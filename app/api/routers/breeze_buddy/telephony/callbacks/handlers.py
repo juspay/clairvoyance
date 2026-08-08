@@ -38,6 +38,7 @@ from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
 from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
+from app.core.security.webhook_signature import verify_provider_webhook
 from app.database.accessor import get_lead_by_call_id
 
 
@@ -61,6 +62,11 @@ async def handle_callback_details_get(
     Raises:
         HTTPException: 404 if provider is not supported
     """
+    # Authenticate the provider webhook before trusting any of its data — an
+    # unauthenticated caller must not be able to inject a recording URL that the
+    # server then fetches with master provider credentials (PT-05).
+    await verify_provider_webhook(request, provider)
+
     query_params = dict(request.query_params)
     logger.info(f"Received call-details with {provider} query params: {query_params}")
 
@@ -87,6 +93,11 @@ async def handle_call_transfer(
     request: Request, provider: str, action: str
 ) -> Response:
     """Unified transfer callback — dispatches by provider + action."""
+    # Authenticate before dispatching — an unauthenticated caller must not be
+    # able to forge transfer callbacks (e.g. the Exotel dial-up path discloses
+    # the live human-agent phone number) (PT-12).
+    await verify_provider_webhook(request, provider)
+
     provider_lower = provider.lower()
 
     if action == "dial-up":
@@ -176,6 +187,10 @@ async def handle_callback_details_post(
     Raises:
         HTTPException: 404 if provider is not supported
     """
+    # Authenticate before trusting the recording URL / call SID in the body
+    # (PT-05).
+    await verify_provider_webhook(request, provider)
+
     form = await request.form()
     logger.info(f"Received callback from {provider} with form data: {form}")
 
@@ -267,6 +282,11 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     Returns:
         200 OK response
     """
+    # Authenticate before acting on the status — a forged status callback could
+    # release a live call's pod (DoS), force retries (toll fraud), or fabricate
+    # outcomes (PT-12).
+    await verify_provider_webhook(request, provider)
+
     form = await request.form()
     logger.info(f"Received callback from {provider} with form data: {form}")
 
@@ -393,6 +413,9 @@ async def handle_twilio_twiml_fallback(request: Request) -> HTMLResponse:
     Returns:
         TwiML XML with <Connect><Stream> pointing to static WebSocket URL
     """
+    # Authenticate — this is a Twilio webhook and must carry a valid signature.
+    await verify_provider_webhook(request, "twilio")
+
     form = await request.form()
     call_sid = form.get("CallSid", "unknown")
     error_code = form.get("ErrorCode", "")
