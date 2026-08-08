@@ -535,6 +535,20 @@ SSRF_ALLOW_PRIVATE_EGRESS = os.environ.get(
     "SSRF_ALLOW_PRIVATE_EGRESS", "false"
 ).lower() in ("1", "true", "yes")
 
+# Brute-force rate limiting for the unauthenticated credential endpoints
+# (/login, /auth/s2s/token, /signup, /auth/accounts). Fixed-window caps per
+# client IP and per username/email, layered on top of bcrypt + the timing
+# equalization (PT-16) so online guessing is bounded. Set a cap to 0 to disable
+# that dimension. Enforcement fails OPEN on a Redis outage (see
+# app/api/routers/breeze_buddy/auth/rate_limit.py) so a Redis blip can't lock
+# every operator out of login.
+AUTH_RATE_LIMIT_PER_IP_PER_HOUR = int(
+    os.environ.get("AUTH_RATE_LIMIT_PER_IP_PER_HOUR", "40")
+)
+AUTH_RATE_LIMIT_PER_USERNAME_PER_HOUR = int(
+    os.environ.get("AUTH_RATE_LIMIT_PER_USERNAME_PER_HOUR", "15")
+)
+
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"
 )

@@ -20,7 +20,7 @@ from app.core.config.static import (
     LOOM_APP_URL,
 )
 from app.core.logger import logger
-from app.core.security.password import verify_password_async
+from app.core.security.password import DUMMY_PASSWORD_HASH, verify_password_async
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
 from app.database.accessor.breeze_buddy import merchants as merchant_accessors
 from app.database.accessor.breeze_buddy.users import get_user_by_username
@@ -149,7 +149,13 @@ async def login_handler(
             expires_in=expires_in,
         )
 
-    # Authentication failed
+    # Authentication failed: no such user. Still spend one bcrypt against a
+    # dummy hash so an unknown username can't be distinguished from a wrong
+    # password by response timing (username-enumeration oracle, PT-16). Uses the
+    # async wrapper for the same reason the real check does: this branch is the
+    # one an attacker can drive at will, so running bcrypt inline here would
+    # freeze the event loop for ~240ms per guess.
+    await verify_password_async(login_request.password, DUMMY_PASSWORD_HASH)
     logger.warning(f"Failed login attempt for unknown user: {login_request.username}")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -181,6 +187,10 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     # Authenticate user
     user = await get_user_by_username(request.username)
     if not user:
+        # Spend one bcrypt against a dummy hash before failing so an unknown
+        # username is timing-indistinguishable from a wrong password — this path
+        # would otherwise reveal whether an admin account exists (PT-16).
+        await verify_password_async(request.password, DUMMY_PASSWORD_HASH)
         logger.warning(f"S2S token request failed: user not found - {request.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
