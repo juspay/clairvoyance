@@ -42,6 +42,22 @@ def _boom(value, args):
 
 
 @pytest.fixture(autouse=True)
+def _bypass_ssrf_egress(monkeypatch):
+    """These tests drive the response pipeline through a placeholder MCP host.
+
+    The direct-HTTP handler now revalidates egress at call time, which would
+    reject `http://x/mcp` before any of the projection/transform behaviour under
+    test here runs. The guard itself is covered in tests/test_ssrf_egress.py,
+    including a case asserting this handler refuses a rebinding host.
+    """
+
+    async def _ok(url, *args, **kwargs):
+        return ["203.0.113.10"]
+
+    monkeypatch.setattr(mcp_mod, "validate_egress_url", _ok)
+
+
+@pytest.fixture(autouse=True)
 def _register_test_transforms():
     added = {"test_append_z": _append_z, "test_boom": _boom}
     saved = {k: TRANSFORM_REGISTRY[k] for k in added if k in TRANSFORM_REGISTRY}
