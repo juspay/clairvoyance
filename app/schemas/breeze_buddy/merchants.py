@@ -5,6 +5,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.breeze_buddy.auth import MAX_S2S_TOKEN_LIFETIME_DAYS
+
 
 class MerchantCreate(BaseModel):
     """Create a new merchant entity (business entity).
@@ -35,11 +37,19 @@ class MerchantCreate(BaseModel):
         "merchant row, and return it (once) in the response. Used e.g. as the "
         "webhook HMAC secret. Requires a reseller_id.",
     )
+    # PT-21. This mints a real RBAC JWT through the same helper as
+    # POST /auth/s2s/token (merchants/handlers.py: create_access_token_with_rbac),
+    # so it takes the same cap. It previously defaulted to 3650 days and allowed
+    # 365000 — and unlike /auth/s2s/token, which is admin-only, this endpoint is
+    # reachable by resellers too.
     token_lifetime_days: int = Field(
-        default=3650,
+        default=MAX_S2S_TOKEN_LIFETIME_DAYS,
         ge=1,
-        le=365000,
-        description="Lifetime of the issued token in days (only when issue_token).",
+        le=MAX_S2S_TOKEN_LIFETIME_DAYS,
+        description=(
+            "Lifetime of the issued token in days (only when issue_token). "
+            f"Capped at {MAX_S2S_TOKEN_LIFETIME_DAYS} (PT-21)."
+        ),
     )
 
 

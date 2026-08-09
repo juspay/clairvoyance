@@ -6,6 +6,13 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+# PT-21. Every path that mints a long-lived S2S token must bound it by this,
+# not by its own literal — there is more than one such path (POST /auth/s2s/token
+# and POST /merchant with issue_token=true), and they both hand the value
+# straight to rbac_token_manager.create_access_token_with_rbac. A per-schema
+# literal is how the two drifted to 365 and 365000 in the first place.
+MAX_S2S_TOKEN_LIFETIME_DAYS = 365
+
 
 class TokenData(BaseModel):
     """Token data model for JWT payload (legacy)"""
@@ -61,7 +68,10 @@ class LoginRequest(BaseModel):
     """Login request model"""
 
     username: str
-    password: str
+    # min_length=1: bcrypt's verifier rejects an empty plaintext with
+    # ValueError, which would surface as a 500 instead of the generic 401.
+    # Fail at the schema boundary (422) so it never reaches verify_password.
+    password: str = Field(..., min_length=1)
 
 
 class LoginResponse(BaseModel):
@@ -83,9 +93,13 @@ class S2STokenRequest(BaseModel):
     """S2S token generation request model"""
 
     username: str
-    password: str
+    # See LoginRequest.password — empty plaintext must 422, never reach bcrypt.
+    password: str = Field(..., min_length=1)
     token_lifetime_days: int = Field(
-        default=365, ge=1, le=365000, description="Token lifetime in days (1-365000)"
+        default=MAX_S2S_TOKEN_LIFETIME_DAYS,
+        ge=1,
+        le=MAX_S2S_TOKEN_LIFETIME_DAYS,
+        description=f"Token lifetime in days (1-{MAX_S2S_TOKEN_LIFETIME_DAYS})",
     )
     reseller_ids: Optional[List[str]] = Field(
         default=None,

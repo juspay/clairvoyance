@@ -17,7 +17,7 @@ async def get_current_user_with_role(
             status_code=401,
             detail="Authorization header missing",
         )
-    return rbac_token_manager.verify_rbac_token(credentials.credentials)
+    return await rbac_token_manager.verify_rbac_token(credentials.credentials)
 
 
 def require_admin(current_user: UserInfo) -> None:
