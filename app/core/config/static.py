@@ -632,6 +632,15 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+# Template `custom` global functions execute author-supplied python_code. An
+# in-process interpreter sandbox is NOT a security boundary, so this feature is
+# OFF by default and must be explicitly enabled per-deployment (and only when
+# template authorship is trusted). When disabled, custom python_code functions
+# are skipped at flow-build time and never compiled or executed.
+ENABLE_CUSTOM_PYTHON_FUNCTIONS = (
+    os.environ.get("ENABLE_CUSTOM_PYTHON_FUNCTIONS", "false").lower() == "true"
+)
+
 GLOBAL_FUNCTION_DESCRIPTION_SUFFIX = os.environ.get(
     "GLOBAL_FUNCTION_DESCRIPTION_SUFFIX",
     "After providing the answer, continue the conversation from where it was interrupted, reminding the user of the current step or asking the next relevant question.",

@@ -37,7 +37,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.utils.parser import (
     compile_custom_function,
 )
-from app.core.config.static import GLOBAL_FUNCTION_DESCRIPTION_SUFFIX
+from app.core.config.static import (
+    ENABLE_CUSTOM_PYTHON_FUNCTIONS,
+    GLOBAL_FUNCTION_DESCRIPTION_SUFFIX,
+)
 from app.core.logger import logger
 
 # Execution budget assumed for a handler whose template sets no explicit
@@ -492,6 +495,16 @@ class CustomPythonGlobalFunctionAdapter:
         Returns:
             FlowsFunctionSchema or None if compilation failed
         """
+        if not ENABLE_CUSTOM_PYTHON_FUNCTIONS:
+            # SECURITY: custom python_code executes author-supplied code and is
+            # not safely sandboxable in-process. Disabled by default; skip the
+            # function entirely (never compile/exec) unless explicitly enabled.
+            logger.warning(
+                f"Skipping custom function '{config.get('name')}': custom "
+                "python_code functions are disabled (ENABLE_CUSTOM_PYTHON_FUNCTIONS=false)"
+            )
+            return None
+
         func = GlobalCustomFunction.model_validate(config)
 
         # Compile python_code at build time
