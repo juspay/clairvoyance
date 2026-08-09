@@ -13,7 +13,6 @@ import json
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
 from starlette.responses import HTMLResponse
-from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
@@ -30,6 +29,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
     handle_mpc_transfer_webhook,
     plivo_dial_xml,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.security import (
+    verify_plivo_webhook,
+)
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
 )
@@ -37,7 +39,6 @@ from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
     get_transfer_flag,
 )
 from app.core.concurrency import spawn_background_task
-from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.database.accessor import get_lead_by_call_id
@@ -63,6 +64,10 @@ async def handle_callback_details_get(
     Raises:
         HTTPException: 404 if provider is not supported
     """
+    if provider.lower() != "plivo":
+        raise HTTPException(status_code=404, detail="Unsupported telephony provider")
+    await verify_plivo_webhook(request)
+
     query_params = dict(request.query_params)
     logger.info(f"Received call-details with {provider} query params: {query_params}")
 
@@ -89,6 +94,10 @@ async def handle_call_transfer(
     request: Request, provider: str, action: str
 ) -> Response:
     """Unified transfer callback — dispatches by provider + action."""
+    if provider.lower() != "plivo":
+        raise HTTPException(status_code=404, detail="Unsupported telephony provider")
+    await verify_plivo_webhook(request)
+
     provider_lower = provider.lower()
 
     if action == "dial-up":
@@ -178,6 +187,10 @@ async def handle_callback_details_post(
     Raises:
         HTTPException: 404 if provider is not supported
     """
+    if provider.lower() != "plivo":
+        raise HTTPException(status_code=404, detail="Unsupported telephony provider")
+    await verify_plivo_webhook(request)
+
     form = await request.form()
     logger.info(f"Received callback from {provider} with form data: {form}")
 
@@ -276,6 +289,10 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     Returns:
         200 OK response
     """
+    if provider.lower() != "plivo":
+        raise HTTPException(status_code=404, detail="Unsupported telephony provider")
+    await verify_plivo_webhook(request)
+
     form = await request.form()
     logger.info(f"Received callback from {provider} with form data: {form}")
 
@@ -399,51 +416,5 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
 
 
 async def handle_twilio_twiml_fallback(request: Request) -> HTMLResponse:
-    """
-    Fallback TwiML endpoint for Twilio when Smart Router is unreachable.
-
-    Twilio calls this via the ``fallback_url`` parameter when the primary ``url``
-    (Smart Router webhook) fails (timeout, 5xx, connection refused). Returns
-    TwiML with the static WebSocket URL — no pod isolation, but the call
-    still works.
-
-    This prevents calls from dropping silently when Smart Router is down.
-
-    Returns:
-        TwiML XML with <Connect><Stream> pointing to static WebSocket URL
-    """
-    form = await request.form()
-    call_sid = form.get("CallSid", "unknown")
-    error_code = form.get("ErrorCode", "")
-    error_url = form.get("ErrorUrl", "")
-
-    logger.warning(
-        "Twilio fallback triggered — Smart Router unreachable, using static WebSocket",
-        extra={
-            "call_sid": call_sid,
-            "error_code": error_code,
-            "error_url": error_url,
-        },
-    )
-
-    # Use template WebSocket URL (v2 flow) as default fallback
-    ws_url = TWILIO_TEMPLATE_WEBSOCKET_URL
-
-    if not ws_url:
-        logger.error(
-            "No fallback WebSocket URL configured — call will drop",
-            extra={"call_sid": call_sid},
-        )
-        return HTMLResponse(
-            content=str(VoiceResponse()),
-            media_type="application/xml",
-        )
-
-    # Build TwiML using Twilio SDK (consistent with twilio.py make_call)
-    voice_response = VoiceResponse()
-    connect = Connect()
-    stream = Stream(url=ws_url)
-    connect.append(stream)
-    voice_response.append(connect)
-
-    return HTMLResponse(content=str(voice_response), media_type="application/xml")
+    """Twilio is not in use, so its TwiML fallback is refused."""
+    raise HTTPException(status_code=404, detail="Unsupported telephony provider")
