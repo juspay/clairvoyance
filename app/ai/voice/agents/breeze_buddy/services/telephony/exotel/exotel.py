@@ -1,5 +1,6 @@
 import json
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 from fastapi import Response, WebSocket
@@ -18,9 +19,12 @@ from app.core.config.static import (
     EXOTEL_API_TOKEN,
     EXOTEL_SUBDOMAIN,
     EXOTEL_TEMPLATE_APPLET_APP_ID,
+    EXOTEL_WEBHOOK_AUTH_TOKEN,
 )
 from app.core.logger import logger
+from app.core.security.webhook_signature import redact_query_param
 from app.core.transport.http_client import get_proxy_config
+from app.database.queries.breeze_buddy.blacklisted_numbers import mask_phone
 from app.schemas import CallProvider, TelephonyConfig
 
 
@@ -82,19 +86,37 @@ class ExotelProvider(VoiceCallProvider):
 
         flow_url = f"http://my.exotel.com/{self.EXOTEL_ACCOUNT_SID}/exoml/start_voice/{applet_id}"
 
+        if not EXOTEL_WEBHOOK_AUTH_TOKEN:
+            logger.error(
+                "EXOTEL_WEBHOOK_AUTH_TOKEN is not configured; not placing Exotel call"
+            )
+            return None
+
+        status_callback = (
+            self.APP_BASE_URL
+            + "/agent/voice/breeze-buddy/exotel/callback/status"
+            + f"?auth_token={quote(EXOTEL_WEBHOOK_AUTH_TOKEN, safe='')}"
+        )
+
         payload = {
             "From": customer_mobile_number,
             "CallerId": telephony_number,
             "Url": flow_url,
-            "StatusCallback": (
-                self.APP_BASE_URL + "/agent/voice/breeze-buddy/exotel/callback/status"
-            ),
+            "StatusCallback": status_callback,
         }
 
         url = f"https://{self.EXOTEL_API_KEY}:{self.EXOTEL_API_TOKEN}@{self.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
 
         logger.info(f"Making Exotel API call to: {self.EXOTEL_SUBDOMAIN}")
-        logger.info(f"Payload: {payload}")
+        logger.info(
+            "Payload: {}",
+            {
+                **payload,
+                "From": mask_phone(customer_mobile_number),
+                "CallerId": mask_phone(telephony_number),
+                "StatusCallback": redact_query_param(payload["StatusCallback"]),
+            },
+        )
 
         try:
             # Use centralized proxy configuration

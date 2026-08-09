@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import sys
 from typing import Optional
 
@@ -12,15 +13,43 @@ logger.remove()
 from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
 from app.core.logger.context import get_log_context
 
+_SENSITIVE_QUERY_PARAMS = ("auth_token",)
+
+_SENSITIVE_QUERY_RE = re.compile(
+    r"(?i)\b(" + "|".join(_SENSITIVE_QUERY_PARAMS) + r")"
+    r"(\s*['\"]?\s*[:=]\s*['\"]?)([^&\s,}\"'<>]+)"
+)
+
+
+def redact_sensitive_query_params(message: str) -> str:
+    """Replace credential-bearing query-parameter values in a log line.
+
+    Operates on free-form text rather than a parsed URL because the lines that
+    carry the secret are not URLs: an access-log line is a request line, and a
+    handler may log ``dict(request.query_params)``. Never raises — a logging
+    helper must not be able to break a log call.
+    """
+    try:
+        return _SENSITIVE_QUERY_RE.sub(r"\1\2REDACTED", message)
+    except Exception:  # pragma: no cover
+        return message
+
 
 # Patcher to inject log context into extra BEFORE enqueueing
 # This is critical because enqueue=True processes logs in a background thread
 # where contextvars are not propagated. The patcher runs in the calling thread.
 # Defined at module level so it can be reused in configure_session_logger()
 def log_context_patcher(record):
-    """Inject log context into record['extra'] for both dev and prod formatting."""
+    """Inject log context into record['extra'] for both dev and prod formatting.
+
+    Also redacts credential-bearing query parameters. This is the one chokepoint
+    every record passes through — app-level ``logger.*`` calls and Uvicorn
+    records forwarded by :class:`InterceptHandler` alike — in both dev and JSON
+    formatting, so a secret cannot reach a sink by any route.
+    """
     ctx = get_log_context()
     record["extra"]["_log_context"] = ctx
+    record["message"] = redact_sensitive_query_params(record["message"])
 
 
 def json_sink(message):
