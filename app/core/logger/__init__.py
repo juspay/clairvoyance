@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import sys
 from typing import Optional
 
@@ -12,15 +13,52 @@ logger.remove()
 from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
 from app.core.logger.context import get_log_context
 
+# Query parameters whose VALUE is a credential rather than data. Exotel's
+# webhook shared secret travels in the URL — the only channel Exotel offers —
+# so any log line carrying that URL (Uvicorn's access log, or a handler logging
+# its own query params) would otherwise write the secret to the sink on every
+# inbound callback. Anyone who could read logs could then forge callbacks, which
+# is precisely the attack the signature verification closes.
+_SENSITIVE_QUERY_PARAMS = ("auth_token",)
+
+_SENSITIVE_QUERY_RE = re.compile(
+    r"(?i)\b("
+    + "|".join(_SENSITIVE_QUERY_PARAMS)
+    + r")"
+    # ``k=v`` in a URL/access-log line, or ``'k': 'v'`` from a logged dict.
+    r"(\s*['\"]?\s*[:=]\s*['\"]?)([^&\s,}\"'<>]+)"
+)
+
+
+def redact_sensitive_query_params(message: str) -> str:
+    """Replace credential-bearing query-parameter values in a log line.
+
+    Operates on free-form text rather than a parsed URL because the lines that
+    carry the secret are not URLs: an access-log line is a request line, and a
+    handler may log ``dict(request.query_params)``. Never raises — a logging
+    helper must not be able to break a log call.
+    """
+    try:
+        return _SENSITIVE_QUERY_RE.sub(r"\1\2REDACTED", message)
+    except Exception:  # pragma: no cover - defensive; never break a log call
+        return message
+
 
 # Patcher to inject log context into extra BEFORE enqueueing
 # This is critical because enqueue=True processes logs in a background thread
 # where contextvars are not propagated. The patcher runs in the calling thread.
 # Defined at module level so it can be reused in configure_session_logger()
 def log_context_patcher(record):
-    """Inject log context into record['extra'] for both dev and prod formatting."""
+    """Inject log context into record['extra'] for both dev and prod formatting.
+
+    Also redacts credential-bearing query parameters. This is the one chokepoint
+    every record passes through — app-level ``logger.*`` calls and Uvicorn
+    records forwarded by :class:`InterceptHandler` alike — in both dev and JSON
+    formatting, so a secret cannot reach a sink by any route.
+    """
     ctx = get_log_context()
     record["extra"]["_log_context"] = ctx
+    record["message"] = redact_sensitive_query_params(record["message"])
 
 
 def json_sink(message):
@@ -88,6 +126,8 @@ class InterceptHandler(logging.Handler):
         # Bind log context to forwarded logs
         # This ensures pipecat/library logs also get the log context
         log_context = get_log_context()
+        # Redaction happens in log_context_patcher, which every record passes
+        # through — no need to repeat it here.
         logger.opt(depth=depth, exception=record.exc_info).bind(
             _log_context=log_context
         ).log(level, record.getMessage())

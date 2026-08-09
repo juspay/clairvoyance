@@ -10,13 +10,15 @@ Endpoints:
 - GET/POST /{provider}/answer - Unified answer handler
 
 Authentication:
-- Exotel: Requires `auth_token` query parameter matching EXOTEL_WEBHOOK_AUTH_TOKEN env var
-- Plivo: No authentication (Plivo validates via answer_url configuration)
+- Exotel: constant-time `auth_token` query-param check against EXOTEL_WEBHOOK_AUTH_TOKEN
+- Plivo: X-Plivo-Signature-V3/V2 HMAC verification against PLIVO_AUTH_TOKEN
+Both go through the shared ``verify_provider_webhook`` (fail-closed if the
+provider's secret is unset).
 """
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.core.config.static import EXOTEL_WEBHOOK_AUTH_TOKEN
+from app.core.security.webhook_signature import verify_provider_webhook
 
 from .handlers import handle_provider_answer
 
@@ -57,14 +59,9 @@ async def provider_answer(request: Request, provider: str):
             detail=f"Provider '{provider}' is not supported for answer webhooks",
         )
 
-    # Exotel requires auth token verification
-    if provider_lower == "exotel":
-        auth_token = request.query_params.get("auth_token")
-        if not EXOTEL_WEBHOOK_AUTH_TOKEN:
-            raise HTTPException(
-                status_code=401, detail="Webhook authentication not configured"
-            )
-        if auth_token != EXOTEL_WEBHOOK_AUTH_TOKEN:
-            raise HTTPException(status_code=401, detail="Invalid auth token")
+    # Verify the provider webhook before dispatching (Exotel: constant-time
+    # auth_token compare; Plivo: X-Plivo-Signature HMAC). Previously Plivo had
+    # NO authentication and Exotel used a non-constant-time compare (PT-23).
+    await verify_provider_webhook(request, provider_lower)
 
     return await handle_provider_answer(request, provider_lower)

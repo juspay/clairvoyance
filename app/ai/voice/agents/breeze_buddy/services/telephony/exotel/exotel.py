@@ -1,5 +1,6 @@
 import json
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 from fastapi import Response, WebSocket
@@ -18,10 +19,37 @@ from app.core.config.static import (
     EXOTEL_API_TOKEN,
     EXOTEL_SUBDOMAIN,
     EXOTEL_TEMPLATE_APPLET_APP_ID,
+    EXOTEL_WEBHOOK_AUTH_TOKEN,
 )
 from app.core.logger import logger
+from app.core.security.webhook_signature import redact_query_param
 from app.core.transport.http_client import get_proxy_config
+from app.database.queries.breeze_buddy.blacklisted_numbers import mask_phone
 from app.schemas import CallProvider, TelephonyConfig
+
+_EXOTEL_STATUS_CALLBACK_PATH = "/agent/voice/breeze-buddy/exotel/callback/status"
+
+
+def _exotel_status_callback_url(base_url: str) -> str:
+    """Build the Exotel status-callback URL, carrying the shared auth token.
+
+    Exotel does not sign its webhooks, so ``verify_provider_webhook`` checks a
+    shared secret supplied as the ``auth_token`` query parameter. That token has
+    to be embedded in the URL we register with Exotel — it is the only channel
+    by which Exotel can present it. When no token is configured the URL is left
+    bare, which the verifier rejects (fail-closed) unless signature enforcement
+    is explicitly disabled.
+    """
+    url = base_url.rstrip("/") + _EXOTEL_STATUS_CALLBACK_PATH
+    if not EXOTEL_WEBHOOK_AUTH_TOKEN:
+        logger.error(
+            "EXOTEL_WEBHOOK_AUTH_TOKEN is unset — Exotel status callbacks will be "
+            "rejected while ENFORCE_TELEPHONY_WEBHOOK_SIGNATURES is enabled (the "
+            "default). Set it (and keep it in sync with this deployment) or "
+            "Exotel outcome/retry handling will not run."
+        )
+        return url
+    return f"{url}?auth_token={quote(EXOTEL_WEBHOOK_AUTH_TOKEN, safe='')}"
 
 
 class ExotelProvider(VoiceCallProvider):
@@ -86,15 +114,29 @@ class ExotelProvider(VoiceCallProvider):
             "From": customer_mobile_number,
             "CallerId": telephony_number,
             "Url": flow_url,
-            "StatusCallback": (
-                self.APP_BASE_URL + "/agent/voice/breeze-buddy/exotel/callback/status"
-            ),
+            # Exotel has no request-signing scheme, so the status callback is
+            # authenticated by a shared token carried in the URL we hand it.
+            # verify_provider_webhook() reads it from ``auth_token``; without it
+            # every status callback 401s and outcome/retry handling stops.
+            "StatusCallback": _exotel_status_callback_url(self.APP_BASE_URL),
         }
 
         url = f"https://{self.EXOTEL_API_KEY}:{self.EXOTEL_API_TOKEN}@{self.EXOTEL_SUBDOMAIN}/v1/Accounts/{self.EXOTEL_ACCOUNT_SID}/Calls/connect.json"
 
         logger.info(f"Making Exotel API call to: {self.EXOTEL_SUBDOMAIN}")
-        logger.info(f"Payload: {payload}")
+        # Never log this payload raw. "StatusCallback" carries the shared
+        # webhook secret as a query parameter, and "From"/"CallerId" are phone
+        # numbers. Both would otherwise land in every log sink on every
+        # outbound call.
+        logger.info(
+            "Payload: {}",
+            {
+                **payload,
+                "From": mask_phone(customer_mobile_number),
+                "CallerId": mask_phone(telephony_number),
+                "StatusCallback": redact_query_param(payload["StatusCallback"]),
+            },
+        )
 
         try:
             # Use centralized proxy configuration
