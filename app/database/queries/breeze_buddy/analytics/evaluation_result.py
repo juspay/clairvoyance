@@ -1,4 +1,4 @@
-"""SQL for topic_result."""
+"""Topic analytics SQL for evaluation_result."""
 
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -10,6 +10,7 @@ def _topic_filters(
 ) -> Tuple[List[str], List[Any]]:
     clauses = [
         f"{alias}.status = 'COMPLETED'",
+        f"{alias}.evaluation_type = 'TOPIC'",
     ]
     values: List[Any] = []
 
@@ -72,13 +73,13 @@ def get_topic_dashboard_rows_query(
             ca.template_id,
             template.name AS template_name,
             ca.started_at,
-            ca.topic_type AS raw_topic_type,
-            ca.topic ->> 'label' AS raw_label
-        FROM topic_result ca
+            ca.result_type AS raw_topic_type,
+            ca.result ->> 'label' AS raw_label
+        FROM evaluation_result ca
         JOIN template ON template.id = ca.template_id
         WHERE {where}
-          AND ca.topic_type IS NOT NULL
-        ORDER BY ca.started_at, ca.source_id, ca.topic_type
+          AND ca.result_type IS NOT NULL
+        ORDER BY ca.started_at, ca.source_id, ca.result_type
     """
     return query, values
 
@@ -96,10 +97,11 @@ def get_topic_conversations_query(
         topic_type_index = len(values)
         base_clauses.append(
             "EXISTS ("
-            "SELECT 1 FROM topic_result matched "
+            "SELECT 1 FROM evaluation_result matched "
             "WHERE matched.source_id = ca.source_id "
             "AND matched.status = 'COMPLETED' "
-            f"AND matched.topic_type = ${topic_type_index}"
+            "AND matched.evaluation_type = 'TOPIC' "
+            f"AND matched.result_type = ${topic_type_index}"
             ")"
         )
     elif topic_type == "__other__":
@@ -107,10 +109,11 @@ def get_topic_conversations_query(
         topic_types_index = len(values)
         base_clauses.append(
             "EXISTS ("
-            "SELECT 1 FROM topic_result matched "
+            "SELECT 1 FROM evaluation_result matched "
             "WHERE matched.source_id = ca.source_id "
             "AND matched.status = 'COMPLETED' "
-            f"AND matched.topic_type = ANY(${topic_types_index}::text[])"
+            "AND matched.evaluation_type = 'TOPIC' "
+            f"AND matched.result_type = ANY(${topic_types_index}::text[])"
             ")"
         )
     base_where = " AND ".join(base_clauses)
@@ -130,11 +133,11 @@ def get_topic_conversations_query(
             ca.source_id::uuid AS id, ca.source_id, ca.reseller_id,
             ca.merchant_id, ca.template_id, ca.started_at,
             COALESCE(
-                jsonb_agg(ca.topic ORDER BY ca.topic_type)
-                    FILTER (WHERE ca.topic IS NOT NULL),
+                jsonb_agg(ca.result ORDER BY ca.result_type)
+                    FILTER (WHERE ca.result IS NOT NULL),
                 '[]'::jsonb
             ) AS topics
-        FROM topic_result ca
+        FROM evaluation_result ca
         WHERE {base_where} {cursor_clause}
         GROUP BY
             ca.source_id, ca.reseller_id,
@@ -153,14 +156,15 @@ def get_topics_for_source_query(
     """Return topics for a source within the caller's tenant scope."""
     query = """
         SELECT COALESCE(
-            jsonb_agg(topic ORDER BY topic_type)
-                FILTER (WHERE topic IS NOT NULL),
+            jsonb_agg(result ORDER BY result_type)
+                FILTER (WHERE result IS NOT NULL),
             '[]'::jsonb
         ) AS topics
-        FROM topic_result
+        FROM evaluation_result
         WHERE source_id = $1
           AND ($2::text[] IS NULL OR reseller_id = ANY($2::text[]))
           AND ($3::text[] IS NULL OR merchant_id = ANY($3::text[]))
           AND status = 'COMPLETED'
+          AND evaluation_type = 'TOPIC'
     """
     return query, [source_id, reseller_ids, merchant_ids]
