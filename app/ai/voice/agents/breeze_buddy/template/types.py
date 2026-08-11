@@ -2034,6 +2034,18 @@ class ConfigurationModel(BaseModel):
             "cancellation itself is always forced client-side and has no knob."
         ),
     )
+    dial_tone: bool = Field(
+        True,
+        description=(
+            "Whether to play the dial-tone fallback when no initial greeting "
+            "audio is cached. True (default) preserves legacy behaviour — a "
+            "short dial tone plays so the caller knows the line is live. Set "
+            "False for speech-to-speech realtime LLMs (e.g. Gemini Live) so "
+            "that, when no greeting is cached, nothing plays out-of-band and "
+            "the realtime LLM speaks first (avoids the dial tone colliding "
+            "with the LLM's opening response)."
+        ),
+    )
     keyword_filter: Optional[KeywordFilterConfig] = Field(
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",

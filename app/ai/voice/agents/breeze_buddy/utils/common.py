@@ -480,8 +480,26 @@ async def prepare_initial_greeting_payload(
                         f"Deleted dynamic greeting from Redis for lead {lead.id}"
                     )
 
-        # 3. Fall back to dial tone if no greeting audio found
+        # 3. Fall back to dial tone if no greeting audio found.
+        # Gated by configurations.dial_tone (default True). Realtime
+        # (speech-to-speech) LLMs set it False so that, with no cached greeting,
+        # nothing plays out-of-band and the LLM speaks first.
         if not mulaw_data:
+            configs = template.configurations if template else None
+            dial_tone_enabled = getattr(configs, "dial_tone", True) if configs else True
+            if not dial_tone_enabled:
+                logger.info(
+                    "No greeting audio found and dial_tone disabled; playing "
+                    "nothing (LLM will speak first)"
+                )
+                # Distinct from a failure (None): callers must treat this as an
+                # intentional no-playback, not an error.
+                return {
+                    "payload": None,
+                    "greeting_source": None,
+                    "greeting_text": None,
+                    "skipped": True,
+                }
             logger.info("No greeting audio found, using dial tone")
             wav_file_path = (
                 "app/ai/voice/agents/breeze_buddy/static/audio/dial-tone.wav"

@@ -123,6 +123,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.ai.voice.llm.realtime.gemini_realtime import has_realtime_llm
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
@@ -719,8 +720,15 @@ class Agent:
         self.greeting_source = greeting_result.source
         self.greeting_text = greeting_result.text
 
-        # Start post-greeting idle timer if greeting was sent
-        if self.greeting_source and self.configurations:
+        # Realtime LLMs use server-side turn detection plus the pipeline's
+        # UserIdleController. Their user-turn events can arrive after speech
+        # begins, so this separate wall-clock timer could expire mid-response
+        # and trigger a false idle recovery or reconnect.
+        if (
+            self.greeting_source
+            and self.configurations
+            and not has_realtime_llm(self.configurations.llm_configurations)
+        ):
             user_idle_config = getattr(
                 self.configurations, "user_idle_configuration", None
             )
@@ -1101,9 +1109,14 @@ class Agent:
             self.greeting_source = greeting_result.source
             self.greeting_text = greeting_result.text
 
-            # Mirror telephony: start post-greeting idle timer so the bot
-            # re-engages if the user stays silent after the greeting.
-            if self.greeting_source and self.configurations:
+            # Mirror the telephony fallback for non-realtime pipelines.
+            # Realtime LLMs rely on server-side turn detection and the
+            # UserIdleController to avoid the timer race described above.
+            if (
+                self.greeting_source
+                and self.configurations
+                and not has_realtime_llm(self.configurations.llm_configurations)
+            ):
                 user_idle_config = getattr(
                     self.configurations, "user_idle_configuration", None
                 )
