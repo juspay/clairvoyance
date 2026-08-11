@@ -21,7 +21,7 @@ matter.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Role → default tool name. The keys ARE the registry keys used across the
 # flavor; the values are the Stage-A UCP surface.
@@ -57,6 +57,40 @@ def resolve_role_map(template: Any) -> Dict[str, str]:
     }
 
 
+def pick_checkout_url(
+    configured: Any,
+    payload_url: Any,
+    state_url: Any,
+) -> Optional[str]:
+    """The CartView checkout button's destination — ONE precedence, for
+    every path that builds that button.
+
+    ``configured`` (``ui_intents.urls.checkout_page``) wins: a merchant
+    who names a page means it, and that page is typically their own
+    storefront cart, which the CartView cookie sync exists to populate.
+    Then the cart payload's ``continue_url``, then the reducer-state
+    fallback (the ``state_keys.checkout_url`` role). ``None`` when there
+    is nothing to point at — the caller renders no button rather than a
+    dead one.
+
+    Takes RESOLVED candidates rather than the sources, because the two
+    callers reach them differently: the DIRECT driver has one tool
+    payload plus the agent's state, the render_ui finalizer has a
+    BindingStore and bind refs. Only the ORDER is shared — and only the
+    order needed sharing: it was duplicated in both, so
+    ``urls.checkout_page`` shipped honoured on the DIRECT path and
+    ignored on the model-driven one, giving one button two destinations.
+
+    Non-string candidates are skipped rather than returned; template JSON
+    is merchant-edited, and a wrong-typed value should fall through to
+    the next tier, never become an href.
+    """
+    for candidate in (configured, payload_url, state_url):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
 __all__ = [
     "DEFAULT_TOOLS",
     "ROLE_CREATE_CART",
@@ -64,5 +98,6 @@ __all__ = [
     "ROLE_GET_PRODUCT",
     "ROLE_SEARCH",
     "ROLE_UPDATE_CART",
+    "pick_checkout_url",
     "resolve_role_map",
 ]
