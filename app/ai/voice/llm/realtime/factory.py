@@ -148,11 +148,17 @@ async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
             api_key=api_key,
             model=realtime.model or DEFAULT_GEMINI_REALTIME_MODEL,
             voice=realtime.voice,
+            language=realtime.language,
+            thinking_level=realtime.thinking_level,
+            silence_duration_ms=realtime.silence_duration_ms,
             function_call_timeout_secs=function_call_timeout,
         )
         logger.info(
             f"Resolving Gemini Live LLM service: model={gemini_config.model}, "
-            f"voice={gemini_config.voice or 'default'}"
+            f"voice={gemini_config.voice or 'default'}, "
+            f"language={gemini_config.language or 'auto'}, "
+            f"thinking_level={gemini_config.thinking_level or 'default'}, "
+            f"silence_duration_ms={gemini_config.silence_duration_ms or 'default'}"
         )
         return build_gemini_realtime_llm(gemini_config)
 

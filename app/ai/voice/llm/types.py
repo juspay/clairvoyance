@@ -59,6 +59,30 @@ class RealtimeConfig(BaseModel):
         "(e.g. 'alloy', 'echo' for OpenAI; 'Ara', 'Rex' for xAI). "
         "Falls back to the provider service's default when unset.",
     )
+    language: Optional[str] = Field(
+        None,
+        description="BCP-47 language code for realtime audio output (e.g. 'hi' "
+        "Hindi, 'ta' Tamil, 'hi-IN'). Sent to Gemini Live as "
+        "speechConfig.languageCode on the wire whenever set; native-audio "
+        "models (2.5) auto-detect and ignore it, non-native-audio Live models "
+        "(e.g. gemini-3.1-flash-live-preview) may honor it — undocumented, "
+        "confirm with a live test. Not used by OpenAI/xAI/Azure.",
+    )
+    thinking_level: Optional[str] = Field(
+        None,
+        description="Gemini 3.x Live reasoning level: 'minimal', 'low', "
+        "'medium', or 'high' (3.1-flash-live defaults to 'minimal' for lowest "
+        "latency). Only applied when set; otherwise the model default applies. "
+        "Gemini 2.5 native-audio uses thinking_budget and ignores this. "
+        "Not used by OpenAI/xAI/Azure.",
+    )
+    silence_duration_ms: Optional[int] = Field(
+        None,
+        description="Gemini Live server-side VAD end-of-speech threshold in "
+        "milliseconds (how long a pause ends the user's turn; 3.1-flash-live "
+        "recommends 500–800ms). Only applied when set; otherwise Gemini's "
+        "server-side VAD default applies. Not used by OpenAI/xAI/Azure.",
+    )
     endpoint: Optional[str] = Field(
         None,
         description="Provider-specific endpoint URL override (currently used "

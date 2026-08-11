@@ -63,6 +63,10 @@ async def send_initial_greeting(
             template=template,
             provider=provider,
         )
+        if greeting_result and greeting_result.get("skipped"):
+            # Intentional no-playback (dial_tone disabled for a realtime LLM that
+            # speaks first). Not a failure — skip media send + error tracking.
+            return GreetingResult(source=None, text=None)
         if not greeting_result:
             logger.warning("Failed to prepare greeting payload, skipping initial audio")
             track_error(
