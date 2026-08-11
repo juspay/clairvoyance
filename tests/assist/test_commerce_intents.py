@@ -699,6 +699,104 @@ def test_checkout_page_url_config_overrides_continue_url():
     assert op["props"]["checkout"]["url"] == "https://shop.example/checkouts/abc"
 
 
+def test_checkout_page_url_config_applies_to_render_ui_path_too():
+    """The MODEL-DRIVEN render_ui path must resolve the CartView checkout
+    button with the SAME precedence as the DIRECT-intent path above.
+
+    It did not. ``_cart_view_show_op`` honoured
+    ``ui_intents.urls.checkout_page`` while ``_finalize_commerce`` never
+    read ``urls`` at all, so ONE button had TWO destinations: the
+    storefront /cart after a widget tap, the platform checkout after a
+    model-driven render. The model-driven path is the common one — every
+    cart tool's ``tool_ui_instructions`` render CartView through it — so
+    most shoppers got the destination the merchant had NOT configured,
+    skipping the page the CartView cookie sync exists to populate.
+
+    The model cannot paper over this: ``render_ui_tool`` deliberately
+    refuses to read ``checkout`` from model args (server policy), so the
+    fix has to live here.
+    """
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.render_ui import (
+        _finalize_commerce,
+    )
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.schemas import CartView
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+
+    store = BindingStore()
+    store.record(
+        "get_cart",
+        "tu1",
+        _envelope(
+            {**_cart_payload([]), "continue_url": "https://shop.example/checkouts/abc"}
+        ),
+    )
+    bind = {"cart_id": "$tool:get_cart#/id"}
+
+    def _checkout(template: Any, state_values: Optional[Dict[str, Any]] = None) -> Any:
+        props: Dict[str, Any] = {}
+        _finalize_commerce(
+            "CartView",
+            CartView,
+            props,
+            bind=bind,
+            store=store,
+            template=template,
+            state_values=state_values,
+        )
+        return props.get("checkout")
+
+    # 1. Configured fixed destination WINS over the tool's continue_url.
+    template = _template()
+    template.configurations.ui_intents = UiIntentsConfig(
+        urls={"checkout_page": "https://shop.example/cart"}
+    )
+    assert _checkout(template)["url"] == "https://shop.example/cart"
+
+    # 2. Unset → continue_url still wins. The pre-existing precedence for
+    #    every template that does NOT configure a page is untouched.
+    template.configurations.ui_intents = None
+    assert _checkout(template)["url"] == "https://shop.example/checkouts/abc"
+
+    # 3. Blank/non-string config is ignored rather than emitting an empty
+    #    href (template JSON is merchant-edited — "" is a live typo).
+    template.configurations.ui_intents = UiIntentsConfig(urls={"checkout_page": ""})
+    assert _checkout(template)["url"] == "https://shop.example/checkouts/abc"
+
+    # 4. Reducer-state fallback stays LAST: it applies only when neither a
+    #    configured page nor a continue_url is available.
+    empty = BindingStore()
+    empty.record("get_cart", "tu1", _envelope({"id": "gid://shopify/Cart/c1"}))
+    props: Dict[str, Any] = {}
+    _finalize_commerce(
+        "CartView",
+        CartView,
+        props,
+        bind=bind,
+        store=empty,
+        template=_template(),
+        state_values={"checkout_url": "https://shop.example/from-state"},
+    )
+    assert props["checkout"]["url"] == "https://shop.example/from-state"
+
+
+def test_pick_checkout_url_is_the_single_precedence_both_paths_share():
+    """The order lives in ONE place now. Duplicating it is what let the
+    configured tier ship on the DIRECT path and go missing on the
+    model-driven one."""
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
+        pick_checkout_url,
+    )
+
+    assert pick_checkout_url("/cfg", "/payload", "/state") == "/cfg"
+    assert pick_checkout_url(None, "/payload", "/state") == "/payload"
+    assert pick_checkout_url(None, None, "/state") == "/state"
+    assert pick_checkout_url(None, None, None) is None
+    # Empty and wrong-typed candidates fall through instead of becoming an
+    # href — template JSON is merchant-edited.
+    assert pick_checkout_url("", "/payload", "/state") == "/payload"
+    assert pick_checkout_url(0, ["/nope"], "/state") == "/state"
+
+
 class TestCartLineIntegrity:
     """``update_cart`` REPLACES the cart with the set we send, so how the
     desired set is built is a data-loss surface, not a formatting detail."""

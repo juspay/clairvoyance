@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
     ROLE_SEARCH,
+    pick_checkout_url,
     resolve_role_map,
 )
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.step_labels import (
@@ -223,9 +224,11 @@ def _finalize_commerce(
     Layout is derived from the FINAL hydrated count (post items[]
     selection, post max_items cap): 1-2 products sit side by side; 3+
     scroll as a carousel. The CartView checkout button mirrors the
-    DIRECT-intent path: the bound cart payload's ``continue_url`` wins,
-    the reducer-state fallback (``ui_intents.state_keys.checkout_url``
-    role) next; no url anywhere → no button."""
+    DIRECT-intent path exactly: the configured fixed destination
+    (``ui_intents.urls.checkout_page``) wins, then the bound cart
+    payload's ``continue_url``, then the reducer-state fallback
+    (``ui_intents.state_keys.checkout_url`` role); no url anywhere →
+    no button."""
     if isinstance(hydrated_props.get("products"), list):
         hydrated_props["layout"] = (
             "grid" if len(hydrated_props["products"]) <= 2 else "carousel"
@@ -242,7 +245,8 @@ def _finalize_commerce(
             (getattr(ui_intents, "state_keys", None) or {}) if ui_intents else {}
         )
         labels = (getattr(ui_intents, "labels", None) or {}) if ui_intents else {}
-        checkout_url: Optional[str] = None
+        urls = (getattr(ui_intents, "urls", None) or {}) if ui_intents else {}
+        payload_url: Optional[Any] = None
         for ref in bind.values():
             parsed = parse_bind_ref(ref)
             if parsed is None:
@@ -251,12 +255,22 @@ def _finalize_commerce(
             if isinstance(payload, dict):
                 cu = payload.get("continue_url")
                 if isinstance(cu, str) and cu:
-                    checkout_url = cu
+                    payload_url = cu
                     break
-        if checkout_url is None and state_values:
-            fallback = state_values.get(state_keys.get("checkout_url", "checkout_url"))
-            if isinstance(fallback, str) and fallback:
-                checkout_url = fallback
+        # Precedence itself lives in ``roles.pick_checkout_url`` — shared
+        # with the DIRECT path's ``intents.py::_cart_view_show_op``, which
+        # resolves the same three candidates from different sources. It
+        # was duplicated, and this path silently lacked the configured
+        # tier, so one button had two destinations.
+        checkout_url = pick_checkout_url(
+            urls.get("checkout_page"),
+            payload_url,
+            (
+                state_values.get(state_keys.get("checkout_url", "checkout_url"))
+                if state_values
+                else None
+            ),
+        )
         if checkout_url:
             hydrated_props["checkout"] = {
                 "label": labels.get("checkout") or _DEFAULT_CHECKOUT_LABEL,

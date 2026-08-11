@@ -50,6 +50,7 @@ from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
     ROLE_GET_PRODUCT,
     ROLE_SEARCH,
     ROLE_UPDATE_CART,
+    pick_checkout_url,
 )
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.upsell import run_cart_upsell
 from app.ai.voice.agents.breeze_buddy.chat.intents.router import (
@@ -678,15 +679,15 @@ def _cart_view_show_op(tool_name: str, result: Any, agent: Any) -> Dict[str, Any
         if payload.get(key) is not None:
             bind[prop] = f"$tool:{tool_name}#/{key}"
     props: Dict[str, Any] = {}
-    # Configured fixed destination (template ui_intents.urls.checkout_page,
-    # e.g. the storefront /cart page — cookie sync shows the built cart
-    # there) WINS over the tool's checkout-bound continue_url.
-    checkout_url = (
-        cfg.checkout_page_url
-        or payload.get("continue_url")
-        or agent.agent_state.get(cfg.checkout_url_key)
+    # Precedence (configured page → continue_url → reducer state) is
+    # shared with the model-driven path's ``render_ui._finalize_commerce``,
+    # which resolves the same three candidates from a BindingStore.
+    checkout_url = pick_checkout_url(
+        cfg.checkout_page_url,
+        payload.get("continue_url"),
+        agent.agent_state.get(cfg.checkout_url_key),
     )
-    if isinstance(checkout_url, str) and checkout_url:
+    if checkout_url:
         props["checkout"] = {"label": cfg.checkout_label, "url": checkout_url}
     return {
         "op": "show",
