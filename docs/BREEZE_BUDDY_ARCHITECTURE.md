@@ -80,7 +80,18 @@ class PushLeadRequest(BaseModel):
     template: str                     # Template name to use
     reseller_id: str                     # Reseller identifier
     merchant_id: Optional[str] = None  # Merchant-specific identifier
-    reporting_webhook_url: str | None = None  # Callback URL
+```
+
+Call callbacks are configured on the template:
+```json
+{
+  "configurations": {
+    "service_callback": {
+      "url": "https://example.com/webhook",
+      "max_attempts": 3
+    }
+  }
+}
 ```
 
 **Insertion Process** ([leads.py:153-275](app/api/routers/breeze_buddy/leads.py#L153-L275)):
@@ -581,7 +592,9 @@ class TemplateContext:
 - `lead`: Lead data
 - `call_sid`: Call identifier
 - `order_id`: Order identifier
-- `reporting_webhook_url`: Callback URL
+- `configurations.service_callback`: Active template callback configuration
+  (a lead's `payload.reporting_webhook_url`, if present, overrides
+  this)
 - `root_span`: OpenTelemetry span
 - `provider`: Telephony provider
 - `end_conversation_callbacks`: Callback list
@@ -622,8 +635,7 @@ Inserts new lead for processing ([leads.py:153-275](app/api/routers/breeze_buddy
   },
   "template": "order-confirmation",
   "reseller_id": "reseller_123",
-  "merchant_id": "merchant_456",
-  "reporting_webhook_url": "https://example.com/webhook"
+  "merchant_id": "merchant_456"
 }
 ```
 
@@ -778,7 +790,9 @@ Creates new template in database ([template.py:55-105](app/database/accessor/bre
 **Process**:
 1. Extract callback response data
 2. Validate against `expected_callback_response_schema`
-3. Send webhook request to `reporting_webhook_url`
+3. Send webhook request to the active template's `service_callback.url`
+   (or the lead's legacy `reporting_webhook_url`, if still present, which
+   takes precedence during the migration window)
 
 ### Internal Handlers
 
@@ -1157,7 +1171,7 @@ Have a good day."
 
 7. End Conversation Callbacks
    ├─> Extract callback data: {updated_address: "..."}
-   ├─> POST to reporting_webhook_url
+   ├─> POST to the active template's service_callback.url
    └─> Update final call status
 ```
 
@@ -1180,8 +1194,7 @@ Have a good day."
   },
   "template": "order-confirmation",
   "reseller_id": "reseller_123",
-  "merchant_id": "myshop.myshopify.com",
-  "reporting_webhook_url": "https://myshop.com/webhooks/call-status"
+  "merchant_id": "myshop.myshopify.com"
 }
 ```
 

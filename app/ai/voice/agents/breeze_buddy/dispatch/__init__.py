@@ -7,6 +7,8 @@ ZSET-as-schedule + leader-elected promoter + worker-pool design.
 See docs/BACKLOG_DISPATCHER_REDESIGN.md for the architecture.
 """
 
+from typing import Optional
+
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     acquire_channel_token,
     init_channel_semaphore,
@@ -30,10 +32,23 @@ from app.ai.voice.agents.breeze_buddy.dispatch.reconcilers import (
     reconcile_backlog_to_zset,
     reconcile_channel_tokens,
 )
-from app.ai.voice.agents.breeze_buddy.dispatch.worker import (
-    start_workers,
-    stop_workers,
-)
+
+
+async def start_workers(count: Optional[int] = None):
+    from app.ai.voice.agents.breeze_buddy.dispatch.worker import (
+        start_workers as _start_workers,
+    )
+
+    return await _start_workers(count)
+
+
+async def stop_workers() -> None:
+    from app.ai.voice.agents.breeze_buddy.dispatch.worker import (
+        stop_workers as _stop_workers,
+    )
+
+    await _stop_workers()
+
 
 __all__ = [
     "DISPATCHABLE_EXECUTION_MODES",

@@ -55,6 +55,6 @@ logs
 .claude/memory/
 CLAUDE.local.md
 .claude/settings.json
-
+graphify-out/
 # Local scratch / test fixtures
 temp/

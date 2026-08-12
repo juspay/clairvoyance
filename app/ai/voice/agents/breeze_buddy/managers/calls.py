@@ -39,6 +39,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
+from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
@@ -164,10 +165,16 @@ async def _run_pre_checks_for_lead(
     )
 
     # Send webhook for pre-check failure
-    reporting_webhook_url = (
-        lead.payload.get("reporting_webhook_url") if lead.payload else None
+    service_callback = (
+        template.configurations.service_callback
+        if template and template.configurations
+        else None
     )
-    if reporting_webhook_url:
+    webhook_url = (lead.payload or {}).get("reporting_webhook_url") or (
+        service_callback.url if service_callback else None
+    )
+    max_attempts = service_callback.max_attempts if service_callback else 3
+    if webhook_url:
         failed_checks = [r for r in pre_check_result.results if not r.passed]
         webhook_data = {
             "outcome": "PRECHECK_FAILED",
@@ -176,7 +183,12 @@ async def _run_pre_checks_for_lead(
             "orderId": lead.request_id,
         }
         try:
-            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+            await send_webhook_with_retry(
+                session,
+                webhook_url,
+                webhook_data,
+                max_retries=max_attempts,
+            )
         except Exception as e:
             logger.error(
                 f"Error sending pre-check failure webhook for lead {lead.id}: {e}"
@@ -366,7 +378,10 @@ async def _release_number(number_id: str, provider: CallProvider):
 
 
 async def _retry_call(
-    lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
+    lead: LeadCallTracker,
+    config: CallExecutionConfig,
+    outcome: Optional[str] = None,
+    template: Optional[TemplateModel] = None,
 ):
     """
     Schedules a retry for a call and sends webhook for NO_ANSWER outcomes.
@@ -375,8 +390,16 @@ async def _retry_call(
 
     # Send webhook for NO_ANSWER on every attempt
     if outcome == "NO_ANSWER":
-        reporting_webhook_url = (lead.payload or {}).get("reporting_webhook_url")
-        if reporting_webhook_url:
+        service_callback = (
+            template.configurations.service_callback
+            if template and template.configurations
+            else None
+        )
+        webhook_url = (lead.payload or {}).get("reporting_webhook_url") or (
+            service_callback.url if service_callback else None
+        )
+        max_attempts = service_callback.max_attempts if service_callback else 3
+        if webhook_url:
             call_duration = None
             if lead.call_initiated_time:
                 call_initiated_time_utc = lead.call_initiated_time.astimezone(
@@ -397,7 +420,10 @@ async def _retry_call(
             try:
                 async with create_aiohttp_session() as session:
                     success = await send_webhook_with_retry(
-                        session, reporting_webhook_url, summary_data, max_retries=3
+                        session,
+                        webhook_url,
+                        summary_data,
+                        max_retries=max_attempts,
                     )
                     if success:
                         logger.info(
@@ -621,7 +647,12 @@ async def handle_call_completion(
         and lead.call_direction == CallDirection.OUTBOUND
         and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
-        await _retry_call(lead, config, outcome)
+        template = (
+            await get_template_by_id_cached(lead.template_id)
+            if lead.template_id
+            else None
+        )
+        await _retry_call(lead, config, outcome, template)
 
     return updated_lead
 
@@ -710,7 +741,12 @@ async def handle_unanswered_calls(call_id: str):
         and lead.call_direction == CallDirection.OUTBOUND
         and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
-        await _retry_call(lead, config, "NO_ANSWER")
+        template = (
+            await get_template_by_id_cached(lead.template_id)
+            if lead.template_id
+            else None
+        )
+        await _retry_call(lead, config, "NO_ANSWER", template)
 
 
 async def update_call_recording(

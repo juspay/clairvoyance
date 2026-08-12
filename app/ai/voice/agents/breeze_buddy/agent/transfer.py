@@ -22,6 +22,7 @@ from app.ai.voice.agents.breeze_buddy.template.context import (
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.agent_transfer import PendingAgentTransfer
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
+from app.core.logger import logger
 from app.core.logger.context import update_log_context
 from app.database.accessor.breeze_buddy.lead_call_tracker import update_lead_template
 
@@ -84,11 +85,16 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
                 "generation": bot.generation,
             }
         )
-        await update_lead_template(
+        updated_lead = await update_lead_template(
             lead_id=bot.lead.id,
             template=transfer.template.name,
             template_id=str(transfer.template.id),
         )
+        if updated_lead:
+            updated_lead.metaData = bot.lead.metaData
+            bot.lead = updated_lead
+        else:
+            logger.warning(f"Failed to update lead template for lead {bot.lead.id}")
 
     # 3. Swap the template trio — everything downstream reads these.
     bot.template = transfer.template

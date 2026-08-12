@@ -67,7 +67,6 @@ async def push_lead(
             "template": "order-confirmation",
             "merchant_id": "merchant_123",
             "request_id": "order_456",
-            "reporting_webhook_url": "https://example.com/webhook",
             "payload": {
                 "customer_name": "John Doe",
                 "customer_mobile_number": "+1234567890",

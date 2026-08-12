@@ -493,7 +493,9 @@ async def update_lead_call_completion_details(
 
 
 async def update_lead_template(
-    lead_id: str, template: str, template_id: str
+    lead_id: str,
+    template: str,
+    template_id: str,
 ) -> Optional[LeadCallTracker]:
     """
     Update the template name and template_id for a lead.

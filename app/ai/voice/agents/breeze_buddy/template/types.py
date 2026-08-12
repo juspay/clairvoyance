@@ -684,6 +684,17 @@ class PhrasingOrder(str, Enum):
     RANDOM = "random"
 
 
+class ServiceCallbackConfig(BaseModel):
+    """Webhook callback fired at the end of every call (inbound and outbound)."""
+
+    url: str = Field(..., description="URL to POST the call summary to")
+    max_attempts: int = Field(
+        3,
+        ge=1,
+        description="Total HTTP POST attempts, including retries.",
+    )
+
+
 class FillerPhraseConfig(BaseModel):
     """Configuration for TTS filler phrases spoken during function call execution."""
 
@@ -2019,6 +2030,9 @@ class ConfigurationModel(BaseModel):
         None, description="Default VAD configuration for the template"
     )
     enable_inbound: bool = False  # Whether this template can handle inbound calls
+    service_callback: Optional["ServiceCallbackConfig"] = Field(
+        None, description="Callback configuration for inbound/outbound call reporting"
+    )
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
     )

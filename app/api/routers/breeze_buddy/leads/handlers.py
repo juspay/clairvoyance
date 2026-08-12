@@ -331,10 +331,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             seconds=config.initial_offset + req.delay
         )
 
-        # Prepare payload with reporting webhook URL
         lead_payload = {**req.payload}
-        if req.reporting_webhook_url:
-            lead_payload["reporting_webhook_url"] = req.reporting_webhook_url
 
         if req.is_playground:
             # Playground supplies stt_language and tts_provider explicitly —
