@@ -574,6 +574,18 @@ async def handle_call_completion(
         await raise_orphan_webhook(call_id=call_id, source="call_completion")
         return
 
+    # Clean up greeting audio from Redis if it exists — do this regardless of status
+    # since the delete is idempotent and prevents Redis key leaks from completed calls.
+    try:
+        redis = await get_redis_service()
+        greeting_key = f"greeting:{lead.id}"
+        await redis.delete(greeting_key)
+        logger.info(f"Deleted greeting audio from Redis for lead {lead.id}")
+    except Exception as e:
+        logger.opt(exception=e).warning(
+            f"Failed to delete greeting audio from Redis for lead {lead.id}"
+        )
+
     # Always release telephony number (including transfers — bot leaves, cleanup happens here)
     if (
         lead.telephony_number_id
