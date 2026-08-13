@@ -83,6 +83,16 @@ class RealtimeConfig(BaseModel):
         "recommends 500–800ms). Only applied when set; otherwise Gemini's "
         "server-side VAD default applies. Not used by OpenAI/xAI/Azure.",
     )
+    endframe_deferral_timeout_secs: float = Field(
+        1.0,
+        description="Gemini Live only. Cap (seconds) on the deferred EndFrame "
+        "queued by finish_call/end_conversation. pipecat otherwise parks it "
+        "for up to 30s while the bot considers itself mid-turn (turn_complete "
+        "rarely arrives for a function-call-only turn such as finish_call), "
+        "leaving the telephony line open until the customer hangs up. "
+        "Defaults to 1.0s when unset; set 0 for an immediate release. "
+        "Not used by OpenAI/xAI/Azure.",
+    )
     endpoint: Optional[str] = Field(
         None,
         description="Provider-specific endpoint URL override (currently used "

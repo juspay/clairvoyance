@@ -152,6 +152,7 @@ async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
             thinking_level=realtime.thinking_level,
             silence_duration_ms=realtime.silence_duration_ms,
             function_call_timeout_secs=function_call_timeout,
+            endframe_deferral_timeout_secs=realtime.endframe_deferral_timeout_secs,
         )
         logger.info(
             f"Resolving Gemini Live LLM service: model={gemini_config.model}, "

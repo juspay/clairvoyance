@@ -54,6 +54,7 @@ class GeminiRealtimeConfig:
     thinking_level: Optional[str] = None
     silence_duration_ms: Optional[int] = None
     function_call_timeout_secs: float = 10.0
+    endframe_deferral_timeout_secs: float = 1.0
 
 
 def build_gemini_realtime_llm(config: GeminiRealtimeConfig) -> GeminiLiveLLMService:
@@ -79,11 +80,18 @@ def build_gemini_realtime_llm(config: GeminiRealtimeConfig) -> GeminiLiveLLMServ
         settings_kwargs["vad"] = GeminiVADParams(
             silence_duration_ms=config.silence_duration_ms
         )
-    return GeminiLiveLLMService(
+    service = GeminiLiveLLMService(
         api_key=config.api_key,
         settings=GeminiLiveLLMService.Settings(**settings_kwargs),
         function_call_timeout_secs=config.function_call_timeout_secs,
     )
+    # Cap pipecat's EndFrame deferral so finish_call/end_conversation actually
+    # hang up the line (the default 30s leaves it open until the customer
+    # hangs up). pipecat exposes no constructor param for this — it's a class
+    # constant — so override it per-instance. Template-configurable via
+    # realtime.endframe_deferral_timeout_secs (default 1.0s; 0 = immediate).
+    service._END_FRAME_DEFERRAL_TIMEOUT_SECS = config.endframe_deferral_timeout_secs
+    return service
 
 
 def has_realtime_llm(llm_config: Any) -> bool:
