@@ -384,6 +384,11 @@ async def BB_TTS_SERVICE() -> str:
     return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)
 
 
+async def LEAD_GREETING_CACHE_TTL_SECONDS() -> int:
+    """TTL for lead-specific synthesized greeting audio. Default: two days."""
+    return await get_config("LEAD_GREETING_CACHE_TTL_SECONDS", 2 * 24 * 60 * 60, int)
+
+
 async def GEMINI_TTS_MODEL() -> str:
     """Returns the default Gemini TTS model name from Redis.
 

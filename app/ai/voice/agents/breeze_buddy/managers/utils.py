@@ -15,6 +15,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
+from app.core.config.dynamic import LEAD_GREETING_CACHE_TTL_SECONDS
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
 
@@ -166,9 +167,10 @@ async def prepare_and_store_initial_greeting(
                 "audio": base64.b64encode(greeting_audio).decode("utf-8"),
                 "text": resolved_greeting,
             }
-            await redis.set(
+            await redis.setex(
                 key=lead_greeting_key,
                 value=json.dumps(greeting_data),
+                ttl_seconds=await LEAD_GREETING_CACHE_TTL_SECONDS(),
             )
             logger.info(f"Stored dynamic greeting in Redis for lead {lead_id}")
             return resolved_greeting
