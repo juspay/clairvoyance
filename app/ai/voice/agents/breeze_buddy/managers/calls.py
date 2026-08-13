@@ -63,6 +63,7 @@ from app.database.accessor import (
     update_lead_call_recording_url,
     update_telephony_number_status,
 )
+from app.database.accessor.breeze_buddy.lead_call_tracker import update_lead_payload
 from app.schemas import (
     TEMPLATELESS_PLACEHOLDER_TEMPLATES,
     CallDirection,
@@ -129,6 +130,10 @@ async def _run_pre_checks_for_lead(
 
     Returns True if pre-checks pass (or no pre-checks configured), False otherwise.
     On failure, marks lead as FINISHED with outcome=PRECHECK_FAILED and sends webhook.
+
+    On success, ``export_to_payload`` values are merged into the lead's payload
+    before the dial, so the agent — a separate process that re-reads the lead
+    at answer time — finds them already in place.
     """
     if not config.pre_checks:
         return True
@@ -141,6 +146,15 @@ async def _run_pre_checks_for_lead(
     )
 
     if pre_check_result.should_proceed:
+        if pre_check_result.exports:
+            updated = await update_lead_payload(lead.id, pre_check_result.exports)
+            if updated:
+                lead.payload = updated.payload
+            else:
+                logger.warning(
+                    f"Pre-check payload export write failed for lead {lead.id}; "
+                    f"prompt will render without {list(pre_check_result.exports)}"
+                )
         return True
 
     # Pre-checks failed
