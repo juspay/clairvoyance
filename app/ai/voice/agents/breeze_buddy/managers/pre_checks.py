@@ -9,12 +9,19 @@ Pre-checks are configured per merchant/template in the call_execution_config tab
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
     HttpRequestExecutor,
+)
+from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline import (
+    apply_result_pipeline,
+)
+from app.ai.voice.agents.breeze_buddy.mcp import (
+    _build_server_params,
+    _create_direct_http_tool_handler,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
     HttpAuthConfig,
@@ -69,6 +76,90 @@ def _value_matches(actual: Any, expected: Any, match_type: PreCheckMatchType) ->
     return actual == expected
 
 
+def _extract_exports(
+    response_data: Any,
+    fields: Dict[str, str],
+    pre_check_name: str,
+) -> Dict[str, str]:
+    """Project ``export_to_payload`` fields out of a pre-check response.
+
+    Projection only — an ``mcp`` pre-check's values are already shaped by the
+    server's ``tool_response_transforms``.
+
+    Best-effort by contract — the caller must not let a failure here change
+    the go/no-go outcome, so every error path returns ``{}``.
+    """
+    extracted = apply_result_pipeline(
+        response_data,
+        tool_name=f"pre-check:{pre_check_name}",
+        response_schema=fields,
+    )
+    if extracted is response_data:
+        return {}
+    if not isinstance(extracted, dict):
+        return {}
+
+    return {
+        key: value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        for key, value in extracted.items()
+        if key in fields and value not in (None, "", [], {})
+    }
+
+
+async def _fetch_mcp_response(
+    pre_check: PreCheckConfig,
+    context: Dict[str, Any],
+    executor: HttpRequestExecutor,
+) -> Tuple[Optional[Any], Optional[str]]:
+    """Call an MCP tool through the same handler the conversation uses, which
+    brings the ``default_args`` merge, the envelope unwrap and the per-tool
+    transforms with it.
+
+    Returns ``(payload, None)`` or ``(None, reason)``; ``reason`` feeds
+    ``_apply_default`` so ``default_on_failure`` still decides.
+    """
+    server = pre_check.mcp
+    tool = pre_check.mcp_tool
+    if server is None or not tool:
+        return None, "'mcp' is set but 'mcp_tool' is missing"
+
+    arguments = executor._resolve_body(pre_check.mcp_arguments, context)
+    if not isinstance(arguments, dict):
+        return None, "mcp_arguments did not resolve to an object"
+
+    server_params = _build_server_params(server, context)
+    try:
+        HttpRequestExecutor._validate_resolved_url(server_params.url)
+    except ValueError as e:
+        return None, f"MCP server URL rejected: {e}"
+
+    handler = _create_direct_http_tool_handler(
+        server_params,
+        tool,
+        response_schema=server.tool_response_schemas.get(tool) or None,
+        response_transforms=server.tool_response_transforms.get(tool) or None,
+        default_args=server.default_args,
+    )
+
+    logger.info(
+        f"Pre-check '{pre_check.name}': calling MCP tool "
+        f"'{tool}' on server '{server.name or server.url}'"
+    )
+    envelope = await handler(arguments, None)
+
+    if envelope.get("status") != "success":
+        return None, f"MCP tool failed: {envelope.get('data')}"
+
+    data = envelope.get("data")
+    if isinstance(data, str):
+        try:
+            return json.loads(data), None
+        except json.JSONDecodeError:
+            # Prose answer — nothing to project out of it.
+            return None, "MCP tool returned non-JSON content"
+    return data, None
+
+
 @dataclass
 class SinglePreCheckResult:
     """Result of a single pre-check execution."""
@@ -85,6 +176,7 @@ class PreCheckResult:
 
     should_proceed: bool
     results: List[SinglePreCheckResult] = field(default_factory=list)
+    exports: Dict[str, str] = field(default_factory=dict)
 
     def summary(self) -> str:
         """Human-readable summary for logging."""
@@ -271,6 +363,7 @@ async def run_pre_checks(
         return PreCheckResult(should_proceed=True)
 
     results: List[SinglePreCheckResult] = []
+    exports: Dict[str, str] = {}
     executor = HttpRequestExecutor(session)
 
     for pre_check in pre_checks:
@@ -303,73 +396,135 @@ async def run_pre_checks(
             lead, template, pre_check.credential_id
         )
 
-        # Execute HTTP request using HttpRequestExecutor
+        # Fetch via MCP or plain HTTP; both converge on ``response_data``.
         try:
-            # Convert PreCheckHttpRequest to HttpRequestConfig
-            # This is inside try block to handle validation errors gracefully
-            http_cfg = pre_check.http_request
-
-            # Convert auth dict to HttpAuthConfig (if present)
-            converted_auth = _convert_auth_dict_to_config(http_cfg.auth)
-
-            # Convert query_params to Dict[str, str]
-            converted_query_params = _convert_query_params_to_str_dict(
-                http_cfg.query_params
-            )
-
-            http_config = HttpRequestConfig(
-                url=http_cfg.url,
-                method=HttpMethod(http_cfg.method.upper()),  # Normalize to uppercase
-                headers=http_cfg.headers or {},
-                body=http_cfg.body,
-                auth=converted_auth,
-                query_params=converted_query_params,
-                timeout=http_cfg.timeout,
-                max_retries=http_cfg.max_retries,
-            )
-
-            logger.info(
-                f"Pre-check '{pre_check.name}': executing {http_config.method.value} {http_cfg.url}"
-            )
-
-            response = await executor.execute(
-                config=http_config,
-                resolved_fields=context,
-                fire_and_forget=False,  # We need the response
-            )
-
-            if response is None or response == (0, ""):
-                result = _apply_default(pre_check, "HTTP request failed")
-                results.append(result)
-                if not result.passed:
-                    return PreCheckResult(should_proceed=False, results=results)
-                continue
-
-            status_code, response_body = response
-
-            # Check for non-success status
-            if status_code < 200 or status_code >= 300:
-                result = _apply_default(pre_check, f"API returned status {status_code}")
-                results.append(result)
-                if not result.passed:
-                    return PreCheckResult(should_proceed=False, results=results)
-                continue
-
-            # Parse response JSON
-            try:
-                response_data = json.loads(response_body)
-            except json.JSONDecodeError:
-                logger.warning(
-                    f"Pre-check '{pre_check.name}': response is not valid JSON"
+            if pre_check.mcp is not None:
+                response_data, failure_reason = await _fetch_mcp_response(
+                    pre_check, context, executor
                 )
-                result = _apply_default(pre_check, "Response is not valid JSON")
+                if failure_reason is not None:
+                    logger.warning(f"Pre-check '{pre_check.name}': {failure_reason}")
+                    result = _apply_default(pre_check, failure_reason)
+                    results.append(result)
+                    if not result.passed:
+                        return PreCheckResult(should_proceed=False, results=results)
+                    continue
+
+            else:
+                # Convert PreCheckHttpRequest to HttpRequestConfig
+                # This is inside try block to handle validation errors gracefully
+                http_cfg = pre_check.http_request
+                if http_cfg is None:
+                    result = _apply_default(
+                        pre_check, "neither 'http_request' nor 'mcp' is configured"
+                    )
+                    results.append(result)
+                    if not result.passed:
+                        return PreCheckResult(should_proceed=False, results=results)
+                    continue
+
+                # Convert auth dict to HttpAuthConfig (if present)
+                converted_auth = _convert_auth_dict_to_config(http_cfg.auth)
+
+                # Convert query_params to Dict[str, str]
+                converted_query_params = _convert_query_params_to_str_dict(
+                    http_cfg.query_params
+                )
+
+                http_config = HttpRequestConfig(
+                    url=http_cfg.url,
+                    method=HttpMethod(
+                        http_cfg.method.upper()
+                    ),  # Normalize to uppercase
+                    headers=http_cfg.headers or {},
+                    body=http_cfg.body,
+                    auth=converted_auth,
+                    query_params=converted_query_params,
+                    timeout=http_cfg.timeout,
+                    max_retries=http_cfg.max_retries,
+                )
+
+                logger.info(
+                    f"Pre-check '{pre_check.name}': executing {http_config.method.value} {http_cfg.url}"
+                )
+
+                response = await executor.execute(
+                    config=http_config,
+                    resolved_fields=context,
+                    fire_and_forget=False,  # We need the response
+                )
+
+                if response is None or response == (0, ""):
+                    result = _apply_default(pre_check, "HTTP request failed")
+                    results.append(result)
+                    if not result.passed:
+                        return PreCheckResult(should_proceed=False, results=results)
+                    continue
+
+                status_code, response_body = response
+
+                # Check for non-success status
+                if status_code < 200 or status_code >= 300:
+                    result = _apply_default(
+                        pre_check, f"API returned status {status_code}"
+                    )
+                    results.append(result)
+                    if not result.passed:
+                        return PreCheckResult(should_proceed=False, results=results)
+                    continue
+
+                # Parse response JSON
+                try:
+                    response_data = json.loads(response_body)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Pre-check '{pre_check.name}': response is not valid JSON"
+                    )
+                    result = _apply_default(pre_check, "Response is not valid JSON")
+                    results.append(result)
+                    if not result.passed:
+                        return PreCheckResult(should_proceed=False, results=results)
+                    continue
+
+            pre_check_exports: Dict[str, str] = {}
+            if pre_check.export_to_payload:
+                try:
+                    pre_check_exports = _extract_exports(
+                        response_data, pre_check.export_to_payload, pre_check.name
+                    )
+                    logger.info(
+                        f"Pre-check '{pre_check.name}': exported "
+                        f"{list(pre_check_exports.keys())}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Pre-check '{pre_check.name}': export failed ({e}), "
+                        "continuing without it"
+                    )
+                exports.update(pre_check_exports)
+
+            response_config = pre_check.response_config
+            if response_config is None:
+                results.append(
+                    SinglePreCheckResult(
+                        name=pre_check.name,
+                        passed=True,
+                        reason="Fetch-only (no response_config)",
+                        response_data=response_data,
+                    )
+                )
+                continue
+
+            if not isinstance(response_data, dict):
+                result = _apply_default(
+                    pre_check,
+                    f"Response is a {type(response_data).__name__}, not an object",
+                )
                 results.append(result)
                 if not result.passed:
                     return PreCheckResult(should_proceed=False, results=results)
                 continue
 
-            # Check response field
-            response_config = pre_check.response_config
             check_field = response_config.response_field
 
             if check_field not in response_data:
@@ -416,8 +571,8 @@ async def run_pre_checks(
                 return PreCheckResult(should_proceed=False, results=results)
 
         except Exception as e:
-            logger.error(
-                f"Pre-check '{pre_check.name}': execution error: {e}", exc_info=True
+            logger.opt(exception=e).error(
+                f"Pre-check '{pre_check.name}': execution error: {e}"
             )
             result = _apply_default(pre_check, f"Execution error: {e}")
             results.append(result)
@@ -425,4 +580,4 @@ async def run_pre_checks(
                 return PreCheckResult(should_proceed=False, results=results)
 
     logger.info(f"All pre-checks passed for lead {lead.id}")
-    return PreCheckResult(should_proceed=True, results=results)
+    return PreCheckResult(should_proceed=True, results=results, exports=exports)

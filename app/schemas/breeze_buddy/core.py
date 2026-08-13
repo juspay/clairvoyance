@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.ai.voice.agents.breeze_buddy.template.types import McpServerConfig
+
 
 class TelephonyNumberStatus(str, Enum):
     """Status of outbound phone numbers"""
@@ -162,6 +164,18 @@ class PreCheckConfig(BaseModel):
             },
             "default_on_failure": "proceed"
         }
+
+    Omitting ``response_config`` makes the pre-check *fetch-only*: it still
+    runs and still exports, but never blocks the call.
+
+    Set ``mcp`` instead of ``http_request`` to call an MCP tool:
+
+        {
+            "name": "catalog_lookup",
+            "mcp": {"name": "shopify", "url": "...", "auth": {"type": "none"}},
+            "mcp_tool": "search_catalog",
+            "mcp_arguments": {"catalog": {"query": "{items}"}}
+        }
     """
 
     type: PreCheckType = PreCheckType.EXTERNAL_API
@@ -171,8 +185,32 @@ class PreCheckConfig(BaseModel):
         default=None,
         description="UUID of the credential to use for placeholder resolution",
     )
-    http_request: PreCheckHttpRequest
-    response_config: PreCheckResponseConfig
+    http_request: Optional[PreCheckHttpRequest] = Field(
+        default=None,
+        description="The HTTP request to run. Unset when using 'mcp'.",
+    )
+    mcp: Optional[McpServerConfig] = Field(
+        default=None,
+        description="MCP server to call instead of http_request. Same model as "
+        "configurations.mcp.servers[*]; 'enabled' is not consulted.",
+    )
+    mcp_tool: Optional[str] = Field(
+        default=None, description="Tool to call on 'mcp'. Required with 'mcp'."
+    )
+    mcp_arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arguments for mcp_tool",
+    )
+    response_config: Optional[PreCheckResponseConfig] = Field(
+        default=None,
+        description="Go/no-go rule. Omit for a fetch-only pre-check that never "
+        "blocks the call.",
+    )
+    export_to_payload: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="payload keys projected out of the "
+        "response and merged into the lead payload before the dial.",
+    )
     default_on_failure: PreCheckDefaultAction = Field(
         default=PreCheckDefaultAction.PROCEED,
         description="What to do if the pre-check API call fails/times out. 'proceed' = fail-open, 'skip' = fail-closed",
