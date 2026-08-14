@@ -18,6 +18,8 @@ class TemplateMetadata(BaseModel):
     merchant_id: Optional[str] = None
     name: str
     is_active: bool
+    family_id: Optional[str] = None
+    current_version: int = 1
     supported_channels: List[str] = ["voice"]
     created_at: datetime
     updated_at: datetime

@@ -98,6 +98,7 @@ Breeze Buddy is the template-driven telephony agent. These patterns MUST be foll
 - Variables use `{placeholder}` syntax, resolved from lead payload at runtime
 - Node transitions are LLM-driven via function calls with optional async hooks
 - Template types defined in `breeze_buddy/template/types.py` -- this is the source of truth for all template models
+- Every template write appends a snapshot to `template_version` (lineage); `family_id` groups templates for admin bulk update (`POST /templates/bulk/update`, JSON merge patch + node_patches) and bulk rollback (`POST /templates/bulk/rollback`, drift-guarded). Never UPDATE `template.flow` directly -- always go through the accessor so the version row is written. Family propagation: editing a family's parent template (`PUT /templates/families/{id}`) snapshots into `template_family_version`; `POST /templates/families/{id}/propagate/preview` three-way merges that edit into every child (base = the family revision in `template.derived_from_base_version`) and `.../propagate/apply` writes it as one `op_type='propagation'` bulk op, revertible via `POST /templates/bulk/rollback` (`also_revert_family` also restores the parent). Merge primitives live in `template/merge.py` -- pure functions, no I/O
 
 ### Lead Processing Flow
 1. Lead inserted via `/push/lead/v2` -> validated -> stored as BACKLOG

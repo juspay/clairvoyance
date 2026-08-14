@@ -11,6 +11,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.core.logger import logger
+from app.database import get_db_connection
+from app.database.accessor.breeze_buddy.template_version import (
+    insert_template_version_on_conn,
+)
 from app.database.decoder.breeze_buddy.template import decode_template
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.call_execution_config import (
@@ -78,6 +82,7 @@ async def create_template(
     telephony_number_id: Optional[str] = None,
     is_active: bool = True,
     supported_channels: Optional[List[str]] = None,
+    changed_by: Optional[str] = None,
 ) -> Optional[TemplateModel]:
     """Create a new template with flow stored as JSON."""
     logger.info(f"Creating template with ID: {template_id}")
@@ -121,16 +126,19 @@ async def create_template(
             now,
         )
 
-        result = await run_parameterized_query(query, values)
-        if result and get_row_count(result) > 0:
-            decoded_result = decode_template(result[0])
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                row = await conn.fetchrow(query, *values)
+                if row is None:
+                    logger.error("Failed to create template")
+                    return None
+                await insert_template_version_on_conn(
+                    conn, row, change_source="create", changed_by=changed_by
+                )
+            decoded_result = decode_template(row)
             if decoded_result:
                 logger.info(f"Template created successfully: {decoded_result.id}")
-            else:
-                logger.error("Template decoding failed after creation")
             return decoded_result
-
-        logger.error("Failed to create template")
         return None
 
     except Exception as e:
@@ -254,6 +262,8 @@ async def get_templates_list(
                     name=row["name"],
                     is_active=row["is_active"],
                     supported_channels=list(row["supported_channels"]),
+                    family_id=(str(row["family_id"]) if row.get("family_id") else None),
+                    current_version=row.get("current_version") or 1,
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                 )
@@ -308,6 +318,28 @@ async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:
         return None
 
 
+async def get_template_raw_configurations(
+    template_id: str,
+) -> Optional[Dict[str, Any]]:
+    """The ``configurations`` column exactly as stored.
+
+    ``get_template_by_id`` decodes through ``ConfigurationModel``, which
+    materialises every Pydantic default. Callers that COPY a template's
+    configuration into another row (family create) must persist what was
+    actually stored, not the default-filled view of it.
+    """
+    try:
+        query, values = get_template_by_id_query(template_id)
+        result = await run_parameterized_query(query, values)
+        if not result:
+            return None
+        raw = result[0]["configurations"]
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as e:
+        logger.error(f"Error reading raw configurations for {template_id}: {e}")
+        raise
+
+
 async def get_template_merchant_id(template_id: str) -> Optional[str]:
     """Return only the merchant that owns a template.
 
@@ -349,6 +381,9 @@ async def replace_template(
     merchant_id: Optional[str],
     now,
     supported_channels: Optional[List[str]] = None,
+    changed_by: Optional[str] = None,
+    change_source: str = "manual_edit",
+    bulk_op_id: Optional[str] = None,
 ) -> Optional[TemplateModel]:
     """
     Update an existing template.
@@ -411,17 +446,23 @@ async def replace_template(
             now,
         )
 
-        result = await run_parameterized_query(query, values)
-
-        if result and get_row_count(result) > 0:
-            decoded_result = decode_template(result[0])
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                row = await conn.fetchrow(query, *values)
+                if row is None:
+                    logger.error(f"Failed to update template: {template_id}")
+                    return None
+                await insert_template_version_on_conn(
+                    conn,
+                    row,
+                    change_source=change_source,
+                    bulk_op_id=bulk_op_id,
+                    changed_by=changed_by,
+                )
+            decoded_result = decode_template(row)
             if decoded_result:
                 logger.info(f"Template updated successfully: {decoded_result.id}")
-            else:
-                logger.error("Template decoding failed after update")
             return decoded_result
-
-        logger.error(f"Failed to update template: {template_id}")
         return None
 
     except Exception as e:
@@ -527,6 +568,8 @@ async def delete_template_if_not_referenced(
                 merchant_id=row.get("merchant_id"),
                 name=row["name"],
                 is_active=row["is_active"],
+                family_id=(str(row["family_id"]) if row.get("family_id") else None),
+                current_version=row.get("current_version") or 1,
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
             )

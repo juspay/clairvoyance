@@ -41,6 +41,17 @@ from .rbac import require_admin_or_reseller_owner
 
 router = APIRouter()
 
+from .bulk import router as bulk_router  # noqa: E402
+
+# bulk BEFORE versions: versions has POST /templates/{template_id}/rollback,
+# which would otherwise capture /templates/bulk/rollback with
+# template_id="bulk" (routes match in inclusion order).
+router.include_router(bulk_router)
+
+from .versions import router as versions_router  # noqa: E402
+
+router.include_router(versions_router)
+
 
 @router.post("/templates", status_code=status.HTTP_201_CREATED)
 async def create_template(
@@ -110,6 +121,10 @@ async def list_templates(
         None, ge=1, le=100, description="Page size. Omit to return all."
     ),
     search: Optional[str] = Query(None, description="Case-insensitive name search."),
+    unassigned: bool = Query(
+        False,
+        description="When true, only return templates not yet assigned to any family.",
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -152,6 +167,7 @@ async def list_templates(
         page=page,
         limit=limit,
         search=search,
+        unassigned=unassigned,
     )
 
 

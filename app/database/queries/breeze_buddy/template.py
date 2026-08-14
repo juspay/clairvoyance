@@ -36,7 +36,7 @@ def get_template_in_scope_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, family_id, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {" AND ".join(conditions)}
     """
@@ -74,7 +74,7 @@ def create_template_query(
     query = f"""
         INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
-        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, family_id, current_version, created_at, updated_at
     """
 
     return query, [
@@ -113,7 +113,8 @@ def delete_template_if_not_referenced_query(template_id: str) -> tuple[str, list
         )
         DELETE FROM {TEMPLATE_TABLE}
         WHERE id IN (SELECT id FROM can_delete)
-        RETURNING id, reseller_id, merchant_id, name, is_active, created_at, updated_at
+        RETURNING id, reseller_id, merchant_id, name, is_active, family_id,
+                  current_version, created_at, updated_at
     """
     return query, [template_id]
 
@@ -150,6 +151,12 @@ def _build_template_list_conditions(
     if "is_active" in filters:
         values.append(filters["is_active"])
         conditions.append(f"is_active = ${len(values)}")
+
+    if filters.get("family_id_is_null"):
+        # Unassigned agents only — used by the family pickers so admins
+        # cannot accidentally add an agent that already belongs to another
+        # family.
+        conditions.append("family_id IS NULL")
 
     if filters.get("search"):
         values.append(f"%{filters['search']}%")
@@ -190,7 +197,7 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, is_active, supported_channels, created_at, updated_at
+               name, is_active, supported_channels, family_id, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         {where_clause}
         ORDER BY {order_by}
@@ -229,7 +236,7 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, family_id, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
@@ -275,7 +282,7 @@ def get_template_by_telephony_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, family_id, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
@@ -304,7 +311,7 @@ def get_all_templates_by_telephony_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, telephony_number_id, is_active, supported_channels, family_id, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE telephony_number_id = $1
         AND is_active = TRUE
@@ -396,12 +403,13 @@ def replace_template_query(
             reseller_id = $9,
             merchant_id = $10,
             supported_channels = $11,
+            current_version = current_version + 1,
             updated_at = $12
         WHERE id = $13
         RETURNING id,
                   reseller_id,
                   merchant_id,
-                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, family_id, current_version, created_at, updated_at
     """
 
     return query, [
@@ -417,5 +425,220 @@ def replace_template_query(
         merchant_id,
         supported_channels,
         updated_at,
+        template_id,
+    ]
+
+
+def get_templates_for_update_query(template_ids: List[str]) -> Tuple[str, List[Any]]:
+    """Lock + load full head rows for a bulk operation (row locks prevent a
+    concurrent PUT from interleaving between read and write)."""
+    query = f"""
+        SELECT id, reseller_id, merchant_id, name, flow,
+               expected_payload_schema, expected_callback_response_schema,
+               configurations, secrets, telephony_number_id, is_active,
+               supported_channels, family_id, current_version,
+               created_at, updated_at
+        FROM {TEMPLATE_TABLE}
+        WHERE id = ANY($1::uuid[])
+        ORDER BY id
+        FOR UPDATE
+    """
+    return query, [template_ids]
+
+
+def update_template_bulk_fields_query(
+    template_id: str, flow_json: str, configurations_json: Optional[str], now
+) -> Tuple[str, List[Any]]:
+    """Bulk update touches only flow + configurations (patched values);
+    identity, secrets, pins, channels are never bulk-edited."""
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET flow = $1::jsonb,
+            configurations = $2::jsonb,
+            current_version = current_version + 1,
+            updated_at = $3
+        WHERE id = $4
+        RETURNING id, reseller_id, merchant_id, name, flow,
+                  expected_payload_schema, expected_callback_response_schema,
+                  configurations, secrets, telephony_number_id, is_active,
+                  supported_channels, family_id, current_version,
+                  created_at, updated_at
+    """
+    return query, [flow_json, configurations_json, now, template_id]
+
+
+_FAMILY_MEMBER_COLUMNS = (
+    "id, reseller_id, merchant_id, name, flow, "
+    "expected_payload_schema, expected_callback_response_schema, "
+    "configurations, secrets, telephony_number_id, is_active, "
+    "supported_channels, family_id, current_version, "
+    "derived_from_base_version, created_at, updated_at"
+)
+
+
+def get_family_templates_for_update_query(family_id: str) -> Tuple[str, List[Any]]:
+    query = f"""
+        SELECT {_FAMILY_MEMBER_COLUMNS}
+        FROM {TEMPLATE_TABLE}
+        WHERE family_id = $1
+        ORDER BY id
+        FOR UPDATE
+    """
+    return query, [family_id]
+
+
+def get_family_member_contents_query(
+    family_id: str,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> Tuple[str, List[Any]]:
+    """Read-only twin of ``get_family_templates_for_update_query`` — same
+    columns, no ``FOR UPDATE``. Propagation preview must not take row locks:
+    it writes nothing and must never block a concurrent PUT.
+
+    ``limit`` / ``offset`` enable paginated preview: pass them together to
+    fetch one page of members; omit both to fetch all (legacy / apply path).
+    """
+    values: List[Any] = [family_id]
+    query = f"""
+        SELECT {_FAMILY_MEMBER_COLUMNS}
+        FROM {TEMPLATE_TABLE}
+        WHERE family_id = $1
+        ORDER BY id
+    """
+    if limit is not None:
+        values.append(limit)
+        query += f"\n        LIMIT ${len(values)}"
+        values.append(offset)
+        query += f"\n        OFFSET ${len(values)}"
+    return query, values
+
+
+def count_family_member_contents_query(family_id: str) -> Tuple[str, List[Any]]:
+    """Total number of template members in a family — for pagination metadata."""
+    query = f"""
+        SELECT COUNT(*) AS total
+        FROM {TEMPLATE_TABLE}
+        WHERE family_id = $1
+    """
+    return query, [family_id]
+
+
+def set_template_derived_base_version_query(
+    template_id: str, base_version: Optional[int]
+) -> Tuple[str, List[Any]]:
+    """Record which family revision a child is now synced to.
+
+    Lineage metadata, not content: deliberately does NOT bump
+    current_version and is not part of the version snapshot — the template's
+    content is unchanged by this statement.
+    """
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET derived_from_base_version = $1
+        WHERE id = $2
+    """
+    return query, [base_version, template_id]
+
+
+def set_templates_derived_base_version_query(
+    template_ids: List[str], base_version: Optional[int]
+) -> Tuple[str, List[Any]]:
+    """Bulk form, used when a propagation is reverted."""
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET derived_from_base_version = $1
+        WHERE id = ANY($2::uuid[])
+    """
+    return query, [base_version, template_ids]
+
+
+def assign_family_query(
+    family_id: str, template_ids: List[str], now
+) -> Tuple[str, List[Any]]:
+    """Adopt templates into a family.
+
+    Families are global admin-managed groups: any existing template can be
+    assigned regardless of reseller, provided it is not already a member of
+    a *different* family.  Templates already in *this* family are a no-op.
+    Templates belonging to another family are excluded by the WHERE clause
+    and therefore absent from RETURNING id, which causes _assert_all_assigned
+    to raise a 409 with a clear message.
+    """
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET family_id = $1,
+            updated_at = $2
+        WHERE id = ANY($3::uuid[])
+          AND (family_id IS NULL OR family_id = $1::uuid)
+        RETURNING id
+    """
+    return query, [family_id, now, template_ids]
+
+
+def get_template_head_versions_query(template_ids: List[str]) -> Tuple[str, List[Any]]:
+    """Lock + read just the head version numbers for a bulk rollback's drift
+    check (row locks prevent a concurrent edit racing the rollback)."""
+    query = f"""
+        SELECT id, current_version
+        FROM {TEMPLATE_TABLE}
+        WHERE id = ANY($1::uuid[])
+        FOR UPDATE
+    """
+    return query, [template_ids]
+
+
+def restore_template_head_query(
+    template_id: str,
+    reseller_id: str,
+    merchant_id: Optional[str],
+    name: str,
+    flow_json: str,
+    expected_payload_schema_json: Optional[str],
+    expected_callback_response_schema_json: Optional[str],
+    configurations_json: Optional[str],
+    secrets_json: Optional[str],
+    telephony_number_id: Optional[str],
+    is_active: bool,
+    supported_channels: List[str],
+    now,
+) -> Tuple[str, List[Any]]:
+    """Rollback write: restore all editable columns from a snapshot and bump
+    current_version (rollback is itself a new version, never history surgery)."""
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET reseller_id = $1,
+            merchant_id = $2,
+            name = $3,
+            flow = $4::jsonb,
+            expected_payload_schema = $5::jsonb,
+            expected_callback_response_schema = $6::jsonb,
+            configurations = $7::jsonb,
+            secrets = $8::jsonb,
+            telephony_number_id = $9,
+            is_active = $10,
+            supported_channels = $11,
+            current_version = current_version + 1,
+            updated_at = $12
+        WHERE id = $13
+        RETURNING id, reseller_id, merchant_id, name, flow,
+                  expected_payload_schema, expected_callback_response_schema,
+                  configurations, secrets, telephony_number_id, is_active,
+                  supported_channels, family_id, current_version,
+                  created_at, updated_at
+    """
+    return query, [
+        reseller_id,
+        merchant_id,
+        name,
+        flow_json,
+        expected_payload_schema_json,
+        expected_callback_response_schema_json,
+        configurations_json,
+        secrets_json,
+        telephony_number_id,
+        is_active,
+        supported_channels,
+        now,
         template_id,
     ]
