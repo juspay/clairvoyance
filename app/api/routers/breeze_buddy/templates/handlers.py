@@ -3,17 +3,21 @@ Business logic handlers for template operations.
 All handlers perform database operations and enforce business rules.
 """
 
+import copy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
     CreateTemplateRequest,
     FlowMode,
     ReplaceTemplateRequest,
+    TemplateModel,
 )
 from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     mask_template_secrets,
@@ -34,13 +38,42 @@ from app.database.accessor.breeze_buddy.template import (
     get_templates_list,
     replace_template,
 )
+from app.database.accessor.breeze_buddy.template_version import (
+    get_template_version_by_number,
+    list_template_versions,
+)
+from app.database.decoder.breeze_buddy.template import _migrate_legacy_voice_config
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.template import (
     DeleteTemplateResponse,
+    RollbackTemplateResponse,
     TemplateListResponse,
+    TemplateVersionDetail,
+    TemplateVersionListResponse,
 )
 
 from .rbac import apply_hierarchical_template_filters, validate_template_access
+
+
+def _validate_flow_shape(flow: Optional[Dict[str, Any]]) -> None:
+    """Shared flow-shape validation for create / replace / rollback.
+
+    Direct-mode flows have a flat ``system_prompt`` + ``functions`` list and
+    no ``initial_node`` / ``nodes`` (see template/builder.py
+    ``_build_direct_flow_config``); node-mode requires both.
+    """
+    if not flow:
+        raise ValueError("Flow structure is required")
+    if flow.get("mode") == FlowMode.DIRECT.value:
+        if "system_prompt" not in flow:
+            raise ValueError(
+                "system_prompt must be specified in direct-mode flow structure"
+            )
+    else:
+        if "initial_node" not in flow:
+            raise ValueError("initial_node must be specified in flow structure")
+        if "nodes" not in flow or not flow["nodes"]:
+            raise ValueError("nodes must be specified in flow structure")
 
 
 async def create_template_handler(
@@ -68,23 +101,7 @@ async def create_template_handler(
     try:
         # Validate flow structure
         flow = template_data.flow
-        if not flow:
-            raise ValueError("Flow structure is required")
-
-        # Direct-mode flows have a flat ``system_prompt`` + ``functions`` list
-        # and no ``initial_node`` / ``nodes``. The legacy node-based check
-        # below would reject them despite the runtime supporting them
-        # (``template/builder.py:_build_direct_flow_config``).
-        if flow.get("mode") == FlowMode.DIRECT.value:
-            if "system_prompt" not in flow:
-                raise ValueError(
-                    "system_prompt must be specified in direct-mode flow structure"
-                )
-        else:
-            if "initial_node" not in flow:
-                raise ValueError("initial_node must be specified in flow structure")
-            if "nodes" not in flow or not flow["nodes"]:
-                raise ValueError("nodes must be specified in flow structure")
+        _validate_flow_shape(flow)
 
         # Check if template already exists
         existing = await get_template_in_scope(
@@ -137,7 +154,13 @@ async def create_template_handler(
                 context={"reveal_secrets": True},
             )
 
-        template = await create_template(
+        snapshot_configurations = (
+            template_data.configurations.model_dump(exclude_none=True, mode="json")
+            if template_data.configurations
+            else None
+        )
+
+        template, version_number = await create_template(
             template_id=str(uuid4()),
             reseller_id=template_data.reseller_id,
             merchant_id=template_data.merchant_id,
@@ -151,6 +174,8 @@ async def create_template_handler(
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
             now=now,
+            updated_by=current_user.username,
+            snapshot_configurations=snapshot_configurations,
         )
 
         if not template:
@@ -170,7 +195,7 @@ async def create_template_handler(
 
         logger.info(
             f"Successfully created template with id: {template.id} containing flow "
-            f"with {len(flow.get('nodes', []))} nodes"
+            f"with {len(flow.get('nodes', []))} nodes, version {version_number}"
         )
 
         return {
@@ -407,19 +432,7 @@ async def replace_template_handler(
         # Validate flow structure (direct mode has a different shape — see
         # the create handler for the matching branch).
         flow = template_data.flow
-        if not flow:
-            raise ValueError("Flow structure is required")
-
-        if flow.get("mode") == FlowMode.DIRECT.value:
-            if "system_prompt" not in flow:
-                raise ValueError(
-                    "system_prompt must be specified in direct-mode flow structure"
-                )
-        else:
-            if "initial_node" not in flow:
-                raise ValueError("initial_node must be specified in flow structure")
-            if "nodes" not in flow or not flow["nodes"]:
-                raise ValueError("nodes must be specified in flow structure")
+        _validate_flow_shape(flow)
 
         # Validate telephony_number_id if provided. Tenant-scope enforcement
         # applies to NEW or CHANGED pins only: legacy templates that already
@@ -484,6 +497,18 @@ async def replace_template_handler(
                 configurations, existing_configurations
             )
 
+        # Snapshot the FINAL persisted configuration, masked — reconstructing
+        # through ConfigurationModel makes the SecretStr serializer emit
+        # "**********" for auth values (no reveal_secrets context), so the
+        # history row always mirrors what actually went live, minus secrets.
+        snapshot_configurations = (
+            ConfigurationModel(**configurations).model_dump(
+                exclude_none=True, mode="json"
+            )
+            if configurations
+            else None
+        )
+
         # Merge secrets: preserve **** values from existing, update real values
         merged_secrets = merge_secrets(
             incoming_secrets=template_data.secrets,
@@ -502,7 +527,7 @@ async def replace_template_handler(
             )
         ]
 
-        updated_template = await replace_template(
+        updated_template, version_number = await replace_template(
             template_id=template_id,
             reseller_id=reseller_id,
             name=template_data.name,
@@ -516,6 +541,8 @@ async def replace_template_handler(
             merchant_id=template_data.merchant_id,
             supported_channels=supported_channels,
             now=now,
+            updated_by=current_user.username,
+            snapshot_configurations=snapshot_configurations,
         )
 
         if not updated_template:
@@ -546,7 +573,7 @@ async def replace_template_handler(
 
         logger.info(
             f"Successfully updated template with id: {updated_template.id} containing flow "
-            f"with {len(flow.get('nodes', []))} nodes"
+            f"with {len(flow.get('nodes', []))} nodes, version {version_number}"
         )
 
         return mask_template_secrets(updated_template)
@@ -653,4 +680,219 @@ async def delete_template_handler(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting template: {str(e)}",
+        )
+
+
+async def _get_template_with_access(template_id: str, current_user: UserInfo):
+    """Shared 404 + RBAC gate for the version endpoints."""
+    template = await get_template_by_id(template_id)
+    if not template:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Template not found: {template_id}",
+        )
+    validate_template_access(
+        current_user,
+        template.reseller_id,
+        template.merchant_id,
+        operation="access template",
+    )
+    return template
+
+
+async def list_template_versions_handler(
+    template_id: str, page: int, limit: int, current_user: UserInfo
+) -> TemplateVersionListResponse:
+    try:
+        await _get_template_with_access(template_id, current_user)
+        offset = (page - 1) * limit
+        versions, total = await list_template_versions(template_id, limit, offset)
+        # Active version == MAX(version_number) == head of the newest-first
+        # order; page 1 already holds it, later pages fetch just the head.
+        if page == 1 and versions:
+            active_version = versions[0].version_number
+        else:
+            head, _ = await list_template_versions(template_id, 1, 0)
+            active_version = head[0].version_number if head else None
+        return TemplateVersionListResponse(
+            versions=versions, total=total, active_version=active_version
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing template versions: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error listing template versions",
+        )
+
+
+async def get_template_version_handler(
+    template_id: str, version_number: int, current_user: UserInfo
+) -> TemplateVersionDetail:
+    try:
+        await _get_template_with_access(template_id, current_user)
+        version = await get_template_version_by_number(template_id, version_number)
+        if not version:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {version_number} not found for template {template_id}",
+            )
+        return version
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting template version: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error getting template version",
+        )
+
+
+def build_rollback_template_args(
+    existing: TemplateModel, snapshot: TemplateVersionDetail
+) -> Dict[str, Any]:
+    """kwargs for replace_template that restore a snapshot.
+
+    Restored from the snapshot: flow, configurations, both payload schemas.
+    Kept from the live row: name, secrets, outbound_number_id, is_active,
+    scoping, supported_channels (design doc §4 — avoids rename-uniqueness
+    collisions and surprise number/credential changes).
+
+    Snapshot MCP auth is stored masked; merge_masked_mcp_auth swaps the
+    masks for the live row's real values (or clears them when there is no
+    live counterpart, so a broken restore fails loudly at MCP setup).
+
+    The merged dict is then validated like a PUT body (design doc §6):
+    snapshots are raw dicts that may predate today's ``ConfigurationModel``
+    shape, so we normalize legacy fields and construct the model before
+    this is ever written back to the live row. Without this, a rollback to
+    an old snapshot can commit a config that no longer decodes, soft-
+    bricking the template (get_template_by_id returns None -> 404s).
+    Raises ``ValueError`` on an invalid snapshot; the caller maps that to
+    a 400.
+    """
+    existing_configurations = (
+        existing.configurations.model_dump(
+            exclude_none=True, mode="json", context={"reveal_secrets": True}
+        )
+        if existing.configurations
+        else None
+    )
+    merged_configurations = (
+        merge_masked_mcp_auth(
+            copy.deepcopy(snapshot.configurations), existing_configurations
+        )
+        if snapshot.configurations
+        else None
+    )
+    restored_configurations = None
+    if merged_configurations is not None:
+        normalized = _migrate_legacy_voice_config(merged_configurations)
+        try:
+            validated_configurations = ConfigurationModel(**normalized)
+        except ValidationError as e:
+            raise ValueError(
+                f"Version {snapshot.version_number} configurations are no "
+                f"longer valid against the current template schema and "
+                f"cannot be restored: {e}"
+            ) from e
+        restored_configurations = validated_configurations.model_dump(
+            exclude_none=True, mode="json", context={"reveal_secrets": True}
+        )
+    return {
+        "template_id": str(existing.id),
+        "reseller_id": existing.reseller_id,
+        "name": existing.name,
+        "flow": snapshot.flow,
+        "expected_payload_schema": snapshot.expected_payload_schema,
+        "expected_callback_response_schema": snapshot.expected_callback_response_schema,
+        "configurations": restored_configurations,
+        "secrets": existing.secrets,
+        "outbound_number_id": existing.outbound_number_id,
+        "is_active": existing.is_active,
+        "merchant_id": existing.merchant_id,
+        "supported_channels": [str(ch) for ch in existing.supported_channels],
+    }
+
+
+async def rollback_template_handler(
+    template_id: str, version_number: int, current_user: UserInfo
+) -> RollbackTemplateResponse:
+    """Restore version n as a NEW latest version (append-only history)."""
+    logger.info(
+        f"User {current_user.username} (role: {current_user.role}) rolling back "
+        f"template {template_id} to version {version_number}"
+    )
+    try:
+        existing_template = await _get_template_with_access(template_id, current_user)
+        snapshot = await get_template_version_by_number(template_id, version_number)
+        if not snapshot:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Version {version_number} not found for template {template_id}",
+            )
+
+        _validate_flow_shape(snapshot.flow)
+
+        args = build_rollback_template_args(existing_template, snapshot)
+        now = datetime.now(timezone.utc)
+        updated_template, new_version = await replace_template(
+            **args,
+            now=now,
+            updated_by=current_user.username,
+            # Snapshot the FINAL persisted (validated + merged) configuration,
+            # masked — not the raw historical snapshot being restored from.
+            # Reconstructing through ConfigurationModel with no reveal_secrets
+            # context makes the SecretStr serializer emit "**********", so
+            # this version row mirrors what actually went live, minus
+            # secrets, same as the PUT path.
+            snapshot_configurations=(
+                ConfigurationModel(**args["configurations"]).model_dump(
+                    exclude_none=True, mode="json"
+                )
+                if args["configurations"]
+                else None
+            ),
+            change_source="rollback",
+            restored_from=version_number,
+        )
+        if not updated_template or new_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to roll back template",
+            )
+
+        # Best-effort cache bust — same contract as PUT: the DB write is
+        # committed; a Redis blip must not surface as a 500.
+        try:
+            await invalidate_template(template_id)
+        except Exception as cache_exc:
+            logger.warning(
+                f"Template cache invalidation failed for {template_id}: {cache_exc}"
+            )
+
+        logger.info(
+            f"Template {template_id} rolled back to version {version_number} "
+            f"as new version {new_version}"
+        )
+        return RollbackTemplateResponse(
+            template_id=str(template_id),
+            restored_from=version_number,
+            new_version=new_version,
+            message=(
+                f"Version {version_number} restored as version {new_version}; "
+                f"it is now live"
+            ),
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Validation error rolling back template: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error rolling back template: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error rolling back template",
         )

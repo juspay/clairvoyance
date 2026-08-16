@@ -11,6 +11,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.core.logger import logger
+from app.database import get_db_connection
 from app.database.decoder.breeze_buddy.template import decode_template
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.call_execution_config import (
@@ -29,7 +30,37 @@ from app.database.queries.breeze_buddy.template import (
     get_templates_list_query,
     replace_template_query,
 )
+from app.database.queries.breeze_buddy.template_version import (
+    insert_template_version_query,
+)
 from app.schemas.breeze_buddy.template import TemplateMetadata
+
+
+def serialize_version_snapshot(
+    flow: dict,
+    snapshot_configurations: Optional[dict],
+    expected_payload_schema: Optional[dict],
+    expected_callback_response_schema: Optional[dict],
+) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
+    """JSON-dump the version-snapshot blobs; None stays SQL NULL, never 'null'."""
+    return (
+        json.dumps(flow),
+        (
+            json.dumps(snapshot_configurations)
+            if snapshot_configurations is not None
+            else None
+        ),
+        (
+            json.dumps(expected_payload_schema)
+            if expected_payload_schema is not None
+            else None
+        ),
+        (
+            json.dumps(expected_callback_response_schema)
+            if expected_callback_response_schema is not None
+            else None
+        ),
+    )
 
 
 def get_row_count(result: Optional[list[asyncpg.Record]]) -> int:
@@ -78,7 +109,9 @@ async def create_template(
     telephony_number_id: Optional[str] = None,
     is_active: bool = True,
     supported_channels: Optional[List[str]] = None,
-) -> Optional[TemplateModel]:
+    updated_by: Optional[str] = None,
+    snapshot_configurations: Optional[dict] = None,
+) -> Tuple[Optional[TemplateModel], Optional[int]]:
     """Create a new template with flow stored as JSON."""
     logger.info(f"Creating template with ID: {template_id}")
 
@@ -121,21 +154,51 @@ async def create_template(
             now,
         )
 
-        result = await run_parameterized_query(query, values)
-        if result and get_row_count(result) > 0:
+        (
+            flow_snapshot_json,
+            snapshot_configurations_json,
+            payload_schema_json,
+            callback_schema_json,
+        ) = serialize_version_snapshot(
+            flow,
+            snapshot_configurations,
+            expected_payload_schema,
+            expected_callback_response_schema,
+        )
+        version_query, version_values = insert_template_version_query(
+            template_id=template_id,
+            name=name,
+            flow=flow_snapshot_json,
+            configurations=snapshot_configurations_json,
+            expected_payload_schema=payload_schema_json,
+            expected_callback_response_schema=callback_schema_json,
+            updated_by=updated_by,
+            change_source="create",
+            restored_from=None,
+        )
+
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                result = await conn.fetch(query, *values)
+                if not result:
+                    logger.error("Failed to create template")
+                    return None, None
+                version_row = await conn.fetch(version_query, *version_values)
             decoded_result = decode_template(result[0])
+            version_number = version_row[0]["version_number"] if version_row else None
             if decoded_result:
-                logger.info(f"Template created successfully: {decoded_result.id}")
+                logger.info(
+                    f"Template created successfully: {decoded_result.id} "
+                    f"(version {version_number})"
+                )
             else:
                 logger.error("Template decoding failed after creation")
-            return decoded_result
-
-        logger.error("Failed to create template")
-        return None
+            return decoded_result, version_number
+        return None, None
 
     except Exception as e:
         logger.error(f"Error creating template: {e}")
-        return None
+        return None, None
 
 
 async def get_templates_list(
@@ -349,7 +412,11 @@ async def replace_template(
     merchant_id: Optional[str],
     now,
     supported_channels: Optional[List[str]] = None,
-) -> Optional[TemplateModel]:
+    updated_by: Optional[str] = None,
+    snapshot_configurations: Optional[dict] = None,
+    change_source: str = "update",
+    restored_from: Optional[int] = None,
+) -> Tuple[Optional[TemplateModel], Optional[int]]:
     """
     Update an existing template.
 
@@ -367,9 +434,15 @@ async def replace_template(
         is_active: Whether template is active (required)
         merchant_id: Merchant identifier (optional, set to NULL if not provided)
         now: Current timestamp
+        updated_by: Identity of the actor making this change (version snapshot)
+        snapshot_configurations: Configurations to snapshot into the version
+            history (masked -- distinct from `configurations`, which is the
+            real value written to the template row)
+        change_source: Provenance of this write ("update", "create", "rollback")
+        restored_from: Version number this write restores from, if any
 
     Returns:
-        Updated TemplateModel if successful, None otherwise
+        Tuple of (updated TemplateModel if successful else None, version_number)
     """
     logger.info(f"Updating template with ID: {template_id}")
 
@@ -411,22 +484,53 @@ async def replace_template(
             now,
         )
 
-        result = await run_parameterized_query(query, values)
+        (
+            flow_snapshot_json,
+            snapshot_configurations_json,
+            payload_schema_json,
+            callback_schema_json,
+        ) = serialize_version_snapshot(
+            flow,
+            snapshot_configurations,
+            expected_payload_schema,
+            expected_callback_response_schema,
+        )
+        version_query, version_values = insert_template_version_query(
+            template_id=template_id,
+            name=name,
+            flow=flow_snapshot_json,
+            configurations=snapshot_configurations_json,
+            expected_payload_schema=payload_schema_json,
+            expected_callback_response_schema=callback_schema_json,
+            updated_by=updated_by,
+            change_source=change_source,
+            restored_from=restored_from,
+        )
 
-        if result and get_row_count(result) > 0:
+        async for conn in get_db_connection():
+            async with conn.transaction():
+                # UPDATE row-locks the template row: concurrent saves
+                # serialize here, making the MAX+1 subquery race-free.
+                result = await conn.fetch(query, *values)
+                if not result:
+                    logger.error(f"Failed to update template: {template_id}")
+                    return None, None
+                version_row = await conn.fetch(version_query, *version_values)
             decoded_result = decode_template(result[0])
+            version_number = version_row[0]["version_number"] if version_row else None
             if decoded_result:
-                logger.info(f"Template updated successfully: {decoded_result.id}")
+                logger.info(
+                    f"Template updated successfully: {decoded_result.id} "
+                    f"(version {version_number}, source={change_source})"
+                )
             else:
                 logger.error("Template decoding failed after update")
-            return decoded_result
-
-        logger.error(f"Failed to update template: {template_id}")
-        return None
+            return decoded_result, version_number
+        return None, None
 
     except Exception as e:
         logger.error(f"Error updating template: {e}", exc_info=True)
-        return None
+        return None, None
 
 
 async def get_template_by_telephony_number_id(

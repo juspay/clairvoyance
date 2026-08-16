@@ -98,6 +98,7 @@ Breeze Buddy is the template-driven telephony agent. These patterns MUST be foll
 - Variables use `{placeholder}` syntax, resolved from lead payload at runtime
 - Node transitions are LLM-driven via function calls with optional async hooks
 - Template types defined in `breeze_buddy/template/types.py` -- this is the source of truth for all template models
+- Every template create/update/rollback appends a snapshot row to `template_version` in the same transaction (append-only; active version = MAX(version_number); secrets never snapshotted). See `docs/TEMPLATE_VERSIONING.md`
 
 ### Lead Processing Flow
 1. Lead inserted via `/push/lead/v2` -> validated -> stored as BACKLOG
