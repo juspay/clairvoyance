@@ -31,6 +31,7 @@ class AnalyticsType(str, Enum):
     CHATS_BY_HOUR = "chats-by-hour"
     TOPIC_DASHBOARD = "topic-dashboard"
     TOPIC_CONVERSATIONS = "topic-conversations"
+    OBSERVER_BASED = "observer-based"
 
     @classmethod
     def _missing_(cls, value: object) -> Optional["AnalyticsType"]:
@@ -137,6 +138,9 @@ class AnalyticsFilters(BaseModel):
         None,
         max_length=200,
         description="Exact underlying stable keys when opening the virtual Other topic group",
+    )
+    observer_name: Optional[str] = Field(
+        None, description="Filter observer analytics by observer name"
     )
 
 

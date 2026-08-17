@@ -37,6 +37,7 @@ from .handlers import (
     get_distinct_resellers,
     get_lead_based_analytics,
     get_lead_status_counts,
+    get_observer_based_analytics,
     get_outcome_counts,
     get_performance_analytics,
     get_telephony_numbers_analytics,
@@ -71,6 +72,7 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.CHATS_BY_HOUR: get_chats_by_hour_analytics,
     AnalyticsType.TOPIC_DASHBOARD: get_topic_dashboard_analytics,
     AnalyticsType.TOPIC_CONVERSATIONS: get_topic_conversations_analytics,
+    AnalyticsType.OBSERVER_BASED: get_observer_based_analytics,
 }
 
 

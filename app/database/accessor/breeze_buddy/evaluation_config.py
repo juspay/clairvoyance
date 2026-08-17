@@ -7,10 +7,12 @@ from app.database.queries.breeze_buddy.evaluation_config import (
     add_discovered_topics_query,
     get_enabled_evaluations_query,
     get_evaluation_config_query,
+    get_observer_evaluation_config_query,
     has_enabled_evaluations_query,
     initialize_evaluation_config_query,
     set_evaluation_enabled_query,
     update_evaluation_configuration_query,
+    upsert_observer_evaluation_config_query,
 )
 
 
@@ -21,6 +23,24 @@ async def initialize_evaluation_config(template_id: str) -> None:
 
 async def get_evaluation_config(template_id: str) -> Optional[Dict[str, Any]]:
     query, values = get_evaluation_config_query(template_id)
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None
+
+
+async def get_observer_evaluation_config(template_id: str) -> Optional[Dict[str, Any]]:
+    query, values = get_observer_evaluation_config_query(template_id)
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None
+
+
+async def upsert_observer_evaluation_config(
+    template_id: str,
+    configuration: Dict[str, Any],
+    enabled: bool,
+) -> Optional[Dict[str, Any]]:
+    query, values = upsert_observer_evaluation_config_query(
+        template_id, configuration, enabled
+    )
     rows = await run_parameterized_query(query, values)
     return dict(rows[0]) if rows else None
 

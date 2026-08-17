@@ -25,6 +25,7 @@ from app.core.logger import logger
 from app.database.accessor import get_telephony_number_by_id, get_template_in_scope
 from app.database.accessor.breeze_buddy.evaluation_config import (
     initialize_evaluation_config,
+    upsert_observer_evaluation_config,
 )
 from app.database.accessor.breeze_buddy.template import (
     check_template_usage,
@@ -41,6 +42,58 @@ from app.schemas.breeze_buddy.template import (
 )
 
 from .rbac import apply_hierarchical_template_filters, validate_template_access
+
+
+async def sync_observer_evaluation_config(
+    template_id: str,
+    configurations: Optional[Dict[str, Any]],
+    *,
+    raise_on_failure: bool = True,
+) -> None:
+    """Mirror ``configurations.observers`` into the OBSERVER evaluation_config row.
+
+    The runtime reads that row first, so this write is what makes an edit
+    actually take effect. Clients send the complete list every time, so the
+    first write also backfills the template's existing observers.
+
+    Row-level ``enabled`` stays ``True`` — the console toggles the per-observer
+    flag instead, and ``False`` here would silently drop every observer. A
+    request omitting ``observers`` is left alone so a partial PUT can't wipe the
+    row.
+
+    ``raise_on_failure`` is for the create path: the template row has already
+    committed, so a 500 there tells the caller the create failed when it did
+    not, and their retry hits the 409 duplicate guard instead. Creating without
+    the row only costs detection recording — observers still run off the
+    template JSON — so create logs and moves on.
+    """
+    if not configurations or "observers" not in configurations:
+        return
+
+    try:
+        await upsert_observer_evaluation_config(
+            template_id=template_id,
+            configuration={"observers": configurations.get("observers") or []},
+            enabled=True,
+        )
+    except Exception as e:
+        # On replace, staying quiet would report a config as live while calls
+        # keep using the previous one, and a retried PUT is idempotent — so fail
+        # loudly there. See ``raise_on_failure`` for why create differs.
+        logger.exception(
+            f"Failed to sync observers into evaluation_config for template "
+            f"{template_id}"
+        )
+        if not raise_on_failure:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Template saved, but the observer configuration could not be "
+                "stored, so observers still run the previous config. Retry the "
+                "save."
+            ),
+        ) from e
 
 
 async def create_template_handler(
@@ -167,6 +220,10 @@ async def create_template_handler(
                     f"Failed to initialize topic evaluation for template "
                     f"{template.id}: {e}"
                 )
+
+        await sync_observer_evaluation_config(
+            str(template.id), configurations, raise_on_failure=False
+        )
 
         logger.info(
             f"Successfully created template with id: {template.id} containing flow "
@@ -532,6 +589,8 @@ async def replace_template_handler(
                     f"Failed to initialize topic evaluation for template "
                     f"{updated_template.id}: {e}"
                 )
+
+        await sync_observer_evaluation_config(template_id, configurations)
 
         # Cache invalidation is best-effort: the DB write has already
         # committed, so a Redis blip here must not surface as a 500 to a

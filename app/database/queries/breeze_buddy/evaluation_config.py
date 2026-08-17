@@ -19,6 +19,36 @@ def get_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]]:
     return query, [template_id]
 
 
+def get_observer_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]]:
+    query = f"""
+        SELECT {_CONFIG_COLUMNS}
+        FROM evaluation_config
+        WHERE template_id = $1::uuid
+          AND evaluation_type = 'OBSERVER'
+    """
+    return query, [template_id]
+
+
+def upsert_observer_evaluation_config_query(
+    template_id: str,
+    configuration: Dict[str, Any],
+    enabled: bool,
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        INSERT INTO evaluation_config (
+            template_id, evaluation_type, enabled, topics, configuration
+        )
+        VALUES ($1::uuid, 'OBSERVER', $2::boolean, ARRAY[]::text[], $3::jsonb)
+        ON CONFLICT (template_id, evaluation_type)
+        DO UPDATE SET
+            enabled = EXCLUDED.enabled,
+            topics = ARRAY[]::text[],
+            configuration = EXCLUDED.configuration
+        RETURNING {_CONFIG_COLUMNS}
+    """
+    return query, [template_id, enabled, json.dumps(configuration)]
+
+
 def initialize_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]]:
     query = """
         INSERT INTO evaluation_config (

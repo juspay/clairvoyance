@@ -3,10 +3,12 @@ Analytics service layer — all business logic for analytics endpoints.
 Database access is delegated to the accessor layer.
 """
 
+import asyncio
 import csv
 import io
 import json
-from datetime import datetime, timedelta
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -41,6 +43,12 @@ from app.database.accessor.breeze_buddy.analytics.evaluation_result import (
     get_topic_conversations,
     get_topic_dashboard,
 )
+from app.database.accessor.breeze_buddy.analytics.observer_result import (
+    get_legacy_observer_detection_rows_from_db,
+    get_observer_aggregate_rows_from_db,
+    get_observer_detection_rows_from_db,
+    get_observer_eligible_conversation_count_from_db,
+)
 from app.database.accessor.breeze_buddy.chat_analytics import (
     get_chat_summary_from_db,
     get_chat_trends_from_db,
@@ -51,6 +59,37 @@ from app.database.accessor.breeze_buddy.telephony_number import (
 )
 from app.schemas import CallDetailGroupedResult, CallDetailResult, UserInfo
 from app.utils.common import parse_json
+
+
+def _pct(numerator: int, denominator: int) -> float:
+    return round((numerator / denominator) * 100, 2) if denominator else 0.0
+
+
+def _observer_action(row: Dict[str, Any]) -> str:
+    return row.get("handler") or row.get("action_type") or "unknown"
+
+
+def _observer_sort_key(row: Dict[str, Any]) -> datetime:
+    """Newest-first ordering key for merged detection rows.
+
+    Sorting the ISO strings instead put naive and tz-aware timestamps in the
+    wrong order (``+00:00`` sorts after a bare time) and floated rows with no
+    timestamp to the top. Rows without ``started_at`` sort last on a descending
+    sort.
+    """
+    started_at = row.get("started_at")
+    if not isinstance(started_at, datetime):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if started_at.tzinfo is None:
+        return started_at.replace(tzinfo=timezone.utc)
+    return started_at
+
+
+def _observer_started_iso(row: Dict[str, Any]) -> Optional[str]:
+    started_at = row.get("started_at")
+    if isinstance(started_at, datetime):
+        return started_at.isoformat()
+    return str(started_at) if started_at else None
 
 
 def parse_outcome_breakdown(outcome_breakdown: Any) -> Dict[str, int]:
@@ -346,6 +385,146 @@ async def get_chat_based_analytics(
         "filters_applied": filters,
         "time_granularity": None,
         "results": results,
+    }
+
+
+async def get_observer_based_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Observer fire analytics from evaluation_result."""
+    limit = min(int(options.get("limit") or 1000), 1000)
+    # ``rows`` is capped and feeds only the "recent fires" list. Every count
+    # comes from the aggregate query instead, which groups in SQL over the full
+    # match set — deriving totals from a capped list under-reported them.
+    aggregates, rows, legacy_rows, eligible_conversations = await asyncio.gather(
+        get_observer_aggregate_rows_from_db(filters),
+        get_observer_detection_rows_from_db(filters, limit=limit),
+        get_legacy_observer_detection_rows_from_db(filters, limit=limit),
+        get_observer_eligible_conversation_count_from_db(filters),
+    )
+    rows = sorted([*rows, *legacy_rows], key=_observer_sort_key, reverse=True)[:limit]
+
+    total_fires = 0
+    by_observer: Dict[str, Dict[str, Any]] = {}
+    action_counts: Counter[str] = Counter()
+    outcome_counts: Counter[str] = Counter()
+    trend_counts: Counter[str] = Counter()
+
+    for group in aggregates:
+        observer_name = group.get("observer_name") or "unknown"
+        action = group.get("action") or "unknown"
+        outcome = group.get("outcome") or "unchanged"
+        day = group.get("day")
+        fires = int(group.get("fires") or 0)
+
+        total_fires += fires
+        action_counts[action] += fires
+        outcome_counts[outcome] += fires
+        if day:
+            trend_counts[day.isoformat()] += fires
+
+        entry = by_observer.setdefault(
+            observer_name,
+            {
+                "observer_name": observer_name,
+                "triggers": 0,
+                "actions": Counter(),
+                "outcomes": Counter(),
+                "last_triggered": None,
+                "last_source_id": None,
+            },
+        )
+        entry["triggers"] += fires
+        entry["actions"][action] += fires
+        entry["outcomes"][outcome] += fires
+
+        # Groups arrive unordered, so keep the newest rather than the first.
+        last = group.get("last_triggered")
+        if last and (
+            entry["last_triggered"] is None
+            or last.isoformat() > entry["last_triggered"]
+        ):
+            entry["last_triggered"] = last.isoformat()
+            entry["last_source_id"] = group.get("last_source_id")
+
+    observer_results = []
+    for observer_name, entry in by_observer.items():
+        top_action = entry["actions"].most_common(1)[0][0] if entry["actions"] else None
+        top_outcome = (
+            entry["outcomes"].most_common(1)[0][0] if entry["outcomes"] else None
+        )
+        observer_results.append(
+            {
+                "observer_name": observer_name,
+                "triggers": entry["triggers"],
+                "trigger_rate": _pct(entry["triggers"], eligible_conversations),
+                "top_action": top_action,
+                "top_outcome": top_outcome,
+                "last_triggered": entry["last_triggered"],
+                "last_source_id": entry["last_source_id"],
+            }
+        )
+    observer_results.sort(key=lambda item: (-item["triggers"], item["observer_name"]))
+
+    action_breakdown = [
+        {
+            "action": action,
+            "count": count,
+            "percentage": _pct(count, total_fires),
+        }
+        for action, count in action_counts.most_common()
+    ]
+    outcome_breakdown = [
+        {
+            "outcome": outcome,
+            "count": count,
+            "percentage": _pct(count, total_fires),
+        }
+        for outcome, count in outcome_counts.most_common()
+    ]
+    trend = [
+        {"date": day, "triggers": count}
+        for day, count in sorted(trend_counts.items(), key=lambda item: item[0])
+    ]
+    recent_limit = min(int(options.get("recent_limit") or 50), 50)
+    recent_fires = [
+        {
+            "source_id": row.get("source_id"),
+            "conversation_id": row.get("call_id") or row.get("source_id"),
+            "observer_name": row.get("observer_name"),
+            "action": _observer_action(row),
+            "outcome": row.get("outcome"),
+            "node": row.get("node"),
+            "triggered_at": _observer_started_iso(row),
+        }
+        for row in rows[:recent_limit]
+    ]
+
+    most_active = observer_results[0] if observer_results else None
+
+    return {
+        "type": "observer-based",
+        "filters_applied": filters,
+        "results": [
+            {
+                "summary": {
+                    "total_triggers": total_fires,
+                    "eligible_conversations": eligible_conversations,
+                    "trigger_rate": _pct(total_fires, eligible_conversations),
+                    "most_active_observer": (
+                        most_active["observer_name"] if most_active else None
+                    ),
+                    "most_active_triggers": (
+                        most_active["triggers"] if most_active else 0
+                    ),
+                },
+                "trend": trend,
+                "action_breakdown": action_breakdown,
+                "outcome_breakdown": outcome_breakdown,
+                "observers": observer_results,
+                "recent_fires": recent_fires,
+            }
+        ],
     }
 
 
