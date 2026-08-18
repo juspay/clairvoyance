@@ -40,6 +40,7 @@ from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     diff_state_patch,
 )
+from app.ai.voice.agents.breeze_buddy.chat.guardrails import ChatOutputGuard
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     assistant_turn_to_blocks,
     internal_text_block,
@@ -103,6 +104,63 @@ _HARNESS_TOOLS = frozenset({RENDER_UI_TOOL_NAME, REVISE_PLAN_TOOL_NAME})
 
 
 class CycleLoopMixin:
+    async def _finish_guardrail_output_block(
+        self: "ChatAgent",
+        *,
+        node_name: str,
+        approved_before_cycle: List[str],
+        approved_in_cycle: List[str],
+        turn_ui_ops: List[Dict[str, Any]],
+        redirect_message: str,
+    ) -> AsyncIterator[SSEEvent]:
+        """Persist only approved prose plus the trusted fixed redirect."""
+        approved = strip_ui_stream_markers("".join(approved_before_cycle)).strip()
+        current = "".join(approved_in_cycle).strip()
+        text_parts = [part for part in (approved, current) if part]
+        redirect = redirect_message.strip()
+        if redirect:
+            prefix = " " if text_parts else ""
+            yield SSEEvent(
+                event="assistant_token", data={"delta": f"{prefix}{redirect}"}
+            )
+            text_parts.append(redirect)
+        visible_text = " ".join(text_parts).strip()
+
+        assistant_idx: Optional[int] = None
+        final_ui_blocks = self._row_ui_blocks(turn_ui_ops)
+        if visible_text or final_ui_blocks:
+            if self._internal_turn:
+                persisted_blocks = (
+                    [internal_text_block(visible_text)] if visible_text else []
+                )
+            else:
+                persisted_blocks = (
+                    plain_text_blocks(visible_text) if visible_text else []
+                )
+            stored = await insert_chat_message(
+                session_id=self.session_id,
+                role=ChatMessageRole.ASSISTANT,
+                content=None if self._internal_turn else (visible_text or None),
+                content_blocks=persisted_blocks,
+                ui_blocks=final_ui_blocks,
+            )
+            assistant_idx = stored.idx if stored else None
+            if visible_text and not self._internal_turn:
+                yield SSEEvent(
+                    event="assistant_message",
+                    data={"idx": assistant_idx, "content": visible_text},
+                )
+
+        await update_chat_session_after_turn(
+            session_id=self.session_id,
+            current_node=node_name or None,
+        )
+        logger.info(f"ChatAgent {self.session_id}: output blocked by Guardrail")
+        yield SSEEvent(
+            event="turn_end",
+            data={"session_status": "ACTIVE", "assistant_idx": assistant_idx},
+        )
+
     async def _cycle_loop(
         self: "ChatAgent",
         context: LLMContext,
@@ -158,7 +216,12 @@ class CycleLoopMixin:
         early_final_idx: Optional[int] = None
         for cycle in range(1, _MAX_TOOL_CYCLES + 1):
             tool_calls: List[FunctionCallFromLLM] = []
-            turn_text: List[str] = []
+            cycle_approved_chunks: List[str] = []
+            output_guard = ChatOutputGuard(
+                self.guardrail_coordinator,
+                released_any=self._turn_prose_streamed,
+            )
+            output_blocked = False
             turn_ui_ops = []
             cycle_context_messages = []
             finish_reason: Optional[str] = None
@@ -203,7 +266,7 @@ class CycleLoopMixin:
                 )
                 context.set_tools(_tools_schema(node, cycle_funcs))
 
-            async for kind, payload in llm_driver.stream(
+            response_stream = llm_driver.stream(
                 self._llm,
                 context,
                 log_label=f"chat#{self.session_id[:8]}",
@@ -223,7 +286,8 @@ class CycleLoopMixin:
                     if (self._in_chips_cycle or (first_cycle_fast and cycle == 1))
                     else None
                 ),
-            ):
+            )
+            async for kind, payload in response_stream:
                 if kind == "text":
                     text = cast(str, payload)
                     # Plan-as-emission (Phase 2): strip any <plan>…</plan>
@@ -264,7 +328,6 @@ class CycleLoopMixin:
                         continue
                     if not text:
                         continue
-                    turn_text.append(text)
                     # Strip <ui_stream>…</ui_stream> from the user-facing
                     # prose stream. Each TextOut becomes an
                     # assistant_token; each JsonlOpLine is healed →
@@ -277,9 +340,15 @@ class CycleLoopMixin:
                     healer = make_healer_fn(healer_ctx)
                     for out in self._ui_extractor.feed(text):
                         if isinstance(out, TextOut):
-                            yield SSEEvent(
-                                event="assistant_token", data={"delta": out.value}
-                            )
+                            guarded = await output_guard.feed(out.value)
+                            for chunk in guarded.chunks:
+                                cycle_approved_chunks.append(chunk)
+                                yield SSEEvent(
+                                    event="assistant_token", data={"delta": chunk}
+                                )
+                            if guarded.blocked:
+                                output_blocked = True
+                                break
                         elif self._render_ui_enabled:
                             # Hard cutover (RFC-002 Phase D): render_ui
                             # sessions accept UI ONLY via the render_ui
@@ -309,17 +378,11 @@ class CycleLoopMixin:
                                     if isinstance(op_payload, dict):
                                         turn_ui_ops.append(op_payload)
                                 yield ev
+                    if output_blocked:
+                        break
                 elif kind == "tool_call":
                     call = cast(FunctionCallFromLLM, payload)
                     tool_calls.append(call)
-                    yield SSEEvent(
-                        event="function_call_started",
-                        data={
-                            "name": call.function_name,
-                            "args": dict(call.arguments),
-                            "tool_call_id": call.tool_call_id,
-                        },
-                    )
                 elif kind == "context_message":
                     # LLM-specific context message (Gemini thought
                     # signature). Added in stream order — BEFORE the
@@ -332,17 +395,79 @@ class CycleLoopMixin:
                 elif kind == "finish_reason":
                     finish_reason = cast(str, payload)
 
+            if output_blocked:
+                await cast(Any, response_stream).aclose()
+                async for event in self._finish_guardrail_output_block(
+                    node_name=node_name,
+                    approved_before_cycle=assistant_text_chunks,
+                    approved_in_cycle=cycle_approved_chunks,
+                    turn_ui_ops=turn_ui_ops,
+                    redirect_message=output_guard.redirect_message,
+                ):
+                    yield event
+                return
+
             # Release the plan extractor's held tail (a partial "<plan"
             # prefix is ordinary prose; an unterminated block is dropped) —
             # it flows through the SAME ui-extractor path as live chunks.
             plan_tail = self._plan_extractor.flush()
             if plan_tail and not suppress_cycle_prose and not self._in_chips_cycle:
-                turn_text.append(plan_tail)
                 for out in self._ui_extractor.feed(plan_tail):
                     if isinstance(out, TextOut):
-                        yield SSEEvent(
-                            event="assistant_token", data={"delta": out.value}
-                        )
+                        guarded = await output_guard.feed(out.value)
+                        for chunk in guarded.chunks:
+                            cycle_approved_chunks.append(chunk)
+                            yield SSEEvent(
+                                event="assistant_token", data={"delta": chunk}
+                            )
+                        if guarded.blocked:
+                            output_blocked = True
+                            break
+
+            # Drain any text the UI extractor held while deciding whether a
+            # partial marker was prose. It must pass the same output gate
+            # before tool dispatch or persistence.
+            if not output_blocked:
+                for out in self._ui_extractor.flush():
+                    if not isinstance(out, TextOut):
+                        continue
+                    guarded = await output_guard.feed(out.value)
+                    for chunk in guarded.chunks:
+                        cycle_approved_chunks.append(chunk)
+                        yield SSEEvent(event="assistant_token", data={"delta": chunk})
+                    if guarded.blocked:
+                        output_blocked = True
+                        break
+
+            if not output_blocked:
+                guarded_tail = await output_guard.flush()
+                for chunk in guarded_tail.chunks:
+                    cycle_approved_chunks.append(chunk)
+                    yield SSEEvent(event="assistant_token", data={"delta": chunk})
+                output_blocked = guarded_tail.blocked
+
+            if output_blocked:
+                async for event in self._finish_guardrail_output_block(
+                    node_name=node_name,
+                    approved_before_cycle=assistant_text_chunks,
+                    approved_in_cycle=cycle_approved_chunks,
+                    turn_ui_ops=turn_ui_ops,
+                    redirect_message=output_guard.redirect_message,
+                ):
+                    yield event
+                return
+
+            # Tool activity is surfaced only after all preceding prose has
+            # passed the output gate. A blocked cycle never starts its calls.
+            for call in tool_calls:
+                yield SSEEvent(
+                    event="function_call_started",
+                    data={
+                        "name": call.function_name,
+                        "args": dict(call.arguments),
+                        "tool_call_id": call.tool_call_id,
+                    },
+                )
 
             # No DATA tool in this cycle means the model already had
             # everything it needed when it spoke — this is the answer.
@@ -361,21 +486,19 @@ class CycleLoopMixin:
             # (measured 2026-08-09: 3/3 sessions, turn 1 announced, turn 2
             # did not). Each piece of prose is written exactly once.
             #
-            # Both flags key off the STRIPPED prose, never raw ``turn_text``
-            # truthiness. ``turn_text`` holds every non-empty delta, so a
-            # lone "\n" or a cycle whose text was entirely <ui_stream>
-            # markers is a non-empty list carrying no prose at all — and
-            # three such shapes are live-observed here: an empty Vertex
+            # Both flags key off approved, visible prose. A lone "\n" or a
+            # cycle whose text was entirely <ui_stream> markers carries no
+            # prose at all. Three such shapes are live-observed here: an empty Vertex
             # candidate (see the MALFORMED branch below), a <plan>-only
             # cycle when the template has plan_enforcement off, and the
             # marker-mimicry bug (see ``_ui_summary``). Counting one of
             # those as "the model answered" skips the recovery nudge below
             # and lets the turn end with an empty reply.
-            cycle_prose = strip_ui_stream_markers("".join(turn_text)).strip()
+            cycle_prose = "".join(cycle_approved_chunks).strip()
             if cycle_prose:
                 self._turn_prose_streamed = True
                 if cycle_answers:
-                    assistant_text_chunks.extend(turn_text)
+                    assistant_text_chunks.extend(cycle_approved_chunks)
                     answered = True
                     # Mirrored onto the agent so the render_ui handler can
                     # read the same fact — a chips-only call must know
@@ -589,7 +712,7 @@ class CycleLoopMixin:
             # cycle whose only text was whitespace persisted a blank
             # VISIBLE block and a non-null content column — an empty bubble
             # on resume for every turn the model led with a stray newline.
-            visible_text = strip_ui_stream_markers("".join(turn_text)).strip()
+            visible_text = "".join(cycle_approved_chunks).strip()
             ui_summary = self._ui_summary(turn_ui_ops)
 
             # In-memory LLM context still gets the augmented text — this
@@ -996,12 +1119,9 @@ class CycleLoopMixin:
                 await update_chat_session_after_turn(
                     session_id=self.session_id, current_node=node_name or None
                 )
-                # Drain any held marker carry (mirrors the normal turn end).
-                for out in self._ui_extractor.flush():
-                    if isinstance(out, TextOut):
-                        yield SSEEvent(
-                            event="assistant_token", data={"delta": out.value}
-                        )
+                # The response-end Guardrail path already drained the UI
+                # extractor before any tool dispatch.
+                self._ui_extractor.flush()
                 # ``assistant_idx`` carries the gate-time assistant row so
                 # turn metrics persist (the turn DID consume an LLM call)
                 # and the client has a stable anchor for the partial bubble.
@@ -1056,13 +1176,9 @@ class CycleLoopMixin:
             yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
             return
 
-        # Drain any held marker carry. Trailing prose held mid-marker is
-        # forwarded; an unmatched <ui_stream> open is dropped (with warning).
-        for out in self._ui_extractor.flush():
-            if isinstance(out, TextOut):
-                yield SSEEvent(event="assistant_token", data={"delta": out.value})
-            # JsonlOpLine items from flush() shouldn't happen — defensive
-            # path drops them (flush only ever yields TextOut today).
+        # The response-end Guardrail path already drained the UI extractor
+        # before tool dispatch and persistence.
+        self._ui_extractor.flush()
 
         # Reconstruct prose-only history (strips every
         # <ui_stream>…</ui_stream>) so saved messages never carry SpecStream

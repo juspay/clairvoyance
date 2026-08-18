@@ -14,6 +14,7 @@ from app.database.accessor.breeze_buddy.evaluation_config import (
 from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.conversation_analysis import (
+    EvaluationType,
     TopicCatalogResponse,
     TopicConfigurationResponse,
     TopicEvaluationSettingsRequest,
@@ -54,7 +55,7 @@ async def get_topic_catalog_handler(
     current_user: UserInfo,
 ) -> TopicCatalogResponse:
     await _validate_topic_access(template_id, current_user)
-    config = await get_evaluation_config(str(template_id))
+    config = await get_evaluation_config(str(template_id), EvaluationType.TOPIC.value)
     return _evaluation_catalog_response(str(template_id), config)
 
 
@@ -64,7 +65,9 @@ async def set_topic_evaluation_enabled_handler(
     current_user: UserInfo,
 ) -> TopicCatalogResponse:
     await _validate_topic_access(template_id, current_user)
-    config = await set_evaluation_enabled(str(template_id), request.enabled)
+    config = await set_evaluation_enabled(
+        str(template_id), EvaluationType.TOPIC.value, request.enabled
+    )
     return _evaluation_catalog_response(str(template_id), config)
 
 
@@ -79,7 +82,7 @@ async def update_topic_configuration_handler(
             detail="No fields provided to update",
         )
 
-    current = await get_evaluation_config(template_id)
+    current = await get_evaluation_config(template_id, EvaluationType.TOPIC.value)
     if not current:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -98,7 +101,9 @@ async def update_topic_configuration_handler(
         ) from exc
 
     row = await update_evaluation_configuration(
-        template_id, {key: resolved[key] for key in patch}
+        template_id,
+        EvaluationType.TOPIC.value,
+        {key: resolved[key] for key in patch},
     )
     if not row:
         raise HTTPException(

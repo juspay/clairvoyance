@@ -23,6 +23,7 @@ from app.api.routers.breeze_buddy.demo import router as demo_router
 
 # DragonTTS kill switch (admin-only one-directional TTS failover)
 from app.api.routers.breeze_buddy.dragontts import router as dragontts_router
+from app.api.routers.breeze_buddy.evaluations import router as evaluations_router
 
 # Knowledge base (RAG) management: KBs, documents, retrieval testing
 from app.api.routers.breeze_buddy.knowledge_base import router as knowledge_base_router
@@ -90,6 +91,7 @@ router.include_router(numbers_router, prefix="", tags=["numbers"])
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
 router.include_router(topics_router, prefix="", tags=["topics"])
+router.include_router(evaluations_router, prefix="", tags=["evaluations"])
 
 # DragonTTS kill switch (admin-only: force kill / restore + status)
 router.include_router(dragontts_router, prefix="", tags=["dragontts"])

@@ -1,5 +1,9 @@
 """Breeze Buddy custom processors for pipeline control."""
 
+from app.ai.voice.agents.breeze_buddy.processors.custom_guardrails import (
+    GuardrailResponseGateProcessor,
+    InputGuardrailProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.processors.knowledge_retrieval import (
     KnowledgeRetrievalProcessor,
 )
@@ -20,6 +24,8 @@ from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
 )
 
 __all__ = [
+    "GuardrailResponseGateProcessor",
+    "InputGuardrailProcessor",
     "KnowledgeRetrievalProcessor",
     "MetricsCollectorProcessor",
     "TranscriptCollectorProcessor",

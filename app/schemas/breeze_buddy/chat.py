@@ -302,7 +302,9 @@ class SendChatMessageRequest(BaseModel):
         "",
         description=(
             "The user's message text. May be empty ONLY when ``ui_intent`` "
-            "is provided."
+            "is provided. No API-level length cap: when the template enables "
+            "an input Guardrail, messages over its complete-candidate window "
+            "are blocked at evaluation time with the configured redirect."
         ),
     )
     context: Optional[ClientContextPatch] = Field(
