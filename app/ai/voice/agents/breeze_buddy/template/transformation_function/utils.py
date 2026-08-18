@@ -1,4 +1,6 @@
 import re
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 
 def indian_number_to_speech(number: int | float) -> str:
@@ -298,3 +300,30 @@ def format_array(
         lines.append(f"{item_label} {index}: " + ", ".join(parts))
 
     return "\n".join(lines)
+
+
+def to_number(value: Any = "") -> Any:
+    """Convert a numeric string to ``int`` or ``float``; otherwise return it."""
+    if not isinstance(value, str):
+        return value
+
+    raw = value
+    text = raw.replace(",", "").strip()
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return raw
+
+    if not number.is_finite():
+        return raw
+
+    # Avoid pathological exponents / magnitudes that can lead to huge int
+    # allocations (e.g. "1e1000000") and preserve values outside float range.
+    if abs(number.adjusted()) > 308:
+        return raw
+
+    if number == number.to_integral_value():
+        return int(number)
+
+    result = float(number)
+    return result if result not in (float("inf"), float("-inf")) else raw
