@@ -22,6 +22,7 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.prompt_injections imp
 from app.ai.voice.agents.breeze_buddy.utils.playground import (
     apply_playground_overrides,
 )
+from app.ai.voice.llm.types import RealtimeLLMProvider
 from app.core.logger import logger
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
 
@@ -211,6 +212,25 @@ def prepare_initial_node(
         task_messages = [greeting_context_message] + task_messages
         logger.info(f"Injected greeting into LLM context: {greeting_text[:50]}...")
 
+    # Gemini Live must ALWAYS get its flow-init LLMRunFrame, even when a
+    # greeting played. pipecat 1.1.0's Gemini Live drops all input audio
+    # client-side until the first LLMContextFrame reaches the service; with a
+    # played greeting pipecat-flows skips the run frame that would push it,
+    # so the context frame is never sent, the input gate never opens, and
+    # the call goes permanently deaf after the greeting. The companion
+    # Agent._suppress_realtime_initial_inference() keeps the seeded context
+    # from generating over the pre-played audio.
+    #
+    # Deliberately Gemini-only: other realtime providers (OpenAI/xAI/Azure)
+    # send input audio unconditionally (no such gate) and lack the
+    # suppression attribute, so forcing their run frame with a played
+    # greeting could make them talk over it. They keep the legacy behavior.
+    llm_configs = configurations.llm_configurations if configurations else None
+    realtime = getattr(llm_configs, "realtime", None)
+    is_gemini_realtime = (
+        realtime is not None and realtime.provider == RealtimeLLMProvider.GEMINI
+    )
+
     return NodeConfig(
         name=node_config["name"],
         task_messages=task_messages,
@@ -218,5 +238,5 @@ def prepare_initial_node(
         functions=node_config.get("functions", []),
         pre_actions=node_config.get("pre_actions", []),
         post_actions=node_config.get("post_actions", []),
-        respond_immediately=not has_greeting_source,
+        respond_immediately=(not has_greeting_source) or is_gemini_realtime,
     )

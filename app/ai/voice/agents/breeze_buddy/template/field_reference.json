@@ -209,7 +209,10 @@
       "description": "Browser-side (Daily Krisp) noise cancellation for web voice sessions. null/true = ON (platform default), false = opt out. Returned to web clients on the /connect response as `noise_cancellation`; echo cancellation is always forced client-side and has no knob.",
       "example": false
     },
-    "dial_tone":                  { "description": "Whether to play the dial-tone fallback when no initial greeting audio is cached. true (default) keeps legacy behaviour — a short dial tone plays so the caller knows the line is live. Set false for speech-to-speech realtime LLMs (e.g. Gemini Live): with no cached greeting, nothing plays out-of-band and the realtime LLM speaks first, avoiding the dial tone colliding with its opening response.", "example": false },
+    "dial_tone": {
+      "description": "Whether to play the dial-tone fallback when no initial greeting audio is cached. true (default) keeps legacy behaviour — a short dial tone plays so the caller knows the line is live. Set false for speech-to-speech realtime LLMs (e.g. Gemini Live): with no cached greeting, nothing plays out-of-band and the realtime LLM speaks first, avoiding the dial tone colliding with its opening response.",
+      "example": false
+    },
     "keyword_filter": {
       "description": "Suppresses short STT filler transcriptions (e.g. 'hmm', 'ok') produced while the bot is speaking, preventing false interruption triggers.",
       "example": {

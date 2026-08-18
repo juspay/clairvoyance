@@ -78,6 +78,7 @@ class RealtimeConfig(BaseModel):
     )
     silence_duration_ms: Optional[int] = Field(
         None,
+        ge=1,
         description="Gemini Live server-side VAD end-of-speech threshold in "
         "milliseconds (how long a pause ends the user's turn; 3.1-flash-live "
         "recommends 500–800ms). Only applied when set; otherwise Gemini's "

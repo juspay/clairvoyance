@@ -63,6 +63,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_
 from app.ai.voice.agents.breeze_buddy.utils.playground import (
     apply_playground_overrides,
 )
+from app.ai.voice.llm.realtime.gemini.opening_line import (
+    DEFAULT_GENERATION_TIMEOUT_SECONDS,
+)
 from app.core.config import dynamic as dyn_cfg
 from app.core.config.static import (
     BB_CHANNEL_WAIT_BACKOFF_MAX_S,
@@ -347,11 +350,43 @@ class Worker:
 
             if template:
                 template = apply_playground_overrides(locked, template)
-                await prepare_and_store_initial_greeting(
-                    lead_id=locked.id,
-                    payload=locked.payload or {},
-                    template=template,
-                )
+                # Pre-dial greeting preparation, AWAITED so audio is in
+                # Redis before the phone even rings: TTS synthesis for
+                # non-realtime templates, and — via
+                # generate_realtime_opening_line — the Gemini Live opening
+                # line. The Gemini greeting is per-TEMPLATE (static only),
+                # normally generated at template-save time, so that branch
+                # is a single Redis GET (~ms) on the happy path and only
+                # regenerates on a cache miss (TTL expiry / failed save-time
+                # generation). Throughput note (by design): a miss suspends
+                # THIS worker until the audio is ready (or the budget below
+                # expires), so the worker picks no further lead meanwhile
+                # and the lead lock stays held; the OTHER dispatch workers,
+                # the event loop, and every handler keep running. The
+                # generator bounds itself at
+                # DEFAULT_GENERATION_TIMEOUT_SECONDS; the outer wait_for is
+                # a backstop that also covers a hung non-generator step
+                # (e.g. a stuck Redis call). On timeout or failure we dial
+                # anyway (fail-open to LLM-speaks-first). No-ops (gate
+                # checks inside) for every greeting-less or variable-greeting
+                # template. Placed before number/channel acquisition so no
+                # channel capacity is held while generating.
+                try:
+                    await asyncio.wait_for(
+                        prepare_and_store_initial_greeting(
+                            lead_id=locked.id,
+                            payload=locked.payload or {},
+                            template=template,
+                            generate_realtime_opening_line=True,
+                        ),
+                        timeout=DEFAULT_GENERATION_TIMEOUT_SECONDS + 5.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Worker {self._uuid}: greeting prep for lead "
+                        f"{locked.id} exceeded the dispatch budget; dialing "
+                        "without a cached greeting (LLM will speak first)"
+                    )
 
             # Rate-limit PEEK before channel token. Read-only — we don't
             # record the attempt here, because we may still bail downstream

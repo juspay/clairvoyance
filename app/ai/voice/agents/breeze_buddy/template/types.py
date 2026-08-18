@@ -2057,6 +2057,8 @@ class ConfigurationModel(BaseModel):
             "with the LLM's opening response)."
         ),
     )
+    # NOTE: Gemini Live greeting pre-generation is automatic from this
+    # initial_greeting field + llm_configurations.realtime — no flag here.
     keyword_filter: Optional[KeywordFilterConfig] = Field(
         None,
         description="Keyword filter to suppress specific transcriptions while bot is active",

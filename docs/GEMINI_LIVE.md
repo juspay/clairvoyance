@@ -13,14 +13,26 @@ widget voice.
 
 | Concern | File |
 | --- | --- |
-| Builder (`GeminiRealtimeConfig` → `GeminiLiveLLMService`) | `app/ai/voice/llm/realtime/gemini_realtime.py` |
+| Builder (`GeminiRealtimeConfig` → `BuddyGeminiLiveLLMService`) | `app/ai/voice/llm/realtime/gemini/realtime.py` |
+| Opening-line generator (per-template pre-generated greeting) | `app/ai/voice/llm/realtime/gemini/opening_line.py` |
 | Provider factory (resolves api key, forwards params) | `app/ai/voice/llm/realtime/factory.py` |
 | `RealtimeConfig` fields (provider/model/voice/language/thinking/silence) | `app/ai/voice/llm/types.py` |
 | Pipeline wiring (realtime branch) | `app/ai/voice/agents/breeze_buddy/agent/pipeline.py` (`is_realtime`) |
 | Agent glue (greeting and idle handling) | `app/ai/voice/agents/breeze_buddy/agent/__init__.py` |
+| Opening-line cache (store/check/invalidate) | `app/ai/voice/agents/breeze_buddy/managers/utils.py` (`ensure_realtime_opening_line_cached`) |
+| Save-time validation + regeneration | `app/api/routers/breeze_buddy/templates/handlers.py` |
 
 Surface: **Gemini Developer API only** (no Vertex in production). Auth via the
 Gemini API key resolved in the factory.
+
+> The builder produces **`BuddyGeminiLiveLLMService`**, a thin subclass of
+> pipecat's `GeminiLiveLLMService`. pipecat 1.1.0 delivers async-tool results as a
+> `developer` message that the Gemini adapter maps to plain user text — invisible
+> to the function-response loop, so an awaited async function (e.g. a global
+> function's HTTP result) stalls the model until the customer speaks. The subclass
+> re-sends finished results via `send_tool_response` plus the Gemini-3.x realtime
+> nudge (`send_realtime_input(text=" ")`), mirroring pipecat's own sync-result
+> path. Re-evaluate on the next pipecat upgrade.
 
 ## Model & voice defaults
 
@@ -40,7 +52,8 @@ Set on the template's `configurations.llm_configurations.realtime`:
     "voice": "Kore",                            // optional; default Kore
     "language": "hi",                           // optional; BCP-47, see note
     "thinking_level": "minimal",                // optional; minimal|low|medium|high
-    "silence_duration_ms": 600                  // optional; server-side VAD end-of-speech
+    "silence_duration_ms": 600,                 // optional; server-side VAD end-of-speech (>=1)
+    "endframe_deferral_timeout_secs": 1         // optional; default 1
   }
 }
 ```
@@ -60,11 +73,17 @@ Set on the template's `configurations.llm_configurations.realtime`:
   a pause ends the user's turn. **The dominant per-turn latency lever.** Recommend
   **500–800 ms**. Do **not** go below ~400 — natural Hindi/Hinglish pauses are
   150–400 ms, so 100–200 ms will cut the caller off mid-sentence and *increase*
-  false interruptions (the opposite of "fewer unnecessary turns"). Unset → Gemini's
-  server-side default.
+  false interruptions (the opposite of "fewer unnecessary turns"). Validated `>= 1`;
+  unset → Gemini's server-side default.
+- **`endframe_deferral_timeout_secs`** — cap on the deferred `EndFrame` queued by
+  `finish_call`/`end_conversation`. pipecat otherwise parks it for up to 30 s when
+  the bot considers itself mid-turn (a function-call-only turn never emits
+  `turn_complete`), leaving the line open until the customer hangs up. Default `1`
+  second; `0` releases immediately.
 
-All four optional fields are forwarded only when set; unset → pipecat/Gemini
-defaults apply (`factory.py` → `gemini_realtime.py`).
+All optional fields are Gemini-only — every other realtime provider ignores them —
+and are forwarded only when set; unset → pipecat/Gemini defaults apply
+(`factory.py` → `realtime/gemini/realtime.py`).
 
 ## Pipeline topology
 
@@ -93,19 +112,47 @@ Prerequisites: `BREEZE_BUDDY_AIC_LICENSE_KEY` set and the model file present
 (`transport.py` logs a warning and proceeds without filtering if either is
 missing). AIC adds a small processing cost — weigh against the min-latency goal.
 
-## Greeting behaviour & `dial_tone`
+## Opening line (per-template, static-only) & `dial_tone`
 
-The opening greeting can be played two ways:
+The opening line is **pre-generated once per template** — not per lead — with the
+template's exact Live model/voice/language, so the pre-played audio is
+indistinguishable from the live session's own speech.
 
-1. **Out-of-band** (default when a greeting is cached): BB synthesizes the
-   `initial_greeting` and pushes it directly to the transport (telephony `playAudio`
-   / Daily `OutputAudioRawFrame`). Fast — no wait for Gemini's first token.
-2. **Gemini speaks first**: when no greeting is cached and the realtime LLM should
-   open, Gemini generates the first utterance.
+**Static-only.** `initial_greeting` for a Gemini-realtime template must be plain
+text — `PUT/POST /templates` **rejects `{placeholder}` greetings with a 422** (there
+is no lead payload at generation time; personalise in the conversation instead).
+Non-Gemini templates keep full variable support on the TTS path. A template
+stored before this enforcement that still has variables simply skips pre-play
+(warn log, LLM speaks first) until re-saved. Pre-generation is automatic —
+Gemini realtime + a non-empty `initial_greeting` is the whole trigger; clearing
+the greeting disables it.
 
-When there is **no cached greeting**, BB historically falls back to a `dial-tone.wav`
-(`utils/common.py`). For realtime that collides with Gemini's own opening response,
-so set:
+**Lifecycle.**
+
+- **Template save (create/replace):** a background task regenerates the line with
+  `force=True` — so voice/model/greeting edits never serve stale audio. Failure
+  only warns; the first call regenerates lazily.
+- **Invalidation:** every PUT/DELETE drops the cached key alongside the template
+  cache (`template/cache.py`), so a removed/disabled greeting can't outlive its
+  edit — invalidation is the correctness mechanism (no TTL).
+- **Call time (dispatch worker, pre-dial):** a single Redis `GET` on the happy
+  path. On a miss (failed save-time generation) the worker awaits generation
+  before dialing — bounded at 30 s (`DEFAULT_GENERATION_TIMEOUT_SECONDS`) with a
+  35 s outer backstop, suspending only that worker's slot, then dials fail-open
+  (LLM speaks first) on timeout.
+- **Playback:** at connect the cached audio plays out-of-band immediately
+  (telephony `playAudio` / Daily `OutputAudioRawFrame`), and the template's
+  `initial_greeting` seeds the LLM context so Gemini never repeats the line.
+  The entry lives in the **shared persistent static key**
+  (`greeting:template:{id}`, raw base64 mulaw — the same key and format the
+  TTS path uses; the text is derived from the template config at read time)
+  and is **read without delete** — one generation serves every call until the
+  next template edit.
+
+When there is **no cached greeting** (feature disabled, greeting-less, or a
+variable greeting on a legacy template), BB historically falls back to a
+`dial-tone.wav` (`utils/common.py`). For realtime that collides with Gemini's own
+opening response, so set:
 
 ```jsonc
 "dial_tone": false   // under configurations; default true (legacy)
@@ -114,12 +161,6 @@ so set:
 Effect: no greeting cached + `dial_tone:false` → **nothing** plays out-of-band and
 the realtime LLM speaks first. A cached greeting always plays regardless of this
 flag. (Default `true` preserves legacy behaviour for non-realtime templates.)
-
-> ⚠️ **Known issue (pre-fix):** returning `None` from the greeting-prep skip path is
-> currently treated by `send_initial_greeting` as a *failure* and recorded into
-> `lead.metaData.errors`. So a realtime template with no cached greeting logs a
-> spurious "Failed to prepare greeting payload" error on every call. Fix pending —
-> the skip must be distinguished from a real failure.
 
 ## Idle handling
 
@@ -132,10 +173,13 @@ Realtime instead relies on the aggregator's `on_user_turn_idle`
 (`pipeline.py`, `UserIdleController`).
 
 > ⚠️ **Known gap:** the idle controller arms only on `BotStoppedSpeakingFrame`. The
-> out-of-band telephony greeting emits no such frame, and the initial node does not
-> respond immediately after a pre-played greeting — so a caller who picks up and
-> **stays silent after the greeting** may receive no nudge and no BUSY outcome until
-> the provider's own timeout. Verify with a silent-caller test.
+> out-of-band telephony greeting emits no such frame — but the input-gate half of
+> this gap is fixed: realtime flows always push the initial run frame
+> (`respond_immediately=True`) with initial inference suppressed, so Gemini's mic
+> input gate opens and customer speech after the greeting **is** honoured. What
+> remains: a caller who picks up and **stays silent** gets no *proactive* nudge and
+> no BUSY outcome until the provider's own timeout. Verify with a silent-caller
+> test.
 
 ## Latency notes
 
@@ -151,8 +195,9 @@ Realtime instead relies on the aggregator's `on_user_turn_idle`
 
 ## Open items
 
-- Spurious greeting-prep error on the no-greeting realtime path (see `dial_tone`).
-- Silent-after-greeting idle gap (see Idle handling).
-- No Pydantic validation on `thinking_level` / bounds on `silence_duration_ms`.
+- Silent-after-greeting callers get no proactive nudge (see Idle handling — the
+  input-gate half is fixed; the proactive-nudge half is not).
+- No Pydantic validation on `thinking_level` (`silence_duration_ms` is validated
+  `>= 1`).
 - Undocumented `language` effect on the 3.1 live model.
 - `_is_realtime_llm()` duplicates realtime-detection logic in `pipeline.py` — DRY.

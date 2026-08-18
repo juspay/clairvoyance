@@ -14,7 +14,7 @@ from app.ai.voice.llm.realtime.azure_realtime import (
     AzureRealtimeConfig,
     build_azure_realtime_llm,
 )
-from app.ai.voice.llm.realtime.gemini_realtime import (
+from app.ai.voice.llm.realtime.gemini.realtime import (
     DEFAULT_GEMINI_REALTIME_MODEL,
     GeminiRealtimeConfig,
     build_gemini_realtime_llm,

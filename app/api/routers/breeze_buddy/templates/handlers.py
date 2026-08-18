@@ -9,11 +9,18 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.managers.utils import (
+    ensure_realtime_opening_line_cached,
+)
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CreateTemplateRequest,
     FlowMode,
     ReplaceTemplateRequest,
+)
+from app.ai.voice.agents.breeze_buddy.utils.common import (
+    gemini_realtime_from_configurations,
+    greeting_has_variables,
 )
 from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     mask_template_secrets,
@@ -21,6 +28,7 @@ from app.ai.voice.agents.breeze_buddy.utils.secrets import (
     merge_secrets,
 )
 from app.api.routers.breeze_buddy.numbers.rbac import require_number_in_tenant_scope
+from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.database.accessor import get_telephony_number_by_id, get_template_in_scope
 from app.database.accessor.breeze_buddy.evaluation_config import (
@@ -41,6 +49,67 @@ from app.schemas.breeze_buddy.template import (
 )
 
 from .rbac import apply_hierarchical_template_filters, validate_template_access
+
+
+def _validate_static_realtime_greeting(configurations) -> None:
+    """Gemini Live opening lines are pre-generated per template — static text
+    only. Reject ``{placeholder}`` greetings at save time: they cannot be
+    rendered per-lead on this path (no payload exists at generation time).
+
+    Pre-generation is automatic for every Gemini realtime template with a
+    non-empty initial_greeting (no flag). Non-Gemini templates keep full
+    variable support (TTS path).
+    """
+    if not configurations or not configurations.initial_greeting:
+        return
+    if gemini_realtime_from_configurations(configurations) is None:
+        return
+    if greeting_has_variables(configurations.initial_greeting):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "configurations.initial_greeting for a Gemini Live (realtime) "
+                "template must be static text: variable placeholders like "
+                "{customer_name} are not supported. The opening line is "
+                "pre-generated once per template in the call's Live voice; "
+                "personalise it in the conversation instead."
+            ),
+        )
+
+
+def _realtime_opening_line_applies(template) -> bool:
+    """True when a saved template should have a pre-generated opening line:
+    Gemini realtime + a non-empty initial_greeting."""
+    configs = getattr(template, "configurations", None)
+    if not configs or not getattr(configs, "initial_greeting", None):
+        return False
+    return gemini_realtime_from_configurations(configs) is not None
+
+
+def _spawn_realtime_opening_line_regeneration(template) -> None:
+    """Regenerate the Gemini Live opening line in the background (best-effort).
+
+    The save has already committed; generation takes ~4-8s and must not block
+    the API response. On any failure the task logs and leaves the cache empty
+    — the first dispatched lead regenerates lazily before dialing
+    (ensure_realtime_opening_line_cached's miss path).
+    """
+    if not _realtime_opening_line_applies(template):
+        return
+    try:
+        spawn_background_task(
+            ensure_realtime_opening_line_cached(template, force=True),
+            name=f"rt-opening-line:{template.id}",
+        )
+        logger.info(
+            f"Scheduled realtime opening-line regeneration for template "
+            f"{template.id}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to schedule opening-line regeneration for template "
+            f"{template.id}: {type(e).__name__} — first call will generate lazily"
+        )
 
 
 async def create_template_handler(
@@ -85,6 +154,10 @@ async def create_template_handler(
                 raise ValueError("initial_node must be specified in flow structure")
             if "nodes" not in flow or not flow["nodes"]:
                 raise ValueError("nodes must be specified in flow structure")
+
+        # Gemini Live (realtime) opening lines are static-only — reject
+        # variable greetings before any write.
+        _validate_static_realtime_greeting(template_data.configurations)
 
         # Check if template already exists
         existing = await get_template_in_scope(
@@ -172,6 +245,10 @@ async def create_template_handler(
             f"Successfully created template with id: {template.id} containing flow "
             f"with {len(flow.get('nodes', []))} nodes"
         )
+
+        # Pre-generate the Gemini Live opening line in the background (no-op
+        # for templates without one) so the first call finds it cached.
+        _spawn_realtime_opening_line_regeneration(template)
 
         return {
             "status": "success",
@@ -421,6 +498,10 @@ async def replace_template_handler(
             if "nodes" not in flow or not flow["nodes"]:
                 raise ValueError("nodes must be specified in flow structure")
 
+        # Gemini Live (realtime) opening lines are static-only — reject
+        # variable greetings before any write.
+        _validate_static_realtime_greeting(template_data.configurations)
+
         # Validate telephony_number_id if provided. Tenant-scope enforcement
         # applies to NEW or CHANGED pins only: legacy templates that already
         # carry a cross-merchant pin (pre-ownership data) must keep passing
@@ -536,13 +617,23 @@ async def replace_template_handler(
         # Cache invalidation is best-effort: the DB write has already
         # committed, so a Redis blip here must not surface as a 500 to a
         # client whose mutation actually succeeded. Stale cache entries
-        # self-correct on TTL expiry.
+        # self-correct on TTL expiry. This also drops the realtime
+        # opening-line key (template/cache.py), so a stale greeting can
+        # never outlive its template edit — the regeneration below (or the
+        # first call, if the template no longer qualifies) repopulates it.
         try:
             await invalidate_template(template_id)
         except Exception as cache_exc:
             logger.warning(
                 f"Template cache invalidation failed for {template_id}: {cache_exc}"
             )
+
+        # Re-generate the Gemini Live opening line in the background: voice,
+        # model, or greeting edits must not keep serving the old audio. When
+        # the updated template no longer qualifies (greeting removed /
+        # non-Gemini / disabled), this is a no-op and the invalidated key
+        # stays deleted.
+        _spawn_realtime_opening_line_regeneration(updated_template)
 
         logger.info(
             f"Successfully updated template with id: {updated_template.id} containing flow "

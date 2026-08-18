@@ -175,9 +175,12 @@ async def send_initial_greeting_daily(
         greeting_source: Optional[str] = None
         greeting_text: Optional[str] = None
 
-        # 1. Static greeting (persistent template-level cache)
-        template_audio_key = f"greeting:template:{template.id}"
-        template_greeting = await redis.get(template_audio_key)
+        # 1. Static greeting (persistent template-level cache): the TTS
+        # path's synthesized audio or the Gemini Live pre-generated opening
+        # line — same key, raw base64 mulaw, kept fresh by PUT/DELETE
+        # invalidation. Greetings are static, so the playback text is the
+        # template's initial_greeting itself.
+        template_greeting = await redis.get(f"greeting:template:{template.id}")
         if template_greeting:
             mulaw_data = base64.b64decode(template_greeting)
             greeting_source = "template_static"
