@@ -10,10 +10,38 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 from pipecat.frames.frames import OutputAudioRawFrame
 from pydub import AudioSegment
 
+from app.ai.voice.llm.types import RealtimeLLMProvider
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
 from app.services.redis.client import get_redis_service
+
+
+def _gemini_realtime_config(template) -> Optional[Any]:
+    """The template's Gemini Live realtime config, or None for anything else.
+
+    Shared gate for the realtime greeting paths: Gemini Live templates own
+    their greeting audio via per-template Live generation (automatic when
+    initial_greeting is set, cached under the shared static-template
+    greeting key). Every other provider (and non-realtime templates) gets
+    None — all Gemini-only behaviour is a no-op for them.
+    """
+    return gemini_realtime_from_configurations(
+        getattr(template, "configurations", None)
+    )
+
+
+def gemini_realtime_from_configurations(configurations) -> Optional[Any]:
+    """``_gemini_realtime_config`` for a bare ConfigurationModel (no template).
+
+    Used by the template-save path, which validates a request's
+    configurations before any template object exists.
+    """
+    llm_configs = getattr(configurations, "llm_configurations", None)
+    realtime = getattr(llm_configs, "realtime", None)
+    if realtime is not None and realtime.provider == RealtimeLLMProvider.GEMINI:
+        return realtime
+    return None
 
 
 def track_error(
@@ -440,7 +468,12 @@ async def prepare_initial_greeting_payload(
         if lead:
             redis = await get_redis_service()
 
-            # 1. First check for template audio (static greeting - persistent)
+            # 1. Static template audio (persistent): the TTS path's
+            # synthesized greeting or the Gemini Live pre-generated opening
+            # line — both write raw base64 mulaw under the same key.
+            # Freshness comes from PUT/DELETE invalidation, not TTL.
+            # Greetings are static, so the playback text is simply the
+            # template's initial_greeting.
             if template:
                 template_audio_key = f"greeting:template:{template.id}"
                 template_greeting = await redis.get(template_audio_key)

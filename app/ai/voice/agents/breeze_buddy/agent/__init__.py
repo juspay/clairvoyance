@@ -123,7 +123,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
-from app.ai.voice.llm.realtime.gemini_realtime import has_realtime_llm
+from app.ai.voice.llm.realtime.gemini.realtime import has_realtime_llm
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
@@ -176,6 +176,7 @@ class Agent:
         self.stream_sid: Optional[str] = None
         self.vad_analyzer: Optional[SileroVADAnalyzer] = None
         self.transport: Any = None
+        self.llm_service: Any = None
         self.lead: Optional[LeadCallTracker] = None
         self.root_span: Any = None
         self.flow_manager: Optional[FlowManager] = None
@@ -1109,6 +1110,11 @@ class Agent:
             self.greeting_source = greeting_result.source
             self.greeting_text = greeting_result.text
 
+            # Gemini Live + played greeting (Daily variant): the service was
+            # built before the client connected, so apply the no-initial-
+            # inference override now — must land before flow init below.
+            self._suppress_realtime_initial_inference()
+
             # Mirror the telephony fallback for non-realtime pipelines.
             # Realtime LLMs rely on server-side turn detection and the
             # UserIdleController to avoid the timer race described above.
@@ -1215,6 +1221,35 @@ class Agent:
             logger.error(error_msg)
             track_error(self.errors, error_msg)
             self.root_span.end()
+
+    def _suppress_realtime_initial_inference(self) -> None:
+        """Gemini Live + played greeting: don't generate on context init.
+
+        flow.py always sends the flow-init LLMRunFrame for realtime LLMs
+        (without it, pipecat 1.1.0's Gemini Live input gate never opens and
+        the call goes deaf after the greeting). This companion override makes
+        the context seed non-generating (``turn_complete=False``) so the
+        model doesn't speak over the pre-played greeting — the greeting sits
+        in history as an assistant message and the next user utterance gets
+        a single history-aware response.
+
+        Only Gemini Live has ``_inference_on_context_initialization``; other
+        providers/services keep their default. No-op when no greeting played
+        (LLM-speaks-first remains the trigger). Idempotent, and read by the
+        service only when the first context frame arrives — so any call
+        before flow init is in time.
+        """
+        if not self.greeting_source:
+            return
+        if not self.llm_service or not hasattr(
+            self.llm_service, "_inference_on_context_initialization"
+        ):
+            return
+        self.llm_service._inference_on_context_initialization = False
+        logger.info(
+            "Realtime initial inference suppressed (greeting was played): "
+            "context will seed history without generating a response"
+        )
 
     async def run(self, runner_args: Optional[RunnerArguments] = None) -> None:
         """Main entry point for running the agent.
@@ -1333,6 +1368,12 @@ class Agent:
         )
         if not is_stream:
             assert llm is not None, "LLM is required in agent mode"
+
+        # Expose the LLM service for runtime overrides, and apply the
+        # greeting one now — the telephony greeting was already sent during
+        # transport setup, before this generation was built.
+        self.llm_service = llm
+        self._suppress_realtime_initial_inference()
 
         # Knowledge base runtime resolution (fail-open). Stream mode goes
         # through the chat brain, which has its own KB hooks; realtime LLMs

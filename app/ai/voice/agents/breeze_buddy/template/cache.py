@@ -85,7 +85,14 @@ async def get_template_by_id_cached(template_id: str) -> Optional[TemplateModel]
 
 
 async def invalidate_template(template_id: str) -> None:
-    """Drop the Redis entry. Idempotent; safe to call when key is absent."""
+    """Drop the Redis entry. Idempotent; safe to call when key is absent.
+
+    Also drops the static greeting key (TTS or Gemini Live opening line —
+    same key): a greeting/voice/model edit (or a greeting removed entirely)
+    must not keep serving stale pre-played audio. The template PUT handler
+    regenerates the Gemini opening line in the background when the updated
+    template still qualifies.
+    """
     if not is_redis_configured():
         return
     try:

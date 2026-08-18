@@ -14,16 +14,86 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TTSProvider,
 )
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
-from app.ai.voice.agents.breeze_buddy.utils.common import greeting_has_variables
+from app.ai.voice.agents.breeze_buddy.utils.common import (
+    _gemini_realtime_config,
+    greeting_has_variables,
+)
+from app.ai.voice.llm.realtime.gemini.opening_line import generate_opening_line_mulaw
 from app.core.config.dynamic import LEAD_GREETING_CACHE_TTL_SECONDS
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
+
+
+def _resolve_greeting_text(
+    initial_greeting: str, payload: dict, template: TemplateModel
+) -> str:
+    """Apply payload transformation functions and {placeholder} substitution.
+
+    Shared by the TTS greeting path and the realtime opening-line path so
+    both resolve the exact same text for the same lead.
+    """
+    resolved_payload = {}
+    expected_schema = template.expected_payload_schema or {}
+
+    for key, value in (payload or {}).items():
+        resolved_value = value
+
+        # Check if there are transformation functions for this field
+        if key in expected_schema and isinstance(expected_schema[key], dict):
+            field_schema = expected_schema[key]
+            function_names = None
+            raw = field_schema.get("function")
+            if isinstance(raw, list):
+                function_names = raw
+            elif isinstance(raw, str):
+                function_names = [raw]
+            fn_params = {}
+            raw_params = field_schema.get("params")
+            if isinstance(raw_params, dict):
+                fn_params = raw_params
+
+            if function_names:
+                for fn_name in function_names:
+                    if fn_name not in TEMPLATE_FUNCTION_REGISTRY:
+                        logger.warning(
+                            f"Unknown transformation function '{fn_name}' "
+                            f"for field '{key}', skipping"
+                        )
+                        continue
+                    try:
+                        func = TEMPLATE_FUNCTION_REGISTRY[fn_name]
+                        if resolved_value is None or resolved_value == "":
+                            resolved_value = func(**fn_params) if fn_params else func()
+                        else:
+                            resolved_value = (
+                                func(resolved_value, **fn_params)
+                                if fn_params
+                                else func(resolved_value)
+                            )
+                        # Log key + function only: resolved values carry
+                        # lead payload data (names, order ids) — no PII.
+                        logger.info(f"Applied function '{fn_name}' to field '{key}'")
+                    except Exception as e:
+                        logger.opt(exception=e).warning(
+                            f"Error applying function '{fn_name}' to field "
+                            f"'{key}': {type(e).__name__}"
+                        )
+
+        resolved_payload[key] = resolved_value
+
+    resolved_greeting = initial_greeting
+    for key, value in resolved_payload.items():
+        placeholder = f"{{{key}}}"
+        if value is not None and isinstance(value, (str, int, float, bool)):
+            resolved_greeting = resolved_greeting.replace(placeholder, str(value))
+    return resolved_greeting
 
 
 async def prepare_and_store_initial_greeting(
     lead_id: str,
     payload: dict,
     template: TemplateModel,
+    generate_realtime_opening_line: bool = False,
 ) -> Optional[str]:
     """
     Synthesize and store initial greeting audio in Redis.
@@ -31,10 +101,18 @@ async def prepare_and_store_initial_greeting(
     Handles both static (template-level) and dynamic (lead-level) greetings.
     Static greetings are cached per template, dynamic greetings are per-lead.
 
+    For Gemini Live (realtime) templates this delegates to
+    ensure_realtime_opening_line_cached ONLY when
+    generate_realtime_opening_line is True (dispatch worker, pre-dial);
+    otherwise it is a read-only skip (connect-time fallbacks must never
+    generate while the customer is on the line).
+
     Args:
         lead_id: The lead ID for dynamic greeting key
         payload: Lead payload for variable substitution
         template: Template with initial greeting configuration
+        generate_realtime_opening_line: Pre-dial only — let a Gemini-realtime
+            cache miss regenerate the opening line here
 
     Returns:
         The resolved greeting text if successful, None otherwise
@@ -44,6 +122,24 @@ async def prepare_and_store_initial_greeting(
         or not template.configurations
         or not template.configurations.initial_greeting
     ):
+        return None
+
+    # Gemini Live templates own their greeting audio: a per-template opening
+    # line generated with the call's Live voice
+    # (ensure_realtime_opening_line_cached — static greetings only,
+    # produced at template save / pre-dial). Synthesizing TTS here instead
+    # would produce a different voice, and for variable-free greetings the
+    # static template key it writes is checked FIRST at playback — it would
+    # permanently shadow the Live-generated audio.
+    #
+    # Only the dispatch worker sets generate_realtime_opening_line (pre-dial,
+    # bounded by its wait_for): a cache miss then regenerates BEFORE the
+    # phone rings. The connect-time fallbacks keep the default False —
+    # generating with the customer already on the line is seconds of dead
+    # air, worse than the LLM speaking the opening itself.
+    if _gemini_realtime_config(template) is not None:
+        if generate_realtime_opening_line:
+            return await ensure_realtime_opening_line_cached(template)
         return None
 
     try:
@@ -71,66 +167,10 @@ async def prepare_and_store_initial_greeting(
                     return None
 
             # Synthesize per lead with resolved variables
-            # Apply transformation functions from payload schema if available
-            resolved_payload = {}
-            expected_schema = template.expected_payload_schema or {}
-
-            for key, value in (payload or {}).items():
-                resolved_value = value
-
-                # Check if there are transformation functions for this field
-                if key in expected_schema and isinstance(expected_schema[key], dict):
-                    field_schema = expected_schema[key]
-                    function_names = None
-                    raw = field_schema.get("function")
-                    if isinstance(raw, list):
-                        function_names = raw
-                    elif isinstance(raw, str):
-                        function_names = [raw]
-                    fn_params = {}
-                    raw_params = field_schema.get("params")
-                    if isinstance(raw_params, dict):
-                        fn_params = raw_params
-
-                    if function_names:
-                        for fn_name in function_names:
-                            if fn_name not in TEMPLATE_FUNCTION_REGISTRY:
-                                logger.warning(
-                                    f"Unknown transformation function '{fn_name}' "
-                                    f"for field '{key}', skipping"
-                                )
-                                continue
-                            try:
-                                func = TEMPLATE_FUNCTION_REGISTRY[fn_name]
-                                if resolved_value is None or resolved_value == "":
-                                    resolved_value = (
-                                        func(**fn_params) if fn_params else func()
-                                    )
-                                else:
-                                    resolved_value = (
-                                        func(resolved_value, **fn_params)
-                                        if fn_params
-                                        else func(resolved_value)
-                                    )
-                                logger.info(
-                                    f"Applied function '{fn_name}' to field '{key}', "
-                                    f"result: '{resolved_value}'"
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Error applying function '{fn_name}' to field '{key}': {e}"
-                                )
-
-                resolved_payload[key] = resolved_value
-
-            # Resolve greeting with transformed values
-            resolved_greeting = initial_greeting
-            for key, value in resolved_payload.items():
-                placeholder = f"{{{key}}}"
-                if value is not None and isinstance(value, (str, int, float, bool)):
-                    resolved_greeting = resolved_greeting.replace(
-                        placeholder, str(value)
-                    )
+            # (shared resolver: payload transformation functions + substitution)
+            resolved_greeting = _resolve_greeting_text(
+                initial_greeting, payload or {}, template
+            )
 
             # Build voice config: check payload override first, then template config
             voice_config = None
@@ -210,4 +250,93 @@ async def prepare_and_store_initial_greeting(
             f"Failed to synthesize/store greeting audio for lead {lead_id}: {e}"
         )
         # Continue without greeting audio - not a fatal error
+        return None
+
+
+async def ensure_realtime_opening_line_cached(
+    template: TemplateModel,
+    force: bool = False,
+) -> Optional[str]:
+    """Ensure a Gemini Live template's opening-line audio is cached.
+
+    Per-TEMPLATE (greetings are static-only, no ``{placeholders}``): the audio
+    is generated once with the call's Live model/voice/language and reused by
+    every call. It lives in the SAME persistent static-template key the TTS
+    path uses (``greeting:template:{id}``, raw base64 mulaw) — freshness
+    comes from PUT/DELETE invalidation, not TTL. Since greetings are static,
+    the text for playback/LLM-context is simply
+    ``configurations.initial_greeting``; the cache stores audio only.
+
+    ``force=True`` skips the cache check and regenerates — used by the
+    template-save path so voice/model/greeting edits always re-synthesize.
+    The dispatch worker AWAITS the cache check (and, on a miss, generation)
+    before make_call; a hit is a single Redis GET, so the pre-dial wait is
+    ~milliseconds for every call after the first. Generation is bounded by
+    the generator's 30s timeout and blocks only that worker's dial.
+
+    Automatic for every Gemini realtime template with a non-empty
+    ``initial_greeting`` — no flag. Variable greetings are rejected at
+    template save; a stored template that still has one skips pre-play here
+    (LLM speaks first). Never raises; returns None on every skip/failure so
+    the call fails open.
+
+    Returns:
+        The opening-line text if audio is cached (or was just generated),
+        None otherwise.
+    """
+    configs = getattr(template, "configurations", None)
+    initial_greeting = getattr(configs, "initial_greeting", None)
+    if not initial_greeting:
+        return None
+    realtime = _gemini_realtime_config(template)
+    if realtime is None:
+        return None
+    # Static-only by design: variable greetings are rejected at template
+    # save. One stored before that enforcement skips pre-play (LLM speaks
+    # first) rather than rendering per-lead.
+    if greeting_has_variables(initial_greeting):
+        logger.warning(
+            f"opening-line: template {template.id} has a variable greeting "
+            "(static text only is supported); skipping pre-play — edit the "
+            "template's initial_greeting to re-enable"
+        )
+        return None
+
+    template_key = f"greeting:template:{template.id}"
+
+    if not force:
+        try:
+            if await (await get_redis_service()).get(template_key):
+                return initial_greeting
+        except Exception as e:  # noqa: BLE001 - fail open to LLM-speaks-first
+            logger.opt(exception=e).warning(
+                f"opening-line: cache check failed for template {template.id} "
+                f"({type(e).__name__}); regenerating"
+            )
+
+    try:
+        mulaw_audio = await generate_opening_line_mulaw(initial_greeting, realtime)
+        if not mulaw_audio:
+            logger.warning(
+                f"opening-line: no audio generated for template {template.id}; "
+                "LLM will speak first"
+            )
+            return None
+
+        await (await get_redis_service()).set(
+            key=template_key,
+            value=base64.b64encode(mulaw_audio).decode("utf-8"),
+        )
+        # Log ids/sizes only — keep greeting text out of logs.
+        logger.info(
+            f"Stored realtime opening line for template {template.id} "
+            f"({len(mulaw_audio)} bytes mulaw)"
+        )
+        return initial_greeting
+
+    except Exception as e:  # noqa: BLE001 - fail open to LLM-speaks-first
+        logger.opt(exception=e).warning(
+            f"realtime opening-line preparation failed for template "
+            f"{template.id}: {type(e).__name__}"
+        )
         return None
