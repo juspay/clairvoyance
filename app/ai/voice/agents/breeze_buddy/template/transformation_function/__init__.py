@@ -8,6 +8,7 @@ from .utils import (
     string_to_lowercase,
     string_to_uppercase,
     string_trim,
+    to_number,
     trim_words,
 )
 
@@ -19,6 +20,7 @@ def register_template_function(name, func):
 
 
 register_template_function("indian_number_to_speech", indian_number_to_speech)
+register_template_function("to_number", to_number)
 register_template_function("string_to_lowercase", string_to_lowercase)
 register_template_function("string_to_uppercase", string_to_uppercase)
 register_template_function("string_trim", string_trim)
