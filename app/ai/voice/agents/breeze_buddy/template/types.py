@@ -425,6 +425,16 @@ class TTSConfig(BaseModel):
         None, description="TTS language code (e.g. 'en', 'hi', 'en-IN')"
     )
     speed: Optional[float] = Field(None, description="Speed/pace multiplier")
+    stability: Optional[float] = Field(
+        None,
+        description=("Voice stability, 0.0-1.0 — lower is more"),
+    )
+    similarity_boost: Optional[float] = Field(
+        None,
+        description=(
+            "Similarity boost, 0.0-1.0 — how closely the output matches the original voice sample"
+        ),
+    )
     volume: Optional[float] = Field(
         None, description="Volume multiplier (Cartesia only, range 0.5-2.0)"
     )

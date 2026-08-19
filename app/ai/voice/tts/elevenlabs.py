@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import httpx
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.services.elevenlabs.tts import (
+    ElevenLabsTTSService,
+    language_to_elevenlabs_language,
+)
 from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 
@@ -30,6 +33,8 @@ class ElevenLabsConfig:
     voice_id: str
     model: str
     speed: float = 1.0
+    stability: Optional[float] = None
+    similarity_boost: Optional[float] = None
     language: Language = Language.EN_IN
     text_filters: Optional[Sequence] = None
     aggregate_sentences: bool = True
@@ -49,6 +54,8 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
         enable_ssml_parsing=config.enable_ssml_parsing,
         settings=ElevenLabsTTSService.Settings(
             speed=config.speed,
+            stability=config.stability,
+            similarity_boost=config.similarity_boost,
             language=config.language,
         ),
         text_filters=text_filters,
@@ -65,6 +72,10 @@ async def _generate_elevenlabs_audio(
     voice_id: str | None = None,
     model_id: str | None = None,
     use_indian_residency: bool = True,
+    speed: float | None = None,
+    stability: float | None = None,
+    similarity_boost: float | None = None,
+    language: Language | None = None,
 ) -> bytes:
     """Synthesize audio using ElevenLabs TTS API.
 
@@ -75,6 +86,11 @@ async def _generate_elevenlabs_audio(
         use_indian_residency: If True, uses Indian residency API endpoint and key.
                              If False, uses default global API endpoint and key.
                              Defaults to True.
+        speed: Optional playback speed, so a pre-synthesized greeting matches the
+               speed the live pipeline uses.
+        stability: Optional voice stability (0.0-1.0). Omitted when None.
+        similarity_boost: Optional similarity boost (0.0-1.0). Omitted when None.
+        language: Optional language, so the greeting matches the live pipeline.
 
     Returns:
         Audio bytes in ulaw_8000 format
@@ -104,15 +120,31 @@ async def _generate_elevenlabs_audio(
         "Accept": "audio/basic",
     }
 
-    payload = {
+    voice_settings: dict[str, float] = {}
+    for key, value in (
+        ("speed", speed),
+        ("stability", stability),
+        ("similarity_boost", similarity_boost),
+    ):
+        if value is not None:
+            voice_settings[key] = value
+
+    payload: dict = {
         "text": text,
         "model_id": final_model_id,
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
     }
+    if voice_settings:
+        payload["voice_settings"] = voice_settings
+
+    language_code = language_to_elevenlabs_language(language) if language else None
+    if language_code:
+        payload["language_code"] = language_code
 
     logger.info(
         f"Synthesizing greeting with ElevenLabs (ulaw_8000): {text[:50]}... "
-        f"[voice_id={final_voice_id}, model_id={final_model_id}, indian_residency={use_indian_residency}]"
+        f"[voice_id={final_voice_id}, model_id={final_model_id}, "
+        f"indian_residency={use_indian_residency}, voice_settings={voice_settings}, "
+        f"language_code={language_code}]"
     )
 
     async with httpx.AsyncClient() as client:

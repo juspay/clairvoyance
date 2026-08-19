@@ -67,6 +67,8 @@ _PARAM_FIELDS = (
     "pitch",
     "style_prompt",
     "enable_ssml_parsing",
+    "similarity_boost",
+    "stability",
 )
 
 
