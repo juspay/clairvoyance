@@ -323,15 +323,16 @@ async def test_user_role_follows_the_same_rules_as_merchant(patch_merchant_looku
 # ---------------------------------------------------------------------------
 # require_admin_or_reseller_access: the endpoint-level gate on search/buy.
 #
-# resolve_buy_scope above is still fully able to compute a valid scope for
-# merchant/user roles -- that logic is left in place, unused. This gate is
-# what currently keeps them from reaching it: buying spends real money, and
-# for now that is restricted to admin + reseller.
+# resolve_buy_scope above owns per-role scoping; this gate just guards the
+# entry. admin + reseller + merchant reach resolve_buy_scope; the plain
+# "user" role stays blocked because it carries no tenant scope of its own.
+# The function name is stale (kept to keep this change one line at the call
+# sites) -- the gate is "buy-capable role", not just admin/reseller.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("role", [UserRole.ADMIN, UserRole.RESELLER])
-def test_admin_and_reseller_pass_the_buy_gate(role):
+@pytest.mark.parametrize("role", [UserRole.ADMIN, UserRole.RESELLER, UserRole.MERCHANT])
+def test_admin_reseller_and_merchant_pass_the_buy_gate(role):
     from app.api.routers.breeze_buddy.numbers.rbac import (
         require_admin_or_reseller_access,
     )
@@ -339,8 +340,8 @@ def test_admin_and_reseller_pass_the_buy_gate(role):
     require_admin_or_reseller_access(make_user(role))  # must not raise
 
 
-@pytest.mark.parametrize("role", [UserRole.MERCHANT, UserRole.USER])
-def test_merchant_and_user_are_blocked_by_the_buy_gate(role):
+@pytest.mark.parametrize("role", [UserRole.USER])
+def test_plain_user_is_blocked_by_the_buy_gate(role):
     from app.api.routers.breeze_buddy.numbers.rbac import (
         require_admin_or_reseller_access,
     )
