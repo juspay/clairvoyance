@@ -64,6 +64,8 @@ _VOICE_CONFIG_FIELDS = (
     "model",
     "language",
     "speed",
+    "stability",
+    "similarity_boost",
     "volume",
     "emotion",
     "pitch",
@@ -187,7 +189,7 @@ async def get_tts_service(voice_config: TTSConfig):
     logger.info(
         f"Building TTS service: provider={provider}, voice_id={voice_config.voice_id}, "
         f"model={voice_config.model}, speed={voice_config.speed}, language={voice_config.language}, "
-        f"enable_ssml_parsing={voice_config.enable_ssml_parsing}"
+        f"enable_ssml_parsing={voice_config.enable_ssml_parsing}, stability={voice_config.stability}, similarity_boost={voice_config.similarity_boost}"
     )
 
     # Emoji stripping applies to EVERY provider/flow. pipecat runs these filters
@@ -224,6 +226,8 @@ async def get_tts_service(voice_config: TTSConfig):
                 voice_id=voice_config.voice_id or "",
                 model=voice_config.model or "eleven_flash_v2_5",
                 speed=voice_config.speed or 1.0,
+                stability=voice_config.stability,
+                similarity_boost=voice_config.similarity_boost,
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 aggregate_sentences=aggregate,
                 enable_ssml_parsing=bool(voice_config.enable_ssml_parsing),
@@ -348,6 +352,12 @@ async def generate_audio(
     resolved = await resolve_voice_config(voice_config, overrides)
     provider = resolved.provider.value
 
+    logger.info(
+        f"TTS resolved config: provider={provider}, "
+        f"voice_id={resolved.voice_id}, model={resolved.model}, "
+        f"language={resolved.language}, speed={resolved.speed}, volume={resolved.volume}"
+    )
+
     # Batch synth calls the provider API directly, bypassing the pipecat TTS
     # service (and its EmojiTextFilter), so strip emoji here too. The caller
     # stores the display text separately — the greeting bubble keeps its emoji.
@@ -392,6 +402,12 @@ async def generate_audio(
             voice_id=resolved.voice_id,
             model_id=resolved.model,
             use_indian_residency=use_indian_residency,
+            speed=resolved.speed,
+            stability=resolved.stability,
+            similarity_boost=resolved.similarity_boost,
+            language=(
+                _parse_language(resolved.language) if resolved.language else None
+            ),
         )
         input_format = "ulaw"
     elif provider == "cartesia":

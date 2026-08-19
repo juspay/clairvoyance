@@ -82,20 +82,28 @@ class ElevenLabsProvider(BaseTTSProvider):
         ] = {}
 
     def _voice_settings(self, params: dict) -> dict:
-        # Caller-supplied voice_settings win; otherwise mirror the one-shot
-        # defaults. speed is ALWAYS set (explicit, else the DragonTTS default) so
-        # an OMITTED speed and an EXPLICIT speed==default yield identical audio —
-        # canonical_params collapses the latter to "absent", so they must sound
-        # the same or one cache key would serve different-speed audio.
-        speed = (params or {}).get("speed")
+        # Caller-supplied voice_settings win; otherwise build from the flat
+        # tuning params. speed is ALWAYS set (explicit, else the DragonTTS
+        # default) so an OMITTED speed and an EXPLICIT speed==default yield
+        # identical audio — canonical_params collapses the latter to "absent",
+        # so they must sound the same or one cache key would serve
+        # different-speed audio.
+        params = params or {}
+        speed = params.get("speed")
         if speed is None:
             speed = PROVIDER_DEFAULTS.get("elevenlabs", {}).get("speed", 1.0)
-        vs = (params or {}).get("voice_settings")
+        vs = params.get("voice_settings")
         if isinstance(vs, dict) and vs:
             vs = dict(vs)
             vs.setdefault("speed", speed)
             return vs
-        return {"stability": 0.5, "similarity_boost": 0.75, "speed": speed}
+        settings: dict = {"speed": speed}
+        for key in ("stability", "similarity_boost"):
+            value = params.get(key)
+            if value is not None:
+                settings[key] = value
+        logger.info(f"ElevenLabs voice_settings: {settings}")
+        return settings
 
     def _get_pool(
         self,
