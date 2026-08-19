@@ -1,0 +1,1 @@
+ALTER TYPE evaluation_type ADD VALUE IF NOT EXISTS 'OBSERVER';

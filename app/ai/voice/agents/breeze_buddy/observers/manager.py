@@ -12,10 +12,10 @@ from typing import Any, List
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 
-from app.ai.voice.agents.breeze_buddy.template.types import ActionType
 from app.core.logger import logger
 
 from .observer import RealtimeObserver
+from .utils import is_alert_action
 
 
 class ObserverManager:
@@ -86,21 +86,15 @@ class ObserverManager:
             if self._stopped:
                 return
 
-            def _is_alert(obs: RealtimeObserver) -> bool:
-                return (
-                    obs.config.action is not None
-                    and obs.config.action.type == ActionType.ALERT
-                )
-
             eligible = [
                 obs
                 for obs in self._observers
                 if event_name in obs.config.trigger_on
                 and self._turn_count >= obs.config.start_after_turn
                 and (
-                    _is_alert(obs)
+                    is_alert_action(obs.config.action)
                     and obs.name not in self._fired_alerts
-                    or not _is_alert(obs)
+                    or not is_alert_action(obs.config.action)
                     and obs.name not in self._acted
                 )
             ]
@@ -124,14 +118,23 @@ class ObserverManager:
                 return_exceptions=True,
             )
 
-            for obs, result in zip(eligible, results):
+            # Alerts first. An alert is a notification, not a terminal action —
+            # it never sets ``_action_taken``. Draining them before the
+            # terminal observers keeps a same-batch end_conversation from
+            # returning out of the loop while an alert that also detected is
+            # still waiting its turn. sorted() is stable, so config order still
+            # decides within each group.
+            for obs, result in sorted(
+                zip(eligible, results),
+                key=lambda pair: not is_alert_action(pair[0].config.action),
+            ):
                 if self._action_taken:
                     return
                 if isinstance(result, Exception):
                     logger.error(f"Observer {obs.name} check failed: {result}")
                     continue
                 if result is True:
-                    is_alert = _is_alert(obs)
+                    is_alert = is_alert_action(obs.config.action)
                     if is_alert:
                         self._fired_alerts.add(obs.name)
                     else:

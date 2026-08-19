@@ -16,16 +16,42 @@ existing ``update_outcome_in_database`` hook and runs the configured
 """
 
 import time
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
-from app.ai.voice.agents.breeze_buddy.template.types import ActionType, ObserverConfig
+from app.ai.voice.agents.breeze_buddy.template.types import ObserverConfig
 from app.core.logger import logger
 
 from .llm import call_llm
-from .utils import set_outcome
+from .utils import is_alert_action, record_detection, set_outcome
+
+# What an observer LLM may put in the stored detection. Its tool arguments are
+# model-authored and can quote the transcript, so anything not named here is
+# dropped rather than written to evaluation_result.
+_DETECTION_ALLOWED_KEYS = ("reason", "confidence")
+_DETECTION_VALUE_MAX_CHARS = 300
+
+
+def _bounded_detection(raw: Any) -> Dict[str, Any]:
+    """Keep only known scalar detection fields, each length-capped."""
+    if not isinstance(raw, dict):
+        return {}
+    bounded: Dict[str, Any] = {}
+    for key in _DETECTION_ALLOWED_KEYS:
+        value = raw.get(key)
+        if isinstance(value, bool) or isinstance(value, (int, float)):
+            bounded[key] = value
+        elif isinstance(value, str) and value.strip():
+            bounded[key] = value[:_DETECTION_VALUE_MAX_CHARS]
+    # Only keys we refused — an allowed key that came in blank is simply empty,
+    # not something withheld.
+    dropped = sorted(set(raw) - set(_DETECTION_ALLOWED_KEYS))
+    if dropped:
+        bounded["dropped_keys"] = dropped
+    return bounded
 
 
 def _build_tool_from_action(config: "ObserverConfig") -> list[FunctionSchema]:
@@ -63,12 +89,14 @@ class RealtimeObserver:
         llm_service: Any,
         agent_context: Any,
         handler_map: Dict[str, Any],
+        evaluation_config_id: Optional[str] = None,
     ) -> None:
         self.config = config
         self.name = config.name
         self._llm_service = llm_service
         self._agent_context = agent_context
         self._handler_map = handler_map
+        self._evaluation_config_id = evaluation_config_id
         self._tools = _build_tool_from_action(config)
         self._last_detection: Dict[str, Any] = {}
 
@@ -103,7 +131,7 @@ class RealtimeObserver:
                 )
                 return False
 
-            self._last_detection = tool_args or {}
+            self._last_detection = _bounded_detection(tool_args)
             # Capture the active node now — by the time execute_action
             # runs, the main LLM may have already transitioned.
             flow_mgr = getattr(self._agent_context, "flow_manager", None)
@@ -132,7 +160,7 @@ class RealtimeObserver:
         lead = self._agent_context.lead
         action = self.config.action
         handler_name = action.handler or (
-            "send_alert" if action.type == ActionType.ALERT else str(action.type.value)
+            "send_alert" if is_alert_action(action) else str(action.type.value)
         )
 
         if lead:
@@ -166,7 +194,7 @@ class RealtimeObserver:
             )
             return
 
-        if action.type == ActionType.ALERT:
+        if is_alert_action(action):
             call_sid = ctx.call_sid
             safe_detection = (
                 list(self._last_detection.keys())
@@ -199,5 +227,25 @@ class RealtimeObserver:
         logger.info(
             f"Observer {self.name} executing action: "
             f"{handler_name}, outcome={outcome}"
+        )
+        # Recorded before the handler runs: end_conversation tears the pipeline
+        # down, so anything after it never gets the chance to write. ``type``
+        # becomes the ``result`` column on evaluation_result.
+        await record_detection(
+            agent_context=self._agent_context,
+            evaluation_config_id=self._evaluation_config_id,
+            observer_name=self.name,
+            detection={
+                "type": self.name,
+                "label": self.name.replace("_", " ").title(),
+                "observer_name": self.name,
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
+                "node": getattr(self, "_detected_at_node", None),
+                "action_type": action.type.value,
+                "handler": handler_name,
+                "args": action.args or {},
+                "outcome": outcome,
+                "detection": self._last_detection,
+            },
         )
         await handler(handler_args)

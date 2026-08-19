@@ -71,7 +71,11 @@ from app.ai.voice.agents.breeze_buddy.mcp import get_mcp_global_functions
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     create_root_span,
 )
-from app.ai.voice.agents.breeze_buddy.observers import ObserverManager, build_observers
+from app.ai.voice.agents.breeze_buddy.observers import (
+    ObserverManager,
+    build_observers,
+    resolve_observer_configs,
+)
 from app.ai.voice.agents.breeze_buddy.processors import (
     KnowledgeRetrievalProcessor,
     MetricsCollectorProcessor,
@@ -1462,8 +1466,8 @@ class Agent:
             )
 
         # ── Real-time observers ──────────────────────────────────
-        observers_config = (
-            self.configurations.observers if self.configurations else None
+        observers_config, observer_config_id = await resolve_observer_configs(
+            self.template
         )
         logger.info(
             f"Observer setup: "
@@ -1477,6 +1481,7 @@ class Agent:
                     template=self.template,
                     agent_context=self,
                     handler_map=self.flow_builder.handler_map,
+                    evaluation_config_id=observer_config_id,
                 )
                 if observer_instances:
                     self._observer_manager = ObserverManager(
