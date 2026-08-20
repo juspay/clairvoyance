@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import ipaddress
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -121,6 +122,8 @@ def _normalize_url(url: Optional[str]) -> Optional[str]:
     raw_url = (url or "").strip()
     if not raw_url:
         return None
+    if len(raw_url) > 2048:
+        raise ValueError("url is too long")
 
     if raw_url.startswith("http://"):
         raise ValueError("url must be a valid https URL")
@@ -136,7 +139,13 @@ def _normalize_url(url: Optional[str]) -> Optional[str]:
         raise ValueError("url must be a valid https URL")
 
     hostname = parsed.hostname.lower()
-    if hostname == "localhost":
+    if hostname == "localhost" or hostname.endswith((".local", ".internal")):
+        raise ValueError("url must use a public host")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
         raise ValueError("url must use a public host")
 
     if parsed.port and parsed.port != 443:
