@@ -37,6 +37,9 @@ from urllib.parse import quote
 from fastapi import Request, Response
 from starlette.responses import HTMLResponse
 
+from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    raise_inbound_capacity_rejected,
+)
 from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     IVR_CONFIG_CACHE_PREFIX,
     IVR_CONFIG_CACHE_TTL,
@@ -47,6 +50,7 @@ from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_allocate_pod,
 )
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    CAPACITY_REJECTED_OUTCOME,
     check_inbound_policy,
     log_blocked_call,
     set_block_redirect,
@@ -72,7 +76,9 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     create_lead_call_tracker,
 )
 from app.database.accessor.breeze_buddy.telephony_number import (
+    decrement_telephony_number_channels,
     get_telephony_number_by_number,
+    increment_telephony_number_channels,
 )
 from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_telephony_number_id,
@@ -82,6 +88,7 @@ from app.schemas import (
     IVR_OPTIONS_TEMPLATE,
     UNKNOWN_TEMPLATE,
     CallDirection,
+    CallProvider,
     InboundBlockAction,
     LeadCallStatus,
 )
@@ -229,6 +236,10 @@ async def resolve_call_templates(
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
         "reseller_id": first_template.reseller_id if first_template else None,
+        # Already fetched above; returned so the answer handler can gate on
+        # channel capacity without a second lookup, and so acquire and release
+        # agree on the same row (and therefore the same provider).
+        "telephony_number": telephony_number,
     }
 
 
@@ -413,11 +424,52 @@ def _build_block_response(
     )
 
 
+_INBOUND_CAPACITY_MESSAGE = (
+    "Sorry, all our agents are currently busy. Please try again later."
+)
+
+
+def _build_capacity_rejection_response() -> Response:
+    """Turn away a Plivo inbound call that found no free channel.
+
+    Answers the call, speaks, then hangs up — the same shape as the policy
+    block response above. The cheaper
+    ``<PreAnswer><Speak/></PreAnswer><Hangup reason="busy"/>`` is not billed,
+    but the call is never answered, so the message rides as early media, which
+    plenty of carriers strip. Delivering the message is the point of this
+    response, so we pay for the answered leg.
+    """
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(_INBOUND_CAPACITY_MESSAGE)}</Speak>
+    <Hangup/>
+</Response>"""
+    return HTMLResponse(content=xml, media_type="application/xml")
+
+
+async def _admit_plivo_inbound_call(telephony_number_id: str) -> bool:
+    """Take one channel for an inbound Plivo call.
+
+    Same gate outbound uses in ``_acquire_number``: the atomic
+    ``channels = channels + 1 WHERE channels < maximum_channels`` update, which
+    returns no row when the number is already at its ceiling. Both directions
+    therefore share one counter, so an inbound call genuinely reduces what
+    outbound can dial and vice versa.
+
+    Returns False when at capacity — and also when the UPDATE itself failed,
+    because the accessor collapses both into None. That makes inbound
+    admission fail *closed* on a DB outage, matching outbound (where the
+    worker simply defers the lead). The visible difference is that an inbound
+    caller hears the busy message instead of waiting invisibly in a queue.
+    """
+    return await increment_telephony_number_channels(telephony_number_id) is not None
+
+
 async def _create_inbound_lead_in_answer_handler(
     call_id: str,
     from_number: str,
     templates: list,
-) -> None:
+) -> bool:
     """Create an inbound lead in the answer handler before returning XML.
 
     This ensures the lead exists in the database even if the caller hangs
@@ -428,10 +480,15 @@ async def _create_inbound_lead_in_answer_handler(
     later in the WebSocket handler if the user chooses a different one.
 
     Errors are swallowed — the answer response must not be blocked by a
-    DB write failure.
+    DB write failure. The boolean is reported, not raised, purely so the
+    Plivo capacity gate can hand its channel back: without a PROCESSING row
+    there is nothing for the call-end callbacks or
+    ``reconcile_stuck_processing_leads`` to decrement, so a silently failed
+    insert would strand that channel forever. Callers that did not take a
+    channel can ignore the result, exactly as before.
     """
     if not templates:
-        return
+        return False
 
     first_template = templates[0]
     is_ivr_mode = len(templates) > 1
@@ -445,7 +502,7 @@ async def _create_inbound_lead_in_answer_handler(
 
     lead_id = str(uuid.uuid4())
     try:
-        await create_lead_call_tracker(
+        lead = await create_lead_call_tracker(
             id=lead_id,
             reseller_id=first_template.reseller_id,
             template=lead_template_name,
@@ -463,11 +520,17 @@ async def _create_inbound_lead_in_answer_handler(
             ),
             call_direction=CallDirection.INBOUND,
         )
+        if not lead:
+            # The accessor logs and returns None rather than raising.
+            logger.error(f"[Answer] Failed to create inbound lead for {call_id}")
+            return False
         logger.info(f"[Answer] Created inbound lead {lead_id} for call_id {call_id}")
+        return True
     except Exception as e:
         logger.error(
             f"[Answer] Failed to create inbound lead for call_id {call_id}: {e}"
         )
+        return False
 
 
 async def _build_provider_response(
@@ -826,15 +889,89 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
                     {"id": str(t.id), "name": t.name} for t in allowed_templates
                 ]
 
+        # ── Channel capacity gate (Plivo inbound only) ────────────────────
+        # After policy, so a blacklisted / out-of-hours caller never consumes
+        # a channel and capacity rejections stay separable from policy blocks
+        # in analytics. Before the lead insert, so a rejected call leaves
+        # exactly one terminal row (written by log_blocked_call) instead of a
+        # PROCESSING row we would then have to close.
+        telephony_number = result.get("telephony_number")
+        gated_number_id: Optional[str] = None
+        if (
+            provider == "plivo"
+            and telephony_number is not None
+            and telephony_number.provider == CallProvider.PLIVO
+        ):
+            with timed_phase("acquire_inbound_channel"):
+                admitted = await _admit_plivo_inbound_call(str(telephony_number.id))
+
+            if not admitted:
+                logger.info(
+                    f"[{tag}] No free channel on {telephony_number.number} "
+                    f"for call {call_id}; rejecting as busy"
+                )
+                # Owner fields come off the same post-policy template list the
+                # lead would have been created from, so the rejected row lands
+                # in the same analytics scope as a served call.
+                allowed = result.get("templates") or []
+                first = allowed[0] if allowed else None
+                spawn_background_task(
+                    log_blocked_call(
+                        call_id=call_id,
+                        from_number=from_number,
+                        to_number=to_number,
+                        provider=provider,
+                        reseller_id=first.reseller_id if first else "",
+                        merchant_id=first.merchant_id if first else None,
+                        template_name=first.name if first else UNKNOWN_TEMPLATE,
+                        template_id=str(first.id) if first else None,
+                        telephony_number_id=str(telephony_number.id),
+                        block_action=None,
+                        block_reason="channel_capacity_exhausted",
+                        block_message=_INBOUND_CAPACITY_MESSAGE,
+                        outcome=CAPACITY_REJECTED_OUTCOME,
+                    ),
+                    name=f"log-capacity-rejection:{call_id}",
+                )
+                spawn_background_task(
+                    raise_inbound_capacity_rejected(
+                        telephony_number_id=str(telephony_number.id),
+                        number=telephony_number.number,
+                        reseller_id=first.reseller_id if first else None,
+                        merchant_id=first.merchant_id if first else None,
+                        maximum_channels=telephony_number.maximum_channels,
+                    ),
+                    name=f"alert-capacity-rejection:{call_id}",
+                )
+                return _build_capacity_rejection_response()
+
+            gated_number_id = str(telephony_number.id)
+
         # Create inbound lead early so it exists even if caller hangs up before
         # the WebSocket connects. This prevents orphan-call webhooks for normal
         # immediate-hangup behaviour.
+        #
+        # The lead is created PROCESSING, which is what the release side keys
+        # on: whichever callback moves it off PROCESSING returns the channel.
         with timed_phase("create_inbound_lead"):
-            await _create_inbound_lead_in_answer_handler(
+            lead_created = await _create_inbound_lead_in_answer_handler(
                 call_id=call_id,
                 from_number=from_number,
                 templates=result.get("templates", []),
             )
+
+        # No PROCESSING row means nothing will ever decrement the channel we
+        # just took — not the call-end callbacks (they look the lead up by
+        # call_id) and not reconcile_stuck_processing_leads (it scans for
+        # PROCESSING). Hand it straight back. The call itself is fine and
+        # proceeds as normal; it is simply untracked from here on.
+        if gated_number_id and not lead_created:
+            logger.error(
+                f"[{tag}] Inbound lead insert failed for call {call_id} after "
+                f"taking a channel on {gated_number_id}; returning the channel "
+                "so it is not stranded. The call will proceed untracked."
+            )
+            await decrement_telephony_number_channels(gated_number_id)
 
     with timed_phase("build_response"):
         return await _build_provider_response(
