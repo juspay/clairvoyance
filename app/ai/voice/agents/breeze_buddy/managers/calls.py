@@ -379,6 +379,55 @@ async def _release_number(number_id: str, provider: CallProvider):
         await decrement_telephony_number_channels(number_id)
 
 
+def _releases_capacity(lead: LeadCallTracker, provider: CallProvider) -> bool:
+    """
+    Whether this callback still owes the telephony number a channel back.
+
+    Outbound: the worker took a channel (``_acquire_number``) plus a Redis
+    dispatch token before dialling, for every dispatchable execution mode.
+
+    Inbound: only the Plivo answer path takes a channel
+    (``_admit_plivo_inbound_call``), and it does so as part of creating the
+    lead in PROCESSING. So release exactly once — when this callback is the
+    one moving the lead off PROCESSING. Anything already terminal when we
+    looked it up either never held a channel (CAPACITY_REJECTED, BLOCKED_*
+    and out-of-hours all write a FINISHED row at answer time, before or
+    instead of any acquire) or has already had it returned by an earlier
+    callback. Releasing for those invents capacity the number does not have,
+    which then lets us over-commit the trunk until someone notices.
+    """
+    if lead.call_direction == CallDirection.OUTBOUND:
+        return is_dispatchable(lead.execution_mode)
+    return provider == CallProvider.PLIVO and lead.status == LeadCallStatus.PROCESSING
+
+
+async def _release_call_resources(lead: LeadCallTracker) -> None:
+    """Give the telephony number its channel back once the call is over."""
+    if not lead.telephony_number_id:
+        logger.info(f"No telephony number id for lead: {lead.id}")
+        return
+
+    telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
+    if not telephony_number:
+        logger.error(
+            f"Could not find telephony number with id: "
+            f"{lead.telephony_number_id} to release."
+        )
+        return
+
+    if not _releases_capacity(lead, telephony_number.provider):
+        return
+
+    await _release_number(telephony_number.id, telephony_number.provider)
+
+    if lead.call_direction == CallDirection.OUTBOUND:
+        # Event-driven dispatch: return the token to the channel semaphore.
+        # Inbound never takes one — there the DB counter is the whole gate.
+        # Idempotent in aggregate — reconcile_channel_tokens trims any
+        # over-count caused by duplicate webhooks within 60s.
+        await release_channel_token(telephony_number.id)
+
+
 async def _retry_call(
     lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
 ):
@@ -514,20 +563,11 @@ async def reconcile_stuck_processing_leads():
                 call_end_time=datetime.now(timezone.utc),
             )
 
-            if (
-                locked_lead.telephony_number_id
-                and locked_lead.call_direction == CallDirection.OUTBOUND
-                and is_dispatchable(locked_lead.execution_mode)
-            ):
-                telephony_number = await get_telephony_number_by_id(
-                    locked_lead.telephony_number_id
-                )
-                if telephony_number:
-                    await _release_number(
-                        telephony_number.id, telephony_number.provider
-                    )
-                    # Event-driven dispatch: return token to channel semaphore.
-                    await release_channel_token(telephony_number.id)
+            # ``locked_lead`` is the pre-update snapshot: the lock was taken
+            # with expected_status=PROCESSING, so this sweep is by definition
+            # the callback transitioning the lead, and the inbound guard in
+            # _releases_capacity sees PROCESSING as intended.
+            await _release_call_resources(locked_lead)
 
             # Only retry outbound telephony calls - inbound and test calls should not be retried
             config = await _get_lead_config(locked_lead)
@@ -586,25 +626,10 @@ async def handle_call_completion(
             f"Failed to delete greeting audio from Redis for lead {lead.id}"
         )
 
-    # Always release telephony number (including transfers — bot leaves, cleanup happens here)
-    if (
-        lead.telephony_number_id
-        and lead.call_direction == CallDirection.OUTBOUND
-        and is_dispatchable(lead.execution_mode)
-    ):
-        telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
-        if telephony_number:
-            await _release_number(telephony_number.id, telephony_number.provider)
-            # Event-driven dispatch: return a token to the channel semaphore.
-            # Idempotent in aggregate — reconcile_channel_tokens trims any
-            # over-count caused by duplicate webhooks within 60s.
-            await release_channel_token(telephony_number.id)
-        else:
-            logger.error(
-                f"Could not find telephony number with id: {lead.telephony_number_id} to release."
-            )
-    else:
-        logger.info(f"No telephony number id for lead: {lead.id}")
+    # Always release telephony number (including transfers — bot leaves, cleanup happens here).
+    # Runs before the completion UPDATE below so the inbound guard in
+    # _releases_capacity still sees this lead as PROCESSING.
+    await _release_call_resources(lead)
 
     # Check if this is a transfer — for outcome override only
     is_transfer = (
@@ -689,25 +714,12 @@ async def handle_unanswered_calls(call_id: str):
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
 
-    # Release telephony number channel — do this before the FINISHED guard because the
-    # channel must be freed regardless of lead status. _release_number is idempotent
-    # (SQL uses GREATEST(0, ...)), so duplicate releases are safe.
-    if (
-        lead.telephony_number_id
-        and lead.call_direction == CallDirection.OUTBOUND
-        and is_dispatchable(lead.execution_mode)
-    ):
-        telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
-        if telephony_number:
-            await _release_number(telephony_number.id, telephony_number.provider)
-            # Event-driven dispatch: return token to channel semaphore.
-            await release_channel_token(telephony_number.id)
-        else:
-            logger.error(
-                f"Could not find telephony number with id: {lead.telephony_number_id} to release."
-            )
-    else:
-        logger.info(f"No telephony number id for lead: {lead.id}")
+    # Release telephony number channel — for outbound this runs before the FINISHED
+    # guard because the channel must be freed regardless of lead status, and
+    # _release_number is idempotent (SQL uses GREATEST(0, ...)). For inbound the
+    # guard in _releases_capacity is stricter: only a lead still PROCESSING here
+    # is holding a channel, so a duplicate or post-block callback releases nothing.
+    await _release_call_resources(lead)
 
     # Guard: if another callback already finished this lead, skip to avoid duplicate retries.
     # This happens when the lock race causes multiple calls for the same lead — each call's
