@@ -5,6 +5,9 @@ from app.api.routers.breeze_buddy.agent_router.health import router as pod_route
 
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
+from app.api.routers.breeze_buddy.assist_onboarding import (
+    router as assist_onboarding_router,
+)
 from app.api.routers.breeze_buddy.auth import router as auth_router
 from app.api.routers.breeze_buddy.blacklist import router as blacklist_router
 
@@ -99,6 +102,9 @@ router.include_router(template_generator_router, prefix="", tags=["template-gene
 
 # Website scraping only; no template/widget provisioning.
 router.include_router(website_scraping_router, prefix="", tags=["website-scraping"])
+
+# Idempotent merchant onboarding for the Buddy Assist widget.
+router.include_router(assist_onboarding_router, prefix="", tags=["assist-onboarding"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])
