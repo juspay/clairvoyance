@@ -75,6 +75,19 @@ class PreCheckType(str, Enum):
     """Supported pre-check types"""
 
     EXTERNAL_API = "external_api"
+    INTERNAL_FUNCTION = "internal_function"
+
+
+class PreCheckFailureAction(str, Enum):
+    """What to do with the lead when a pre-check blocks the call.
+
+    ``abort`` is the historical (and default) behaviour. ``defer`` exists for
+    transient blocks — a cooldown window that has not elapsed yet, a quota that
+    resets later — where killing the lead outright is the wrong answer.
+    """
+
+    ABORT = "abort"  # FINISHED / PRECHECK_FAILED, terminal
+    DEFER = "defer"  # stay BACKLOG, push next_attempt_at and retry later
 
 
 class PreCheckDefaultAction(str, Enum):
@@ -176,6 +189,27 @@ class PreCheckConfig(BaseModel):
             "mcp_tool": "search_catalog",
             "mcp_arguments": {"catalog": {"query": "{items}"}}
         }
+
+    Set ``type: "internal_function"`` to call an in-repo Python function from
+    ``managers/pre_check_functions.PRE_CHECK_FUNCTIONS`` instead of making a
+    network hop. The function returns a plain bool and is passed the resolved
+    ``function_args``, so ``response_config`` and ``export_to_payload`` do not
+    apply:
+
+        {
+            "type": "internal_function",
+            "name": "Contact cooldown",
+            "function": "recent_contact_cooldown",
+            "function_args": {"merchant_id": "*", "window_hours": 24},
+            "on_failure_action": "defer",
+            "defer_seconds": 3600,
+            "max_defers": 10,
+            "default_on_failure": "proceed"
+        }
+
+    ``on_failure_action`` decides what a *block* does to the lead: ``abort``
+    (default, terminal) or ``defer`` (retry in ``defer_seconds``, up to
+    ``max_defers`` times before falling through to abort).
     """
 
     type: PreCheckType = PreCheckType.EXTERNAL_API
@@ -215,6 +249,64 @@ class PreCheckConfig(BaseModel):
         default=PreCheckDefaultAction.PROCEED,
         description="What to do if the pre-check API call fails/times out. 'proceed' = fail-open, 'skip' = fail-closed",
     )
+    function: Optional[str] = Field(
+        default=None,
+        description="Key into PRE_CHECK_FUNCTIONS. Required when "
+        "type='internal_function', forbidden otherwise.",
+    )
+    function_args: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arguments passed to 'function'. Values support the same "
+        "{placeholder} syntax as http_request, resolved from credentials, "
+        "template secrets and the lead payload.",
+    )
+    on_failure_action: PreCheckFailureAction = Field(
+        default=PreCheckFailureAction.ABORT,
+        description="What happens to the lead when this pre-check blocks the "
+        "call. 'abort' = FINISHED/PRECHECK_FAILED (default), 'defer' = stay "
+        "BACKLOG and retry after defer_seconds.",
+    )
+    defer_seconds: int = Field(
+        default=3600,
+        ge=30,
+        le=86400,
+        description="How far out to push next_attempt_at. Only read when "
+        "on_failure_action='defer'.",
+    )
+    max_defers: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="How many times a lead may be deferred by pre-checks "
+        "before falling through to abort. Only read when "
+        "on_failure_action='defer'.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_type_shape(self) -> "PreCheckConfig":
+        """Keep the two pre-check shapes from bleeding into each other.
+
+        This is the only validation layer for pre-checks — the configurations
+        router passes the list straight through to the DB — so a typo here has
+        to fail loudly at write time rather than silently fail-open at dispatch.
+        """
+        if self.type == PreCheckType.INTERNAL_FUNCTION:
+            if not self.function:
+                raise ValueError(
+                    "pre-check type 'internal_function' requires 'function' "
+                    "(a key in PRE_CHECK_FUNCTIONS)"
+                )
+            if self.http_request is not None or self.mcp is not None:
+                raise ValueError(
+                    "pre-check type 'internal_function' cannot also set "
+                    "'http_request' or 'mcp'"
+                )
+        elif self.function is not None:
+            raise ValueError(
+                f"'function' is only valid with type 'internal_function', "
+                f"not '{self.type.value}'"
+            )
+        return self
 
 
 class LeadCallTracker(BaseModel):
