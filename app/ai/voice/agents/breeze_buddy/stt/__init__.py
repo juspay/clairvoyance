@@ -2,7 +2,11 @@
 
 Central routing: accepts a normalized ``STTConfiguration`` from the template
 and casts it to the provider-specific builder config. Defaults are baked into
-the Pydantic models — no env/dynamic config needed (except API keys).
+the Pydantic models for Deepgram, so it needs no env/dynamic lookup. Soniox
+falls back to static env config; Sarvam falls back to Redis-backed dynamic
+config (including a few fields — ``prompt``, ``vad_signals``,
+``high_vad_sensitivity`` — that have no template override at all and are
+always Redis-sourced).
 """
 
 from __future__ import annotations
@@ -33,6 +37,11 @@ from app.core.config.dynamic import (
     BB_SARVAM_STT_MODEL,
     BB_SARVAM_STT_PROMPT,
     BB_SARVAM_STT_VAD_SIGNALS,
+)
+from app.core.config.resolver import (
+    FieldSpec,
+    or_none,
+    resolve_fields,
 )
 from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_CONTEXT,
@@ -118,23 +127,45 @@ async def create_stt_from_config(config: STTConfiguration):
             raise ValueError("SONIOX_API_KEY is required for soniox STT")
 
         sx = config.soniox
-        effective_context = (
-            sx.context if sx and sx.context else BREEZE_BUDDY_SONIOX_CONTEXT
+        language = _normalize_language(config.language)
+
+        resolved = await resolve_fields(
+            [
+                FieldSpec(
+                    "context",
+                    tiers=[
+                        lambda: or_none(sx.context if sx else None),
+                        lambda: BREEZE_BUDDY_SONIOX_CONTEXT,
+                    ],
+                ),
+                FieldSpec(
+                    "model",
+                    tiers=[
+                        lambda: or_none(sx.model if sx else None),
+                        lambda: BREEZE_BUDDY_SONIOX_MODEL,
+                    ],
+                ),
+                FieldSpec(
+                    "language_hints",
+                    tiers=[
+                        lambda: or_none(language),
+                        lambda: BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
+                    ],
+                ),
+            ]
         )
-        effective_model = sx.model if sx and sx.model else BREEZE_BUDDY_SONIOX_MODEL
 
         if sx and sx.context:
             logger.info("Using template-specific Soniox context")
 
-        language = _normalize_language(config.language)
         enable_lang_id = sx.enable_language_identification if sx else None
         return build_soniox_stt(
             SonioxConfig(
                 api_key=SONIOX_API_KEY,
-                model=effective_model,
+                model=resolved["model"],
                 vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
-                language_hints=language or BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
-                context_json=effective_context,
+                language_hints=resolved["language_hints"],
+                context_json=resolved["context"],
                 max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),
@@ -147,22 +178,40 @@ async def create_stt_from_config(config: STTConfiguration):
             raise ValueError("SARVAM_API_KEY is required for sarvam STT")
 
         sv = config.sarvam
-        bb_model = sv.model if sv and sv.model else await BB_SARVAM_STT_MODEL()
-        bb_lang = (
-            sv.language_code
-            if sv and sv.language_code
-            else await BB_SARVAM_STT_LANGUAGE_CODE()
+        resolved = await resolve_fields(
+            [
+                FieldSpec(
+                    "model",
+                    tiers=[
+                        lambda: or_none(sv.model if sv else None),
+                        BB_SARVAM_STT_MODEL,
+                    ],
+                ),
+                FieldSpec(
+                    "language_code",
+                    tiers=[
+                        lambda: or_none(sv.language_code if sv else None),
+                        BB_SARVAM_STT_LANGUAGE_CODE,
+                    ],
+                ),
+                # No template override exists for these — always Redis-sourced.
+                FieldSpec("prompt", tiers=[BB_SARVAM_STT_PROMPT]),
+                FieldSpec("vad_signals", tiers=[BB_SARVAM_STT_VAD_SIGNALS]),
+                FieldSpec(
+                    "high_vad_sensitivity", tiers=[BB_SARVAM_STT_HIGH_VAD_SENSITIVITY]
+                ),
+            ]
         )
 
         return build_sarvam_stt(
             SarvamConfig(
                 api_key=SARVAM_API_KEY,
-                model=bb_model,
+                model=resolved["model"],
                 sample_rate=SAMPLE_RATE,
-                language_code=bb_lang,
-                prompt=await BB_SARVAM_STT_PROMPT(),
-                vad_signals=await BB_SARVAM_STT_VAD_SIGNALS(),
-                high_vad_sensitivity=await BB_SARVAM_STT_HIGH_VAD_SENSITIVITY(),
+                language_code=resolved["language_code"],
+                prompt=resolved["prompt"],
+                vad_signals=resolved["vad_signals"],
+                high_vad_sensitivity=resolved["high_vad_sensitivity"],
             )
         )
 

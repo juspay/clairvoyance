@@ -12,13 +12,17 @@ For the full mute_stt/unmute_stt routing (VAD → TranscriptionGate fallback),
 see handlers/internal/stt.py.
 """
 
-from typing import Optional
+from typing import Callable, Optional, Union
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    TemplateModel,
+    VadConfig,
+)
 from app.core.config.dynamic import (
     BB_DAILY_VAD_CONFIDENCE,
     BB_DAILY_VAD_MIN_VOLUME,
@@ -30,11 +34,19 @@ from app.core.config.dynamic import (
     BB_TELEPHONY_VAD_STOP_SECS,
     BREEZE_BUDDY_ENABLE_VAD,
 )
+from app.core.config.resolver import FieldSpec, resolve_fields
 from app.core.logger import logger
 
 # Constants
 TELEPHONY_SAMPLE_RATE = 8000
 DAILY_SAMPLE_RATE = 16000
+
+# SmartTurn's trigger VAD is deliberately snappier than the standalone VAD
+# path: the ML model decides where the turn actually ends, so the trigger only
+# has to fire it. Kept as a literal rather than reading BB_TELEPHONY_VAD_* —
+# that flag is tuned for the plain-VAD/timeout path, and retuning it there must
+# not silently change SmartTurn latency.
+SMART_TURN_TRIGGER_STOP_SECS = 0.2
 
 
 async def create_daily_vad_params() -> VADParams:
@@ -57,7 +69,31 @@ async def create_telephony_vad_params() -> VADParams:
     )
 
 
-def _layer_template_vad(
+_VAD_FIELDS = ("confidence", "start_secs", "stop_secs", "min_volume")
+
+
+async def _resolve_vad_params(
+    override_getter: Callable[[str], Optional[float]], base: VADParams
+) -> VADParams:
+    """Merge a higher-tier override (per-field, may be partial) over ``base``.
+
+    Shared by every VAD merge site — the only thing that differs is what
+    ``override_getter`` reads from (a template's ``vad_config``, a node's
+    ``vad_config``, ...) and what ``base`` represents (Redis mode-defaults,
+    the live analyzer's current params, ...).
+    """
+    specs = [
+        FieldSpec(
+            name=f,
+            tiers=[lambda f=f: override_getter(f), lambda f=f: getattr(base, f)],
+        )
+        for f in _VAD_FIELDS
+    ]
+    resolved = await resolve_fields(specs)
+    return VADParams(**resolved)
+
+
+async def _layer_template_vad(
     template: Optional[TemplateModel], defaults: VADParams
 ) -> VADParams:
     """Layer template.configurations.vad_config per-field over defaults.
@@ -74,38 +110,38 @@ def _layer_template_vad(
         return defaults
 
     logger.info(f"Template VAD config: {template_vad}")
-    return VADParams(
-        confidence=(
-            template_vad.confidence
-            if template_vad.confidence is not None
-            else defaults.confidence
-        ),
-        start_secs=(
-            template_vad.start_secs
-            if template_vad.start_secs is not None
-            else defaults.start_secs
-        ),
-        stop_secs=(
-            template_vad.stop_secs
-            if template_vad.stop_secs is not None
-            else defaults.stop_secs
-        ),
-        min_volume=(
-            template_vad.min_volume
-            if template_vad.min_volume is not None
-            else defaults.min_volume
-        ),
-    )
+    return await _resolve_vad_params(lambda f: getattr(template_vad, f, None), defaults)
 
 
 async def build_daily_vad_params(template: Optional[TemplateModel]) -> VADParams:
     """Build VAD params for Daily mode: template > Redis `BB_DAILY_VAD_*`."""
-    return _layer_template_vad(template, await create_daily_vad_params())
+    return await _layer_template_vad(template, await create_daily_vad_params())
 
 
 async def build_telephony_vad_params(template: Optional[TemplateModel]) -> VADParams:
     """Build VAD params for telephony mode: template > Redis `BB_TELEPHONY_VAD_*`."""
-    return _layer_template_vad(template, await create_telephony_vad_params())
+    return await _layer_template_vad(template, await create_telephony_vad_params())
+
+
+async def build_smart_turn_trigger_vad_params(
+    configurations: Optional[ConfigurationModel],
+) -> VADParams:
+    """Build VAD params for SmartTurn's auto-created trigger VAD.
+
+    SmartTurn needs an ``is_speech`` signal from a VAD; when the pipeline has
+    no externally-supplied analyzer it creates one itself. Precedence is
+    ``template > SmartTurn trigger defaults`` — a template may tune the trigger,
+    but the fallback tier is this path's own defaults
+    (``SMART_TURN_TRIGGER_STOP_SECS``), not the shared ``BB_TELEPHONY_VAD_*``
+    flags that drive the standalone VAD path.
+
+    Takes a bare ``configurations`` (not a ``TemplateModel``) because the
+    pipeline has already unwrapped the template by this point.
+    """
+    return await _resolve_vad_params(
+        lambda f: getattr(getattr(configurations, "vad_config", None), f, None),
+        VADParams(stop_secs=SMART_TURN_TRIGGER_STOP_SECS),
+    )
 
 
 async def create_vad_analyzer(
@@ -165,7 +201,7 @@ def reset_vad_to_default(context: TemplateContext):
         )
 
 
-def apply_node_vad_config(context: TemplateContext, node_name: str):
+async def apply_node_vad_config(context: TemplateContext, node_name: str) -> None:
     """Apply node-specific VAD config if it exists."""
     bot = context.bot
     if not bot.vad_analyzer:
@@ -182,18 +218,26 @@ def apply_node_vad_config(context: TemplateContext, node_name: str):
     # NodeConfig is a TypedDict, so access vad_config as a dict key
     vad_config = node_config.get("vad_config")
     if vad_config:
-        _apply_vad_config_to_analyzer(bot.vad_analyzer, vad_config, context.call_sid)
+        await _apply_vad_config_to_analyzer(
+            bot.vad_analyzer, vad_config, context.call_sid
+        )
 
 
-def _get_vad_config_value(vad_config, key: str):
+def _get_vad_config_value(
+    vad_config: Union[VadConfig, dict, None], key: str
+) -> Optional[float]:
     """Get a value from vad_config, supporting both dict and object access."""
     if isinstance(vad_config, dict):
         return vad_config.get(key)
     return getattr(vad_config, key, None)
 
 
-def _apply_vad_config_to_analyzer(vad_analyzer, vad_config, call_sid: str):
-    """Apply VAD config to the VAD analyzer.
+async def _apply_vad_config_to_analyzer(
+    vad_analyzer: VADAnalyzer,
+    vad_config: Union[VadConfig, dict, None],
+    call_sid: str,
+) -> None:
+    """Apply node-level VAD config (node > current live params) to the analyzer.
 
     Supports both dict and object access patterns for vad_config.
     Uses set_params() to ensure internal frame counts are recalculated.
@@ -205,27 +249,11 @@ def _apply_vad_config_to_analyzer(vad_analyzer, vad_config, call_sid: str):
         "min_volume": vad_analyzer.params.min_volume,
     }
 
-    confidence = _get_vad_config_value(vad_config, "confidence")
-    start_secs = _get_vad_config_value(vad_config, "start_secs")
-    stop_secs = _get_vad_config_value(vad_config, "stop_secs")
-    min_volume = _get_vad_config_value(vad_config, "min_volume")
-
-    vad_analyzer.set_params(
-        VADParams(
-            confidence=(
-                confidence if confidence is not None else vad_analyzer.params.confidence
-            ),
-            start_secs=(
-                start_secs if start_secs is not None else vad_analyzer.params.start_secs
-            ),
-            stop_secs=(
-                stop_secs if stop_secs is not None else vad_analyzer.params.stop_secs
-            ),
-            min_volume=(
-                min_volume if min_volume is not None else vad_analyzer.params.min_volume
-            ),
-        )
+    current = vad_analyzer.params
+    new_params_obj = await _resolve_vad_params(
+        lambda f: _get_vad_config_value(vad_config, f), current
     )
+    vad_analyzer.set_params(new_params_obj)
 
     new_params = {
         "confidence": vad_analyzer.params.confidence,

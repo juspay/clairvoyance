@@ -48,6 +48,7 @@ from app.core.config.dynamic import (
     BB_VOICE_PROVIDER_DEFAULTS,
     DRAGONTTS_URL,
 )
+from app.core.config.resolver import FieldSpec, resolve_fields
 from app.core.config.static import (
     CARTESIA_API_KEY,
     ELEVENLABS_API_KEY,
@@ -112,10 +113,17 @@ async def resolve_voice_config(
         return TTSConfig(provider=provider_enum, **defaults)
 
     # Merge: effective_config fields win over defaults for non-None values
-    merged = {}
-    for field in _VOICE_CONFIG_FIELDS:
-        val = getattr(effective_config, field, None)
-        merged[field] = val if val is not None else defaults.get(field)
+    specs = [
+        FieldSpec(
+            name=f,
+            tiers=[
+                lambda f=f: getattr(effective_config, f, None),
+                lambda f=f: defaults.get(f),
+            ],
+        )
+        for f in _VOICE_CONFIG_FIELDS
+    ]
+    merged = await resolve_fields(specs)
 
     return TTSConfig(provider=effective_config.provider, **merged)
 

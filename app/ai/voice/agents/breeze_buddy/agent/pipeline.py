@@ -9,7 +9,6 @@ from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
     LocalSmartTurnAnalyzerV3,
 )
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.observers.loggers.llm_log_observer import LLMLogObserver
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
 from pipecat.observers.loggers.transcription_log_observer import (
@@ -61,7 +60,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     SmartTurnConfig,
     TurnDetectionMode,
 )
-from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
+from app.ai.voice.agents.breeze_buddy.template.vad import (
+    TELEPHONY_SAMPLE_RATE,
+    build_smart_turn_trigger_vad_params,
+)
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service, resolve_voice_config
 from app.ai.voice.llm.realtime import get_realtime_llm_service
 from app.core.config.static import (
@@ -353,24 +355,23 @@ async def build_pipeline(
     turn_detection_mode = (
         stt_config.turn_detection if stt_config else TurnDetectionMode.STT_NATIVE
     )
-    # STT_NATIVE fires immediately (0.0s). Only TIMEOUT honours configured value.
-    # The STTConfiguration validator already enforces this, but be explicit here.
-    user_speech_timeout = (
-        stt_config.user_speech_timeout
-        if stt_config and turn_detection_mode == TurnDetectionMode.TIMEOUT
-        else 0.0
-    )
+    # STT_NATIVE fires immediately (0.0s), TIMEOUT honours the configured value —
+    # already enforced by STTConfiguration's _normalize_user_speech_timeout
+    # model_validator (template/types.py), so no ternary is needed here.
+    user_speech_timeout = stt_config.user_speech_timeout if stt_config else 0.0
 
-    # SmartTurn mode: auto-create Silero VAD (stop_secs=0.2) as trigger if no
-    # external VAD was provided.  SmartTurn needs is_speech signal from VAD.
-    # When no external VAD exists this is the telephony path (8 kHz sample rate).
+    # SmartTurn mode: auto-create Silero VAD as trigger if no external VAD was
+    # provided. SmartTurn needs an is_speech signal from VAD. When no external
+    # VAD exists this is the telephony path (8 kHz sample rate). Params are
+    # resolved template > Redis, same precedence as every other VAD build site.
     if turn_detection_mode == TurnDetectionMode.SMART_TURN and vad_analyzer is None:
+        vad_params = await build_smart_turn_trigger_vad_params(configurations)
         vad_analyzer = SileroVADAnalyzer(
             sample_rate=TELEPHONY_SAMPLE_RATE,
-            params=VADParams(stop_secs=0.2),
+            params=vad_params,
         )
         logger.info(
-            "SmartTurn mode: auto-created Silero VAD (stop_secs=0.2) as trigger"
+            f"SmartTurn mode: auto-created Silero VAD (params={vad_params}) as trigger"
         )
 
     # --- User turn start strategies ---

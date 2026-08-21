@@ -39,6 +39,11 @@ from app.core.config.dynamic import (
     OPENAI_MAX_COMPLETION_TOKENS,
     OPENAI_TEMPERATURE,
 )
+from app.core.config.resolver import (
+    FieldSpec,
+    or_none,
+    resolve_fields,
+)
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
     AZURE_OPENAI_API_KEY,
@@ -59,14 +64,8 @@ async def _resolve_azure(
     turns). Voice runs each call in its own subprocess and gets nothing
     from connection sharing — keep voice on the stock pipecat service.
     """
-    # Endpoint: template override or env default
-    endpoint = (
-        llm_config.endpoint
-        if llm_config and llm_config.endpoint
-        else AZURE_OPENAI_ENDPOINT
-    )
-
-    # API key: resolve from named config key or use env default
+    # API key: resolve from named config key or use env default. Not a tier
+    # chain — the *name* of the dynamic key is itself template-supplied.
     if llm_config and llm_config.endpoint and not llm_config.api_key_name:
         raise ValueError(
             "api_key_name is required when a custom endpoint is provided for Azure"
@@ -81,20 +80,46 @@ async def _resolve_azure(
     else:
         api_key = AZURE_OPENAI_API_KEY
 
-    model = (
-        llm_config.model
-        if llm_config and llm_config.model
-        else AZURE_BREEZE_BUDDY_OPENAI_MODEL
-    )
-    temperature = (
-        llm_config.temperature
-        if llm_config and llm_config.temperature is not None
-        else await BREEZE_BUDDY_AZURE_TEMPERATURE()
-    )
-    max_tokens = (
-        llm_config.max_tokens
-        if llm_config and llm_config.max_tokens
-        else await BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS()
+    resolved = await resolve_fields(
+        [
+            FieldSpec(
+                "endpoint",
+                tiers=[
+                    lambda: or_none(llm_config.endpoint if llm_config else None),
+                    lambda: AZURE_OPENAI_ENDPOINT,
+                ],
+            ),
+            FieldSpec(
+                "model",
+                tiers=[
+                    lambda: or_none(llm_config.model if llm_config else None),
+                    lambda: AZURE_BREEZE_BUDDY_OPENAI_MODEL,
+                ],
+            ),
+            FieldSpec(
+                "temperature",
+                tiers=[
+                    lambda: llm_config.temperature if llm_config else None,
+                    BREEZE_BUDDY_AZURE_TEMPERATURE,
+                ],
+            ),
+            FieldSpec(
+                "max_tokens",
+                tiers=[
+                    lambda: or_none(llm_config.max_tokens if llm_config else None),
+                    BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
+                ],
+            ),
+            FieldSpec(
+                "function_call_timeout_secs",
+                tiers=[
+                    lambda: or_none(
+                        llm_config.function_call_timeout_secs if llm_config else None
+                    ),
+                    10.0,
+                ],
+            ),
+        ]
     )
 
     # Extract reasoning_effort from thinking config
@@ -105,16 +130,12 @@ async def _resolve_azure(
     return build_azure_llm(
         AzureConfig(
             api_key=api_key,
-            endpoint=endpoint,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            endpoint=resolved["endpoint"],
+            model=resolved["model"],
+            temperature=resolved["temperature"],
+            max_tokens=resolved["max_tokens"],
             reasoning_effort=reasoning_effort,
-            function_call_timeout_secs=(
-                llm_config.function_call_timeout_secs
-                if llm_config and llm_config.function_call_timeout_secs
-                else 10.0
-            ),
+            function_call_timeout_secs=resolved["function_call_timeout_secs"],
         ),
         pooled=pooled,
     )
@@ -145,16 +166,39 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
     else:
         api_key = OPENAI_API_KEY
 
-    model = llm_config.model if llm_config and llm_config.model else OPENAI_MODEL
-    temperature = (
-        llm_config.temperature
-        if llm_config and llm_config.temperature is not None
-        else await OPENAI_TEMPERATURE()
-    )
-    max_tokens = (
-        llm_config.max_tokens
-        if llm_config and llm_config.max_tokens
-        else await OPENAI_MAX_COMPLETION_TOKENS()
+    resolved = await resolve_fields(
+        [
+            FieldSpec(
+                "model",
+                tiers=[
+                    lambda: or_none(llm_config.model if llm_config else None),
+                    lambda: OPENAI_MODEL,
+                ],
+            ),
+            FieldSpec(
+                "temperature",
+                tiers=[
+                    lambda: llm_config.temperature if llm_config else None,
+                    OPENAI_TEMPERATURE,
+                ],
+            ),
+            FieldSpec(
+                "max_tokens",
+                tiers=[
+                    lambda: or_none(llm_config.max_tokens if llm_config else None),
+                    OPENAI_MAX_COMPLETION_TOKENS,
+                ],
+            ),
+            FieldSpec(
+                "function_call_timeout_secs",
+                tiers=[
+                    lambda: or_none(
+                        llm_config.function_call_timeout_secs if llm_config else None
+                    ),
+                    10.0,
+                ],
+            ),
+        ]
     )
 
     reasoning_effort = None
@@ -165,48 +209,57 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
         OpenAIConfig(
             api_key=api_key,
             base_url=base_url,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            model=resolved["model"],
+            temperature=resolved["temperature"],
+            max_tokens=resolved["max_tokens"],
             reasoning_effort=reasoning_effort,
-            function_call_timeout_secs=(
-                llm_config.function_call_timeout_secs
-                if llm_config and llm_config.function_call_timeout_secs
-                else 10.0
-            ),
+            function_call_timeout_secs=resolved["function_call_timeout_secs"],
         )
     )
 
 
 async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMService:
     """Build Vertex (Gemini) LLM — all params required from template config."""
-    credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
-    project_id = await GOOGLE_VERTEX_PROJECT_ID()
-
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_VERTEX_CREDENTIALS_JSON is required for google_vertex provider"
-        )
-    if not project_id:
-        raise ValueError(
-            "GOOGLE_VERTEX_PROJECT_ID is required for google_vertex provider"
-        )
-    if not llm_config.model:
-        raise ValueError(
-            "model is required in LLMConfiguration for google_vertex provider"
-        )
-    if not llm_config.region:
-        raise ValueError(
-            "region is required in LLMConfiguration for google_vertex provider"
-        )
-    if llm_config.temperature is None:
-        raise ValueError(
-            "temperature is required in LLMConfiguration for google_vertex provider"
-        )
-    if not llm_config.max_tokens:
-        raise ValueError(
-            "max_tokens is required in LLMConfiguration for google_vertex provider"
-        )
+    resolved = await resolve_fields(
+        [
+            FieldSpec(
+                "credentials_json",
+                tiers=[GOOGLE_VERTEX_CREDENTIALS_JSON],
+                required=True,
+                error_message="GOOGLE_VERTEX_CREDENTIALS_JSON is required for google_vertex provider",
+            ),
+            FieldSpec(
+                "project_id",
+                tiers=[GOOGLE_VERTEX_PROJECT_ID],
+                required=True,
+                error_message="GOOGLE_VERTEX_PROJECT_ID is required for google_vertex provider",
+            ),
+            FieldSpec(
+                "model",
+                tiers=[lambda: llm_config.model],
+                required=True,
+                error_message="model is required in LLMConfiguration for google_vertex provider",
+            ),
+            FieldSpec(
+                "region",
+                tiers=[lambda: llm_config.region],
+                required=True,
+                error_message="region is required in LLMConfiguration for google_vertex provider",
+            ),
+            FieldSpec(
+                "temperature",
+                tiers=[lambda: llm_config.temperature],
+                required=True,
+                error_message="temperature is required in LLMConfiguration for google_vertex provider",
+            ),
+            FieldSpec(
+                "max_tokens",
+                tiers=[lambda: llm_config.max_tokens],
+                required=True,
+                error_message="max_tokens is required in LLMConfiguration for google_vertex provider",
+            ),
+        ]
+    )
 
     # Extract thinking config
     thinking_budget = None
@@ -225,12 +278,12 @@ async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMServic
 
     return build_vertex_llm(
         VertexConfig(
-            credentials_json=credentials_json,
-            project_id=project_id,
-            location=llm_config.region,
-            model=llm_config.model,
-            temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens,
+            credentials_json=resolved["credentials_json"],
+            project_id=resolved["project_id"],
+            location=resolved["region"],
+            model=resolved["model"],
+            temperature=resolved["temperature"],
+            max_tokens=resolved["max_tokens"],
             thinking_budget=thinking_budget,
             thinking_level=thinking_level,
             function_call_timeout_secs=(
@@ -246,33 +299,46 @@ async def _resolve_claude_vertex(
     llm_config: LLMConfiguration, *, pooled: bool = False
 ) -> VertexAnthropicLLMService:
     """Build Claude on Vertex AI — all params required from template config."""
-    credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
-    project_id = await GOOGLE_VERTEX_PROJECT_ID()
-
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_VERTEX_CREDENTIALS_JSON is required for claude_vertex provider"
-        )
-    if not project_id:
-        raise ValueError(
-            "GOOGLE_VERTEX_PROJECT_ID is required for claude_vertex provider"
-        )
-    if not llm_config.model:
-        raise ValueError(
-            "model is required in LLMConfiguration for claude_vertex provider"
-        )
-    if not llm_config.region:
-        raise ValueError(
-            "region is required in LLMConfiguration for claude_vertex provider"
-        )
-    if llm_config.temperature is None:
-        raise ValueError(
-            "temperature is required in LLMConfiguration for claude_vertex provider"
-        )
-    if not llm_config.max_tokens:
-        raise ValueError(
-            "max_tokens is required in LLMConfiguration for claude_vertex provider"
-        )
+    resolved = await resolve_fields(
+        [
+            FieldSpec(
+                "credentials_json",
+                tiers=[GOOGLE_VERTEX_CREDENTIALS_JSON],
+                required=True,
+                error_message="GOOGLE_VERTEX_CREDENTIALS_JSON is required for claude_vertex provider",
+            ),
+            FieldSpec(
+                "project_id",
+                tiers=[GOOGLE_VERTEX_PROJECT_ID],
+                required=True,
+                error_message="GOOGLE_VERTEX_PROJECT_ID is required for claude_vertex provider",
+            ),
+            FieldSpec(
+                "model",
+                tiers=[lambda: llm_config.model],
+                required=True,
+                error_message="model is required in LLMConfiguration for claude_vertex provider",
+            ),
+            FieldSpec(
+                "region",
+                tiers=[lambda: llm_config.region],
+                required=True,
+                error_message="region is required in LLMConfiguration for claude_vertex provider",
+            ),
+            FieldSpec(
+                "temperature",
+                tiers=[lambda: llm_config.temperature],
+                required=True,
+                error_message="temperature is required in LLMConfiguration for claude_vertex provider",
+            ),
+            FieldSpec(
+                "max_tokens",
+                tiers=[lambda: llm_config.max_tokens],
+                required=True,
+                error_message="max_tokens is required in LLMConfiguration for claude_vertex provider",
+            ),
+        ]
+    )
 
     # Extract thinking config
     thinking_enabled = False
@@ -288,12 +354,12 @@ async def _resolve_claude_vertex(
 
     return build_claude_vertex_llm(
         ClaudeVertexConfig(
-            credentials_json=credentials_json,
-            project_id=project_id,
-            region=llm_config.region,
-            model=llm_config.model,
-            temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens,
+            credentials_json=resolved["credentials_json"],
+            project_id=resolved["project_id"],
+            region=resolved["region"],
+            model=resolved["model"],
+            temperature=resolved["temperature"],
+            max_tokens=resolved["max_tokens"],
             thinking_enabled=thinking_enabled,
             thinking_budget_tokens=thinking_budget_tokens,
             function_call_timeout_secs=(

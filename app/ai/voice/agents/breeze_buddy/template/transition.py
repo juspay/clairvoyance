@@ -89,7 +89,7 @@ async def transition_handler(
         reset_vad_to_default(context)
 
         # Get node-specific VAD config and apply it
-        apply_node_vad_config(context, transition_to)
+        await apply_node_vad_config(context, transition_to)
 
         # Determine user_speech_timeout from input collection config BEFORE reset.
         # This is passed to both reset and apply so there's never a window where
