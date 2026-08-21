@@ -5,6 +5,7 @@ These utilities ensure sensitive data (API keys, tokens, passwords) are never
 exposed in API responses while allowing updates to preserve existing values.
 """
 
+import copy
 from typing import Any, Dict, Optional
 
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
@@ -18,7 +19,8 @@ SECRETS_MASK = "******"
 # field_serializer in ``template/types.py`` emits 10 asterisks; accept the
 # 6-asterisk top-level form too in case a UI client normalises everything to
 # one shape. Either form means "value unchanged — keep what's in DB".
-_AUTH_MASK_VALUES = frozenset({SECRETS_MASK, "**********"})
+AUTH_SECRET_MASK = "**********"
+_AUTH_MASK_VALUES = frozenset({SECRETS_MASK, AUTH_SECRET_MASK})
 
 # The three SecretStr fields on ``HttpAuthConfig``. If the schema gains
 # another secret-typed auth field, add it here.
@@ -77,6 +79,63 @@ def merge_secrets(
             merged[key] = value
 
     return merged if merged else None
+
+
+def contains_masked_literal(value: Any) -> bool:
+    """True if ``value`` is (or, for a dict/list/tuple, contains anywhere
+    nested within it) one of the known masked-secret placeholders
+    (``SECRETS_MASK`` or the 10-asterisk ``HttpAuthConfig`` serializer form).
+
+    Used to catch a client round-tripping a masked API response value back
+    as a "real" edit (e.g. a family-propagation "custom" resolution built
+    from the masked preview) instead of supplying the actual value or
+    explicitly choosing to keep the existing one.
+    """
+    if isinstance(value, str):
+        return value in _AUTH_MASK_VALUES
+    if isinstance(value, dict):
+        return any(contains_masked_literal(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(contains_masked_literal(v) for v in value)
+    return False
+
+
+def mask_mcp_auth_secrets(
+    configurations: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return a copy of ``configurations`` with every MCP auth secret replaced
+    by the mask ``HttpAuthConfig``'s field_serializer emits.
+
+    Write-time enforcement of the "family content never holds a real secret"
+    invariant (docs/TEMPLATE_LINEAGE.md): ``template_family`` /
+    ``template_family_version`` store configurations as a plain dict, so
+    masking only on read leaves the real token at rest in the row and in every
+    snapshot. Applied before the family INSERT/UPDATE instead, a family row
+    can never hold one in the first place.
+
+    Only ``configurations.mcp.servers[*].auth`` is walked -- the same set of
+    fields and the same single HttpAuthConfig location as
+    ``merge_masked_mcp_auth``. Extend both together if the schema grows
+    another auth-bearing path.
+    """
+    if not configurations:
+        return configurations
+    servers = ((configurations.get("mcp") or {}).get("servers")) or []
+    if not any(
+        isinstance(s, dict) and isinstance(s.get("auth"), dict) for s in servers
+    ):
+        return configurations
+    masked = copy.deepcopy(configurations)
+    for server in ((masked.get("mcp") or {}).get("servers")) or []:
+        if not isinstance(server, dict):
+            continue
+        auth = server.get("auth")
+        if not isinstance(auth, dict):
+            continue
+        for field in _AUTH_SECRET_FIELDS:
+            if auth.get(field) is not None:
+                auth[field] = AUTH_SECRET_MASK
+    return masked
 
 
 def merge_masked_mcp_auth(
@@ -191,6 +250,13 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
         id=template.id,
         reseller_id=template.reseller_id,
         merchant_id=template.merchant_id,
+        # Lineage fields (read-only) must be carried through the masked copy,
+        # same rationale as ``supported_channels`` below -- otherwise version
+        # list/get/rollback responses would report the ``TemplateModel``
+        # default (``current_version=1``, ``family_id=None``) instead of the
+        # template's actual lineage state.
+        family_id=template.family_id,
+        current_version=template.current_version,
         name=template.name,
         flow=template.flow,
         expected_payload_schema=template.expected_payload_schema,

@@ -18,6 +18,14 @@
       "description": "Optional merchant sub-namespace within the reseller. Null for reseller-level templates.",
       "example": "merchant-42"
     },
+    "family_id": {
+      "description": "Read-only. Groups this template with other templates for admin bulk update/rollback (see POST /templates/bulk/update, POST /templates/bulk/rollback). Set via POST /templates/families, never editable via PUT.",
+      "example": "fam-cod-confirmation"
+    },
+    "current_version": {
+      "description": "Read-only. Monotonically increasing version number; every write appends a snapshot row to template_version. Starts at 1.",
+      "example": 3
+    },
     "name": {
       "description": "Human-readable display name shown in dashboards and logs.",
       "example": "COD Confirmation – Hindi+English"

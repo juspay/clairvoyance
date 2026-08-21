@@ -281,6 +281,11 @@ POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
 POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
 POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
 
+# Number of most-recent template_version snapshots retained per template.
+# Minimum 2: rollback needs the head snapshot and its predecessor, and a 0
+# would prune the snapshot written for the head in the same transaction.
+TEMPLATE_VERSION_RETENTION = max(2, int(os.getenv("TEMPLATE_VERSION_RETENTION", "10")))
+
 # Worker threads available to asyncio.to_thread() for offloaded blocking work
 # (sync telephony SDKs: Plivo recording, provider.make_call, Twilio conference).
 # Python's default is min(32, cpu_count + 4) — only 5 threads on a 1-core pod,

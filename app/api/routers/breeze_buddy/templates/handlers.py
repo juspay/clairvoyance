@@ -224,6 +224,7 @@ async def create_template_handler(
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
             now=now,
+            changed_by=current_user.username,
         )
 
         if not template:
@@ -278,6 +279,7 @@ async def list_templates_handler(
     page: Optional[int] = None,
     limit: Optional[int] = None,
     search: Optional[str] = None,
+    unassigned: bool = False,
 ) -> TemplateListResponse:
     """
     List templates with RBAC enforcement.
@@ -310,6 +312,8 @@ async def list_templates_handler(
             filters["merchant_id"] = merchant_id
         if not include_inactive:
             filters["is_active"] = True
+        if unassigned:
+            filters["family_id_is_null"] = True
 
         # Apply RBAC filtering (validates access and injects user's accessible merchants/shops)
         filters = apply_hierarchical_template_filters(filters, current_user)
@@ -597,6 +601,7 @@ async def replace_template_handler(
             merchant_id=template_data.merchant_id,
             supported_channels=supported_channels,
             now=now,
+            changed_by=current_user.username,
         )
 
         if not updated_template:

@@ -222,6 +222,8 @@ def decode_template(result: asyncpg.Record) -> Optional[TemplateModel]:
         ),
         is_active=result["is_active"],
         supported_channels=list(supported_channels),
+        family_id=(str(result["family_id"]) if result.get("family_id") else None),
+        current_version=result.get("current_version") or 1,
         created_at=result["created_at"],
         updated_at=result["updated_at"],
     )

@@ -686,6 +686,33 @@ Creates new template from JSON ([template.py:55-123](app/api/routers/breeze_budd
 - Prevents duplicate templates
 - Validates flow structure
 
+#### 2a. Template Versioning & Family/Bulk Routers
+**Location**: [api/routers/breeze_buddy/templates/versions.py](app/api/routers/breeze_buddy/templates/versions.py), [api/routers/breeze_buddy/templates/bulk.py](app/api/routers/breeze_buddy/templates/bulk.py)
+
+Every write to a template (`PUT /templates/{template_id}`, and the bulk/rollback routes below) appends an immutable snapshot row to `template_version` instead of mutating history in place — see [docs/TEMPLATE_LINEAGE.md](TEMPLATE_LINEAGE.md) for the full design.
+
+**Version history endpoints** ([versions.py](app/api/routers/breeze_buddy/templates/versions.py)):
+- `GET /templates/{template_id}/versions` — version metadata list, newest first
+- `GET /templates/{template_id}/versions/{version}` — full snapshot of one version (secrets masked)
+- `POST /templates/{template_id}/rollback` — restore an older version as the new head (appends a version; history is never rewritten)
+
+**Family & bulk endpoints** ([bulk.py](app/api/routers/breeze_buddy/templates/bulk.py), admin-only unless noted; family reads are reseller-RBAC'd):
+- `POST /templates/families` — create a family: name + base (parent) template + initial members
+- `GET /templates/families` — list families with base-template info (reseller-scoped for non-admins)
+- `GET /templates/families/{family_id}` — one family: parent content inline + all members with versions
+- `PUT /templates/families/{family_id}` — edit the family's parent template content (bumps `base_version`, snapshots the old content into `template_family_version`)
+- `PATCH /templates/families/{family_id}/members` — add/remove member templates
+- `GET /templates/families/{family_id}/versions` — parent's own version history
+- `GET /templates/families/{family_id}/versions/{n}` — one historical parent snapshot
+- `POST /templates/families/{family_id}/rollback` — restore an older parent revision as a new `base_version` (members untouched)
+- `POST /templates/families/{family_id}/propagate/preview` — three-way merge of the parent's latest edit into every member (base = each member's `derived_from_base_version`); returns auto-applies, no-ops, and conflicts, writes nothing
+- `POST /templates/families/{family_id}/propagate/apply` — writes the resolved merge into every member as one `op_type='propagation'` bulk op
+- `POST /templates/bulk/update` — apply a JSON merge patch (+ `node_patches`) to every template in a family (or an explicit id list); all-or-nothing, supports `dry_run=true` to preview
+- `POST /templates/bulk/rollback` — revert a completed `bulk_update` or `propagation` op via its `bulk_op_id`; refuses if a member was edited afterwards unless `force=true` (drift guard); `also_revert_family: true` also restores the parent for a propagation op (422 if that propagation has no prior family revision, 409 if the revision was pruned)
+- `GET /templates/bulk/ops` — ledger of bulk operations, the source of rollback targets (`rollback_unavailable_count` flags pruned pre-op snapshots)
+
+**Never** `UPDATE template SET flow = ...` directly — always go through `app/database/accessor/breeze_buddy/template.py` so the corresponding `template_version` row is written.
+
 ### Database Layer
 
 #### 1. Template Accessor
