@@ -14,6 +14,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
+    count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
     get_lead_based_analytics_query,
@@ -872,3 +873,36 @@ async def reset_widget_voice_lead(
     except Exception as e:
         logger.error(f"Error resetting widget voice lead {lead_id}: {e}")
         raise
+
+
+async def count_recent_contacted_leads(
+    customer_mobile_number: str,
+    reseller_id: str,
+    window_start: datetime,
+    merchant_id: Optional[str] = None,
+    exclude_request_id: Optional[str] = None,
+    exclude_lead_id: Optional[str] = None,
+) -> Optional[int]:
+    """Count recent/in-flight contact rows for a phone number. See the query
+    docstring for what counts as "contact".
+
+    Returns ``None`` (not ``0``) when the query fails, so the caller can tell
+    "no recent contact" apart from "we don't know" — the pre-check treats the
+    latter as an error and lets ``default_on_failure`` decide.
+    """
+    try:
+        query_text, values = count_recent_contacted_leads_query(
+            customer_mobile_number=customer_mobile_number,
+            reseller_id=reseller_id,
+            window_start=window_start,
+            merchant_id=merchant_id,
+            exclude_request_id=exclude_request_id,
+            exclude_lead_id=exclude_lead_id,
+        )
+        result = await run_parameterized_query(query_text, values)
+        if not result:
+            return None
+        return int(result[0]["count"] or 0)
+    except Exception as e:
+        logger.error(f"Error counting recent contacted leads: {e}")
+        return None

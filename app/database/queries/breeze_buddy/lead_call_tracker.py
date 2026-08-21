@@ -786,3 +786,62 @@ def reset_widget_voice_lead_query(
         execution_mode,
     ]
     return text, values
+
+
+def count_recent_contacted_leads_query(
+    customer_mobile_number: str,
+    reseller_id: str,
+    window_start: datetime,
+    merchant_id: Optional[str] = None,
+    exclude_request_id: Optional[str] = None,
+    exclude_lead_id: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """Count leads for this phone number that were contacted recently OR are
+    being contacted right now.
+
+    Backs the ``recent_contact_cooldown`` pre-check function.
+
+    Omit ``merchant_id`` for the ``"*"`` scope — count contacts across every
+    merchant under the reseller rather than just the lead's own.
+
+    Both sides of the phone comparison are normalized to their last 10 digits
+    (``RIGHT(regexp_replace(..., '\\D', '', 'g'), 10)``) rather than compared
+    for exact equality — stored numbers carry inconsistent ``+``/country-code
+    formatting (see the console-search fix in ``analytics.py`` for the same
+    issue), so a raw-string match would silently miss a recent contact and
+    let the duplicate call through. Same technique as
+    ``blacklisted_numbers.normalize_phone_number`` (last-10-digit compare):
+    cheaper than a full digit-strip comparison and, unlike it, also collapses
+    ``+91``/``91``/no-prefix variants of the same Indian number onto one
+    another. Migration 054's partial index expressions must mirror this exact
+    expression or Postgres won't use them.
+    """
+    values: List[Any] = [reseller_id, window_start, customer_mobile_number]
+    conditions = [
+        '"reseller_id" = $1',
+        '(("call_initiated_time" IS NOT NULL AND "call_initiated_time" >= $2)'
+        " OR "
+        '(("is_locked" = TRUE OR "status" = '
+        f"'{LeadCallStatus.PROCESSING.value}') AND \"updated_at\" >= $2))",
+        "RIGHT(regexp_replace(\"payload\"->>'customer_mobile_number', '\\D', '', 'g'), 10) "
+        "= RIGHT(regexp_replace($3, '\\D', '', 'g'), 10)",
+    ]
+
+    if merchant_id:
+        values.append(merchant_id)
+        conditions.append(f'"merchant_id" = ${len(values)}')
+
+    if exclude_request_id:
+        values.append(exclude_request_id)
+        conditions.append(f'("request_id" IS DISTINCT FROM ${len(values)})')
+
+    if exclude_lead_id:
+        values.append(exclude_lead_id)
+        conditions.append(f'("id" IS DISTINCT FROM ${len(values)})')
+
+    text = f"""
+        SELECT COUNT(*) AS count
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE {" AND ".join(conditions)};
+    """
+    return text, values

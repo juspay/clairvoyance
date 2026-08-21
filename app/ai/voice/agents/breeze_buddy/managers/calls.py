@@ -13,7 +13,7 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
 # the circular import via ``dispatch/__init__.py`` -> ``dispatch.worker`` ->
@@ -26,7 +26,10 @@ from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
     is_dispatchable,
     schedule_lead,
 )
-from app.ai.voice.agents.breeze_buddy.managers.pre_checks import run_pre_checks
+from app.ai.voice.agents.breeze_buddy.managers.pre_checks import (
+    PreCheckDecision,
+    run_pre_checks,
+)
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
 )
@@ -63,7 +66,10 @@ from app.database.accessor import (
     update_lead_call_recording_url,
     update_telephony_number_status,
 )
-from app.database.accessor.breeze_buddy.lead_call_tracker import update_lead_payload
+from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    append_metadata_field,
+    update_lead_payload,
+)
 from app.schemas import (
     TEMPLATELESS_PLACEHOLDER_TEMPLATES,
     CallDirection,
@@ -72,6 +78,7 @@ from app.schemas import (
     ExecutionMode,
     LeadCallStatus,
     LeadCallTracker,
+    PreCheckFailureAction,
     TelephonyNumber,
     TelephonyNumberStatus,
 )
@@ -124,19 +131,26 @@ async def _run_pre_checks_for_lead(
     lead: LeadCallTracker,
     template: Optional[TemplateModel],
     session,
-) -> bool:
+) -> Tuple[PreCheckDecision, int]:
     """
     Run pre-checks for a lead and handle failure cases.
 
-    Returns True if pre-checks pass (or no pre-checks configured), False otherwise.
-    On failure, marks lead as FINISHED with outcome=PRECHECK_FAILED and sends webhook.
-
-    On success, ``export_to_payload`` values are merged into the lead's payload
-    before the dial, so the agent — a separate process that re-reads the lead
-    at answer time — finds them already in place.
+    Returns ``(decision, defer_seconds)``:
+      - ``PROCEED`` when pre-checks pass (or none are configured). On success,
+        ``export_to_payload`` values are merged into the lead's payload before
+        the dial, so the agent -- a separate process that re-reads the lead at
+        answer time -- finds them already in place.
+      - ``ABORT`` when a blocking pre-check is configured
+        ``on_failure_action: "abort"`` (the default), or when a deferring one
+        has exhausted ``max_defers``. The lead is already marked FINISHED /
+        PRECHECK_FAILED and the reporting webhook has been sent; the caller
+        only needs to release the lock.
+      - ``DEFER`` with the number of seconds to push ``next_attempt_at`` out
+        by. The lead stays BACKLOG and nothing is reported -- a defer is not a
+        terminal outcome.
     """
     if not config.pre_checks:
-        return True
+        return PreCheckDecision.PROCEED, 0
 
     pre_check_result = await run_pre_checks(
         pre_checks=config.pre_checks,
@@ -155,25 +169,87 @@ async def _run_pre_checks_for_lead(
                     f"Pre-check payload export write failed for lead {lead.id}; "
                     f"prompt will render without {list(pre_check_result.exports)}"
                 )
-        return True
+        return PreCheckDecision.PROCEED, 0
 
     # Pre-checks failed
     logger.info(f"Pre-checks failed for lead {lead.id}: {pre_check_result.summary()}")
+
+    exhausted_reason: Optional[str] = None
+    if pre_check_result.failure_action == PreCheckFailureAction.DEFER:
+        defer_count = (lead.metaData or {}).get("pre_check_defer_count", 0)
+        if not isinstance(defer_count, int) or defer_count < 0:
+            defer_count = 0
+
+        if defer_count >= pre_check_result.max_defers:
+            # Fall through to the abort path below rather than deferring
+            # forever. Without this a lead whose pre-check never passes sits in
+            # BACKLOG indefinitely with no terminal state and no report.
+            exhausted_reason = (
+                f"max_defers ({pre_check_result.max_defers}) exhausted after "
+                f"{defer_count} defer(s)"
+            )
+            logger.warning(
+                f"Pre-checks for lead {lead.id}: {exhausted_reason}; aborting "
+                "instead of deferring again"
+            )
+        else:
+            failed = next((r for r in pre_check_result.results if not r.passed), None)
+            counted = await append_metadata_field(
+                lead.id,
+                {
+                    "pre_check_defer_count": defer_count + 1,
+                    "pre_check_last_defer": {
+                        "name": failed.name if failed else None,
+                        "reason": failed.reason if failed else None,
+                        "defer_seconds": pre_check_result.defer_seconds,
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    },
+                },
+            )
+            if counted is None:
+                # The cap is only enforceable while the counter persists --
+                # accessors here swallow errors and return None rather than
+                # raising. Deferring anyway would re-read the same count next
+                # tick and loop in BACKLOG forever, which is the exact outcome
+                # max_defers exists to prevent. Fail safe: abort, so the lead
+                # still reaches a terminal state and the caller still gets a
+                # webhook.
+                exhausted_reason = (
+                    "defer counter write failed; aborting rather than deferring "
+                    "unbounded (max_defers cannot be enforced without it)"
+                )
+                logger.error(f"Pre-checks for lead {lead.id}: {exhausted_reason}")
+            else:
+                logger.info(
+                    f"Deferring lead {lead.id} by {pre_check_result.defer_seconds}s "
+                    f"(defer {defer_count + 1}/{pre_check_result.max_defers})"
+                )
+                return PreCheckDecision.DEFER, pre_check_result.defer_seconds
+
+    # Seed from what's already on the row: update_lead_call_completion_details
+    # REPLACES meta_data rather than merging it (unlike append_metadata_field,
+    # which the defer path uses), so anything not carried here is destroyed --
+    # the defer trail written above, and a playground lead's configurations /
+    # flow_override.
+    meta_data: dict[str, Any] = {
+        **(lead.metaData or {}),
+        "pre_check_results": [
+            {
+                "name": r.name,
+                "passed": r.passed,
+                "reason": r.reason,
+            }
+            for r in pre_check_result.results
+        ],
+    }
+    if exhausted_reason:
+        meta_data["pre_check_defer_exhausted"] = exhausted_reason
 
     await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome="PRECHECK_FAILED",
-        meta_data={
-            "pre_check_results": [
-                {
-                    "name": r.name,
-                    "passed": r.passed,
-                    "reason": r.reason,
-                }
-                for r in pre_check_result.results
-            ]
-        },
+        meta_data=meta_data,
         call_end_time=datetime.now(timezone.utc),
     )
 
@@ -183,10 +259,13 @@ async def _run_pre_checks_for_lead(
     )
     if reporting_webhook_url:
         failed_checks = [r for r in pre_check_result.results if not r.passed]
+        failure_reason = "; ".join(f"{r.name}: {r.reason}" for r in failed_checks)
+        if exhausted_reason:
+            failure_reason = f"{failure_reason}; {exhausted_reason}"
         webhook_data = {
             "outcome": "PRECHECK_FAILED",
             "attemptCount": lead.attempt_count + 1,
-            "failureReason": "; ".join(f"{r.name}: {r.reason}" for r in failed_checks),
+            "failureReason": failure_reason,
             "orderId": lead.request_id,
         }
         try:
@@ -196,7 +275,7 @@ async def _run_pre_checks_for_lead(
                 f"Error sending pre-check failure webhook for lead {lead.id}: {e}"
             )
 
-    return False
+    return PreCheckDecision.ABORT, 0
 
 
 async def _get_available_number(

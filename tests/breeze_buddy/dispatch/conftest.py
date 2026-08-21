@@ -29,6 +29,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
     reconcilers as recon_mod,
     worker as worker_mod,
 )
+from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
 from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.core import (
     CallExecutionConfig,
@@ -419,7 +420,12 @@ class DispatchHarness:
         self.released_locks: List[str] = []
         self.completions: List[Dict[str, Any]] = []
         # Toggle behaviours.
+        # ``pre_check_result`` is a convenience bool: True -> PROCEED,
+        # False -> ABORT. For DEFER, set ``pre_check_decision`` directly
+        # (it takes priority over ``pre_check_result`` when set).
         self.pre_check_result: bool = True
+        self.pre_check_decision: Optional[PreCheckDecision] = None
+        self.pre_check_defer_seconds: int = 0
         self.is_blacklisted: bool = False
         self.rate_limit_ok: bool = True
         self.rate_limit_defer_seconds: int = 0
@@ -544,8 +550,14 @@ class DispatchHarness:
     def _is_within_calling_hours(self, config: CallExecutionConfig) -> bool:
         return True
 
-    async def _run_pre_checks_for_lead(self, *args, **kwargs) -> bool:
-        return self.pre_check_result
+    async def _run_pre_checks_for_lead(
+        self, *args, **kwargs
+    ) -> Tuple[PreCheckDecision, int]:
+        if self.pre_check_decision is not None:
+            return self.pre_check_decision, self.pre_check_defer_seconds
+        if self.pre_check_result:
+            return PreCheckDecision.PROCEED, 0
+        return PreCheckDecision.ABORT, 0
 
     async def _get_available_number(
         self, config, template

@@ -56,6 +56,7 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _release_number,
     _run_pre_checks_for_lead,
 )
+from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
@@ -347,10 +348,20 @@ class Worker:
                     "without a template."
                 )
 
-            if not await _run_pre_checks_for_lead(config, locked, template, session):
+            pre_check_decision, pre_check_defer = await _run_pre_checks_for_lead(
+                config, locked, template, session
+            )
+            if pre_check_decision is PreCheckDecision.ABORT:
                 # _run_pre_checks_for_lead already set status to FINISHED on
                 # failure; we just need to release the lock.
                 lock_released = await self._release(locked.id)
+                return
+            if pre_check_decision is PreCheckDecision.DEFER:
+                # Transient block (cooldown, quota). Lead stays BACKLOG and
+                # comes back after pre_check_defer seconds.
+                lock_released = await self._defer_and_release(
+                    locked.id, pre_check_defer
+                )
                 return
 
             if template:
