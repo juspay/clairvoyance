@@ -452,6 +452,11 @@ async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
     return [shop.strip() for shop in config_value.split(",") if shop.strip()]
 
 
+async def CAMPAIGN_MAX_LEADS() -> int:
+    """Returns CAMPAIGN_MAX_LEADS from Redis"""
+    return await get_config("CAMPAIGN_MAX_LEADS", 5000, int)
+
+
 # --- Breeze Buddy Azure LLM Configuration ---
 async def BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS() -> int:
     """Returns BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS from Redis"""

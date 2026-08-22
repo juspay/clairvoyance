@@ -16,6 +16,7 @@ from fastapi import HTTPException, status
 from app.ai.voice.agents.breeze_buddy.dispatch import cancel_scheduled_lead
 from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
 from app.api.routers.breeze_buddy.leads.handlers import push_lead_handler
+from app.core.config.dynamic import CAMPAIGN_MAX_LEADS
 from app.core.logger import logger
 from app.database.accessor import handle_lead_abort
 from app.database.accessor.breeze_buddy.campaigns import (
@@ -82,6 +83,16 @@ async def create_campaign_handler(
     req: CreateCampaignRequest, current_user: UserInfo
 ) -> CreateCampaignResponse:
     _require_scope_access(current_user, req.reseller_id, req.merchant_id)
+
+    max_leads = await CAMPAIGN_MAX_LEADS()
+    if len(req.leads) > max_leads:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Campaign upload is limited to {max_leads} leads per request; "
+                "split the file into smaller batches"
+            ),
+        )
 
     campaign = await create_campaign(
         reseller_id=req.reseller_id,

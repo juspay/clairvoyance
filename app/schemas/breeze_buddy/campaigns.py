@@ -34,7 +34,7 @@ class CreateCampaignRequest(BaseModel):
     template_id: str
     reseller_id: str
     merchant_id: Optional[str] = None
-    leads: List[CampaignLeadInput] = Field(..., min_length=1, max_length=1000)
+    leads: List[CampaignLeadInput] = Field(..., min_length=1)
 
 
 class CampaignLeadError(BaseModel):
