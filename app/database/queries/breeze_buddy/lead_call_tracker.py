@@ -328,6 +328,23 @@ def update_lead_call_id_by_id_query(
     return text, values
 
 
+def update_lead_customer_id_query(
+    lead_id: str, customer_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to stamp the CRM customer_id onto a lead row (ADR 0017).
+    Stamped at write by resolve(), never joined at read — the timeline rule.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "customer_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [customer_id, lead_id]
+    return text, values
+
+
 def update_lead_call_completion_details_query(
     id: str,
     status: Optional[LeadCallStatus] = None,
