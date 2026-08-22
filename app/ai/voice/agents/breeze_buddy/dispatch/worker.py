@@ -27,6 +27,10 @@ from typing import Any, List, Optional, cast
 
 import aiohttp
 
+from app.ai.voice.agents.breeze_buddy.crm_mirror import (
+    is_non_customer_lead,
+    mirror_to_crm,
+)
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
     raise_no_telephony_number,
 )
@@ -66,6 +70,7 @@ from app.ai.voice.agents.breeze_buddy.utils.playground import (
 from app.ai.voice.llm.realtime.gemini.opening_line import (
     DEFAULT_GENERATION_TIMEOUT_SECONDS,
 )
+from app.core.concurrency import spawn_background_task
 from app.core.config import dynamic as dyn_cfg
 from app.core.config.static import (
     BB_CHANNEL_WAIT_BACKOFF_MAX_S,
@@ -540,6 +545,29 @@ class Worker:
                 return
 
             call_sid = str(call.get("sid"))
+
+            # Keyed on the SID, so a retried lead records a second attempt
+            # rather than colliding with the first. Test/playground traffic
+            # never reaches the CRM.
+            if not is_non_customer_lead(locked.execution_mode, locked.metaData):
+                spawn_background_task(
+                    mirror_to_crm(
+                        "call.attempted",
+                        merchant_id=locked.merchant_id,
+                        external_id=call_sid,
+                        lead_id=str(locked.id),
+                        phone=customer_mobile,
+                        # Pass-through of the creation-time stamp; mirrors
+                        # never resolve.
+                        customer_id=locked.customer_id,
+                        call_id=call_sid,
+                        attempt_count=locked.attempt_count,
+                        template_id=locked.template_id,
+                        direction="OUTBOUND",
+                    ),
+                    name=f"crm-call-attempted-{call_sid}",
+                )
+
             updated = await update_lead_call_details(
                 locked.id,
                 LeadCallStatus.PROCESSING,

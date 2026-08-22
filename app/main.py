@@ -69,6 +69,7 @@ from app.core.config.static import (
 # Import necessary components from the new structure
 from app.core.logger import logger
 from app.core.middleware.widget_cors_bypass import CustomWidgetCorsBypassMiddleware
+from app.crm import api as crm_api
 from app.database import close_db_pool, init_db_pool
 from app.services.knowledge_base import (
     process_pending_documents as process_pending_kb_documents,
@@ -391,6 +392,10 @@ app.include_router(
     prefix="/agent/voice/breeze-buddy",
     tags=["Feature Flags"],
 )
+
+# CRM (Buddy CPaaS) — mounted OUTSIDE /agent/voice/breeze-buddy (ADR 0006);
+# admin/S2S only in phase 1 (ADR 0007), auth wired per module router.
+app.include_router(crm_api.router, prefix="/crm", tags=["CRM"])
 
 # System health endpoints
 app.include_router(systems.router, prefix="", tags=["Systems"])

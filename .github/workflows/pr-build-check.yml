@@ -21,6 +21,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # Full history: the migration-immutability check diffs against the
+          # merge base with the target branch.
+          fetch-depth: 0
 
       # Step 2: Set up Python
       - name: Set up Python
@@ -66,7 +69,50 @@ jobs:
           uv run pyrefly check
         continue-on-error: false
 
-      # Step 9: Check commit count (must be exactly 1)
+      # Step 9: Migration hygiene — duplicate numbers, gaps, naming
+      - name: Check migration numbering
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run python scripts/check_migrations.py
+        continue-on-error: false
+
+      # Step 10: Applied migrations are immutable — PRs may only ADD files
+      - name: Check migrations are never edited
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          # The 2026-08-22 renumbering of the pre-CI 026/034 duplicates is
+          # the ONE sanctioned rename (reconciled by RENAMED_MIGRATIONS in
+          # scripts/migrate.py); filter those four names out of the diff.
+          CHANGED=$(git diff --diff-filter=MDR --name-only \
+            "origin/${{ github.base_ref }}...HEAD" -- app/database/migrations/ \
+            | grep -vE '/(026_link_call_execution_config_to_template|046_link_call_execution_config_to_template|034_knowledge_base|047_knowledge_base)\.sql$' || true)
+          if [ -n "$CHANGED" ]; then
+            echo "Migration files are immutable once merged. Modified/deleted/renamed:"
+            echo "$CHANGED"
+            echo "Write a new migration (next number) instead."
+            exit 1
+          fi
+          echo "No existing migrations touched."
+
+      # Step 11: CRM module boundaries — table ownership, SQL/driver
+      # confinement, import direction, handle discipline (ADR 0001
+      # amendment: one DB role, so the boundary is enforced in CI)
+      - name: Check crm module boundaries
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run python scripts/check_crm_boundaries.py
+        continue-on-error: false
+
+      # Step 12: CRM law tests — pure (no DB): policy tables, liveness,
+      # normalization, mirror dedupe, both CI guards' own rules
+      - name: Run crm tests
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run pytest tests/crm -q
+        continue-on-error: false
+
+      # Step 13: Check commit count (must be exactly 1)
       - name: Check commit count
         if: github.event_name == 'pull_request'
         run: |

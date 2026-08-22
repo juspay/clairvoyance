@@ -1,156 +1,154 @@
 # Clairvoyance
 
-Conversational AI platform for real-time voice and chat interactions, built around **Breeze Buddy** — a template-driven agent for outbound/inbound telephony, web chat, and widget voice. Built on FastAPI + Pipecat-AI + asyncpg.
-
-> **Note:** The former **Automatic** analytics voice agent (web/mobile via Daily.co) has been **removed**. Its functionality is migrated to an Automatic template-driven Breeze Buddy workflow (analytics tools exposed via global HTTP functions / MCP on a template). Open follow-ups tracked in `docs/AUTOMATIC_PARITY.md` (chart rendering, push-to-talk).
+Conversational AI platform for real-time voice and chat interactions, built around **Breeze Buddy** — a template-driven agent for outbound/inbound telephony, web chat, and widget voice — and the **Buddy CPaaS CRM** growing under `app/crm/`. Built on FastAPI + Pipecat-AI + asyncpg.
 
 ## Commands
 
 ```bash
-# Setup
 ./scripts/setup.sh                  # Python 3.11 check, git hooks, uv install
-uv sync --extra dev                 # Install with dev tools (black, isort, autoflake, pyrefly)
-
-# Run
+uv sync --extra dev                 # Install with dev tools
 uv run python run.py                # Start FastAPI server on 0.0.0.0:8000
 
-# Format (pre-commit hook runs these automatically)
-uv run black .                      # Code formatting (line-length=88)
-uv run isort . --profile black      # Import sorting
+uv run black .                      # Format (pre-commit hook runs these)
+uv run isort . --profile black
 uv run autoflake --in-place --remove-all-unused-imports --remove-unused-variables --exclude "app/__init__.py,.venv/*,venv/*" -r app/
-
-# Type check
-uv run pyrefly check                # Type checking
-
-# Dependencies
-uv add <package>                    # Add production dependency
-uv add --dev <package>              # Add dev dependency
-uv lock --upgrade && uv sync        # Upgrade all
+uv run pyrefly check                # Type check
+uv run pytest tests/                # Tests
+uv run python scripts/check_migrations.py       # Migration numbering guard
+uv run python scripts/check_crm_boundaries.py   # CRM boundary guard (10 rules)
 ```
+
+## Building modules & making code changes — READ THIS FIRST
+
+**Any new module, table, contract, or non-trivial change follows
+[`docs/crm/building-modules.md`](docs/crm/building-modules.md)** (skeleton, laws,
+scars, checklist) and [`docs/crm/migrations.md`](docs/crm/migrations.md). The full
+design corpus (canon, ADRs 0001–0021, per-module guides) is at
+https://swaroopvarma1.github.io/buddy-cpaas-docs/ — **the corpus wins on any
+conflict**. Applies to legacy areas too: touched buddy code is left better, never
+worse. `scripts/check_crm_boundaries.py` enforces the laws in CI — run it before
+pushing; if it fails, fix the code, don't fight the rule (rules changed only via
+the corpus).
+
+### The module skeleton (every `app/crm/<module>/`)
+
+```
+contracts.py   # THE public surface — the only file other modules import
+api.py         # thin routes → logic (or db/accessor for trivial reads)
+schemas.py     # leaf Pydantic shapes; imports nothing internal
+<concern>.py   # BUSINESS LOGIC by name (resolve.py, facts.py, ingest.py):
+               #   gather → decide (PURE, returns a plan) → apply
+workers.py     # drain loops, only if the module owns one
+db/            # ALL mechanics: __init__ (the door), accessor.py,
+               #   queries.py ($1 params only), decoder.py
+```
+
+Layer law: `api → logic → db/accessor → db/queries`. Cross-module = the other
+module's `contracts.py`, nothing else. Business logic is findable by FILENAME.
+
+### The atomic grammar (transactions)
+
+- Logic enters a DB boundary ONLY via `await atomically(_thing_in_txn, ...)`.
+- The body is named `*_in_txn(txn, ...)`, sits immediately below its public
+  entry, and its docstring opens `ATOMIC: <what shares fate> — <the law>`.
+- **A logic file touches a handle in exactly one place: the `txn` param of an
+  `_in_txn` body** (threading through the atom's private sub-steps included).
+  Accessors self-scope single statements and batch loops (`crm_connection`,
+  db-internal). `import asyncpg` only in `shared/db.py` and `db/`.
+- `grep -rn "ATOMIC:" app/crm` = the system's atom inventory with reasons.
+
+### Non-negotiable CRM laws (CI-enforced; full list in the docs)
+
+- `merchant_id NOT NULL` + first column of every unique index on `crm_*` tables;
+  `platform_*` tables never have a merchant column; no table stores a reseller.
+- Fail CLOSED anywhere permission-adjacent (missing/NULL/error/unknown → NO; no
+  bypass flags, ever). Buddy-side spine mirrors are the opposite: fail OPEN.
+- `resolve()` is the only creator of customers: deterministic probes, no fuzzy
+  matching, evidence-ladder handle overwrites (ADR 0021), collisions staple.
+- Normalize at every writer (E.164 phone, lowercased email) — a format mismatch
+  on a suppressed value CONTACTS someone who said stop.
+- Vocabulary (channels/connectors/sources) lives in code, never CHECKs; CHECKs
+  on FORMAT are required. No stored state a predicate can answer.
+- The data layer (`app/database`) imports neither `app.ai` nor `app.crm` — taps
+  use the hook registry in `accessor/breeze_buddy/lead_call_tracker.py`.
 
 ## Architecture
 
 ```
 app/
-├── main.py                         # FastAPI entry with lifespan (startup, shutdown)
+├── main.py                         # FastAPI entry with lifespan
+├── crm/                            # Buddy CPaaS (docs/crm/building-modules.md)
+│   ├── api.py, auth.py             # /crm surface plumbing (root holds nothing else)
+│   ├── identity/                   # crm_customer · resolve(), assert_facts()
+│   ├── platform/                   # platform_identity · suppression contracts
+│   ├── record/                     # crm_event_raw · record_event() (the spine)
+│   └── shared/                     # db.py (atomically/crm_connection), normalize.py
 ├── ai/voice/
-│   ├── agents/
-│   │   └── breeze_buddy/           # Telephony + chat + widget agent (Twilio/Plivo/Exotel, Daily)
-│   │       ├── agent/              # Core: pipeline.py, flow.py, transport.py, vad.py
-│   │       ├── template/           # Template types, rendering, node transitions
-│   │       ├── handlers/           # internal/ (builtin, warm_transfer, end_conversation)
-│   │       │                       # transport/ (http_handler for global functions)
-│   │       ├── services/           # telephony/{twilio,plivo,exotel}, daily/, agent_router/
-│   │       ├── managers/           # CallsManager, agent lifecycle
-│   │       ├── processors/         # Data transformation processors
-│   │       ├── observability/      # OTEL tracing setup
-│   │       └── tts/, stt/, llm/    # Provider configuration
-│   ├── llm/                        # LLM provider wrappers
-│   ├── stt/                        # STT providers: Google, Deepgram, Soniox, AssemblyAI, OpenAI
-│   └── tts/                        # TTS providers: ElevenLabs, Cartesia, Google, Sarvam
-├── api/routers/
-│   ├── breeze_buddy/               # 22 files: leads, templates, analytics, websocket, auth
-│   ├── devcycle.py                 # Feature flag webhooks
-│   └── systems.py                  # Health checks, metrics
-├── core/
-│   ├── config/static.py            # Env var config (~198 vars, loaded once at startup)
-│   ├── config/dynamic.py           # Redis-backed runtime config (DevCycle feature flags)
-│   ├── logger/                     # Loguru: colored dev output, JSON structured prod output
-│   ├── security/                   # JWT validation, password hashing, RBAC
-│   ├── background_tasks/           # Scheduler with Redis distributed locking
-│   └── transport/http_client.py    # aiohttp session factory with proxy support
+│   ├── agents/breeze_buddy/        # Telephony + chat + widget agent
+│   │   └── crm_mirror.py           # Buddy→spine taps (ADR 0017), hook-registered
+│   ├── llm/  stt/  tts/            # Provider wrappers
+├── api/routers/breeze_buddy/       # leads, templates, analytics, websocket, auth
+├── core/                           # config (static/dynamic), logger, security,
+│                                   #   background_tasks, transport
 ├── database/
-│   ├── migrations/                 # Sequential SQL: 001_initial_tables.sql, 002_...sql
-│   ├── queries/                    # Raw parameterized SQL builders (return tuple[str, list])
-│   ├── accessor/                   # Business logic layer (calls queries + decoders)
-│   └── decoder/                    # DB rows -> Pydantic models
-├── schemas/                        # Pydantic models (breeze_buddy/)
-├── services/                       # External: redis/, aws/ (KMS, S3), gcp/, slack/, langfuse/
-└── utils/                          # Common validation, parsing utilities
+│   ├── migrations/                 # Sequential SQL (docs/crm/migrations.md)
+│   ├── queries/ accessor/ decoder/ # Legacy three-layer (SQL → logic → Pydantic)
+├── schemas/  services/  utils/
 ```
 
 ## Code Conventions
 
-- **Python 3.11+**, managed with `uv` (not pip/poetry)
-- **Black** formatting (line-length=88), **isort** (profile=black), **autoflake** (unused imports), **pyrefly** type checking
-- **Naming**: snake_case functions/vars, PascalCase classes, SCREAMING_SNAKE_CASE constants (in static.py)
-- **Imports**: stdlib -> third-party -> app (isort enforced)
-- **Type hints**: Required on function signatures. Use `Optional[T]`, `List[T]`, `Dict[str, Any]`, `Union`
-- **Pydantic models** for all API request/response schemas and data transfer
-- **Async everything**: All DB, HTTP, and I/O operations are async/await
-- **No ORM**: Raw asyncpg with parameterized queries (`$1, $2` placeholders). Three-layer pattern: queries (SQL builders) -> accessor (business logic) -> decoder (row to Pydantic)
+- **Python 3.11+**, `uv` (not pip/poetry); black (88), isort, autoflake, pyrefly
+- Type hints on signatures; Pydantic for API schemas; async everything
+- **No ORM** — raw asyncpg, `$1` placeholders; any value via f-string into SQL is
+  a blocker (one DB role: total blast radius)
+- snake_case functions, PascalCase classes, SCREAMING_SNAKE_CASE constants
 
 ## Git Workflow
 
-- **Commit format**: `feat:`, `fix:`, `fix(scope):`, `refactor:`, `docs:` prefixes
-- **IMPORTANT: PRs must contain exactly 1 commit** (enforced in CI)
-- **Pre-commit hook** (`.githooks/pre-commit`): runs autoflake, isort, black, pyrefly check -- auto-formats and stages
-- **CI checks** (`pr-build-check.yml`): black --check, isort --check, autoflake --check, pyrefly check, commit count = 1
-- **Main branch**: `release`. PRs target `release`
-- Run `git config core.hooksPath .githooks` if hooks aren't active (setup.sh does this)
+- Commit prefixes: `feat:`, `fix:`, `fix(scope):`, `refactor:`, `docs:`
+- **PRs contain exactly 1 commit** (CI-enforced) — iterate with
+  `git commit --amend` + `git push --force-with-lease`
+- Main branch: `release`; PRs target `release`
+- CI: black/isort/autoflake/pyrefly, migration numbering + immutability,
+  crm boundary guard, commit count
 
-## Breeze Buddy Patterns
+## Working practices (learned the hard way — follow them)
 
-Breeze Buddy is the template-driven telephony agent. These patterns MUST be followed when working in `app/ai/voice/agents/breeze_buddy/`:
+- **Never pipe test output when the exit code gates a commit** — `pytest | tail`
+  exits 0 on failure. Run checks unpiped (or check PIPESTATUS) before any amend.
+- **Full-file writes beat string-patching** on formatter-touched files — isort
+  collapses/reorders imports and silently defeats exact-string replaces. If you
+  script an edit, assert per-file that the pattern matched.
+- **Verify wiring by running, not by reading**: import-smoke the routers,
+  registries and contracts after structural changes (hooks registered? routes
+  mounted?) — pyrefly passing does not prove runtime wiring.
+- **Every law change is a triple in one commit**: docs text + CI rule + a red
+  test proving the rule fires. Never ship a convention without its enforcement.
+- Migrations: never edit a merged one; next number; one table owner per file.
+- New tables: canon-conformant DDL + `TABLE_OWNERS` entry in
+  `scripts/check_crm_boundaries.py`, or CI fails the PR by itself.
 
-### Template System
-- Templates are JSON stored in PostgreSQL: `{initial_node, nodes: [{node_name, task_messages, functions, hooks}]}`
-- Variables use `{placeholder}` syntax, resolved from lead payload at runtime
-- Node transitions are LLM-driven via function calls with optional async hooks
-- Template types defined in `breeze_buddy/template/types.py` -- this is the source of truth for all template models
+## Breeze Buddy essentials
 
-### Lead Processing Flow
-1. Lead inserted via `/push/lead/v2` -> validated -> stored as BACKLOG
-2. Cron job picks up backlog leads
-3. Pre-checks run (optional external API validation)
-4. Call initiated via telephony provider (Twilio/Plivo/Exotel)
-5. Agent loads template -> renders variables -> builds Pipecat pipeline
-6. Conversation runs -> callbacks execute -> DB updated with outcome
-
-### Handler Architecture
-- **Internal handlers** (`handlers/internal/`): builtin_dispatcher, warm_transfer, end_conversation, STT, audio, outcome update
-- **Transport handlers** (`handlers/transport/`): HTTP requests/responses for external integrations
-- **Hook system**: Async side-effect functions (e.g., `update_outcome_in_database`, `set_transfer_flag`)
-- **Global functions**: HTTP-based functions that block the flow and return data to LLM
-
-### Configuration Hierarchy
-1. **Static config** (`core/config/static.py`): Env vars, loaded once at startup, never re-read
-2. **Dynamic config** (`core/config/dynamic.py`): Redis/DevCycle feature flags, async functions
-3. **Template-level config**: STT/TTS provider, turn detection, interruption, VAD, warm transfer number
-4. **Playground override**: Runtime config override via `is_playground=true` in lead payload
-
-### Voice Pipeline
-- **STT providers**: Soniox (default, native endpoint detection), Deepgram (SmartTurn), Sarvam, OpenAI, Google
-- **TTS providers**: ElevenLabs (default), Cartesia, Sarvam -- template-level voice configuration
-- **Turn detection modes**: `stt_native`, `smart_turn` (Whisper ONNX), `timeout`
-- **VAD**: Silero with configurable confidence, start_secs, stop_secs, min_volume
-- **Transport**: Daily.co for web, Twilio/Plivo/Exotel for telephony
-
-### Error Handling
-- `track_error(errors_list, error_message)` to collect errors
-- `end_call_with_errors(ws, stream_sid, errors)` for graceful disconnect
-- Fail-open graceful degradation (greeting prep, pre-checks with `default_on_failure`)
-- `send_webhook_with_retry()` for reporting webhooks
-
-### Observability
-- **OTEL tracing** to Langfuse: root span with conversation_id (`customer_name-shop_name-timestamp`)
-- **Log context** via `set_log_context()` / `update_log_context()` using contextvars (call_sid, lead_id, reseller_id, merchant_id)
-- **Transcriptions**: Collected from LLM message history in `end_conversation`, stored as `{role, content}` array in `lead.metaData`
-
-### Chat (text) mode
-- Same template + FlowManager + LLM as voice; swaps audio I/O for text frames. Spec lives in `docs/CHAT_MODE.md`
-- Code under `app/ai/voice/agents/breeze_buddy/chat/` (agent, transport, sse, cleanup) + router at `app/api/routers/breeze_buddy/chat.py`
-- Templates opt in via `supported_channels: ["voice", "chat"]`; chat agents construct the builder with `disabled_names=CHAT_DISABLED_NAMES` (defined in `chat/disabled.py`) to strip voice-only functions/actions (mute_stt, play_audio_sound, warm_transfer, end_conversation, ...)
-- **Stateless per turn**: `POST /message` builds a fresh `ChatAgent`, replays history from DB into `LLMContext`, drives one turn via `run_turn`, tears down. No in-memory registry, no sticky LB.
-- Per-session `RedisLock` (180s TTL, no auto-extend) wraps the entire turn — single mutual-exclusion primitive across pods.
-- Idle session cleanup is one task on the global `BackgroundTaskScheduler` (`chat/cleanup.py`); the scheduler's distributed lock keeps it single-pod-per-tick.
-- Open follow-ups: LLM-generated greeting (today only `static_greeting` works), outcome webhook on `end()`
+- **Templates** are JSON in PostgreSQL (`{initial_node, nodes[...]}`), variables
+  `{placeholder}`-resolved from the lead payload; node transitions are LLM
+  function calls with async hooks. `template/types.py` is the source of truth.
+- **Lead flow**: `/push/lead/v2` → BACKLOG → cron dispatch → pre-checks →
+  telephony call (Twilio/Plivo/Exotel) → template pipeline → outcome on the lead.
+  CRM taps ride the accessor hook registry — never import app/ai from the data
+  layer.
+- **Config hierarchy**: static env (loaded once) → dynamic (Redis/DevCycle) →
+  template-level → playground override. Never read `os.environ` in module code.
+- **Chat mode**: stateless per turn (fresh agent per POST /message, history
+  replayed from DB, per-session RedisLock). Spec: `docs/CHAT_MODE.md`.
+- **Errors**: `track_error(...)` to collect; fail-open degradation on the voice
+  path. **Observability**: OTEL→Langfuse; `set_log_context()` at entrypoints.
 
 ## Important
 
-- IMPORTANT: Never modify migration SQL files directly. Create new sequential migrations (e.g., `026_your_change.sql`)
-- IMPORTANT: The pre-commit hook auto-formats code. If CI fails on formatting, run `uv run black . && uv run isort . --profile black` locally
-- Secrets and credentials are KMS-encrypted in the database. Use `SKIP_KMS_DECRYPT=true` locally if no AWS access
-- `.env.example` -- copy to `.env` and fill required ones for your work area (some entries are legacy Automatic vars, now unused)
-- Redis distributed locking prevents duplicate background task execution across pods
-- CORS is configured in main.py via `CORS_ALLOWED_ORIGINS` env var
+- Secrets are KMS-encrypted in the DB; `SKIP_KMS_DECRYPT=true` locally without AWS
+- `app/core/security/jwt.py` requires `JWT_SECRET_KEY` + `JWT_ALGORITHM` env vars
+  at import — any script importing the API surface transitively needs them
+- Redis distributed locking prevents duplicate background tasks across pods
+- CORS via `CORS_ALLOWED_ORIGINS` env var in main.py
