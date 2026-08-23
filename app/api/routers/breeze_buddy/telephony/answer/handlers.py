@@ -37,6 +37,9 @@ from urllib.parse import quote
 from fastapi import Request, Response
 from starlette.responses import HTMLResponse
 
+# Imported for its side effect: installs the CRM lead-lifecycle taps
+# (stamp + call.inbound mirror fire from the created hook) in this process.
+from app.ai.voice.agents.breeze_buddy import crm_mirror  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     IVR_CONFIG_CACHE_PREFIX,
     IVR_CONFIG_CACHE_TTL,
@@ -445,7 +448,7 @@ async def _create_inbound_lead_in_answer_handler(
 
     lead_id = str(uuid.uuid4())
     try:
-        await create_lead_call_tracker(
+        created_lead = await create_lead_call_tracker(
             id=lead_id,
             reseller_id=first_template.reseller_id,
             template=lead_template_name,
@@ -463,7 +466,19 @@ async def _create_inbound_lead_in_answer_handler(
             ),
             call_direction=CallDirection.INBOUND,
         )
+        if created_lead is None:
+            logger.error(
+                f"[Answer] Inbound lead insert returned no row for call_id "
+                f"{call_id} — skipping CRM mirror (no lead to reference)"
+            )
+            return
         logger.info(f"[Answer] Created inbound lead {lead_id} for call_id {call_id}")
+
+        # CRM stamp + call.inbound mirror both fire from the created-lead
+        # tap (crm_mirror), sequenced stamp-then-mirror in one background
+        # task so the event is born with its customer_id — a mirror
+        # spawned here would race the stamp and record NULL. The answer
+        # response still never waits on CRM work.
     except Exception as e:
         logger.error(
             f"[Answer] Failed to create inbound lead for call_id {call_id}: {e}"

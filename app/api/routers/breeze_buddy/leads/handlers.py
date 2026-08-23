@@ -10,6 +10,10 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.crm_mirror import (
+    is_non_customer_lead,
+    mirror_to_crm,
+)
 from app.ai.voice.agents.breeze_buddy.dispatch import (
     cancel_scheduled_lead,
     is_dispatchable,
@@ -47,6 +51,7 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.translator import (
 from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector import (
     determine_tts_provider_for_call,
 )
+from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.database.accessor import (
     append_metadata_field,
@@ -418,6 +423,27 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         lead_execution_mode = req.execution_mode or ExecutionMode.TELEPHONY
         if next_attempt_at is not None and is_dispatchable(lead_execution_mode):
             await schedule_lead(lead_id=uuid, next_attempt_at=next_attempt_at)
+
+        # CRM identity stamp + event mirror (ADR 0017). Backgrounded: the
+        # push response never waits on CRM work, and a CRM failure cannot
+        # reach this request — fail-open by construction.
+        # Test/playground pushes never reach the CRM — pilot merchants'
+        # customer lists must not fill with test numbers.
+        # lead.pushed is emitted in the same instant the created-tap stamp
+        # starts, so it is born with customer_id NULL — deliberate: the
+        # spine consumer (A10) attributes it at processing time. Only the
+        # call.* mirrors ride the stamp (they fire after it exists).
+        if not is_non_customer_lead(lead_execution_mode, meta_data):
+            spawn_background_task(
+                mirror_to_crm(
+                    "lead.pushed",
+                    merchant_id=req.merchant_id,
+                    external_id=uuid,
+                    lead_id=uuid,
+                    phone=customer_mobile,
+                ),
+                name=f"crm-lead-pushed-{uuid}",
+            )
 
         logger.info(f"Lead call tracker {req.request_id} added to queue with ID {uuid}")
 

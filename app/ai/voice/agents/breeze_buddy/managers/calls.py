@@ -634,6 +634,9 @@ async def handle_call_completion(
         call_end_time=call_end_time,
     )
 
+    # call.completed is mirrored to the CRM inside
+    # update_lead_call_completion_details (the terminal choke point).
+
     # Config is only needed for retry scheduling — a failure here must not
     # prevent the lead record from being marked FINISHED above.
     config = await _get_lead_config(lead)
@@ -729,6 +732,9 @@ async def handle_unanswered_calls(call_id: str):
         meta_data={},
         call_end_time=datetime.now(timezone.utc),
     )
+
+    # call.completed is mirrored to the CRM inside
+    # update_lead_call_completion_details (the terminal choke point).
 
     # Only retry outbound telephony calls - inbound and test calls should not be retried
     if (

@@ -32,6 +32,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_by_id_query,
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
+    update_lead_customer_id_query,
     update_lead_payload_query,
     update_lead_request_id_query,
     update_lead_template_query,
@@ -50,6 +51,37 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
     Get the number of rows in the result.
     """
     return len(result) if result else 0
+
+
+# --------------------------------------------------------------------------
+# CRM tap hooks (ADR 0017). The data layer imports nothing from app/ai or
+# app/crm: buddy-side code (crm_mirror) registers callables here at import
+# time, and the two lifecycle choke points below fire them. Hooks must be
+# fail-open and non-blocking; a hook exception is logged, never raised.
+# --------------------------------------------------------------------------
+
+_created_hooks: List[Any] = []
+_finished_hooks: List[Any] = []
+
+
+def register_created_hook(hook: Any) -> None:
+    """Register a callable(lead) fired after every lead INSERT."""
+    if hook not in _created_hooks:
+        _created_hooks.append(hook)
+
+
+def register_finished_hook(hook: Any) -> None:
+    """Register a callable(lead) fired on every terminal transition."""
+    if hook not in _finished_hooks:
+        _finished_hooks.append(hook)
+
+
+def _fire_hooks(hooks: List[Any], lead: LeadCallTracker, label: str) -> None:
+    for hook in hooks:
+        try:
+            hook(lead)
+        except Exception as e:  # fail-open: taps never break lead writes
+            logger.error(f"{label} hook {hook!r} failed for {lead.id}: {e}")
 
 
 def require_template_link(template: str, template_id: Optional[str]) -> None:
@@ -141,6 +173,8 @@ async def create_lead_call_tracker(
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
             logger.info(f"Lead call tracker created successfully: {decoded_result}")
+            if decoded_result is not None:
+                _fire_hooks(_created_hooks, decoded_result, "created-lead")
             return decoded_result
 
         logger.error("Failed to create lead call tracker")
@@ -433,6 +467,26 @@ async def update_lead_call_id_by_id(
         return None
 
 
+async def stamp_lead_customer(lead_id: str, customer_id: str) -> bool:
+    """
+    Stamp the CRM customer_id onto a lead row (ADR 0017, A15).
+
+    Best-effort by design: the caller treats a False return as a logged
+    degradation, never a failure — a call must not be blocked because
+    the CRM stamp could not be written.
+    """
+    try:
+        query_text, values = update_lead_customer_id_query(lead_id, customer_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return True
+        logger.error(f"Failed to stamp customer_id on lead {lead_id}")
+        return False
+    except Exception as e:
+        logger.error(f"Error stamping customer_id on lead {lead_id}: {e}")
+        return False
+
+
 async def update_lead_call_recording_url(
     call_id: str, recording_url: str
 ) -> Optional[LeadCallTracker]:
@@ -482,6 +536,10 @@ async def update_lead_call_completion_details(
             logger.info(
                 f"Lead call completion details updated successfully: {decoded_result}"
             )
+            # Mirror the ending ONLY on the transition to FINISHED —
+            # mid-call outcome writes (template hooks) pass status=None.
+            if status == LeadCallStatus.FINISHED and decoded_result is not None:
+                _fire_hooks(_finished_hooks, decoded_result, "finished-lead")
             return decoded_result
 
         logger.error("Failed to update lead call completion details")
@@ -690,6 +748,10 @@ async def handle_lead_abort(
 
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
+            # Abort is a terminal transition that bypasses the completion
+            # accessor — mirror its ending here (outcome=ABORT on the row).
+            if decoded_result is not None:
+                _fire_hooks(_finished_hooks, decoded_result, "finished-lead")
             return decoded_result
 
         logger.error("Failed to abort lead")

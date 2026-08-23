@@ -44,6 +44,30 @@ CREATE TABLE IF NOT EXISTS {TRACKING_TABLE} (
 );
 """
 
+# Applied migrations that were later renamed on disk (pre-CI duplicate
+# numbers, renumbered 2026-08-22). The tracking table records applied
+# migrations by filename, so every command reconciles these rows to the
+# new names BEFORE computing pending — otherwise a renamed-but-applied
+# file would look pending and its SQL would re-run. File contents are
+# unchanged, so the stored checksums still match.
+RENAMED_MIGRATIONS = {
+    "026_link_call_execution_config_to_template.sql": (
+        "046_link_call_execution_config_to_template.sql"
+    ),
+    "034_knowledge_base.sql": "047_knowledge_base.sql",
+}
+
+
+async def reconcile_renames(conn: asyncpg.Connection) -> None:
+    for old, new in RENAMED_MIGRATIONS.items():
+        await conn.execute(
+            f"UPDATE {TRACKING_TABLE} SET filename = $2 "
+            f"WHERE filename = $1 "
+            f"AND NOT EXISTS (SELECT 1 FROM {TRACKING_TABLE} WHERE filename = $2)",
+            old,
+            new,
+        )
+
 
 def list_migration_files() -> list[Path]:
     return sorted(MIGRATIONS_DIR.glob("*.sql"))
@@ -92,6 +116,7 @@ async def cmd_status() -> int:
     try:
         async with pool.acquire() as conn:
             await conn.execute(CREATE_TRACKING_TABLE)
+            await reconcile_renames(conn)
             applied = await fetch_applied(conn)
         files = list_migration_files()
         pending = [f for f in files if f.name not in applied]
@@ -125,6 +150,7 @@ async def cmd_up() -> int:
     try:
         async with pool.acquire() as conn:
             await conn.execute(CREATE_TRACKING_TABLE)
+            await reconcile_renames(conn)
             applied = await fetch_applied(conn)
             files = list_migration_files()
 
@@ -181,6 +207,7 @@ async def cmd_mark(filenames: list[str]) -> int:
     try:
         async with pool.acquire() as conn:
             await conn.execute(CREATE_TRACKING_TABLE)
+            await reconcile_renames(conn)
             for name in filenames:
                 path = MIGRATIONS_DIR / name
                 if not path.exists():

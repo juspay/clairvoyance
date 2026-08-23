@@ -242,6 +242,9 @@ class LeadCallTracker(BaseModel):
     langfuse_scores: Optional[Dict[str, Any]] = None
     execution_mode: ExecutionMode = ExecutionMode.TELEPHONY
     call_direction: CallDirection = CallDirection.OUTBOUND
+    # CRM identity stamp (migration 050, A15) — written once by the
+    # created-lead tap; later mirrors PASS it through, they never resolve.
+    customer_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
