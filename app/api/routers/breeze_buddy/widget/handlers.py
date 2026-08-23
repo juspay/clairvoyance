@@ -116,12 +116,14 @@ from app.schemas.breeze_buddy.chat import (
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
-from app.services.redis.locks import LockAcquireError, RedisLock
+from app.services.redis.locks import (
+    SESSION_LOCK_TTL_SECONDS,
+    LockAcquireError,
+    RedisLock,
+)
 
-# Per-session Redis lock TTL — same as the chat sender's lock so the
-# two paths can serialise on the same key. Voice connect / end is fast
-# (DB writes + a Daily REST call), well under this.
-_SESSION_LOCK_TTL_SECONDS = 180
+# Voice connect / end is fast (DB writes + a Daily REST call), well under the
+# shared session-lock TTL.
 
 # The Daily room itself expires after 1h (set in start_daily_session).
 # Surface that to the client so the embed knows when to reconnect.
@@ -133,7 +135,7 @@ def _session_lock(session_id: str) -> RedisLock:
     widget operations + the existing chat handlers serialise."""
     return RedisLock(
         f"chat:session:{session_id}:lock",
-        ttl_seconds=_SESSION_LOCK_TTL_SECONDS,
+        ttl_seconds=SESSION_LOCK_TTL_SECONDS,
     )
 
 

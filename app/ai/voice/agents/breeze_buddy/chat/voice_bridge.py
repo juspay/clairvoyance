@@ -42,7 +42,11 @@ from app.database.accessor.breeze_buddy.chat_session import (
     list_chat_messages_for_session,
 )
 from app.schemas.breeze_buddy.chat import ChatMessageRole
-from app.services.redis.locks import LockAcquireError, RedisLock
+from app.services.redis.locks import (
+    SESSION_LOCK_TTL_SECONDS,
+    LockAcquireError,
+    RedisLock,
+)
 
 # Cap on a single TTSSpeakFrame (mirrors agent/__init__.py TTS_SPEAK_MAX_CHARS).
 # Defined locally so this module doesn't import the Agent (which imports it).
@@ -55,9 +59,8 @@ _TTS_SPEAK_MAX_CHARS = 2000
 # writer of the session. While current_channel=VOICE the chat HTTP paths are
 # already 409-gated, so this is rarely contended; it closes the post-flip window
 # where a flip to CHAT races a still-writing bridge turn against a new /message.
-# Key kept inline (not imported from the FastAPI router) so this stays importable
-# in the voice subprocess.
-_SESSION_LOCK_TTL_SECONDS = 180
+# The key is kept inline (not imported from the FastAPI router) so this stays
+# importable in the voice subprocess.
 
 
 def _lock_key(session_id: str) -> str:
@@ -280,7 +283,7 @@ class WidgetVoiceBridge:
         TTS + RTVI, and release the lock (cancel-safe). Shared by the spoken-turn
         and approval-decision paths."""
         lock = RedisLock(
-            _lock_key(self.session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS
+            _lock_key(self.session_id), ttl_seconds=SESSION_LOCK_TTL_SECONDS
         )
         try:
             await lock.acquire()
@@ -347,7 +350,7 @@ class WidgetVoiceBridge:
                 except Exception:  # noqa: BLE001
                     pass
             # Shield the release so a cancellation that lands here still issues
-            # the Redis DEL (else the lock lingers until its 180s TTL and the
+            # the Redis DEL (else the lock lingers until its TTL elapses and the
             # next turn / message 409s).
             try:
                 await asyncio.shield(lock.release())
