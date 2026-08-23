@@ -41,6 +41,10 @@ class LockAcquireError(Exception):
         self.key = key
 
 
+SESSION_LOCK_TTL_SECONDS = 180
+"""TTL for the per-session lock shared by every chat/widget/voice-bridge path."""
+
+
 # Compare-and-DEL: only release if our token still owns the key. Without
 # the token check, a holder whose TTL elapsed (and whose work was picked
 # up by another pod) would delete the *other pod's* fresh lock on

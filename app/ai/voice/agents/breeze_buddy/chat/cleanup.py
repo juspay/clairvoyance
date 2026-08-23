@@ -23,16 +23,17 @@ from app.database.accessor.breeze_buddy.chat_session import (
 )
 from app.schemas.breeze_buddy.chat import ChatEndedReason, ChatSessionStatus
 from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
-from app.services.redis.locks import LockAcquireError, RedisLock
+from app.services.redis.locks import (
+    SESSION_LOCK_TTL_SECONDS,
+    LockAcquireError,
+    RedisLock,
+)
 from app.utils.common import utcnow
 
-# Same lock key + TTL as the per-turn lock in
-# ``app/api/routers/breeze_buddy/chat/handlers.py`` — must stay in sync.
-# Inlined (rather than imported) to keep the chat agent tree free of a
-# routers/ dependency. Cleanup work itself is sub-second; the TTL exists
-# only as a safety net so a crashed pod can't pin an in-flight session
-# forever.
-_SESSION_LOCK_TTL_SECONDS = 180
+# Same lock key as the per-turn lock in
+# ``app/api/routers/breeze_buddy/chat/handlers.py``. Cleanup work itself is
+# sub-second; the TTL exists only as a safety net so a crashed pod can't pin
+# an in-flight session forever.
 
 # Per-tick processing cap. Higher than the accessor default (100) so that
 # a transient backlog from one stalled tick is drained on the next one.
@@ -79,7 +80,7 @@ async def end_idle_chat_sessions() -> None:
     skipped = 0
     for row in stale:
         session_id = str(row.id)
-        lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+        lock = RedisLock(_lock_key(session_id), ttl_seconds=SESSION_LOCK_TTL_SECONDS)
         try:
             await lock.acquire()
         except LockAcquireError:

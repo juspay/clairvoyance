@@ -86,14 +86,13 @@ from app.schemas.breeze_buddy.chat import (
     ToolApprovalStatus,
 )
 from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
-from app.services.redis.locks import LockAcquireError, RedisLock
+from app.services.redis.locks import (
+    SESSION_LOCK_TTL_SECONDS,
+    LockAcquireError,
+    RedisLock,
+)
 
 from . import cancel_bus
-
-# Per-session lock TTL. A single chat turn (LLM call + tool round-trips)
-# is well under this — if it isn't, the upstream LLM is hung and we
-# want the lock to expire so retries can recover. No mid-turn renewal.
-_SESSION_LOCK_TTL_SECONDS = 180
 
 
 def _lock_key(session_id: str) -> str:
@@ -477,7 +476,7 @@ async def send_chat_message_handler(
     already bound to a specific ``session_id`` and there's nothing
     further to authorise.
     """
-    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=SESSION_LOCK_TTL_SECONDS)
     try:
         await lock.acquire()
     except LockAcquireError:
@@ -495,7 +494,7 @@ async def send_chat_message_handler(
     # it once streaming starts; until ``StreamingResponse`` is constructed
     # successfully, this outer ``finally`` is the safety net so any
     # exception during prep — HTTPException, DB blip, anything — releases
-    # rather than leaking the lock until the 180s TTL.
+    # rather than leaking the lock until the TTL elapses.
     lock_handed_off = False
     try:
         fresh = await get_chat_session_by_id(session_id)
@@ -685,7 +684,7 @@ async def send_chat_intent_handler(
     dispatch, so ``inject_tool_args`` sees the client's latest identifiers
     rather than the previous turn's.
     """
-    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=SESSION_LOCK_TTL_SECONDS)
     try:
         await lock.acquire()
     except LockAcquireError:
@@ -803,7 +802,7 @@ async def _turn_sse_stream(
             # so the NEXT await in this generator (the finally's
             # ``lock.release()``) is re-raised as CancelledError
             # before the Redis DEL goes out. Result: the lock stays
-            # held until its 180s TTL and the next /message gets
+            # held until its TTL elapses and the next /message gets
             # 409. Calling ``uncancel()`` decrements the counter
             # so cleanup can complete. Symptom this fixes:
             # "cancelled by user" log fires, but follow-up sends
@@ -914,7 +913,7 @@ async def approve_chat_tool_handler(
     5. Load history AFTER all the above so replay is fully answered, then
        repair with the claimed id + still-pending siblings excluded.
     """
-    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=SESSION_LOCK_TTL_SECONDS)
     try:
         await lock.acquire()
     except LockAcquireError:
@@ -1032,7 +1031,7 @@ async def cancel_chat_turn_handler(session_id: str) -> None:
     - If the session isn't running anywhere, this is a no-op (the
       lock isn't held, the next /message proceeds normally).
     - If Redis is down, this is a no-op + warning log — the lock
-      will still release on TTL (180s).
+      will still release on TTL (SESSION_LOCK_TTL_SECONDS).
 
     We do NOT touch the lock here: the running task's ``finally``
     block holds the unique token and is the only safe releaser.
@@ -1059,7 +1058,7 @@ async def end_chat_session_handler(
             ended_reason=session.ended_reason or ChatEndedReason.USER_ENDED,
         )
 
-    lock = RedisLock(_lock_key(session_id), ttl_seconds=_SESSION_LOCK_TTL_SECONDS)
+    lock = RedisLock(_lock_key(session_id), ttl_seconds=SESSION_LOCK_TTL_SECONDS)
     try:
         await lock.acquire()
     except LockAcquireError as exc:
