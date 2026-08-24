@@ -16,6 +16,7 @@ import asyncio
 import time
 
 from app.core.config import settings
+from app.core.logging import logger
 
 
 class ProviderBusy(Exception):
@@ -60,7 +61,15 @@ class ResilienceGate:
     still held/entered, it just does nothing) so call sites are unconditional.
     """
 
-    def __init__(self, max_concurrent: int, rate_per_sec: float, wait_timeout: float):
+    def __init__(
+        self,
+        max_concurrent: int,
+        rate_per_sec: float,
+        wait_timeout: float,
+        provider: str = "",
+    ):
+        self._provider = provider
+        self._max_concurrent = max_concurrent
         self._sem: asyncio.Semaphore | None = (
             asyncio.Semaphore(max_concurrent)
             if max_concurrent and max_concurrent > 0
@@ -79,6 +88,14 @@ class ResilienceGate:
             try:
                 await asyncio.wait_for(self._sem.acquire(), timeout=self._wait_timeout)
             except asyncio.TimeoutError as e:
+                # uvicorn runs --no-access-log and the API layer maps this to a
+                # 503 without logging — without this line the rejection would be
+                # completely invisible server-side.
+                logger.warning(
+                    f"{self._provider or 'provider'} bulkhead full: "
+                    f"{self._max_concurrent} in-flight, waited "
+                    f"{self._wait_timeout * 1000:.0f}ms — rejecting (503)"
+                )
                 raise ProviderBusy("provider at concurrent-synth cap") from e
         if self._bucket is not None:
             try:
@@ -126,7 +143,7 @@ def get_gate(provider: str) -> ResilienceGate:
     gate = _GATE_CACHE.get(provider)
     if gate is None:
         mc, rate, wait = _config(provider)
-        gate = ResilienceGate(mc, rate, wait)
+        gate = ResilienceGate(mc, rate, wait, provider=provider)
         _GATE_CACHE[provider] = gate
     return gate
 

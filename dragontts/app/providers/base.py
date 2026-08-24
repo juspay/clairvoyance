@@ -36,6 +36,16 @@ class ProviderError(Exception):
     """
 
 
+class ProviderRateLimited(ProviderError):
+    """A provider rejected the call with a rate limit / quota (429,
+    gRPC ResourceExhausted) — TRANSIENT: the API layer maps this to 503 +
+    Retry-After instead of 502, so callers back off and retry. Raised at the
+    provider boundary where the structured gRPC/HTTP code is still available;
+    never classified by message substring (provider messages embed request
+    context, and google.api_core renders ResourceExhausted as the literal
+    "429 Quota exceeded" — both substring approaches misclassify)."""
+
+
 class BaseTTSProvider(ABC):
     """A single TTS backend.
 
