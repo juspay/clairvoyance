@@ -51,7 +51,7 @@ INR = [{"field": "payload.currency", "op": "is", "value": "INR"}]
 
 
 async def _migrate(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    conn = await asyncpg.connect(DSN)
+    conn = await asyncpg.connect(DSN, statement_cache_size=0)
     try:
         await conn.execute(
             "CREATE TEMP TABLE crm_workflow (n int, definition jsonb, draft jsonb)"

@@ -42,6 +42,15 @@ PR time — earlier than a grant would fail:
      module (identity + shared only): consumers register through
      record/consumers.py from worker_main, so subscriber -> record is the
      only direction the import cycle can never form in.
+  13. NESTED CONNECTIONS — no second pooled connection inside an atom.
+     A function reached from an *_in_txn body must not call an acquirer
+     (crm_connection/connection/atomically) or another module's
+     contracts: the atom's transaction already pins one server
+     connection, so the second needs a SECOND slot at the same time.
+     Behind a transaction pooler that is a deadlock, not an error
+     (docs/PGBOUNCER.md). Known sites are grandfathered by path and the
+     set is CLOSED. Registry-mediated nesting (a hook worker_main fills)
+     is late-bound and invisible here — see the doc.
 
 New table? Add it to TABLE_OWNERS with its owning module. New violation
 class? This script is the place — the boundary is code, so the check is
@@ -50,6 +59,7 @@ code.
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -183,6 +193,88 @@ def is_contracts_import(target: str, module: str) -> bool:
             f"app.crm.preview.{module}.contracts",
         )
     )
+
+
+# Rule 13. Sites that already open a second pooled connection inside an atom.
+# Each needs TWO server slots at once behind a transaction pooler, so
+# default_pool_size must exceed 2x the concurrent atoms per replica and
+# query_wait_timeout must be set (docs/PGBOUNCER.md). Sizing makes them safe;
+# folding the reads onto the atom's own txn would make them free. CLOSED —
+# a new entry here is a new deadlock risk, not a formality.
+NESTED_CONNECTION_LEGACY = {
+    "app/crm/record/workers.py",
+    "app/crm/outreach/plans.py",
+}
+
+# What "opens another connection" looks like structurally.
+_ACQUIRERS = {"crm_connection", "connection", "atomically"}
+
+
+def nested_connections_in_atoms(rp: str, text: str) -> list[str]:
+    """Calls that need a second server slot while an atom holds the first.
+
+    Reach is transitive over LOCAL calls from every *_in_txn body: the real
+    sites put the offending call in a private sub-step, one or two hops down
+    (record/workers.py reaches resolve() through _process_one), so a lexical
+    scan of the atom body alone finds nothing.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return [f"{rp}: does not parse — the nested-connection rule cannot scan it"]
+
+    funcs = {
+        n.name: n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    contracts: set[str] = set()
+    for n in ast.walk(tree):
+        if (
+            isinstance(n, ast.ImportFrom)
+            and n.module
+            and n.module.endswith("contracts")
+        ):
+            for a in n.names:
+                contracts.add(a.asname or a.name)
+    watch = contracts | _ACQUIRERS
+
+    reached: set[str] = set()
+    work = [n for n in funcs.values() if n.name.endswith("_in_txn")]
+    while work:
+        fn = work.pop()
+        if fn.name in reached:
+            continue
+        reached.add(fn.name)
+        for sub in ast.walk(fn):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and sub.func.id in funcs
+                and sub.func.id not in reached
+            ):
+                work.append(funcs[sub.func.id])
+
+    out = []
+    for name in sorted(reached):
+        for sub in ast.walk(funcs[name]):
+            if not isinstance(sub, ast.Call):
+                continue
+            f = sub.func
+            called = (
+                f.id
+                if isinstance(f, ast.Name)
+                else (f.attr if isinstance(f, ast.Attribute) else None)
+            )
+            if called in watch:
+                out.append(
+                    f"{rp}:{sub.lineno}: {called}() inside the atom reached by "
+                    f"{name}() opens a SECOND pooled connection while the "
+                    f"transaction holds the first — behind a transaction pooler "
+                    f"that deadlocks. Thread the atom's txn through instead "
+                    f"(docs/PGBOUNCER.md)."
+                )
+    return out
 
 
 def check(root: Path = ROOT) -> list[str]:
@@ -334,6 +426,11 @@ def check(root: Path = ROOT) -> list[str]:
                         f"{rp}: {m.group(1)} lacks an 'ATOMIC: <what> — <law>' "
                         f"docstring — every atom states what shares fate and why"
                     )
+
+        # 13. no second pooled connection inside an atom
+        if in_crm and not (in_db_pkg or is_shared_db):
+            if rp not in NESTED_CONNECTION_LEGACY:
+                errors.extend(nested_connections_in_atoms(rp, text))
 
         # crm-root files hold no SQL and no table literals (surface plumbing)
         if in_crm and module is None and SQL_STMT.search(text):

@@ -281,7 +281,49 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "")
 # Connection pool settings
 POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
 POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
-POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
+# asyncpg's implicit prepared-statement cache breaks behind transaction-pooling
+# proxies (PgBouncer, Cloud SQL Managed Connection Pooling): statements are
+# prepared on one server connection and executed on another, failing with
+# InvalidSQLStatementNameError -- but only once a second client shares that
+# server connection, so it survives every low-concurrency test.
+#
+# Declares the TOPOLOGY this pool connects into: true when POSTGRES_HOST/PORT
+# point at a transaction pooler (PgBouncer, Cloud SQL MCP) rather than at
+# Postgres. Set it in the same manifest change that repoints host/port -- the
+# deployment knows which it is, so it says so, rather than the app guessing
+# from port numbers or hostnames.
+POSTGRES_BEHIND_POOLER = (
+    os.environ.get("POSTGRES_BEHIND_POOLER", "false").lower() == "true"
+)
+# Derived from that topology unless set explicitly. Behind a pooler the cache
+# MUST be 0; direct to Postgres it should be asyncpg's own default (100),
+# which is both correct and faster. An explicit value always wins -- that is
+# the escape hatch for a pooler configured with max_prepared_statements > 0.
+POSTGRES_STATEMENT_CACHE_SIZE = int(
+    os.getenv("POSTGRES_STATEMENT_CACHE_SIZE") or (0 if POSTGRES_BEHIND_POOLER else 100)
+)
+# Ceiling on waiting for a pooled connection. Behind a transaction pooler a
+# code path that opens a SECOND connection while holding a transaction can
+# consume every server slot and wait forever (docs/PGBOUNCER.md, "Never open a
+# second connection inside a transaction"). asyncpg's default wait is
+# unbounded, which turns that into a silent permanent hang; this turns it into
+# a loud, debuggable error. 0 restores the unbounded default.
+#
+# Why 30s. This is a BACKSTOP, not a request budget -- it exists to make a
+# starved pod visible, not to protect any one call. Two regimes:
+#   - Behind PgBouncer, the bouncer's query_wait_timeout (5s in the rig and in
+#     the deployed pgbouncer.ini) fires first and this never does. Innermost
+#     bound wins, which is the correct layering: the pooler knows about server
+#     slots, the app only knows it is waiting.
+#   - Direct to Postgres (production today, pre-cutover) nothing else bounds
+#     the wait, so this is the only thing between starvation and a hung pod.
+# So it is set well above any legitimate wait -- p99 acquire is milliseconds --
+# and firing means genuine exhaustion, never load. Anything caring about
+# latency (the voice path especially) must impose its own deadline: a call
+# still waiting 30s for a connection was lost about 29s earlier.
+POSTGRES_ACQUIRE_TIMEOUT_SECONDS = float(
+    os.getenv("POSTGRES_ACQUIRE_TIMEOUT_SECONDS") or "30"
+)
 
 # Worker threads available to asyncio.to_thread() for offloaded blocking work
 # (sync telephony SDKs: Plivo recording, provider.make_call, Twilio conference).
