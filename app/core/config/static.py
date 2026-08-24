@@ -279,7 +279,13 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "")
 # Connection pool settings
 POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
 POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
-POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "3600"))  # 1 hour
+# asyncpg's implicit prepared-statement cache breaks behind transaction-pooling
+# proxies (PgBouncer, Cloud SQL Managed Connection Pooling): statements are
+# prepared on one server connection and executed on another. 0 disables the
+# cache (P0.1 requires shipping this before/with the pooler); raise only when
+# connecting to Postgres directly or through a pooler that tracks prepared
+# statements (max_prepared_statements > 0).
+POSTGRES_STATEMENT_CACHE_SIZE = int(os.getenv("POSTGRES_STATEMENT_CACHE_SIZE", "0"))
 
 # Worker threads available to asyncio.to_thread() for offloaded blocking work
 # (sync telephony SDKs: Plivo recording, provider.make_call, Twilio conference).

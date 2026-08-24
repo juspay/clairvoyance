@@ -14,6 +14,7 @@ from app.core.config.static import (
     POSTGRES_PASSWORD,
     POSTGRES_POOL_SIZE,
     POSTGRES_PORT,
+    POSTGRES_STATEMENT_CACHE_SIZE,
     POSTGRES_USER,
 )
 from app.core.logger import logger
@@ -69,6 +70,7 @@ async def init_db_pool(min_size: Optional[int] = None, max_size: Optional[int] =
                 port=POSTGRES_PORT,
                 min_size=min_size,
                 max_size=max_size,
+                statement_cache_size=POSTGRES_STATEMENT_CACHE_SIZE,
             )
             logger.info("Database pool initialized successfully.")
         except Exception as e:

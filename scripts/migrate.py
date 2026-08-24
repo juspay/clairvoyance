@@ -86,6 +86,10 @@ async def get_pool() -> asyncpg.Pool:
         port=int(os.environ.get("POSTGRES_PORT", "5432")),
         min_size=1,
         max_size=2,
+        # Same contract as app/database/__init__.py: no prepared-statement
+        # cache, so the runner works through PgBouncer transaction pooling
+        # (docs/PGBOUNCER.md). Safe against direct Postgres too.
+        statement_cache_size=0,
     )
 
 
