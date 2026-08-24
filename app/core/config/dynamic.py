@@ -774,3 +774,60 @@ async def DRAGONTTS_HEALTH_TIMEOUT_S() -> float:
 async def PLIVO_INR_CONVERSION_RATE() -> float:
     """Returns PLIVO_INR_CONVERSION_RATE from Redis"""
     return await get_config("PLIVO_INR_CONVERSION_RATE", 80.0, float)
+
+
+# ----------------------------------------------------------------------------
+# CRM permission windows (app/crm/permission).
+#
+# These are compliance numbers, not engineering tuning: they move when a
+# regulator, a jurisdiction or counsel's reading moves, and none of those wait
+# for a deploy train. Read once at the top of each consent write, so a change
+# lands on the next write.
+#
+# The canon fixes only the first two, and only loosely -- "~7 days" for India's
+# promotional grant and "~90 days" for the opt-out embargo. No document names a
+# lifetime for a confirm link; 24h is ours.
+#
+# Turning a knob never rewrites history: what a window decided is stored as a
+# concrete deadline on crm_consent_state.expires_at, so a row always shows the
+# window it was actually given, whatever the flag says later.
+# ----------------------------------------------------------------------------
+
+
+async def _positive_int(key: str, default: int) -> int:
+    """A zero or negative window inverts the rule it encodes — a -1 day
+    embargo lifted yesterday. Bad values fall back to the default."""
+    raw = await get_config(key, default, int)
+    try:
+        # bool first: int(True) is 1, so a Boolean-typed flag would silently
+        # become a one-day window instead of being rejected.
+        value = 0 if isinstance(raw, bool) else int(raw)
+    except (TypeError, ValueError):
+        value = 0
+    if value <= 0:
+        logger.warning(f"Invalid {key}; using {default}")
+        return default
+    return value
+
+
+async def CRM_MARKETING_GRANT_DAYS() -> int:
+    """How long a marketing consent grant stays live before it must be re-won.
+
+    Transactional permission has no clock at all and ignores this -- an OTP
+    that expires is a locked-out customer, the opposite of protecting her.
+    """
+    return await _positive_int("CRM_MARKETING_GRANT_DAYS", 7)
+
+
+async def CRM_REASK_EMBARGO_DAYS() -> int:
+    """How long after a withdrawal even asking again is refused.
+
+    Raising it is always safe. Lowering it shortens a quiet period the customer
+    was promised, so it wants the same care as any other compliance change.
+    """
+    return await _positive_int("CRM_REASK_EMBARGO_DAYS", 90)
+
+
+async def CRM_PENDING_CONFIRM_HOURS() -> int:
+    """How long a double-opt-in confirm link stays usable."""
+    return await _positive_int("CRM_PENDING_CONFIRM_HOURS", 24)
