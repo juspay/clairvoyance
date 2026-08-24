@@ -456,7 +456,15 @@ async def get_cache(key: str, request: Request):
     record = await metadata.get(key)
     if not record:
         raise HTTPException(status_code=404, detail="cache key not found")
-    audio = await blobs.get(record.storage_path)
+    try:
+        audio = await blobs.get(record.storage_path)
+    except FileNotFoundError:
+        # Poisoned row (purge-vs-restore race) — 404, not a raw 500. A read
+        # through /tts/bytes or /tts/stream self-heals it (re-synth + re-store).
+        raise HTTPException(
+            status_code=404,
+            detail="cache key found but its blob file is missing (will self-heal on next TTS read)",
+        )
     return Response(
         content=audio,
         media_type=content_type_for(record.encoding),

@@ -26,7 +26,7 @@ from app.cache.key import parse_model_id
 from app.cache.resilience import ProviderBusy
 from app.core.config import settings
 from app.core.logging import logger
-from app.providers.base import ProviderError
+from app.providers.base import ProviderError, ProviderRateLimited
 from app.providers.registry import ProviderNotConfigured
 from app.schemas.cache import CheckResponse, CreateResponse, DeleteResponse
 from app.schemas.tts import TTSRequest
@@ -34,8 +34,52 @@ from app.schemas.tts import TTSRequest
 router = APIRouter()
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    """True when the upstream failure is a rate limit / quota rejection —
+    retryable, unlike other provider errors. Classification is STRUCTURAL,
+    never by message substring: provider messages embed request context
+    (caller-controlled text can contain "Too Many Requests"), and
+    google.api_core renders ResourceExhausted as the literal "429 Quota
+    exceeded" — substring matching misclassifies in BOTH directions.
+    httpx errors carry the numeric status; provider quota rejections arrive
+    as the typed ProviderRateLimited raised where the gRPC code is still
+    structured (a ``rate_limited`` attribute is accepted for providers not
+    yet migrated to the typed raise)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429
+    if isinstance(exc, ProviderRateLimited):
+        return True
+    return bool(getattr(exc, "rate_limited", False))
+
+
 def _map_upstream_error(provider: str, exc: Exception) -> HTTPException:
-    if isinstance(exc, (httpx.HTTPStatusError, ProviderError)):
+    # Server-side visibility: uvicorn runs --no-access-log, so without this
+    # the mapped response (502/503) leaves no trace in DragonTTS's own logs —
+    # the caller sees the error but we can't grep for it here.
+    if _is_rate_limit(exc):
+        # Rate limits are transient: 503 + Retry-After (same contract as the
+        # bulkhead's ProviderBusy) so callers retry instead of treating the
+        # failure as a dead upstream.
+        logger.warning(f"upstream {provider} rate-limited (429): {exc}")
+        return HTTPException(
+            status_code=503,
+            detail=f"upstream {provider} rate-limited (429): {exc}",
+            headers={"Retry-After": "2"},
+        )
+    logger.warning(f"upstream {provider} error: {exc}")
+    if isinstance(exc, httpx.HTTPStatusError):
+        # httpx's message carries status+URL but NOT the provider's body —
+        # attach it so the REAL reason (e.g. ElevenLabs' "voice_id does not
+        # exist") reaches the caller instead of a bare status code.
+        try:
+            body = f" | body: {exc.response.text[:200]}"
+        except Exception:
+            body = ""
+        return HTTPException(
+            status_code=502,
+            detail=f"upstream {provider} returned an error: {exc}{body}",
+        )
+    if isinstance(exc, ProviderError):
         return HTTPException(
             status_code=502,
             detail=f"upstream {provider} returned an error: {exc}",
@@ -58,9 +102,9 @@ async def tts_bytes(req: TTSRequest, request: Request):
             status_code=503, detail=str(e), headers={"Retry-After": "1"}
         )
     except ProviderError as e:
-        raise HTTPException(
-            status_code=502, detail=f"upstream {provider} returned an error: {e}"
-        )
+        # Through the mapper so rate limits (gRPC ResourceExhausted) get
+        # 503 + Retry-After and every provider failure is logged server-side.
+        raise _map_upstream_error(provider, e)
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         raise _map_upstream_error(provider, e)
     except Exception as e:  # any other provider/lib error -> 502 with the reason
@@ -103,9 +147,9 @@ async def tts_stream(req: TTSRequest, request: Request):
             status_code=503, detail=str(e), headers={"Retry-After": "1"}
         )
     except ProviderError as e:
-        raise HTTPException(
-            status_code=502, detail=f"upstream {provider} returned an error: {e}"
-        )
+        # Through the mapper so rate limits (gRPC ResourceExhausted) get
+        # 503 + Retry-After and every provider failure is logged server-side.
+        raise _map_upstream_error(provider, e)
     except Exception as e:  # any other provider/lib error -> 502 with the reason
         raise HTTPException(
             status_code=502,
@@ -197,9 +241,9 @@ async def tts_create(req: TTSRequest, request: Request):
             status_code=503, detail=str(e), headers={"Retry-After": "1"}
         )
     except ProviderError as e:
-        raise HTTPException(
-            status_code=502, detail=f"upstream {provider} returned an error: {e}"
-        )
+        # Through the mapper so rate limits (gRPC ResourceExhausted) get
+        # 503 + Retry-After and every provider failure is logged server-side.
+        raise _map_upstream_error(provider, e)
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         raise _map_upstream_error(provider, e)
     except Exception as e:  # any other provider/lib error -> 502 with the reason
@@ -273,9 +317,23 @@ async def tts_create_bulk(requests: list[TTSRequest], request: Request):
         except ProviderBusy:
             errors.append({"index": i, "error": "provider busy (bulkhead full); retry"})
         except ProviderError as e:
-            errors.append({"index": i, "error": f"upstream error: {e}"})
+            tag = (
+                "rate-limited (429), retry later"
+                if _is_rate_limit(e)
+                else "upstream error"
+            )
+            errors.append({"index": i, "error": f"{tag}: {e}"})
         except (httpx.HTTPStatusError, httpx.RequestError) as e:
-            errors.append({"index": i, "error": f"upstream error: {type(e).__name__}"})
+            tag = (
+                "rate-limited (429), retry later"
+                if _is_rate_limit(e)
+                else "upstream error"
+            )
+            errors.append({"index": i, "error": f"{tag}: {type(e).__name__}"})
+        except Exception as e:
+            # One bad item (storage error, unexpected lib error) must not 500
+            # the whole batch — record it and keep going.
+            errors.append({"index": i, "error": f"{type(e).__name__}: {e}"})
     return {
         "created": len(results),
         "errors": len(errors),

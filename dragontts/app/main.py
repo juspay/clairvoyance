@@ -11,7 +11,9 @@ import asyncio
 import concurrent.futures
 import ctypes
 import gc
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -20,14 +22,31 @@ from app.api.v1 import cache as cache_api, health, tts
 from app.cache.service import CacheService
 from app.core.config import settings
 from app.core.logging import logger
-from app.drain import (
-    decr_inflight,
-    incr_inflight,
-    wait_for_inflight_drain,
-)
+from app.drain import decr_inflight, incr_inflight, wait_for_inflight_drain
 from app.providers.registry import ProviderRegistry
 from app.storage.filesystem import FilesystemBlobStore
 from app.storage.sqlite import SQLiteMetadataStore
+
+
+def _secs_until_next_purge_window() -> float:
+    """Seconds until the next purge-window start (default 02:00 Asia/Kolkata).
+
+    Falls back to a fixed UTC+5:30 offset when zoneinfo/tzdata is unavailable
+    in the image. Module-level so the schedule math is unit-testable.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(settings.ttl_purge_window_tz)
+    except Exception:
+        tz = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(tz)
+    target = now.replace(
+        hour=settings.ttl_purge_window_start_hour, minute=0, second=0, microsecond=0
+    )
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
 
 
 @asynccontextmanager
@@ -88,17 +107,43 @@ async def lifespan(app: FastAPI):
 
     checkpoint_task = asyncio.create_task(_checkpoint_loop())
 
-    # Periodic TTL purge: delete expired entries (rows + blobs). Cadence is
-    # coarse (default 20 min) since TTLs are hour-to-day scale. Backfill of
-    # pre-existing NULL-TTL entries is NOT automatic — trigger it once via
-    # POST /cache/backfill-ttl after deploying this feature.
-    async def _ttl_purge_loop():
+    # Periodic TTL purge: delete expired entries (rows + blobs). Scheduled:
+    # wakes at the window start hour (default 02:00 Asia/Kolkata = IST
+    # low-traffic) and purges only if >= ttl_purge_every_days (default 2)
+    # elapsed since the last run; ttl_purge_every_days <= 0 falls back to the
+    # legacy fixed-interval sweep. Backfill of pre-existing NULL-TTL entries
+    # is NOT automatic — trigger it once via POST /cache/backfill-ttl after
+    # deploying this feature.
+    async def _ttl_purge_loop() -> None:
         while True:
-            await asyncio.sleep(settings.ttl_purge_interval_seconds)
+            if settings.ttl_purge_every_days > 0:
+                await asyncio.sleep(_secs_until_next_purge_window())
+                # The N-day cadence is persisted in SQLite (shared durable
+                # state) so restarts and the other workers honor it too —
+                # an in-memory timestamp would reset on every boot.
+                try:
+                    last = await metadata.get_meta("last_ttl_purge")
+                except Exception:
+                    last = None
+                try:
+                    elapsed_ok = last is None or (
+                        time.time() - float(last)
+                        >= settings.ttl_purge_every_days * 86400
+                    )
+                except ValueError:
+                    elapsed_ok = True
+                if not elapsed_ok:
+                    continue  # window arrived, but the N-day interval hasn't
+            else:
+                await asyncio.sleep(settings.ttl_purge_interval_seconds)
             try:
                 await cache.purge_expired()
+                try:
+                    await metadata.set_meta("last_ttl_purge", str(time.time()))
+                except Exception as e:
+                    logger.opt(exception=e).warning("persist last_ttl_purge failed")
             except Exception as e:
-                logger.debug(f"TTL purge failed: {e}")
+                logger.opt(exception=e).warning("TTL purge failed")
 
     ttl_purge_task = asyncio.create_task(_ttl_purge_loop())
 

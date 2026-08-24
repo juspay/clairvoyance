@@ -6,7 +6,9 @@ reused across both services.
 
 from __future__ import annotations
 
-from pydantic import Field, field_validator
+from typing import Any, Dict
+
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Per-provider defaults. Ported from clairvoyance BB_SPEECH_PROVIDER_DEFAULTS.
@@ -92,10 +94,27 @@ class Settings(BaseSettings):
     # (TTL_PURGE_INTERVAL_SECONDS) deletes expired rows + blobs. Set BASE<=0 to
     # disable TTL entirely (entries never expire, no purge). Supersedes the flat
     # ttl_seconds knob below, which is kept only for back-compat.
-    cache_ttl_base_seconds: int = 172800  # 48h floor — min TTL for any phrase
-    cache_ttl_per_word_seconds: int = 21600  # +6h per word
+    cache_ttl_base_seconds: int = 300  # 5 min floor — min TTL for any phrase
+    cache_ttl_per_word_seconds: int = 300  # +5 min per word (10 words ≈ 55 min)
     cache_ttl_max_seconds: int = 518400  # 6d cap
-    ttl_purge_interval_seconds: int = 1200  # purge sweep cadence (20 min)
+    # Purge schedule: fire at ttl_purge_window_start_hour in ttl_purge_window_tz
+    # (02:00 IST = low-traffic) and SKIP the window unless
+    # ttl_purge_every_days elapsed since the last run. <=0 disables scheduling
+    # and falls back to the legacy fixed-interval sweep below.
+    ttl_purge_every_days: int = 2
+    ttl_purge_window_start_hour: int = 2
+    ttl_purge_window_tz: str = "Asia/Kolkata"
+    ttl_purge_interval_seconds: int = 1200  # legacy sweep cadence (fallback only)
+
+    @field_validator("ttl_purge_window_start_hour")
+    @classmethod
+    def _validate_purge_hour(cls, v: int) -> int:
+        # An out-of-range hour would make datetime.replace() raise inside the
+        # purge loop and silently stop TTL purging altogether.
+        if not 0 <= v <= 23:
+            raise ValueError("ttl_purge_window_start_hour must be 0-23")
+        return v
+
     # Backfill for pre-existing entries (ttl_expires_at IS NULL, e.g. created
     # before this feature under ttl_seconds=0). At startup each NULL row gets a
     # RANDOM expiry in [min,max] hours so they age out gradually instead of
@@ -149,7 +168,7 @@ class Settings(BaseSettings):
 
     # --- Performance ---
     thread_pool_workers: int = 32  # asyncio.to_thread pool size
-    bulk_create_max: int = 1000  # hard cap on /tts/create/bulk items
+    bulk_create_max: int = 100  # hard cap on /tts/create/bulk items
     # --- Memory: return freed glibc heap to the OS (RSS-creep mitigation) ---
     # glibc keeps freed memory in its arenas instead of releasing it to the OS,
     # so the large short-lived audio + numpy resample buffers fragment the heap
@@ -165,11 +184,11 @@ class Settings(BaseSettings):
     # Number of warm, persistent Cartesia streaming sockets kept ready for cache
     # misses (each multiplexes many utterances by context_id). Set via env, e.g.
     # CARTESIA_STREAM_POOL_SIZE=4. 0 => open a fresh socket per miss (no pooling).
-    cartesia_stream_pool_size: int = 2
+    cartesia_stream_pool_size: int = 3
     # Warm ElevenLabs multi-context WS sockets, pooled PER VOICE (the voice is in
     # the WS URL). Each socket multiplexes up to 5 concurrent contexts. Streaming
     # misses reuse a warm socket; if none is ready, fall back to one-shot HTTP.
-    elevenlabs_stream_pool_size: int = 2
+    elevenlabs_stream_pool_size: int = 16
     # Max server-silence gap (seconds) after audio starts that ends an ElevenLabs
     # WS utterance (ElevenLabs delays is_final ~20s). Lower = faster stream
     # close/turn-end; raise if long utterances ever truncate at a >N s pause.
@@ -177,7 +196,7 @@ class Settings(BaseSettings):
     # Warm Sarvam WS sockets. Sarvam is NOT multiplexed (one utterance per socket
     # at a time), so this is a LIFO stack of warm, pre-configured connections. 0
     # => stream via a fresh socket per miss (no pooling).
-    sarvam_stream_pool_size: int = 2
+    sarvam_stream_pool_size: int = 3
     # Force IPv4 for the Cartesia WS handshake. Some networks advertise IPv6
     # (AAAA) for api.cartesia.ai but black-hole the SYN, hanging the handshake
     # while IPv4 works fine. Safe default (IPv4 always reaches Cartesia).
@@ -192,7 +211,22 @@ class Settings(BaseSettings):
     provider_max_concurrent_synths: int = 24
     provider_rate_limit_per_sec: float = 0.0
     provider_bulkhead_wait_timeout_ms: int = 2500
-    provider_resilience_overrides: dict = Field(default_factory=dict)
+    provider_resilience_overrides: Dict[str, Dict[str, Any]] = Field(
+        default_factory=lambda: {
+            "cartesia": {"max_concurrent": 10, "wait_timeout_ms": 3000},
+            "sarvam": {"max_concurrent": 10, "wait_timeout_ms": 3000},
+            "elevenlabs": {"max_concurrent": 64, "wait_timeout_ms": 5000},
+            "gemini": {"max_concurrent": 64, "wait_timeout_ms": 5000},
+        },
+        # The documented + deployed env name is PROVIDER_RESILIENCE — without
+        # this alias pydantic only matches PROVIDER_RESILIENCE_OVERRIDES and a
+        # deployment setting the documented name is SILENTLY ignored
+        # (extra="ignore"), leaving the bulkhead at the global defaults. Accept
+        # both names.
+        validation_alias=AliasChoices(
+            "PROVIDER_RESILIENCE", "PROVIDER_RESILIENCE_OVERRIDES"
+        ),
+    )
     # --- Write-behind metrics (off the hot HIT path) ---
     # HIT touch/metric updates are batched + flushed by a background task so a HIT
     # returns audio without awaiting a SQLite write. Flush by interval or batch

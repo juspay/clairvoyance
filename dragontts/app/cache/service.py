@@ -26,12 +26,7 @@ from typing import Callable
 
 from app.audio.format import convert_audio
 from app.audio.text import normalize_for_tts, prepend_leading_dot
-from app.cache.key import (
-    canonical_params,
-    hash_key,
-    normalize_text,
-    parse_model_id,
-)
+from app.cache.key import canonical_params, hash_key, normalize_text, parse_model_id
 from app.cache.metrics import WriteBehindMetrics
 from app.cache.resilience import get_gate
 from app.core.config import settings
@@ -252,6 +247,26 @@ class CacheService:
             <= datetime.now(timezone.utc)
         )
 
+    async def _hit_native(self, record: CacheRecord) -> bytes | None:
+        """Read a HIT entry's blob; ``None`` if the file is missing.
+
+        A row whose blob file is gone (the purge-vs-restore race: purge unlinks
+        the file just after a concurrent MISS re-wrote it and re-inserted the
+        row) would otherwise raise FileNotFoundError on every serve, forever —
+        the row is never deleted, so nothing ever re-synthesizes. Returning
+        ``None`` makes the read paths fall through to the MISS path, which
+        re-synthesizes and re-stores over the row (``replace_with_totals``,
+        same content-addressed path) — the entry heals itself on first touch.
+        """
+        try:
+            return await self._blobs.get(record.storage_path)
+        except FileNotFoundError:
+            logger.warning(
+                f"blob missing for key={record.key[:12]}… (row exists, file gone) "
+                f"— treating as MISS to re-synthesize and heal"
+            )
+            return None
+
     async def _timed(self, kind: str, t0: float, provider: str) -> None:
         """Record a latency sample (sampling-gated) for the avg/p95 rollup, tagged
         with the routed provider for the per-provider latency view."""
@@ -439,12 +454,11 @@ class CacheService:
         outer lookup and here — e.g. by a concurrent request)."""
         rec = await self._metadata.get(key)
         if rec and not self._expired(rec):
-            return (
-                await self._blobs.get(rec.storage_path),
-                rec.encoding,
-                rec.sample_rate,
-                "HIT",
-            )
+            native = await self._hit_native(rec)
+            if native is not None:
+                return (native, rec.encoding, rec.sample_rate, "HIT")
+            # Blob missing (poisoned row): fall through to synth + replace-store,
+            # which heals the entry instead of raising FileNotFoundError.
         native = await self._synthesize(req, provider, model)
         if settings.enable_write_through:
             await self._store(
@@ -552,29 +566,32 @@ class CacheService:
         record = await self._metadata.get(key)
         if record and not self._expired(record):
             t_cs = time.perf_counter()
-            native = await self._blobs.get(record.storage_path)
-            audio = await self._convert_audio(
-                native,
-                native_encoding=record.encoding,
-                native_rate=record.sample_rate,
-                out_encoding=of.encoding,
-                out_rate=of.sample_rate,
-            )
-            await self._metrics.touch_and_record(
-                key,
-                {
-                    "requests": 1,
-                    "hits": 1,
-                    "bytes_served": len(audio),
-                    "words_served": _wc(req.transcript),
-                },
-                provider=provider,
-            )
-            self._hits += 1
-            logger.info(f"CACHE HIT  key={key[:12]}… provider={provider}")
-            await self._timed("cache_serve", t_cs, provider)
-            await self._timed("total", t0, provider)
-            return audio, {"X-Cache": "HIT", "X-Cache-Key": key}
+            native = await self._hit_native(record)
+            if native is not None:
+                audio = await self._convert_audio(
+                    native,
+                    native_encoding=record.encoding,
+                    native_rate=record.sample_rate,
+                    out_encoding=of.encoding,
+                    out_rate=of.sample_rate,
+                )
+                await self._metrics.touch_and_record(
+                    key,
+                    {
+                        "requests": 1,
+                        "hits": 1,
+                        "bytes_served": len(audio),
+                        "words_served": _wc(req.transcript),
+                    },
+                    provider=provider,
+                )
+                self._hits += 1
+                logger.info(f"CACHE HIT  key={key[:12]}… provider={provider}")
+                await self._timed("cache_serve", t_cs, provider)
+                await self._timed("total", t0, provider)
+                return audio, {"X-Cache": "HIT", "X-Cache-Key": key}
+            # Blob missing (poisoned row): fall through to the MISS path — it
+            # re-synthesizes and re-stores over the row, healing the entry.
 
         logger.info(f"CACHE MISS key={key[:12]}… provider={provider} — synthesizing")
 
@@ -798,36 +815,39 @@ class CacheService:
         record = await self._metadata.get(key)
         if record and not self._expired(record):
             t_cs = time.perf_counter()
-            native = await self._blobs.get(record.storage_path)
-            if _same_format(
-                of.encoding, of.sample_rate, record.encoding, record.sample_rate
-            ):
-                served, chunks = native, _chunked(native)
-            else:
-                served = await self._convert_audio(
-                    native,
-                    native_encoding=record.encoding,
-                    native_rate=record.sample_rate,
-                    out_encoding=of.encoding,
-                    out_rate=of.sample_rate,
+            native = await self._hit_native(record)
+            if native is not None:
+                if _same_format(
+                    of.encoding, of.sample_rate, record.encoding, record.sample_rate
+                ):
+                    served, chunks = native, _chunked(native)
+                else:
+                    served = await self._convert_audio(
+                        native,
+                        native_encoding=record.encoding,
+                        native_rate=record.sample_rate,
+                        out_encoding=of.encoding,
+                        out_rate=of.sample_rate,
+                    )
+                    chunks = _chunked(served)
+                await self._metrics.touch_and_record(
+                    key,
+                    {
+                        "requests": 1,
+                        "hits": 1,
+                        "bytes_served": len(served),
+                        "words_served": _wc(req.transcript),
+                    },
+                    provider=provider,
                 )
-                chunks = _chunked(served)
-            await self._metrics.touch_and_record(
-                key,
-                {
-                    "requests": 1,
-                    "hits": 1,
-                    "bytes_served": len(served),
-                    "words_served": _wc(req.transcript),
-                },
-                provider=provider,
-            )
-            self._hits += 1
-            logger.info(f"CACHE HIT  (stream) key={key[:12]}… provider={provider}")
-            await self._timed("cache_serve", t_cs, provider)
-            return {"X-Cache": "HIT", "X-Cache-Key": key}, self._timed_chunks(
-                chunks, t0, provider
-            )
+                self._hits += 1
+                logger.info(f"CACHE HIT  (stream) key={key[:12]}… provider={provider}")
+                await self._timed("cache_serve", t_cs, provider)
+                return {"X-Cache": "HIT", "X-Cache-Key": key}, self._timed_chunks(
+                    chunks, t0, provider
+                )
+            # Blob missing (poisoned row): fall through to the streaming MISS
+            # path — on completion it re-stores over the row, healing the entry.
 
         logger.info(
             f"CACHE MISS (stream) key={key[:12]}… provider={provider} — streaming synth"
@@ -947,6 +967,15 @@ class CacheService:
                     accumulated += chunk
                     yield chunk
                 completed = True
+        except Exception as e:
+            # The 200 + headers are already out, so uvicorn truncates the body
+            # and the caller sees "incomplete chunked read" — log the real cause
+            # HERE with context (the raw ASGI traceback carries none).
+            logger.error(
+                f"stream synth aborted mid-body key={key[:12]}… provider={provider} "
+                f"after {len(accumulated)}B sent: {type(e).__name__}: {e}"
+            )
+            raise
         finally:
             await gen.aclose()
             if completed and accumulated:
@@ -1262,7 +1291,17 @@ class CacheService:
         pointing at a missing file. Returns the number of entries purged."""
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
         rows = await self._metadata.purge_expired(now_iso)
-        for _prov, _size, path in rows:
+        # Purge-vs-restore race guard: a concurrent MISS for one of these keys
+        # can re-write the blob and re-insert the row between the purge txn
+        # and this unlink — unlinking then deletes the FRESH blob and leaves
+        # a poisoned row (row without file). Snapshot live keys AFTER the
+        # txn: a key that is live again was re-created, so keep its file.
+        # (Residual window — a re-store landing after the snapshot — is
+        # covered by the read-time self-heal.)
+        live = await self._metadata.all_keys() if rows else set()
+        for _prov, _size, path, key in rows:
+            if key in live:
+                continue
             try:
                 await self._blobs.delete(path)
             except Exception as e:

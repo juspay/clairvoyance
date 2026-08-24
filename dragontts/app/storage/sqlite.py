@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS provider_totals (
     total_bytes INTEGER NOT NULL DEFAULT 0,
     total_words INTEGER NOT NULL DEFAULT 0
 );
+
+-- Tiny generic key/value metadata (e.g. persisted last-purge timestamp
+-- shared across workers/restarts).
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)
 """
 
 _COLUMNS = (
@@ -551,6 +558,29 @@ class SQLiteMetadataStore:
         rows = await self._run(_q)
         return [_row_to_record(r) for r in rows]
 
+    async def get_meta(self, key: str) -> str | None:
+        """Read a value from the generic ``meta`` kv table (None if absent)."""
+
+        def _q(conn: sqlite3.Connection) -> str | None:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)
+            ).fetchone()
+            return row[0] if row else None
+
+        return await self._run(_q)
+
+    async def set_meta(self, key: str, value: str) -> None:
+        """Upsert a value in the generic ``meta`` kv table (autocommit)."""
+
+        def _q(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+        await self._run(_q)
+
     async def all_keys(self) -> set[str]:
         """Every cache key — used to reap orphaned blob files."""
 
@@ -615,7 +645,8 @@ class SQLiteMetadataStore:
     async def purge_expired(self, now_iso: str) -> list[tuple]:
         """Delete rows whose ``ttl_expires_at`` is set and < ``now_iso``, adjusting
         ``provider_totals`` atomically; return ``(provider, size_bytes,
-        storage_path)`` per row so the caller can unlink the blobs. Mirrors
+        ``storage_path, key)`` per row so the caller can unlink the blobs (key
+        included for the purge-vs-restore race guard). Mirrors
         :meth:`delete_filtered`'s transaction so a concurrent insert can't escape
         the purge or drift totals. Rows with NULL ``ttl_expires_at`` (never
         expiring) are left alone."""
@@ -632,21 +663,23 @@ class SQLiteMetadataStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 rows = conn.execute(
-                    f"SELECT provider, size_bytes, storage_path, text FROM cache_entries{where}",
+                    f"SELECT key, provider, size_bytes, storage_path, text "
+                    f"FROM cache_entries{where}",
                     (now_iso,),
                 ).fetchall()
                 if rows:
                     conn.execute(f"DELETE FROM cache_entries{where}", (now_iso,))
                     deltas: dict[str, list[int]] = {}
                     for r in rows:
-                        d = deltas.setdefault(r[0], [0, 0, 0])
+                        # rows are (key, provider, size_bytes, storage_path, text)
+                        d = deltas.setdefault(r[1], [0, 0, 0])
                         d[0] -= 1
-                        d[1] -= r[1]
-                        d[2] -= _wc(r[3])
+                        d[1] -= r[2]
+                        d[2] -= _wc(r[4])
                     for prov, (de, db, dw) in deltas.items():
                         conn.execute(totals_sql, (prov, de, db, dw))
                 conn.execute("COMMIT")
-                return [(r[0], r[1], r[2]) for r in rows]
+                return [(r[1], r[2], r[3], r[0]) for r in rows]
             except BaseException:
                 conn.execute("ROLLBACK")
                 raise

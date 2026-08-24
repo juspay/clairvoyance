@@ -107,13 +107,32 @@ async def _generate_dragontts_audio(*, text: str, resolved: "TTSConfig") -> byte
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
+            # DragonTTS relays the REAL cause in its JSON body, e.g.
+            # {"detail": "upstream gemini returned an error: ..."} — surface
+            # that as the headline instead of blaming the relay. The greeting
+            # wrapper re-logs whatever we raise, so re-raise the parsed detail
+            # (chained) rather than the bare HTTPStatusError whose message
+            # says only "Server error '502' for url ...".
+            try:
+                detail = json.loads(e.response.text).get(
+                    "detail", e.response.text[:200]
+                )
+            except Exception:
+                detail = e.response.text[:200]
             logger.error(
-                f"DragonTTS /tts/bytes returned HTTP {e.response.status_code}: "
-                f"{e.response.text[:200]}"
+                f"TTS synth failed (HTTP {e.response.status_code} via DragonTTS "
+                f"relay): {str(detail)[:300]}"
             )
-            raise
+            raise RuntimeError(
+                f"TTS synth failed (HTTP {e.response.status_code} via DragonTTS "
+                f"relay): {str(detail)[:300]}"
+            ) from e
         except httpx.RequestError as e:
-            logger.error(f"DragonTTS /tts/bytes request failed: {e}")
+            # str() is EMPTY for ReadTimeout/ReadError — log the type + repr so
+            # the failure mode is identifiable without guessing.
+            logger.error(
+                f"DragonTTS /tts/bytes request failed: {type(e).__name__}: {e!r}"
+            )
             raise
         logger.info(f"DragonTTS /tts/bytes ok: {len(response.content)} bytes")
         return response.content
@@ -217,7 +236,9 @@ class DragonTTSService(TTSService):
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         """Stream one aggregated sentence via DragonTTS, yielding a frame per chunk."""
-        logger.debug(f"{self}: Generating TTS via DragonTTS (len={len(text)})")
+        # Length only — the transcript is caller content (PII); it already
+        # lives in DragonTTS server logs, not here.
+        logger.debug(f"{self}: Generating TTS via DragonTTS: len={len(text)}")
 
         # Defensive: build a client if start() wasn't invoked by the pipeline.
         if self._client is None:
@@ -261,8 +282,8 @@ class DragonTTSService(TTSService):
                     except Exception:
                         detail = err.decode("utf-8", "replace")
                     msg = (
-                        f"DragonTTS /tts/stream HTTP {response.status_code}: "
-                        f"{str(detail)[:300]}"
+                        f"TTS stream failed (HTTP {response.status_code} via "
+                        f"DragonTTS relay): {str(detail)[:300]}"
                     )
                     logger.error(msg)
                     yield ErrorFrame(error=msg)
@@ -285,8 +306,12 @@ class DragonTTSService(TTSService):
             # A trailing odd byte (carry is always 0 or 1 byte here) can't form a
             # complete 16-bit sample, so drop it rather than emit a corrupt frame.
         except httpx.RequestError as e:
-            logger.error(f"DragonTTS stream request failed: {e}")
-            yield ErrorFrame(error=f"DragonTTS stream request failed: {e}")
+            # str() is EMPTY for ReadTimeout/ReadError; include the type so the
+            # truncation family is attributable from the log line alone.
+            logger.error(f"DragonTTS stream request failed: {type(e).__name__}: {e!r}")
+            yield ErrorFrame(
+                error=f"DragonTTS stream request failed: {type(e).__name__}: {e}"
+            )
 
 
 def build_dragontts_tts(config: DragonTTSConfig) -> DragonTTSService:
