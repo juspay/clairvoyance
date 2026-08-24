@@ -58,14 +58,15 @@ def insert_customer_query(
 
 
 def apply_handles_query(
-    customer_id: str, writes: Dict[str, str]
+    merchant_id: str, customer_id: str, writes: Dict[str, str]
 ) -> Tuple[str, List[Any]]:
     """Write planned handle changes (attach + ladder overwrites — the
     accessor decides WHAT, this builder only decides HOW) and bump
     last_seen_at. The 049 history trigger preserves any replaced value;
-    updated_at is touched by trigger."""
+    updated_at is touched by trigger. merchant_id leads the WHERE — a
+    customer_id from the wrong tenant must not write across the boundary."""
     sets = ["last_seen_at = now()"]
-    values: List[Any] = [customer_id]
+    values: List[Any] = [merchant_id, customer_id]
     for column in HANDLE_COLUMNS:
         if column in writes:
             values.append(writes[column])
@@ -73,21 +74,25 @@ def apply_handles_query(
     query = f"""
         UPDATE {CRM_CUSTOMER_TABLE}
         SET {", ".join(sets)}
-        WHERE id = $1
+        WHERE merchant_id = $1 AND id = $2
     """
     return query, values
 
 
-def merge_customer_query(loser_id: str, survivor_id: str) -> Tuple[str, List[Any]]:
+def merge_customer_query(
+    merchant_id: str, loser_id: str, survivor_id: str
+) -> Tuple[str, List[Any]]:
     """The staple (never melt): one UPDATE on the younger row. The WHERE
     status='active' makes racing staplers converge — the second is a
-    no-op. Freed partial uniques let the survivor attach the handles."""
+    no-op. merchant_id leads the WHERE — the loser must belong to the
+    same tenant as the survivor. Freed partial uniques let the survivor
+    attach the handles."""
     query = f"""
         UPDATE {CRM_CUSTOMER_TABLE}
-        SET status = 'merged_away', merged_into_id = $2, merged_at = now()
-        WHERE id = $1 AND status = 'active'
+        SET status = 'merged_away', merged_into_id = $3, merged_at = now()
+        WHERE merchant_id = $1 AND id = $2 AND status = 'active'
     """
-    return query, [loser_id, survivor_id]
+    return query, [merchant_id, loser_id, survivor_id]
 
 
 def get_customer_query(merchant_id: str, customer_id: str) -> Tuple[str, List[Any]]:

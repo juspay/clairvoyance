@@ -5,7 +5,8 @@ One DB role and no schema grants, so the boundary is enforced HERE, at
 PR time — earlier than a grant would fail:
 
   1. TABLE OWNERSHIP — a quoted crm_*/platform_* table literal may appear
-     only in its owning module's db/ package (+ migrations, tests, scripts).
+     only in its owning module's db/ package (+ migrations, tests, scripts,
+     and the sealed registry, which declares tables as data, never queries).
   2. SQL CONFINEMENT — SQL statements inside app/crm live only in
      db/queries*.py files.
   3. DRIVER CONFINEMENT — within app/crm, `import asyncpg` is legal only
@@ -49,6 +50,12 @@ TABLE_OWNERS = {
     "platform_identity": "platform",
     "crm_event_raw": "record",
 }
+
+# The sealed schema may name every governed table outside any owner's db/.
+# It declares tables as DATA — zero SQL, zero asyncpg, zero handles — so the
+# naming IS the ownership record there, not an ownership violation. This is
+# the one path Rule 1 does not flag; anything else goes through contracts.
+SEALED_REGISTRY = "app/crm/shared/sealed.py"
 
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions
 # (the template.py DTO->engine scar predates the CRM; fixed with the
@@ -96,7 +103,7 @@ def check(root: Path = ROOT) -> list[str]:
         # 1. table ownership — quoted literals only in the owner's db/
         for table, owner in TABLE_OWNERS.items():
             if re.search(rf"[\"']{table}[\"']", text):
-                allowed = rp.startswith(f"app/crm/{owner}/db/")
+                allowed = rp.startswith(f"app/crm/{owner}/db/") or rp == SEALED_REGISTRY
                 if not allowed:
                     errors.append(
                         f"{rp}: table literal '{table}' outside its owner "

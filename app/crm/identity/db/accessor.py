@@ -76,16 +76,16 @@ async def insert_customer(
 
 
 async def apply_handles(
-    conn: asyncpg.Connection, customer_id: str, writes: Dict[str, str]
+    conn: asyncpg.Connection, merchant_id: str, customer_id: str, writes: Dict[str, str]
 ) -> None:
-    query, values = apply_handles_query(customer_id, writes)
+    query, values = apply_handles_query(merchant_id, customer_id, writes)
     await conn.execute(query, *values)
 
 
 async def merge_customer(
-    conn: asyncpg.Connection, loser_id: str, survivor_id: str
+    conn: asyncpg.Connection, merchant_id: str, loser_id: str, survivor_id: str
 ) -> None:
-    query, values = merge_customer_query(loser_id, survivor_id)
+    query, values = merge_customer_query(merchant_id, loser_id, survivor_id)
     await conn.execute(query, *values)
 
 

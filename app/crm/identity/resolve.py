@@ -154,12 +154,14 @@ async def _apply_resolution(
     if plan.create:
         return await accessor.insert_customer(txn, merchant_id, handles)
     for loser_id in plan.losers:
-        await accessor.merge_customer(txn, str(loser_id), str(plan.survivor_id))
+        await accessor.merge_customer(
+            txn, merchant_id, str(loser_id), str(plan.survivor_id)
+        )
         logger.info(
             f"resolve: stapled customer {loser_id} into {plan.survivor_id} "
             f"(handle co-occurrence, merchant {merchant_id})"
         )
-    await accessor.apply_handles(txn, str(plan.survivor_id), plan.writes)
+    await accessor.apply_handles(txn, merchant_id, str(plan.survivor_id), plan.writes)
     assert plan.survivor_id is not None  # non-create plans always carry one
     return plan.survivor_id
 

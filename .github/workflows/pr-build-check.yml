@@ -15,6 +15,34 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # Postgres for the A3 gates: canon conformance and the tenancy laws are
+    # defined against the real schema, so both introspect a database that has
+    # every migration applied. Throwaway container, empty of data.
+    services:
+      postgres:
+        # pgvector image, not stock postgres: migration 034 does
+        # CREATE EXTENSION vector, which the plain image cannot satisfy.
+        # pg_trgm (also 034) is contrib and ships with both.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: clairvoyance
+          POSTGRES_PASSWORD: clairvoyance
+          POSTGRES_DB: clairvoyance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: clairvoyance
+      POSTGRES_PASSWORD: clairvoyance
+      POSTGRES_DB: clairvoyance
+
     steps:
       # Step 1: Checkout code from the PR head
       - name: Checkout repository
@@ -112,7 +140,26 @@ jobs:
           uv run pytest tests/crm -q
         continue-on-error: false
 
-      # Step 13: Check commit count (must be exactly 1)
+      # Step 13: Apply every migration to the throwaway Postgres. Doubles as
+      # a check that the migration set applies cleanly from scratch.
+      - name: Apply migrations
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run python scripts/migrate.py up
+
+      # Step 14: Canon conformance — MISSING is pending, EXTRA/MISMATCHED fail
+      - name: Check canon conformance
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run python scripts/check_canon.py
+
+      # Step 15: Tenancy laws (canon 07-wiring) over the crm namespace
+      - name: Check tenancy
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run python scripts/check_tenancy.py
+
+      # Step 16: Check commit count (must be exactly 1)
       - name: Check commit count
         if: github.event_name == 'pull_request'
         run: |
