@@ -153,6 +153,10 @@ class DragonTTSConfig:
             into the cache key and applied per nested provider.
         aggregate_sentences: Whether to buffer LLM output to sentence
             boundaries before synthesizing (lower provider call count).
+        text_filters: Pipecat text filters applied before synthesis — the
+            DragonTTS path gets the same emoji stripping the direct providers
+            get (alert-catalog B3.1: raw emoji reaching nested Gemini trips
+            Vertex content-policy rejections mid-call).
     """
 
     url: str
@@ -161,6 +165,7 @@ class DragonTTSConfig:
     language: str = ""
     params: dict = field(default_factory=dict)
     aggregate_sentences: bool = True
+    text_filters: Optional[list] = None
 
 
 class DragonTTSService(TTSService):
@@ -190,6 +195,7 @@ class DragonTTSService(TTSService):
         language: str = "",
         params: Optional[dict] = None,
         aggregate_sentences: bool = True,
+        text_filters: Optional[list] = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -204,6 +210,7 @@ class DragonTTSService(TTSService):
             # The base class requires a settings store; language is handled
             # directly (DragonTTS takes a plain code), so leave it unset here.
             settings=TTSSettings(model=model_id, voice=voice_id, language=None),
+            text_filters=text_filters,
             **kwargs,
         )
         self._url = url.rstrip("/")
@@ -330,4 +337,5 @@ def build_dragontts_tts(config: DragonTTSConfig) -> DragonTTSService:
         language=config.language,
         params=config.params,
         aggregate_sentences=config.aggregate_sentences,
+        text_filters=config.text_filters,
     )

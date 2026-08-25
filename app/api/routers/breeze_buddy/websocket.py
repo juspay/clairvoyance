@@ -3,6 +3,10 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import handle_call_completion
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
+    is_caller_disconnected_error,
+    is_disconnected,
+)
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.schemas import CallProvider
@@ -33,7 +37,7 @@ async def telephony_websocket_handler_v2(
     connects here. Pod release is handled by status callbacks and call
     completion handlers (both call Smart Router's release endpoint).
     """
-    logger.info("Handling v2 websocket for %s", template)
+    logger.info(f"Handling v2 websocket for {template}")
 
     async with create_aiohttp_session() as session:
         try:
@@ -44,22 +48,29 @@ async def telephony_websocket_handler_v2(
         except WebSocketDisconnect:
             logger.warning("WebSocket v2 client disconnected.")
         except Exception as e:
-            error_type = type(e).__name__
-            error_message = str(e)
-            logger.error(
-                "An error occurred in the WebSocket v2 handler - Type: %s, Message: '%s', Args: %s",
-                error_type,
-                error_message,
-                e.args,
-                exc_info=True,
-            )
+            if is_caller_disconnected_error(e):
+                # Teardown race that escaped the IVR/audio paths (e.g. during
+                # pipeline setup or post-IVR): caller already gone — warn,
+                # don't error (same classification as send_message/IVR).
+                logger.warning(
+                    f"WebSocket v2 handler ended on teardown (caller disconnected): {e}"
+                )
+            else:
+                # .opt(exception=True), NOT exc_info: loguru ignores exc_info, and
+                # any kwarg re-.format()s the message — braces in the exception
+                # text would raise KeyError from inside this logging call (the
+                # 2026-07-28 SSE incident class). No args/kwargs → format() is
+                # never called → brace-bearing errors log safely WITH a traceback.
+                logger.opt(exception=True).error(
+                    f"An error occurred in the WebSocket v2 handler - Type: {type(e).__name__}, "
+                    f"Message: '{e}', Args: {e.args}"
+                )
             try:
-                if websocket.client_state.name != "DISCONNECTED":
+                if not is_disconnected(websocket):
                     await websocket.close(code=1011, reason="Internal Server Error")
             except Exception as close_error:
                 logger.warning(
-                    "Could not close websocket v2 (likely already closed): %s",
-                    close_error,
+                    f"Could not close websocket v2 (likely already closed): {close_error}"
                 )
         finally:
             logger.info("WebSocket v2 client connection closed.")
