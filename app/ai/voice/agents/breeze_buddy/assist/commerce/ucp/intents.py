@@ -342,6 +342,16 @@ class CheckoutPayload(_IntentPayload):
     url: Optional[str] = Field(None, max_length=2048)
 
 
+class TrackOrderPayload(_IntentPayload):
+    """Client-routed (checkout posture) — the OrderStatus card's
+    "Track your order" / "View order status" button; the widget opens
+    the tool-sourced tracking or order-status URL itself. The schema
+    exists so an (unexpected) server-side arrival still 422s with a
+    typed error instead of a KeyError."""
+
+    url: Optional[str] = Field(None, max_length=2048)
+
+
 async def _drive_view_product(
     agent: Any,
     prep: Any,
@@ -757,6 +767,10 @@ register_intents(
             internal=True,
         ),
         "checkout": IntentPolicy(IntentRoute.CLIENT, CheckoutPayload),
+        # WISMO: the OrderStatus card's tracking link — client-routed
+        # exactly like checkout (the URL is tool-sourced by construction;
+        # the widget opens it with the host page's cancellable intercept).
+        "track_order": IntentPolicy(IntentRoute.CLIENT, TrackOrderPayload),
     },
 )
 
@@ -768,6 +782,7 @@ __all__ = [
     "ViewProductPayload",
     "EnrichProductPayload",
     "CheckoutPayload",
+    "TrackOrderPayload",
     "CartToolConfig",
     "resolve_cart_config",
 ]

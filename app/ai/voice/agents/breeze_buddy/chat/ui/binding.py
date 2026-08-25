@@ -342,6 +342,19 @@ def resolve_show_op(
         return OpResult(error=f"show_component_disabled:{component}")
     schema = UI_CATALOG[component]
 
+    # Literal fields (model-authored, trust-gated — e.g. OrderStatus's
+    # transcribed ETA) must NEVER be bind targets: a bind pointer-walks
+    # the RAW tool payload, which would (a) skip the flavor's anchoring
+    # verifier entirely and (b) reach payload fields the projection
+    # deliberately never renders. This is the one choke point both the
+    # render_ui function path and the text-channel show path traverse, so
+    # the gate cannot be bypassed on either. Verified literal values
+    # arrive via props (execute_render_ui merges them post-verification).
+    declared_literals = tuple(getattr(schema, "literal_fields", ()) or ())
+    literal_binds = sorted(set(op.get("bind") or {}) & set(declared_literals))
+    if literal_binds:
+        return OpResult(error=f"literal_field_not_bindable:{','.join(literal_binds)}")
+
     bind = op.get("bind") or {}
     props = op.get("props") or {}
     hydrated: Dict[str, Any] = dict(props)

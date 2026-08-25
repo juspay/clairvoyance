@@ -70,6 +70,6 @@ def test_migration_matches_the_view_contract() -> None:
     # Tripwire (the 048 pattern, tests/crm/test_suppression.py): if the
     # view's exclusion filter or direction normalization drifts, this
     # fails and forces a look at both sides together.
-    sql = Path("app/database/migrations/052_create_crm_journey_view.sql").read_text()
+    sql = Path("app/database/migrations/055_create_crm_journey_view.sql").read_text()
     assert "WHERE customer_id IS NOT NULL" in sql
     assert "LOWER(call_direction)" in sql

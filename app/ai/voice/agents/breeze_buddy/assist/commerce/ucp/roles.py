@@ -30,6 +30,12 @@ ROLE_GET_PRODUCT = "get_product"
 ROLE_CREATE_CART = "create_cart"
 ROLE_UPDATE_CART = "update_cart"
 ROLE_GET_CART = "get_cart"
+# WISMO (order tracking): the order lookup and the courier-page read.
+# Both are template `flow.functions` HTTP tools, not UCP/MCP tools — the
+# roles exist so the annotator, step labels, read_only annotations and
+# the render_ui think-step follow whatever names a template gives them.
+ROLE_ORDER_STATUS = "order_status"
+ROLE_PAGE_READ = "page_read"
 
 DEFAULT_TOOLS: Dict[str, str] = {
     ROLE_SEARCH: "search_catalog",
@@ -37,6 +43,8 @@ DEFAULT_TOOLS: Dict[str, str] = {
     ROLE_CREATE_CART: "create_cart",
     ROLE_UPDATE_CART: "update_cart",
     ROLE_GET_CART: "get_cart",
+    ROLE_ORDER_STATUS: "get_order_status",
+    ROLE_PAGE_READ: "read_page_content",
 }
 
 
@@ -96,6 +104,8 @@ __all__ = [
     "ROLE_CREATE_CART",
     "ROLE_GET_CART",
     "ROLE_GET_PRODUCT",
+    "ROLE_ORDER_STATUS",
+    "ROLE_PAGE_READ",
     "ROLE_SEARCH",
     "ROLE_UPDATE_CART",
     "pick_checkout_url",

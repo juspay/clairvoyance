@@ -73,10 +73,17 @@ class RenderUiFlavorPack:
 
     tool_description: Optional[str] = None
     bind_description: Optional[str] = None
+    # Per-component sentences APPENDED to bind_description, each only when
+    # its component is actually offered this session (dict order = prose
+    # order). A disabled component must leave no trace in the schema — a
+    # template that opts out of OrderStatus must not have the model coached
+    # to bind it (dangling coaching live-reads as an instruction to try).
+    bind_component_coaching: Optional[Dict[str, str]] = None
     items_description: Optional[str] = None
     quick_replies_description: Optional[str] = None
     quick_replies_rider_description: Optional[str] = None
     link_description: Optional[str] = None
+    literal_fields_description: Optional[str] = None
     bind_example: Optional[str] = None
     link_untrusted_fallback_hint: Optional[str] = None
     # Tools whose success forces the render_ui think-step when the
@@ -87,6 +94,16 @@ class RenderUiFlavorPack:
         None
     )
     finalize_hydrated: Optional[Callable[..., None]] = None
+    # Literal-fields trust gate (components with ``literal_fields`` on
+    # their schema, e.g. OrderStatus's transcribed ETA): called as
+    # ``(component, schema_cls, literal_args, store=…, template=…,
+    # state_values=…) -> (accepted_props, dropped_reasons)``. Accepted
+    # values merge into the hydrated props; dropped names+reasons ride the
+    # function response. No hook registered → every literal field drops
+    # (fail closed: unverified model values must never render).
+    verify_literal_fields: Optional[
+        Callable[..., "tuple[Dict[str, Any], Dict[str, str]]"]
+    ] = None
     # Repeat-render policy: (component, prev_props, new_props) → None (no
     # merge — surfaces stack as authored) or (merged_props, llm_note); the
     # agent swaps the wire op for a `replace` on the first node and the
@@ -195,6 +212,14 @@ _LINK_DESC_GENERIC = (
 )
 _BIND_EXAMPLE_GENERIC = "[{'prop':'<prop>','ref':'$tool:<tool_name>#/<json_pointer>'}]"
 _LINK_FALLBACK_HINT_GENERIC = "pass one of the template's trusted URLs"
+_FIELDS_DESC_GENERIC = (
+    "Literal display fields for components that declare them: "
+    "[{'name':'<field>','value':'<short string>'} or "
+    "{'name':'<field>','values':['<string>', …]}]. Values must be "
+    "TRANSCRIBED near-verbatim from THIS turn's tool results — the "
+    "server verifies each one and silently drops anything it cannot "
+    "ground (the function response names the drops)."
+)
 
 
 def build_render_ui_schema(
@@ -236,6 +261,46 @@ def build_render_ui_schema(
         quick_desc = (
             pack.quick_replies_rider_description if pack else None
         ) or _QUICK_RIDER_DESC_GENERIC
+    # Bind coaching is composed per OFFERED component (post-filter enum):
+    # the base description plus each offered component's sentence, in the
+    # pack's stated order. A component absent from the enum
+    # (disabled_primitives, lazy group not enabled) contributes nothing —
+    # the model never reads coaching for UI it cannot render.
+    bind_desc = (pack.bind_description if pack else None) or _BIND_DESC_GENERIC
+    for comp_name, sentence in (
+        (pack.bind_component_coaching if pack else None) or {}
+    ).items():
+        if comp_name in components:
+            bind_desc += sentence
+    # `fields` is advertised only when an offered component actually
+    # declares literal fields — every other session keeps today's schema
+    # byte-identical (no arg for the model to misuse).
+    literal_field_names: List[str] = []
+    for comp_name in components:
+        comp_schema = UI_CATALOG.get(comp_name)
+        for fname in getattr(comp_schema, "literal_fields", ()) or ():
+            if fname not in literal_field_names:
+                literal_field_names.append(fname)
+    fields_property: Dict[str, Any] = {}
+    if literal_field_names:
+        fields_desc = (
+            pack.literal_fields_description if pack else None
+        ) or _FIELDS_DESC_GENERIC
+        fields_property = {
+            "fields": {
+                "type": "array",
+                "description": fields_desc,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "enum": literal_field_names},
+                        "value": {"type": "string"},
+                        "values": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["name"],
+                },
+            }
+        }
     return FlowsFunctionSchema(
         name=RENDER_UI_TOOL_NAME,
         # This description is LLM-facing (rides the tools schema on EVERY
@@ -246,6 +311,7 @@ def build_render_ui_schema(
         # RESPONSE when it actually happens.
         description=(pack.tool_description if pack else None) or _TOOL_DESC_GENERIC,
         properties={
+            **fields_property,
             "component": {
                 "type": "string",
                 "enum": components,
@@ -253,8 +319,7 @@ def build_render_ui_schema(
             },
             "bind": {
                 "type": "array",
-                "description": (pack.bind_description if pack else None)
-                or _BIND_DESC_GENERIC,
+                "description": bind_desc,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -631,6 +696,45 @@ def execute_render_ui(
                 },
                 component=component,
             )
+        # Literal fields (schema-declared, e.g. OrderStatus's transcribed
+        # ETA): collect from the `fields` array (the advertised form) or
+        # tolerated top-level args, run the flavor's trust gate, and merge
+        # ONLY the verified survivors into props. No registered verifier →
+        # everything drops (fail closed — an unverified model value must
+        # never render). Dropped names+reasons ride the function response
+        # so the model corrects in-turn instead of silently losing UI.
+        schema_cls = UI_CATALOG.get(component)
+        declared = tuple(getattr(schema_cls, "literal_fields", ()) or ())
+        dropped_fields: Dict[str, str] = {}
+        if declared:
+            literal_args: Dict[str, Any] = {}
+            fields_arg = args.get("fields")
+            if isinstance(fields_arg, list):
+                for entry in fields_arg:
+                    if not (isinstance(entry, dict) and entry.get("name") in declared):
+                        continue
+                    if isinstance(entry.get("values"), list):
+                        literal_args[entry["name"]] = entry["values"]
+                    elif entry.get("value") is not None:
+                        literal_args[entry["name"]] = entry["value"]
+            for name in declared:  # tolerate the natural top-level form
+                if name in args and name not in literal_args:
+                    literal_args[name] = args[name]
+            if literal_args:
+                pack = _resolve_pack(flavor_groups)
+                verify = pack.verify_literal_fields if pack else None
+                if verify is None:
+                    dropped_fields = {k: "no_verifier" for k in literal_args}
+                else:
+                    accepted, dropped_fields = verify(
+                        component,
+                        schema_cls,
+                        literal_args,
+                        store=store,
+                        template=template,
+                        state_values=state_values,
+                    )
+                    props.update(accepted)
         for prop, ref in bind.items():
             if parse_bind_ref(ref) is None:
                 return RenderUiOutcome(
@@ -684,8 +788,13 @@ def execute_render_ui(
                 template=template,
                 state_values=state_values,
             )
+        fn_result = summarize_render(component, result.op, flavor_groups)
+        if dropped_fields:
+            # The model's in-turn correction signal: which transcriptions
+            # failed the trust gate, and why. Names + short reasons only.
+            fn_result["dropped_fields"] = dropped_fields
         return RenderUiOutcome(
-            fn_result=summarize_render(component, result.op, flavor_groups),
+            fn_result=fn_result,
             ops=[result.op],
             decision="rendered",
             component=component,

@@ -14,10 +14,19 @@ CI-enforced by `scripts/check_migrations.py` and the immutability guard in
    file before merge — CI blocks the duplicate.
 2. **Never edit, rename, or delete a merged migration.** The SQL already
    ran; the tracker knows it by filename and checksum. Corrections are a
-   new migration with the next number. (The one historical exception: the
-   pre-CI duplicate numbers 026/034 were renumbered to 046/047 on
-   2026-08-22, reconciled by `RENAMED_MIGRATIONS` in `scripts/migrate.py`
-   so no environment re-runs them. Do not add to that list.)
+   new migration with the next number. `RENAMED_MIGRATIONS` in
+   `scripts/migrate.py` exists for exactly ONE situation: an
+   already-merged **duplicate number** that escaped CI (a content
+   correction is NEVER a rename). Entries so far: the pre-CI 026/034
+   pair, renumbered to 046/047 on 2026-08-22; and 052 (journey view →
+   055) on 2026-08-25, after two open PRs each passed HEAD-only CI with
+   the same number. That escape class is now closed —
+   `check_migrations.py --base` unions the PR's migrations with the
+   CURRENT target branch, and the immutability guard derives its rename
+   exemptions from `RENAMED_MIGRATIONS` (`--print-sanctioned`), so the
+   registry and CI cannot drift. Adding an entry requires all three in
+   one commit: the registry entry, this doc's list above, and the red
+   test in `tests/crm/test_check_migrations.py` pinning the new name.
 3. **048+ is the CPaaS era.** One table owner per migration — the task
    that owns a table ships its migration (vertical slices).
 4. Migrations run as `POSTGRES_USER` via

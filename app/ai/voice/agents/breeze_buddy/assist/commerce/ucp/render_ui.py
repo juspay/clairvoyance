@@ -24,12 +24,17 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.roles import (
+    ROLE_ORDER_STATUS,
     ROLE_SEARCH,
     pick_checkout_url,
     resolve_role_map,
 )
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.step_labels import (
     COMMERCE_GROUP,
+)
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.wismo import (
+    OrderStatus,
+    verify_wismo_literals,
 )
 from app.ai.voice.agents.breeze_buddy.chat.flavors import (
     register_flavor_roles,
@@ -58,13 +63,28 @@ _TOOL_DESC = (
     "them. decision='no_ui' renders nothing (empty results or a "
     "purely conversational reply)."
 )
-_BIND_DESC = (
-    "Data bindings into THIS turn's tool results, e.g. "
-    "[{'prop':'products','ref':'$tool:search_catalog#/products'}]. "
-    "CartView binds cart_id/line_items/totals/cart_token off "
-    "the cart tool result the same way; its checkout button "
-    "is automatic — never author it."
-)
+_BIND_DESC = "Data bindings into THIS turn's tool results."
+# Per-component sentences the engine appends ONLY when that component is
+# offered this session (dict order = prose order). A template that opts
+# out of a component via disabled_primitives must not have the model
+# coached to bind it — dead coaching reads as an instruction to try.
+_BIND_COACHING = {
+    "ProductGrid": (
+        " ProductGrid binds the search result's products, e.g. "
+        "[{'prop':'products','ref':'$tool:search_catalog#/products'}]."
+    ),
+    "CartView": (
+        " CartView binds cart_id/line_items/totals/cart_token off "
+        "the cart tool result the same way; its checkout button "
+        "is automatic — never author it."
+    ),
+    "OrderStatus": (
+        " OrderStatus binds "
+        "[{'prop':'order','ref':'$tool:get_order_status#/orders/0'}]; its "
+        "headline, status and tracking button are automatic — transcriptions "
+        "go in `fields`, never in bind."
+    ),
+}
 _ITEMS_DESC = (
     "ProductGrid selection: which bound products to show, in "
     "this order (ids from THIS turn's results). Use when the "
@@ -97,6 +117,17 @@ _LINK_DESC = (
 )
 _BIND_EXAMPLE = "[{'prop':'products','ref':'$tool:search_catalog#/products'}]"
 _LINK_FALLBACK_HINT = "pass the store's configured checkout URL"
+_FIELDS_DESC = (
+    "OrderStatus transcription fields (only after read_page_content ran "
+    "this turn): [{'name':'eta_display','value':'Friday, 10 July'}, "
+    "{'name':'latest_update','value':'25 Aug, 12:32 PM — Out for pickup'}, "
+    "{'name':'updates','values':['<row>', …]}] (≤5 rows, newest first). "
+    "Transcribe NEAR-VERBATIM from the tracking page — dates and times "
+    "exactly as the page states them, never from memory. eta_display "
+    "only when the page itself STATES an estimated/expected delivery "
+    "date — a checkpoint timestamp is not an ETA. Omit fields the page "
+    "doesn't state; friendly paraphrase belongs in your prose, not here."
+)
 
 _DEFAULT_CHECKOUT_LABEL = "Review and checkout"
 
@@ -135,17 +166,32 @@ def _feature_variant_entry(entry: Dict[str, Any], variant_id: str) -> Dict[str, 
     return out
 
 
-def _merge_repeat_grid(
+def _merge_repeat_commerce(
     component: str,
     prev_props: Dict[str, Any],
     new_props: Dict[str, Any],
 ) -> Optional[tuple]:
-    """Repeat-render policy: a SECOND ProductGrid this turn merges
-    value-level into the first (works across different searches —
-    hydrated values need no bind re-resolution), dedupes on product id,
-    caps at 12, restamps layout from the combined count. One combined
-    product display per turn, never stacked surfaces. Other components
-    return ``None`` — no merge."""
+    """Repeat-render policy — one surface per component per turn:
+
+    - ProductGrid: value-level merge (dedupe on id, cap 12, restamp
+      layout) — works across different searches.
+    - OrderStatus: the LIVE pattern is render-early-then-enrich (the
+      forced think-step after ``get_order_status`` paints the card
+      before ``read_page_content`` has run; the model re-renders with
+      transcribed fields after). The second render REPLACES the first:
+      new props win, previously verified enrichment survives when the
+      new call omits it, and presentation re-derives through the schema
+      so an ETA landing late still lifts the headline.
+
+    Other components return ``None`` — no merge, surfaces stack."""
+    if component == "OrderStatus":
+        merged = {**prev_props, **new_props}
+        revalidated = OrderStatus.model_validate(
+            {k: v for k, v in merged.items() if k in OrderStatus.model_fields}
+        )
+        return revalidated.model_dump(exclude_none=True), (
+            "updated this turn's existing order card in place — one card per turn"
+        )
     if component != "ProductGrid":
         return None
     prev_products = [
@@ -177,6 +223,21 @@ def _summarize_commerce(
     (QuickReplies, LinkButton) — the engine's generic summary handles
     them."""
     result: Dict[str, Any] = {"status": "ok", "rendered": component}
+    order = props.get("order")
+    if component == "OrderStatus" and isinstance(order, dict):
+        # WISMO memory: enough for referents ("that order") and for the
+        # model to know which transcriptions actually rendered.
+        result["order"] = order.get("order_name")
+        if props.get("status_key"):
+            result["state"] = props["status_key"]
+        rendered_fields = [
+            name
+            for name in ("eta_display", "latest_update", "updates")
+            if props.get(name)
+        ]
+        if rendered_fields:
+            result["fields"] = rendered_fields
+        return result
     products = props.get("products")
     if isinstance(products, list):
         result["count"] = len(products)
@@ -281,19 +342,26 @@ def _finalize_commerce(
 COMMERCE_RENDER_UI_PACK = RenderUiFlavorPack(
     tool_description=_TOOL_DESC,
     bind_description=_BIND_DESC,
+    bind_component_coaching=_BIND_COACHING,
     items_description=_ITEMS_DESC,
     quick_replies_description=_QUICK_DESC,
     quick_replies_rider_description=_QUICK_RIDER_DESC,
     link_description=_LINK_DESC,
+    literal_fields_description=_FIELDS_DESC,
     bind_example=_BIND_EXAMPLE,
     link_untrusted_fallback_hint=_LINK_FALLBACK_HINT,
-    # A ROLE, not a tool name: the engine binds it through the template
+    # ROLES, not tool names: the engine binds them through the template
     # (see roles.py), so the think-step still fires for a merchant whose
-    # gateway calls the search tool something else.
-    default_force_after=[role_key(ROLE_SEARCH)],
+    # gateway calls the search / order-lookup tool something else. The
+    # order-status entry makes the WISMO card (or an explicit no_ui) as
+    # deterministic as the post-search grid.
+    default_force_after=[role_key(ROLE_SEARCH), role_key(ROLE_ORDER_STATUS)],
     summarize=_summarize_commerce,
     finalize_hydrated=_finalize_commerce,
-    merge_repeat_render=_merge_repeat_grid,
+    merge_repeat_render=_merge_repeat_commerce,
+    # WISMO literal transcriptions anchor against this turn's fetched
+    # courier page (wismo.py) — the trust gate behind the `fields` arg.
+    verify_literal_fields=verify_wismo_literals,
 )
 
 

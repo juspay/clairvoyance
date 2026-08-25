@@ -43,6 +43,9 @@ from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.tool_meta import (
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.ui_prompt import (
     register_commerce_render_ui_prompt,
 )
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.wismo import (
+    register_commerce_wismo,
+)
 
 # Private-name import is deliberate (same posture as ui_binding's
 # session_state imports): _CatalogBase is the catalog's schema contract
@@ -539,6 +542,12 @@ register_commerce_render_ui_prompt()
 # prop-shape summarizer, and post-hydration projection policy (layout,
 # CartView checkout stamping) — see assist/commerce/render_ui.py.
 register_commerce_render_ui_pack()
+
+# WISMO (order tracking): the OrderStatus component, the courier-blind
+# page-text wrapper annotator, step labels + read_only annotations for
+# the order_status / page_read roles — see assist/commerce/ucp/wismo.py.
+# (Its anchoring verifier is wired through the render_ui pack above.)
+register_commerce_wismo()
 
 # On adding a SECOND flavor: these register_* calls are the whole
 # registration surface, and every one now takes the flavor's group as its
