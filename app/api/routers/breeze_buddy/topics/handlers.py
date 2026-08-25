@@ -72,7 +72,7 @@ async def update_topic_configuration_handler(
     template_id: str,
     request: UpdateTopicConfigurationRequest,
 ) -> TopicConfigurationResponse:
-    patch = request.model_dump(exclude_unset=True)
+    patch = request.model_dump(exclude_unset=True, mode="json")
     if not patch:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -90,6 +90,9 @@ async def update_topic_configuration_handler(
         existing = resolve_topic_evaluation_configuration(current.get("configuration"))
         if "settings" in patch:
             patch["settings"] = {**existing["settings"], **patch["settings"]}
+        if "provider" in patch and patch["provider"] != existing["provider"]:
+            patch.setdefault("sdk", None)
+            patch.setdefault("region", None)
         resolved = resolve_topic_evaluation_configuration({**existing, **patch})
     except (TypeError, ValueError) as exc:
         raise HTTPException(

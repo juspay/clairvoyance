@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.ai.voice.llm import LLMProvider, LLMSdk
+
 
 class ConversationChannel(str, Enum):
     VOICE = "VOICE"
@@ -44,11 +46,22 @@ class TopicCatalogResponse(BaseModel):
 
 
 class UpdateTopicConfigurationRequest(BaseModel):
+    provider: Optional[LLMProvider] = None
+    sdk: Optional[LLMSdk] = None
     model: Optional[str] = Field(None, max_length=200)
+    region: Optional[str] = Field(None, max_length=100)
     system_prompt: Optional[str] = Field(None, max_length=50000)
     settings: Optional[Dict[str, Any]] = None
 
-    @field_validator("model", "system_prompt", "settings", mode="before")
+    @field_validator(
+        "provider",
+        "sdk",
+        "model",
+        "region",
+        "system_prompt",
+        "settings",
+        mode="before",
+    )
     @classmethod
     def reject_null(cls, value: Any) -> Any:
         if value is None:
@@ -60,7 +73,10 @@ class UpdateTopicConfigurationRequest(BaseModel):
 
 class TopicConfigurationResponse(BaseModel):
     template_id: UUID
+    provider: LLMProvider
+    sdk: Optional[LLMSdk] = None
     model: str
+    region: Optional[str] = None
     system_prompt: str
     settings: Dict[str, Any]
 
