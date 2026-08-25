@@ -55,6 +55,10 @@ RENAMED_MIGRATIONS = {
         "046_link_call_execution_config_to_template.sql"
     ),
     "034_knowledge_base.sql": "047_knowledge_base.sql",
+    # 052 duplicate (two 2026-08 merges collided; renumbered 2026-08-25).
+    # The journey view merged second, so it takes the new number; the
+    # drop-check migration keeps 052.
+    "052_create_crm_journey_view.sql": "055_create_crm_journey_view.sql",
 }
 
 

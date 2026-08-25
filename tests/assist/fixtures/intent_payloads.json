@@ -85,5 +85,13 @@
     {
       "url": "https://beyond-bound.example/cart/c/hWN2h0jP3rDIzW0Yc8jQe9Jw?key=abc123"
     }
+  ],
+  "track_order": [
+    {
+      "url": "https://shiprocket.co/tracking/SF1876236403KAD"
+    },
+    {
+      "url": "https://amirandsons.example/orders/tok/authenticate?key=k"
+    }
   ]
 }

@@ -34,7 +34,7 @@ from app.ai.voice.agents.breeze_buddy.template.ui_prompt import (
 # be idempotent).
 ensure_group_loaded("commerce")
 
-COMMERCE = {"ProductCard", "ProductGrid", "CartView", "ProductDetail"}
+COMMERCE = {"ProductCard", "ProductGrid", "CartView", "ProductDetail", "OrderStatus"}
 # The subset the LLM is prompted with — ProductDetail is server_only and
 # ProductCard was retired to server_only 2026-07-30 (a ProductGrid of one
 # IS a card now that layout is count-derived): registered + allowlisted,

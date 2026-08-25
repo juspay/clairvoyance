@@ -58,6 +58,7 @@ from typing import (
     Literal,
     Optional,
     Set,
+    Tuple,
     Type,
     Union,
 )
@@ -201,6 +202,14 @@ class _CatalogBase(BaseModel):
     # component has no selection directive (a same-named CONTENT field, like
     # QuickReplies.items, is untouched).
     selection_field: ClassVar[Optional[str]] = None
+
+    # Model-authored LITERAL fields on a data-bound component (e.g.
+    # OrderStatus's transcribed ETA). Accepted ONLY via the render_ui
+    # function path, and ONLY after the flavor pack's
+    # ``verify_literal_fields`` trust gate passed them (anchoring against
+    # this turn's tool payloads). A text-channel ``show`` op naming one
+    # drops at parse — the gate must not be bypassable in-band.
+    literal_fields: ClassVar[Tuple[str, ...]] = ()
 
 
 # ---------------------------------------------------------------------------

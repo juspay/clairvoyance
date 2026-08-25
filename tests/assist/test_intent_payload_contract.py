@@ -41,6 +41,7 @@ PAYLOAD_MODELS = {
     "view_product": ci.ViewProductPayload,
     "enrich_product": ci.EnrichProductPayload,
     "checkout": ci.CheckoutPayload,
+    "track_order": ci.TrackOrderPayload,
 }
 
 
@@ -153,7 +154,7 @@ def test_required_field_validation_stays_strict():
 # copy fails that repo's CI until the constant is bumped — and bumping it
 # is the reviewer's cue to update the other repo in the same change.
 INTENT_FIXTURE_SHA256 = (
-    "98be2907cebd786f9a5b85d62e6628f9d030e04479fe5f9375d9b9f85fd061ac"
+    "0d853c407d8c2ac775cc48db54d66ea4ec350e3cc8a9df5fcac576253bdbc998"
 )
 
 

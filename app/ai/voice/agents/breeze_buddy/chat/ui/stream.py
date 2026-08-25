@@ -660,6 +660,19 @@ def _parse_show_op(
     if collisions:
         return OpResult(error=f"bind_props_collision:{','.join(collisions)}")
 
+    # Literal fields (model-authored, trust-gated) are a render_ui-only
+    # surface: their anchoring verification lives in the function-call
+    # path, so a hand-typed text-channel `show` op naming one would be an
+    # unverified-value injection. Same posture as LinkButton's
+    # ``render_ui_only`` parse rejection.
+    schema = UI_CATALOG.get(component)
+    declared = tuple(getattr(schema, "literal_fields", ()) or ())
+    literal_props = sorted(set(props) & set(declared))
+    if literal_props:
+        return OpResult(
+            error=f"literal_field_requires_render_ui:{','.join(literal_props)}"
+        )
+
     return OpResult(op=op)
 
 

@@ -69,11 +69,22 @@ jobs:
           uv run pyrefly check
         continue-on-error: false
 
-      # Step 9: Migration hygiene — duplicate numbers, gaps, naming
+      # Step 9: Migration hygiene — duplicate numbers, gaps, naming.
+      # On PRs the check unions with the CURRENT base branch, so two open
+      # PRs claiming the same number collide at CI time instead of after
+      # both merge (the 052 escape, 2026-08: this job checks out the PR
+      # HEAD, so each PR saw only its own migration). The residual
+      # stale-approval race is closed only by requiring branches to be
+      # up to date before merging.
       - name: Check migration numbering
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          uv run python scripts/check_migrations.py
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch origin "${{ github.base_ref }}"
+            uv run python scripts/check_migrations.py --base "origin/${{ github.base_ref }}"
+          else
+            uv run python scripts/check_migrations.py
+          fi
         continue-on-error: false
 
       # Step 10: Applied migrations are immutable — PRs may only ADD files
@@ -81,12 +92,18 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch origin ${{ github.base_ref }}
-          # The 2026-08-22 renumbering of the pre-CI 026/034 duplicates is
-          # the ONE sanctioned rename (reconciled by RENAMED_MIGRATIONS in
-          # scripts/migrate.py); filter those four names out of the diff.
+          # Sanctioned renames (already-merged duplicate numbers reconciled
+          # by RENAMED_MIGRATIONS in scripts/migrate.py) are exempt. The
+          # exemption list is DERIVED from that registry — it was a second
+          # hardcoded copy here, and the 052→055 rename updated one and not
+          # the other, so this guard failed the very PR that fixed the
+          # duplicate. One registry, both guards.
+          export PATH="$HOME/.cargo/bin:$PATH"
+          SANCTIONED=$(uv run python scripts/check_migrations.py --print-sanctioned \
+            | sed 's|^|app/database/migrations/|')
           CHANGED=$(git diff --diff-filter=MDR --name-only \
             "origin/${{ github.base_ref }}...HEAD" -- app/database/migrations/ \
-            | grep -vE '/(026_link_call_execution_config_to_template|046_link_call_execution_config_to_template|034_knowledge_base|047_knowledge_base)\.sql$' || true)
+            | grep -vxF -f <(echo "$SANCTIONED") || true)
           if [ -n "$CHANGED" ]; then
             echo "Migration files are immutable once merged. Modified/deleted/renamed:"
             echo "$CHANGED"

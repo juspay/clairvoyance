@@ -290,6 +290,8 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
             template_id="tpl-1",
             metadata={},
             current_node=None,
+            # None = unmetered — billing gate/deduction no-op in-harness.
+            merchant_id=None,
         )
 
     async def _get_template(_tid):

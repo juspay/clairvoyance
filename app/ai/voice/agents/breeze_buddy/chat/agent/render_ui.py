@@ -57,8 +57,28 @@ class RenderUiHandlerMixin:
         # 2-cycle bound) — a UI-heavy turn must not lose its chips to calls
         # it already spent mid-turn.
         chips_cycle = self._in_chips_cycle
-        self._rui_calls_this_turn = getattr(self, "_rui_calls_this_turn", 0) + 1
-        if self._rui_calls_this_turn > 3 and not chips_cycle:
+        # Pure no_ui acknowledgments get their own (generous) bound: the
+        # forced think-step DEMANDS a render_ui call after each armed tool
+        # result, and a multi-tool turn legitimately answers no_ui several
+        # times before its one real render (live WISMO chain 2026-08-26:
+        # order lookup -> no_ui -> page read -> no_ui -> card; the shared
+        # cap counted those forced acknowledgments and then refused the
+        # card itself). Render ATTEMPTS keep the strict duplicate-spam cap.
+        if (args or {}).get("decision") == "no_ui" and not chips_cycle:
+            self._rui_noui_this_turn = getattr(self, "_rui_noui_this_turn", 0) + 1
+            if self._rui_noui_this_turn > 8:
+                self._need_render_ui_think = False
+                return {
+                    "status": "error",
+                    "error": (
+                        "render_ui already resolved this turn — do NOT call "
+                        "it again; reply to the user in one short line of "
+                        "prose now."
+                    ),
+                }
+        else:
+            self._rui_calls_this_turn = getattr(self, "_rui_calls_this_turn", 0) + 1
+        if getattr(self, "_rui_calls_this_turn", 0) > 3 and not chips_cycle:
             # The flag MUST drop here: it forces allowed=[render_ui] on the
             # next cycle, and the flag only clears on a SUCCESSFUL render_ui
             # — this error result isn't one. Without this line a model that
