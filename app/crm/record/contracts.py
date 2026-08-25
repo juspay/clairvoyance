@@ -6,5 +6,6 @@ continues.
 """
 
 from app.crm.record.ingest import record_event
+from app.crm.record.timeline import get_customer_journey
 
-__all__ = ["record_event"]
+__all__ = ["record_event", "get_customer_journey"]

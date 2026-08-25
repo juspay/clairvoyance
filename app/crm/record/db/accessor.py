@@ -6,9 +6,11 @@ fail postures and serialization decisions live in the logic file
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
-from app.crm.record.db.queries import insert_event_query
+from app.crm.record.db.decoder import decode_journey_card
+from app.crm.record.db.queries import get_customer_journey_query, insert_event_query
+from app.crm.record.schemas import JourneyCard
 from app.crm.shared.db import crm_connection
 
 
@@ -36,3 +38,18 @@ async def insert_event(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return str(row["id"]) if row else None
+
+
+async def get_customer_journey(
+    merchant_id: str,
+    customer_id: str,
+    limit: int = 50,
+    before_started_at: Optional[datetime] = None,
+    before_id: Optional[str] = None,
+) -> List[JourneyCard]:
+    query, values = get_customer_journey_query(
+        merchant_id, customer_id, limit, before_started_at, before_id
+    )
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_journey_card(row) for row in rows]
