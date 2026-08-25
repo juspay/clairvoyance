@@ -1,9 +1,11 @@
-"""SQL builders for crm_event_raw (T13). $1 placeholders only."""
+"""SQL builders for crm_event_raw (T13) and crm_journey_event (V01, A12).
+$1 placeholders only."""
 
 from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
 EVENT_RAW_TABLE = "crm_event_raw"
+JOURNEY_EVENT_VIEW = "crm_journey_event"
 
 
 def insert_event_query(
@@ -38,3 +40,32 @@ def insert_event_query(
         occurred_at,
         customer_id,
     ]
+
+
+def get_customer_journey_query(
+    merchant_id: str,
+    customer_id: str,
+    limit: int,
+    before_started_at: Optional[datetime] = None,
+    before_id: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """Keyset cursor (started_at, id) — canon's prescribed pagination for
+    V01 (crm.journey_event). An OFFSET page shifts under an append-heavy
+    timeline; a row-value comparison on the cursor doesn't."""
+    values: List[Any] = [merchant_id, customer_id]
+    cursor = ""
+    if before_started_at is not None and before_id:
+        values.extend([before_started_at, before_id])
+        cursor = "AND (started_at, id) < ($3, $4)"
+    values.append(limit)
+    query = f"""
+        SELECT id, merchant_id, customer_id, channel, direction, handled_by,
+               started_at, ended_at, outcome, recording_ref, transcript_ref,
+               source_kind
+        FROM {JOURNEY_EVENT_VIEW}
+        WHERE merchant_id = $1 AND customer_id = $2
+        {cursor}
+        ORDER BY started_at DESC, id DESC
+        LIMIT ${len(values)}
+    """
+    return query, values
