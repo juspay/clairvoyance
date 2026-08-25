@@ -678,3 +678,6 @@ HTTP_REQUEST_BLOCKED_CONTENT_TYPES = [
 
 # Maximum number of redirects to follow (0 to disable redirects)
 HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3"))
+
+JUSPAY_BASE_URL = os.environ.get("JUSPAY_BASE_URL", "https://sandbox.juspay.in")
+JUSPAY_TXNS_TIMEOUT_SECONDS = int(os.environ.get("JUSPAY_TXNS_TIMEOUT_SECONDS", "30"))
