@@ -137,6 +137,17 @@ async def get_tts_service(voice_config: TTSConfig):
     """Build a TTS service from a resolved TTSConfig."""
     provider = voice_config.provider.value
 
+    # Emoji stripping applies to EVERY provider/flow, DragonTTS included.
+    # pipecat runs these filters only on the string sent to the TTS provider
+    # (incl. TTSSpeakFrame used by the widget stream mode + fillers); the
+    # transcript frame keeps its emoji. Parity matters here: without the
+    # filter, raw emoji reaches DragonTTS's NESTED provider (e.g. Gemini),
+    # and Vertex content-policy rejections of the bot's speech are the
+    # alert catalog's #1 live TTS failure (B3.1, 93/3d).
+    text_filters: list = []
+    if await BB_STRIP_EMOJIS_FROM_TTS():
+        text_filters.append(EmojiTextFilter())
+
     # Route through the DragonTTS caching proxy when the template selects it
     # directly (legacy provider="dragontts") OR opts in via enable_tts_caching
     # AND DragonTTS is currently healthy. When DragonTTS is down the health flag
@@ -183,6 +194,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 language=voice_config.language or "",
                 params=_collect_params(voice_config),
                 aggregate_sentences=aggregate,
+                text_filters=text_filters,
             )
         )
 
@@ -191,13 +203,6 @@ async def get_tts_service(voice_config: TTSConfig):
         f"model={voice_config.model}, speed={voice_config.speed}, language={voice_config.language}, "
         f"enable_ssml_parsing={voice_config.enable_ssml_parsing}, stability={voice_config.stability}, similarity_boost={voice_config.similarity_boost}"
     )
-
-    # Emoji stripping applies to EVERY provider/flow. pipecat runs these filters
-    # only on the string sent to the TTS provider (incl. TTSSpeakFrame used by
-    # the widget stream mode + fillers); the transcript frame keeps its emoji.
-    text_filters: list = []
-    if await BB_STRIP_EMOJIS_FROM_TTS():
-        text_filters.append(EmojiTextFilter())
 
     if provider == "elevenlabs":
         use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()

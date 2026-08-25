@@ -45,9 +45,9 @@ CREATE TABLE IF NOT EXISTS {TRACKING_TABLE} (
 """
 
 # Applied migrations that were later renamed on disk (pre-CI duplicate
-# numbers, renumbered 2026-08-22). The tracking table records applied
-# migrations by filename, so every command reconciles these rows to the
-# new names BEFORE computing pending — otherwise a renamed-but-applied
+# numbers, renumbered 2026-08-22 and 2026-08-25). The tracking table records
+# applied migrations by filename, so every command reconciles these rows to
+# the new names BEFORE computing pending — otherwise a renamed-but-applied
 # file would look pending and its SQL would re-run. File contents are
 # unchanged, so the stored checksums still match.
 RENAMED_MIGRATIONS = {

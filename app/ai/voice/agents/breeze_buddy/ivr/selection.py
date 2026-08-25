@@ -34,6 +34,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio, resolve_voice_config
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
+    is_caller_disconnected_error,
     send_message,
 )
 from app.core.logger import logger
@@ -375,7 +376,12 @@ async def _run_ivr_menu(
         logger.error(f"[IVR] Failed to parse IVR config from Redis: {e}")
         return None
     except Exception as e:
-        logger.error(f"[IVR] Failed to setup IVR: {e}")
+        if is_caller_disconnected_error(e):
+            # Caller hung up mid-menu and a cancelled receive already consumed
+            # the disconnect — expected teardown race, not an IVR failure.
+            logger.warning(f"[IVR] Caller disconnected during IVR menu: {e}")
+        else:
+            logger.error(f"[IVR] Failed to setup IVR: {e}")
         return None
 
 
