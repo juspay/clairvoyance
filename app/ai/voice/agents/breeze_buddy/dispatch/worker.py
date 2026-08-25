@@ -23,7 +23,7 @@ import asyncio
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import aiohttp
 
@@ -65,11 +65,10 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     record_outbound_call_attempt,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.utils.common import _gemini_realtime_config
 from app.ai.voice.agents.breeze_buddy.utils.playground import (
     apply_playground_overrides,
-)
-from app.ai.voice.llm.realtime.gemini.opening_line import (
-    DEFAULT_GENERATION_TIMEOUT_SECONDS,
 )
 from app.core.concurrency import spawn_background_task
 from app.core.config import dynamic as dyn_cfg
@@ -94,6 +93,88 @@ from app.database.accessor import (
 )
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.services.redis import get_redis_service
+
+# ---------------------------------------------------------------------------
+# Greeting pre-warm
+# ---------------------------------------------------------------------------
+
+# One retry on ANY failure — timeouts included. A first attempt that runs
+# out of time is usually cold-start (Live session connect + model warm-up),
+# so the retry frequently lands. Per-attempt caps: 15s for TTS greetings,
+# 30s for the Gemini Live opening line (measured: a 41-word greeting
+# generates in ~15s over Live — the TTS cap would fail most non-trivial
+# Live greetings). Worst-case channel-token hold is timeout + 0.5s pause
+# + timeout (~30.5s TTS / ~60.5s Live), only reached when generation is
+# fully degraded — which is when dials should pace down anyway.
+_GREETING_PREWARM_ATTEMPTS = 2
+_GREETING_PREWARM_RETRY_PAUSE_S = 0.5
+_GREETING_PREWARM_TIMEOUT_S = 15.0
+_GREETING_PREWARM_LIVE_TIMEOUT_S = 30.0
+
+
+async def _prewarm_initial_greeting_with_retry(
+    lead_id: str,
+    payload: Dict[str, Any],
+    template: TemplateModel,
+) -> None:
+    """
+    Pre-dial greeting preparation, AWAITED so audio is in Redis before the
+    phone rings: TTS synthesis for non-realtime templates and — via
+    generate_realtime_opening_line — the Gemini Live opening line
+    (per-TEMPLATE, normally generated at template-save time, so a cheap
+    Redis GET on the happy path).
+
+    Runs after every dispatch gate (rate-limit record, channel token, DB
+    number), immediately before the dial — TTS/generation spend is
+    proportional to actual dials. Each attempt is capped at
+    _GREETING_PREWARM_TIMEOUT_S (TTS) or _GREETING_PREWARM_LIVE_TIMEOUT_S
+    (Gemini Live opening line); the single retry fires on ANY failure —
+    timeout included — so the worst-case channel-token hold is
+    timeout + pause + timeout. Every failure path is fail-open: we dial
+    anyway and the answer-time path in agent setup retries synthesis as a
+    cache miss (worst case the caller hears the dial-tone fallback / LLM
+    speaks first).
+    """
+    greeting_expected = bool(
+        template.configurations and template.configurations.initial_greeting
+    )
+    timeout_s = (
+        _GREETING_PREWARM_LIVE_TIMEOUT_S
+        if _gemini_realtime_config(template) is not None
+        else _GREETING_PREWARM_TIMEOUT_S
+    )
+    for attempt in range(1, _GREETING_PREWARM_ATTEMPTS + 1):
+        try:
+            result = await asyncio.wait_for(
+                prepare_and_store_initial_greeting(
+                    lead_id=lead_id,
+                    payload=payload,
+                    template=template,
+                    generate_realtime_opening_line=True,
+                ),
+                timeout=timeout_s,
+            )
+            if result is not None or not greeting_expected:
+                return  # cached (or nothing configured) — done
+            logger.warning(
+                f"Greeting prewarm attempt {attempt}/{_GREETING_PREWARM_ATTEMPTS} "
+                f"fail-opened with no cached audio for lead {lead_id}; "
+                "answer-time path will retry"
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Greeting prewarm attempt {attempt}/{_GREETING_PREWARM_ATTEMPTS} "
+                f"timed out for lead {lead_id}; retrying — first attempts "
+                "often time out on cold-start"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.opt(exception=e).warning(
+                f"Greeting prewarm attempt {attempt}/{_GREETING_PREWARM_ATTEMPTS} "
+                f"failed for lead {lead_id}; answer-time path will retry"
+            )
+        if attempt < _GREETING_PREWARM_ATTEMPTS:
+            await asyncio.sleep(_GREETING_PREWARM_RETRY_PAUSE_S)
+
 
 # ---------------------------------------------------------------------------
 # Single dispatch worker
@@ -366,43 +447,6 @@ class Worker:
 
             if template:
                 template = apply_playground_overrides(locked, template)
-                # Pre-dial greeting preparation, AWAITED so audio is in
-                # Redis before the phone even rings: TTS synthesis for
-                # non-realtime templates, and — via
-                # generate_realtime_opening_line — the Gemini Live opening
-                # line. The Gemini greeting is per-TEMPLATE (static only),
-                # normally generated at template-save time, so that branch
-                # is a single Redis GET (~ms) on the happy path and only
-                # regenerates on a cache miss (TTL expiry / failed save-time
-                # generation). Throughput note (by design): a miss suspends
-                # THIS worker until the audio is ready (or the budget below
-                # expires), so the worker picks no further lead meanwhile
-                # and the lead lock stays held; the OTHER dispatch workers,
-                # the event loop, and every handler keep running. The
-                # generator bounds itself at
-                # DEFAULT_GENERATION_TIMEOUT_SECONDS; the outer wait_for is
-                # a backstop that also covers a hung non-generator step
-                # (e.g. a stuck Redis call). On timeout or failure we dial
-                # anyway (fail-open to LLM-speaks-first). No-ops (gate
-                # checks inside) for every greeting-less or variable-greeting
-                # template. Placed before number/channel acquisition so no
-                # channel capacity is held while generating.
-                try:
-                    await asyncio.wait_for(
-                        prepare_and_store_initial_greeting(
-                            lead_id=locked.id,
-                            payload=locked.payload or {},
-                            template=template,
-                            generate_realtime_opening_line=True,
-                        ),
-                        timeout=DEFAULT_GENERATION_TIMEOUT_SECONDS + 5.0,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        f"Worker {self._uuid}: greeting prep for lead "
-                        f"{locked.id} exceeded the dispatch budget; dialing "
-                        "without a cached greeting (LLM will speak first)"
-                    )
 
             # Rate-limit PEEK before channel token. Read-only — we don't
             # record the attempt here, because we may still bail downstream
@@ -523,6 +567,36 @@ class Worker:
                     await _release_number(number.id, number.provider)
                     lock_released = await self._defer_and_release(locked.id, rl_defer)
                     return
+
+            # Greeting pre-warm as late as possible — after every gate,
+            # immediately before the dial — so TTS/generation spend is
+            # proportional to actual dials, not dispatch attempts. The
+            # channel token acquired above is held during the bounded
+            # wait (by design: dials pacing to generation capacity under
+            # degradation). Bounded and fail-open — a slow or hung
+            # generator never blocks the dial; the answer-time path
+            # retries synthesis as a cache miss.
+            if template:
+                try:
+                    await _prewarm_initial_greeting_with_retry(
+                        lead_id=locked.id,
+                        payload=locked.payload or {},
+                        template=template,
+                    )
+                except asyncio.CancelledError:
+                    # Cancellation (worker shutdown) mid-prewarm: none of
+                    # the explicit release paths below ran, and the outer
+                    # finally only releases the lead lock. Return the
+                    # channel token + DB number, then re-raise so the
+                    # cancellation propagates.
+                    logger.warning(
+                        f"Worker {self._uuid}: cancelled during greeting "
+                        f"prewarm for lead {locked.id}; releasing channel "
+                        "token + number"
+                    )
+                    await release_channel_token(number.id, token)
+                    await _release_number(number.id, number.provider)
+                    raise
 
             try:
                 call = await call_provider.make_call_async(

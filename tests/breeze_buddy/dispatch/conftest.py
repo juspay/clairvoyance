@@ -442,6 +442,9 @@ class DispatchHarness:
         # are still observed here so we can pin the race-rejection path).
         self.rate_limit_peeks: list[dict[str, str]] = []
         self.rate_limit_records: list[dict[str, str]] = []
+        # Templates whose greeting prep ran with the pre-dial
+        # generate_realtime_opening_line flag (see the greeting mock below).
+        self.opening_line_calls: List[Any] = []
         self.cas_succeeds: bool = True
         self.get_available_returns_none: bool = False
         # Captured alerts so tests can assert no-telephony-number throttled
@@ -597,9 +600,17 @@ class DispatchHarness:
         return (True, 0)
 
     async def prepare_and_store_initial_greeting(
-        self, lead_id: str, payload: Dict[str, Any], template: Any
-    ) -> None:
-        return None
+        self,
+        lead_id: str,
+        payload: Dict[str, Any],
+        template: Any,
+        generate_realtime_opening_line: bool = False,
+    ) -> Optional[str]:
+        if generate_realtime_opening_line:
+            self.opening_line_calls.append(
+                template.id if template is not None else None
+            )
+        return "ok"
 
     def apply_playground_overrides(
         self, lead: LeadCallTracker, template: Any, template_vars=None

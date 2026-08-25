@@ -136,10 +136,20 @@ the greeting disables it.
   cache (`template/cache.py`), so a removed/disabled greeting can't outlive its
   edit — invalidation is the correctness mechanism (no TTL).
 - **Call time (dispatch worker, pre-dial):** a single Redis `GET` on the happy
-  path. On a miss (failed save-time generation) the worker awaits generation
-  before dialing — bounded at 30 s (`DEFAULT_GENERATION_TIMEOUT_SECONDS`) with a
-  35 s outer backstop, suspending only that worker's slot, then dials fail-open
-  (LLM speaks first) on timeout.
+  path. The pre-warm runs after every dispatch gate (rate-limit record, channel
+  token, DB number) and immediately before `make_call`, so generation spend
+  tracks actual dials — and the channel token is held during the bounded wait,
+  which paces dials to generation capacity when the provider degrades. On a
+  miss (failed save-time generation) the worker awaits generation before
+  dialing: each attempt is capped at **30 s for the Live opening line**
+  (measured: a 41-word greeting generates in ~15 s over Live — the 15 s TTS
+  cap would fail most non-trivial greetings) vs 15 s for plain TTS, and the
+  single retry fires on ANY failure — timeout included, since a timed-out
+  first attempt is usually cold-start (session connect + model warm-up) and
+  the retry frequently lands. Worst-case channel-token hold is ~60.5 s for
+  Live / ~30.5 s for TTS. After both attempts it dials fail-open (LLM speaks
+  first). Cancellation (worker shutdown) mid-prewarm releases the channel
+  token + number before re-raising.
 - **Playback:** at connect the cached audio plays out-of-band immediately
   (telephony `playAudio` / Daily `OutputAudioRawFrame`), and the template's
   `initial_greeting` seeds the LLM context so Gemini never repeats the line.

@@ -98,6 +98,22 @@ if not number: ZADD now+10s; release_lock; continue
 token = BLPOP bb:channel:{number.id} timeout=10s
 if not token: ZADD now + jitter(1..3s); release_lock; continue
 
+# Greeting pre-warm — LATE position, after every gate and right before the
+# dial, so TTS/opening-line generation spend is proportional to actual dials,
+# not dispatch attempts (leads that bounce downstream never synthesize). TTS
+# for non-realtime templates; the Gemini Live opening line
+# (generate_realtime_opening_line=True) otherwise — normally a Redis GET.
+# Bounded per attempt: 15s for TTS greetings, 30s for the Gemini Live
+# opening line (measured ~15s for a 41-word Live greeting). One retry
+# fires on ANY failure — timeout included (a timed-out first attempt is
+# usually cold-start; the retry frequently lands). Worst-case token hold
+# ~30.5s TTS / ~60.5s Live. Fail-open after both attempts (dial anyway —
+# the answer-time path retries synthesis as a cache miss). The channel
+# token is held during the bounded wait — by design: under degradation
+# dials pace to generation capacity. Cancellation mid-prewarm releases
+# token + number, then re-raises.
+await prewarm_initial_greeting(lead, template)   # bounded, fail-open
+
 try:
   call_sid = provider.make_call(number, lead)
   UPDATE lead_call_tracker SET status='PROCESSING', call_id=call_sid
@@ -292,14 +308,14 @@ PR #722's knobs cover everything else (promoter tick, batch, worker count per sh
 | Worker `BLPOP` pickup | <10ms |
 | DB row lock CAS | 10–50ms |
 | Pre-checks (inline) | 300–1500ms |
-| Greeting TTS | 300–800ms |
 | Rate-limit + channel `BLPOP` | <50ms (good path) |
+| Greeting pre-warm (post-token, pre-`make_call`) | 300–800ms typical; happy-path cache GET ~ms; hard ceiling `DEFAULT_GENERATION_TIMEOUT_SECONDS`+5s then fail-open |
 | Provider `make_call` HTTP | 200–800ms |
 | **Time we send `make_call`** | **T + 800–3200ms** |
 | Carrier signalling → phone ringing | 1–4s |
 | **Time customer's phone rings** | **T + 2–7s** |
 
-**SLO: phone rings within 3–7s of `next_attempt_at`.** Carrier signalling dominates; software cannot get under the PSTN floor. Shaving inline pre-checks + TTS would change our internal "T → `make_call`" number but not the customer-visible "T → phone rings" bucket, so no software-side optimisation here is worth the complexity.
+**SLO: phone rings within 3–7s of `next_attempt_at`.** Carrier signalling dominates; software cannot get under the PSTN floor. Shaving inline pre-checks + TTS would change our internal "T → `make_call`" number but not the customer-visible "T → phone rings" bucket, so no software-side optimisation here is worth the complexity. The greeting pre-warm sits between channel-token acquisition and `make_call` — the token is held during its bounded wait (a degraded TTS/generation provider slows dials, never stops them: timeout fails open to LLM-speaks-first).
 
 ## 11. Scaling envelope
 
