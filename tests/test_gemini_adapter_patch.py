@@ -27,7 +27,12 @@ from pipecat.processors.aggregators.llm_context import (
     LLMSpecificMessage,
 )
 
+from app.ai.voice.agents.breeze_buddy.chat.llm.gemini import (
+    adapter_patch as adapter_patch_module,
+)
 from app.ai.voice.agents.breeze_buddy.chat.llm.gemini.adapter_patch import (
+    GEMINI_PLACEHOLDER_SIGNATURE_WIRE,
+    PLACEHOLDER_THOUGHT_SIGNATURE,
     AdjacentMergeGeminiAdapter,
 )
 
@@ -233,22 +238,19 @@ def test_invocation_params_balanced_after_injected_intent():
     params = adapter.get_llm_invocation_params(context)
     contents = params["messages"]
     assert_call_response_pairing(contents)
-    # The search call kept its signature; the injected call has none.
-    signed = [
-        p.function_call.name
-        for c in contents
-        for p in (c.parts or [])
-        if getattr(p, "function_call", None) and getattr(p, "thought_signature", None)
-    ]
-    unsigned = [
-        p.function_call.name
+    # The search call kept its REAL signature; the injected call cannot
+    # have one, so it now carries Google's documented placeholder for
+    # client-injected calls (Gemini 3 strict validation would otherwise
+    # 400 it — see the stamp tests below; the stamp is silent for
+    # injected intents).
+    sig_by_name = {
+        p.function_call.name: p.thought_signature
         for c in contents
         for p in (c.parts or [])
         if getattr(p, "function_call", None)
-        and not getattr(p, "thought_signature", None)
-    ]
-    assert signed == ["search_catalog"]
-    assert unsigned == ["create_cart"]
+    }
+    assert sig_by_name["search_catalog"] == b"sig-bytes"
+    assert sig_by_name["create_cart"] == PLACEHOLDER_THOUGHT_SIGNATURE
 
 
 def test_parallel_call_responses_coalesce_into_one_user_turn():
@@ -360,3 +362,222 @@ def test_chat_adapter_swap_is_instance_local_and_voice_stays_stock():
     # Non-Gemini services pass through untouched.
     sentinel = object()
     assert ensure_chat_gemini_adapter(sentinel) is sentinel
+
+
+# ---------------------------------------------------------------------------
+# Thought-signature re-attachment + placeholder stamp (live 2026-08-26 crash:
+# 400 "Function call is missing a thought_signature in functionCall parts")
+# ---------------------------------------------------------------------------
+
+
+class _LogRecorder:
+    """Minimal stand-in for the module logger — records warning messages."""
+
+    def __init__(self) -> None:
+        self.warnings: List[str] = []
+
+    def warning(self, message: str, *args, **kwargs) -> None:
+        self.warnings.append(message)
+
+    def debug(self, message: str, *args, **kwargs) -> None:
+        pass
+
+
+def sig_message(call_id: str, raw: bytes) -> LLMSpecificMessage:
+    return LLMSpecificMessage(
+        llm="google",
+        message={
+            "type": "thought_signature",
+            "signature": raw,
+            "bookmark": {"function_call": call_id},
+        },
+    )
+
+
+def assistant_calls(*ids: str, name: str = "render_ui") -> dict:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": "{}"},
+            }
+            for call_id in ids
+        ],
+    }
+
+
+def tool_result(call_id: str) -> dict:
+    return {
+        "role": "tool",
+        "tool_call_id": call_id,
+        "content": json.dumps({"status": "ok"}),
+    }
+
+
+def signatures_by_call_id(contents: list) -> dict:
+    return {
+        p.function_call.id: p.thought_signature
+        for c in contents
+        for p in (c.parts or [])
+        if getattr(p, "function_call", None)
+    }
+
+
+def test_parallel_batch_signature_reattaches_to_signed_part(monkeypatch):
+    """THE confirmed live crash (2026-08-26): a cycle emits parallel calls,
+    Gemini signs only the FIRST functionCall part, the cycle loop appends
+    ONE assistant message with all the calls — and upstream's re-attachment
+    probes only ``parts[-1]``, silently dropping the captured signature
+    ("Thought signatures to apply: 2 / Applied 1" in the crash log). The
+    patched adapter attaches by call id on ANY part, restoring the exact
+    shape Gemini emitted (first part signed, siblings bare — live-validated
+    against Vertex as accepted)."""
+    recorder = _LogRecorder()
+    monkeypatch.setattr(adapter_patch_module, "logger", recorder)
+    adapter = AdjacentMergeGeminiAdapter()
+    messages = [
+        {"role": "user", "content": "where is my order"},
+        assistant_calls("call_1", name="get_order_status"),
+        sig_message("call_1", b"real-sig-1"),
+        tool_result("call_1"),
+        assistant_calls("call_2", "call_3", "call_4"),
+        sig_message("call_2", b"real-sig-2"),
+        tool_result("call_2"),
+        tool_result("call_3"),
+        tool_result("call_4"),
+    ]
+    context = LLMContext(messages=cast(List[LLMContextMessage], messages))
+    contents = adapter.get_llm_invocation_params(context)["messages"]
+    assert_call_response_pairing(contents)
+    sigs = signatures_by_call_id(contents)
+    assert sigs == {
+        "call_1": b"real-sig-1",
+        "call_2": b"real-sig-2",  # first part of the batch — where Gemini put it
+        "call_3": None,
+        "call_4": None,
+    }
+    assert recorder.warnings == []
+
+
+def test_upstream_last_part_probe_misses_parallel_batch():
+    """Documents the upstream bug the re-attachment override exists for —
+    if this ever fails, pipecat probes all parts and the override can be
+    dropped."""
+    adapter = GeminiLLMAdapter()
+    batch = Content(role="model", parts=[fc_part("t", "c1"), fc_part("t", "c2")])
+    adapter._apply_thought_signatures_to_messages(
+        [{"signature": b"sig", "bookmark": {"function_call": "c1"}}], [batch]
+    )
+    assert batch.parts is not None
+    assert not any(
+        p.thought_signature for p in batch.parts
+    ), "upstream now attaches to non-last parts — override may be removable"
+
+
+def test_unsigned_batch_stamped_with_placeholder_and_warns(monkeypatch):
+    """No signature was captured for a cycle at all (Gemini emitted none /
+    the bookmark never made it into context): after re-attachment + merge
+    the batch is stamped with the documented placeholder and ONE structured
+    warning fires."""
+    recorder = _LogRecorder()
+    monkeypatch.setattr(adapter_patch_module, "logger", recorder)
+    adapter = AdjacentMergeGeminiAdapter()
+    messages = [
+        {"role": "user", "content": "hi"},
+        assistant_calls("call_1", name="get_order_status"),
+        sig_message("call_1", b"real-sig-1"),
+        tool_result("call_1"),
+        assistant_calls("call_9", "call_10"),  # signature never captured
+        tool_result("call_9"),
+        tool_result("call_10"),
+    ]
+    context = LLMContext(messages=cast(List[LLMContextMessage], messages))
+    contents = adapter.get_llm_invocation_params(context)["messages"]
+    sigs = signatures_by_call_id(contents)
+    assert sigs["call_1"] == b"real-sig-1"  # real signature untouched
+    assert sigs["call_9"] == PLACEHOLDER_THOUGHT_SIGNATURE
+    assert sigs["call_10"] == PLACEHOLDER_THOUGHT_SIGNATURE
+    assert len(recorder.warnings) == 1
+    assert "no_signature_captured" in recorder.warnings[0]
+    assert "render_ui" in recorder.warnings[0]
+
+
+def test_captured_not_reattached_tripwire(monkeypatch):
+    """A bookmark referencing a call INSIDE a still-unsigned message means
+    the re-attachment pass regressed — the stamp still saves the request
+    and the warning names the tripwire case. (Forced here via an empty
+    signature, which re-attachment skips.)"""
+    recorder = _LogRecorder()
+    monkeypatch.setattr(adapter_patch_module, "logger", recorder)
+    adapter = AdjacentMergeGeminiAdapter()
+    messages = [
+        {"role": "user", "content": "hi"},
+        assistant_calls("call_1", "call_2"),
+        sig_message("call_1", b""),  # captured but unattachable
+        sig_message("call_x", b"real"),  # keeps the fc-signature fast-path on
+        tool_result("call_1"),
+        tool_result("call_2"),
+    ]
+    context = LLMContext(messages=cast(List[LLMContextMessage], messages))
+    contents = adapter.get_llm_invocation_params(context)["messages"]
+    sigs = signatures_by_call_id(contents)
+    assert sigs["call_1"] == PLACEHOLDER_THOUGHT_SIGNATURE
+    assert sigs["call_2"] == PLACEHOLDER_THOUGHT_SIGNATURE
+    assert len(recorder.warnings) == 1
+    assert "captured_not_reattached" in recorder.warnings[0]
+
+
+def test_injected_only_stamp_is_silent(monkeypatch):
+    """Widget direct-intent injections (``intent_*`` call ids) are the
+    placeholder's documented use case — stamped, but never warned about."""
+    recorder = _LogRecorder()
+    monkeypatch.setattr(adapter_patch_module, "logger", recorder)
+    adapter = AdjacentMergeGeminiAdapter()
+    messages = [
+        {"role": "user", "content": "hi"},
+        assistant_calls("call_1", name="search_catalog"),
+        sig_message("call_1", b"real-sig-1"),
+        tool_result("call_1"),
+        assistant_calls("intent_abc", name="create_cart"),  # injected
+        tool_result("intent_abc"),
+    ]
+    context = LLMContext(messages=cast(List[LLMContextMessage], messages))
+    contents = adapter.get_llm_invocation_params(context)["messages"]
+    sigs = signatures_by_call_id(contents)
+    assert sigs["call_1"] == b"real-sig-1"
+    assert sigs["intent_abc"] == PLACEHOLDER_THOUGHT_SIGNATURE
+    assert recorder.warnings == []
+
+
+def test_no_signature_regime_means_no_stamp(monkeypatch):
+    """With no captured signatures at all (thinking off / non-signing
+    model), functionCall messages stay exactly as adapted — the stamp
+    never changes behavior outside an active signature regime."""
+    recorder = _LogRecorder()
+    monkeypatch.setattr(adapter_patch_module, "logger", recorder)
+    adapter = AdjacentMergeGeminiAdapter()
+    messages = [
+        {"role": "user", "content": "hi"},
+        assistant_calls("call_1", "call_2"),
+        tool_result("call_1"),
+        tool_result("call_2"),
+    ]
+    context = LLMContext(messages=cast(List[LLMContextMessage], messages))
+    contents = adapter.get_llm_invocation_params(context)["messages"]
+    sigs = signatures_by_call_id(contents)
+    assert sigs == {"call_1": None, "call_2": None}
+    assert recorder.warnings == []
+
+
+def test_placeholder_wire_form_is_documented_literal():
+    """Google documents the dummy signature as the LITERAL string in the
+    request JSON; the SDK serializes ``Part.thought_signature`` bytes as
+    unpadded url-safe base64 — this pins the round-trip against SDK
+    upgrades (live-validated: the bare history 400s, this stamp passes)."""
+    part = Part(thought_signature=PLACEHOLDER_THOUGHT_SIGNATURE)
+    wire = part.model_dump(mode="json", exclude_none=True)["thought_signature"]
+    assert wire == GEMINI_PLACEHOLDER_SIGNATURE_WIRE
+    assert wire == "context_engineering_is_the_way_to_go"
