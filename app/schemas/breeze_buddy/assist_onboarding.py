@@ -59,6 +59,16 @@ class AssistOnboardingStreamRequest(BaseModel):
     provider: Literal["google"] = "google"
     bot_brand_name: Optional[str] = Field(None, min_length=1, max_length=255)
     is_active: bool = True
+    allow_unpersonalized: bool = Field(
+        False,
+        description=(
+            "Proceed with the generic default assistant when the site scrape "
+            "fails, instead of aborting. Off by default: the standing policy is "
+            "to fail without writing rather than publish an unpersonalized "
+            "assistant silently. Set only when a human has been shown the "
+            "failure and chosen to continue anyway."
+        ),
+    )
 
     @field_validator("reseller_id", "merchant_id", "merchant_name", "bot_brand_name")
     @classmethod

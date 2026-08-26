@@ -1801,6 +1801,19 @@ class AgentTransferConfig(BaseModel):
 
 
 class ConfigurationModel(BaseModel):
+    # --- Provenance ---
+    assist_personalization: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "How this Assist template's brand section was produced — "
+            "`{status, source, provider, generated_at}`. Written by onboarding "
+            "and read by connected products (the Shopify app surfaces whether a "
+            "merchant is running a personalized or a generic assistant). "
+            "Absent on templates that predate onboarding, and on non-Assist "
+            "templates."
+        ),
+    )
+
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
         default_factory=list,
