@@ -1196,6 +1196,21 @@ class McpServerConfig(BaseModel):
             "part and it lives here in the template."
         ),
     )
+    bypass_compaction_for_turns: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Number of most-recent ``last_turn_only`` tool results (voice "
+            "pipeline only) that are exempt from compaction — kept fully raw "
+            "instead of being projected/stubbed. Default 0 means every "
+            "eligible result compacts immediately, including the newest one "
+            "(prior hardcoded voice behavior). Safe to raise because "
+            "``tool_context_projection``/``tool_response_schemas`` already "
+            "shrink the per-call payload before it reaches context, unlike "
+            "chat's raw catalog results. When multiple MCP servers set this, "
+            "the largest value wins."
+        ),
+    )
     default_args: Dict[str, Any] = Field(
         default_factory=dict,
         description=(

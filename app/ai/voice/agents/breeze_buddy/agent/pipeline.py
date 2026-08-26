@@ -20,7 +20,6 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi import (
@@ -42,6 +41,10 @@ from pipecat.turns.user_stop import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from app.ai.voice.agents.breeze_buddy.agent.context_compactor import (
+    CompactedContextAggregatorPair,
+    build_tool_context_maps,
+)
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
@@ -277,6 +280,13 @@ async def build_pipeline(
     # app/ai/voice/agents/breeze_buddy/ to manage long conversation contexts.
     context = LLMContext()
 
+    # Per-tool context-compaction policy (voice analogue of the chat
+    # compactor). Empty maps (template didn't declare tool_context_retention)
+    # make the assistant compactor a no-op.
+    tool_retention, tool_projection, tool_recent_keep = build_tool_context_maps(
+        configurations
+    )
+
     # User-idle resolution is shared between realtime and standard pipelines:
     # both paths use the same aggregator-driven idle detection (timer lives
     # inside LLMUserAggregator; handler fires on on_user_turn_idle). Stream
@@ -308,8 +318,11 @@ async def build_pipeline(
         # UserStartedSpeakingFrame / UserStoppedSpeakingFrame from server-side
         # turn detection. user_idle still works because on_user_turn_idle
         # fires on the aggregator regardless of upstream source.
-        context_aggregator = LLMContextAggregatorPair(
+        context_aggregator = CompactedContextAggregatorPair(
             context,
+            retention=tool_retention,
+            projection=tool_projection,
+            recent_keep=tool_recent_keep,
             user_params=LLMUserAggregatorParams(user_idle_timeout=user_idle_timeout),
         )
         user_aggregator = context_aggregator.user()
@@ -475,8 +488,11 @@ async def build_pipeline(
     # The aggregator owns the idle timer (user_idle_timeout above); the
     # callback handler is wired via on_user_turn_idle below. Both were
     # resolved before the realtime branch.
-    context_aggregator = LLMContextAggregatorPair(
+    context_aggregator = CompactedContextAggregatorPair(
         context,
+        retention=tool_retention,
+        projection=tool_projection,
+        recent_keep=tool_recent_keep,
         user_params=LLMUserAggregatorParams(
             user_turn_strategies=user_turn_strategies,
             user_mute_strategies=user_mute_strategies,

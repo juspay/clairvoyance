@@ -31,6 +31,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.get_current_time import 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.hold_and_consult import (
     hold_and_consult,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.indian_number_to_speech import (
+    indian_number_to_speech_handler,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.query_knowledge_base import (
     query_knowledge_base,
 )
@@ -57,6 +60,7 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "end_conversation": end_conversation_global,
     "get_current_time": get_current_time,
     "hold_and_consult": hold_and_consult,
+    "indian_number_to_speech": indian_number_to_speech_handler,
     "query_knowledge_base": query_knowledge_base,
     "update_outcome": update_outcome,
 }
