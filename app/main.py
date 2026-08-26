@@ -93,7 +93,7 @@ _background_scheduler = None
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """FastAPI lifespan manager that handles startup and shutdown tasks."""
-    logger.info(f"Application startup... (POD_ROLE={POD_ROLE})")
+    logger.info(f"Application startup... (POD_ROLE={POD_ROLE}, CRM_ROLE={CRM_ROLE})")
 
     # Size the executor backing asyncio.to_thread() before anything can use it.
     # See BLOCKING_THREAD_POOL_SIZE in static.py for why the default is wrong.
