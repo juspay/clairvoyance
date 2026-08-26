@@ -48,10 +48,12 @@ def decode_credential(
     return Credential(
         id=str(row["id"]),
         reseller_id=row["reseller_id"],
+        merchant_id=row.get("merchant_id"),
         name=row["name"],
         credential_type=CredentialType(row["credential_type"]),
         value=_mask_credential_value(real_value) if mask else real_value,
         is_encrypted=row["is_encrypted"],
+        template_exposable=row.get("template_exposable", True),
         description=row["description"],
         is_active=row["is_active"],
         created_at=row["created_at"],

@@ -24,6 +24,8 @@ from app.database.queries.breeze_buddy.credentials import (
 from app.schemas import Credential, CredentialType
 from app.services.encryption import encrypt_credential
 
+_CONNECTOR_CREDENTIAL_PREFIX = "connector:"
+
 
 def _merge_credential_value(
     incoming: Dict[str, Any],
@@ -95,11 +97,16 @@ async def create_credential(
     credential_type: CredentialType,
     value: Dict[str, Any],
     description: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Optional[Credential]:
     """Create a new credential with optional KMS encryption."""
-    logger.info(f"Creating credential '{name}' for merchant: {reseller_id or 'GLOBAL'}")
+    logger.info(f"Creating credential '{name}' for reseller: {reseller_id or 'GLOBAL'}")
 
     try:
+        if name.startswith(_CONNECTOR_CREDENTIAL_PREFIX):
+            logger.error("Connector credential names are reserved for connector sync")
+            return None
+
         # Validate value structure matches credential_type
         _validate_credential_value(credential_type, value)
 
@@ -113,6 +120,8 @@ async def create_credential(
             value=stored_value,
             is_encrypted=is_encrypted,
             description=description,
+            merchant_id=merchant_id,
+            template_exposable=True,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -205,6 +214,10 @@ async def update_credential(
     logger.info(f"Updating credential {credential_id}")
 
     try:
+        if name and name.startswith(_CONNECTOR_CREDENTIAL_PREFIX):
+            logger.error("Connector credential names are reserved for connector sync")
+            return None
+
         stored_value = None
         is_encrypted = None
 
