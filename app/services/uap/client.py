@@ -59,8 +59,6 @@ async def request(
     token = base64.b64encode(f"{api_key}:".encode()).decode()
     headers = {"Authorization": f"Basic {token}", "x-merchantid": merchant_id}
     if routing_id:
-        # Juspay requires this to stay constant for every request tied to
-        # one customer.
         headers["x-routing-id"] = routing_id
 
     kwargs: Dict[str, Any] = {}

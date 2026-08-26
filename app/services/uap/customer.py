@@ -34,7 +34,6 @@ async def create_or_get_customer(
 
     response = await client.request(
         "POST",
-        # safe="" so a reference with a slash can't escape the path.
         f"/v2/customers/{quote(object_reference_id, safe='')}",
         api_key=creds.api_key,
         merchant_id=creds.merchant_id,
@@ -46,9 +45,6 @@ async def create_or_get_customer(
             "email_address": email_address,
             "first_name": first_name,
             "last_name": last_name,
-            # Without this the call still succeeds and returns a valid
-            # customer, just with no token — the failure would surface much
-            # later at the SDK call.
             "options.get_client_auth_token": True,
         },
         routing_id=object_reference_id,
