@@ -17,6 +17,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.get_current_time import (
     get_current_time,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.send_whatsapp_message import (
+    send_whatsapp_message,
+)
 from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
@@ -36,6 +39,7 @@ __all__ = [
     "get_current_time",
     "mute_stt",
     "play_audio_sound",
+    "send_whatsapp_message",
     "unmute_stt",
     "update_outcome",
 ]

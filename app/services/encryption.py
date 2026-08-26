@@ -112,6 +112,11 @@ def encrypt_credential(value_dict: dict) -> tuple[str, bool]:
     return json_str, False
 
 
+def is_credential_encryption_configured() -> bool:
+    """Return whether credential encryption is configured with a valid key."""
+    return _get_key_bytes() is not None
+
+
 def decrypt_credential(stored_value: str, is_encrypted: bool) -> Optional[dict]:
     """
     Decrypt a stored credential value back to a dictionary.

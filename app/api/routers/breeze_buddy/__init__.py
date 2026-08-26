@@ -53,6 +53,7 @@ from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.wallet import router as wallet_router
 from app.api.routers.breeze_buddy.webhooks import router as webhooks_router
 from app.api.routers.breeze_buddy.websocket import router as websocket_router
+from app.api.routers.breeze_buddy.whatsapp import router as whatsapp_router
 
 # Widget public mode (CHAT_MODE.md §14): per-merchant widget_config
 # CRUD (RBAC) + the unified /widget/session conversation router
@@ -83,6 +84,9 @@ router.include_router(configurations_router, prefix="", tags=["configurations"])
 
 # Credentials (API keys, tokens - centralized secret management)
 router.include_router(credentials_router, prefix="", tags=["credentials"])
+
+# WhatsApp connection sync (Nautilus -> Clairvoyance)
+router.include_router(whatsapp_router, prefix="", tags=["whatsapp"])
 
 # Telephony numbers (caller IDs + inbound DIDs)
 router.include_router(numbers_router, prefix="", tags=["numbers"])

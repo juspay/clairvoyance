@@ -335,6 +335,19 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 # When empty, credentials are stored as plain JSON (acceptable for dev/local).
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
 
+# WhatsApp sync token transport encryption.
+# PEM RSA private key matching the public key used by Nautilus.
+WHATSAPP_SYNC_PRIVATE_KEY = os.getenv("WHATSAPP_SYNC_PRIVATE_KEY", "")
+
+# Meta WhatsApp Cloud API. The access token and phone number ID are
+# merchant-specific connector data; these values only select the Graph endpoint.
+META_WHATSAPP_GRAPH_API_BASE_URL = os.getenv(
+    "META_WHATSAPP_GRAPH_API_BASE_URL", "https://graph.facebook.com"
+)
+META_WHATSAPP_GRAPH_API_VERSION = os.getenv(
+    "META_WHATSAPP_GRAPH_API_VERSION", "v23.0"
+)
+
 # JWT Authentication Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "")
