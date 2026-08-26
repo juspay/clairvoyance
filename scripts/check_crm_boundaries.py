@@ -49,6 +49,7 @@ TABLE_OWNERS = {
     "platform_identity": "platform",
     "crm_event_raw": "record",
     "crm_journey_event": "record",
+    "crm_message": "connectivity",
 }
 
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions

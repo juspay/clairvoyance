@@ -1,3 +1,4 @@
+import math
 import os
 
 # --- Configuration ---
@@ -443,6 +444,40 @@ BB_DISPATCH_QPS_JITTER_MS = int(os.environ.get("BB_DISPATCH_QPS_JITTER_MS", 200)
 #   - BB_RECONCILE_BACKLOG_LIMIT
 
 
+def _positive_int(env_var: str, default: int) -> int:
+    """Read a positive int, falling back to the default on garbage or <1.
+
+    Lenient rather than fatal: a bad dial should not stop a pod from booting.
+    But it must not be honoured either — a zero here would dead-letter every
+    message on its first attempt, or expire a claim lease mid-send.
+    """
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 1 else default
+
+
+def _positive_float(env_var: str, default: float) -> float:
+    """Read a positive finite float, falling back to the default.
+
+    Same leniency as _positive_int. Finite matters: 'inf' parses and compares
+    > 0, and an infinite poll interval is a worker that sleeps forever after
+    its first empty poll — draining nothing and raising nothing.
+    """
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
 # -----------------------------------------------------------------------------
 # CRM worker roles (design/worker-runtime.md, sealed 26-Aug-2026)
 # One image, N pods: CRM_ROLE selects which drain loop (if any) this
@@ -451,9 +486,25 @@ BB_DISPATCH_QPS_JITTER_MS = int(os.environ.get("BB_DISPATCH_QPS_JITTER_MS", 200)
 # -----------------------------------------------------------------------------
 CRM_ROLE = os.environ.get("CRM_ROLE", "api").lower()
 
-CRM_WORKER_INTERVAL = float(os.environ.get("CRM_WORKER_INTERVAL", 1.0))
-CRM_WORKER_BATCH = int(os.environ.get("CRM_WORKER_BATCH", 100))
-CRM_WORKER_HEARTBEAT = float(os.environ.get("CRM_WORKER_HEARTBEAT", 60.0))
+CRM_WORKER_INTERVAL = _positive_float("CRM_WORKER_INTERVAL", 1.0)
+CRM_WORKER_BATCH = _positive_int("CRM_WORKER_BATCH", 100)
+CRM_WORKER_HEARTBEAT = _positive_float("CRM_WORKER_HEARTBEAT", 60.0)
+
+# CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; loop mechanics
+# ride CRM_WORKER_BATCH/CRM_WORKER_INTERVAL like every role). It currently
+# calls send() with no permission check in front of it — a dummy send only.
+
+# How long a worker may hold a row before it is assumed dead and requeued.
+# Must exceed the slowest realistic provider call.
+CRM_DISPATCH_STALE_MINUTES = _positive_int("CRM_DISPATCH_STALE_MINUTES", 5)
+
+# Bounded so one undeliverable message cannot earn a provider rate-limit ban
+# for every other merchant sharing that sender.
+CRM_DISPATCH_MAX_ATTEMPTS = _positive_int("CRM_DISPATCH_MAX_ATTEMPTS", 3)
+
+# Retry backoff: a provider answering "you are sending too fast" must be
+# obeyed, so each attempt waits twice as long as the last.
+CRM_DISPATCH_RETRY_BASE_SECONDS = _positive_int("CRM_DISPATCH_RETRY_BASE_SECONDS", 30)
 
 
 # Announcement Banner Configuration
