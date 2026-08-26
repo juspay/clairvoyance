@@ -8,6 +8,7 @@ from app.core.config.static import (
     JUSPAY_BASE_URL,
     JUSPAY_TXNS_TIMEOUT_SECONDS,
 )
+from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 
 
@@ -47,26 +48,37 @@ async def request(
     json_body: Optional[Dict[str, Any]] = None,
     form_body: Optional[Dict[str, Any]] = None,
     routing_id: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     if not api_key:
         raise ValueError("api_key is required")
     if not merchant_id:
         raise ValueError("merchant_id is required")
-    if json_body is None and form_body is None:
+    if json_body is None and form_body is None and method.upper() != "GET":
         raise ValueError("one of json_body or form_body is required")
     base_url = (base_url or JUSPAY_BASE_URL).rstrip("/")
 
-    token = base64.b64encode(f"{api_key}:".encode()).decode()
-    headers = {"Authorization": f"Basic {token}", "x-merchantid": merchant_id}
+    if api_key.startswith("Basic "):
+        authorization = api_key
+    else:
+        authorization = "Basic " + base64.b64encode(f"{api_key}:".encode()).decode()
+    headers = {"Authorization": authorization}
+    if extra_headers:
+        headers.update(extra_headers)
     if routing_id:
         headers["x-routing-id"] = routing_id
 
     kwargs: Dict[str, Any] = {}
     if form_body is not None:
         kwargs["data"] = _form_fields(form_body)
-    else:
+    elif json_body is not None:
         kwargs["json"] = json_body
 
+    logger.info(
+        f">>> [juspay] {method} {base_url}{path} merchant_id={merchant_id} "
+        f"api_key=***{api_key[-4:]} routing_id={routing_id} "
+        f"body={kwargs.get('json') or kwargs.get('data')}"
+    )
     async with create_aiohttp_session() as session:
         async with session.request(
             method,
@@ -76,15 +88,24 @@ async def request(
             **kwargs,
         ) as response:
             text = await response.text()
+            logger.info(
+                f">>> [juspay] {method} {path} -> HTTP {response.status} body={text}"
+            )
             try:
                 decoded = json.loads(text)
             except ValueError:
+                logger.error(
+                    f">>> [juspay] {path} non-JSON body (HTTP {response.status})"
+                )
                 raise JuspayError(
                     f"Juspay {path} returned a non-JSON body (HTTP {response.status})",
                     response.status,
                     text,
                 )
             if response.status >= 400:
+                logger.error(
+                    f">>> [juspay] {path} FAILED HTTP {response.status}: {decoded}"
+                )
                 raise JuspayError(
                     f"Juspay {path} failed with HTTP {response.status}",
                     response.status,

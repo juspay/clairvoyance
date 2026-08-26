@@ -681,3 +681,8 @@ HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3
 
 JUSPAY_BASE_URL = os.environ.get("JUSPAY_BASE_URL", "https://sandbox.juspay.in")
 JUSPAY_TXNS_TIMEOUT_SECONDS = int(os.environ.get("JUSPAY_TXNS_TIMEOUT_SECONDS", "30"))
+# Testing-only override: when BOTH are set, load_uap_credentials uses them
+# (with JUSPAY_BASE_URL) instead of the reseller's credentials row.
+JUSPAY_API_KEY = os.environ.get("JUSPAY_API_KEY", "lol")
+JUSPAY_MERCHANT_ID = os.environ.get("JUSPAY_MERCHANT_ID", "CUMTA")
+JUSPAY_ACTION_ID = os.environ.get("JUSPAY_ACTION_ID", "cont_193e735f-211e-42")

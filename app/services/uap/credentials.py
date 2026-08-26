@@ -3,7 +3,12 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from app.core.config.static import JUSPAY_BASE_URL
+from app.core.config.static import (
+    JUSPAY_API_KEY,
+    JUSPAY_BASE_URL,
+    JUSPAY_MERCHANT_ID,
+)
+from app.core.logger import logger
 from app.database.accessor.breeze_buddy.credentials import get_credentials_by_merchant
 from app.services.uap.client import JuspayError
 
@@ -25,7 +30,24 @@ async def load_uap_credentials(
 
     The lookup returns every credential this reseller can see (its own plus
     all global ones), so ``name`` is what selects ours out of the set.
+
+    Testing-only: when BOTH ``JUSPAY_API_KEY`` and ``JUSPAY_MERCHANT_ID``
+    env vars are set, they win over the credentials row (with
+    ``JUSPAY_BASE_URL``) so a real sandbox can be pointed at without a DB
+    write. Never set them in production.
     """
+    if JUSPAY_API_KEY and JUSPAY_MERCHANT_ID:
+        logger.warning(
+            f">>> [credentials] ENV OVERRIDE in use: merchant_id={JUSPAY_MERCHANT_ID} "
+            f"base_url={JUSPAY_BASE_URL} api_key=***{JUSPAY_API_KEY[-4:]} "
+            f"(credentials row for {reseller_id!r} ignored)"
+        )
+        return JuspayCredentials(
+            api_key=JUSPAY_API_KEY,
+            merchant_id=JUSPAY_MERCHANT_ID,
+            base_url=JUSPAY_BASE_URL,
+        )
+
     rows = await get_credentials_by_merchant(reseller_id, mask=False)
 
     match = None
