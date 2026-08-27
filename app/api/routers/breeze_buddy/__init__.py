@@ -49,6 +49,7 @@ from app.api.routers.breeze_buddy.template_generator import (
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.topics import router as topics_router
 from app.api.routers.breeze_buddy.tts_catalog import router as tts_catalog_router
+from app.api.routers.breeze_buddy.uap import router as uap_router
 from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.wallet import router as wallet_router
 from app.api.routers.breeze_buddy.webhooks import router as webhooks_router
@@ -83,6 +84,7 @@ router.include_router(configurations_router, prefix="", tags=["configurations"])
 
 # Credentials (API keys, tokens - centralized secret management)
 router.include_router(credentials_router, prefix="", tags=["credentials"])
+router.include_router(uap_router, prefix="/uap", tags=["UAP"])
 
 # Telephony numbers (caller IDs + inbound DIDs)
 router.include_router(numbers_router, prefix="", tags=["numbers"])

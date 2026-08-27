@@ -196,10 +196,16 @@ class HttpRequestExecutor:
                             except ValueError:
                                 pass  # Invalid Content-Length, will check actual size below
 
-                        # Read response with size limit
-                        response_bytes = await response.content.read(
-                            HTTP_REQUEST_MAX_RESPONSE_BYTES + 1
-                        )
+                        # Read the FULL response with a size cap.
+                        # ``content.read(n)`` returns as soon as ANY bytes are
+                        # buffered (aiohttp semantics), silently truncating
+                        # multi-chunk bodies mid-JSON — so accumulate to EOF.
+                        buffer = bytearray()
+                        async for chunk in response.content.iter_chunked(64 * 1024):
+                            buffer.extend(chunk)
+                            if len(buffer) > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                                break
+                        response_bytes = bytes(buffer)
                         if len(response_bytes) > HTTP_REQUEST_MAX_RESPONSE_BYTES:
                             error_msg = (
                                 f"Response exceeded max size of "

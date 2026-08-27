@@ -38,6 +38,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
 )
+from app.ai.voice.agents.breeze_buddy.handlers.internal.uap_order_status import (
+    uap_order_status,
+)
+from app.ai.voice.agents.breeze_buddy.handlers.internal.uap_pay import uap_pay
 from app.ai.voice.agents.breeze_buddy.handlers.internal.update_outcome import (
     update_outcome,
 )
@@ -58,6 +62,8 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "get_current_time": get_current_time,
     "hold_and_consult": hold_and_consult,
     "query_knowledge_base": query_knowledge_base,
+    "uap_order_status": uap_order_status,
+    "uap_pay": uap_pay,
     "update_outcome": update_outcome,
 }
 
