@@ -1,4 +1,4 @@
-"""/crm/customers — the admin endpoints the console list + 360 read (A6).
+"""/customers — the admin endpoints the console list + 360 read (A6).
 
 Thin routes per module rules §1: auth via Depends, delegate to the
 accessor. Tenancy law: every query carries its merchant_id predicate.

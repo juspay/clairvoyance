@@ -1,6 +1,6 @@
 """/crm root router (A5).
 
-Mounted in app/main.py at prefix "/crm" — OUTSIDE /agent/voice/breeze-buddy
+Mounted in app/main.py at the root — OUTSIDE /agent/voice/breeze-buddy
 (ADR 0006). Each module's api.py router is included here as it lands:
 
     from app.crm.identity import api as identity_api
@@ -18,6 +18,7 @@ from app.crm.outreach import api as outreach_api
 from app.crm.record import api as record_api
 
 router = APIRouter()
-router.include_router(identity_api.router, prefix="/customers", tags=["CRM Customers"])
-router.include_router(record_api.router, prefix="/customers", tags=["CRM Journey"])
-router.include_router(outreach_api.router, prefix="/workflows", tags=["CRM Workflows"])
+router.include_router(identity_api.router, prefix="/customers", tags=["Customers"])
+router.include_router(record_api.journey_router, prefix="/customers", tags=["Journey"])
+router.include_router(record_api.ingest_router, prefix="/ingest", tags=["Ingest"])
+router.include_router(outreach_api.router, prefix="/workflows", tags=["Workflows"])

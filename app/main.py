@@ -428,9 +428,12 @@ app.include_router(
     tags=["Feature Flags"],
 )
 
-# CRM (Buddy CPaaS) — mounted OUTSIDE /agent/voice/breeze-buddy (ADR 0006);
-# admin/S2S only in phase 1 (ADR 0007), auth wired per module router.
-app.include_router(crm_api.router, prefix="/crm", tags=["CRM"])
+# Customer-engagement doors — mounted OUTSIDE /agent/voice/breeze-buddy
+# (ADR 0006); admin/S2S only in phase 1 (ADR 0007), auth wired per module
+# router. No "crm" in the path: the never-words stay off every surface an
+# outside team or merchant can see (ADR 0022). The app/crm package and the
+# crm_* tables keep their internal names — those are invisible outside.
+app.include_router(crm_api.router, prefix="")
 
 # System health endpoints
 app.include_router(systems.router, prefix="", tags=["Systems"])
