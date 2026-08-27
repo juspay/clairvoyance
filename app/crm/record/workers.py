@@ -1,48 +1,19 @@
 """The event worker's pass (CRM_ROLE=event-worker, app/crm/worker_main.py):
 claim a batch, then per row extract -> resolve() -> assert_facts() -> entry
-rules -> stamp, one commit."""
+rules -> stamp, one commit.
+
+The pass knows no source by name: which extractor reads a payload is the
+registry's business (record/extractors), and this file only asks it."""
 
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.identity.contracts import assert_facts, resolve as crm_resolve
 from app.crm.outreach.contracts import consume_attributed_event
 from app.crm.record.db import DbTxn, accessor, atomically, savepoint
-from app.crm.record.schemas import Extracted, RawEvent
-
-# Producer's payload key -> canon attribute name (T05). A producer with a
-# different shape brings its own map.
-FACT_KEYS = {
-    "customer_name": "name",
-    "locale": "locale",
-    "timezone": "timezone",
-}
-
-
-def _extract_flat(payload: Dict[str, Any]) -> Extracted:
-    """The flat shape: handles and facts as top-level keys. Every buddy
-    mirror (lead-api, telephony) sends it, and it is what a new producer
-    gets by default — the name describes the payload, not the producer."""
-    phone = payload.get("customer_mobile_number")
-    return Extracted(
-        handles={"phone": phone} if phone else {},
-        facts={
-            attribute: payload[key]
-            for key, attribute in FACT_KEYS.items()
-            if payload.get(key)
-        },
-    )
-
-
-# source -> extractor. A new channel is one registration here; an
-# unregistered source falls back to the flat shape.
-Extractor = Callable[[Dict[str, Any]], Extracted]
-EXTRACTORS: Dict[str, Extractor] = {
-    "lead-api": _extract_flat,
-    "telephony": _extract_flat,
-}
-DEFAULT_EXTRACTOR: Extractor = _extract_flat
+from app.crm.record.extractors import DEFAULT_EXTRACTOR, EXTRACTORS
+from app.crm.record.schemas import RawEvent
 
 
 async def run_pass(limit: int) -> List[RawEvent]:
@@ -71,34 +42,47 @@ async def _pass_in_txn(txn: DbTxn, limit: int) -> List[RawEvent]:
 async def _process_one(txn: DbTxn, event: RawEvent) -> None:
     """One row, inside the caller's savepoint. A quarantine stamped itself
     already and names no customer, so it returns early."""
-    customer_id = await _run_processor(txn, event)
+    customer_id, handles = await _run_processor(txn, event)
     if customer_id is None:
         return
-    await _consume_attributed_event(event, customer_id)
+    await _consume_attributed_event(event, customer_id, handles)
     await accessor.stamp_event(txn, str(event.id), customer_id)
 
 
-async def _consume_attributed_event(event: RawEvent, customer_id: str) -> None:
+async def _consume_attributed_event(
+    event: RawEvent, customer_id: str, handles: Dict[str, str]
+) -> None:
     """Entry-rules slot: per row, inside its savepoint, before its stamp, so a
-    poison rule costs one row per poll. A raise here leaves the row pending."""
-    await consume_attributed_event(event, customer_id)
+    poison rule costs one row per poll. A raise here leaves the row pending.
+
+    The extractor's handles ride along so the consumer never re-hunts what
+    this pass already found. Two searches would drift — and did: a Shopify
+    order with its phone only in customer.default_address resolved here and
+    then parked at the first call node, because the payload re-search did
+    not know that path."""
+    await consume_attributed_event(event, customer_id, handles)
 
 
-async def _run_processor(txn: DbTxn, event: RawEvent) -> Optional[str]:
+async def _run_processor(
+    txn: DbTxn, event: RawEvent
+) -> Tuple[Optional[str], Dict[str, str]]:
     """extract -> resolve() (or pass through a set customer_id) -> assert_facts().
-    Quarantines what it cannot attribute; a failed assert_facts never fails the row."""
+    Quarantines what it cannot attribute; a failed assert_facts never fails the row.
+
+    Returns the customer AND the handles the extractor found, so the one
+    source-aware discovery in the system is this one."""
     extract = EXTRACTORS.get(event.source, DEFAULT_EXTRACTOR)
     try:
         extracted = extract(event.payload)
     except Exception as e:
         await accessor.quarantine_event(txn, str(event.id), f"extractor_error: {e}")
-        return None
+        return None, {}
 
     customer_id = event.customer_id
     if not customer_id:
         if not extracted.handles:
             await accessor.quarantine_event(txn, str(event.id), "no_handle")
-            return None
+            return None, {}
         try:
             customer_id = str(
                 await crm_resolve(
@@ -110,7 +94,7 @@ async def _run_processor(txn: DbTxn, event: RawEvent) -> Optional[str]:
             )
         except ValueError as e:
             await accessor.quarantine_event(txn, str(event.id), f"unresolvable: {e}")
-            return None
+            return None, {}
 
     if extracted.facts:
         try:
@@ -123,7 +107,7 @@ async def _run_processor(txn: DbTxn, event: RawEvent) -> Optional[str]:
             )
         except Exception as e:
             logger.warning(f"event {event.id}: assert_facts failed, dropping: {e}")
-    return customer_id
+    return customer_id, extracted.handles
 
 
 def _log_queue_lag(events: List[RawEvent], limit: int) -> None:

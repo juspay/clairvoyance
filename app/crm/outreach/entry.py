@@ -19,10 +19,13 @@ from app.crm.outreach.db import accessor
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import RawEvent
+from app.crm.shared.normalize import normalize_phone
 
-# Where a phone hides in an event payload, tried in order — the voice
-# mirrors use customer_mobile_number; external doors normalize to
-# customer.phone as extractors are registered per source.
+# Fallback only: where a phone hides in a payload when no extractor
+# handles were passed in (the voice mirrors, which send the flat shape).
+# An external door's letter arrives VERBATIM under the two-plane ruling,
+# so its phone is wherever that provider puts it — which is the source's
+# extractor's business, not this file's.
 _PHONE_PATHS = ("customer_mobile_number", "phone")
 
 # Small-facts cap (canon: context carries pointers "plus the few small
@@ -32,19 +35,38 @@ _CONTEXT_VALUE_MAX_CHARS = 256
 
 
 def _phone_from_payload(payload: dict) -> str | None:
+    """The number the sends will actually dial or message — normalized to
+    E.164 here, because resolve() normalizes only what it probes on and
+    context is a separate copy. Unnormalized, a bare "9876543210" would
+    resolve to +919876543210 for identity while the call node dialled the
+    bare form, and a suppression stored in E.164 would not match it."""
+    raw: str | None = None
     for key in _PHONE_PATHS:
         if payload.get(key):
-            return str(payload[key])
-    customer = payload.get("customer")
-    if isinstance(customer, dict) and customer.get("phone"):
-        return str(customer["phone"])
-    return None
+            raw = str(payload[key])
+            break
+    if raw is None:
+        customer = payload.get("customer")
+        if isinstance(customer, dict) and customer.get("phone"):
+            raw = str(customer["phone"])
+    if raw is None:
+        return None
+    return normalize_phone(raw) or raw
 
 
-async def consume_attributed_event(event: RawEvent, customer_id: str) -> None:
+async def consume_attributed_event(
+    event: RawEvent, customer_id: str, handles: Optional[dict] = None
+) -> None:
     """Match one just-attributed event against every live plan's entry and
     goal topics. customer_id arrives separately: the row object still
-    carries the pre-stamp value."""
+    carries the pre-stamp value.
+
+    ``handles`` is what the source's extractor already found. Taking it
+    rather than re-reading the payload keeps ONE source-aware discovery in
+    the system: the number the sends dial is then the same number identity
+    resolved on, so suppression matches by construction and a new source
+    needs no teaching here. The payload search stays as the fallback for
+    the voice mirrors, which resolve before this consumer exists."""
     flows = await accessor.live_workflows(event.merchant_id)
     entry_matches: List[Tuple[Workflow, WorkflowDefinition]] = []
     goal_matches: List[Workflow] = []
@@ -84,7 +106,7 @@ async def consume_attributed_event(event: RawEvent, customer_id: str) -> None:
             {reply_key(node.id): None if answer is None else str(answer)},
         )
     for flow, definition in entry_matches:
-        await _try_enrol(flow, definition, event, customer_id)
+        await _try_enrol(flow, definition, event, customer_id, handles)
 
 
 def reply_key(node_id: str) -> str:
@@ -112,14 +134,18 @@ def _context_from_payload(payload: dict) -> dict:
 
 
 async def _try_enrol(
-    flow: Workflow, definition: WorkflowDefinition, event: RawEvent, customer_id: str
+    flow: Workflow,
+    definition: WorkflowDefinition,
+    event: RawEvent,
+    customer_id: str,
+    handles: Optional[dict] = None,
 ) -> None:
     admit, enrollment_key = _enrollment_key(definition, event, str(flow.id))
     if not admit:
         return  # a keyed plan without its key: a refusal, not an error
     context = _context_from_payload(event.payload)
     context["source_event_id"] = str(event.id)
-    phone = _phone_from_payload(event.payload)
+    phone = (handles or {}).get("phone") or _phone_from_payload(event.payload)
     if phone:
         context["phone"] = phone
     await enrol(
