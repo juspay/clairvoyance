@@ -10,7 +10,7 @@ The trust ladder is fixed:
 
 An inferred claim NEVER materializes and its confidence is capped at 0.5
 (canon T05) — a guess may steer, never decide. History is master data:
-never evicted, never trimmed.
+never evicted, never trimmed, and appended to only on drift (_is_drift).
 """
 
 import json
@@ -54,6 +54,20 @@ def claim_confidence(evidence: str, confidence: Optional[float]) -> float:
 def _winner(claims: list) -> Dict[str, Any]:
     """Highest evidence wins; ties break to the newest claim."""
     return max(claims, key=lambda c: (EVIDENCE_RANK.get(c["e"], -1), c["at"]))
+
+
+def _is_drift(claims: list, value: Any, evidence: str, source: str) -> bool:
+    """The history records evidence, not traffic: a claim identical to the
+    latest one (same value, class and producer) carries nothing new. Any
+    difference is real drift and is always appended."""
+    if not claims:
+        return True
+    latest = claims[-1]
+    return (
+        latest.get("v") != value
+        or latest.get("e") != evidence
+        or latest.get("src") != source
+    )
 
 
 async def assert_facts(
@@ -102,6 +116,8 @@ async def _assert_facts_in_txn(
     materialized: Dict[str, Any] = {}
     for attribute, value in facts.items():
         claims = attributes.setdefault(attribute, [])
+        if not _is_drift(claims, value, evidence, source):
+            continue
         claims.append({"v": value, "e": evidence, "k": k, "src": source, "at": now})
         winner = _winner(claims)
         column = MATERIALIZED_COLUMNS.get(attribute)

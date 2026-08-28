@@ -200,6 +200,7 @@ def _created_lead_tap(lead: LeadCallTracker) -> None:
             customer_id = await _stamp_customer_on_lead(
                 str(lead.id), merchant_id, phone
             )
+            customer_name = (lead.payload or {}).get("customer_name")
             if inbound:
                 await mirror_to_crm(
                     "call.inbound",
@@ -210,6 +211,7 @@ def _created_lead_tap(lead: LeadCallTracker) -> None:
                     customer_id=customer_id,
                     call_id=lead.call_id,
                     direction="INBOUND",
+                    customer_name=customer_name,
                 )
             if born_terminal:
                 await mirror_to_crm(
@@ -225,6 +227,7 @@ def _created_lead_tap(lead: LeadCallTracker) -> None:
                     direction=getattr(lead.call_direction, "value", None),
                     started_at=lead.call_initiated_time,
                     ended_at=lead.call_end_time,
+                    customer_name=customer_name,
                 )
 
         spawn_background_task(_tap(), name=f"crm-lead-created-{lead.id}")
@@ -263,6 +266,7 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
                 direction=getattr(lead.call_direction, "value", None),
                 started_at=lead.call_initiated_time,
                 ended_at=lead.call_end_time,
+                customer_name=(lead.payload or {}).get("customer_name"),
             ),
             name=f"crm-call-completed-{lead.call_id or lead.id}",
         )

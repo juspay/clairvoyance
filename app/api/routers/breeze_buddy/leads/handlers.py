@@ -441,6 +441,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                     external_id=uuid,
                     lead_id=uuid,
                     phone=customer_mobile,
+                    customer_name=lead_payload.get("customer_name"),
                 ),
                 name=f"crm-lead-pushed-{uuid}",
             )

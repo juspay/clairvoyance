@@ -42,6 +42,45 @@ def insert_event_query(
     ]
 
 
+def claim_pending_events_query(limit: int) -> Tuple[str, List[Any]]:
+    """The lock IS the claim: FOR UPDATE SKIP LOCKED means concurrent
+    event-worker replicas never fight over the same row. Ordered by
+    received_at to match crm_event_raw_pending_ix (T13)."""
+    query = f"""
+        SELECT id, merchant_id, source, topic, schema_version, external_id,
+               payload, received_at, occurred_at, customer_id
+        FROM {EVENT_RAW_TABLE}
+        WHERE processed_at IS NULL
+        ORDER BY received_at
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+    """
+    return query, [limit]
+
+
+def stamp_event_query(
+    event_id: str, customer_id: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """Touches only customer_id + processed_at — the immutability trigger
+    (T13) allows nothing else on this table."""
+    query = f"""
+        UPDATE {EVENT_RAW_TABLE}
+        SET customer_id = $2, processed_at = now()
+        WHERE id = $1
+    """
+    return query, [event_id, customer_id]
+
+
+def quarantine_event_query(event_id: str, reason: str) -> Tuple[str, List[Any]]:
+    """Touches only quarantine_reason + processed_at — same trigger."""
+    query = f"""
+        UPDATE {EVENT_RAW_TABLE}
+        SET quarantine_reason = $2, processed_at = now()
+        WHERE id = $1
+    """
+    return query, [event_id, reason]
+
+
 def get_customer_journey_query(
     merchant_id: str,
     customer_id: str,

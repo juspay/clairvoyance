@@ -58,6 +58,7 @@ from app.core.config.static import (
     BOT_MAX_DRAIN_SECONDS,
     CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
     CORS_ALLOWED_ORIGINS,
+    CRM_ROLE,
     ENABLE_DISPATCHER,
     ENABLE_DRAGONTTS_KILL_SWITCH,
     ENABLE_SIGTERM_HANDLER,
@@ -70,6 +71,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.middleware.widget_cors_bypass import CustomWidgetCorsBypassMiddleware
 from app.crm import api as crm_api
+from app.crm.worker_main import start_worker_role, stop_worker_role
 from app.database import close_db_pool, init_db_pool
 from app.services.knowledge_base import (
     process_pending_documents as process_pending_kb_documents,
@@ -157,7 +159,7 @@ async def lifespan(_app: FastAPI):
 
     # Start background task scheduler if enabled
     global _background_scheduler
-    if await ENABLE_BACKGROUND_TASKS():
+    if CRM_ROLE == "api" and await ENABLE_BACKGROUND_TASKS():
         try:
             # Create scheduler instance with configurable loop interval
             _background_scheduler = BackgroundTaskScheduler(
@@ -251,6 +253,11 @@ async def lifespan(_app: FastAPI):
                 logger.info("No background tasks registered, scheduler not started")
         except Exception as e:
             logger.error(f"Failed to start background task scheduler: {e}")
+    elif CRM_ROLE != "api":
+        logger.info(
+            f"CRM_ROLE={CRM_ROLE}: background task scheduler not started "
+            "(a worker pod runs exactly one loop)"
+        )
     else:
         logger.info(
             "Background task scheduler disabled (ENABLE_BACKGROUND_TASKS=false)"
@@ -259,7 +266,9 @@ async def lifespan(_app: FastAPI):
     # Start the event-driven dispatcher (promoter + workers). Main-server
     # workload only by default. Channel-semaphore init is handled by the
     # reconciler — no separate boot-time initialisation logic. See §2.
-    if ENABLE_DISPATCHER:
+    # Gated on CRM_ROLE like the scheduler above: a pod is its role, so a
+    # CRM worker pod runs exactly one loop and never also dials voice.
+    if CRM_ROLE == "api" and ENABLE_DISPATCHER:
         try:
             # Fast cold-start: trigger one reconcile_channel_tokens immediately
             # so workers don't BLPOP on empty channel LISTs while waiting for
@@ -297,16 +306,42 @@ async def lifespan(_app: FastAPI):
             await start_analysis_worker()
         except Exception as e:
             logger.error(f"Failed to start conversation analysis worker: {e}")
+    elif CRM_ROLE != "api":
+        logger.info(
+            f"CRM_ROLE={CRM_ROLE}: event-driven dispatcher not started "
+            "(a worker pod runs exactly one loop)"
+        )
     else:
         logger.info("Event-driven dispatcher disabled (ENABLE_DISPATCHER=false)")
+
+    # CRM worker roles (design/worker-runtime.md): one image, N pods. A
+    # non-"api" CRM_ROLE runs its drain loop as an asyncio task in this
+    # process instead of serving HTTP — see app/crm/worker_main.py.
+    if CRM_ROLE != "api":
+        await start_worker_role(CRM_ROLE)
+        logger.info(f"CRM worker role '{CRM_ROLE}' started")
+    else:
+        logger.info("CRM_ROLE=api: no CRM worker loop started")
 
     yield
 
     logger.info("Application shutdown event triggered...")
 
+    # Stop the CRM worker role before scheduler/db close so an in-flight
+    # batch finishes (or times out) with the pool still open.
+    if CRM_ROLE != "api":
+        try:
+            logger.info(f"Stopping CRM worker role '{CRM_ROLE}'...")
+            await stop_worker_role()
+        except Exception as e:
+            logger.error(
+                f"Error stopping CRM worker role '{CRM_ROLE}': {e}", exc_info=True
+            )
+
     # Stop the event-driven dispatcher before scheduler/db close so any
-    # in-flight workers get their locks/tokens released cleanly.
-    if ENABLE_DISPATCHER:
+    # in-flight workers get their locks/tokens released cleanly. Mirrors
+    # the startup gate — only an api pod ever started these.
+    if CRM_ROLE == "api" and ENABLE_DISPATCHER:
         try:
             logger.info("Stopping event-driven dispatcher...")
             await stop_workers()

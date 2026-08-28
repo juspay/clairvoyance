@@ -1,0 +1,68 @@
+"""The only registry of CRM worker roles — closed dict, no discovery. Lives
+at the package root because it is the one leaf that may import every
+module's contracts side by side."""
+
+import asyncio
+from typing import Any, Callable, Coroutine, Dict, Optional
+
+from app.core.config.static import (
+    CRM_WORKER_BATCH,
+    CRM_WORKER_INTERVAL,
+    POSTGRES_MAX_OVERFLOW,
+    POSTGRES_POOL_SIZE,
+)
+from app.crm.record.contracts import observe_processed_event, run_pass
+from app.crm.shared.worker import run_drain_loop
+
+ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
+    "event-worker": lambda stop_event: run_drain_loop(
+        run_pass,
+        observe_processed_event,
+        interval=CRM_WORKER_INTERVAL,
+        batch=CRM_WORKER_BATCH,
+        stop_event=stop_event,
+        name="event-worker",
+    ),
+    # "walker" and "dispatcher" land here when outreach/ and the C-lane ship —
+    # one line each, per the sealed doc's own "copy the manifest" framing.
+}
+
+_task: Optional[asyncio.Task] = None
+_stop_event: Optional[asyncio.Event] = None
+
+
+async def start_worker_role(role: str) -> None:
+    """No-op for role == 'api'. Raises on an unregistered role, or on a pool
+    too small for a pass to make progress in."""
+    global _task, _stop_event
+    if role == "api" or _task is not None:
+        return
+    if role not in ROLES:
+        raise ValueError(f"unknown CRM_ROLE: {role!r}")
+    ceiling = POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW
+    if ceiling < 2:
+        raise RuntimeError(
+            f"CRM_ROLE={role!r} needs a DB pool ceiling of at least 2, got "
+            f"{ceiling} (POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW). A pass "
+            f"holds two at once: #1 carries the claim's transaction for the "
+            f"whole batch (FOR UPDATE SKIP LOCKED releases only at commit), "
+            f"and #2 is taken and returned by each contract the rows call — "
+            f"resolve(), then assert_facts() — since each opens its own "
+            f"transaction. At a ceiling of one, #2 waits on the connection #1 "
+            f"is holding and the worker hangs on the first row, silently."
+        )
+    _stop_event = asyncio.Event()
+    _task = asyncio.create_task(ROLES[role](_stop_event), name=f"crm-{role}")
+
+
+async def stop_worker_role() -> None:
+    global _task, _stop_event
+    if _task is None or _stop_event is None:
+        return
+    _stop_event.set()
+    try:
+        await asyncio.wait_for(_task, timeout=10)
+    except asyncio.TimeoutError:
+        _task.cancel()
+    _task = None
+    _stop_event = None
