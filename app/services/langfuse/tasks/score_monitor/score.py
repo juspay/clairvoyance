@@ -380,32 +380,44 @@ class ScoreMonitor:
         """
         Get call and lead statistics for the last 24 hours.
 
+        Outcomes are treated generically:
+        - NO_ANSWER: call not answered (not picked up), excluded from pick-up count
+        - BUSY: call answered but did not reach a successful outcome (counted as picked,
+          tracked separately as an unsuccessful result)
+        - None/unknown: excluded from outcome breakdown
+        Everything else is a template-defined outcome and is tracked dynamically.
+
         Returns:
-            Dictionary with call stats, lead stats, provider split, and merchant count.
-            Returns zeros for all metrics if DB query fails.
+            Dictionary with call stats, lead stats, provider split, and outcome
+            breakdowns. Returns zeros for all metrics if DB query fails.
         """
+        # Outcomes excluded from the template-outcome breakdown:
+        # - NO_ANSWER: call not answered, used only to derive picks count
+        # - BUSY: answered but unsuccessful, tracked as its own counter
+        # Everything else (ABORT, CONFIRM, custom outcomes, etc.) is a real
+        # template outcome and flows into the dynamic breakdown.
+        NON_OUTCOME: frozenset = frozenset({"NO_ANSWER", "BUSY"})
+
         # Default stats with zeros
-        default_stats = {
+        default_stats: Dict[str, Any] = {
             # Call-based metrics
             "calls_attempted": 0,
             "calls_picked": 0,
             "calls_picked_pct": 0.0,
-            "calls_successful": 0,  # CONFIRM + CANCEL + ADDRESS_UPDATED
+            "calls_successful": 0,  # Calls with any template outcome (not NO_ANSWER/BUSY/None)
             "calls_successful_pct": 0.0,
-            "calls_busy": 0,  # BUSY outcome (picked but not successful)
+            "calls_busy": 0,  # BUSY: answered but did not reach a successful outcome
             "calls_busy_pct": 0.0,
+            # Dynamic per-outcome call count (excludes NO_ANSWER, BUSY, None)
+            "call_outcome_breakdown": {},
             # Lead-based metrics
             "total_leads": 0,
             "leads_picked": 0,
             "leads_picked_pct": 0.0,
-            "leads_successful": 0,  # Leads with CONFIRM, CANCEL, or ADDRESS_UPDATED
+            "leads_successful": 0,  # Leads with at least one template outcome
             "leads_successful_pct": 0.0,
-            "leads_confirmed": 0,
-            "leads_confirmed_pct": 0.0,
-            "leads_cancelled": 0,
-            "leads_cancelled_pct": 0.0,
-            "leads_address_updated": 0,
-            "leads_address_updated_pct": 0.0,
+            # Dynamic per-outcome lead count (excludes NO_ANSWER, BUSY, None)
+            "lead_outcome_breakdown": {},
             # Provider split
             "provider_split": {
                 "TWILIO": 0,
@@ -432,30 +444,33 @@ class ScoreMonitor:
             # Initialize counters for call-based metrics
             calls_attempted = 0  # FINISHED status
             calls_no_answer = 0
-            calls_confirm = 0
-            calls_cancel = 0
-            calls_address_updated = 0
             calls_busy = 0
+            call_outcome_breakdown: Dict[str, int] = {}
             provider_counts = default_stats["provider_split"].copy()
 
-            # Process each call tracker for call-based stats
+            # Per-lead data grouped by request_id
+            # { request_id → {"finished": int, "no_answer": int, "outcomes": {outcome: count}} }
+            per_lead: Dict[str, Dict[str, Any]] = {}
+
+            # Process each call tracker
             for tracker, calling_provider in call_trackers:
                 # Count attempted calls (FINISHED status)
                 if tracker.status and tracker.status.value == "FINISHED":
                     calls_attempted += 1
 
-                # Count by outcome
-                outcome_value = tracker.outcome if tracker.outcome else None
+                outcome_value: Optional[str] = tracker.outcome or None
+
+                # Call-level outcome tallying
                 if outcome_value == "NO_ANSWER":
                     calls_no_answer += 1
-                elif outcome_value == "CONFIRM":
-                    calls_confirm += 1
-                elif outcome_value == "CANCEL":
-                    calls_cancel += 1
-                elif outcome_value == "ADDRESS_UPDATED":
-                    calls_address_updated += 1
                 elif outcome_value == "BUSY":
                     calls_busy += 1
+                elif outcome_value and outcome_value not in NON_OUTCOME:
+                    # Any named outcome that isn't NO_ANSWER or BUSY is a real
+                    # template outcome (includes ABORT, CONFIRM, custom outcomes, etc.)
+                    call_outcome_breakdown[outcome_value] = (
+                        call_outcome_breakdown.get(outcome_value, 0) + 1
+                    )
 
                 # Count by provider
                 if calling_provider:
@@ -463,9 +478,26 @@ class ScoreMonitor:
                     if provider_upper in provider_counts:
                         provider_counts[provider_upper] += 1
 
+                # Accumulate per-lead data (group by request_id)
+                request_id = tracker.request_id or tracker.id  # fallback to row id
+                if request_id not in per_lead:
+                    per_lead[request_id] = {
+                        "finished": 0,
+                        "no_answer": 0,
+                        "outcomes": {},
+                    }
+                if tracker.status and tracker.status.value == "FINISHED":
+                    per_lead[request_id]["finished"] += 1
+                if outcome_value == "NO_ANSWER":
+                    per_lead[request_id]["no_answer"] += 1
+                if outcome_value and outcome_value not in NON_OUTCOME:
+                    per_lead[request_id]["outcomes"][outcome_value] = (
+                        per_lead[request_id]["outcomes"].get(outcome_value, 0) + 1
+                    )
+
             # Calculate call-based derived metrics
             calls_picked = calls_attempted - calls_no_answer
-            calls_successful = calls_confirm + calls_cancel + calls_address_updated
+            calls_successful = sum(call_outcome_breakdown.values())
 
             calls_picked_pct = (
                 (calls_picked / calls_attempted * 100) if calls_attempted > 0 else 0.0
@@ -477,59 +509,32 @@ class ScoreMonitor:
                 (calls_busy / calls_picked * 100) if calls_picked > 0 else 0.0
             )
 
-            # Get lead-based analytics
-            lead_data = await get_lead_based_analytics(
-                start_date=start_time,
-                end_date=now,
-            )
-
-            # Calculate lead-based metrics
-            total_leads = len(lead_data) if lead_data else 0
+            # Calculate lead-based metrics from per_lead data
+            total_leads = len(per_lead)
             leads_picked = 0
-            leads_confirmed = 0
-            leads_cancelled = 0
-            leads_address_updated = 0
+            lead_outcome_breakdown: Dict[str, int] = {}
 
-            if lead_data:
-                for lead in lead_data:
-                    # Lead is "picked" if finished_calls > no_answer_calls
-                    if lead["finished_calls"] > lead["no_answer_calls"]:
-                        leads_picked += 1
-                    if lead["confirmed_calls"] > 0:
-                        leads_confirmed += 1
-                    if lead["cancelled_calls"] > 0:
-                        leads_cancelled += 1
-                    if lead["address_update_calls"] > 0:
-                        leads_address_updated += 1
+            for lead_data in per_lead.values():
+                # Lead is "picked" if at least one call was answered
+                if lead_data["finished"] > lead_data["no_answer"]:
+                    leads_picked += 1
+                # Accumulate per-outcome lead count
+                for outcome, count in lead_data["outcomes"].items():
+                    if count > 0:
+                        lead_outcome_breakdown[outcome] = (
+                            lead_outcome_breakdown.get(outcome, 0) + 1
+                        )
 
-            # A lead is "successful" if it has CONFIRM, CANCEL, or ADDRESS_UPDATED
-            leads_successful = leads_confirmed + leads_cancelled + leads_address_updated
+            leads_successful = sum(lead_outcome_breakdown.values())
 
-            # Calculate lead-based percentages
             leads_picked_pct = (
                 (leads_picked / total_leads * 100) if total_leads > 0 else 0.0
             )
             leads_successful_pct = (
                 (leads_successful / leads_picked * 100) if leads_picked > 0 else 0.0
             )
-            # Confirmed/Cancelled/Address Updated are % of successful leads
-            leads_confirmed_pct = (
-                (leads_confirmed / leads_successful * 100)
-                if leads_successful > 0
-                else 0.0
-            )
-            leads_cancelled_pct = (
-                (leads_cancelled / leads_successful * 100)
-                if leads_successful > 0
-                else 0.0
-            )
-            leads_address_updated_pct = (
-                (leads_address_updated / leads_successful * 100)
-                if leads_successful > 0
-                else 0.0
-            )
 
-            stats = {
+            stats: Dict[str, Any] = {
                 # Call-based metrics
                 "calls_attempted": calls_attempted,
                 "calls_picked": calls_picked,
@@ -538,18 +543,19 @@ class ScoreMonitor:
                 "calls_successful_pct": round(calls_successful_pct, 1),
                 "calls_busy": calls_busy,
                 "calls_busy_pct": round(calls_busy_pct, 1),
+                # Dynamic breakdowns
+                "call_outcome_breakdown": dict(
+                    sorted(call_outcome_breakdown.items(), key=lambda x: -x[1])
+                ),
                 # Lead-based metrics
                 "total_leads": total_leads,
                 "leads_picked": leads_picked,
                 "leads_picked_pct": round(leads_picked_pct, 1),
                 "leads_successful": leads_successful,
                 "leads_successful_pct": round(leads_successful_pct, 1),
-                "leads_confirmed": leads_confirmed,
-                "leads_confirmed_pct": round(leads_confirmed_pct, 1),
-                "leads_cancelled": leads_cancelled,
-                "leads_cancelled_pct": round(leads_cancelled_pct, 1),
-                "leads_address_updated": leads_address_updated,
-                "leads_address_updated_pct": round(leads_address_updated_pct, 1),
+                "lead_outcome_breakdown": dict(
+                    sorted(lead_outcome_breakdown.items(), key=lambda x: -x[1])
+                ),
                 # Provider split
                 "provider_split": provider_counts,
             }
@@ -656,32 +662,55 @@ class ScoreMonitor:
                 )
 
                 # Section 3: Call-based analytics
-                call_analytics_text = (
-                    f"• Total Calls Attempted: *{call_stats['calls_attempted']}*\n"
-                    f"• Calls Picked Up: *{call_stats['calls_picked']}* ({call_stats['calls_picked_pct']}% of attempted calls)\n"
-                    f"• Successful Calls: *{call_stats['calls_successful']}* ({call_stats['calls_successful_pct']}% of picked calls)\n"
-                    f"• Picked & Busy Calls: *{call_stats['calls_busy']}* ({call_stats['calls_busy_pct']}% of picked calls)"
-                )
+                call_analytics_lines = [
+                    f"• Total Calls Attempted: *{call_stats['calls_attempted']}*",
+                    f"• Calls Picked Up: *{call_stats['calls_picked']}* ({call_stats['calls_picked_pct']}% of attempted calls)",
+                    f"• Successful Calls: *{call_stats['calls_successful']}* ({call_stats['calls_successful_pct']}% of picked calls)",
+                    f"• Answered but Unsuccessful (Busy): *{call_stats['calls_busy']}* ({call_stats['calls_busy_pct']}% of picked calls)",
+                ]
+                # Dynamic per-outcome call count
+                call_outcome_breakdown = call_stats.get("call_outcome_breakdown", {})
+                calls_successful = call_stats["calls_successful"]
+                for outcome, count in call_outcome_breakdown.items():
+                    pct = (
+                        round(count / calls_successful * 100, 1)
+                        if calls_successful > 0
+                        else 0.0
+                    )
+                    outcome_label = outcome.replace("_", " ").title()
+                    call_analytics_lines.append(
+                        f"  ↳ {outcome_label}: *{count}* ({pct}% of successful)"
+                    )
                 sections.append(
                     {
                         "title": "Call-Based Stats",
-                        "text": call_analytics_text,
+                        "text": "\n".join(call_analytics_lines),
                     }
                 )
 
                 # Section 4: Lead-based analytics
-                lead_analytics_text = (
-                    f"• Total Leads Processed: *{call_stats['total_leads']}*\n"
-                    f"• Leads Picked: *{call_stats['leads_picked']}* ({call_stats['leads_picked_pct']}% of total leads)\n"
-                    f"• Successful Leads: *{call_stats['leads_successful']}* ({call_stats['leads_successful_pct']}% of picked leads)\n"
-                    f"• Confirmed: *{call_stats['leads_confirmed']}* ({call_stats['leads_confirmed_pct']}% of successful)\n"
-                    f"• Cancelled: *{call_stats['leads_cancelled']}* ({call_stats['leads_cancelled_pct']}% of successful)\n"
-                    f"• Address Updated: *{call_stats['leads_address_updated']}* ({call_stats['leads_address_updated_pct']}% of successful)"
-                )
+                lead_analytics_lines = [
+                    f"• Total Leads Processed: *{call_stats['total_leads']}*",
+                    f"• Leads Picked: *{call_stats['leads_picked']}* ({call_stats['leads_picked_pct']}% of total leads)",
+                    f"• Successful Leads: *{call_stats['leads_successful']}* ({call_stats['leads_successful_pct']}% of picked leads)",
+                ]
+                # Dynamic outcome breakdown for leads (sorted by count, highest first)
+                lead_outcome_breakdown = call_stats.get("lead_outcome_breakdown", {})
+                leads_successful = call_stats["leads_successful"]
+                for outcome, count in lead_outcome_breakdown.items():
+                    pct = (
+                        round(count / leads_successful * 100, 1)
+                        if leads_successful > 0
+                        else 0.0
+                    )
+                    outcome_label = outcome.replace("_", " ").title()
+                    lead_analytics_lines.append(
+                        f"  ↳ {outcome_label}: *{count}* ({pct}% of successful)"
+                    )
                 sections.append(
                     {
                         "title": "Lead-Based Stats",
-                        "text": lead_analytics_text,
+                        "text": "\n".join(lead_analytics_lines),
                     }
                 )
 
