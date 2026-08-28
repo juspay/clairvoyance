@@ -97,7 +97,7 @@ def insert_lead_call_tracker_query(
         call_id,
         telephony_number_id,
         call_direction.value,
-        outcome,
+        outcome.upper() if outcome else None,
         datetime.now(),
         datetime.now(),
     ]
@@ -364,7 +364,7 @@ def update_lead_call_completion_details_query(
         set_clauses.append(f'"status" = ${len(values)}')
 
     if outcome is not None:
-        values.append(outcome)
+        values.append(outcome.upper())
         set_clauses.append(f'"outcome" = ${len(values)}')
 
     if meta_data is not None:
