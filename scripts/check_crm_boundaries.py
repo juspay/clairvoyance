@@ -49,6 +49,9 @@ TABLE_OWNERS = {
     "platform_identity": "platform",
     "crm_event_raw": "record",
     "crm_journey_event": "record",
+    "crm_decision_log": "permission",
+    "crm_consent_event": "permission",
+    "crm_consent_state": "permission",
 }
 
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions
