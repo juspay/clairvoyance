@@ -20,6 +20,12 @@ def validate_kb_access(
 ) -> None:
     """Validate the user can touch a KB belonging to reseller/merchant.
 
+    Mirrors require_kb_write_access's ownership hierarchy (admin: everything;
+    reseller: any KB under their reseller, incl. all its merchants; merchant:
+    only KBs for a merchant they own) so read access is never stricter than
+    write access — a reseller-role user must be able to read a KB it's
+    already permitted to write to.
+
     Raises:
         HTTPException: 403 if the user lacks permission
     """
@@ -38,6 +44,11 @@ def validate_kb_access(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied to reseller {reseller_id}",
         )
+
+    # A reseller-role user owning the reseller may read any of its KBs,
+    # including ones owned by a different merchant under that reseller.
+    if current_user.role == "reseller":
+        return
 
     if merchant_id:
         if (

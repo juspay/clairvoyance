@@ -150,6 +150,27 @@ class KbUsageResponse(BaseModel):
     templates: List[KbUsageTemplate]
 
 
+class AddSheetDocumentRequest(BaseModel):
+    """Connect a Google Sheet as a knowledge base document."""
+
+    sheet_url: str = Field(
+        ..., min_length=10, description="Full Google Sheets URL (or bare ID)."
+    )
+    ranges: Optional[List[str]] = Field(
+        None,
+        description="Sheet tabs / A1 ranges to sync. Omit to sync all tabs.",
+    )
+    name: Optional[str] = Field(
+        None, description="Display name; defaults to the spreadsheet title."
+    )
+
+
+class SheetsServiceAccountResponse(BaseModel):
+    """The service-account email merchants share their sheet with."""
+
+    email: str
+
+
 class QueryKnowledgeBaseRequest(BaseModel):
     """Retrieval-testing request ("hit testing")."""
 

@@ -461,6 +461,56 @@ def get_kb_full_text_query(kb_ids: List[str]) -> Tuple[str, List[Any]]:
     return text, [kb_ids]
 
 
+def get_kb_tab_rows_query(kb_ids: List[str], tab_name: str) -> Tuple[str, List[Any]]:
+    """Generate query for one tab's text: all READY chunks tagged with this
+    sheet/table name, in ingestion order.
+
+    Mirrors get_kb_full_text_query but filters chunk metadata by table name
+    instead of taking every chunk. Chunk metadata is populated by
+    chunking.py::chunk_table (metadata={"table": table.name, ...}) for every
+    row of an ingested spreadsheet tab.
+
+    Note: if a KB contains multiple documents that each have a tab with the
+    same name, rows from all of them are returned concatenated (scoping is
+    by kb_id, not document_id). Fine for the single-sheet-per-KB case this
+    is built for; revisit if that assumption breaks.
+
+    Match is case-insensitive: an LLM calling get_tab_data("pricing") should
+    still hit a tab actually named "Pricing" rather than round-tripping
+    through list_kb_tabs first — the whole point of this tool over semantic
+    search is a deterministic hit, and case is the one mismatch an LLM is
+    likely to make even when it got the name from list_kb_tabs.
+    """
+    text = f"""
+        SELECT c."text", d."name" AS document_name
+        FROM "{KB_CHUNK_TABLE}" c
+        JOIN "{KB_DOCUMENT_TABLE}" d ON d."id" = c."document_id"
+        WHERE c."kb_id" = ANY($1::uuid[])
+          AND d."status" = 'READY'
+          AND LOWER(c."metadata"->>'table') = LOWER($2)
+        ORDER BY d."created_at", c."document_id", c."chunk_index";
+    """
+    return text, [kb_ids, tab_name]
+
+
+def list_kb_tab_names_query(kb_ids: List[str]) -> Tuple[str, List[Any]]:
+    """Generate query for the distinct tab/table names available across
+    these KBs' READY chunks — lets callers discover valid get_tab_data
+    arguments instead of guessing.
+    """
+    text = f"""
+        SELECT DISTINCT c."metadata"->>'table' AS table_name
+        FROM "{KB_CHUNK_TABLE}" c
+        JOIN "{KB_DOCUMENT_TABLE}" d ON d."id" = c."document_id"
+        WHERE c."kb_id" = ANY($1::uuid[])
+          AND d."status" = 'READY'
+          AND c."metadata"->>'table' IS NOT NULL
+          AND c."metadata"->>'table' != ''
+        ORDER BY table_name;
+    """
+    return text, [kb_ids]
+
+
 def get_kb_token_total_query(kb_ids: List[str]) -> Tuple[str, List[Any]]:
     """Generate query for the total READY token count across KBs.
 
@@ -551,3 +601,30 @@ def hybrid_search_chunks_query(
         top_k,
     ]
     return text, values
+
+
+def get_sheet_documents_due_for_poll_query(
+    min_sync_age_seconds: int,
+    batch_size: int,
+) -> Tuple[str, List[Any]]:
+    """Generate query for READY google_sheet documents due a freshness probe.
+
+    The age floor debounces the poller (Sheets bumps modifiedTime on every
+    keystroke-ish save; we never re-sync a sheet more often than this).
+    Bounded by batch_size, unlike an unbounded pull -- a platform with many
+    connected sheets due at once would otherwise probe every one of them
+    serially in a single tick with no cap, mirroring KB_INGEST_BATCH_SIZE's
+    role in the ingestion pipeline. Oldest-synced sheets are probed first so
+    a large backlog drains fairly across ticks instead of starving the same
+    tail forever.
+    """
+    text = f"""
+        SELECT * FROM "{KB_DOCUMENT_TABLE}"
+        WHERE "source_type" = 'google_sheet'
+          AND "status" = 'READY'
+          AND ("synced_at" IS NULL
+               OR "synced_at" < now() - make_interval(secs => $1))
+        ORDER BY "synced_at" NULLS FIRST
+        LIMIT $2;
+    """
+    return text, [min_sync_age_seconds, batch_size]

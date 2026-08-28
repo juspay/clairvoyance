@@ -29,9 +29,11 @@ from typing import List, Optional, Tuple
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.knowledge_base import (
     get_kb_full_text_rows,
+    get_kb_tab_rows,
     get_kb_token_total,
     get_knowledge_base_by_id,
     hybrid_search_chunks,
+    list_kb_tab_names,
 )
 from app.schemas.breeze_buddy.knowledge_base import EmbeddingConfig, RetrievedChunk
 from app.services.embeddings import get_embedding_provider
@@ -39,6 +41,14 @@ from app.services.redis import get_redis_service
 
 _FULL_TEXT_CACHE_TTL_SECONDS = 3600
 _TOKEN_TOTAL_CACHE_TTL_SECONDS = 3600
+_TAB_TEXT_CACHE_TTL_SECONDS = 3600
+_TAB_LIST_CACHE_TTL_SECONDS = 3600
+# Upper bound on a single tab's text handed to the LLM in one tool result.
+# ~8k tokens at ~4 chars/token — a tab can be up to MAX_SHEET_ROWS (10k) rows,
+# which would otherwise blow context/cost/latency in a single call. Over the
+# cap we truncate and flag it (get_full_kb_text refuses instead, but that path
+# is a boot-time whole-KB inject, not an on-demand fetch).
+_TAB_TEXT_MAX_CHARS = 32_000
 
 
 def _normalize_query(query: str) -> str:
@@ -217,3 +227,83 @@ async def get_full_kb_text(
         except Exception:
             pass
     return text, tokens
+
+
+async def get_kb_tab_text(kb_ids: List[str], tab_name: str) -> Tuple[str, bool]:
+    """Concatenated READY chunk text for one sheet tab, cached.
+
+    Returns ``(text, truncated)``. ``text`` is capped at
+    ``_TAB_TEXT_MAX_CHARS`` so a large tab (up to MAX_SHEET_ROWS rows) can't
+    dump tens of thousands of tokens into the LLM in a single tool result —
+    the same concern get_full_kb_text guards with ``max_tokens``, except a
+    tab is fetched on demand so we truncate rather than refuse. ``truncated``
+    tells the handler to warn the LLM to narrow the request.
+
+    Same version-stamped caching as get_full_kb_text — ingestion INCRs
+    kb:ver:{id} on every publish, so no explicit invalidation is needed
+    here; the cache key just becomes unreachable and expires via TTL.
+    """
+    if not kb_ids:
+        return "", False
+    versions = await _get_kb_versions(kb_ids)
+    cache_key = _versioned_key(f"kb:tab:{tab_name}", kb_ids, versions)
+
+    redis = None
+    try:
+        redis = await get_redis_service()
+        cached = await redis.get(cache_key)
+        if cached is not None:
+            payload = json.loads(cached)
+            return payload["text"], payload["truncated"]
+    except Exception:
+        redis = None
+
+    rows = await get_kb_tab_rows(kb_ids, tab_name)
+    sections: List[str] = []
+    current_doc = None
+    for document_name, chunk_text in rows:
+        if document_name != current_doc:
+            sections.append(f"\n### {document_name}\n")
+            current_doc = document_name
+        sections.append(chunk_text)
+    text = "\n".join(sections).strip()
+
+    truncated = len(text) > _TAB_TEXT_MAX_CHARS
+    if truncated:
+        text = text[:_TAB_TEXT_MAX_CHARS].rstrip()
+
+    if redis is not None:
+        try:
+            await redis.setex(
+                cache_key,
+                json.dumps({"text": text, "truncated": truncated}),
+                _TAB_TEXT_CACHE_TTL_SECONDS,
+            )
+        except Exception:
+            pass
+    return text, truncated
+
+
+async def list_kb_tabs(kb_ids: List[str]) -> List[str]:
+    """Distinct tab names available across these KBs, cached."""
+    if not kb_ids:
+        return []
+    versions = await _get_kb_versions(kb_ids)
+    cache_key = _versioned_key("kb:tabs", kb_ids, versions)
+
+    redis = None
+    try:
+        redis = await get_redis_service()
+        cached = await redis.get(cache_key)
+        if cached is not None:
+            return json.loads(cached)
+    except Exception:
+        redis = None
+
+    names = await list_kb_tab_names(kb_ids)
+    if redis is not None:
+        try:
+            await redis.setex(cache_key, json.dumps(names), _TAB_LIST_CACHE_TTL_SECONDS)
+        except Exception:
+            pass
+    return names

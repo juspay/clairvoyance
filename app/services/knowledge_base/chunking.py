@@ -14,6 +14,7 @@ prices/SKUs retrievable.
 
 import hashlib
 import re
+from itertools import zip_longest
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
@@ -244,7 +245,14 @@ def chunk_prose(
 
 
 def chunk_table(table: TableData) -> List[PreparedChunk]:
-    """Row-as-chunk with headers prepended, plus one sheet-summary chunk."""
+    """Row-as-chunk with headers prepended, plus one sheet-summary chunk.
+
+    Headers can legitimately be blank — a tab mid-edit, a header cell that's
+    whitespace-only, or a sheet author who just never labeled a column. A
+    blank header must not cost the row itself: pairing falls back to the
+    bare cell value (no "label: " prefix) instead of discarding it, so a
+    tab never silently loses real data just because its header row does.
+    """
     chunks: List[PreparedChunk] = []
     headers = [h.strip() for h in table.headers]
 
@@ -255,9 +263,9 @@ def chunk_table(table: TableData) -> List[PreparedChunk]:
             continue
         non_empty_rows += 1
         pairs = [
-            f"{header}: {cell}"
-            for header, cell in zip(headers, cells)
-            if header and cell
+            f"{header}: {cell}" if header else cell
+            for header, cell in zip_longest(headers, cells, fillvalue="")
+            if cell
         ]
         if not pairs:
             continue
@@ -279,11 +287,13 @@ def chunk_table(table: TableData) -> List[PreparedChunk]:
                 metadata["row_part"] = part_index
             chunks.append(_make_chunk(part, metadata))
 
-    if headers and non_empty_rows:
+    if non_empty_rows:
+        column_names = ", ".join(h for h in headers if h)
         summary = (
             f"Table '{table.name}' contains {non_empty_rows} rows with columns: "
-            + ", ".join(h for h in headers if h)
-            + "."
+            f"{column_names}."
+            if column_names
+            else f"Table '{table.name}' contains {non_empty_rows} rows."
         )
         chunks.insert(0, _make_chunk(summary, {"table": table.name, "summary": True}))
 
