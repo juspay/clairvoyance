@@ -58,3 +58,11 @@ CLAUDE.local.md
 
 # Local scratch / test fixtures
 temp/
+
+# pre-commit pyrefly error dump + db-switch profiles
+error.txt
+.env.db.*
+.env.bak
+
+# prod backfill run journals — operational artifacts, PII, never commit
+scripts/backfill_runs/
