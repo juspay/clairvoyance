@@ -158,9 +158,9 @@ GEMINI_TRANSLATION_MODEL = os.environ.get(
 TRANSLATION_TIMEOUT_SECONDS = int(os.environ.get("TRANSLATION_TIMEOUT_SECONDS", "30"))
 
 # --- STT Configuration ---
-STT_PROVIDER = os.environ.get(
-    "STT_PROVIDER", "google"
-).lower()  # "google", "assemblyai", "openai", "deepgram", "soniox", "elevenlabs", or "sarvam"
+STT_PROVIDER = (
+    os.environ.get("STT_PROVIDER", "google").lower()
+)  # "google", "assemblyai", "openai", "deepgram", "soniox", "elevenlabs", or "sarvam"
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
 OPENAI_STT_API_KEY = os.getenv("OPENAI_STT_API_KEY")
 OPENAI_STT_MODEL = os.environ.get(
@@ -275,6 +275,12 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "")
+
+# Read replica — when set, read queries are routed to this host instead of
+# the primary.  Leave empty (default) to keep all traffic on the primary
+# (safe fallback: read_pool will alias write_pool internally).
+POSTGRES_READER_HOST = os.getenv("POSTGRES_READER_HOST", "")
+POSTGRES_READER_PORT = os.getenv("POSTGRES_READER_PORT", POSTGRES_PORT)
 
 # Connection pool settings
 POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
