@@ -44,25 +44,27 @@ def require_admin_or_reseller_access(
     current_user: UserInfo, operation: str = "perform this operation"
 ) -> None:
     """
-    Validate user is an admin or reseller.
+    Validate user is an admin, reseller, or merchant.
 
-    Gates provider number search/buy: purchasing spends real money, so it is
-    restricted to admin and reseller for now, not the full set resolve_buy_scope
-    is otherwise able to handle (merchant/user). resolve_buy_scope's
-    merchant/user branch stays in place, unused while this gate is active, so
-    widening access later is a one-line change here rather than new logic.
+    Gates provider number search/buy. Scope restriction per role is enforced
+    down the line by resolve_buy_scope, which owns tenant validation:
+    - admin: picks any (reseller_id, merchant_id) pair.
+    - reseller: reseller_id forced to their own umbrella; merchant_id, if
+      given, must sit under that umbrella.
+    - merchant/user: merchant_id forced into their JWT scope; reseller_id
+      is always derived from the merchant's record, never client-supplied.
 
     Raises:
-        HTTPException: 403 if user is neither admin nor reseller
+        HTTPException: 403 if user has no buy-capable role
     """
-    if current_user.role not in ("admin", "reseller"):
+    if current_user.role not in ("admin", "reseller", "merchant"):
         logger.warning(
             f"User {current_user.username} (role: {current_user.role}) "
             f"attempted to {operation}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Admin or reseller access required to {operation}",
+            detail=f"Admin, reseller or merchant access required to {operation}",
         )
 
 
