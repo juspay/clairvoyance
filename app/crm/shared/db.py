@@ -71,3 +71,12 @@ async def crm_transaction() -> AsyncIterator[asyncpg.Connection]:
         async with conn.transaction():
             yield conn
         return
+
+
+@asynccontextmanager
+async def savepoint(txn: DbTxn) -> AsyncIterator[None]:
+    """One nested unit inside an open atom (a Postgres SAVEPOINT) — THE door
+    for per-row isolation, so one bad row rolls back alone and the batch
+    commits the rest. Logic writes this, never ``txn.transaction()`` (rule 5)."""
+    async with txn.transaction():
+        yield

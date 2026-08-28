@@ -21,7 +21,8 @@ app/crm/<module>/
                  #   -> apply, inside a boundary this file owns
   workers.py     # drain loops (only if the module owns one)
   db/            # ALL mechanics behind one hop — root stays the story
-    __init__.py  # the db door: re-exports transaction, DbTxn, domain errors
+    __init__.py  # the db door: re-exports transaction, savepoint, DbTxn,
+                 #   domain errors
     accessor.py  # execute one query builder per function; no decisions.
                  #   Splits as accessor_<table>.py when the module grows
     queries.py   # SQL builders — (sql, params), $1 placeholders. Splits as
@@ -32,8 +33,13 @@ app/crm/<module>/
 **The layer law:** `api -> logic -> db/accessor -> db/queries`.
 **The boundary law:** logic owns transaction scope (atomicity is business
 semantics) and imports db-world things ONLY from its module's `db/` door:
-`transaction()`, the opaque `DbTxn` handle, domain-named errors. Logic may
-open a boundary and pass the handle; it may never call anything on it.
+`transaction()`, `savepoint()`, the opaque `DbTxn` handle, domain-named
+errors. Logic may open a boundary and pass the handle; it may never speak
+the driver's API on it — not a query (that is the accessor's job), and not
+`txn.transaction()` for nesting. Nesting has its own door: a batch atom
+isolates one unit with `async with savepoint(txn):`, so a single bad row
+rolls back alone while the rest of the batch commits. CI rule 5 rejects
+every driver method on a `txn`/`conn` in a logic file, nesting included.
 `import asyncpg` is legal only in `shared/db.py` and `db/` packages —
 grep-enforced. Single statements and same-builder
 batch loops self-scope INSIDE accessors (`crm_connection`, db-internal —

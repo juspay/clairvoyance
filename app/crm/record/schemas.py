@@ -9,7 +9,7 @@ commerce) populate the same shape instead of the schema growing per arm.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -28,3 +28,27 @@ class JourneyCard(BaseModel):
     recording_ref: Optional[str] = None
     transcript_ref: Optional[str] = None
     source_kind: str
+
+
+class Extracted(BaseModel):
+    """One producer's payload, translated: handles resolve() may probe on and
+    facts assert_facts() may assert, in the canon's attribute vocabulary."""
+
+    handles: Dict[str, str] = {}
+    facts: Dict[str, Any] = {}
+
+
+class RawEvent(BaseModel):
+    """One claimed crm_event_raw row (T13). processed_at/quarantine_reason
+    aren't modeled: a claimed row is always still pending."""
+
+    id: str
+    merchant_id: str
+    source: str
+    topic: str
+    schema_version: str
+    external_id: str
+    payload: Dict[str, Any]
+    received_at: datetime
+    occurred_at: Optional[datetime] = None
+    customer_id: Optional[str] = None

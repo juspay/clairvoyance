@@ -443,6 +443,19 @@ BB_DISPATCH_QPS_JITTER_MS = int(os.environ.get("BB_DISPATCH_QPS_JITTER_MS", 200)
 #   - BB_RECONCILE_BACKLOG_LIMIT
 
 
+# -----------------------------------------------------------------------------
+# CRM worker roles (design/worker-runtime.md, sealed 26-Aug-2026)
+# One image, N pods: CRM_ROLE selects which drain loop (if any) this
+# replica runs. Independent of POD_ROLE — a CRM worker pod never serves
+# HTTP or the dispatcher. "api" (default) starts no loop.
+# -----------------------------------------------------------------------------
+CRM_ROLE = os.environ.get("CRM_ROLE", "api").lower()
+
+CRM_WORKER_INTERVAL = float(os.environ.get("CRM_WORKER_INTERVAL", 1.0))
+CRM_WORKER_BATCH = int(os.environ.get("CRM_WORKER_BATCH", 100))
+CRM_WORKER_HEARTBEAT = float(os.environ.get("CRM_WORKER_HEARTBEAT", 60.0))
+
+
 # Announcement Banner Configuration
 DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR = os.environ.get(
     "DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR", "white"

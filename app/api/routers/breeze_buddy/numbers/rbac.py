@@ -55,14 +55,14 @@ def require_admin_or_reseller_access(
     Raises:
         HTTPException: 403 if user is neither admin nor reseller
     """
-    if current_user.role not in ("admin", "reseller"):
+    if current_user.role not in ("admin", "reseller", "merchant"):
         logger.warning(
             f"User {current_user.username} (role: {current_user.role}) "
             f"attempted to {operation}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Admin or reseller access required to {operation}",
+            detail=f"Admin, reseller, or merchant access required to {operation}",
         )
 
 
