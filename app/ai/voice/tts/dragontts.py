@@ -217,6 +217,17 @@ class DragonTTSService(TTSService):
         """DragonTTS accepts a plain language code — no provider mapping needed."""
         return None
 
+    def can_generate_metrics(self) -> bool:
+        """Emit TTFB/processing metrics like every built-in TTS provider.
+
+        Without this override pipecat's base returns False and DragonTTS calls
+        record no latency at all — the collector never sees a ttfb_ms for the
+        service. The base class runs the TTFB clock itself: started when the
+        first aggregated sentence arrives, stopped on the first streamed audio
+        chunk (cache hit or miss alike).
+        """
+        return True
+
     async def start(self, frame: StartFrame) -> None:
         await super().start(frame)
         self._client = httpx.AsyncClient(timeout=self._TIMEOUT)
