@@ -94,7 +94,18 @@ def test_handle_call_in_logic_fails(tmp_path: Path) -> None:
         tmp_path,
         {"app/crm/identity/resolve.py": "row = await txn.fetchrow(q)\n"},
     )
-    assert any("query method called" in e for e in check(root))
+    assert any("driver method called" in e for e in check(root))
+
+
+def test_nesting_via_driver_transaction_in_logic_fails(tmp_path: Path) -> None:
+    """Nesting has its own door. A raw ``txn.transaction()`` emits the same
+    SAVEPOINT as savepoint(txn) but reads as a second transaction — so a
+    reader concludes the row commits on its own, which it does not."""
+    root = _tree(
+        tmp_path,
+        {"app/crm/record/workers.py": "async with txn.transaction():\n    pass\n"},
+    )
+    assert any("driver method called" in e for e in check(root))
 
 
 def test_unowned_table_in_migration_fails(tmp_path: Path) -> None:
