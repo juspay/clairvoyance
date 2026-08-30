@@ -67,7 +67,11 @@ SQL_STMT = re.compile(
     re.IGNORECASE,
 )
 IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(app[\w.]*)", re.MULTILINE)
-HANDLE_CALL = re.compile(r"\b(?:txn|conn)\.(?:execute|fetch|fetchrow|fetchval)\(")
+# Nesting counts: a raw ``txn.transaction()`` reads like a new transaction
+# but is a SAVEPOINT, and logic has its own door for that — savepoint(txn).
+HANDLE_CALL = re.compile(
+    r"\b(?:txn|conn)\.(?:execute|fetch|fetchrow|fetchval|transaction)\("
+)
 CREATE_TABLE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:crm|platform)_\w+)", re.IGNORECASE
 )
@@ -127,9 +131,10 @@ def check(root: Path = ROOT) -> list[str]:
         if in_crm and not (in_db_pkg or is_shared_db):
             if HANDLE_CALL.search(text):
                 errors.append(
-                    f"{rp}: query method called on a txn/conn handle outside "
+                    f"{rp}: driver method called on a txn/conn handle outside "
                     f"db/ — logic opens boundaries and passes handles; only "
-                    f"accessors call anything on them"
+                    f"accessors query them, and nesting goes through "
+                    f"savepoint(txn), never txn.transaction()"
                 )
 
         # 4. import direction

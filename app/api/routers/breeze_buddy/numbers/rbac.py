@@ -44,16 +44,15 @@ def require_admin_or_reseller_access(
     current_user: UserInfo, operation: str = "perform this operation"
 ) -> None:
     """
-    Validate user is an admin or reseller.
+    Validate user is an admin, reseller or merchant.
 
-    Gates provider number search/buy: purchasing spends real money, so it is
-    restricted to admin and reseller for now, not the full set resolve_buy_scope
-    is otherwise able to handle (merchant/user). resolve_buy_scope's
-    merchant/user branch stays in place, unused while this gate is active, so
-    widening access later is a one-line change here rather than new logic.
+    Gates provider number search/buy: purchasing spends real money, so the
+    gate is a closed allowlist rather than a denylist. resolve_buy_scope can
+    also scope a plain user, but that role must not reach it — a user buys
+    nothing on their own account.
 
     Raises:
-        HTTPException: 403 if user is neither admin nor reseller
+        HTTPException: 403 if the user is none of admin, reseller, merchant
     """
     if current_user.role not in ("admin", "reseller", "merchant"):
         logger.warning(
