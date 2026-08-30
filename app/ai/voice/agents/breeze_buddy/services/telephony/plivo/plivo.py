@@ -1,12 +1,15 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
+from requests import exceptions as requests_exceptions
 from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    OutboundCallContext,
+    OutboundCallPlacement,
     VoiceCallProvider,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.conference import (
@@ -57,7 +60,8 @@ class PlivoProvider(VoiceCallProvider):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
-    ):
+        context: Optional[OutboundCallContext] = None,
+    ) -> Optional[OutboundCallPlacement]:
         """
         Initiate an outbound call via Plivo.
 
@@ -72,42 +76,77 @@ class PlivoProvider(VoiceCallProvider):
             telephony_number: Caller ID / telephony number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            context: Lead binding context carried back on Plivo callbacks
         """
         answer_url = f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/answer"
-        params = {}
+        params: Dict[str, str] = {}
         if reseller_id:
             params["reseller_id"] = reseller_id
         if template_name:
             params["template"] = template_name
+        if context and context.lead_id:
+            params["lead_id"] = context.lead_id
+        if context and context.telephony_number_id:
+            params["telephony_number_id"] = context.telephony_number_id
         if params:
             answer_url += "?" + urlencode(params)
+
+        hangup_url = (
+            f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status"
+        )
+        if params:
+            hangup_url += "?" + urlencode(params)
 
         try:
             response = self.client.calls.create(
                 from_=telephony_number,
                 to_=customer_mobile_number,
                 answer_url=answer_url,
-                hangup_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status",
+                hangup_url=hangup_url,
             )
 
             logger.info(f"Plivo call initiated with answer_url: {answer_url}")
             logger.info(f"Plivo call response: {response}")
 
-            # Get the call UUID from the response
-            call_uuid = None
-            if hasattr(response, "request_uuid"):
-                call_uuid = response.request_uuid
-            elif hasattr(response, "call_uuid"):
-                call_uuid = response.call_uuid
-            elif hasattr(response, "api_id"):
-                call_uuid = response.api_id
+            request_uuid = self._response_attr(response, "request_uuid")
+            call_uuid = self._response_attr(response, "call_uuid")
+            api_id = self._response_attr(response, "api_id")
 
-            logger.info(f"Plivo call initiated successfully: {call_uuid}")
-            return {"status": "call_initiated", "sid": call_uuid}
+            if call_uuid:
+                logger.info(f"Plivo call initiated with CallUUID: {call_uuid}")
+                return OutboundCallPlacement.started(
+                    call_uuid, submission_id=request_uuid, api_id=api_id
+                )
 
+            if request_uuid:
+                logger.info(
+                    f"Plivo call submission accepted: request_uuid={request_uuid}"
+                )
+                return OutboundCallPlacement.submitted(request_uuid, api_id=api_id)
+
+            logger.error(
+                "Plivo call response did not include request_uuid or call_uuid"
+            )
+            return OutboundCallPlacement.rejected(
+                "Plivo response did not include request_uuid or call_uuid",
+                api_id=api_id,
+            )
+
+        except requests_exceptions.ReadTimeout as e:
+            logger.opt(exception=e).error(
+                "Plivo call placement outcome unknown after provider API timeout"
+            )
+            return OutboundCallPlacement.unknown(str(e), error_type=type(e).__name__)
         except Exception as e:
-            logger.error(f"Error when making call via Plivo: {e}")
-            return None
+            logger.opt(exception=e).error(
+                f"Plivo call submission rejected by SDK/API ({type(e).__name__})"
+            )
+            return OutboundCallPlacement.rejected(str(e), error_type=type(e).__name__)
+
+    @staticmethod
+    def _response_attr(response: Any, name: str) -> str | None:
+        value = getattr(response, name, None)
+        return str(value) if value else None
 
 
 async def plivo_dial_xml(

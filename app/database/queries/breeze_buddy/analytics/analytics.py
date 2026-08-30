@@ -767,8 +767,9 @@ def get_attempts_to_connect_query(filters: Dict[str, Any]) -> Tuple[str, List[An
 
     Attempt ordinal is derived with ROW_NUMBER over attempt_count (then time) so it
     is robust regardless of how attempt_count is based. A "connected" attempt is any
-    row whose outcome is set and not NO_ANSWER / BUSY / ABORT (aborted leads were
-    cancelled — often with zero dials — and must not read as a first-attempt pick).
+    row whose outcome is set and not NO_ANSWER / BUSY / ABORT / INVALID_PHONE
+    (aborted and invalid-phone leads were never connected, and often never
+    dialed, so neither may read as a first-attempt pick).
     """
     conditions, values = build_analytics_where_clause(filters)
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
@@ -801,7 +802,8 @@ def get_attempts_to_connect_query(filters: Dict[str, Any]) -> Tuple[str, List[An
         picked AS (
             SELECT request_id, MIN(attempt_no) AS pick_attempt
             FROM attempts
-            WHERE outcome IS NOT NULL AND outcome NOT IN ('NO_ANSWER', 'BUSY', 'ABORT')
+            WHERE outcome IS NOT NULL
+              AND outcome NOT IN ('NO_ANSWER', 'BUSY', 'ABORT', 'INVALID_PHONE')
             GROUP BY request_id
         )
         SELECT

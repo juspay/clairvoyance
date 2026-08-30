@@ -221,6 +221,83 @@ def update_lead_call_details_query(
     return text, values
 
 
+def mark_provider_submission_processing_query(
+    lead_id: str,
+    submission_id: str,
+    call_initiated_time: datetime,
+    telephony_number_id: str,
+    meta_data: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Mark an accepted provider submission PROCESSING in one atomic write.
+
+    This keeps the temporary provider request id, telephony number, timestamp,
+    status, and callback-correlation metadata coherent.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "status" = $1,
+            "call_id" = $2,
+            "updated_at" = NOW(),
+            "call_initiated_time" = $3,
+            "telephony_number_id" = $4,
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $5::jsonb
+        WHERE "id" = $6
+        AND "status" = $7
+        RETURNING *;
+    """
+    values = [
+        LeadCallStatus.PROCESSING.value,
+        submission_id,
+        call_initiated_time,
+        telephony_number_id,
+        json.dumps(meta_data),
+        lead_id,
+        LeadCallStatus.BACKLOG.value,
+    ]
+    return text, values
+
+
+def bind_submitted_call_uuid_query(
+    lead_id: str,
+    call_uuid: str,
+    call_initiated_time: datetime,
+    telephony_number_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Bind a provider callback call UUID to a submitted outbound call.
+
+    Plivo create-call can acknowledge the request with RequestUUID before the
+    live CallUUID is known. The worker records that RequestUUID as call_id and
+    marks the row PROCESSING so stuck-call cleanup can see it. The first Plivo
+    callback then replaces the temporary request id with the live CallUUID.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "call_id" = $1,
+            "updated_at" = NOW(),
+            "call_initiated_time" = COALESCE("call_initiated_time", $2),
+            "telephony_number_id" = COALESCE("telephony_number_id", $3)
+        WHERE "id" = $4
+        AND "status" = $5
+        AND (
+            "call_id" = $1
+            OR "meta_data"->'provider_call_submission'->>'status' = 'accepted_waiting_for_call_uuid'
+        )
+        RETURNING *;
+    """
+    values = [
+        call_uuid,
+        call_initiated_time,
+        telephony_number_id,
+        lead_id,
+        LeadCallStatus.PROCESSING.value,
+    ]
+    return text, values
+
+
 def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by call ID.
@@ -405,6 +482,41 @@ def update_lead_call_completion_details_query(
         RETURNING *;
     """
 
+    return text, values
+
+
+def finish_lead_call_and_release_lock_query(
+    id: str,
+    outcome: str,
+    meta_data: Dict[str, Any],
+    call_end_time: datetime,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate an atomic terminal transition for dispatcher-owned leads.
+
+    The worker must not unlock a lead unless the terminal outcome is written;
+    otherwise backlog reconciliation can pick the same bad row again.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "status" = $1,
+            "outcome" = $2,
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb,
+            "call_end_time" = $4,
+            "is_locked" = FALSE,
+            "updated_at" = NOW()
+        WHERE "id" = $5
+          AND "is_locked" = TRUE
+        RETURNING *;
+    """
+    values = [
+        LeadCallStatus.FINISHED.value,
+        outcome,
+        json.dumps(meta_data),
+        call_end_time,
+        id,
+    ]
     return text, values
 
 

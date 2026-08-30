@@ -4,7 +4,7 @@ Campaign progress correctness: `dialed` and per-lead attempt counts.
 The stored lead_call_tracker.attempt_count is a 0-BASED retry counter (a
 lead answered on its first attempt finishes with 0), so anything that
 means "attempts made" must add 1 when a call was actually initiated —
-and never for leads that finished without a dial (ABORT).
+and never for leads that finished without a dial (ABORT / INVALID_PHONE).
 """
 
 from datetime import datetime, timezone
@@ -68,3 +68,4 @@ def test_dialed_predicate_covers_first_attempt_connects():
     # aggregate must not rely on attempt_count alone.
     q, _ = campaign_stats_query(["c1"])
     assert "attempt_count > 0 OR call_initiated_time IS NOT NULL" in q
+    assert "outcome NOT IN ('NO_ANSWER', 'ABORT', 'INVALID_PHONE')" in q
