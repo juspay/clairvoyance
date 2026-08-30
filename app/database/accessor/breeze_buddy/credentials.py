@@ -19,6 +19,7 @@ from app.database.queries.breeze_buddy.credentials import (
     delete_credential_query,
     get_all_credentials_query,
     get_credential_by_id_query,
+    get_credential_by_name_query,
     get_credentials_by_merchant_query,
     insert_credential_query,
     update_credential_query,
@@ -159,6 +160,22 @@ async def get_credential_by_id(
         if raise_errors:
             raise
         return None
+
+
+async def get_credential_by_name(
+    reseller_id: Optional[str],
+    name: str,
+    mask: bool = True,
+) -> Optional[Credential]:
+    """Get a credential by its unique name, without decrypting every other
+    credential the reseller owns."""
+    try:
+        query_text, values = get_credential_by_name_query(reseller_id, name)
+        result = await run_parameterized_query(query_text, values)
+        return decode_single_credential(result, mask=mask)
+    except Exception as e:
+        logger.error(f"Error getting credential by name '{name}': {e}")
+        raise
 
 
 async def get_credentials_by_merchant(

@@ -29,6 +29,7 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
+from app.crm.connectivity.meta_graph import TOKEN_KEY as META_TOKEN_KEY
 from app.crm.connectivity.providers.base import ChannelAdapter, require_secret
 from app.crm.connectivity.reasons import (
     REASON_BAD_ADDRESS,
@@ -45,7 +46,9 @@ from app.crm.connectivity.schemas import (
 )
 from app.crm.shared.redact import mask_address, mask_digit_runs
 
-TOKEN_KEY = "system_user_token"
+# Single-sourced from meta_graph.py, which is what onboarding writes the
+# bundle with — the write side and the read side cannot be allowed to drift.
+TOKEN_KEY = META_TOKEN_KEY
 
 # Meta's error codes, split by the only question an adapter may ask: could
 # the same request plausibly succeed later?

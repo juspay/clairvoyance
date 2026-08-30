@@ -70,6 +70,28 @@ def get_credentials_by_merchant_query(
         return text, []
 
 
+def get_credential_by_name_query(
+    reseller_id: Optional[str], name: str
+) -> Tuple[str, List[Any]]:
+    """Name-keyed read — one row, decrypted once, instead of scanning every
+    credential a reseller owns."""
+    if reseller_id:
+        text = f"""
+            SELECT * FROM "{CREDENTIALS_TABLE}"
+            WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
+            AND "name" = $2 AND "is_active" = TRUE
+            ORDER BY "reseller_id" NULLS LAST
+            LIMIT 1;
+        """
+        return text, [reseller_id, name]
+    else:
+        text = f"""
+            SELECT * FROM "{CREDENTIALS_TABLE}"
+            WHERE "reseller_id" IS NULL AND "name" = $1 AND "is_active" = TRUE;
+        """
+        return text, [name]
+
+
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
     text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "name" ASC;'

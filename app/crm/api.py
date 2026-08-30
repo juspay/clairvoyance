@@ -13,6 +13,7 @@ because webhook ingress must stay reachable without a bearer token.
 
 from fastapi import APIRouter
 
+from app.crm.connectivity import api as connectivity_api
 from app.crm.identity import api as identity_api
 from app.crm.outreach import api as outreach_api
 from app.crm.record import api as record_api
@@ -21,3 +22,6 @@ router = APIRouter()
 router.include_router(identity_api.router, prefix="/customers", tags=["CRM Customers"])
 router.include_router(record_api.router, prefix="/customers", tags=["CRM Journey"])
 router.include_router(outreach_api.router, prefix="/workflows", tags=["CRM Workflows"])
+router.include_router(
+    connectivity_api.router, prefix="/connectivity", tags=["CRM Connectivity"]
+)

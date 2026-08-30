@@ -1,9 +1,110 @@
-"""Leaf shapes for the connectivity module. Imports nothing internal."""
+"""connectivity module — leaf Pydantic shapes (module rules §1). Imports
+nothing internal; api.py, contracts.py and tests all import from here."""
 
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+
+class OnboardWhatsappRequest(BaseModel):
+    """Body for POST /crm/connectivity/whatsapp/onboard. merchant_id rides in
+    the body (mirroring the established leads/rbac.py convention — a caller
+    with multiple merchant_ids has no single "current" one to derive it
+    from) and api.py validates it against the caller's RBAC merchant_ids
+    before anything else runs (CRM law #6, fail closed on tenancy)."""
+
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    code: str = Field(..., description="Embedded Signup authorization code")
+    waba_id: str = Field(..., description="WhatsApp Business Account id")
+    phone_number_id: str = Field(..., description="Meta phone_number_id")
+    display_label: Optional[str] = Field(
+        None, description="Merchant-facing label for the console"
+    )
+
+
+class InstallationRead(BaseModel):
+    id: str
+    merchant_id: str
+    connector_key: str
+    external_account_id: str
+    display_label: Optional[str] = None
+    status: str
+    token_expires_at: Optional[datetime] = None
+    last_event_at: Optional[datetime] = None
+    health_detail: Dict[str, Any] = Field(default_factory=dict)
+    installed_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChannelBindingRead(BaseModel):
+    id: str
+    merchant_id: str
+    channel: str
+    installation_id: str
+    address: str
+    capabilities: Dict[str, Any] = Field(default_factory=dict)
+    is_primary: bool
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateTemplateDraftRequest(BaseModel):
+    """Body for POST /crm/connectivity/templates. components is stored
+    verbatim (Meta's own registered structure — HEADER/BODY/FOOTER/BUTTONS
+    + variables + example values); never validated against Meta's schema
+    here, that's Meta's job at submission time."""
+
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    channel: str = Field(..., description="whatsapp · sms · … — no CHECK, code decides")
+    provider_account_ref: str = Field(
+        ..., description="The WABA (or DLT entity) that owns this template"
+    )
+    name: str = Field(..., description="What crm_message.template_id will store")
+    language: str = Field(..., description="Meta's real key is (WABA, name, language)")
+    components: List[Dict[str, Any]] = Field(
+        ..., description="Their registered structure, verbatim"
+    )
+
+
+class SubmitTemplateRequest(BaseModel):
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    category: str = Field(..., description="MARKETING · UTILITY · AUTHENTICATION")
+
+
+class EditTemplateRequest(BaseModel):
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    components: List[Dict[str, Any]] = Field(
+        ..., description="Replacement components, verbatim"
+    )
+
+
+class RetireTemplateRequest(BaseModel):
+    merchant_id: str = Field(..., description="Tenant scope — required")
+
+
+class TemplateRead(BaseModel):
+    id: str
+    merchant_id: str
+    channel: str
+    provider_account_ref: str
+    name: str
+    language: str
+    provider_template_id: Optional[str] = None
+    category: Optional[str] = None
+    submitted_category: Optional[str] = None
+    category_updated_at: Optional[datetime] = None
+    components: List[Dict[str, Any]]
+    status: str
+    status_updated_at: datetime
+    rejection_reason: Optional[str] = None
+    quality: str
+    quality_updated_at: Optional[datetime] = None
+    last_synced_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class QueuedMessage(BaseModel):

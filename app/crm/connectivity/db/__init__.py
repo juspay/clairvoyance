@@ -1,8 +1,9 @@
-"""The db door — the only db-world names logic may import.
-
-Nothing here opens a transaction today (every statement is a single UPDATE);
-the door still re-exports these so the first one has somewhere to import from.
-"""
+"""connectivity's db layer door — the ONLY surface logic imports for
+db-world things (module rules §1): atomically() (the only boundary door),
+the opaque handle, domain-named errors. A logic file touches a handle in
+exactly ONE place: the txn parameter of an _in_txn body; accessors
+self-scope everything else (single statements and batch loops). asyncpg
+exists only in shared/db and db/."""
 
 from app.crm.shared.db import DbTxn, UniqueViolation, atomically
 

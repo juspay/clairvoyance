@@ -706,6 +706,12 @@ DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SLACK_TAG_USERS = os.environ.get("SLACK_TAG_USERS", "narsimha.reddy")
 
+# Meta Embedded Signup — the app identity onboarding.py exchanges the
+# signup code against. The Graph endpoint and version it calls are the same
+# two dials the send path uses, defined once above.
+META_APP_ID = os.environ.get("META_APP_ID", "")
+META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
+
 BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS = int(
     os.environ.get("BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS", "60")
 )  # How often the scheduler checks tasks (in seconds). Pre-existing shared
@@ -794,4 +800,11 @@ CRM_RUN_SWEEP_BATCH_SIZE = int(os.environ.get("CRM_RUN_SWEEP_BATCH_SIZE", 500))
 # How often the walker pauses its claim to run one sweep pass.
 CRM_RUN_SWEEP_INTERVAL_SECONDS = _positive_float(
     "CRM_RUN_SWEEP_INTERVAL_SECONDS", 3600.0
+)
+
+# How often the dispatcher pauses its claim to run one WhatsApp template
+# sync pass (connectivity's drift healer) — same "housekeeping on the
+# existing loop" pattern as the walker's retention sweep above.
+CRM_TEMPLATE_SYNC_INTERVAL_SECONDS = _positive_float(
+    "CRM_TEMPLATE_SYNC_INTERVAL_SECONDS", 3600.0
 )

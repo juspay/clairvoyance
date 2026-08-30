@@ -57,6 +57,7 @@ TABLE_OWNERS = {
     "crm_workflow_enrollment": "outreach",
     "crm_connector_installation": "connectivity",
     "crm_channel_binding": "connectivity",
+    "crm_template": "connectivity",
 }
 
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions
