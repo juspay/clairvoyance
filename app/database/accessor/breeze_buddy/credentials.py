@@ -5,6 +5,8 @@ Database accessor functions for the credentials table.
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+import asyncpg
+
 from app.core.logger import logger
 from app.database.decoder.breeze_buddy.credentials import (
     CREDENTIAL_MASK,
@@ -23,6 +25,12 @@ from app.database.queries.breeze_buddy.credentials import (
 )
 from app.schemas import Credential, CredentialType
 from app.services.encryption import encrypt_credential
+
+
+class CredentialInUseError(Exception):
+    """RESTRICT refused the DELETE: a connector installation still holds
+    this bundle. The domain word for the FK violation, so callers can
+    answer 409 without knowing which driver said no."""
 
 
 def _merge_credential_value(
@@ -134,14 +142,22 @@ async def create_credential(
 async def get_credential_by_id(
     credential_id: str,
     mask: bool = True,
+    raise_errors: bool = False,
 ) -> Optional[Credential]:
-    """Get a credential by ID."""
+    """Get a credential by ID.
+
+    With raise_errors=True, a query failure re-raises instead of folding into
+    None — for callers that treat None as terminal ("row gone") and must not
+    read a transient outage as that. None still means "no such row" either way.
+    """
     try:
         query_text, values = get_credential_by_id_query(credential_id)
         result = await run_parameterized_query(query_text, values)
         return decode_single_credential(result, mask=mask)
     except Exception as e:
         logger.error(f"Error getting credential by ID: {e}")
+        if raise_errors:
+            raise
         return None
 
 
@@ -258,20 +274,34 @@ async def update_credential(
 
 
 async def delete_credential(credential_id: str) -> bool:
-    """Delete a credential by ID."""
-    logger.info(f"Deleting credential {credential_id}")
+    """Delete a credential by ID. False means only "no row matched".
+
+    Errors re-raise rather than fold into False, so the handler can answer
+    honestly: a connector installation still holding the bundle raises
+    CredentialInUseError (the handler's 409), anything else re-raises as
+    itself (the handler's 500) — never a 404 for a row that still exists.
+    The driver's exception is translated HERE, at the accessor boundary,
+    so no layer above needs to import asyncpg.
+    """
+    # bind() rather than interpolation: credential_id lands as a structured
+    # field a log search can filter on.
+    log = logger.bind(credential_id=credential_id)
+    log.info("Deleting credential")
 
     try:
         query_text, values = delete_credential_query(credential_id)
         result = await run_parameterized_query(query_text, values)
 
         if result and len(result) > 0:
-            logger.info(f"Credential {credential_id} deleted successfully")
+            log.info("Credential deleted successfully")
             return True
 
-        logger.warning(f"Credential {credential_id} not found for deletion")
+        log.warning("Credential not found for deletion")
         return False
 
+    except asyncpg.ForeignKeyViolationError as exc:
+        log.warning("Credential is still in use and was not deleted")
+        raise CredentialInUseError(credential_id) from exc
     except Exception as e:
-        logger.error(f"Error deleting credential {credential_id}: {e}")
-        return False
+        log.opt(exception=e).error("Error deleting credential")
+        raise

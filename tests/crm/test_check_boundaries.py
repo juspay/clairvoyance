@@ -152,3 +152,30 @@ def test_connection_handle_in_logic_fails(tmp_path: Path) -> None:
         },
     )
     assert any("connection handle in logic" in e for e in check(root))
+
+
+def test_adapter_import_outside_send_fails(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/dispatch.py": (
+                "from app.crm.connectivity.providers import adapter_for\n"
+            )
+        },
+    )
+    assert any("adapter import outside send.py" in e for e in check(root))
+
+
+def test_send_and_providers_themselves_may_import_adapters(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/send.py": (
+                "from app.crm.connectivity.providers import adapter_for\n"
+            ),
+            "app/crm/connectivity/providers/whatsapp.py": (
+                "from app.crm.connectivity.providers.base import ChannelAdapter\n"
+            ),
+        },
+    )
+    assert check(root) == []

@@ -29,6 +29,9 @@ PR time — earlier than a grant would fail:
   10. HANDLES STAY DOWN — connection()/crm_connection never appears in
      logic; accessors self-scope single statements and batch loops. A
      logic file touches a handle ONLY as an _in_txn body's txn param.
+  11. ADAPTER CONFINEMENT — app.crm.connectivity.providers is imported
+     only by app/crm/connectivity/send.py and inside providers/ itself;
+     any other import reaches a provider around the send() door's checks.
 
 New table? Add it to TABLE_OWNERS with its owning module. New violation
 class? This script is the place — the boundary is code, so the check is
@@ -52,6 +55,8 @@ TABLE_OWNERS = {
     "crm_message": "connectivity",
     "crm_workflow": "outreach",
     "crm_workflow_enrollment": "outreach",
+    "crm_connector_installation": "connectivity",
+    "crm_channel_binding": "connectivity",
 }
 
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions
@@ -86,6 +91,7 @@ def crm_module_of(rp: str) -> str | None:
 
 
 def check(root: Path = ROOT) -> list[str]:
+    """Scan the tree and return every boundary violation as a message."""
     errors: list[str] = []
     py_files = [
         p
@@ -166,6 +172,15 @@ def check(root: Path = ROOT) -> list[str]:
                         f"{rp}: the data layer imports neither app.ai nor "
                         f"app.crm ({target}) — use the hook-registry pattern"
                     )
+            # 11. adapter confinement — providers/ sits behind the send() door
+            if target.startswith("app.crm.connectivity.providers"):
+                if rp != "app/crm/connectivity/send.py" and not rp.startswith(
+                    "app/crm/connectivity/providers/"
+                ):
+                    errors.append(
+                        f"{rp}: adapter import outside send.py ({target}) — "
+                        f"providers/ is reached only through the send() door"
+                    )
 
         # 7-9. the atomic grammar
         if in_crm and not is_shared_db:
@@ -214,12 +229,16 @@ def check(root: Path = ROOT) -> list[str]:
 
 
 def main() -> int:
+    """CLI entry: print violations and exit nonzero when any exist."""
     errors = check()
     for error in errors:
         print(f"error: {error}", file=sys.stderr)
     if errors:
         return 1
-    print("OK: crm boundaries clean (ownership, SQL, driver, imports, handles).")
+    print(
+        "OK: crm boundaries clean "
+        "(ownership, SQL, driver, imports, handles, adapters)."
+    )
     return 0
 
 

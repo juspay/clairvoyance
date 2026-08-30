@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 
 from app.core.logger import logger
 from app.database.accessor import (
+    CredentialInUseError,
     create_credential,
     delete_credential,
     get_all_credentials,
@@ -155,7 +156,10 @@ async def update_credential_handler(
 
 async def delete_credential_handler(credential_id: str, current_user: UserInfo) -> None:
     """Delete a credential."""
-    logger.info(f"User {current_user.username} deleting credential: {credential_id}")
+    # bind() rather than interpolation: credential_id lands as a structured
+    # field a log search can filter on.
+    log = logger.bind(credential_id=credential_id)
+    log.info(f"User {current_user.username} deleting credential")
 
     try:
         existing = await get_credential_by_id(credential_id, mask=True)
@@ -172,12 +176,25 @@ async def delete_credential_handler(credential_id: str, current_user: UserInfo) 
                 detail=f"Credential {credential_id} not found",
             )
 
-        logger.info(f"Credential {credential_id} deleted successfully")
+        log.info("Credential deleted successfully")
 
     except HTTPException:
         raise
+    except CredentialInUseError as exc:
+        # The credential exists and is still wired to something — a connector
+        # installation holds it. 409, not 500: the request was understood and
+        # deliberately refused, and the caller can act on it by disconnecting
+        # the connector first. The accessor translated the driver's FK
+        # violation, so this layer knows credentials, not Postgres.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Credential {credential_id} is in use by a connector and "
+                f"cannot be deleted. Disconnect the connector first."
+            ),
+        ) from exc
     except Exception as e:
-        logger.error(f"Error deleting credential {credential_id}: {e}", exc_info=True)
+        log.opt(exception=e).error("Error deleting credential")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete credential.",

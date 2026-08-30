@@ -8,12 +8,13 @@ The loop itself is not here: claim_sends()/dispatch_send() plug into the
 shared drain-loop scaffold (app/crm/shared/worker.py) as the "dispatcher"
 role in app/crm/worker_main.py. This file owns only what a row means.
 
-TODO: no permission check yet — may_contact() does not exist. It belongs in
-_dispatch_one before send(), and a refusal must write a 'blocked' row rather
-than retry. This phase ships demo sends without it by explicit scope decision
-(see the PR thread with Swaroop); the gate structure lands with B5.
+The gate exists as a thin slice: _gate() below probes platform suppression
+(fail closed) before every send, and a refusal writes a 'blocked' row. The
+full may_contact() — consent, purpose, quiet hours — replaces _gate's body
+with B5; the call site never changes.
 """
 
+import asyncio
 import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,12 +24,22 @@ from app.core.config.static import (
     CRM_DISPATCH_MAX_ATTEMPTS,
     CRM_DISPATCH_RETRY_BASE_SECONDS,
     CRM_DISPATCH_STALE_MINUTES,
+    CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
 )
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
+from app.crm.connectivity.channels import gate_handle_kind_for
 from app.crm.connectivity.db import accessor
-from app.crm.connectivity.schemas import QueuedMessage, SendOutcome
+from app.crm.connectivity.reasons import (
+    REASON_ATTEMPTS_EXHAUSTED,
+    REASON_GATE_UNAVAILABLE,
+    REASON_PROVIDER_REJECTED,
+    REASON_SEND_ERROR,
+    REASON_SUPPRESSED,
+)
+from app.crm.connectivity.schemas import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
+from app.crm.platform.contracts import is_suppressed
 
 LOG_COMPONENT = "crm.connectivity.dispatch"
 
@@ -42,16 +53,18 @@ LOG_ID_SAMPLE = 100
 # CRM_DISPATCH_MAX_ATTEMPTS cannot silently park a message for hours.
 RETRY_MAX_SECONDS = 300
 
-# 'failed' is the provider refusing for good; 'dead' is us running out of
-# retries. A merchant asking why nothing arrived needs to know which.
+# 'failed' is the provider refusing for good; 'blocked' is US refusing
+# (gate, no route); 'dead' is us running out of retries. A merchant asking
+# why nothing arrived needs to know which (T16 col 12).
 STATUS_QUEUED = "queued"
 STATUS_ACCEPTED = "accepted"
 STATUS_FAILED = "failed"
+STATUS_BLOCKED = "blocked"
 STATUS_DEAD = "dead"
 
-REASON_SEND_ERROR = "send_error"
-REASON_ATTEMPTS_EXHAUSTED = "max_attempts_exhausted"
-REASON_PROVIDER_REJECTED = "provider_rejected"
+# All REASON_* words live in reasons.py — one file, one name per failure
+# mode. Channel metadata (which handle kind the gate probes) lives in
+# channels.py — one registry, pinned ADAPTERS ⊆ CHANNELS by the test suite.
 
 
 def sample_ids(ids: Sequence[str], limit: int = LOG_ID_SAMPLE) -> str:
@@ -98,6 +111,16 @@ def plan_for_outcome(
             mark_sent=True,
         )
 
+    if outcome.status == STATUS_BLOCKED:
+        # OUR refusal: terminal, nothing was sent, and retrying cannot
+        # change what WE decided (T16: blocked vs failed vs dead).
+        return DispatchPlan(
+            status=STATUS_BLOCKED,
+            reason=outcome.reason or REASON_GATE_UNAVAILABLE,
+            provider_message_id=None,
+            mark_sent=False,
+        )
+
     # A row with no reason is a support ticket nobody can answer.
     reason = outcome.reason or REASON_PROVIDER_REJECTED
 
@@ -118,14 +141,13 @@ def plan_for_outcome(
             mark_sent=False,
         )
 
-    # Requeue, but not immediately: the delay is what makes a retry a retry
-    # rather than a second helping of whatever just failed.
+    # Requeue with a delay — the delay is what makes it a retry rather than a
+    # second helping of whatever just failed.
     #
-    # Note this is at-least-once, not exactly-once. The dedupe key stops a
-    # producer creating a second ROW; it cannot stop this row reaching the
-    # provider twice — if the provider accepted the attempt and we lost the
-    # response, the retry sends again. That risk is bounded by the claim
-    # lease, not eliminated.
+    # At-least-once, not exactly-once: the dedupe key stops a producer
+    # creating a second ROW, but if the provider accepted an attempt whose
+    # response we lost, the retry sends again. Bounded by the claim lease,
+    # not eliminated.
     return DispatchPlan(
         status=STATUS_QUEUED,
         reason=reason,
@@ -134,6 +156,65 @@ def plan_for_outcome(
         retry_after_seconds=backoff_seconds(
             attempt, CRM_DISPATCH_RETRY_BASE_SECONDS, RETRY_MAX_SECONDS
         ),
+    )
+
+
+async def _gate(message: QueuedMessage) -> Optional[str]:
+    """Returns a refusal reason, or None to allow. may_contact() (B5)
+    replaces this body; the call site never changes.
+
+    The thin slice that exists today is the one check a person who said
+    STOP is protected by: platform's suppression probe, which itself fails
+    closed (a DB error inside it reads as suppressed). Consent, purpose and
+    quiet hours arrive with the full gate.
+    """
+    # TODO(permission): the full gate must ALSO call may_contact() (B5) —
+    # consent from the consent table, purpose authorisation, quiet hours.
+    # Suppression stays as check #1; may_contact() joins it here, and its
+    # decision_id flows into mint_send_token below.
+    kind = gate_handle_kind_for(message.channel)
+    if kind is None:
+        # A channel the gate cannot check must not slip through unchecked.
+        return REASON_GATE_UNAVAILABLE
+    try:
+        # Same deadline law as send(): the probe reads the same pool, and a
+        # hung probe stalls the serial batch past the claim lease exactly
+        # like a hung provider — same reassigned tail, same double send. The
+        # lease-pin test bounds BATCH × timeout × 2, which covers this
+        # deadline plus send()'s.
+        if await asyncio.wait_for(
+            is_suppressed({kind: message.sent_to_address}),
+            timeout=CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
+        ):
+            return REASON_SUPPRESSED
+    except asyncio.TimeoutError:
+        # Fail closed, not retry-later-by-word: nothing was sent, so this is
+        # OUR refusal, same as a probe that raised.
+        logger.error(
+            f"gate probe timed out after {CRM_MESSAGE_SEND_TIMEOUT_SECONDS}s "
+            f"for {message.id}"
+        )
+        return REASON_GATE_UNAVAILABLE
+    except Exception as e:
+        # is_suppressed is total by contract; this catches an escape from
+        # OUR plumbing around it. Unknown gate input → NO (ADR 0018).
+        logger.opt(exception=e).error(f"gate probe raised for {message.id}")
+        return REASON_GATE_UNAVAILABLE
+    return None
+
+
+def mint_send_token(message: QueuedMessage) -> SendToken:
+    """The token that names the one message _gate() just allowed.
+
+    Policy lives in _gate(); this mints identity, and send() refuses a token
+    that does not name this exact message — so no adapter was ever wired
+    without one. When may_contact() (B5) replaces _gate's body, its
+    decision_id lands here, tracing a send back to the grant.
+    """
+    return SendToken(
+        message_id=message.id,
+        purpose_key=message.purpose_key,
+        granted=True,
     )
 
 
@@ -148,24 +229,35 @@ def _jittered(seconds: Optional[int]) -> Optional[int]:
 async def claim_sends(batch: int) -> List[QueuedMessage]:
     """The scaffold's claim: sweep stale leases, then claim up to ``batch``.
 
-    Lease-style, not txn-style — the claim commits before any send happens
-    (holding a transaction across a provider call would pin a pooled
-    connection for as long as the network takes), and the stale sweep is
-    what expires a dead worker's lease.
+    Lease-style, not txn-style: the claim commits before any send happens,
+    because holding a transaction across a provider call would pin a pooled
+    connection for as long as the network takes. The stale sweep is what
+    expires a dead worker's lease.
     """
     # Reset per pass, so the previous message's ids can't leak into this
     # pass's claim and sweep lines.
     set_log_context(component=LOG_COMPONENT)
 
-    # Reclaim first so rows abandoned by a dead worker rejoin this batch
-    # instead of waiting another tick.
-    reclaimed = await accessor.requeue_stale_claims(CRM_DISPATCH_STALE_MINUTES)
+    # Reclaim first, so rows abandoned by a dead worker rejoin this batch
+    # instead of waiting a tick. The sweep KILLS rather than requeues a row
+    # out of attempts — every lap through it was a claim that really sent, so
+    # an unbounded sweep would be an unbounded sender.
+    reclaimed, exhausted = await accessor.requeue_stale_claims(
+        CRM_DISPATCH_STALE_MINUTES, CRM_DISPATCH_MAX_ATTEMPTS
+    )
     if reclaimed:
         # Named, not counted: these are the rows a double-send investigation
         # starts from.
         logger.warning(
             f"crm dispatch reclaimed {len(reclaimed)} stale claim(s): "
             f"{sample_ids(reclaimed)}"
+        )
+    if exhausted:
+        # Louder than a reclaim: each of these was attempted max times and
+        # never once recorded an outcome — the customer may have every copy.
+        logger.error(
+            f"crm dispatch killed {len(exhausted)} stale claim(s) out of "
+            f"attempts: {sample_ids(exhausted)}"
         )
 
     messages = await accessor.claim_queued_messages(batch)
@@ -175,9 +267,9 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
 
 def _log_queue_lag(messages: Sequence[QueuedMessage], limit: int) -> None:
     """How long the oldest claimed row sat past due — the alert that rises
-    whatever the cause. Measured from next_attempt_at (timestamptz NOT NULL,
-    so always aware), not created_at: a retry serving out its backoff is
-    waiting on purpose, and on-purpose waiting is not lag."""
+    whatever the cause. Measured from next_attempt_at, not created_at: a
+    retry serving out its backoff is waiting on purpose, and on-purpose
+    waiting is not lag."""
     if not messages:
         return
     oldest = min(m.next_attempt_at for m in messages)
@@ -198,11 +290,9 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
     """Work one claimed message.
 
     Never raises: the rest of the batch is already claimed, so an escaping
-    exception would strand it until those claims expire.
-
-    Nothing is wrapped in a transaction. Holding one across the provider call
-    would pin a pooled connection for as long as the network takes, and one
-    slow provider could then starve the app behind the connection pooler.
+    exception would strand it until those claims expire. Nothing is wrapped
+    in a transaction either — one held across a provider call would pin a
+    pooled connection for as long as the network takes.
     """
     # Structured, so a log search can filter by message or merchant instead of
     # substring-matching the text. Every line below inherits these fields.
@@ -215,15 +305,25 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         channel=message.channel,
         attempt=message.attempt,
     )
-    try:
-        outcome = await send(message)
-    except Exception as e:
-        # Retryable, not rejected: we don't know whether the provider saw it.
-        # opt(exception=) not exc_info=True — loguru drops the latter's stack.
-        logger.opt(exception=e).error(f"send raised for message {message.id}")
-        outcome = SendOutcome(
-            status=STATUS_FAILED, reason=REASON_SEND_ERROR, retryable=True
-        )
+    refusal = await _gate(message)
+    if refusal is not None:
+        # Blocked before the adapter is ever touched — the row records OUR
+        # refusal with its reason, and nothing reaches the provider.
+        # gate_unavailable is louder: it means misconfig (a channel the gate
+        # cannot probe), not policy — the one refusal an operator must notice.
+        log = logger.error if refusal == REASON_GATE_UNAVAILABLE else logger.warning
+        log(f"message {message.id} blocked by gate — {refusal}")
+        outcome = SendOutcome(status=STATUS_BLOCKED, reason=refusal)
+    else:
+        try:
+            outcome = await send(mint_send_token(message), message)
+        except Exception as e:
+            # Retryable, not rejected: we don't know whether the provider
+            # saw it. opt(exception=) — loguru drops exc_info's stack.
+            logger.opt(exception=e).error(f"send raised for message {message.id}")
+            outcome = SendOutcome(
+                status=STATUS_FAILED, reason=REASON_SEND_ERROR, retryable=True
+            )
 
     # message.attempt already counts this try — the claim incremented it.
     plan = plan_for_outcome(outcome, message.attempt, max_attempts)
@@ -235,6 +335,9 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
             plan.reason,
             plan.provider_message_id,
             plan.mark_sent,
+            # The claim's generation: if the sweep reassigned this row and a
+            # newer claim bumped attempt, our late outcome must miss.
+            message.attempt,
             _jittered(plan.retry_after_seconds),
         )
     except Exception as e:
