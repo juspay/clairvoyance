@@ -152,7 +152,11 @@ class RenderUiHandlerMixin:
             # Componentless chips call is the canonical chips-cycle shape
             # now that QuickReplies left the schema enum.
             raw_args["component"] = "QuickReplies"
-        components = render_ui_components(self._ui_allowlist, self._catalog_v2)
+        components = render_ui_components(
+            self._ui_allowlist,
+            self._catalog_v2,
+            custom_components=set(self._custom_defs),
+        )
         if self._quick_replies_mode == "off":
             components = [c for c in components if c != "QuickReplies"]
         if chips_cycle:
@@ -183,6 +187,7 @@ class RenderUiHandlerMixin:
             template=self.template,
             state_values=self.agent_state,
             flavor_groups=self._ui_flavor_groups,
+            custom_defs=self._custom_defs,
         )
         if outcome.decision == "rendered" and outcome.component and outcome.ops:
             # Repeat-render merge is FLAVOR policy (commerce: a second

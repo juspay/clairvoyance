@@ -29,6 +29,10 @@ from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     claim_tool_approval,
     resolve_dangling_approvals,
 )
+from app.ai.voice.agents.breeze_buddy.chat.custom_components import (
+    model_renderable,
+    resolve_custom_components,
+)
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     blocks_to_llm_context_messages,
     repair_dangling_tool_uses,
@@ -122,7 +126,13 @@ def negotiate_catalog(
             list(ui_cat.disabled_primitives or []) if ui_cat is not None else None
         ),
     )
-    if not any(is_data_bound(name) for name in allowlist):
+    # A template is v2-capable when its allowlist carries a data-bound
+    # component OR it opts into registry custom components (CHAMELEON) —
+    # those are data-bound by definition (v1 rejects anything else at
+    # registration) but live outside the process-global catalog, so the
+    # is_data_bound scan can't see them.
+    custom_names = list(getattr(ui_cat, "custom_components", None) or [])
+    if not any(is_data_bound(name) for name in allowlist) and not custom_names:
         return CATALOG_VERSION, []
     flavors = [g for g in (enabled_groups or []) if g in LAZY_GROUPS]
     return CATALOG_VERSION_V2, flavors
@@ -280,6 +290,7 @@ async def run_chat_turn(
         context_placement=context_placement,
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
+        custom_components=model_renderable(await resolve_custom_components(template)),
     )
     async for event in agent.run_turn(
         user_content=user_content,
@@ -372,6 +383,7 @@ async def run_chat_approval_continuation(
         agent_state=agent_state,
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
+        custom_components=model_renderable(await resolve_custom_components(template)),
     )
     async for event in agent.run_approval_turn(
         approval=claimed,

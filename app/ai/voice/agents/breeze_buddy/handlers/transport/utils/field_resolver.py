@@ -142,6 +142,8 @@ class FieldResolver:
             return self._resolve_llm(config, field_name=field_name)
         elif config.source == FieldSource.COMPUTED:
             return self._resolve_computed(config)
+        elif config.source == FieldSource.TOOL_RESULT:
+            return self._resolve_tool_result(config, field_name)
         else:
             raise ValueError(
                 f"Unsupported field source: {config.source}. "
@@ -255,6 +257,53 @@ class FieldResolver:
             logger.debug(f"Resolved LLM field '{arg_name}' successfully")
 
         return value
+
+    def _resolve_tool_result(
+        self, config: FieldConfig, field_name: Optional[str] = None
+    ) -> Optional[Any]:
+        """Resolve "<tool_name>#/<json-pointer>" against THIS turn's
+        recorded tool results (the chat agent's BindingStore — the same
+        store render_ui show-ops hydrate from).
+
+        Databinding for tool ARGS: an identifier produced by one tool and
+        consumed by the next hops server-side instead of being retyped by
+        the LLM, which mistranscribes UUIDs often enough to break flows.
+        Fail-soft: no store on this surface (voice), unknown tool, or a
+        pointer miss all resolve to None with a log line.
+        """
+        expr = config.value
+        if not isinstance(expr, str) or "#/" not in expr:
+            logger.error(
+                f"TOOL_RESULT value must be '<tool>#/<pointer>', got {expr!r} "
+                f"(field {field_name!r})"
+            )
+            return None
+        tool_name, pointer = expr.split("#/", 1)
+        store = getattr(getattr(self.context, "bot", None), "binding_store", None)
+        if store is None:
+            logger.warning(
+                f"TOOL_RESULT source unavailable on this surface for "
+                f"field {field_name!r} ({expr!r})"
+            )
+            return None
+        data = store.resolve(tool_name)
+        for segment in [s for s in pointer.split("/") if s]:
+            if isinstance(data, list):
+                try:
+                    data = data[int(segment)]
+                except (ValueError, IndexError):
+                    data = None
+            elif isinstance(data, dict):
+                data = data.get(segment)
+            else:
+                data = None
+            if data is None:
+                logger.warning(
+                    f"TOOL_RESULT {expr!r} unresolved at segment "
+                    f"{segment!r} (field {field_name!r})"
+                )
+                return None
+        return data
 
     def _resolve_computed(self, config: FieldConfig) -> str:
         """

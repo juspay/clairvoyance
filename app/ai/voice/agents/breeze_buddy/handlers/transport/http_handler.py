@@ -19,6 +19,7 @@ Uses the same resolution pattern as hooks:
 - {placeholder} resolution in http_request config
 """
 
+import asyncio
 import json
 from typing import Any, Dict, Optional, Tuple
 
@@ -39,6 +40,23 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     SseResponseMode,
 )
 from app.core.logger import logger
+
+
+def _retry_condition_met(response_body: str, cfg: Any) -> bool:
+    """True when the parsed body's `cfg.field` (dotted) equals `cfg.equals`.
+
+    Unparseable / non-dict bodies and missing fields return True — never
+    keep re-requesting something we cannot evaluate.
+    """
+    try:
+        current: Any = json.loads(response_body)
+    except (json.JSONDecodeError, TypeError):
+        return True
+    for key in cfg.field.split("."):
+        if not isinstance(current, dict) or key not in current:
+            return True
+        current = current[key]
+    return bool(current == cfg.equals)
 
 
 async def http_function_handler(
@@ -142,6 +160,35 @@ async def http_function_handler(
             fire_and_forget=False,
             on_sse_event=sse_forwarder,
         )
+
+        # Step 4b: content-conditional re-request (poll-until-ready APIs —
+        # see RetryUntilConfig). Bounded and invisible to the LLM: only the
+        # final response continues down the pipeline. Non-SSE 2xx only.
+        retry_until = config.http_request.retry_until
+        if retry_until is not None:
+            attempt = 1
+            while (
+                attempt < retry_until.max_attempts
+                and result is not None
+                and result != (0, "")
+                and not sse_forwarder.chunks
+                and 200 <= result[0] < 300
+                and not _retry_condition_met(result[1], retry_until)
+            ):
+                logger.info(
+                    f"[{function_name}] retry_until: {retry_until.field!r} not "
+                    f"{retry_until.equals!r} yet — attempt "
+                    f"{attempt + 1}/{retry_until.max_attempts} after "
+                    f"{retry_until.delay_ms}ms"
+                )
+                await asyncio.sleep(retry_until.delay_ms / 1000)
+                result = await executor.execute(
+                    config=config.http_request,
+                    resolved_fields=resolved_fields,
+                    fire_and_forget=False,
+                    on_sse_event=sse_forwarder,
+                )
+                attempt += 1
 
         # Step 5: Handle response
         if result is None or result == (0, ""):

@@ -51,7 +51,10 @@ from app.ai.voice.agents.breeze_buddy.mcp import (
     close_mcp_pool,
 )
 from app.ai.voice.agents.breeze_buddy.template.approval import build_approval_map
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    CustomComponentDef,
+    TemplateModel,
+)
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     CATALOG_VERSION_V2,
     data_bound_names,
@@ -143,6 +146,7 @@ class ChatAgent(
         context_placement: Optional[str] = None,
         catalog_version: Optional[str] = None,
         merchant_id: Optional[str] = None,
+        custom_components: Optional[Dict[str, "CustomComponentDef"]] = None,
     ) -> None:
         self.session_id = session_id
         self.template = template
@@ -253,6 +257,17 @@ class ChatAgent(
         self._catalog_v2 = catalog_version == CATALOG_VERSION_V2
         if not self._catalog_v2:
             self._ui_allowlist -= data_bound_names()
+        # CHAMELEON session overlay: this template's resolved registry
+        # component defs (ui_component rows named in
+        # ``ui_catalog.custom_components``). Session DATA, never a catalog
+        # mutation — two merchants on one worker never see each other's
+        # defs. v2/render_ui-only, so the overlay joins the allowlist
+        # AFTER the catalog-version prune above (v1/voice sessions carry
+        # no custom defs at all).
+        self._custom_defs: Dict[str, "CustomComponentDef"] = (
+            dict(custom_components) if (custom_components and self._catalog_v2) else {}
+        )
+        self._ui_allowlist |= set(self._custom_defs)
         # Per-turn record of successful post-pipeline tool results, keyed
         # (tool_name, tool_use_id) — what `show`-op bindings resolve
         # against. Populated in _cycle_loop after each ungated dispatch;

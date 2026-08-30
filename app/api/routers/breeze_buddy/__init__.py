@@ -49,6 +49,7 @@ from app.api.routers.breeze_buddy.template_generator import (
 from app.api.routers.breeze_buddy.templates import router as templates_router
 from app.api.routers.breeze_buddy.topics import router as topics_router
 from app.api.routers.breeze_buddy.tts_catalog import router as tts_catalog_router
+from app.api.routers.breeze_buddy.ui_components import router as ui_components_router
 from app.api.routers.breeze_buddy.users import router as users_router
 from app.api.routers.breeze_buddy.wallet import router as wallet_router
 from app.api.routers.breeze_buddy.webhooks import router as webhooks_router
@@ -157,4 +158,6 @@ router.include_router(chat_router, prefix="", tags=["chat"])
 # - widget_config: per-merchant config (admin/reseller-scoped CRUD)
 # - widget: unified /widget/session/* conversation router (chat ↔ voice)
 router.include_router(widget_config_router, prefix="", tags=["widget-config"])
+# - ui_components: CHAMELEON custom-component registry (migration 057)
+router.include_router(ui_components_router, prefix="", tags=["ui-components"])
 router.include_router(widget_router, prefix="", tags=["widget-session"])

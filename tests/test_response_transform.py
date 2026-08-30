@@ -21,7 +21,12 @@ from app.ai.voice.agents.breeze_buddy.template.types import ResponseTransform
 
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
     apply_response_transforms,
+    count_where,
+    find_where,
+    mark_extremum,
     derive_field,
+    format_range,
+    map_values,
     omit_fields,
     pick_fields,
     scale_by_exponent,
@@ -777,3 +782,374 @@ def test_derive_field_malformed_template_is_noop():
     )
     # Original values preserved, no "out" field added.
     assert data["products"] == [{"id": "ok-1"}, {"id": "ok-2"}]
+
+
+# ---------------------------------------------------------------------------
+# map_values — display-layer value rename (scalar + list)
+# ---------------------------------------------------------------------------
+
+
+def test_map_values_scalar_and_list():
+    leg = {"mode": "Subway"}
+    map_values(
+        leg,
+        {"field": "mode", "to": "mode_display", "map": {"Subway": "Train"}},
+    )
+    assert leg["mode_display"] == "Train"
+    assert leg["mode"] == "Subway"  # source untouched
+
+    journey = {"modes": ["Walk", "Subway", "Walk"]}
+    map_values(
+        journey,
+        {"field": "modes", "to": "modes_display", "map": {"Subway": "Train"}},
+    )
+    assert journey["modes_display"] == ["Walk", "Train", "Walk"]
+
+
+def test_map_values_unmapped_keeps_original_unless_default():
+    leg = {"mode": "Metro"}
+    map_values(leg, {"field": "mode", "to": "d", "map": {"Subway": "Train"}})
+    assert leg["d"] == "Metro"
+    map_values(
+        leg,
+        {"field": "mode", "to": "d2", "map": {"Subway": "Train"}, "default": "?"},
+    )
+    assert leg["d2"] == "?"
+
+
+def test_map_values_bad_args_noop():
+    leg = {"mode": "Bus"}
+    map_values(leg, {"field": "mode", "to": "x", "map": "not-a-dict"})
+    assert "x" not in leg
+    map_values(leg, {"field": "missing", "to": "x", "map": {}})
+    assert "x" not in leg
+
+
+# ---------------------------------------------------------------------------
+# format_range — min/max display label
+# ---------------------------------------------------------------------------
+
+
+def test_format_range_equal_and_span():
+    j = {"min_fare": 30, "max_fare": 30}
+    format_range(
+        j,
+        {"min_field": "min_fare", "max_field": "max_fare", "to": "fare", "prefix": "₹"},
+    )
+    assert j["fare"] == "₹30"
+    j2 = {"min_fare": 10, "max_fare": 55}
+    format_range(
+        j2,
+        {"min_field": "min_fare", "max_field": "max_fare", "to": "fare", "prefix": "₹"},
+    )
+    assert j2["fare"] == "₹10–55"
+
+
+def test_format_range_missing_side_and_skip_zero():
+    j = {"min_fare": 15}
+    format_range(
+        j,
+        {"min_field": "min_fare", "max_field": "max_fare", "to": "fare", "prefix": "₹"},
+    )
+    assert j["fare"] == "₹15"
+    z = {"min_fare": 0, "max_fare": 0}
+    format_range(
+        z,
+        {
+            "min_field": "min_fare",
+            "max_field": "max_fare",
+            "to": "fare",
+            "prefix": "₹",
+            "skip_zero": True,
+        },
+    )
+    assert "fare" not in z
+
+
+def test_format_range_non_numeric_noop():
+    j = {"min_fare": "abc", "max_fare": 5}
+    format_range(j, {"min_field": "min_fare", "max_field": "max_fare", "to": "fare"})
+    assert "fare" not in j
+
+
+def test_format_range_from_style():
+    j = {"min_fare": 5, "max_fare": 35}
+    format_range(
+        j,
+        {
+            "min_field": "min_fare",
+            "max_field": "max_fare",
+            "to": "fare",
+            "prefix": "₹",
+            "style": "from",
+        },
+    )
+    assert j["fare"] == "from ₹5"
+    # equal bounds stay plain regardless of style
+    e = {"min_fare": 30, "max_fare": 30}
+    format_range(
+        e,
+        {
+            "min_field": "min_fare",
+            "max_field": "max_fare",
+            "to": "fare",
+            "prefix": "₹",
+            "style": "from",
+        },
+    )
+    assert e["fare"] == "₹30"
+
+
+# ---------------------------------------------------------------------------
+# mark_extremum — cross-item ranking tags (Fastest / Cheapest)
+# ---------------------------------------------------------------------------
+
+
+def test_mark_extremum_min_and_second_pass_skips_tagged():
+    data = {
+        "journeys": [
+            {"id": "a", "duration": 900, "min_fare": 40},
+            {"id": "b", "duration": 1700, "min_fare": 5},
+            {"id": "c", "duration": 2000, "min_fare": 30},
+        ]
+    }
+    mark_extremum(
+        data,
+        {
+            "list_field": "journeys",
+            "field": "duration",
+            "to": "tag",
+            "label": "Fastest",
+        },
+    )
+    mark_extremum(
+        data,
+        {
+            "list_field": "journeys",
+            "field": "min_fare",
+            "to": "tag",
+            "label": "Cheapest",
+        },
+    )
+    tags = [j.get("tag") for j in data["journeys"]]
+    assert tags == ["Fastest", "Cheapest", None]
+
+
+def test_mark_extremum_fastest_also_cheapest_stays_fastest():
+    data = {
+        "journeys": [
+            {"id": "a", "duration": 900, "min_fare": 5},
+            {"id": "b", "duration": 1700, "min_fare": 30},
+        ]
+    }
+    mark_extremum(
+        data,
+        {
+            "list_field": "journeys",
+            "field": "duration",
+            "to": "tag",
+            "label": "Fastest",
+        },
+    )
+    mark_extremum(
+        data,
+        {
+            "list_field": "journeys",
+            "field": "min_fare",
+            "to": "tag",
+            "label": "Cheapest",
+        },
+    )
+    # a took Fastest; Cheapest then goes to the best REMAINING (b)
+    assert [j.get("tag") for j in data["journeys"]] == ["Fastest", "Cheapest"]
+
+
+def test_mark_extremum_max_and_bad_values():
+    data = {"items": [{"v": "x"}, {"v": 2}, {"v": 9}]}
+    mark_extremum(
+        data,
+        {"list_field": "items", "field": "v", "mode": "max", "to": "t", "label": "Top"},
+    )
+    assert data["items"][2]["t"] == "Top"
+    # no numeric values at all → no-op
+    empty = {"items": [{"v": None}]}
+    mark_extremum(
+        empty, {"list_field": "items", "field": "v", "to": "t", "label": "Top"}
+    )
+    assert "t" not in empty["items"][0]
+
+
+# ---------------------------------------------------------------------------
+# count_where — predicate counting (transfers)
+# ---------------------------------------------------------------------------
+
+
+def test_count_where_transfers():
+    j = {
+        "legs": [{"mode": "Walk"}, {"mode": "Bus"}, {"mode": "Metro"}, {"mode": "Walk"}]
+    }
+    count_where(
+        j,
+        {
+            "list_field": "legs",
+            "field": "mode",
+            "not_in": ["Walk"],
+            "offset": -1,
+            "min": 0,
+            "to": "transfers",
+        },
+    )
+    assert j["transfers"] == 1
+    direct = {"legs": [{"mode": "Walk"}, {"mode": "Metro"}]}
+    count_where(
+        direct,
+        {
+            "list_field": "legs",
+            "field": "mode",
+            "not_in": ["Walk"],
+            "offset": -1,
+            "min": 0,
+            "to": "transfers",
+        },
+    )
+    assert direct["transfers"] == 0
+
+
+def test_count_where_in_filter_and_noop():
+    j = {"legs": [{"mode": "Bus"}, {"mode": "Bus"}, {"mode": "Walk"}]}
+    count_where(
+        j, {"list_field": "legs", "field": "mode", "in": ["Bus"], "to": "buses"}
+    )
+    assert j["buses"] == 2
+    bad = {"legs": "not-a-list"}
+    count_where(bad, {"list_field": "legs", "field": "mode", "to": "n"})
+    assert "n" not in bad
+
+
+# ---------------------------------------------------------------------------
+# find_where — first-match field lifting (transit leg order for intents)
+# ---------------------------------------------------------------------------
+
+
+def test_find_where_lifts_first_transit_leg():
+    j = {
+        "legs": [
+            {"mode": "Walk", "order": 0},
+            {"mode": "Subway", "order": 1},
+            {"mode": "Metro", "order": 2},
+        ]
+    }
+    find_where(
+        j,
+        {
+            "list_field": "legs",
+            "field": "mode",
+            "not_in": ["Walk", "Taxi"],
+            "set": {"tier_leg_order": "order", "tier_leg_found": "mode"},
+        },
+    )
+    assert j["tier_leg_order"] == 1
+    assert j["tier_leg_found"] == "Subway"
+
+
+def test_find_where_in_filter_no_match_and_noop():
+    j = {"legs": [{"mode": "Walk", "order": 0}, {"mode": "Taxi", "order": 1}]}
+    find_where(
+        j,
+        {
+            "list_field": "legs",
+            "field": "mode",
+            "in": ["Subway", "Metro", "Bus"],
+            "set": {"tier_leg_order": "order"},
+        },
+    )
+    assert "tier_leg_order" not in j
+    # zero order copies verbatim (falsy values are data, not misses)
+    z = {"legs": [{"mode": "Metro", "order": 0}]}
+    find_where(
+        z,
+        {
+            "list_field": "legs",
+            "field": "mode",
+            "not_in": ["Walk"],
+            "set": {"tier_leg_order": "order"},
+        },
+    )
+    assert z["tier_leg_order"] == 0
+    bad = {"legs": "nope"}
+    find_where(bad, {"list_field": "legs", "field": "mode", "set": {"x": "order"}})
+    assert "x" not in bad
+    # missing source field on the match: destination stays absent
+    m = {"legs": [{"mode": "Bus"}]}
+    find_where(
+        m,
+        {
+            "list_field": "legs",
+            "field": "mode",
+            "not_in": ["Walk"],
+            "set": {"tier_leg_order": "order"},
+        },
+    )
+    assert "tier_leg_order" not in m
+
+
+def test_coalesce_default_guarantees_field():
+    from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
+        coalesce,
+    )
+
+    absent = {}
+    coalesce(absent, {"fields": ["tier"], "to": "tier", "default": ""})
+    assert absent["tier"] == ""
+    none_val = {"tier": None}
+    coalesce(none_val, {"fields": ["tier"], "to": "tier", "default": ""})
+    assert none_val["tier"] == ""
+    present = {"tier": "FIRST_CLASS"}
+    coalesce(present, {"fields": ["tier"], "to": "tier", "default": ""})
+    assert present["tier"] == "FIRST_CLASS"
+    zero = {"n": 0}
+    coalesce(zero, {"fields": ["n"], "to": "n", "default": -1})
+    assert zero["n"] == 0
+    # no default: legacy no-op on miss
+    legacy = {}
+    coalesce(legacy, {"fields": ["missing"], "to": "out"})
+    assert "out" not in legacy
+
+
+# ---------------------------------------------------------------------------
+# upcoming_times — next departures after "now" from a service-day timetable
+# ---------------------------------------------------------------------------
+
+
+def test_upcoming_times_filters_and_formats():
+    from datetime import datetime, timedelta, timezone
+
+    from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
+        upcoming_times,
+    )
+
+    now = datetime.now(timezone.utc)
+    past = (now - timedelta(hours=1)).strftime("%H:%M:%S")
+    soon = (now + timedelta(minutes=10)).strftime("%H:%M:%S")
+    later = (now + timedelta(minutes=40)).strftime("%H:%M:%S")
+    latest = (now + timedelta(minutes=70)).strftime("%H:%M:%S")
+
+    # pair-shaped entries: last element (departure) is used
+    d = {"times": [[past, past], [past, soon], [later, later], [latest, latest]]}
+    upcoming_times(d, {"field": "times", "to": "next_label", "count": 2})
+    expected_first = now + timedelta(minutes=10)
+    assert d["next_label"].count(",") == 1
+    assert d["next_label"].split(",")[0].strip().endswith(("AM", "PM"))
+
+    # all in the past → field NOT written (absence = no more today)
+    gone = {"times": [past, past]}
+    upcoming_times(gone, {"field": "times", "to": "next_label"})
+    assert "next_label" not in gone
+
+    # malformed entries skipped; non-list no-op
+    junk = {"times": ["nope", None, 42, soon]}
+    upcoming_times(junk, {"field": "times", "to": "next_label", "count": 1})
+    assert "next_label" in junk
+    bad = {"times": "x"}
+    upcoming_times(bad, {"field": "times", "to": "n"})
+    assert "n" not in bad

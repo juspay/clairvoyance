@@ -27,6 +27,7 @@ assignment (first rendered op of a turn anchors the widget tree as
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -48,6 +49,15 @@ from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
 )
 
 RENDER_UI_TOOL_NAME = "render_ui"
+
+# Chips carrying raw identifiers are always a model mistake (ids belong
+# in actions' msg, never on a user-facing pill). Shared shape with the
+# rider-harvest guard in agent/runtime.py.
+_IDENTIFIER_CHIP_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|\b[0-9a-f]{16,}\b",
+    re.IGNORECASE,
+)
 REVISE_PLAN_TOOL_NAME = "revise_plan"
 
 
@@ -155,14 +165,25 @@ class RenderUiOutcome:
     reason: Optional[str] = None
 
 
-def render_ui_components(ui_allowlist: Set[str], catalog_v2: bool) -> List[str]:
+def render_ui_components(
+    ui_allowlist: Set[str],
+    catalog_v2: bool,
+    custom_components: Optional[Set[str]] = None,
+) -> List[str]:
     """The component names ``render_ui`` offers on this session: data-bound,
     allowlisted, not server-only — plus the literal-content components the
     engine keeps model-authored (QuickReplies; LinkButton, whose url is
-    server-verified against trusted/tool-sourced links)."""
+    server-verified against trusted/tool-sourced links).
+
+    ``custom_components`` are this session's registry defs (CHAMELEON
+    overlay) — session data, never catalog entries, so they join the enum
+    here explicitly. v2-only, same as every data-bound component."""
     names: List[str] = []
     if catalog_v2:
         for name in sorted(ui_allowlist):
+            if custom_components and name in custom_components:
+                names.append(name)
+                continue
             schema = UI_CATALOG.get(name)
             if schema is None or not is_data_bound(name):
                 continue
@@ -228,6 +249,7 @@ def build_render_ui_schema(
     trusted_urls: Optional[List[str]] = None,
     quick_replies_mode: Optional[str] = None,
     flavor_groups: Optional[List[str]] = None,
+    custom_coaching: Optional[Dict[str, str]] = None,
 ) -> FlowsFunctionSchema:
     """The ``render_ui`` function schema (Vertex-safe subset: no
     additionalProperties — ``bind`` is an array of {prop, ref} pairs).
@@ -272,6 +294,12 @@ def build_render_ui_schema(
     ).items():
         if comp_name in components:
             bind_desc += sentence
+    # Custom registry defs coach the same way (prompt_hint per offered
+    # component) — a def a template didn't opt into leaves no trace.
+    for comp_name, sentence in (custom_coaching or {}).items():
+        if comp_name in components and sentence:
+            hint = sentence.strip()
+            bind_desc += " " + hint if hint.endswith(".") else " " + hint + "."
     # `fields` is advertised only when an offered component actually
     # declares literal fields — every other session keeps today's schema
     # byte-identical (no arg for the model to misuse).
@@ -526,6 +554,7 @@ def execute_render_ui(
     template: Any = None,
     state_values: Optional[Dict[str, Any]] = None,
     flavor_groups: Optional[List[str]] = None,
+    custom_defs: Optional[Dict[str, Any]] = None,
 ) -> RenderUiOutcome:
     """Run one ``render_ui`` call: validate → hydrate → finalize → summarize.
 
@@ -631,6 +660,13 @@ def execute_render_ui(
                 chip_items.append(
                     {k: v for k, v in entry.items() if k in ("label", "value") and v}
                 )
+        # Chips are user-facing copy: drop any carrying a raw identifier
+        # (UUID / long hex) — same guard as the rider-harvest path.
+        chip_items = [
+            item
+            for item in chip_items
+            if not _IDENTIFIER_CHIP_RE.search(item.get("label", ""))
+        ]
         props["items"] = chip_items
     if component == "LinkButton":
         link = args.get("link")
@@ -684,6 +720,59 @@ def execute_render_ui(
             for k, v in bind_raw.items()
             if isinstance(k, str) and isinstance(v, str)
         }
+
+    if custom_defs and component in custom_defs:
+        # CHAMELEON: session-scoped registry component. Same trust path
+        # (this turn's BindingStore only), hydrated + validated against
+        # the def's JSON Schema instead of a catalog Pydantic class. No
+        # flavor finalize, no literal fields (v1 rejects them at write).
+        from app.ai.voice.agents.breeze_buddy.chat.ui.custom_defs import (
+            resolve_custom_show_op,
+            summarize_custom_render,
+        )
+
+        def_ = custom_defs[component]
+        if not bind:
+            return RenderUiOutcome(
+                fn_result={
+                    "status": "error",
+                    "error": (
+                        f"{component} is data-bound: pass bind, e.g. "
+                        f"{_BIND_EXAMPLE_GENERIC}"
+                    ),
+                },
+                component=component,
+            )
+        show_op: Dict[str, Any] = {
+            "op": "show",
+            "id": op_id,
+            "component": component,
+            "bind": bind,
+            "props": props,
+        }
+        if parent:
+            show_op["parent"] = parent
+        custom_result = resolve_custom_show_op(show_op, store, def_)
+        if custom_result.op is None:
+            return RenderUiOutcome(
+                fn_result={
+                    "status": "error",
+                    "error": (
+                        f"render failed: {custom_result.error}. Bind refs "
+                        "must point into a tool result from THIS turn."
+                    ),
+                },
+                component=component,
+                reason=custom_result.error,
+            )
+        return RenderUiOutcome(
+            fn_result=summarize_custom_render(
+                def_, custom_result.op.get("props") or {}
+            ),
+            ops=[custom_result.op],
+            decision="rendered",
+            component=component,
+        )
 
     if is_data_bound(component):
         if not bind:

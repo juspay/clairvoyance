@@ -35,6 +35,9 @@ from app.ai.voice.agents.breeze_buddy.chat.intents.router import (
     run_direct_intent,
     template_enabled_flavors,
 )
+from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+    template_intent_policies,
+)
 from app.ai.voice.agents.breeze_buddy.chat.metrics import TurnMetrics
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent, format_sse
 from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
@@ -620,7 +623,11 @@ async def serve_session_intent(
     flavors = template_enabled_flavors(template)
     ensure_flavor_intents(flavors)
     try:
-        parsed = parse_ui_intent(raw_intent, enabled_flavors=flavors)
+        parsed = parse_ui_intent(
+            raw_intent,
+            enabled_flavors=flavors,
+            extra_policies=template_intent_policies(template),
+        )
     except IntentValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
