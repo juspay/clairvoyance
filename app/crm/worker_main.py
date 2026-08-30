@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, Callable, Coroutine, Dict, Optional
 
 from app.core.config.static import (
+    CRM_DISPATCH_BATCH,
     CRM_WORKER_BATCH,
     CRM_WORKER_INTERVAL,
     POSTGRES_MAX_OVERFLOW,
@@ -29,7 +30,10 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         claim_sends,
         dispatch_send,
         interval=CRM_WORKER_INTERVAL,
-        batch=CRM_WORKER_BATCH,
+        # Its own dial, not CRM_WORKER_BATCH: a claimed batch must finish
+        # inside the claim lease (batch × send timeout < lease), or another
+        # pod's sweep re-sends the unworked tail — a real duplicate message.
+        batch=CRM_DISPATCH_BATCH,
         stop_event=stop_event,
         name="dispatcher",
     ),

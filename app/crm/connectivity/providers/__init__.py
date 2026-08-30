@@ -1,0 +1,46 @@
+"""The adapter registry — the channel vocabulary, in code.
+
+This dict is what the tables deliberately refuse to hold: migration 027
+taught that a CHECK constraint turns "support a new channel" into a
+migration, a deploy window and a rollback plan. Here a new channel is
+providers/<name>.py plus one line below. Nothing else.
+
+Imported ONLY by send.py — the point of putting adapters behind one door:
+
+    grep -rn "connectivity.providers" app/ | grep -v "^app/crm/connectivity/providers/"
+"""
+
+from typing import Dict, Optional
+
+from app.crm.connectivity.providers.base import ChannelAdapter
+from app.crm.connectivity.providers.whatsapp import MetaWhatsAppAdapter
+
+# Instantiated once: adapters are stateless request builders.
+#
+# One entry on purpose — no stand-in adapter. A local run points
+# META_WHATSAPP_GRAPH_BASE_URL at a stub and exercises the REAL adapter,
+# testing the request we actually send rather than one that resembles it.
+ADAPTERS: Dict[str, ChannelAdapter] = {
+    MetaWhatsAppAdapter.channel: MetaWhatsAppAdapter(),
+    # "sms": SmsAdapter(),
+    # "email": EmailAdapter(),
+    # "instagram": InstagramAdapter(),
+}
+
+
+def adapter_for(channel: str) -> Optional[ChannelAdapter]:
+    """The adapter serving ``channel``, or None.
+
+    None rather than a raise: an unroutable channel is a terminal fact about
+    that row, which the caller records as its reason — not an exception the
+    worker should wear.
+    """
+    return ADAPTERS.get(channel)
+
+
+__all__ = [
+    "ADAPTERS",
+    "ChannelAdapter",
+    "MetaWhatsAppAdapter",
+    "adapter_for",
+]

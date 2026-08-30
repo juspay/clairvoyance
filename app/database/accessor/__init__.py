@@ -22,6 +22,7 @@ from .breeze_buddy.call_execution_config import (
     update_call_execution_config,
 )
 from .breeze_buddy.credentials import (
+    CredentialInUseError,
     create_credential,
     delete_credential,
     get_all_credentials,
@@ -131,4 +132,5 @@ __all__ = [
     "get_credentials_as_template_vars",
     "update_credential",
     "delete_credential",
+    "CredentialInUseError",
 ]

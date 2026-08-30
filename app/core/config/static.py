@@ -240,6 +240,7 @@ CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS = int(
 # infrequent. The *tuning* knobs (caps, rate limits, token TTL) live in
 # dynamic.py and can be dialed without a restart.
 def _parse_demo_templates(raw: str) -> dict[str, str]:
+    """Parse 'slug:template_id,slug:template_id' pairs; malformed entries are skipped."""
     out: dict[str, str] = {}
     for entry in (raw or "").split(","):
         entry = entry.strip()
@@ -490,13 +491,30 @@ CRM_WORKER_INTERVAL = _positive_float("CRM_WORKER_INTERVAL", 1.0)
 CRM_WORKER_BATCH = _positive_int("CRM_WORKER_BATCH", 100)
 CRM_WORKER_HEARTBEAT = _positive_float("CRM_WORKER_HEARTBEAT", 60.0)
 
-# CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; loop mechanics
-# ride CRM_WORKER_BATCH/CRM_WORKER_INTERVAL like every role). It currently
-# calls send() with no permission check in front of it — a dummy send only.
+# CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; pacing rides
+# CRM_WORKER_INTERVAL, but the batch is its own dial below). send() reaches
+# real providers behind a thin permission slice: dispatch._gate probes
+# platform suppression before every send and fails CLOSED. The full
+# may_contact() — consent, purpose, quiet hours — replaces the gate's body
+# at B5; the seam is already load-bearing.
+
+# The dispatcher's own batch — deliberately NOT CRM_WORKER_BATCH (100).
+# Sends are serial and each may spend the full send timeout, so claiming a
+# batch is a promise to finish batch × timeout of work inside the claim
+# lease. At 100 that promise breaks (100 × 20s ≫ the lease) and another pod's
+# sweep re-sends the unworked tail while this pod still holds it — a REAL
+# duplicate message, which no outcome guard can undo.
+CRM_DISPATCH_BATCH = _positive_int("CRM_DISPATCH_BATCH", 20)
 
 # How long a worker may hold a row before it is assumed dead and requeued.
-# Must exceed the slowest realistic provider call.
-CRM_DISPATCH_STALE_MINUTES = _positive_int("CRM_DISPATCH_STALE_MINUTES", 5)
+# Must exceed a whole batch of worst-case sends — CRM_DISPATCH_BATCH × 2 ×
+# CRM_MESSAGE_SEND_TIMEOUT_SECONDS, the 2 because each message may burn one
+# timeout in the gate probe and another in send() — since rows claimed at
+# the head of a pass sit in 'sending' while the tail is worked. Defaults
+# give 20 × 2 × 20s = 800s against 900s — the bound the test suite pins so
+# no dial can drift past the others. The only cost of a longer lease is how
+# long a genuinely dead worker's rows wait for rescue.
+CRM_DISPATCH_STALE_MINUTES = _positive_int("CRM_DISPATCH_STALE_MINUTES", 15)
 
 # Bounded so one undeliverable message cannot earn a provider rate-limit ban
 # for every other merchant sharing that sender.
@@ -506,6 +524,22 @@ CRM_DISPATCH_MAX_ATTEMPTS = _positive_int("CRM_DISPATCH_MAX_ATTEMPTS", 3)
 # obeyed, so each attempt waits twice as long as the last.
 CRM_DISPATCH_RETRY_BASE_SECONDS = _positive_int("CRM_DISPATCH_RETRY_BASE_SECONDS", 30)
 
+# The ceiling on ONE provider call, applied by send() so that no adapter can
+# forget it — and separately on the gate probe before it (dispatch._gate),
+# which reads the same pool. Must stay well under CRM_DISPATCH_STALE_MINUTES:
+# a send that outlives its claim gets the row reassigned to a second worker
+# while the first is still sending, and the customer receives the message
+# twice.
+CRM_MESSAGE_SEND_TIMEOUT_SECONDS = _positive_int("CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 20)
+
+# Meta WhatsApp Cloud API. Only the endpoint lives here — the access token and
+# the phone number id are per-merchant connector data, read from the vault at
+# send time. Pointing the base URL at a local stub is how the dispatcher is
+# exercised end to end without sending anything to Meta.
+META_WHATSAPP_GRAPH_BASE_URL = os.environ.get(
+    "META_WHATSAPP_GRAPH_BASE_URL", "https://graph.facebook.com"
+)
+META_WHATSAPP_GRAPH_VERSION = os.environ.get("META_WHATSAPP_GRAPH_VERSION", "v23.0")
 
 # Announcement Banner Configuration
 DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR = os.environ.get(
