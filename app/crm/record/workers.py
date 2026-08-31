@@ -10,6 +10,7 @@ from app.crm.identity.contracts import assert_facts, resolve as crm_resolve
 from app.crm.outreach.contracts import consume_attributed_event
 from app.crm.record.db import DbTxn, accessor, atomically, savepoint
 from app.crm.record.schemas import Extracted, RawEvent
+from app.crm.shared.normalize import normalize_email, normalize_phone
 
 # Producer's payload key -> canon attribute name (T05). A producer with a
 # different shape brings its own map.
@@ -35,12 +36,50 @@ def _extract_flat(payload: Dict[str, Any]) -> Extracted:
     )
 
 
+def _extract_shopify(payload: Dict[str, Any]) -> Extracted:
+    """Shopify's own order/checkout body, as the relay forwards it.
+
+    The relay is a pipe: it carries Shopify's words unopened, so the
+    nesting arrives intact and this is where it gets read. Shopify puts a
+    phone in up to three places and the top-level one is usually null; a
+    guest checkout carries no customer object at all, which is why the
+    shipping address is the fallback for both handle and name.
+
+    The name is never defaulted. A placeholder like "Customer" would
+    reach assert_facts as a genuine name claim and overwrite what we
+    actually know about this person — absent is absent.
+    """
+    customer = payload.get("customer") or {}
+    address = payload.get("shipping_address") or payload.get("billing_address") or {}
+
+    # Most specific first: the customer record beats the shipping contact.
+    raw_phone = customer.get("phone") or payload.get("phone") or address.get("phone")
+    raw_email = customer.get("email") or payload.get("email")
+
+    handles: Dict[str, str] = {}
+    if raw_phone:
+        phone = normalize_phone(str(raw_phone))
+        if phone:
+            handles["phone"] = phone
+    if raw_email:
+        email = normalize_email(str(raw_email))
+        if email:
+            handles["email"] = email
+
+    first = customer.get("first_name") or address.get("first_name") or ""
+    last = customer.get("last_name") or address.get("last_name") or ""
+    name = " ".join(part for part in (str(first), str(last)) if part).strip()
+
+    return Extracted(handles=handles, facts={"name": name} if name else {})
+
+
 # source -> extractor. A new channel is one registration here; an
 # unregistered source falls back to the flat shape.
 Extractor = Callable[[Dict[str, Any]], Extracted]
 EXTRACTORS: Dict[str, Extractor] = {
     "lead-api": _extract_flat,
     "telephony": _extract_flat,
+    "shopify": _extract_shopify,
 }
 DEFAULT_EXTRACTOR: Extractor = _extract_flat
 

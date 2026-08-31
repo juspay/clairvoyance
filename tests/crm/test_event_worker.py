@@ -812,3 +812,67 @@ def test_heartbeat_counts_rows_since_the_last_beat(
     assert counted, "expected at least one heartbeat"
     # first beat precedes any work; a later one reports the batch just done
     assert any(n == 3 for _, n in counted)
+
+
+# --- the Shopify extractor: a pipe's letter, read at the belt ---
+
+
+def test_shopify_extractor_reads_the_nested_customer_phone() -> None:
+    # The relay forwards Shopify's body unopened, so the phone arrives
+    # nested and the top-level one is usually null.
+    extracted = workers._extract_shopify(
+        {
+            "phone": None,
+            "customer": {
+                "first_name": "Priya",
+                "last_name": "Sharma",
+                "phone": "+91 98765 43210",
+            },
+            "shipping_address": {"phone": "9999999999"},
+        }
+    )
+    assert extracted.handles["phone"] == "+919876543210"  # normalized
+    assert extracted.facts == {"name": "Priya Sharma"}
+
+
+def test_shopify_extractor_falls_back_to_the_shipping_contact() -> None:
+    # A guest checkout carries no customer object at all.
+    extracted = workers._extract_shopify(
+        {
+            "shipping_address": {
+                "first_name": "Rohan",
+                "last_name": "Mehta",
+                "phone": "9876543210",
+            }
+        }
+    )
+    assert extracted.handles["phone"] == "+919876543210"
+    assert extracted.facts == {"name": "Rohan Mehta"}
+
+
+def test_shopify_extractor_never_invents_a_name() -> None:
+    # A placeholder would reach assert_facts as a real name claim and
+    # overwrite what we actually know. Absent is absent.
+    extracted = workers._extract_shopify({"customer": {"phone": "9876543210"}})
+    assert extracted.facts == {}
+
+
+def test_shopify_extractor_skips_an_unusable_phone() -> None:
+    # normalize_phone returns None rather than writing a bad handle; with
+    # nothing usable the row quarantines no_handle and stays replayable.
+    extracted = workers._extract_shopify({"customer": {"phone": "n/a"}})
+    assert "phone" not in extracted.handles
+
+
+def test_shopify_extractor_takes_the_email_too() -> None:
+    extracted = workers._extract_shopify(
+        {"customer": {"email": "  Priya@Example.COM  ", "phone": "9876543210"}}
+    )
+    assert extracted.handles["email"] == "priya@example.com"
+
+
+def test_shopify_source_is_registered() -> None:
+    # Without the registration a raw Shopify body falls to _extract_flat,
+    # which looks for a top-level customer_mobile_number that is not
+    # there — every order would quarantine no_handle.
+    assert workers.EXTRACTORS["shopify"] is workers._extract_shopify

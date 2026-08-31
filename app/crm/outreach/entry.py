@@ -19,6 +19,7 @@ from app.crm.outreach.db import accessor
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import RawEvent
+from app.crm.shared.normalize import normalize_phone
 
 # Where a phone hides in an event payload, tried in order — the voice
 # mirrors use customer_mobile_number; external doors normalize to
@@ -32,13 +33,23 @@ _CONTEXT_VALUE_MAX_CHARS = 256
 
 
 def _phone_from_payload(payload: dict) -> str | None:
+    """The number the sends will actually dial or message — normalized to
+    E.164 here, because resolve() normalizes only what it probes on and
+    context is a separate copy. Unnormalized, a bare "9876543210" would
+    resolve to +919876543210 for identity while the call node dialled the
+    bare form, and a suppression stored in E.164 would not match it."""
+    raw: str | None = None
     for key in _PHONE_PATHS:
         if payload.get(key):
-            return str(payload[key])
-    customer = payload.get("customer")
-    if isinstance(customer, dict) and customer.get("phone"):
-        return str(customer["phone"])
-    return None
+            raw = str(payload[key])
+            break
+    if raw is None:
+        customer = payload.get("customer")
+        if isinstance(customer, dict) and customer.get("phone"):
+            raw = str(customer["phone"])
+    if raw is None:
+        return None
+    return normalize_phone(raw) or raw
 
 
 async def consume_attributed_event(event: RawEvent, customer_id: str) -> None:
