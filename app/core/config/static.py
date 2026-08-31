@@ -742,3 +742,22 @@ HTTP_REQUEST_BLOCKED_CONTENT_TYPES = [
 
 # Maximum number of redirects to follow (0 to disable redirects)
 HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3"))
+
+# ---------------------------------------------------------------------------
+# CRM outreach — walker + run retention (canon T20; the corpus names the
+# mechanisms, these are the numbers). The walker's poll/batch come from the
+# shared CRM_WORKER_INTERVAL / CRM_WORKER_BATCH above (worker-runtime.md).
+# ---------------------------------------------------------------------------
+# The claim pushes wake_at this far ahead: the timer IS the lease (canon T20).
+CRM_WALKER_LEASE_SECONDS = int(os.environ.get("CRM_WALKER_LEASE_SECONDS", 300))
+
+# Consecutive failed claims before a run parks for a human.
+CRM_WALKER_MAX_ATTEMPTS = int(os.environ.get("CRM_WALKER_MAX_ATTEMPTS", 3))
+# Exited runs age out (canon T20 exited_at: the retention sweep is most
+# of what keeps the hot table small). Batched; leftovers go next tick.
+CRM_RUN_RETENTION_DAYS = int(os.environ.get("CRM_RUN_RETENTION_DAYS", 90))
+CRM_RUN_SWEEP_BATCH_SIZE = int(os.environ.get("CRM_RUN_SWEEP_BATCH_SIZE", 500))
+# How often the walker pauses its claim to run one sweep pass.
+CRM_RUN_SWEEP_INTERVAL_SECONDS = _positive_float(
+    "CRM_RUN_SWEEP_INTERVAL_SECONDS", 3600.0
+)

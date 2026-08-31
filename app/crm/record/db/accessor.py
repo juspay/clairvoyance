@@ -13,6 +13,7 @@ from app.crm.record.db import DbTxn
 from app.crm.record.db.decoder import decode_journey_card, decode_raw_event
 from app.crm.record.db.queries import (
     claim_pending_events_query,
+    customer_has_event_query,
     get_customer_journey_query,
     insert_event_query,
     quarantine_event_query,
@@ -79,3 +80,12 @@ async def get_customer_journey(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_journey_card(row) for row in rows]
+
+
+async def customer_has_event(
+    merchant_id: str, customer_id: str, topics: List[str], since: datetime
+) -> bool:
+    query, values = customer_has_event_query(merchant_id, customer_id, topics, since)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return bool(row["found"]) if row else False

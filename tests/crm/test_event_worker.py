@@ -37,6 +37,17 @@ from app.crm.shared.worker import run_drain_loop
 # ---------------------------------------------------------------------------
 
 
+async def _no_plans_live(event: RawEvent, customer_id: str) -> None:
+    """The entry-rules consumer with no plans live: the pass must run the
+    same with or without outreach reacting."""
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_outreach(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workers, "consume_attributed_event", _no_plans_live)
+
+
 class _FakeSavepoint:
     async def __aenter__(self) -> "_FakeSavepoint":
         return self

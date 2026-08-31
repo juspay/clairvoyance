@@ -3,16 +3,47 @@
 Every function self-scopes; see queries.py for why no transaction is needed.
 """
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.crm.connectivity.db.decoder import decode_queued_message
 from app.crm.connectivity.db.queries import (
     apply_outcome_query,
     claim_queued_messages_query,
+    insert_message_query,
     requeue_stale_claims_query,
 )
 from app.crm.connectivity.schemas import QueuedMessage
 from app.crm.shared.db import crm_connection
+
+
+async def insert_message(
+    merchant_id: str,
+    customer_id: str,
+    channel: str,
+    sent_to_address: str,
+    source_kind: str,
+    source_id: Optional[str],
+    purpose_key: str,
+    template_id: Optional[str],
+    variables: Dict[str, Any],
+    dedupe_key: str,
+) -> Optional[str]:
+    """None = the dedupe unique absorbed it (a row already names this send)."""
+    query, values = insert_message_query(
+        merchant_id,
+        customer_id,
+        channel,
+        sent_to_address,
+        source_kind,
+        source_id,
+        purpose_key,
+        template_id,
+        variables,
+        dedupe_key,
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return str(row["id"]) if row else None
 
 
 async def claim_queued_messages(batch_size: int) -> List[QueuedMessage]:

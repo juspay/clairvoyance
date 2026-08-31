@@ -108,3 +108,22 @@ def get_customer_journey_query(
         LIMIT ${len(values)}
     """
     return query, values
+
+
+def customer_has_event_query(
+    merchant_id: str, customer_id: str, topics: List[str], since: datetime
+) -> Tuple[str, List[Any]]:
+    """The walker's goal re-check at fire time: did she do the thing after
+    the run began? One EXISTS on the stamped customer index. A producer
+    that omits occurred_at must not defeat the check (NULL > x is NULL,
+    never true) — the envelope's received_at stands in."""
+    query = f"""
+        SELECT EXISTS (
+            SELECT 1 FROM {EVENT_RAW_TABLE}
+            WHERE merchant_id = $1
+              AND customer_id = $2
+              AND topic = ANY($3)
+              AND COALESCE(occurred_at, received_at) > $4
+        ) AS found
+    """
+    return query, [merchant_id, customer_id, topics, since]

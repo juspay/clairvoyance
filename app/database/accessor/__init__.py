@@ -49,6 +49,7 @@ from .breeze_buddy.lead_call_tracker import (
     update_lead_call_id_by_id,
     update_lead_call_initiated_time,
     update_lead_call_recording_url,
+    update_lead_enrollment_id,
     update_lead_template,
 )
 from .breeze_buddy.telephony_number import (
@@ -104,6 +105,7 @@ __all__ = [
     "delete_call_execution_config",
     "calling_activation_for_merchant",
     "create_lead_call_tracker",
+    "update_lead_enrollment_id",
     "append_metadata_field",
     "acquire_lock_on_lead_by_id",
     "release_lock_on_lead_by_id",

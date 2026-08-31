@@ -328,6 +328,22 @@ def update_lead_call_id_by_id_query(
     return text, values
 
 
+def update_lead_enrollment_id_query(
+    lead_id: str, enrollment_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Stamp the CRM workflow run (ADR 0010) onto the lead it caused — once;
+    a lead is never re-attributed to another run.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "enrollment_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2 AND "enrollment_id" IS NULL
+        RETURNING *;
+    """
+    return text, [enrollment_id, lead_id]
+
+
 def update_lead_customer_id_query(
     lead_id: str, customer_id: str
 ) -> Tuple[str, List[Any]]:

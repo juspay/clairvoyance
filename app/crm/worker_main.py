@@ -12,7 +12,8 @@ from app.core.config.static import (
     POSTGRES_POOL_SIZE,
 )
 from app.crm.connectivity.contracts import claim_sends, dispatch_send
-from app.crm.record.contracts import observe_processed_event, run_pass
+from app.crm.outreach.contracts import claim_due_runs, walk_run
+from app.crm.record.workers import observe_processed_event, run_pass
 from app.crm.shared.worker import run_drain_loop
 
 ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
@@ -32,8 +33,14 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         stop_event=stop_event,
         name="dispatcher",
     ),
-    # "walker" lands here when outreach/ ships — one line, per the sealed
-    # doc's own "copy the manifest" framing.
+    "walker": lambda stop_event: run_drain_loop(
+        claim_due_runs,
+        walk_run,
+        interval=CRM_WORKER_INTERVAL,
+        batch=CRM_WORKER_BATCH,
+        stop_event=stop_event,
+        name="walker",
+    ),
 }
 
 _task: Optional[asyncio.Task] = None
