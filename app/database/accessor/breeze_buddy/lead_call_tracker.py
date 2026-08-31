@@ -34,6 +34,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
     update_lead_customer_id_query,
+    update_lead_enrollment_id_query,
     update_lead_payload_query,
     update_lead_request_id_query,
     update_lead_template_query,
@@ -485,6 +486,20 @@ async def stamp_lead_customer(lead_id: str, customer_id: str) -> bool:
         return False
     except Exception as e:
         logger.error(f"Error stamping customer_id on lead {lead_id}: {e}")
+        return False
+
+
+async def update_lead_enrollment_id(lead_id: str, enrollment_id: str) -> bool:
+    """
+    Stamp the workflow run onto a lead (ADR 0010). False = not stamped:
+    the lead already carries a run, or the row is missing.
+    """
+    try:
+        query_text, values = update_lead_enrollment_id_query(lead_id, enrollment_id)
+        result = await run_parameterized_query(query_text, values)
+        return bool(result and get_row_count(result) > 0)
+    except Exception as e:
+        logger.error(f"Error stamping enrollment_id on lead {lead_id}: {e}")
         return False
 
 

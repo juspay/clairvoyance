@@ -1,13 +1,16 @@
 """record module's public surface — the only file other modules may import
-from app/crm/record."""
+from app/crm/record.
 
+The event worker's pass (workers.py: run_pass, observe_processed_event) is
+deliberately NOT exported here. workers.py calls outreach's entry-rules
+consumer, and outreach imports this file — exporting the pass here would
+close an import cycle. app/crm/worker_main.py, the one composition root,
+takes the pass from workers.py directly.
+"""
+
+from app.crm.record.events import customer_has_event
 from app.crm.record.ingest import record_event
+from app.crm.record.schemas import RawEvent
 from app.crm.record.timeline import get_customer_journey
-from app.crm.record.workers import observe_processed_event, run_pass
 
-__all__ = [
-    "record_event",
-    "get_customer_journey",
-    "run_pass",
-    "observe_processed_event",
-]
+__all__ = ["RawEvent", "record_event", "get_customer_journey", "customer_has_event"]

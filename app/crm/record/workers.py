@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.core.logger import logger
 from app.crm.identity.contracts import assert_facts, resolve as crm_resolve
+from app.crm.outreach.contracts import consume_attributed_event
 from app.crm.record.db import DbTxn, accessor, atomically, savepoint
 from app.crm.record.schemas import Extracted, RawEvent
 
@@ -79,8 +80,8 @@ async def _process_one(txn: DbTxn, event: RawEvent) -> None:
 
 async def _consume_attributed_event(event: RawEvent, customer_id: str) -> None:
     """Entry-rules slot: per row, inside its savepoint, before its stamp, so a
-    poison rule costs one row per poll. No-op until outreach.contracts lands."""
-    return None
+    poison rule costs one row per poll. A raise here leaves the row pending."""
+    await consume_attributed_event(event, customer_id)
 
 
 async def _run_processor(txn: DbTxn, event: RawEvent) -> Optional[str]:

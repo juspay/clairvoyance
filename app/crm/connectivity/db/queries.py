@@ -5,7 +5,8 @@ nothing here needs a transaction. The claim and the sweep are deliberately
 unscoped by merchant: one global queue, not a loop per tenant.
 """
 
-from typing import Any, List, Optional, Tuple
+import json
+from typing import Any, Dict, List, Optional, Tuple
 
 MESSAGE_TABLE = "crm_message"
 
@@ -17,6 +18,43 @@ CLAIMED_COLUMNS = """
     source_kind, source_id, purpose_key, template_id, variables,
     dedupe_key, attempt, next_attempt_at
 """
+
+
+def insert_message_query(
+    merchant_id: str,
+    customer_id: str,
+    channel: str,
+    sent_to_address: str,
+    source_kind: str,
+    source_id: Optional[str],
+    purpose_key: str,
+    template_id: Optional[str],
+    variables: Dict[str, Any],
+    dedupe_key: str,
+) -> Tuple[str, List[Any]]:
+    """One queued row, no verdict (gate-mechanics §1). The dedupe unique
+    (merchant_id, dedupe_key) absorbs a producer's retry: conflict = no
+    row returned, and the caller treats that as already queued."""
+    query = f"""
+        INSERT INTO {MESSAGE_TABLE}
+            (merchant_id, customer_id, channel, sent_to_address, source_kind,
+             source_id, purpose_key, template_id, variables, dedupe_key)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+        ON CONFLICT (merchant_id, dedupe_key) DO NOTHING
+        RETURNING id
+    """
+    return query, [
+        merchant_id,
+        customer_id,
+        channel,
+        sent_to_address,
+        source_kind,
+        source_id,
+        purpose_key,
+        template_id,
+        json.dumps(variables),
+        dedupe_key,
+    ]
 
 
 def claim_queued_messages_query(batch_size: int) -> Tuple[str, List[Any]]:
