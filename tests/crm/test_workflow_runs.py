@@ -65,13 +65,17 @@ def test_call_payload_and_send_variables_share_one_bookkeeping_filter() -> None:
         "reply_ask": "YES",
         "reporting_webhook_url": "https://merchant/report",
         "cart_value": 1999,
+        "repeat_event_ids": ["e-2", "e-3"],
+        "repeat_items": [{"order_id": "B"}],
+        "repeat_count": 3,
     }
     facts = run_facts(context)
     assert facts == {
         "reporting_webhook_url": "https://merchant/report",
         "cart_value": 1999,
+        "repeat_count": 3,
     }
-    assert send_variables(context) == {"cart_value": 1999}
+    assert send_variables(context) == {"cart_value": 1999, "repeat_count": 3}
 
 
 def test_lead_request_id_is_the_merchants_order_id_else_the_run() -> None:

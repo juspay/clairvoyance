@@ -305,6 +305,78 @@ def resume_run_on_event_query(
     ]
 
 
+def patch_open_run_query(
+    merchant_id: str,
+    workflow_id: str,
+    enrollment_key: str,
+    entry_node: str,
+    event_id: str,
+    patch: Dict[str, Any],
+    accumulate: bool,
+    max_field: Optional[str],
+    max_value: Optional[float],
+    debounce_minutes: float,
+) -> Tuple[str, List[Any]]:
+    """Repeat entries (modules/05 §Repeat entries): ONE idempotent UPDATE
+    in the resume_run_on_event shape. Touches only a run still standing on
+    its first square (status waiting, current_node = the entry node) — a
+    run past it is never patched. Found by enrollment_key so a keyed plan's
+    order edit patches ITS order's run. The event marks itself used in
+    context.repeat_event_ids, so a redelivered repeat matches zero rows and
+    the alarm cannot slide twice for one letter.
+
+    The facts win unconditionally (refresh_latest), only when the new value
+    beats the stored one (refresh_max — compared here, in the statement, a
+    non-numeric stored value never blocks a numeric win), or are appended
+    under repeat_items (accumulate). debounce > 0 slides wake_at."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET context = (
+                CASE
+                    WHEN $7::boolean THEN
+                        context || jsonb_build_object(
+                            'repeat_items',
+                            COALESCE(context->'repeat_items', '[]'::jsonb)
+                                || jsonb_build_array($6::jsonb),
+                            'repeat_count',
+                            COALESCE(jsonb_array_length(context->'repeat_items'), 0) + 2
+                        )
+                    WHEN $8::text IS NULL THEN context || $6::jsonb
+                    WHEN $9::float8 > COALESCE(
+                        CASE WHEN (context->>$8::text) ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                             THEN (context->>$8::text)::float8 END,
+                        '-Infinity'::float8)
+                        THEN context || $6::jsonb
+                    ELSE context
+                END
+            ) || jsonb_build_object(
+                'repeat_event_ids',
+                COALESCE(context->'repeat_event_ids', '[]'::jsonb)
+                    || jsonb_build_array(to_jsonb($5::text))
+            ),
+            wake_at = CASE WHEN $10::float8 > 0
+                           THEN now() + make_interval(secs => $10::float8 * 60)
+                           ELSE wake_at END,
+            last_error = NULL
+        WHERE merchant_id = $1 AND workflow_id = $2::uuid AND enrollment_key = $3
+          AND status = 'waiting' AND current_node = $4
+          AND NOT (COALESCE(context->'repeat_event_ids', '[]'::jsonb) ? $5::text)
+        RETURNING id
+    """
+    return query, [
+        merchant_id,
+        workflow_id,
+        enrollment_key,
+        entry_node,
+        event_id,
+        json.dumps(patch),
+        accumulate,
+        max_field,
+        max_value,
+        debounce_minutes,
+    ]
+
+
 def cancel_open_runs_query(
     merchant_id: str,
     workflow_id: str,

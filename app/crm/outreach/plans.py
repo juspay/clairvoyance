@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.crm.outreach.db import DbTxn, accessor, atomically
-from app.crm.outreach.nodes import NODE_TYPES
+from app.crm.outreach.nodes import NODE_TYPES, is_wait
+from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowSummary
 
 TIMEOUT = "timeout"
@@ -44,6 +45,20 @@ def validate_definition(
     # walker executes from, so validator and walker cannot disagree.
     for node in definition.nodes:
         problems.extend(NODE_TYPES[node.type].validate(node, definition))
+
+    # Repeat-entry words (repeat.py owns the vocabulary). debounce slides
+    # "the entry wait's alarm" — a plan whose first square is an action has
+    # no alarm to slide.
+    if parse_repeat_policy(definition.entry.on_repeat) is None:
+        problems.append(
+            f"entry.on_repeat {definition.entry.on_repeat!r} is not a policy "
+            "(ignore · refresh_latest · refresh_max(<field>) · accumulate)"
+        )
+    if definition.entry.debounce_minutes > 0 and not is_wait(definition.nodes[0]):
+        problems.append(
+            "entry.debounce_minutes needs a wait as the first node — there is "
+            "no entry alarm to slide otherwise"
+        )
 
     node_types = {node.id: node.type for node in definition.nodes}
     for src, dst in ((edge[0], edge[1]) for edge in definition.edges):

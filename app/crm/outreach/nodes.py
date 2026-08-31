@@ -49,7 +49,13 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 # The walker's own bookkeeping in a run's context — never a template
 # variable, never a lead payload key: pointers, the phone (re-added under
 # its canonical key by the call node), per-node results and answers.
-_BOOKKEEPING_KEYS = ("source_event_id", "phone", "customer_mobile_number")
+_BOOKKEEPING_KEYS = (
+    "source_event_id",
+    "phone",
+    "customer_mobile_number",
+    "repeat_event_ids",  # repeat.py: which letters already patched this run
+    "repeat_items",  # repeat.py: accumulate's list — never a template variable
+)
 _BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_")
 
 # Facts the lead machine consumes itself, not the template: kept in the

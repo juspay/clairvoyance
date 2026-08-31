@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple
 from app.core.logger import logger
 from app.crm.outreach.db import accessor
 from app.crm.outreach.enrol import enrol
+from app.crm.outreach.repeat import apply_repeat
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import RawEvent
 
@@ -122,13 +123,26 @@ async def _try_enrol(
     phone = _phone_from_payload(event.payload)
     if phone:
         context["phone"] = phone
-    await enrol(
+    run = await enrol(
         merchant_id=event.merchant_id,
         workflow=flow,
         customer_id=customer_id,
         context=context,
         enrollment_key=enrollment_key,
     )
+    if run is None:
+        # Refused — most often because a run for this key is already open.
+        # The plan's repeat words decide what that open run does with the
+        # repeat (repeat.py); the UPDATE's WHERE makes every other refusal
+        # a no-op, so no second signal from enrol() is needed.
+        await apply_repeat(
+            event.merchant_id,
+            str(flow.id),
+            enrollment_key or customer_id,
+            definition,
+            str(event.id),
+            _context_from_payload(event.payload),
+        )
 
 
 def _enrollment_key(
