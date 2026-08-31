@@ -64,12 +64,14 @@ from app.database.accessor import (
     get_template_by_id,
     handle_lead_abort,
     is_number_blacklisted,
+    mask_phone,
 )
 from app.database.accessor.breeze_buddy.dispatch import (
     update_lead_next_attempt_at_now,
 )
 from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
 from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.utils.common import normalize_e164
 
 from .rbac import validate_lead_read_access, validate_recording_access
 
@@ -280,8 +282,22 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 "template instead.",
             )
 
-        # Check if customer phone number is blacklisted
         customer_mobile = req.payload.get("customer_mobile_number")
+        if customer_mobile is not None:
+            normalized_mobile = normalize_e164(customer_mobile)
+            if not normalized_mobile:
+                logger.warning(
+                    "Undialable customer_mobile_number %s rejected for reseller %s",
+                    mask_phone(str(customer_mobile)),
+                    req.reseller_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="customer_mobile_number is not a valid dialable phone number",
+                )
+            customer_mobile = normalized_mobile
+            req.payload["customer_mobile_number"] = normalized_mobile
+
         if customer_mobile and await is_number_blacklisted(
             customer_mobile, req.reseller_id
         ):
