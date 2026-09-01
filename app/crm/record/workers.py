@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.identity.contracts import assert_facts, resolve as crm_resolve
-from app.crm.outreach.contracts import consume_attributed_event
+from app.crm.record.consumers import consumers
 from app.crm.record.db import DbTxn, accessor, atomically, savepoint
 from app.crm.record.extractors import DEFAULT_EXTRACTOR, EXTRACTORS
 from app.crm.record.schemas import RawEvent
@@ -52,15 +52,19 @@ async def _process_one(txn: DbTxn, event: RawEvent) -> None:
 async def _consume_attributed_event(
     event: RawEvent, customer_id: str, handles: Dict[str, str]
 ) -> None:
-    """Entry-rules slot: per row, inside its savepoint, before its stamp, so a
-    poison rule costs one row per poll. A raise here leaves the row pending.
+    """Consumer slot: per row, inside its savepoint, before its stamp, so a
+    poison consumer costs one row per poll. A raise here leaves the row
+    pending. WHO runs is the registry's business (record/consumers.py,
+    filled by worker_main) — this file imports no subscriber, so a
+    subscriber may read record's contracts without ever forming a cycle.
 
-    The extractor's handles ride along so the consumer never re-hunts what
-    this pass already found. Two searches would drift — and did: a Shopify
+    The extractor's handles ride along so no consumer re-hunts what this
+    pass already found. Two searches would drift — and did: a Shopify
     order with its phone only in customer.default_address resolved here and
     then parked at the first call node, because the payload re-search did
     not know that path."""
-    await consume_attributed_event(event, customer_id, handles)
+    for consume in consumers():
+        await consume(event, customer_id, handles)
 
 
 async def _run_processor(

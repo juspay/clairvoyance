@@ -32,6 +32,10 @@ PR time — earlier than a grant would fail:
   11. ADAPTER CONFINEMENT — app.crm.connectivity.providers is imported
      only by app/crm/connectivity/send.py and inside providers/ itself;
      any other import reaches a provider around the send() door's checks.
+  12. RECORD HEARS, NEVER CALLS — app/crm/record imports no subscriber
+     module (identity + shared only): consumers register through
+     record/consumers.py from worker_main, so subscriber -> record is the
+     only direction the import cycle can never form in.
 
 New table? Add it to TABLE_OWNERS with its owning module. New violation
 class? This script is the place — the boundary is code, so the check is
@@ -181,6 +185,28 @@ def check(root: Path = ROOT) -> list[str]:
                         f"{rp}: adapter import outside send.py ({target}) — "
                         f"providers/ is reached only through the send() door"
                     )
+            # 12. record hears, never calls — the spine's owner imports no
+            # subscriber (not even its contracts; worker_main registers them
+            # through record/consumers.py). record -> subscriber is the
+            # import cycle the registry exists to kill: every subscriber
+            # already reads record's contracts.
+            if rp.startswith("app/crm/record/") and target.startswith("app.crm."):
+                t_parts = target.split(".")
+                t_mod = t_parts[2] if len(t_parts) > 2 else None
+                # auth/api are crm-ROOT surfaces (same allowlist as the
+                # generic cross-module rule), not subscriber modules.
+                if t_mod and t_mod not in (
+                    "record",
+                    "identity",
+                    "shared",
+                    "auth",
+                    "api",
+                ):
+                    errors.append(
+                        f"{rp}: record imports a subscriber ({target}) — "
+                        f"consumers register through record/consumers.py "
+                        f"from worker_main, never the reverse"
+                    )
 
         # 7-9. the atomic grammar
         if in_crm and not is_shared_db:
@@ -237,7 +263,7 @@ def main() -> int:
         return 1
     print(
         "OK: crm boundaries clean "
-        "(ownership, SQL, driver, imports, handles, adapters)."
+        "(ownership, SQL, driver, imports, handles, adapters, subscribers)."
     )
     return 0
 

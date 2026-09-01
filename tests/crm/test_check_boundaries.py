@@ -179,3 +179,26 @@ def test_send_and_providers_themselves_may_import_adapters(tmp_path: Path) -> No
         },
     )
     assert check(root) == []
+
+
+def test_record_importing_a_subscriber_fails(tmp_path: Path) -> None:
+    # Rule 12: not even the subscriber's contracts — worker_main registers
+    # consumers through record/consumers.py; record never reaches back.
+    root = _tree(
+        tmp_path,
+        {"app/crm/record/workers.py": "from app.crm.outreach.contracts import x\n"},
+    )
+    assert any("record imports a subscriber" in e for e in check(root))
+
+
+def test_record_may_import_identity_and_shared(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/record/workers.py": (
+                "from app.crm.identity.contracts import resolve\n"
+                "from app.crm.shared.db import crm_connection\n"
+            )
+        },
+    )
+    assert not any("record imports a subscriber" in e for e in check(root))

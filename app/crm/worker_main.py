@@ -13,9 +13,20 @@ from app.core.config.static import (
     POSTGRES_POOL_SIZE,
 )
 from app.crm.connectivity.contracts import claim_sends, dispatch_send
-from app.crm.outreach.contracts import claim_due_runs, walk_run
+from app.crm.outreach.contracts import (
+    claim_due_runs,
+    consume_attributed_event,
+    walk_run,
+)
+from app.crm.record.consumers import register_consumer
 from app.crm.record.workers import observe_processed_event, run_pass
 from app.crm.shared.worker import run_drain_loop
+
+# The composition root fills record's consumer slot: record owns the WHEN
+# (per row, inside the row's savepoint), this file owns the WHO — so the
+# import always runs subscriber -> record, never back (checker rule 12).
+# Segments and the transactional-send consumer (A13) each add one line here.
+register_consumer(consume_attributed_event)
 
 ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
     "event-worker": lambda stop_event: run_drain_loop(
