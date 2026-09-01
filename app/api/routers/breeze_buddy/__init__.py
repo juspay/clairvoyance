@@ -14,6 +14,9 @@ from app.api.routers.breeze_buddy.blacklist import router as blacklist_router
 # Campaigns (named bulk lead pushes for the console)
 from app.api.routers.breeze_buddy.campaigns import router as campaigns_router
 from app.api.routers.breeze_buddy.chat import router as chat_router
+
+# Browser log ingestion (loom frontend -> backend log stream)
+from app.api.routers.breeze_buddy.client_logs import router as client_logs_router
 from app.api.routers.breeze_buddy.configurations import router as configurations_router
 from app.api.routers.breeze_buddy.credentials import router as credentials_router
 
@@ -152,6 +155,9 @@ router.include_router(daily_router, prefix="", tags=["daily"])
 
 # Chat (text-mode sessions: REST + SSE, no STT/TTS/VAD)
 router.include_router(chat_router, prefix="", tags=["chat"])
+
+# Browser log ingestion (loom console ships batched frontend logs here)
+router.include_router(client_logs_router, prefix="", tags=["client-logs"])
 
 # Widget public mode (CHAT_MODE.md §14)
 # - widget_config: per-merchant config (admin/reseller-scoped CRUD)
