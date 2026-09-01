@@ -12,6 +12,7 @@ Routes under ``/agent/voice/breeze-buddy/widget``:
 - ``POST /widget/session/{id}/voice/end``               close voice attachment
 - ``POST /widget/session/{id}/end``                     end whole conversation
 - ``GET  /widget/session/{id}``                         resume state
+- ``POST /widget/events``                              client observations
 
 Plus an OPTIONS handler per route returning permissive CORS so the
 browser preflight from any merchant origin can reach our handlers —
@@ -45,6 +46,10 @@ from app.schemas.breeze_buddy.chat import (
     WidgetVoiceEndResponse,
 )
 from app.schemas.breeze_buddy.widget_config import StorefrontWidgetConfigResponse
+from app.schemas.breeze_buddy.widget_events import (
+    WidgetEventBatch,
+    WidgetEventIngestResponse,
+)
 
 from .handlers import (
     approve_widget_tool_handler,
@@ -52,6 +57,7 @@ from .handlers import (
     create_widget_session_handler,
     end_widget_session_handler,
     get_widget_session_state_handler,
+    handle_widget_events,
     send_widget_intent_handler,
     send_widget_message_handler,
     transcribe_widget_audio_handler,
@@ -77,6 +83,34 @@ async def widget_storefront_config_preflight() -> Response:
 @router.options("/session")
 async def widget_create_preflight() -> Response:
     return options_cors_response()
+
+
+@router.options("/events")
+async def widget_events_preflight() -> Response:
+    return options_cors_response()
+
+
+@router.post(
+    "/events",
+    response_model=WidgetEventIngestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Record client-side widget observations (skin/style load, drops)",
+)
+async def widget_events(
+    body: WidgetEventBatch, request: Request
+) -> WidgetEventIngestResponse:
+    """Accept a small batch of browser observations from the embed.
+
+    The widget sees failures the server never can: a ``custom-style-url``
+    that 404s, a skin that fails its handshake, a dropped connection, a
+    broken product image. Each becomes one log line beside
+    ``widget: session opened``.
+
+    Auth is the embed's ``public_widget_key`` plus the per-merchant
+    Origin allowlist — no session and no shopper login required, so a
+    visitor who never opens the chat still reports a broken stylesheet.
+    """
+    return await handle_widget_events(body, request)
 
 
 @router.options("/session/{session_id}")
