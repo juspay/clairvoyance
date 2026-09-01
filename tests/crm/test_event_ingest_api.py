@@ -302,3 +302,45 @@ def test_record_event_stays_fail_open_on_store_failure(
         )
     )
     assert result is None
+
+
+# --- the size gate: "store first" is not "store anything of any size" ---
+
+
+def _request_with_content_length(value: str) -> Request:
+    return Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-length", value.encode())],
+        }
+    )
+
+
+def test_an_oversized_letter_is_413_before_the_row_exists() -> None:
+    too_big = str(record_api.MAX_LETTER_BYTES + 1)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(record_api.within_size_limit(_request_with_content_length(too_big)))
+    assert e.value.status_code == 413
+
+
+def test_a_normal_letter_passes_the_size_gate() -> None:
+    ok = str(record_api.MAX_LETTER_BYTES)
+    assert (
+        asyncio.run(record_api.within_size_limit(_request_with_content_length(ok)))
+        is None
+    )
+
+
+def test_size_gate_is_declared_on_the_route() -> None:
+    # Same structure as the auth pin: a door's limit is a declared
+    # dependency, so the next route added beside this one cannot quietly
+    # ship without it.
+    route = next(
+        r
+        for r in record_api.ingest_router.routes
+        if isinstance(r, APIRoute) and r.path == "/events"
+    )
+    assert record_api.within_size_limit in [
+        d.call for d in route.dependant.dependencies
+    ]

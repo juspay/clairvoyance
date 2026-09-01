@@ -125,6 +125,58 @@ def test_entry_topic_enrols_with_phone_and_small_facts(
     assert kwargs["context"]["source_event_id"] == event.id
 
 
+def test_extractor_handles_reach_context_when_the_payload_hides_the_phone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The parked-run regression: a verbatim Shopify letter carries its
+    # phone ONLY in customer.default_address — none of this file's
+    # fallback paths. Before handles were passed through, this order
+    # resolved, enrolled, and parked at its first call/send node
+    # ("no phone in run context"). The extractor's discovery must win.
+    calls: List[Any] = []
+    _wire(monkeypatch, _flow(), calls)
+    event = _event("checkout.initiated")
+    event = event.model_copy(
+        update={
+            "source": "shopify",
+            "payload": {
+                "customer": {
+                    "phone": None,
+                    "default_address": {"phone": "+91 98450 12345"},
+                },
+                "cart_value": 1999,
+            },
+        }
+    )
+    asyncio.run(
+        entry.consume_attributed_event(
+            event, "cust-1", handles={"phone": "+919845012345"}
+        )
+    )
+    ((kind, kwargs),) = calls
+    assert kind == "enrol"
+    assert kwargs["context"]["phone"] == "+919845012345"
+
+
+def test_extractor_handles_beat_the_payload_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Precedence pin: when both exist, the extractor's handle wins — the
+    # number the sends dial must be the number identity resolved on, or
+    # suppression stops matching what we contact.
+    calls: List[Any] = []
+    _wire(monkeypatch, _flow(), calls)
+    event = _event("checkout.initiated")  # payload carries +919845012345
+    asyncio.run(
+        entry.consume_attributed_event(
+            event, "cust-1", handles={"phone": "+918888877777"}
+        )
+    )
+    ((kind, kwargs),) = calls
+    assert kind == "enrol"
+    assert kwargs["context"]["phone"] == "+918888877777"
+
+
 def test_goal_topic_cancels_open_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: List[Any] = []
     _wire(monkeypatch, _flow(), calls)
