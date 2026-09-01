@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import pytest
 
+import app.crm.record.consumers as record_consumers
 import app.crm.record.extractors.flat as flat_extractor
 import app.crm.record.extractors.shopify as shopify_extractor
 import app.crm.record.workers as workers
@@ -50,7 +51,10 @@ async def _no_plans_live(
 
 @pytest.fixture(autouse=True)
 def _no_outreach(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(workers, "consume_attributed_event", _no_plans_live)
+    # The registry, not the import: workers.py no longer knows any
+    # subscriber by name (rule 12) — tests wire the slot the same way
+    # worker_main does.
+    monkeypatch.setattr(record_consumers, "_CONSUMERS", [_no_plans_live])
 
 
 class _FakeSavepoint:
@@ -971,7 +975,7 @@ def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
 
     workers.crm_resolve = fake_resolve  # type: ignore[assignment]
     workers.assert_facts = fake_facts  # type: ignore[assignment]
-    workers.consume_attributed_event = fake_consume  # type: ignore[assignment]
+    record_consumers._CONSUMERS = [fake_consume]
 
     async def fake_stamp(*a: Any, **k: Any) -> None:
         return None

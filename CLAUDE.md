@@ -15,7 +15,7 @@ uv run autoflake --in-place --remove-all-unused-imports --remove-unused-variable
 uv run pyrefly check                # Type check
 uv run pytest tests/                # Tests
 uv run python scripts/check_migrations.py       # Migration numbering guard
-uv run python scripts/check_crm_boundaries.py   # CRM boundary guard (11 rules)
+uv run python scripts/check_crm_boundaries.py   # CRM boundary guard (12 rules)
 ```
 
 ## Building modules & making code changes — READ THIS FIRST
