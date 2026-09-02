@@ -5,7 +5,7 @@ Returns Pydantic models, never raw rows. Errors are logged + re-raised
 so route handlers can convert them into the appropriate HTTP status.
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.database.decoder.breeze_buddy.widget_config import decode_widget_config
@@ -34,6 +34,7 @@ async def create_widget_config(
     max_concurrent_per_ip: int,
     max_voice_sessions_per_ip_hour: int,
     active: bool,
+    appearance: Optional[Dict[str, Any]] = None,
 ) -> Optional[WidgetConfigResponse]:
     query, values = create_widget_config_query(
         reseller_id=reseller_id,
@@ -46,6 +47,7 @@ async def create_widget_config(
         max_concurrent_per_ip=max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=max_voice_sessions_per_ip_hour,
         active=active,
+        appearance=appearance,
     )
     try:
         result = await run_parameterized_query(query, values)
@@ -160,6 +162,7 @@ async def update_widget_config(
     max_messages_per_ip_hour: Optional[int] = None,
     max_concurrent_per_ip: Optional[int] = None,
     max_voice_sessions_per_ip_hour: Optional[int] = None,
+    appearance: Optional[Dict[str, Any]] = None,
     active: Optional[bool] = None,
 ) -> Optional[WidgetConfigResponse]:
     query, values = update_widget_config_query(
@@ -170,6 +173,7 @@ async def update_widget_config(
         max_messages_per_ip_hour=max_messages_per_ip_hour,
         max_concurrent_per_ip=max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=max_voice_sessions_per_ip_hour,
+        appearance=appearance,
         active=active,
     )
     if not values:

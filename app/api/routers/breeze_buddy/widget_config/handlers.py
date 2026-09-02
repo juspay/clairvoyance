@@ -111,6 +111,7 @@ async def create_widget_config_handler(
         max_messages_per_ip_hour=body.max_messages_per_ip_hour,
         max_concurrent_per_ip=body.max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=body.max_voice_sessions_per_ip_hour,
+        appearance=body.appearance,
         active=body.active,
     )
     if not created:
@@ -239,6 +240,7 @@ async def update_widget_config_handler(
         max_messages_per_ip_hour=body.max_messages_per_ip_hour,
         max_concurrent_per_ip=body.max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=body.max_voice_sessions_per_ip_hour,
+        appearance=body.appearance,
         active=body.active,
     )
     if updated is None:
