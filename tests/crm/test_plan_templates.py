@@ -14,8 +14,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pytest
 
 from app.crm.outreach.ladder import expand_stages
-from app.crm.outreach.plans import validate_definition
+from app.crm.outreach.plans import Catalogs, validate_definition
 from app.crm.outreach.schemas import WorkflowDefinition
+from app.crm.record.catalog import code_entries
+from app.crm.record.contracts import CatalogField
 
 PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
 CART = PLANS / "cart-recovery.json"
@@ -47,6 +49,32 @@ def _slug(topic: str) -> str:
     return topic.split(".")[-1].replace("_", "-")
 
 
+def _loan_registration() -> Dict[str, CatalogField]:
+    """What the loan vendor signs at enrollment (POST /ingest/schemas): the
+    one field every loan.* door keys on. The board cannot validate without
+    it — which is the point: a keyed door needs its topic in the catalog."""
+    field = CatalogField(
+        path="payload.application_id",
+        type="text",
+        label="Application",
+        keyable=True,
+        ops=["is", "is_not", "in", "exists"],
+    )
+    return {field.path: field}
+
+
+def _catalogs() -> Catalogs:
+    """The CODE catalog (Shopify's declared fields, by topic) plus the loan
+    vendor's registration — so every catalog law runs over the shipped
+    boards on every CI run, never `catalogs=None` (which skips them all)."""
+    catalogs: Dict[str, Optional[Dict[str, CatalogField]]] = {
+        entry.topic: {f.path: f for f in entry.fields} for entry in code_entries()
+    }
+    for topic in [*LOAN_STAGES, LOAN_DONE, *LOAN_OUT]:
+        catalogs[topic] = _loan_registration()
+    return catalogs
+
+
 def test_the_expected_documents_exist() -> None:
     assert CART.is_file(), CART
     assert LOAN.is_file(), LOAN
@@ -56,7 +84,27 @@ def test_the_expected_documents_exist() -> None:
 
 @pytest.mark.parametrize("path", _every_plan(), ids=lambda p: p.stem)
 def test_every_plan_template_validates(path: Path) -> None:
-    assert validate_definition(_load(path)) == [], path
+    assert validate_definition(_load(path), catalogs=_catalogs()) == [], path
+
+
+def test_the_catalog_laws_actually_run_over_the_boards() -> None:
+    """The guard on the guard: with the catalog in hand, a send mapping a
+    fact Shopify never declares is refused — so a passing suite means the
+    boards' maps and keys were judged, not skipped."""
+    doc = _load(CART)
+    send = next(n for n in doc["nodes"] if n["type"] == "send")
+    send["variables"] = {"1": "loyalty_tier"}
+    problems = validate_definition(doc, catalogs=_catalogs())
+    assert any("loyalty_tier" in p and "not a declared variable" in p for p in problems)
+
+
+def test_every_cart_send_maps_its_blanks() -> None:
+    """send_variables posts EXACTLY the map, nothing when it is empty — a
+    shipped board with an unmapped send would refuse on every send."""
+    for path in (CART, CART_FALLBACK):
+        for node in _load(path)["nodes"]:
+            if node["type"] == "send":
+                assert node.get("variables") == {"1": "customer_name"}, (path, node)
 
 
 def test_cart_recovery_is_the_final_shape_from_the_notes() -> None:

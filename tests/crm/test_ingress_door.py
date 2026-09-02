@@ -189,8 +189,10 @@ def test_only_the_webhook_router_is_unauthenticated() -> None:
 
     Both directions matter: auth appearing on the provider bays locks the
     provider out and silently stops every event, and auth going missing
-    from any /connectors route would expose connector administration to
-    anyone.
+    from any /connectors, /ingest or /catalog route would expose the door
+    to anyone. The walk reads DECLARED dependencies — a check awaited on a
+    handler's first line is invisible to it, which is the point: a route
+    without its auth dependency is a BLOCKER (design/ingest-doors).
     """
 
     def dependency_names(route) -> list:
@@ -225,6 +227,19 @@ def test_only_the_webhook_router_is_unauthenticated() -> None:
         assert carries(route, "get_current_user_with_rbac"), getattr(
             route, "path", route
         )
+    # Every /ingest door (the envelope and the S2S schema registration)
+    # declares the s2s verifier — by body or by query, one of the two
+    # dependencies that call verify_s2s_caller.
+    assert record_api.ingest_router.routes, "the ingest router has doors"
+    for route in record_api.ingest_router.routes:
+        assert carries(route, "verified_caller") or carries(
+            route, "verified_merchant_caller"
+        ), getattr(route, "path", route)
+    # Every /catalog and /schemas console route is the admin's (ADR 0007
+    # phase 1); merchant users take merchant_scope when "Your events" ships.
+    assert record_api.catalog_router.routes, "the catalog router has routes"
+    for route in record_api.catalog_router.routes:
+        assert carries(route, "crm_admin_user"), getattr(route, "path", route)
 
 
 def test_a_callback_carrying_no_letters_is_still_200(client, spec, spine) -> None:

@@ -979,3 +979,36 @@ def test_the_lookup_is_scoped_to_the_merchants_own_account() -> None:
     # the filter is still there, now bound rather than spelled in SQL text
     assert "status = $5" in sql
     assert values == ["shop", "whatsapp", "waba-1", "n", TEMPLATE_APPROVED]
+
+
+class _ScriptedAdapter(ChannelAdapter):
+    channel = "whatsapp"
+
+    def __init__(self, outcome: SendOutcome) -> None:
+        self._outcome = outcome
+
+    async def deliver(self, message, route):
+        """Test double: returns the scripted outcome, route untouched."""
+        return self._outcome
+
+
+async def test_an_accepted_send_names_the_pipe_it_left_on_and_a_refusal_does_not(
+    monkeypatch, happy_accessor
+) -> None:
+    """T16 col 6: the outcome carries the binding the route resolved, so
+    the dispatcher can stamp crm_message.binding_id once; a blocked outcome
+    carries none — no pipe was used, and NULL is the honest row."""
+    message = _message()
+    accepted = SendOutcome(status="accepted", provider_message_id="wamid.T")
+    monkeypatch.setattr(
+        send_module, "adapter_for", lambda channel: _ScriptedAdapter(accepted)
+    )
+    outcome = await send(_token(message), message)
+    assert outcome.status == "accepted" and outcome.binding_id == "b-1"
+
+    blocked = SendOutcome(status="blocked", reason=REASON_GATE_REFUSED)
+    monkeypatch.setattr(
+        send_module, "adapter_for", lambda channel: _ScriptedAdapter(blocked)
+    )
+    outcome = await send(_token(message), message)
+    assert outcome.status == "blocked" and outcome.binding_id is None

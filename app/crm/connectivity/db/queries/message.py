@@ -145,6 +145,7 @@ def apply_outcome_query(
     mark_sent: bool,
     attempt: int,
     retry_after_seconds: Optional[int],
+    binding_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Record what happened to a claimed message.
 
@@ -158,12 +159,19 @@ def apply_outcome_query(
     COALESCE stops a later failure erasing an id an earlier attempt earned.
     ``retry_after_seconds`` is set only when requeuing; NULL leaves
     next_attempt_at alone, since a terminal outcome has no next attempt.
+
+    ``binding_id`` is which pipe the message LEFT on (T16 col 6): stamped
+    once, on the accepted outcome, and never rewritten — migration 060's
+    trigger permits exactly that one write. NULL on blocked rows, where no
+    pipe was ever used, is the honest answer, so a NULL here leaves the
+    column alone.
     """
     query = f"""
         UPDATE {MESSAGE_TABLE}
            SET status = $2,
                reason = $3,
                provider_message_id = COALESCE($4, provider_message_id),
+               binding_id = COALESCE(binding_id, $9::uuid),
                claimed_at = NULL,
                sent_at = CASE WHEN $5 THEN now() ELSE sent_at END,
                next_attempt_at = CASE
@@ -184,4 +192,5 @@ def apply_outcome_query(
         retry_after_seconds,
         attempt,
         MESSAGE_SENDING,
+        binding_id,
     ]

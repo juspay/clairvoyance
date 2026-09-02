@@ -36,6 +36,7 @@ router.include_router(
 # writes for consumers, and the inversion that keeps rule 12 whole: record
 # owns the slot, this root fills it, and record never imports back.
 record_ingress.register_ingress("meta", connectivity_contracts.META_INGRESS)
+router.include_router(record_api.catalog_router, tags=["Catalog"])
 router.include_router(outreach_api.router, prefix="/workflows", tags=["Workflows"])
 router.include_router(
     outreach_api.customer_router, prefix="/customers", tags=["Workflows"]

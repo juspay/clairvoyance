@@ -20,6 +20,7 @@ from app.crm.outreach.db.queries.enrollment import (
     cancel_run_query,
     claim_due_runs_query,
     customer_runs_query,
+    enrollment_counts_query,
     exit_run_query,
     insert_enrollment_query,
     list_runs_query,
@@ -336,3 +337,12 @@ async def customer_runs(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_customer_run(row) for row in rows]
+
+
+async def enrollment_counts(merchant_id: str, days: int) -> Dict[str, int]:
+    """The "matched" side of seen-vs-matched: runs started per plan in the
+    window, computed on read — no counter column, nothing to drift."""
+    query, values = enrollment_counts_query(merchant_id, days)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return {row["workflow_id"]: row["started"] for row in rows}

@@ -16,12 +16,13 @@ segments and the transactional-send consumer (A13) join as one
 ``register_consumer`` line in worker_main each — zero edits in the pass.
 """
 
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.crm.record.schemas import RawEvent
 
-# One processed event in: (event, customer_id, handles). ``handles`` is
-# what the source's extractor found — a consumer never re-hunts the
+# One processed event in: (event, customer_id, handles, variables).
+# ``handles`` is what the engine found the person by and ``variables`` the
+# template fill-ins the catalog declared — a consumer never re-hunts the
 # payload (two searches drift; the parked-Shopify-run scar is the proof).
 # ``customer_id`` is None for a MERCHANT-LEVEL letter (Extracted.about ==
 # "merchant": a template review, an account notice): a consumer that is
@@ -29,7 +30,8 @@ from app.crm.record.schemas import RawEvent
 # things — template status, account health — is exactly who those letters
 # are for. Every consumer hears every letter; none is filtered here.
 Consumer = Callable[
-    [RawEvent, Optional[str], Optional[Dict[str, str]]], Awaitable[None]
+    [RawEvent, Optional[str], Optional[Dict[str, str]], Optional[Dict[str, Any]]],
+    Awaitable[None],
 ]
 
 _CONSUMERS: List[Consumer] = []

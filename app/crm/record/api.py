@@ -1,5 +1,6 @@
 """The record module's doors: the per-customer journey view (A12), the event
-ingest push door (A9), and the provider webhook bays (A9).
+ingest push door (A9), the provider webhook bays (A9), and the event catalog
+(design/event-catalog.md).
 
 Thin routes per module rules §1. ``journey_router`` auths via
 Depends(crm_admin_user) and delegates to timeline.py; ``ingest_router``
@@ -23,20 +24,29 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.crm.auth import crm_admin_user, verify_s2s_caller
-from app.crm.record import ingress
+from app.crm.record import catalog, ingress
 from app.crm.record.ingest import ingest_event
-from app.crm.record.schemas import EventIn, EventReceipt, JourneyCard
+from app.crm.record.schemas import (
+    CatalogEntry,
+    EventIn,
+    EventReceipt,
+    EventSchema,
+    JourneyCard,
+    SampledField,
+    SchemaRegistration,
+)
 from app.crm.record.timeline import get_customer_journey
 from app.schemas import UserInfo
 
 journey_router = APIRouter()
 ingest_router = APIRouter()
 webhook_router = APIRouter()
+catalog_router = APIRouter()
 
 
 @journey_router.get("/{customer_id}/journey", response_model=List[JourneyCard])
@@ -91,6 +101,19 @@ async def verified_caller(event: EventIn, request: Request) -> str:
     handler.
     """
     return await verify_s2s_caller(event.merchant_id, request)
+
+
+async def verified_merchant_caller(
+    request: Request,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+) -> str:
+    """The sibling of verified_caller for a door whose merchant is in the
+    QUERY, not the body (the S2S schema registration): the same
+    verify_s2s_caller, declared as the route's dependency for the same
+    reason — the door-walk test (test_ingress_door) can then prove every
+    ingest route carries its auth, instead of trusting a handler's first
+    line."""
+    return await verify_s2s_caller(merchant_id, request)
 
 
 @ingest_router.post("/events", response_model=EventReceipt)
@@ -218,3 +241,93 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
             filed += 1
     logger.info(f"ingress: {provider} webhook filed {filed}/{len(letters)} letters")
     return Response(status_code=status.HTTP_200_OK)
+
+
+# --- The event catalog (design/event-catalog.md; canon T24) -----------------
+
+
+@catalog_router.get("/catalog", response_model=List[CatalogEntry])
+async def get_catalog_route(
+    request: Request,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> Response:
+    """The merged catalog (code layer + this merchant's registrations),
+    content-addressed: send If-None-Match and get 304 until a deploy or a
+    re-registration changes it."""
+    set_log_context(component="crm.record.catalog", merchant_id=merchant_id)
+    # entries -> etag -> 304, and only a body that is sent pays the
+    # seen-this-week GROUP BY (the ETag excludes seen_7d by design).
+    entries = await catalog.merged_entries(merchant_id)
+    etag = catalog.etag_for(entries)
+    if request.headers.get("if-none-match") == etag:
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag}
+        )
+    entries = await catalog.with_seen_counts(merchant_id, entries)
+    return JSONResponse(
+        content=[e.model_dump(mode="json") for e in entries], headers={"ETag": etag}
+    )
+
+
+@catalog_router.get("/catalog/samples", response_model=List[SampledField])
+async def sample_fields_route(
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    source: str = Query(..., min_length=1),
+    topic: str = Query(..., min_length=1),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> List[SampledField]:
+    """The registration wizard's pre-fill from the vendor's real traffic."""
+    set_log_context(component="crm.record.catalog.samples", merchant_id=merchant_id)
+    return await catalog.sample_fields(merchant_id, source, topic)
+
+
+@catalog_router.get("/schemas", response_model=List[EventSchema])
+async def list_schemas_route(
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> List[EventSchema]:
+    set_log_context(component="crm.record.schemas.list", merchant_id=merchant_id)
+    return await catalog.list_schemas(merchant_id)
+
+
+@catalog_router.post(
+    "/schemas", response_model=EventSchema, status_code=status.HTTP_201_CREATED
+)
+async def register_schema_admin_route(
+    body: SchemaRegistration,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> EventSchema:
+    """The console wizard's door — our ops registering on a vendor's behalf."""
+    set_log_context(component="crm.record.schemas.register", merchant_id=merchant_id)
+    return await _register(
+        merchant_id, body, current_user.email or current_user.username
+    )
+
+
+@ingest_router.post(
+    "/schemas", response_model=EventSchema, status_code=status.HTTP_201_CREATED
+)
+async def register_schema_s2s_route(
+    body: SchemaRegistration,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    _caller: str = Depends(verified_merchant_caller),
+) -> EventSchema:
+    """The vendor's own door at enrollment, beside the envelope door and
+    under its exact auth (verify_s2s_caller, declared): the credential
+    says who may speak; this registration says what their words mean
+    (canon T24)."""
+    set_log_context(component="crm.record.schemas.register", merchant_id=merchant_id)
+    return await _register(merchant_id, body, f"s2s:{merchant_id}")
+
+
+async def _register(
+    merchant_id: str, body: SchemaRegistration, registered_by: str
+) -> EventSchema:
+    try:
+        return await catalog.register_schema(merchant_id, body, registered_by)
+    except catalog.SchemaValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        )

@@ -624,3 +624,16 @@ def sweep_exited_runs_query(cutoff: datetime, batch: int) -> Tuple[str, List[Any
         RETURNING id
     """
     return query, [cutoff, batch]
+
+
+def enrollment_counts_query(merchant_id: str, days: int) -> Tuple[str, List[Any]]:
+    """The "matched" side of seen-vs-matched: runs started per plan in the
+    window, computed on read — no counter column, nothing to drift."""
+    query = f"""
+        SELECT workflow_id::text AS workflow_id, count(*)::int AS started
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1
+          AND entered_at > now() - make_interval(days => $2)
+        GROUP BY workflow_id
+    """
+    return query, [merchant_id, days]

@@ -10,6 +10,12 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
+from app.crm.outreach.catalog_laws import (
+    Catalogs,
+    WorkflowValidationError,
+    entry_against_catalog,
+    gather_catalogs as _gather_catalogs,
+)
 from app.crm.outreach.db import DbTxn, atomically
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
@@ -27,18 +33,27 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowSummary,
 )
+from app.crm.record.contracts import (
+    topic_counts,
+)
+
+SEEN_WINDOW_DAYS = 7
 
 
 def validate_definition(
     raw: Dict[str, Any],
     occupied_nodes: Optional[List[str]] = None,
     live_entry: Optional[Dict[str, Any]] = None,
+    catalogs: Catalogs = None,
 ) -> List[str]:
     """PURE decide: every law the document must satisfy, as a list of
     human-readable problems (empty = valid). occupied_nodes are the
     squares open tokens stand on — publish must not delete one, and while
     any exist the entry rule (live_entry) must not change under them
-    (canon T19: no changing entry semantics mid-flight).
+    (canon T19: no changing entry semantics mid-flight). catalogs maps each
+    topic to its merged field map (gathered by the caller — this function
+    never reads); a topic mapped to None is one no layer declares, so
+    nothing may be filtered, keyed or templated on it.
 
     A ladder (phase 17) is expanded first, so every law below judges the
     board it means — and the stored form, the ladder beside its own
@@ -56,6 +71,19 @@ def validate_definition(
         return [f"definition shape invalid: {e}"]
 
     problems: List[str] = []
+    raw_entry = raw.get("entry")
+    raw_doors = raw_entry if isinstance(raw_entry, list) else [raw_entry]
+    if any(
+        isinstance(door, dict) and isinstance(door.get("where"), dict) and door["where"]
+        for door in raw_doors
+    ):
+        # The model reads a map for the immutable rows 069 could not rewrite;
+        # a document being WRITTEN today must speak the typed grammar.
+        problems.append(
+            "entry.where is a list of conditions [{field, op, value}] — the "
+            "equality map is retired (migration 069)"
+        )
+    problems.extend(entry_against_catalog(definition, catalogs))
     node_ids = [node.id for node in definition.nodes]
     seen = set()
     for node_id in node_ids:
@@ -242,7 +270,8 @@ async def create_workflow(
     never in ways that break the editor. A ladder (phase 17) is stored
     with the board it expands to: the author's intent beside what the
     walker reads."""
-    problems = validate_definition(definition)
+    catalogs = await _gather_catalogs(merchant_id, definition)
+    problems = validate_definition(definition, catalogs=catalogs)
     if problems:
         raise WorkflowValidationError(problems)
     return await workflow_accessor.insert_workflow(
@@ -253,7 +282,8 @@ async def create_workflow(
 async def update_draft(
     merchant_id: str, workflow_id: str, definition: Dict[str, Any]
 ) -> Optional[Workflow]:
-    problems = validate_definition(definition)
+    catalogs = await _gather_catalogs(merchant_id, definition)
+    problems = validate_definition(definition, catalogs=catalogs)
     if problems:
         raise WorkflowValidationError(problems)
     return await workflow_accessor.update_draft(
@@ -264,11 +294,21 @@ async def update_draft(
 async def publish_workflow(
     merchant_id: str, workflow_id: str, published_by: Optional[str] = None
 ) -> Workflow:
-    return await atomically(_publish_in_txn, merchant_id, workflow_id, published_by)
+    draft = await workflow_accessor.get_workflow(merchant_id, workflow_id)
+    catalogs = await _gather_catalogs(
+        merchant_id, (draft.draft if draft else None) or {}
+    )
+    return await atomically(
+        _publish_in_txn, merchant_id, workflow_id, published_by, catalogs
+    )
 
 
 async def _publish_in_txn(
-    txn: DbTxn, merchant_id: str, workflow_id: str, published_by: Optional[str]
+    txn: DbTxn,
+    merchant_id: str,
+    workflow_id: str,
+    published_by: Optional[str],
+    catalogs: Catalogs = None,
 ) -> Workflow:
     """ATOMIC: the validate, the copy, the version row and (migrate) the
     re-pin share one fate — the document the validator approved must be
@@ -292,7 +332,10 @@ async def _publish_in_txn(
     occupied = await enrollment_accessor.occupied_nodes(txn, merchant_id, workflow_id)
     live_entry = (workflow.definition or {}).get("entry")
     problems = validate_definition(
-        draft, occupied_nodes=occupied, live_entry=live_entry
+        draft,
+        occupied_nodes=occupied,
+        live_entry=live_entry,
+        catalogs=catalogs,
     )
     if problems:
         raise WorkflowValidationError(problems)
@@ -400,13 +443,25 @@ async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]
 async def list_workflows(
     merchant_id: str, limit: int, offset: int
 ) -> List[WorkflowSummary]:
-    return await workflow_accessor.list_workflows(merchant_id, limit, offset)
-
-
-class WorkflowValidationError(Exception):
-    def __init__(self, problems: List[str]):
-        self.problems = problems
-        super().__init__("; ".join(problems))
+    """The list, decorated with seen-vs-matched for the window: events on
+    each plan's entry topic (record's count, any source) against runs it
+    started — "saw 240 · matched 3" is a dashboard fact, never a stored one."""
+    summaries = await workflow_accessor.list_workflows(merchant_id, limit, offset)
+    if not summaries:
+        return summaries
+    seen: Dict[str, int] = {}
+    for count in await topic_counts(merchant_id, SEEN_WINDOW_DAYS):
+        seen[count.topic] = seen.get(count.topic, 0) + count.seen
+    started = await enrollment_accessor.enrollment_counts(merchant_id, SEEN_WINDOW_DAYS)
+    return [
+        s.model_copy(
+            update={
+                "seen_7d": seen.get(s.entry_topic or "", 0),
+                "matched_7d": started.get(str(s.id), 0),
+            }
+        )
+        for s in summaries
+    ]
 
 
 class WorkflowNotFound(Exception):

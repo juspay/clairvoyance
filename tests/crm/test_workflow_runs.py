@@ -76,7 +76,15 @@ def test_call_payload_and_send_variables_share_one_bookkeeping_filter() -> None:
         "cart_value": 1999,
         "repeat_count": 3,
     }
-    assert send_variables(context) == {"cart_value": 1999, "repeat_count": 3}
+    # The send posts EXACTLY what the node mapped, {blank: fact} — nothing
+    # rides along, whatever else the context holds.
+    assert send_variables({"1": "cart_value", "n": "repeat_count"}, context) == {
+        "1": 1999,
+        "n": 3,
+    }
+    assert send_variables({}, context) == {}
+    with pytest.raises(KeyError):
+        send_variables({"1": "cart_value", "2": "coupon"}, context)
 
 
 def test_lead_request_id_is_the_merchants_order_id_else_the_run() -> None:
@@ -85,6 +93,10 @@ def test_lead_request_id_is_the_merchants_order_id_else_the_run() -> None:
     assert lead_request_id({"request_id": "req-9"}, "r-1") == "req-9"
     assert lead_request_id({"order_id": ""}, "r-1") == "wf-r-1"
     assert lead_request_id({}, "r-1") == "wf-r-1"
+    # A keyed plan: the enrollment key IS the order id (Shopify's `id`) —
+    # it beats every payload key, so nautilus matches the outcome to the order.
+    assert lead_request_id({"order_id": "o-1001"}, "r-1", "5306070030") == "5306070030"
+    assert lead_request_id({}, "r-1", None) == "wf-r-1"
 
 
 def test_the_current_squares_facts_win_and_every_squares_stay_reachable() -> None:
@@ -121,15 +133,28 @@ def test_the_current_squares_facts_win_and_every_squares_stay_reachable() -> Non
     assert plain["facts_at-bank_bank"] == "hdfc"
     unlabelled = WorkflowNode(id="w", type="wait", minutes=1)
     assert "current_stage" not in run_facts(context, unlabelled)
-    assert send_variables(context, node)["current_node"] == "at-kyc"
+    # a send blank may name the square, its stage, or a stage letter's fact
+    assert send_variables(
+        {"1": "current_node", "2": "current_stage", "3": "facts_at-bank_bank"},
+        context,
+        node,
+    ) == {"1": "at-kyc", "2": "kyc", "3": "hdfc"}
 
 
-def test_send_variables_carry_only_what_a_provider_can_render() -> None:
-    """A bool or a None among the variables makes the WhatsApp face refuse
-    the message terminally; the producer keeps text and numbers only. The
-    call payload is not narrowed — the lead machine spells its own."""
+def test_send_variables_refuse_what_a_provider_cannot_render() -> None:
+    """A bool or a None posted as a variable makes the WhatsApp face refuse
+    the message terminally — so a MAPPED one parks the run here, by name,
+    instead of posting it. The call payload is not narrowed — the lead
+    machine spells its own."""
     context = {"name": "Priya", "amount": 1999, "vip": True, "note": None, "score": 4.5}
-    assert send_variables(context) == {"name": "Priya", "amount": 1999, "score": 4.5}
+    assert send_variables({"1": "name", "2": "amount", "3": "score"}, context) == {
+        "1": "Priya",
+        "2": 1999,
+        "3": 4.5,
+    }
+    for fact in ("vip", "note"):
+        with pytest.raises(ValueError, match=fact):
+            send_variables({"1": fact}, context)
     assert run_facts(context)["vip"] is True
 
 
@@ -159,4 +184,5 @@ def test_the_latest_letters_facts_win_when_the_square_that_heard_it_is_behind() 
     assert run_facts(context, act)["stage"] == "kyc_completed"
     # a pointer at a square with no letter changes nothing
     assert run_facts({**context, "latest_letter": "gone"})["amount"] == 100
-    assert "latest_letter" not in send_variables(context, act)
+    assert "latest_letter" not in run_facts(context, act)
+    assert send_variables({"1": "amount"}, context, act) == {"1": 999}

@@ -14,15 +14,23 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.crm.shared.predicate import Condition, from_equality_map
+
 
 class WorkflowEntry(BaseModel):
     """Which event admits a customer, and the admission guards enforced
     for both doors (canon: entry carries reenter + cooldown)."""
 
     topic: str = Field(min_length=1)
-    # Optional payload condition: every key must equal (orders/create AND
-    # payload.gateway = COD). Empty = topic alone admits.
-    where: Dict[str, Any] = Field(default_factory=dict)
+    # Typed conditions, ANDed (design/event-catalog.md §The where-grammar):
+    # [{field: "payload.gateway", op: "is", value: "COD"}]. Every field must
+    # be declared in the catalog (code or registered layer) — the publish
+    # validator refuses the rest. Empty = topic alone admits. The pre-catalog
+    # equality map is retired: migration 069 rewrote every stored plan, and a
+    # map that still reaches this model (a crm_workflow_version row is
+    # immutable, so 069 could not touch it) is read as the conditions it
+    # meant — the publish validator refuses a NEW document that writes one.
+    where: List[Condition] = Field(default_factory=list)
     reenter: bool = False
     cooldown_hours: float = Field(24.0, ge=0)
     # What a run is ABOUT (canon T20 col 13, ruled 31 Aug 2026): the payload
@@ -44,6 +52,14 @@ class WorkflowEntry(BaseModel):
     # — sliding its alarm by debounce_minutes and merging the facts. Needs
     # debounce_minutes > 0 (validated), or there is nothing to re-arm.
     restart_on_repeat: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_where_map(cls, data: Any) -> Any:
+        """The pre-catalog equality map, read as the conditions it meant."""
+        if isinstance(data, dict) and isinstance(data.get("where"), dict):
+            data = {**data, "where": from_equality_map(data["where"])}
+        return data
 
 
 class WorkflowEntryAt(WorkflowEntry):
@@ -146,6 +162,17 @@ class WorkflowNode(BaseModel):
     stage: Optional[str] = Field(None, min_length=1)
     # Phase 18: only the letter about THIS run wakes the square.
     match: Optional[WorkflowMatch] = None
+    # send only: which run fact fills which template blank, {blank: fact}.
+    # Left = the parameter the provider's registered template declares
+    # ({{customer_name}} named, or "1"/"2" positional); right = the key in
+    # the run's context — a variable field the catalog declares for the
+    # entry topic (design/event-catalog.md: template variables ONLY from
+    # declared fields; the publish validator refuses the rest). Absent or
+    # empty = the template has no blanks and ZERO parameters are posted.
+    # Never the whole context: crm_message.variables is what we actually
+    # posted (canon T16 col 11), and a template with two blanks handed 27
+    # facts is refused by every provider.
+    variables: Dict[str, str] = Field(default_factory=dict)
 
 
 # An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a
@@ -319,6 +346,11 @@ class WorkflowSummary(BaseModel):
     created_by: Optional[str]
     created_at: datetime
     updated_at: datetime
+    # Drift observability (event-catalog.md §Seen vs matched): events on
+    # the entry topic vs runs started, last 7 days — computed on read.
+    entry_topic: Optional[str] = None
+    seen_7d: int = 0
+    matched_7d: int = 0
 
 
 class Workflow(WorkflowSummary):

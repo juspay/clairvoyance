@@ -59,6 +59,7 @@ TABLE_OWNERS = {
     "crm_customer": "identity",
     "platform_identity": "platform",
     "crm_event_raw": "record",
+    "crm_event_schema": "record",
     "crm_journey_event": "record",
     "crm_message": "connectivity",
     "crm_workflow": "outreach",

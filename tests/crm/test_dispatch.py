@@ -167,7 +167,7 @@ async def test_an_accepted_send_records_the_outcome(monkeypatch) -> None:
         return SendOutcome(status="accepted", provider_message_id="wamid.T")
 
     async def record_outcome(
-        message_id, status, reason, pmid, mark_sent, attempt, retry
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
     ):
         """Test double: records what the dispatcher tried to write."""
         written.update(status=status, mark_sent=mark_sent, attempt=attempt)
@@ -195,7 +195,7 @@ async def test_a_raising_send_becomes_a_retryable_send_error(monkeypatch) -> Non
         raise RuntimeError("wire fell over")
 
     async def record_outcome(
-        message_id, status, reason, pmid, mark_sent, attempt, retry
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
     ):
         """Test double: records what the dispatcher tried to write."""
         written.update(status=status, reason=reason, retry=retry)
@@ -232,7 +232,7 @@ async def test_a_suppressed_address_is_blocked_and_the_adapter_never_called(
         raise AssertionError("adapter reached past a refusing gate")
 
     async def record_outcome(
-        message_id, status, reason, pmid, mark_sent, attempt, retry
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
     ):
         """Test double: records what the dispatcher tried to write."""
         written.update(status=status, reason=reason, mark_sent=mark_sent)
@@ -260,7 +260,7 @@ async def test_a_channel_the_gate_cannot_check_fails_closed(monkeypatch) -> None
         raise AssertionError("adapter reached past a refusing gate")
 
     async def record_outcome(
-        message_id, status, reason, pmid, mark_sent, attempt, retry
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
     ):
         """Test double: records what the dispatcher tried to write."""
         written.update(status=status, reason=reason)
@@ -294,7 +294,7 @@ async def test_a_hung_gate_probe_is_bounded_and_fails_closed(monkeypatch) -> Non
         raise AssertionError("adapter reached past a refusing gate")
 
     async def record_outcome(
-        message_id, status, reason, pmid, mark_sent, attempt, retry
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
     ):
         """Test double: records what the dispatcher tried to write."""
         written.update(status=status, reason=reason, mark_sent=mark_sent)
@@ -333,7 +333,9 @@ async def test_a_reclaimed_row_discards_the_late_outcome(monkeypatch) -> None:
         """Test double: a send with a scripted outcome."""
         return SendOutcome(status="accepted", provider_message_id="wamid.L")
 
-    async def reclaimed(message_id, status, reason, pmid, mark_sent, attempt, retry):
+    async def reclaimed(
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
+    ):
         """Test double: the row already belongs to another worker."""
         calls.append(status)
         return False  # the sweep already handed this row to another worker
@@ -523,6 +525,7 @@ def test_outcome_write_is_guarded_by_the_claim() -> None:
         None,
         2,
         MESSAGE_SENDING,
+        None,
     ]
 
 
@@ -788,3 +791,25 @@ def test_customer_fk_is_composite_so_a_message_cannot_cross_tenants() -> None:
     sql = _ddl()
     assert "FOREIGN KEY (merchant_id, customer_id)" in sql
     assert "REFERENCES crm_customer (merchant_id, id)" in sql
+
+
+def test_the_accepted_outcome_stamps_the_pipe_it_left_on_once() -> None:
+    """T16 col 6: binding_id is which pipe the message LEFT on — stamped
+    with the accepted outcome, COALESCEd so it is written once, and left
+    NULL when no pipe was used (blocked)."""
+    query, values = apply_outcome_query(
+        "m-1",
+        "accepted",
+        None,
+        "wamid.T",
+        True,
+        1,
+        None,
+        "7bfe7079-6a19-4116-8f72-e1bde415eb6c",
+    )
+    assert "binding_id = COALESCE(binding_id, $9::uuid)" in query
+    assert values[8] == "7bfe7079-6a19-4116-8f72-e1bde415eb6c"
+    _, values = apply_outcome_query(
+        "m-1", "blocked", "no_binding", None, False, 1, None
+    )
+    assert values[8] is None

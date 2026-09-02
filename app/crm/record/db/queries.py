@@ -157,3 +157,106 @@ def customer_has_event_query(
     if where:
         params.extend([where[0], where[1]])
     return query, params
+
+
+# --- crm_event_schema (T24) + the catalog's compute-on-read queries ---------
+
+EVENT_SCHEMA_TABLE = "crm_event_schema"
+
+
+def insert_detected_schema_query(
+    merchant_id: str, source: str, topic: str
+) -> Tuple[str, List[Any]]:
+    """Discovery: the nudge row, written ONCE per topic ever (the in-process
+    known-set in catalog.py keeps the hot path from even probing). A
+    registered row is never touched — DO NOTHING."""
+    query = f"""
+        INSERT INTO {EVENT_SCHEMA_TABLE}
+            (merchant_id, source, topic, status, first_seen_at)
+        VALUES ($1, $2, $3, 'detected', now())
+        ON CONFLICT (merchant_id, source, topic) DO NOTHING
+    """
+    return query, [merchant_id, source, topic]
+
+
+def register_schema_query(
+    merchant_id: str,
+    source: str,
+    topic: str,
+    label: str,
+    fields_json: str,
+    registered_by: str,
+) -> Tuple[str, List[Any]]:
+    """Registration upgrades the same row: detected -> registered, and every
+    re-registration bumps version (the audit stamp). first_seen_at stays
+    whatever discovery wrote."""
+    query = f"""
+        INSERT INTO {EVENT_SCHEMA_TABLE}
+            (merchant_id, source, topic, label, fields, status, version, registered_by)
+        VALUES ($1, $2, $3, $4, $5::jsonb, 'registered', 1, $6)
+        ON CONFLICT (merchant_id, source, topic) DO UPDATE SET
+            label = EXCLUDED.label,
+            fields = EXCLUDED.fields,
+            status = 'registered',
+            version = {EVENT_SCHEMA_TABLE}.version + 1,
+            registered_by = EXCLUDED.registered_by
+        RETURNING *
+    """
+    return query, [merchant_id, source, topic, label, fields_json, registered_by]
+
+
+def list_schemas_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    query = f"""
+        SELECT * FROM {EVENT_SCHEMA_TABLE}
+        WHERE merchant_id = $1
+        ORDER BY source, topic
+    """
+    return query, [merchant_id]
+
+
+def get_schema_query(
+    merchant_id: str, source: str, topic: str
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        SELECT * FROM {EVENT_SCHEMA_TABLE}
+        WHERE merchant_id = $1 AND source = $2 AND topic = $3
+    """
+    return query, [merchant_id, source, topic]
+
+
+def topic_counts_query(merchant_id: str, days: int) -> Tuple[str, List[Any]]:
+    """ "312 this week" — computed on read from the spine, never stored."""
+    query = f"""
+        SELECT source, topic, count(*)::int AS seen
+        FROM {EVENT_RAW_TABLE}
+        WHERE merchant_id = $1
+          AND received_at > now() - make_interval(days => $2)
+        GROUP BY source, topic
+    """
+    return query, [merchant_id, days]
+
+
+def sample_fields_query(
+    merchant_id: str, source: str, topic: str, limit: int
+) -> Tuple[str, List[Any]]:
+    """The registration wizard's pre-fill: top-level scalar keys seen in the
+    vendor's most recent letters, with up to three distinct sample values.
+    Nested objects and arrays are skipped — the catalog addresses those
+    only through code-layer derived fields."""
+    query = f"""
+        WITH recent AS (
+            SELECT payload FROM {EVENT_RAW_TABLE}
+            WHERE merchant_id = $1 AND source = $2 AND topic = $3
+            ORDER BY received_at DESC
+            LIMIT $4
+        )
+        SELECT e.key AS path,
+               jsonb_typeof(e.value) AS jtype,
+               count(*)::int AS seen,
+               (array_agg(DISTINCT e.value::text))[1:3] AS samples
+        FROM recent, jsonb_each(recent.payload) AS e
+        WHERE jsonb_typeof(e.value) IN ('string', 'number', 'boolean')
+        GROUP BY e.key, jsonb_typeof(e.value)
+        ORDER BY seen DESC, path
+    """
+    return query, [merchant_id, source, topic, limit]
