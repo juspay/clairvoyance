@@ -121,6 +121,9 @@ No service classes, no repository interfaces; pure core + thin shell.
 11. **Vocabulary in code, never CHECKs.** Channels, connectors, sources
     grow with the product — a new one is a deploy, not a migration (the
     027 scar). CHECKs on FORMAT (E.164, closed status enums) are required.
+    Runs execute their pinned version (ADR 0023,
+    `docs/crm/adr/0023-version-pinning.md`); `on_publish: migrate` is the
+    opt-in that lets an edit reach runs in flight, validator-gated.
 12. **Observability.** `set_log_context` at every entrypoint;
     `track_error` on degraded paths; log what was dropped when bounding
     coverage.
