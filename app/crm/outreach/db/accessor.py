@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 from app.crm.outreach.db.decoder import (
+    _jsonb as decode_jsonb,
     decode_customer_run,
     decode_run,
     decode_run_summary,
@@ -26,8 +27,10 @@ from app.crm.outreach.db.queries import (
     claim_due_runs_query,
     customer_runs_query,
     exit_run_query,
+    get_definition_query,
     get_workflow_query,
     insert_enrollment_query,
+    insert_version_query,
     insert_workflow_query,
     list_runs_query,
     list_workflows_query,
@@ -37,6 +40,7 @@ from app.crm.outreach.db.queries import (
     patch_open_run_query,
     publish_workflow_query,
     record_run_error_query,
+    repin_open_runs_query,
     resume_run_on_event_query,
     resume_run_query,
     set_workflow_status_query,
@@ -114,6 +118,46 @@ async def apply_publish(
     query, values = publish_workflow_query(merchant_id, workflow_id)
     row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
+
+
+async def insert_version(
+    conn: asyncpg.Connection,
+    merchant_id: str,
+    workflow_id: str,
+    version: int,
+    definition: Dict[str, Any],
+    on_publish: str,
+    published_by: Optional[str],
+) -> None:
+    """Runs inside the publish atom (conn param): the row shares the
+    publish's fate."""
+    query, values = insert_version_query(
+        merchant_id, workflow_id, version, definition, on_publish, published_by
+    )
+    await conn.execute(query, *values)
+
+
+async def repin_open_runs(
+    conn: asyncpg.Connection, merchant_id: str, workflow_id: str, version: int
+) -> int:
+    """Runs inside the publish atom (conn param). Returns how many runs
+    now execute the new version."""
+    query, values = repin_open_runs_query(merchant_id, workflow_id, version)
+    rows = await conn.fetch(query, *values)
+    return len(rows)
+
+
+async def get_definition(
+    merchant_id: str, workflow_id: str, version: int
+) -> Optional[Dict[str, Any]]:
+    """The pinned document, or None when no such version row exists."""
+    query, values = get_definition_query(merchant_id, workflow_id, version)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    if row is None:
+        return None
+    definition = decode_jsonb(row["definition"])
+    return definition if isinstance(definition, dict) else None
 
 
 async def set_workflow_status(

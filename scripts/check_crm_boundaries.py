@@ -63,6 +63,7 @@ TABLE_OWNERS = {
     "crm_message": "connectivity",
     "crm_workflow": "outreach",
     "crm_workflow_enrollment": "outreach",
+    "crm_workflow_version": "outreach",
     "crm_connector_installation": "connectivity",
     "crm_channel_binding": "connectivity",
     "crm_channel_template": "connectivity",

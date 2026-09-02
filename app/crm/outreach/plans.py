@@ -102,19 +102,25 @@ def validate_definition(
             if len(arrows) > 1:
                 problems.append(f"node {src} has {len(arrows)} outgoing edges")
 
-    if occupied_nodes and live_entry is not None:
-        if _entry_changed(raw.get("entry"), live_entry):
-            problems.append(
-                "entry rule changed while runs are open — pause the plan and "
-                "let them finish, or publish the entry change as a new plan"
-            )
+    # The stranding laws are migrate-mode preconditions (ADR 0023): only a
+    # document that will be pushed UNDER the open runs can strand them.
+    # Under pin they keep their own version, and the new one is theirs to
+    # ignore — the checks below do not apply.
+    if definition.on_publish == "migrate":
+        if occupied_nodes and live_entry is not None:
+            if _entry_changed(raw.get("entry"), live_entry):
+                problems.append(
+                    "entry rule changed while runs are open — pause the plan "
+                    "and let them finish, publish the entry change as a new "
+                    "plan, or publish with on_publish: pin"
+                )
 
-    for occupied in occupied_nodes or []:
-        if occupied not in seen:
-            problems.append(
-                f"node {occupied} has waiting runs standing on it — "
-                "publishing a document without it strands every one"
-            )
+        for occupied in occupied_nodes or []:
+            if occupied not in seen:
+                problems.append(
+                    f"node {occupied} has waiting runs standing on it — "
+                    "migrating a document without it strands every one"
+                )
 
     return problems
 
@@ -156,37 +162,61 @@ async def update_draft(
     return await accessor.update_draft(merchant_id, workflow_id, definition)
 
 
-async def publish_workflow(merchant_id: str, workflow_id: str) -> Workflow:
-    return await atomically(_publish_in_txn, merchant_id, workflow_id)
+async def publish_workflow(
+    merchant_id: str, workflow_id: str, published_by: Optional[str] = None
+) -> Workflow:
+    return await atomically(_publish_in_txn, merchant_id, workflow_id, published_by)
 
 
-async def _publish_in_txn(txn: DbTxn, merchant_id: str, workflow_id: str) -> Workflow:
-    """ATOMIC: the validate and the copy share one fate — the document the
-    validator approved must be the exact document that becomes live, and
-    the occupied-squares read must not race a walker moving tokens."""
+async def _publish_in_txn(
+    txn: DbTxn, merchant_id: str, workflow_id: str, published_by: Optional[str]
+) -> Workflow:
+    """ATOMIC: the validate, the copy, the version row and (migrate) the
+    re-pin share one fate — the document the validator approved must be
+    the exact document that becomes live AND the one the new version row
+    holds, the occupied-squares read must not race a walker moving tokens,
+    and a migrate must never leave a run pointing at a version that did
+    not get written (ADR 0023)."""
     workflow = await accessor.workflow_for_publish(txn, merchant_id, workflow_id)
     if workflow is None:
         raise WorkflowNotFound(workflow_id)
-    if not workflow.draft:
+    draft = workflow.draft
+    if not draft:
         raise WorkflowValidationError(["nothing to publish — draft is empty"])
     occupied = await accessor.occupied_nodes(txn, merchant_id, workflow_id)
     live_entry = (workflow.definition or {}).get("entry")
     problems = validate_definition(
-        workflow.draft, occupied_nodes=occupied, live_entry=live_entry
+        draft, occupied_nodes=occupied, live_entry=live_entry
     )
     if problems:
         raise WorkflowValidationError(problems)
-    problems = await _template_problems(
-        merchant_id, WorkflowDefinition.model_validate(workflow.draft)
-    )
+    definition = WorkflowDefinition.model_validate(draft)
+    problems = await _template_problems(merchant_id, definition)
     if problems:
         raise WorkflowValidationError(problems)
     published = await accessor.apply_publish(txn, merchant_id, workflow_id)
     if published is None:  # a racing publish consumed the draft first
         raise WorkflowValidationError(["draft already published"])
+    # The version row holds the document that just became live — the draft
+    # apply_publish copied verbatim — under the mode it declared.
+    await accessor.insert_version(
+        txn,
+        merchant_id,
+        workflow_id,
+        published.version,
+        draft,
+        definition.on_publish,
+        published_by,
+    )
+    repinned = 0
+    if definition.on_publish == "migrate":
+        repinned = await accessor.repin_open_runs(
+            txn, merchant_id, workflow_id, published.version
+        )
     logger.info(
         f"workflow published: {workflow_id} v{published.version} "
-        f"(merchant {merchant_id})"
+        f"({definition.on_publish}; {repinned} open runs re-pinned; "
+        f"merchant {merchant_id})"
     )
     return published
 

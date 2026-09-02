@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 WORKFLOW_TABLE = "crm_workflow"
 ENROLLMENT_TABLE = "crm_workflow_enrollment"
+VERSION_TABLE = "crm_workflow_version"
 _WORKFLOW_SUMMARY_COLUMNS = """
     id, merchant_id, name, status, version, created_by,
     created_at, updated_at
@@ -94,6 +95,62 @@ def publish_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, Lis
         RETURNING {_WORKFLOW_COLUMNS}
     """
     return query, [merchant_id, workflow_id]
+
+
+def insert_version_query(
+    merchant_id: str,
+    workflow_id: str,
+    version: int,
+    definition: Dict[str, Any],
+    on_publish: str,
+    published_by: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """One immutable row per publish (ADR 0023, phase 11): the document
+    that became live, under the mode it declared. No ON CONFLICT — a
+    second row for the same version is a bug the unique index must
+    surface, never a merge."""
+    query = f"""
+        INSERT INTO {VERSION_TABLE}
+            (merchant_id, workflow_id, version, definition, on_publish, published_by)
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+        RETURNING id
+    """
+    return query, [
+        merchant_id,
+        workflow_id,
+        version,
+        json.dumps(definition),
+        on_publish,
+        published_by,
+    ]
+
+
+def repin_open_runs_query(
+    merchant_id: str, workflow_id: str, version: int
+) -> Tuple[str, List[Any]]:
+    """migrate mode (ADR 0023): every open run of the plan now executes the
+    version just published — inside the publish atom, after the stranding
+    validator said the document keeps every occupied square. Exited runs
+    keep the version they finished under: the audit fact."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET workflow_version = $3
+        WHERE merchant_id = $1 AND workflow_id = $2 AND status <> 'exited'
+        RETURNING id
+    """
+    return query, [merchant_id, workflow_id, version]
+
+
+def get_definition_query(
+    merchant_id: str, workflow_id: str, version: int
+) -> Tuple[str, List[Any]]:
+    """The pinned document, by the pin (phase 12's read)."""
+    query = f"""
+        SELECT definition
+        FROM {VERSION_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2 AND version = $3
+    """
+    return query, [merchant_id, workflow_id, version]
 
 
 def set_workflow_status_query(

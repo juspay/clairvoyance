@@ -110,7 +110,9 @@ async def publish_workflow_route(
 ) -> Workflow:
     set_log_context(component="crm.workflows.publish", merchant_id=merchant_id)
     try:
-        return await plans.publish_workflow(merchant_id, workflow_id)
+        return await plans.publish_workflow(
+            merchant_id, workflow_id, current_user.email
+        )
     except plans.WorkflowNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
