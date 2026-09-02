@@ -17,6 +17,8 @@ from typing import List, Optional, Tuple
 from app.core.logger import logger
 from app.crm.outreach.db import accessor
 from app.crm.outreach.enrol import enrol
+from app.crm.outreach.nodes import _BOOKKEEPING_KEYS, _BOOKKEEPING_PREFIXES
+from app.crm.outreach.repeat import apply_repeat
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import RawEvent
 from app.crm.shared.normalize import normalize_phone
@@ -122,9 +124,17 @@ def _context_from_payload(payload: dict) -> dict:
     """The template-variable bridge: merchants send standard identity keys
     (customer_mobile_number, customer_name) plus whatever scalar keys
     their call template references ({item}, {cart_value}); those small
-    facts ride context -> the lead payload -> template resolution."""
+    facts ride context -> the lead payload -> template resolution.
+
+    The walker's bookkeeping names (nodes.py's ONE definition: pointers,
+    the phone, lead_*/message_*/reply_*, the repeat lists) are skipped: a
+    producer key spelled `repeat_items` or `source_event_id` would corrupt
+    the accumulate branch or the founding-event dedupe — the phone is
+    re-added below, normalized, from what identity resolved on."""
     context = {}
     for key, value in payload.items():
+        if key in _BOOKKEEPING_KEYS or key.startswith(_BOOKKEEPING_PREFIXES):
+            continue  # ours to write, never a producer's
         if not isinstance(value, (str, int, float, bool)):
             continue  # nested objects/lists stay on the event row
         if len(str(value)) > _CONTEXT_VALUE_MAX_CHARS:
@@ -148,13 +158,31 @@ async def _try_enrol(
     phone = (handles or {}).get("phone") or _phone_from_payload(event.payload)
     if phone:
         context["phone"] = phone
-    await enrol(
+    run = await enrol(
         merchant_id=event.merchant_id,
         workflow=flow,
         customer_id=customer_id,
         context=context,
         enrollment_key=enrollment_key,
     )
+    if run is None:
+        # Refused — most often because a run for this key is already open.
+        # The plan's repeat words decide what that open run does with the
+        # repeat (repeat.py); the UPDATE's WHERE makes every other refusal
+        # a no-op, so no second signal from enrol() is needed. The repeat
+        # is offered the SAME small facts enrol() was — the normalized
+        # phone included, so a corrected number reaches the run — minus
+        # source_event_id: that pointer stays the founding event's, and
+        # patch_open_run_query refuses the founding event by it.
+        repeat_facts = {k: v for k, v in context.items() if k != "source_event_id"}
+        await apply_repeat(
+            event.merchant_id,
+            str(flow.id),
+            enrollment_key or customer_id,
+            definition,
+            str(event.id),
+            repeat_facts,
+        )
 
 
 def _enrollment_key(

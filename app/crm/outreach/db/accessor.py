@@ -31,6 +31,7 @@ from app.crm.outreach.db.queries import (
     live_workflows_query,
     occupied_nodes_query,
     park_run_query,
+    patch_open_run_query,
     publish_workflow_query,
     record_run_error_query,
     resume_run_on_event_query,
@@ -224,6 +225,36 @@ async def resume_run_on_event(
     )
     async with crm_connection() as conn:
         await conn.execute(query, *values)
+
+
+async def patch_open_run(
+    merchant_id: str,
+    workflow_id: str,
+    enrollment_key: str,
+    entry_node: str,
+    event_id: str,
+    patch: Dict[str, Any],
+    accumulate: bool,
+    max_field: Optional[str],
+    max_value: Optional[float],
+    debounce_minutes: float,
+) -> bool:
+    """True when an open run on the entry square took the repeat."""
+    query, values = patch_open_run_query(
+        merchant_id,
+        workflow_id,
+        enrollment_key,
+        entry_node,
+        event_id,
+        patch,
+        accumulate,
+        max_field,
+        max_value,
+        debounce_minutes,
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
 
 
 async def cancel_open_runs(

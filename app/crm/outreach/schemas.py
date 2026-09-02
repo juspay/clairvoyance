@@ -30,6 +30,15 @@ class WorkflowEntry(BaseModel):
     # (bursts coalesce: one abandonment conversation); "order_id" = one run
     # per order (WISMO: two parcels, two parallel threads).
     key: Optional[str] = Field(None, min_length=1)
+    # Repeat entries (modules/05-outreach §Repeat entries, sealed 31 Aug
+    # 2026): what an OPEN run still on its first square does when another
+    # entry event for the same key arrives. Words: ignore (default — the
+    # unique absorbs it, today's behaviour) · refresh_latest ·
+    # refresh_max(<payload field>) · accumulate. Vocabulary in code
+    # (repeat.py), validated at publish.
+    on_repeat: str = "ignore"
+    # Every matching repeat slides the entry wait's alarm to now + this.
+    debounce_minutes: float = Field(0, ge=0)
 
 
 class WorkflowGoal(BaseModel):
