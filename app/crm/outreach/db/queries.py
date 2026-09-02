@@ -1,5 +1,13 @@
 """SQL builders for crm_workflow (T19) and crm_workflow_enrollment (T20).
 $1 placeholders only — every value parameterized.
+
+Two kinds of writer touch a run, and the law between them (P1, rollout
+phase 03): WALKER writes (advance, exit, park, record error) are
+compare-and-set on the leased wake_at — the claim pushed wake_at one
+lease window and returned it, so that value is the generation the visit
+holds; a write carrying a stale lease matches zero rows. EVENT-SIDE writes
+(goal-cancel, a wait_event reply, a repeat patch) are unconditional and
+always move wake_at — the event wins, the walker defers to its next wake.
 """
 
 import json
@@ -233,17 +241,27 @@ def claim_due_runs_query(limit: int, lease_seconds: int) -> Tuple[str, List[Any]
 
 
 def advance_run_query(
-    run_id: str, current_node: str, wake_at: datetime, context: Dict[str, Any]
+    run_id: str,
+    current_node: str,
+    wake_at: datetime,
+    context: Dict[str, Any],
+    leased_wake_at: datetime,
 ) -> Tuple[str, List[Any]]:
     """A successful step: move the token, set its next alarm, reset the
-    failure counter (only CONSECUTIVE failures park a run)."""
+    failure counter (only CONSECUTIVE failures park a run).
+
+    The lease is the generation: a write under a stale lease is a no-op.
+    A reply or a repeat that landed mid-visit moved wake_at, so this
+    UPDATE matches nothing and the walker defers instead of clobbering
+    the answer with the timeout path (P1)."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET current_node = $2, wake_at = $3, context = $4::jsonb,
             attempts = 0, last_error = NULL
-        WHERE id = $1 AND status = 'waiting'
+        WHERE id = $1 AND status = 'waiting' AND wake_at = $5
+        RETURNING id
     """
-    return query, [run_id, current_node, wake_at, json.dumps(context)]
+    return query, [run_id, current_node, wake_at, json.dumps(context), leased_wake_at]
 
 
 def exit_run_query(
@@ -251,50 +269,65 @@ def exit_run_query(
     exit_reason: str,
     current_node: Optional[str],
     context: Optional[Dict[str, Any]],
+    leased_wake_at: datetime,
 ) -> Tuple[str, List[Any]]:
-    """An exit without a context KEEPS the row's context: the exited row's
-    pointers (source_event_id above all) are what source_event_used reads
-    to refuse a replayed entry event — wiping them would let the spine's
-    at-least-once redelivery enrol a second run from a stale checkout."""
+    """The WALKER's exit (timed_out, goal_met, completed, ejected). An exit
+    without a context KEEPS the row's context: the exited row's pointers
+    (source_event_id above all) are what source_event_used reads to
+    refuse a replayed entry event — wiping them would let the spine's
+    at-least-once redelivery enrol a second run from a stale checkout.
+
+    The lease is the generation: a write under a stale lease is a no-op
+    (P1). The event side's exit is cancel_open_runs_query, unconditional."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET status = 'exited', exit_reason = $2, exited_at = now(),
             wake_at = NULL,
             current_node = COALESCE($3, current_node),
             context = COALESCE($4::jsonb, context)
-        WHERE id = $1 AND status <> 'exited'
+        WHERE id = $1 AND status <> 'exited' AND wake_at = $5
+        RETURNING id
     """
     return query, [
         run_id,
         exit_reason,
         current_node,
         None if context is None else json.dumps(context),
+        leased_wake_at,
     ]
 
 
-def park_run_query(run_id: str, last_error: str) -> Tuple[str, List[Any]]:
+def park_run_query(
+    run_id: str, last_error: str, leased_wake_at: datetime
+) -> Tuple[str, List[Any]]:
     """Errors park, never exit (canon) — held visible for the merchant,
-    resumable by a human."""
+    resumable by a human. The lease is the generation: a park under a
+    stale lease is a no-op (P1) — the run that moved on will be judged
+    again on its next claim."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET status = 'parked', wake_at = NULL, last_error = $2
-        WHERE id = $1 AND status = 'waiting'
+        WHERE id = $1 AND status = 'waiting' AND wake_at = $3
+        RETURNING id
     """
-    return query, [run_id, last_error]
+    return query, [run_id, last_error, leased_wake_at]
 
 
 def record_run_error_query(
-    run_id: str, last_error: str, retry_in_seconds: int
+    run_id: str, last_error: str, retry_in_seconds: int, leased_wake_at: datetime
 ) -> Tuple[str, List[Any]]:
     """A transient failure: the retry timer is written into wake_at (canon
-    T20: backoff with jitter), and the reason is kept for the screen."""
+    T20: backoff with jitter), and the reason is kept for the screen. The
+    lease is the generation: under a stale lease this is a no-op (P1) —
+    the reply that moved the run already set its own, earlier alarm."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET last_error = $2,
             wake_at = now() + make_interval(secs => $3)
-        WHERE id = $1 AND status = 'waiting'
+        WHERE id = $1 AND status = 'waiting' AND wake_at = $4
+        RETURNING id
     """
-    return query, [run_id, last_error, retry_in_seconds]
+    return query, [run_id, last_error, retry_in_seconds, leased_wake_at]
 
 
 def resume_run_on_event_query(

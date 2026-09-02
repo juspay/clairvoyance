@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.crm.outreach.db.queries import (
     admission_facts_query,
+    advance_run_query,
     cancel_open_runs_query,
     claim_due_runs_query,
     exit_run_query,
@@ -14,6 +15,7 @@ from app.crm.outreach.db.queries import (
     park_run_query,
     publish_workflow_query,
     record_run_error_query,
+    resume_run_on_event_query,
     source_event_used_query,
 )
 from app.crm.record.db.queries import customer_has_event_query
@@ -66,21 +68,47 @@ def test_publish_requires_a_draft_to_exist() -> None:
 
 
 def test_park_only_moves_waiting_runs() -> None:
-    sql, _ = park_run_query("en-1", "boom")
+    sql, _ = park_run_query("en-1", "boom", NOW)
     assert "status = 'waiting'" in sql and "'parked'" in sql
 
 
 def test_exit_never_reexits() -> None:
-    sql, _ = exit_run_query("en-1", "completed", None, {})
+    sql, _ = exit_run_query("en-1", "completed", None, {}, NOW)
     assert "status <> 'exited'" in sql
 
 
 def test_exit_without_context_keeps_the_rows_pointers() -> None:
-    sql, params = exit_run_query("en-1", "goal_met", None, None)
+    sql, params = exit_run_query("en-1", "goal_met", None, None, NOW)
     assert "context = COALESCE($4::jsonb, context)" in sql
     assert params[3] is None  # NULL -> COALESCE keeps source_event_id
-    _, params = exit_run_query("en-1", "completed", "n1", {"reply_x": "YES"})
+    _, params = exit_run_query("en-1", "completed", "n1", {"reply_x": "YES"}, NOW)
     assert json.loads(params[3]) == {"reply_x": "YES"}
+
+
+def test_walker_writes_are_conditional_on_the_leased_wake_at() -> None:
+    """P1 (rollout phase 03): the claim's wake_at is the generation token.
+    Every event-side writer (a reply, a repeat patch) moves wake_at, so a
+    walker write under a stale lease matches zero rows instead of
+    clobbering the reply — and RETURNING id is how the walker learns it."""
+    leased = NOW
+    for sql, params, placeholder in (
+        (*advance_run_query("r-1", "wait-1d", NOW, {"k": 1}, leased), "$5"),
+        (*exit_run_query("r-1", "completed", None, None, leased), "$5"),
+        (*park_run_query("r-1", "boom", leased), "$3"),
+        (*record_run_error_query("r-1", "boom", 600, leased), "$4"),
+    ):
+        assert f"AND wake_at = {placeholder}" in sql, sql
+        assert "RETURNING id" in sql, sql
+        assert params[-1] is leased
+
+
+def test_event_side_writes_stay_unconditional() -> None:
+    """The reply and the goal-cancel are the event side: they always win
+    over a walker mid-visit (the walker defers on its CAS miss)."""
+    sql, _ = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met")
+    assert "AND wake_at =" not in sql
+    sql, _ = resume_run_on_event_query("m1", "wf-1", "c-1", "ask", {"reply_ask": "YES"})
+    assert "AND wake_at =" not in sql
 
 
 def test_admission_and_source_reads_are_merchant_first() -> None:
@@ -114,9 +142,9 @@ def test_claim_skips_paused_plans_and_counts_the_claim() -> None:
 
 
 def test_transient_error_writes_the_retry_into_wake_at() -> None:
-    sql, values = record_run_error_query("r-1", "boom", 600)
+    sql, values = record_run_error_query("r-1", "boom", 600, NOW)
     assert "wake_at = now() + make_interval(secs => $3)" in sql
-    assert values == ["r-1", "boom", 600]
+    assert values == ["r-1", "boom", 600, NOW]
 
 
 def test_goal_recheck_survives_a_null_occurred_at() -> None:
