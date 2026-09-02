@@ -47,12 +47,43 @@ def test_goal_cancel_ends_every_open_run_including_parked() -> None:
     assert params[0] == "m1"
 
 
-def test_goal_cancel_is_time_aware_and_null_safe() -> None:
+def test_goal_cancel_is_time_aware_on_the_entry_event_and_null_safe() -> None:
+    """G7 (rollout phase 06): 'after the run began' means after the ENTRY
+    EVENT happened, not after the row was inserted — a late-delivered
+    earlier-stage letter must not keep a run alive past a goal that truly
+    happened after it. entered_at stays the fallback for older rows."""
     sql, params = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met", NOW)
-    assert "$5::timestamptz IS NULL OR entered_at < $5::timestamptz" in sql
+    assert (
+        "COALESCE((context->>'entered_event_at')::timestamptz, entered_at) "
+        "< $5::timestamptz" in sql
+    )
+    assert "$5::timestamptz IS NULL OR" in sql
     assert params[4] == NOW
     _, params = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met")
     assert params[4] is None  # unstamped goal keeps today's behaviour
+
+
+def test_goal_cancel_can_be_keyed_to_the_run_it_is_about() -> None:
+    """A keyed tier ends only the run whose context field equals the
+    letter's payload field (cart_token = cart_token); the unkeyed form is
+    byte-identical to before."""
+    sql, params = cancel_open_runs_query(
+        "m1", "wf-1", "c-1", "goal_met", NOW, key=("cart_token", "chk-88412")
+    )
+    assert "AND context->>$6 = $7" in sql
+    assert params[5:] == ["cart_token", "chk-88412"]
+    sql, params = cancel_open_runs_query("m1", "wf-1", "c-1", "converted_elsewhere")
+    assert "$6" not in sql and len(params) == 5
+
+
+def test_goal_recheck_can_be_keyed_to_the_run_it_is_about() -> None:
+    sql, params = customer_has_event_query(
+        "m1", "c-1", ["orders/create"], NOW, where=("cart_token", "chk-88412")
+    )
+    assert "AND payload->>$5 = $6" in sql
+    assert params == ["m1", "c-1", ["orders/create"], NOW, "cart_token", "chk-88412"]
+    sql, params = customer_has_event_query("m1", "c-1", ["orders/create"], NOW)
+    assert "$5" not in sql and len(params) == 4
 
 
 def test_live_workflows_read_is_merchant_scoped() -> None:

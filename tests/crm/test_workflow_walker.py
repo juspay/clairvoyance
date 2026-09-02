@@ -186,6 +186,89 @@ def test_a_retry_under_a_stale_lease_is_a_no_op(
     assert verb == "retry" and args[-1] == LEASE
 
 
+# --- rollout phase 06: the fire-time goal re-check judges tiers keyed-first ---
+
+_TIERED = {
+    **_TWO_WAITS,
+    "goals": [
+        {
+            "topics": ["orders/create"],
+            "key": {"event": "cart_token", "run": "cart_token"},
+            "exit_reason": "goal_met",
+        },
+        {"topics": ["orders/create"], "exit_reason": "converted_elsewhere"},
+    ],
+}
+del _TIERED["goal"]
+ENTERED_EVENT_AT = NOW - timedelta(hours=2)
+
+
+def _tiered_run() -> EnrollmentRun:
+    run = _run()
+    run.context = {
+        "phone": "+919876543210",
+        "cart_token": "chk-1",
+        "entered_event_at": ENTERED_EVENT_AT.isoformat(),
+    }
+    return run
+
+
+def _goal_recheck(
+    monkeypatch: pytest.MonkeyPatch, answers: Dict[Optional[Tuple[str, str]], bool]
+) -> List[Tuple[Any, ...]]:
+    asked: List[Tuple[Any, ...]] = []
+
+    async def customer_has_event(
+        merchant_id: str,
+        customer_id: str,
+        topics: List[str],
+        since: datetime,
+        where: Optional[Tuple[str, str]] = None,
+    ) -> bool:
+        asked.append((tuple(topics), since, where))
+        return answers.get(where, False)
+
+    monkeypatch.setattr(walker, "customer_has_event", customer_has_event)
+    return asked
+
+
+def test_this_cart_recovered_exits_goal_met(monkeypatch: pytest.MonkeyPatch) -> None:
+    writes = _Writes(matched=True, definition=_TIERED)
+    monkeypatch.setattr(walker, "accessor", writes)
+    asked = _goal_recheck(monkeypatch, {("cart_token", "chk-1"): True})
+    _advance(writes, _tiered_run())
+    ((verb, args),) = writes.calls
+    assert verb == "exit" and args[1] == "goal_met"
+    # keyed tier asked first, against the ENTRY EVENT's time (G7)
+    assert asked[0] == (("orders/create",), ENTERED_EVENT_AT, ("cart_token", "chk-1"))
+
+
+def test_another_order_exits_converted_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes = _Writes(matched=True, definition=_TIERED)
+    monkeypatch.setattr(walker, "accessor", writes)
+    asked = _goal_recheck(monkeypatch, {None: True})
+    _advance(writes, _tiered_run())
+    ((verb, args),) = writes.calls
+    assert verb == "exit" and args[1] == "converted_elsewhere"
+    assert [where for _, _, where in asked] == [("cart_token", "chk-1"), None]
+
+
+def test_a_run_without_the_key_falls_back_to_the_row_time_and_the_unkeyed_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older row (no entered_event_at) compares against entered_at, and
+    a run whose context lacks the key field cannot match a keyed tier."""
+    writes = _Writes(matched=True, definition=_TIERED)
+    monkeypatch.setattr(walker, "accessor", writes)
+    asked = _goal_recheck(monkeypatch, {})
+    run = _run()
+    _advance(writes, run)
+    assert asked == [(("orders/create",), run.entered_at, None)]
+    assert [verb for verb, _ in writes.calls] == ["advance"]  # no goal -> moved on
+
+
 def test_walk_run_never_writes_without_a_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

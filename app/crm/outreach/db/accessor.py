@@ -8,7 +8,7 @@ transaction; standalone single statements self-scope their own connection
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -290,9 +290,10 @@ async def cancel_open_runs(
     customer_id: str,
     exit_reason: str,
     occurred_at: Optional[datetime] = None,
+    key: Optional[Tuple[str, str]] = None,
 ) -> int:
     query, values = cancel_open_runs_query(
-        merchant_id, workflow_id, customer_id, exit_reason, occurred_at
+        merchant_id, workflow_id, customer_id, exit_reason, occurred_at, key
     )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)

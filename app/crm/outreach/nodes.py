@@ -51,6 +51,7 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 # its canonical key by the call node), per-node results and answers.
 _BOOKKEEPING_KEYS = (
     "source_event_id",
+    "entered_event_at",  # entry.py: when the founding letter happened (G7)
     "phone",
     "customer_mobile_number",
     "repeat_event_ids",  # repeat.py: which letters already patched this run

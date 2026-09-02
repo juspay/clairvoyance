@@ -128,12 +128,21 @@ def get_customer_journey_query(
 
 
 def customer_has_event_query(
-    merchant_id: str, customer_id: str, topics: List[str], since: datetime
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Optional[Tuple[str, str]] = None,
 ) -> Tuple[str, List[Any]]:
     """The walker's goal re-check at fire time: did she do the thing after
     the run began? One EXISTS on the stamped customer index. A producer
     that omits occurred_at must not defeat the check (NULL > x is NULL,
-    never true) — the envelope's received_at stands in."""
+    never true) — the envelope's received_at stands in.
+
+    ``where = (payload field, value)`` narrows it to the letters about
+    ONE thing (the order carrying this run's cart_token — outreach's goal
+    key, phase 06), compared as text: keys are ids and tokens."""
+    keyed = "AND payload->>$5 = $6" if where else ""
     query = f"""
         SELECT EXISTS (
             SELECT 1 FROM {EVENT_RAW_TABLE}
@@ -141,6 +150,10 @@ def customer_has_event_query(
               AND customer_id = $2
               AND topic = ANY($3)
               AND COALESCE(occurred_at, received_at) > $4
+              {keyed}
         ) AS found
     """
-    return query, [merchant_id, customer_id, topics, since]
+    params: List[Any] = [merchant_id, customer_id, topics, since]
+    if where:
+        params.extend([where[0], where[1]])
+    return query, params

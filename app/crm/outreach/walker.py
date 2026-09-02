@@ -127,17 +127,25 @@ async def _advance(
             _deferred(run, "timed_out")
         return
 
-    # Goal re-check at fire time — one indexed EXISTS via record's
-    # contract, never a foreign SELECT.
-    if await customer_has_event(
-        run.merchant_id,
-        str(run.customer_id),
-        definition.goal.topics,
-        run.entered_at,
-    ):
-        if not await accessor.exit_run(str(run.id), "goal_met", lease):
-            _deferred(run, "goal_met")
-        return
+    # Goal re-check at fire time — one indexed EXISTS per tier via
+    # record's contract, never a foreign SELECT. Tiers are judged
+    # keyed-first (goal_tiers, phase 06): "THIS cart recovered" beats
+    # "she bought something", and the run exits with the tier's reason.
+    # Measured from the founding letter's own time (G7), not the row's.
+    since = goal_since(run)
+    for tier in definition.goal_tiers():
+        where: Optional[Tuple[str, str]] = None
+        if tier.key:
+            value = run.context.get(tier.key.run)
+            if value in (None, ""):
+                continue  # this run cannot match a keyed tier
+            where = (tier.key.event, str(value))
+        if await customer_has_event(
+            run.merchant_id, str(run.customer_id), tier.topics, since, where
+        ):
+            if not await accessor.exit_run(str(run.id), tier.exit_reason, lease):
+                _deferred(run, tier.exit_reason)
+            return
 
     current_id = run.current_node
     context = dict(run.context)
@@ -183,6 +191,23 @@ async def _advance(
     raise NodeParked(
         f"{_MAX_STEPS_PER_VISIT} immediate nodes in one visit — runaway document"
     )
+
+
+def goal_since(run: EnrollmentRun) -> datetime:
+    """PURE: the moment "after the run began" is measured from — the
+    founding letter's own time (entered_event_at, stamped by entry.py:
+    G7), else the row's insert time for runs written before the stamp
+    existed. Total: an unreadable stamp falls back rather than failing
+    the visit."""
+    stamp = run.context.get("entered_event_at")
+    if isinstance(stamp, str):
+        try:
+            parsed = datetime.fromisoformat(stamp)
+        except ValueError:
+            return run.entered_at
+        if parsed.tzinfo is not None:
+            return parsed
+    return run.entered_at
 
 
 def pick_next(
