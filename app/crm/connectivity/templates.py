@@ -39,24 +39,20 @@ from app.crm.connectivity.db import DbTxn, atomically
 from app.crm.connectivity.db.accessors import (
     template as template_accessor,
 )
-from app.crm.connectivity.schemas import (
+from app.crm.connectivity.schemas.connector import ConnectorInstallation
+from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.template import (
     ApprovedTemplate,
-    ConnectorInstallation,
-    CredentialBundle,
     TemplateDraft,
     TemplateRead,
 )
-
-#: The only status a local draft edit applies to. Everything else has been
-#: shown to a provider and has to go back through one.
-_LOCAL_EDIT_STATUSES = {"draft"}
-
-#: Statuses a provider that edits in place will re-review from. 'rejected' is
-#: in this set and NOT in the submittable set, which is the whole fix for a
-#: dead end that existed both ways: re-submitting a rejected template POSTs a
-#: create for a name the provider already holds ("name already exists"), and
-#: refusing to edit it left no way to correct the components either.
-_IN_PLACE_EDIT_STATUSES = {"approved", "rejected", "paused"}
+from app.crm.connectivity.status import (
+    TEMPLATE_DRAFT,
+    TEMPLATE_IN_PLACE_EDIT,
+    TEMPLATE_LOCAL_EDIT,
+    TEMPLATE_PENDING,
+    TEMPLATE_REJECTED,
+)
 
 
 class TemplateError(Exception):
@@ -193,7 +189,7 @@ async def _create_draft_in_txn(
         return await template_accessor.insert_template_draft(
             txn, merchant_id, channel, provider_account_ref, name, language, components
         )
-    if existing.status != "draft":
+    if existing.status != TEMPLATE_DRAFT:
         raise TemplateError(
             f"a template named '{name}' ({language}) already exists on this "
             f"account and is '{existing.status}' — edit it instead of recreating it"
@@ -230,13 +226,13 @@ async def submit(merchant_id: str, template_id: str, category: str) -> TemplateR
     template = await template_accessor.get_template(merchant_id, template_id)
     if template is None:
         raise TemplateNotFoundError("no such template")
-    if template.status != "draft":
+    if template.status != TEMPLATE_DRAFT:
         raise TemplateError(
             f"this template is '{template.status}' — only a draft can be "
             f"submitted"
             + (
                 "; edit it to send the corrected version for review"
-                if template.status == "rejected"
+                if template.status == TEMPLATE_REJECTED
                 else ""
             )
         )
@@ -284,7 +280,7 @@ async def submit(merchant_id: str, template_id: str, category: str) -> TemplateR
         state.provider_template_id or "",
         state.category,
         category,
-        state.status or "pending",
+        state.status or TEMPLATE_PENDING,
     )
     return updated
 
@@ -343,13 +339,13 @@ async def edit(
     if template is None:
         raise TemplateNotFoundError("no such template")
 
-    if template.status in _LOCAL_EDIT_STATUSES:
+    if template.status in TEMPLATE_LOCAL_EDIT:
         return await atomically(
             _edit_draft_in_txn, merchant_id, template_id, components
         )
 
     spec = _spec_for(template.channel)
-    if template.status not in _IN_PLACE_EDIT_STATUSES:
+    if template.status not in TEMPLATE_IN_PLACE_EDIT:
         raise TemplateError(
             f"this template is '{template.status}' — it cannot be edited from "
             f"that state"
@@ -387,7 +383,7 @@ async def edit(
         merchant_id,
         template_id,
         components,
-        state.status or "pending",
+        state.status or TEMPLATE_PENDING,
         template.status,
     )
 

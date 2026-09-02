@@ -16,6 +16,13 @@ is worse than no timestamp: it looks answered.
 
 from typing import Any, List, Optional, Tuple
 
+from app.crm.connectivity.status import (
+    TEMPLATE_APPROVED,
+    TEMPLATE_DELETED,
+    TEMPLATE_DRAFT,
+    TEMPLATE_SUBMITTING,
+)
+
 TEMPLATE_TABLE = "crm_channel_template"
 
 TEMPLATE_COLUMNS = """
@@ -107,10 +114,10 @@ def approved_template_for_send_query(
            AND channel = $2
            AND provider_account_ref = $3
            AND name = $4
-           AND status = 'approved'
+           AND status = $5
          LIMIT 2
     """
-    return query, [merchant_id, channel, provider_account_ref, name]
+    return query, [merchant_id, channel, provider_account_ref, name, TEMPLATE_APPROVED]
 
 
 # ---------------------------------------------------------------------------
@@ -159,10 +166,10 @@ def update_draft_components_query(
            SET components = $3::jsonb
          WHERE merchant_id = $1
            AND id = $2::uuid
-           AND status = 'draft'
+           AND status = $4
         RETURNING {TEMPLATE_COLUMNS}
     """
-    return query, [merchant_id, template_id, components_json]
+    return query, [merchant_id, template_id, components_json, TEMPLATE_DRAFT]
 
 
 def claim_for_submit_query(merchant_id: str, template_id: str) -> Tuple[str, List[Any]]:
@@ -182,14 +189,14 @@ def claim_for_submit_query(merchant_id: str, template_id: str) -> Tuple[str, Lis
     """
     query = f"""
         UPDATE {TEMPLATE_TABLE}
-           SET status = 'submitting',
+           SET status = $3,
                status_updated_at = now()
          WHERE merchant_id = $1
            AND id = $2::uuid
-           AND status = 'draft'
+           AND status = $4
         RETURNING {TEMPLATE_COLUMNS}
     """
-    return query, [merchant_id, template_id]
+    return query, [merchant_id, template_id, TEMPLATE_SUBMITTING, TEMPLATE_DRAFT]
 
 
 def release_submit_claim_query(
@@ -209,15 +216,15 @@ def release_submit_claim_query(
     """
     query = f"""
         UPDATE {TEMPLATE_TABLE}
-           SET status = 'draft',
+           SET status = $3,
                status_updated_at = now()
          WHERE merchant_id = $1
            AND id = $2::uuid
-           AND status = 'submitting'
+           AND status = $4
            AND provider_template_id IS NULL
         RETURNING {TEMPLATE_COLUMNS}
     """
-    return query, [merchant_id, template_id]
+    return query, [merchant_id, template_id, TEMPLATE_DRAFT, TEMPLATE_SUBMITTING]
 
 
 def record_submission_query(
@@ -245,7 +252,7 @@ def record_submission_query(
                rejection_reason = NULL
          WHERE merchant_id = $1
            AND id = $2::uuid
-           AND status = 'submitting'
+           AND status = $7
         RETURNING {TEMPLATE_COLUMNS}
     """
     return query, [
@@ -255,6 +262,7 @@ def record_submission_query(
         category,
         submitted_category,
         status,
+        TEMPLATE_SUBMITTING,
     ]
 
 
@@ -299,13 +307,13 @@ def retire_template_query(merchant_id: str, template_id: str) -> Tuple[str, List
     by name, and "what did we send in August" must stay answerable."""
     query = f"""
         UPDATE {TEMPLATE_TABLE}
-           SET status = 'deleted',
+           SET status = $3,
                status_updated_at = now()
          WHERE merchant_id = $1
            AND id = $2::uuid
         RETURNING {TEMPLATE_COLUMNS}
     """
-    return query, [merchant_id, template_id]
+    return query, [merchant_id, template_id, TEMPLATE_DELETED]
 
 
 # The webhook path — apply_status_event / apply_category_event /

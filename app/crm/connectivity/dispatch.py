@@ -37,7 +37,7 @@ from app.crm.connectivity.reasons import (
     REASON_SEND_ERROR,
     REASON_SUPPRESSED,
 )
-from app.crm.connectivity.schemas import QueuedMessage, SendOutcome, SendToken
+from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
 from app.crm.platform.contracts import is_suppressed
 

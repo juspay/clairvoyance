@@ -21,11 +21,8 @@ from app.core.logger import logger
 from app.crm.connectivity.providers.base import ConnectorHandshakeError
 from app.crm.connectivity.providers.meta.graph import GraphError, call, segment
 from app.crm.connectivity.providers.whatsapp import TOKEN_KEY
-from app.crm.connectivity.schemas import (
-    CredentialBundle,
-    HealthLevel,
-    OnboardResult,
-)
+from app.crm.connectivity.schemas.connector import HealthLevel, OnboardResult
+from app.crm.connectivity.schemas.message import CredentialBundle
 
 #: Ceiling on the phone-number page walk. Twenty-five per page, so this is
 #: 500 numbers — far past any real WABA, and a hard stop if a cursor loops.

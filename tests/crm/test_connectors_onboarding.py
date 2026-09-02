@@ -39,7 +39,7 @@ from app.crm.connectivity.providers.whatsapp.onboard import (
     WhatsappOnboarder,
     WhatsappOnboardingError,
 )
-from app.crm.connectivity.schemas import (
+from app.crm.connectivity.schemas.connector import (
     ChannelBinding,
     ConnectorInstallation,
     InstallationRead,
@@ -788,6 +788,43 @@ async def test_a_door_with_no_channel_onboards_without_a_binding(
     installation = await onboard("shop", "shopify", _request().model_dump())
     assert installation is not None
     assert bindings.upserts == [], "a door with no channel writes no pipe"
+
+
+async def test_a_door_with_no_channel_needs_no_address_at_all(monkeypatch) -> None:
+    """The shape follows the same rule the atom does.
+
+    A Shopify install has no endpoint to report, and before this it had to
+    invent one to satisfy a required field that the channel-less path then
+    never read. An invented value that nothing reads is the kind of thing a
+    later reader trusts.
+    """
+    bindings = _FakeBindingAccessor()
+    _patch_onboarding(
+        monkeypatch, result=_result(address=None), bindings=bindings, channel=None
+    )
+    installation = await onboard("shop", "shopify", _request().model_dump())
+    assert installation is not None
+    assert bindings.upserts == []
+
+
+async def test_a_channel_connector_returning_no_endpoint_is_refused(
+    monkeypatch,
+) -> None:
+    """The mirror of the test above: optional in the SHAPE, still required
+    for a connector that carries a channel.
+
+    Binding an empty address would write a row that looks like a live route
+    and matches nothing, so every send would resolve to it and fail — a dead
+    pipe behind a green light, which is the failure onboarding exists to
+    prevent.
+    """
+    bindings = _FakeBindingAccessor()
+    _patch_onboarding(
+        monkeypatch, result=_result(address=None), bindings=bindings, channel="whatsapp"
+    )
+    with pytest.raises(OnboardingError, match="no endpoint to bind"):
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert bindings.upserts == [], "nothing is bound when the endpoint is missing"
 
 
 def test_the_send_side_pins_only_cover_connectors_that_send() -> None:

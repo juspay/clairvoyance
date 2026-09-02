@@ -51,7 +51,7 @@ from app.crm.connectivity.reasons import (
     REASON_TEMPLATE_NOT_APPROVED,
     REASON_TIMEOUT,
 )
-from app.crm.connectivity.schemas import (
+from app.crm.connectivity.schemas.message import (
     QueuedMessage,
     SendOutcome,
     SendRoute,

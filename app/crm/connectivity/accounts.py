@@ -24,15 +24,16 @@ not decrypt) is a refusal.
 """
 
 from app.crm.connectivity.db.accessors import installation as installation_accessor
-from app.crm.connectivity.schemas import ConnectorInstallation, CredentialBundle
+from app.crm.connectivity.schemas.connector import ConnectorInstallation
+from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.status import INSTALLATION_USABLE
 from app.database.accessor.breeze_buddy.credentials import get_credential_by_id
 
-#: The only installation state anything may act through — fail closed on
-#: everything else, 'connecting' included. Onboarding verifies the token and
-#: the endpoint against the provider and writes the row 'healthy' directly, so
-#: 'connecting' is an unproven connection with no first-use deadlock to earn it
-#: an exception.
-USABLE_INSTALLATION_STATES = frozenset({"healthy"})
+#: Kept as a name here because this file IS the door policy and three callers
+#: read it by this name; the words and the reason live in status.py, which is
+#: the one home for them. An alias, never a second definition — the scar in
+#: this file's docstring is exactly what two definitions cost.
+USABLE_INSTALLATION_STATES = INSTALLATION_USABLE
 
 
 class AccountError(Exception):

@@ -39,7 +39,7 @@ from app.crm.connectivity.reasons import (
     REASON_NO_CREDENTIAL,
     REASON_NO_TEMPLATE,
 )
-from app.crm.connectivity.schemas import QueuedMessage, SendOutcome, SendRoute
+from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendRoute
 from app.crm.shared.redact import mask_address, mask_digit_runs
 
 # The Cloud API's own default, used only when the route carries no registry

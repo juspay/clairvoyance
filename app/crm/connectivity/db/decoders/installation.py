@@ -9,7 +9,10 @@ to be wrong.
 
 from typing import Any, Mapping
 
-from app.crm.connectivity.schemas import ConnectorInstallation, InstallationRead
+from app.crm.connectivity.schemas.connector import (
+    ConnectorInstallation,
+    InstallationRead,
+)
 from app.crm.shared.decode import jsonb_object, uuid_or_none
 
 

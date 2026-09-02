@@ -24,12 +24,9 @@ from app.crm.connectivity.providers.whatsapp.templates import (
     WhatsappTemplates,
     _from_meta,
 )
-from app.crm.connectivity.schemas import (
-    ConnectorInstallation,
-    CredentialBundle,
-    TemplateDraft,
-    TemplateRead,
-)
+from app.crm.connectivity.schemas.connector import ConnectorInstallation
+from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
 from app.crm.connectivity.templates import (
     TemplateError,
     TemplateNotFoundError,
@@ -283,7 +280,7 @@ class _StubTemplates:
         """Test double: the provider's answer, or its refusal."""
         if self.submit_error:
             raise self.submit_error
-        from app.crm.connectivity.schemas import ProviderTemplateState
+        from app.crm.connectivity.schemas.template import ProviderTemplateState
 
         return ProviderTemplateState(
             provider_template_id="T-1", status="pending", category=draft.category
@@ -291,7 +288,7 @@ class _StubTemplates:
 
     async def edit(self, bundle, account_ref, provider_template_id, components):
         """Test double: an in-place edit sends it back for review."""
-        from app.crm.connectivity.schemas import ProviderTemplateState
+        from app.crm.connectivity.schemas.template import ProviderTemplateState
 
         return ProviderTemplateState(
             provider_template_id=provider_template_id, status="pending"

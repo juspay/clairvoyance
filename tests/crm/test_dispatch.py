@@ -33,7 +33,7 @@ from app.crm.connectivity.dispatch import (
 )
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.reasons import REASON_RECLAIMED_STALE_CLAIM
-from app.crm.connectivity.schemas import QueuedMessage, SendOutcome
+from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
 from app.crm.shared.decode import jsonb_object
 from scripts.check_crm_boundaries import TABLE_OWNERS
 

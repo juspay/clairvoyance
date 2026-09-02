@@ -2,6 +2,8 @@
 
 from typing import Any, List, Tuple
 
+from app.crm.connectivity.status import BINDING_ACTIVE, BINDING_PAUSED
+
 BINDING_TABLE = "crm_channel_binding"
 
 BINDING_COLUMNS = """
@@ -24,9 +26,9 @@ def primary_binding_query(merchant_id: str, channel: str) -> Tuple[str, List[Any
          WHERE merchant_id = $1
            AND channel = $2
            AND is_primary
-           AND status = 'active'
+           AND status = $3
     """
-    return query, [merchant_id, channel]
+    return query, [merchant_id, channel, BINDING_ACTIVE]
 
 
 def binding_by_id_query(
@@ -46,9 +48,9 @@ def binding_by_id_query(
          WHERE merchant_id = $1
            AND id = $2::uuid
            AND channel = $3
-           AND status = 'active'
+           AND status = $4
     """
-    return query, [merchant_id, binding_id, channel]
+    return query, [merchant_id, binding_id, channel, BINDING_ACTIVE]
 
 
 def binding_by_address_query(
@@ -87,9 +89,9 @@ def has_active_primary_binding_query(
          WHERE merchant_id = $1
            AND channel = $2
            AND is_primary
-           AND status = 'active'
+           AND status = $3
     """
-    return query, [merchant_id, channel]
+    return query, [merchant_id, channel, BINDING_ACTIVE]
 
 
 def upsert_binding_query(
@@ -120,10 +122,17 @@ def upsert_binding_query(
         DO UPDATE SET
             installation_id = EXCLUDED.installation_id,
             is_primary = {BINDING_TABLE}.is_primary OR EXCLUDED.is_primary,
-            status = 'active'
+            status = $6
         RETURNING {BINDING_COLUMNS}
     """
-    return query, [merchant_id, channel, installation_id, address, is_primary]
+    return query, [
+        merchant_id,
+        channel,
+        installation_id,
+        address,
+        is_primary,
+        BINDING_ACTIVE,
+    ]
 
 
 def pause_bindings_for_installation_query(
@@ -141,11 +150,11 @@ def pause_bindings_for_installation_query(
     """
     query = f"""
         UPDATE {BINDING_TABLE}
-           SET status = 'paused',
+           SET status = $3,
                is_primary = false
          WHERE merchant_id = $1
            AND installation_id = $2::uuid
-           AND status = 'active'
+           AND status = $4
         RETURNING {BINDING_COLUMNS}
     """
-    return query, [merchant_id, installation_id]
+    return query, [merchant_id, installation_id, BINDING_PAUSED, BINDING_ACTIVE]

@@ -11,7 +11,7 @@ from typing import Optional
 
 from app.crm.connectivity.providers.meta.graph import GRAPH_THROTTLE_CODES
 from app.crm.connectivity.reasons import REASON_UNREADABLE
-from app.crm.connectivity.schemas import SendOutcome
+from app.crm.connectivity.schemas.message import SendOutcome
 
 # Retryable — the provider is busy or pacing us, not refusing on the merits.
 # The Graph-wide throttles arrive as HTTP 400, which the unknown-4xx default

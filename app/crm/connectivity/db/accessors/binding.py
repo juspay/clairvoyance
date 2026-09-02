@@ -16,7 +16,7 @@ from app.crm.connectivity.db.queries.binding import (
     primary_binding_query,
     upsert_binding_query,
 )
-from app.crm.connectivity.schemas import ChannelBinding
+from app.crm.connectivity.schemas.connector import ChannelBinding
 from app.crm.shared.db import DbTxn, crm_connection
 
 

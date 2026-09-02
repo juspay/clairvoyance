@@ -2,7 +2,7 @@
 
 from typing import Any, Mapping
 
-from app.crm.connectivity.schemas import ApprovedTemplate, TemplateRead
+from app.crm.connectivity.schemas.template import ApprovedTemplate, TemplateRead
 from app.crm.shared.decode import jsonb_list
 
 
