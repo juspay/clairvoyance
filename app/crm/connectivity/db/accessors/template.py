@@ -24,6 +24,7 @@ from app.crm.connectivity.db.queries.template import (
     retire_template_query,
     template_by_id_query,
     template_by_natural_key_query,
+    templates_by_name_query,
     update_draft_components_query,
 )
 from app.crm.connectivity.schemas.template import ApprovedTemplate, TemplateRead
@@ -60,6 +61,15 @@ async def list_templates(
     merchant_id: str, channel: Optional[str] = None, status: Optional[str] = None
 ) -> List[TemplateRead]:
     query, values = list_templates_query(merchant_id, channel, status)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_template(row) for row in rows]
+
+
+async def templates_by_name(
+    merchant_id: str, channel: str, name: str
+) -> List[TemplateRead]:
+    query, values = templates_by_name_query(merchant_id, channel, name)
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_template(row) for row in rows]

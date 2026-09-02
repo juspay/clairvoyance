@@ -9,6 +9,7 @@ gather -> decide (PURE, returns the problems) -> apply.
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
+from app.crm.connectivity.contracts import registers_templates_for, template_status
 from app.crm.outreach.db import DbTxn, accessor, atomically
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.repeat import parse_repeat_policy
@@ -175,6 +176,11 @@ async def _publish_in_txn(txn: DbTxn, merchant_id: str, workflow_id: str) -> Wor
     )
     if problems:
         raise WorkflowValidationError(problems)
+    problems = await _template_problems(
+        merchant_id, WorkflowDefinition.model_validate(workflow.draft)
+    )
+    if problems:
+        raise WorkflowValidationError(problems)
     published = await accessor.apply_publish(txn, merchant_id, workflow_id)
     if published is None:  # a racing publish consumed the draft first
         raise WorkflowValidationError(["draft already published"])
@@ -183,6 +189,37 @@ async def _publish_in_txn(txn: DbTxn, merchant_id: str, workflow_id: str) -> Wor
         f"(merchant {merchant_id})"
     )
     return published
+
+
+async def _template_problems(
+    merchant_id: str, definition: WorkflowDefinition
+) -> List[str]:
+    """GATHER for the publish atom (rollout phase 08, G12): every send node
+    on a channel that registers templates must name one the registry knows
+    AND has approved — otherwise the first sign of a wrong name is a
+    blocked send at dispatch, hours after publish. A lookup, so it lives
+    here beside the atom and validate_definition stays PURE. Drafts are
+    not checked (create/update): a draft may precede approval. The
+    contract takes its own pooled connection beside the atom's — the
+    resolve()-inside-the-pass precedent."""
+    problems: List[str] = []
+    for node in definition.nodes:
+        if node.type != "send" or not node.channel or not node.template:
+            continue  # the validator already demands both on a send node
+        if not registers_templates_for(node.channel):
+            continue  # a channel with no registry (email) has nothing to ask
+        status = await template_status(merchant_id, node.channel, node.template)
+        if status is None:
+            problems.append(
+                f"send node {node.id}: template '{node.template}' is not "
+                f"registered on {node.channel} for this merchant"
+            )
+        elif status != "approved":
+            problems.append(
+                f"send node {node.id}: template '{node.template}' is "
+                f"'{status}', not approved"
+            )
+    return problems
 
 
 async def set_status(

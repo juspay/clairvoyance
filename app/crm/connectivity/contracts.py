@@ -21,6 +21,9 @@ What is here, and why each thing is on the surface:
   registry decides what that payload means.
 - the ``*_template`` family — the T23 registry that ``send.py`` resolves
   against before any provider call.
+- ``template_status`` / ``registers_templates_for`` — what outreach's
+  publish asks so a send node naming an unknown or unapproved template
+  is refused at publish, not blocked at dispatch hours later (phase 08).
 
 Provider-decided template state (approved, rejected, a re-categorisation)
 arrives as webhooks, and the consumer that applies them joins this surface
@@ -31,6 +34,7 @@ reach a provider without passing the checks in front of it. So does the
 route resolver, and so do the provider packages.
 """
 
+from app.crm.connectivity.channels import registers_templates_for
 from app.crm.connectivity.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.onboarding import (
     disconnect,
@@ -46,6 +50,7 @@ from app.crm.connectivity.templates import (
     list_templates,
     retire as retire_template,
     submit as submit_template,
+    template_status,
 )
 
 __all__ = [
@@ -66,4 +71,7 @@ __all__ = [
     "retire_template",
     "get_template",
     "list_templates",
+    # the publish-time check (outreach asks)
+    "template_status",
+    "registers_templates_for",
 ]
