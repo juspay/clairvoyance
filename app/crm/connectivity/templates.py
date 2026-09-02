@@ -40,6 +40,7 @@ from app.crm.connectivity.db.accessors import (
     template as template_accessor,
 )
 from app.crm.connectivity.schemas import (
+    ApprovedTemplate,
     ConnectorInstallation,
     CredentialBundle,
     TemplateDraft,
@@ -505,16 +506,21 @@ async def list_templates(
     return await template_accessor.list_templates(merchant_id, channel, status)
 
 
-async def approved_language(
+async def approved_template(
     merchant_id: str, channel: str, provider_account_ref: str, name: str
-) -> Optional[str]:
-    """Is this template name approved on this account, and in which language?
+) -> Optional[ApprovedTemplate]:
+    """Is this template name approved on this account — and if so, the row.
 
     The registry's one public read for the send path. It states a FACT and
     nothing else — the caller owns the word for "no", exactly as the binding
     and installation steps already separate the fact from the refusal. It also
     keeps every read of the registry table in this file: two logic files
     owning reads on one table is how two answers to "is this approved" appear.
+
+    The answer is the ROW, not one of its fields: which field a send needs is
+    the adapter's business (WhatsApp renders by language, SMS-DLT sends the
+    provider's id), and a registry that answered "the language" would be
+    answering WhatsApp's question for every channel.
 
     None has three causes, and from the sender's side they are one fact:
 
@@ -539,4 +545,4 @@ async def approved_language(
             f"exactly one is required to send"
         )
         return None
-    return approved[0].language
+    return approved[0]

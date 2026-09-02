@@ -123,11 +123,16 @@ class SendRoute(BaseModel):
     installation: ConnectorInstallation
     binding: ChannelBinding
     bundle: CredentialBundle
-    # The locale the template registry says this merchant's template was
-    # APPROVED in (T23). Optional only so a future channel that does not
-    # pre-register templates can leave it unset — for a channel that does,
-    # resolve_send_route refuses before the adapter rather than passing None.
-    template_language: Optional[str] = None
+    # The approved registry row (T23) this send renders — or None on a
+    # channel that does not pre-register templates (channels.py decides
+    # which do). Channel-neutral on purpose: the WhatsApp adapter reads its
+    # language, an SMS-DLT adapter will read its provider_template_id, an
+    # email adapter reads nothing. The route carries the ROW and each adapter
+    # takes the field it needs; a field named for one provider's need would
+    # be the first thing the second adapter has to work around. For a channel
+    # that registers, resolve_send_route refuses before the adapter rather
+    # than passing None.
+    template: Optional["ApprovedTemplate"] = None
 
 
 # ---------------------------------------------------------------------------
@@ -207,15 +212,21 @@ class TemplateDraft(BaseModel):
 
 class ApprovedTemplate(BaseModel):
     """The send path's answer from the registry: this name is approved, and
-    this is the locale it was approved in.
+    these are the facts about it an adapter may need to send.
 
-    Narrow on purpose. resolve_send_route runs once per message, and the row
-    it needs an answer from carries a components blob the send path will
-    never render — the provider does the rendering.
+    Narrow on purpose — resolve_send_route runs once per message, and the row
+    carries a components blob the send path never renders (the provider does)
+    — but not narrower than the CHANNELS it serves: language is what WhatsApp
+    renders by, provider_template_id is what an SMS-DLT header carries, and
+    category is what the gate will map a purpose against. One shape, every
+    adapter reads its own field.
     """
 
     id: str
+    name: str
     language: str
+    provider_template_id: Optional[str] = None
+    category: Optional[str] = None
 
 
 class ProviderTemplateState(BaseModel):
@@ -293,7 +304,13 @@ class CreateTemplateDraftRequest(BaseModel):
 
 class SubmitTemplateRequest(BaseModel):
     merchant_id: str = Field(..., description="Tenant scope — required")
-    category: str = Field(..., description="MARKETING · UTILITY · AUTHENTICATION")
+    category: str = Field(
+        ...,
+        description=(
+            "The provider's own category vocabulary, stored as theirs "
+            "(Meta: MARKETING · UTILITY · AUTHENTICATION)"
+        ),
+    )
 
 
 class EditTemplateRequest(BaseModel):
@@ -331,3 +348,8 @@ class TemplateRead(BaseModel):
     last_synced_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+
+# SendRoute names ApprovedTemplate before it is defined; resolve the forward
+# reference now rather than on first validation.
+SendRoute.model_rebuild()

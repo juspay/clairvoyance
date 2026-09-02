@@ -180,7 +180,7 @@ def _route(**overrides) -> SendRoute:
 
 #: What the registry answers for an approved template, unless a test seeds
 #: something else. One row = one language = sendable.
-_APPROVED = [ApprovedTemplate(id="t-1", language="en_US")]
+_APPROVED = [ApprovedTemplate(id="t-1", name="order_update_v1", language="en_US")]
 
 
 class _FakeAccessor:
@@ -468,9 +468,10 @@ async def test_a_resolved_route_carries_the_whole_context(happy_accessor) -> Non
     assert isinstance(route, SendRoute)
     assert route.binding.address == "1234567890"
     assert route.bundle.secret("system_user_token") == "tok"
-    # And the language the registry approved, which is the whole reason the
-    # adapter no longer reads it off the binding.
-    assert route.template_language == "en_US"
+    # And the registry row it was approved as, which is the whole reason the
+    # adapter no longer reads a language off the binding.
+    assert route.template is not None
+    assert route.template.language == "en_US"
 
 
 def test_both_binding_lookups_are_pinned_to_their_channel() -> None:
@@ -853,8 +854,8 @@ async def test_an_approved_template_passes_to_the_adapter(
         ([], "never registered, pending, rejected or deleted"),
         (
             [
-                ApprovedTemplate(id="t-1", language="en_US"),
-                ApprovedTemplate(id="t-2", language="hi_IN"),
+                ApprovedTemplate(id="t-1", name="order_update_v1", language="en_US"),
+                ApprovedTemplate(id="t-2", name="order_update_v1", language="hi_IN"),
             ],
             "approved in more than one language",
         ),
@@ -912,13 +913,57 @@ async def test_the_route_carries_the_registrys_language_not_the_bindings(
         _FakeAccessor(
             binding=_binding(capabilities={"template_language": "de_DE"}),
             installation=_installation(),
-            approved=[ApprovedTemplate(id="t-1", language="hi_IN")],
+            approved=[
+                ApprovedTemplate(id="t-1", name="order_update_v1", language="hi_IN")
+            ],
         ),
     )
     _patch_credential(monkeypatch, _credential())
     route = await resolve_send_route("shop", "whatsapp", None, "order_update_v1")
     assert isinstance(route, SendRoute)
-    assert route.template_language == "hi_IN"
+    assert route.template is not None
+    assert route.template.language == "hi_IN"
+
+
+# --- the registry gate is a CHANNELS fact, not a send.py assumption ---------
+
+
+def test_whether_a_channel_registers_templates_is_the_registrys_answer() -> None:
+    """WhatsApp does; an unregistered channel answers True so the door fails
+    CLOSED on it — the same posture the gate takes on a channel CHANNELS
+    cannot describe."""
+    from app.crm.connectivity.channels import registers_templates_for
+
+    assert registers_templates_for("whatsapp") is True
+    assert registers_templates_for("carrier_pigeon") is True
+
+
+async def test_a_channel_that_does_not_register_templates_skips_the_registry(
+    monkeypatch, counting_adapter
+) -> None:
+    """An email send names no registry row and must not be refused for
+    lacking one. Before this the resolver assumed every channel pre-registers
+    and would have blocked every such send with template_not_approved — the
+    adapter's own "channel that does not pre-register" fallback was
+    unreachable because the door refused first."""
+
+    class _NeverAsked(_FakeAccessor):
+        async def approved_templates_for_send(self, *args, **kwargs):
+            """Test double: the registry must not be consulted at all."""
+            raise AssertionError("registry read on a non-registering channel")
+
+    _patch_accessors(
+        monkeypatch, _NeverAsked(binding=_binding(), installation=_installation())
+    )
+    _patch_credential(monkeypatch, _credential())
+    monkeypatch.setattr(send_module, "registers_templates_for", lambda channel: False)
+    message = _message(template_id=None)
+    outcome = await send(_token(message), message)
+    assert outcome.status == "accepted"
+    assert counting_adapter.calls == 1
+    route = await resolve_send_route("shop", "whatsapp", None, None)
+    assert isinstance(route, SendRoute)
+    assert route.template is None
 
 
 def test_the_lookup_is_scoped_to_the_merchants_own_account() -> None:

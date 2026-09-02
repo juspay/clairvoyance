@@ -101,7 +101,7 @@ def approved_template_for_send_query(
     LIMIT 2 because the caller only needs to distinguish one from many.
     """
     query = f"""
-        SELECT id, language
+        SELECT id, name, language, provider_template_id, category
           FROM {TEMPLATE_TABLE}
          WHERE merchant_id = $1
            AND channel = $2

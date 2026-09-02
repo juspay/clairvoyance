@@ -39,7 +39,18 @@ def test_purpose_must_start_with_a_known_root() -> None:
     queue.validate_proposal("workflow", "utility.order.cod_confirm")
 
 
-def test_writer_normalizes_the_address() -> None:
+def test_writer_normalizes_the_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The kind of normalization is the CHANNELS registry's answer. "email"
+    is seeded here because no email channel is registered yet — the point is
+    that an email-kind channel lowercases and a phone-kind one parses E.164,
+    and that the writer never guesses which from the channel's name."""
+    from app.crm.connectivity import channels
+
+    monkeypatch.setitem(
+        channels.CHANNELS,
+        "email",
+        channels.Channel(gate_handle_kind="email", registers_templates=False),
+    )
     assert queue.normalize_address("whatsapp", "98450 12345") == "+919845012345"
     assert queue.normalize_address("email", " Priya@Shop.IN ") == "priya@shop.in"
     assert queue.normalize_address("whatsapp", "hello") is None
@@ -88,3 +99,40 @@ def test_unusable_address_is_refused_before_any_write(
     monkeypatch.setattr(queue.message_accessor, "insert_message", never)
     with pytest.raises(ValueError):
         asyncio.run(queue.queue_message(**_proposal(address="hello")))
+
+
+def test_the_address_kind_is_the_channel_registrys_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """queue.py once kept its own tuple of "phone channels" beside the
+    CHANNELS registry that already knew each channel's handle kind — two
+    answers to one question. The registry is the only answer now: a channel
+    it describes as email-kind is lowercased, not parsed as a phone."""
+    from app.crm.connectivity import channels
+
+    monkeypatch.setitem(
+        channels.CHANNELS,
+        "mail",
+        channels.Channel(gate_handle_kind="email", registers_templates=False),
+    )
+    assert (
+        queue.normalize_address("mail", "  Priya@Example.COM ") == "priya@example.com"
+    )
+    assert queue.normalize_address("whatsapp", "+91 98765 43210") == "+919876543210"
+
+
+def test_an_unregistered_channel_is_refused_before_any_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A channel CHANNELS cannot describe has no address kind, so nothing is
+    normalized and nothing is stored: the gate would fail closed on the row
+    at dispatch anyway, and a manifest row that can never send is not worth
+    writing."""
+
+    async def never(*args: Any) -> Optional[str]:
+        raise AssertionError("must not write")
+
+    monkeypatch.setattr(queue.message_accessor, "insert_message", never)
+    assert queue.normalize_address("carrier_pigeon", "+919876543210") is None
+    with pytest.raises(ValueError):
+        asyncio.run(queue.queue_message(**_proposal(channel="carrier_pigeon")))

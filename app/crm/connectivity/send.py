@@ -32,6 +32,7 @@ from typing import Optional, Union
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
 from app.crm.connectivity import accounts, templates
+from app.crm.connectivity.channels import registers_templates_for
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
@@ -126,17 +127,22 @@ async def resolve_send_route(
         )
         return REASON_INSTALLATION_UNHEALTHY
 
-    if not template_name:
-        # The adapter refuses this too, but refusing here keeps the reason on
-        # the near side of the wire for every channel, not just WhatsApp's.
-        return REASON_NO_TEMPLATE
-    # ADR 0011: a non-approved template is refused BEFORE the provider call.
+    # ADR 0011: on a channel that pre-registers templates, a non-approved
+    # template is refused BEFORE the provider call. Whether a channel does is
+    # the CHANNELS registry's answer, not an assumption made here — an email
+    # send names no registry row and must not be refused for lacking one.
     # The registry states the fact; the word for "no" is this door's.
-    language = await templates.approved_language(
-        merchant_id, channel, installation.external_account_id, template_name
-    )
-    if language is None:
-        return REASON_TEMPLATE_NOT_APPROVED
+    template = None
+    if registers_templates_for(channel):
+        if not template_name:
+            # The adapter refuses this too, but refusing here keeps the
+            # reason on the near side of the wire for every such channel.
+            return REASON_NO_TEMPLATE
+        template = await templates.approved_template(
+            merchant_id, channel, installation.external_account_id, template_name
+        )
+        if template is None:
+            return REASON_TEMPLATE_NOT_APPROVED
 
     try:
         # The vault read is a KMS decrypt, so it comes last: the cheapest
@@ -153,7 +159,7 @@ async def resolve_send_route(
         installation=installation,
         binding=binding,
         bundle=bundle,
-        template_language=language,
+        template=template,
     )
 
 
