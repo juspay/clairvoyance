@@ -102,8 +102,15 @@ async def _enrol_in_txn(
     ):
         return None  # this event already made its run (at-least-once scan)
 
+    # Keyed plan: the guards judge THIS key's history (B2 — "one run per
+    # <field>" means reenter/cooldown are about the order, not the
+    # customer). Unkeyed: the key is the customer id and the read is hers.
     facts = await accessor.admission_facts(
-        txn, merchant_id, str(workflow.id), customer_id
+        txn,
+        merchant_id,
+        str(workflow.id),
+        customer_id,
+        enrollment_key=enrollment_key if definition.entry.key else None,
     )
     now = datetime.now(timezone.utc)
     admit, reason = _admission(

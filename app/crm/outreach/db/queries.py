@@ -157,10 +157,28 @@ def insert_enrollment_query(
 
 
 def admission_facts_query(
-    merchant_id: str, workflow_id: str, customer_id: str
+    merchant_id: str,
+    workflow_id: str,
+    customer_id: str,
+    enrollment_key: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Everything the admission guards need in one read: has she EVER run
-    this flow (reenter), when did her latest run begin (cooldown)."""
+    this flow (reenter), when did her latest run begin (cooldown).
+
+    On a keyed plan (entry.key, canon T20 col 13: "one run per <field>")
+    the history judged is that KEY's, not the customer's — "has this
+    ORDER ever run" is what the author declared, so her second order has
+    no history and is admitted (B2, rollout phase 02). The customer
+    predicate stays beside the key for tenancy paranoia. Unkeyed plans
+    keep the customer-wide read."""
+    if enrollment_key is not None:
+        query = f"""
+            SELECT count(*) AS runs, max(entered_at) AS latest_entered_at
+            FROM {ENROLLMENT_TABLE}
+            WHERE merchant_id = $1 AND workflow_id = $2
+              AND enrollment_key = $3 AND customer_id = $4
+        """
+        return query, [merchant_id, workflow_id, enrollment_key, customer_id]
     query = f"""
         SELECT count(*) AS runs, max(entered_at) AS latest_entered_at
         FROM {ENROLLMENT_TABLE}

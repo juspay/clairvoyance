@@ -92,6 +92,20 @@ def test_admission_and_source_reads_are_merchant_first() -> None:
         assert params[0] == "m1"
 
 
+def test_admission_facts_scope_to_the_key_on_keyed_plans() -> None:
+    """B2 (rollout phase 02): entry.key says runs are per <field>, so the
+    history the reenter/cooldown guards judge is that KEY's, not the
+    customer's whole history — otherwise her second order is refused as a
+    re-entry. The customer predicate stays, for tenancy paranoia."""
+    sql, params = admission_facts_query("m1", "wf-1", "c-1", enrollment_key="ORD-2")
+    assert "enrollment_key = $3" in sql and "customer_id = $4" in sql
+    assert params == ["m1", "wf-1", "ORD-2", "c-1"]
+    # the unkeyed form is untouched
+    sql, params = admission_facts_query("m1", "wf-1", "c-1")
+    assert "enrollment_key" not in sql and "customer_id = $3" in sql
+    assert params == ["m1", "wf-1", "c-1"]
+
+
 def test_claim_skips_paused_plans_and_counts_the_claim() -> None:
     sql, values = claim_due_runs_query(50, 300)
     assert "w.status = 'paused'" in sql and "NOT EXISTS" in sql
