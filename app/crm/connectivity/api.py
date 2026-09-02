@@ -33,10 +33,10 @@ from app.core.logger.context import set_log_context
 from app.crm.auth import assert_merchant_access
 from app.crm.connectivity import contracts
 from app.crm.connectivity.onboarding import OnboardingError, UnknownConnectorError
-from app.crm.connectivity.schemas import (
+from app.crm.connectivity.schemas.connector import InstallationRead
+from app.crm.connectivity.schemas.template import (
     CreateTemplateDraftRequest,
     EditTemplateRequest,
-    InstallationRead,
     RetireTemplateRequest,
     SubmitTemplateRequest,
     TemplateRead,

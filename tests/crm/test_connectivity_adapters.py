@@ -24,16 +24,15 @@ from app.crm.connectivity.db.queries.binding import (
 from app.crm.connectivity.providers import ADAPTERS, adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
 from app.crm.connectivity.providers.whatsapp.adapter import MetaWhatsAppAdapter
-from app.crm.connectivity.schemas import (
-    ApprovedTemplate,
-    ChannelBinding,
-    ConnectorInstallation,
+from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
+from app.crm.connectivity.schemas.message import (
     CredentialBundle,
     QueuedMessage,
     SendOutcome,
     SendRoute,
     SendToken,
 )
+from app.crm.connectivity.schemas.template import ApprovedTemplate
 from app.crm.connectivity.send import (
     REASON_GATE_REFUSED,
     REASON_INSTALLATION_UNHEALTHY,
@@ -47,6 +46,7 @@ from app.crm.connectivity.send import (
     send,
     token_grants,
 )
+from app.crm.connectivity.status import BINDING_ACTIVE, TEMPLATE_APPROVED
 from app.crm.shared.redact import mask_address, mask_digit_runs
 from app.schemas import Credential, CredentialType
 from scripts.check_crm_boundaries import TABLE_OWNERS
@@ -483,10 +483,10 @@ def test_both_binding_lookups_are_pinned_to_their_channel() -> None:
     # naming another tenant's row, never a wrong-endpoint send.
     named_sql, named_values = binding_by_id_query("shop", "b-1", "whatsapp")
     assert "channel = $3" in named_sql
-    assert named_values == ["shop", "b-1", "whatsapp"]
+    assert named_values == ["shop", "b-1", "whatsapp", BINDING_ACTIVE]
     primary_sql, primary_values = primary_binding_query("shop", "whatsapp")
     assert "channel = $2" in primary_sql
-    assert primary_values == ["shop", "whatsapp"]
+    assert primary_values == ["shop", "whatsapp", BINDING_ACTIVE]
 
 
 # --- the timeout no adapter can forget --------------------------------------
@@ -976,5 +976,6 @@ def test_the_lookup_is_scoped_to_the_merchants_own_account() -> None:
     sql, values = approved_template_for_send_query("shop", "whatsapp", "waba-1", "n")
     assert "merchant_id = $1" in sql
     assert "provider_account_ref = $3" in sql
-    assert "status = 'approved'" in sql
-    assert values == ["shop", "whatsapp", "waba-1", "n"]
+    # the filter is still there, now bound rather than spelled in SQL text
+    assert "status = $5" in sql
+    assert values == ["shop", "whatsapp", "waba-1", "n", TEMPLATE_APPROVED]

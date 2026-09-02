@@ -28,15 +28,14 @@ import httpx
 
 from app.core.logger import logger
 from app.crm.connectivity.reasons import REASON_TRANSPORT
-from app.crm.connectivity.schemas import (
+from app.crm.connectivity.schemas.connector import OnboardResult
+from app.crm.connectivity.schemas.message import (
     CredentialBundle,
-    OnboardResult,
-    ProviderTemplateState,
     QueuedMessage,
     SendOutcome,
     SendRoute,
-    TemplateDraft,
 )
+from app.crm.connectivity.schemas.template import ProviderTemplateState, TemplateDraft
 from app.crm.shared.redact import mask_address
 
 # All REASON_* words live in reasons.py — one file, one name per failure

@@ -40,10 +40,17 @@ from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
 )
-from app.crm.connectivity.schemas import (
+from app.crm.connectivity.schemas.connector import (
     ConnectorInstallation,
     InstallationRead,
     OnboardResult,
+)
+from app.crm.connectivity.status import (
+    BINDING_RETIRED,
+    INSTALLATION_CONNECTING,
+    INSTALLATION_DEGRADED,
+    INSTALLATION_DISABLED,
+    INSTALLATION_HEALTHY,
 )
 from app.database.accessor.breeze_buddy.credentials import (
     create_credential,
@@ -59,10 +66,10 @@ from app.schemas import CredentialType
 #: but 'healthy', which is the correct posture for a connection that cannot
 #: hear the person it is contacting.
 _STATUS_FOR_HEALTH = {
-    "configured": "connecting",
-    "authenticated": "degraded",
-    "subscribed": "healthy",
-    "healthy": "healthy",
+    "configured": INSTALLATION_CONNECTING,
+    "authenticated": INSTALLATION_DEGRADED,
+    "subscribed": INSTALLATION_HEALTHY,
+    "healthy": INSTALLATION_HEALTHY,
 }
 
 
@@ -106,7 +113,7 @@ async def _refuse_before_spending(
         existing = await installation_accessor.get_installation_by_account(
             merchant_id, connector_key, account_id
         )
-        if existing is not None and existing.status == "disabled":
+        if existing is not None and existing.status == INSTALLATION_DISABLED:
             raise OnboardingError(
                 "this connection is disabled — an administrator must re-enable "
                 "it before it can be reconnected"
@@ -115,7 +122,7 @@ async def _refuse_before_spending(
         binding = await binding_accessor.peek_binding_by_address(
             merchant_id, spec.channel, address
         )
-        if binding is not None and binding.status == "retired":
+        if binding is not None and binding.status == BINDING_RETIRED:
             raise OnboardingError("this endpoint was retired and cannot be reconnected")
 
 
@@ -263,7 +270,7 @@ async def _onboard_in_txn(
     A connector with no channel writes the door alone, and that is a COMPLETE
     onboarding: a data connector (Shopify, Zendesk) has nothing to send from,
     so there is no pipe to be half of."""
-    status = _STATUS_FOR_HEALTH.get(result.health_level, "degraded")
+    status = _STATUS_FOR_HEALTH.get(result.health_level, INSTALLATION_DEGRADED)
     installation = await installation_accessor.upsert_installation(
         txn,
         merchant_id,
@@ -288,10 +295,16 @@ async def _onboard_in_txn(
         # bind, no default route to pick, and no send path to protect.
         return installation
 
+    address = result.address
+    if not address:
+        raise OnboardingError(
+            f"the {spec.channel} connector returned no endpoint to bind"
+        )
+
     existing = await binding_accessor.get_binding_by_address(
-        txn, merchant_id, spec.channel, result.address
+        txn, merchant_id, spec.channel, address
     )
-    if existing is not None and existing.status == "retired":
+    if existing is not None and existing.status == BINDING_RETIRED:
         # canon T12: a retired pipe SURRENDERED its address, and the provider
         # may have recycled it to somebody else. Resurrecting it would point
         # this merchant's sends at a stranger's endpoint.
@@ -307,7 +320,7 @@ async def _onboard_in_txn(
         merchant_id,
         spec.channel,
         installation.id,
-        result.address,
+        address,
         not already_default,
     )
     return installation

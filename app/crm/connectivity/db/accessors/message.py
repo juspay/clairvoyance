@@ -14,7 +14,7 @@ from app.crm.connectivity.db.queries.message import (
     insert_message_query,
     requeue_stale_claims_query,
 )
-from app.crm.connectivity.schemas import QueuedMessage
+from app.crm.connectivity.schemas.message import QueuedMessage
 from app.crm.shared.db import crm_connection
 
 

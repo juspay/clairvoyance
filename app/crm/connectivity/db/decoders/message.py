@@ -2,7 +2,7 @@
 
 from typing import Any, Mapping
 
-from app.crm.connectivity.schemas import QueuedMessage
+from app.crm.connectivity.schemas.message import QueuedMessage
 from app.crm.shared.decode import jsonb_object, uuid_or_none
 
 

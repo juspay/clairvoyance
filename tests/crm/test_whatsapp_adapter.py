@@ -22,14 +22,13 @@ from app.crm.connectivity.providers.whatsapp.payload import (
     build_parameters,
     to_meta_recipient,
 )
-from app.crm.connectivity.schemas import (
-    ApprovedTemplate,
-    ChannelBinding,
-    ConnectorInstallation,
+from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
+from app.crm.connectivity.schemas.message import (
     CredentialBundle,
     QueuedMessage,
     SendRoute,
 )
+from app.crm.connectivity.schemas.template import ApprovedTemplate
 
 ACCEPTED_BODY = {
     "messaging_product": "whatsapp",

@@ -15,7 +15,10 @@ from app.crm.connectivity.db.queries.installation import (
     revoke_installation_query,
     upsert_installation_query,
 )
-from app.crm.connectivity.schemas import ConnectorInstallation, InstallationRead
+from app.crm.connectivity.schemas.connector import (
+    ConnectorInstallation,
+    InstallationRead,
+)
 from app.crm.shared.db import DbTxn, crm_connection
 
 

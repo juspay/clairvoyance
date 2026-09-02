@@ -26,7 +26,7 @@ from app.crm.connectivity.db.queries.template import (
     template_by_natural_key_query,
     update_draft_components_query,
 )
-from app.crm.connectivity.schemas import ApprovedTemplate, TemplateRead
+from app.crm.connectivity.schemas.template import ApprovedTemplate, TemplateRead
 from app.crm.shared.db import DbTxn, crm_connection
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,8 @@ every API response that ever renders a connection.
 
 from typing import Any, List, Optional, Tuple
 
+from app.crm.connectivity.status import INSTALLATION_DISABLED, INSTALLATION_REVOKED
+
 INSTALLATION_TABLE = "crm_connector_installation"
 
 # The route's shape — what send.py needs to reach a provider.
@@ -124,7 +126,7 @@ def upsert_installation_query(
             status = EXCLUDED.status,
             token_expires_at = EXCLUDED.token_expires_at,
             health_detail = EXCLUDED.health_detail
-        WHERE {INSTALLATION_TABLE}.status <> 'disabled'
+        WHERE {INSTALLATION_TABLE}.status <> $9
         RETURNING {INSTALLATION_READ_COLUMNS}
     """
     return query, [
@@ -136,6 +138,7 @@ def upsert_installation_query(
         status,
         token_expires_at,
         health_detail_json,
+        INSTALLATION_DISABLED,
     ]
 
 
@@ -146,9 +149,9 @@ def revoke_installation_query(
     of this table, and crm_message rows point at the bindings under it."""
     query = f"""
         UPDATE {INSTALLATION_TABLE}
-           SET status = 'revoked'
+           SET status = $3
          WHERE merchant_id = $1
            AND id = $2::uuid
         RETURNING {INSTALLATION_READ_COLUMNS}
     """
-    return query, [merchant_id, installation_id]
+    return query, [merchant_id, installation_id, INSTALLATION_REVOKED]

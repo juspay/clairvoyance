@@ -18,11 +18,9 @@ from app.core.logger import logger
 from app.crm.connectivity.providers.base import TemplateProviderError
 from app.crm.connectivity.providers.meta.graph import GraphError, call, segment
 from app.crm.connectivity.providers.whatsapp import TOKEN_KEY
-from app.crm.connectivity.schemas import (
-    CredentialBundle,
-    ProviderTemplateState,
-    TemplateDraft,
-)
+from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.template import ProviderTemplateState, TemplateDraft
+from app.crm.connectivity.status import TEMPLATE_PENDING
 from app.crm.connectivity.topics import (
     TOPIC_TEMPLATE_CATEGORY,
     TOPIC_TEMPLATE_QUALITY,
@@ -114,7 +112,7 @@ class WhatsappTemplates:
             # Meta may assign a DIFFERENT category from the one requested.
             # Theirs is what the merchant is billed at, so theirs is stored.
             category=body.get("category") or draft.category,
-            status=_from_meta(body.get("status")) or "pending",
+            status=_from_meta(body.get("status")) or TEMPLATE_PENDING,
         )
 
     async def edit(
@@ -138,7 +136,7 @@ class WhatsappTemplates:
             json_body={"components": components},
         )
         return ProviderTemplateState(
-            provider_template_id=provider_template_id, status="pending"
+            provider_template_id=provider_template_id, status=TEMPLATE_PENDING
         )
 
     async def retire(
