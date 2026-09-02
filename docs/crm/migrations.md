@@ -66,7 +66,9 @@ Rules the template encodes:
   crm_consent_*, crm_decision_log; connectivity → installations, bindings,
   templates, crm_message; record → crm_event_raw; outreach →
   segments/workflows/broadcasts — note the P2 outreach table must be
-  `crm_campaign` to avoid colliding with buddy's existing `campaign`).
+  `crm_campaign` to avoid colliding with buddy's existing `campaign`;
+  planned: `crm_workflow_version`, owner outreach, rollout phase 11 per
+  ADR 0023 — the immutable per-publish document runs are pinned to).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)
