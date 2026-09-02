@@ -32,6 +32,8 @@ import app.crm.record.extractors.shopify as shopify_extractor
 import app.crm.record.workers as workers
 import app.crm.shared.worker as worker_mod
 from app.crm.record.db import DbTxn
+from app.crm.record.db.decoder import decode_raw_event
+from app.crm.record.db.queries import claim_pending_events_query
 from app.crm.record.extractors import EXTRACTORS
 from app.crm.record.schemas import Extracted, RawEvent
 from app.crm.shared.worker import run_drain_loop
@@ -94,6 +96,7 @@ def _event(
     topic: str = "lead.pushed",
     customer_id: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
+    attempts: int = 1,
 ) -> RawEvent:
     return RawEvent(
         id=event_id,
@@ -109,6 +112,7 @@ def _event(
         ),
         received_at=datetime.now(timezone.utc),
         customer_id=customer_id,
+        attempts=attempts,
     )
 
 
@@ -456,6 +460,88 @@ def test_a_failing_entry_rule_costs_its_own_row_only(
     assert fake_accessor.stamped == [("evt-2", "c2")]
     # ...and the claim still reports both rows as work found.
     assert [e.id for e in result] == ["evt-1", "evt-2"]
+
+
+# --- rollout phase 04 (P2): the claim spends an attempt; poison rows quarantine ---
+
+
+def test_the_claim_spends_an_attempt_and_returns_it() -> None:
+    """The lock is still the claim (FOR UPDATE SKIP LOCKED inside the
+    pass's transaction), but the claim now counts against the row — the
+    crm_workflow_enrollment shape (058): a crash mid-row counts too, so a
+    poison row cannot hide behind never reaching its except."""
+    sql, params = claim_pending_events_query(10)
+    assert "attempts = attempts + 1" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql and "processed_at IS NULL" in sql
+    returning = sql.split("RETURNING", 1)[1]
+    assert "attempts" in returning and "payload" in returning
+    assert "ORDER BY received_at" in sql  # the pending index's order, kept
+    assert params == [10]
+
+
+def test_decoder_carries_attempts() -> None:
+    row = {
+        "id": "e1",
+        "merchant_id": "m1",
+        "source": "shopify",
+        "topic": "orders/create",
+        "schema_version": "1",
+        "external_id": "x",
+        "payload": '{"a": 1}',
+        "received_at": datetime.now(timezone.utc),
+        "occurred_at": None,
+        "customer_id": None,
+        "attempts": 3,
+    }
+    assert decode_raw_event(row).attempts == 3
+
+
+def _poison_pass(
+    monkeypatch: pytest.MonkeyPatch, attempts: int, max_attempts: int
+) -> _FakeAccessor:
+    """One claimed row whose consumer raises deterministically."""
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+    monkeypatch.setattr(workers, "CRM_EVENT_MAX_ATTEMPTS", max_attempts)
+    event = _event("evt-1", customer_id="c1", attempts=attempts)
+
+    async def fake_claim(conn: Any, limit: int) -> List[RawEvent]:
+        return [event]
+
+    async def poison(
+        event: RawEvent, customer_id: str, handles: Dict[str, str]
+    ) -> None:
+        raise RuntimeError("bad live definition")
+
+    monkeypatch.setattr(
+        fake_accessor, "claim_pending_events", fake_claim, raising=False
+    )
+    monkeypatch.setattr(workers, "_consume_attributed_event", poison)
+    _run(workers._pass_in_txn(_fake_txn(), 10))
+    return fake_accessor
+
+
+def test_a_row_that_exhausted_its_attempts_is_quarantined_not_retried_forever(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Before: a deterministically failing consumer left the row pending
+    forever, re-claimed at the head of the queue every poll and re-running
+    resolve()/assert_facts() each time. Now the claim that reaches
+    CRM_EVENT_MAX_ATTEMPTS quarantines it — outside the rolled-back
+    savepoint, as its own statement on the still-valid transaction."""
+    fake_accessor = _poison_pass(monkeypatch, attempts=5, max_attempts=5)
+    assert len(fake_accessor.quarantined) == 1
+    event_id, reason = fake_accessor.quarantined[0]
+    assert event_id == "evt-1"
+    assert reason.startswith("consumer_error after 5 attempts")
+    assert fake_accessor.stamped == []  # quarantine is the terminal stamp
+
+
+def test_a_row_with_attempts_to_spare_stays_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_accessor = _poison_pass(monkeypatch, attempts=1, max_attempts=5)
+    assert fake_accessor.quarantined == [] and fake_accessor.stamped == []
 
 
 def test_pass_returns_claimed_rows_even_when_every_row_failed(

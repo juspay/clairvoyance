@@ -27,6 +27,7 @@ def decode_raw_event(row: Mapping[str, Any]) -> RawEvent:
         received_at=row["received_at"],
         occurred_at=row["occurred_at"],
         customer_id=str(row["customer_id"]) if row["customer_id"] else None,
+        attempts=int(row["attempts"]),
     )
 
 

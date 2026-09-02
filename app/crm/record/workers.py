@@ -8,6 +8,7 @@ registry's business (record/extractors), and this file only asks it."""
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
+from app.core.config.static import CRM_EVENT_MAX_ATTEMPTS
 from app.core.logger import logger
 from app.crm.identity.contracts import assert_facts, resolve as crm_resolve
 from app.crm.record.consumers import consumers
@@ -35,8 +36,44 @@ async def _pass_in_txn(txn: DbTxn, limit: int) -> List[RawEvent]:
             async with savepoint(txn):
                 await _process_one(txn, event)
         except Exception as e:
-            logger.error(f"event {event.id} pass failed, will retry next poll: {e}")
+            await _after_failed_row(txn, event, e)
     return events
+
+
+async def _after_failed_row(txn: DbTxn, event: RawEvent, error: Exception) -> None:
+    """The row's savepoint has rolled back; ``txn`` is still valid. The
+    claim already spent this attempt (062), so a row at the ceiling is
+    quarantined here as its own statement, inside its own savepoint — a
+    consumer that raises deterministically used to sit at the head of the
+    queue forever, re-running resolve()/assert_facts() every poll. Below
+    the ceiling the row stays pending and returns next poll, as before.
+    Quarantine, never delete: replay is the recovery. The log names the
+    letter, never its payload."""
+    if event.attempts < CRM_EVENT_MAX_ATTEMPTS:
+        logger.error(
+            f"event {event.id} ({event.source}/{event.topic}) pass failed on "
+            f"attempt {event.attempts}, will retry next poll: {error}"
+        )
+        return
+    reason = f"consumer_error after {event.attempts} attempts: {error}"
+    try:
+        # Its own savepoint: a failed statement on the bare transaction
+        # would abort it, and every later row's stamp would be lost at
+        # commit. Inside a savepoint only this write rolls back.
+        async with savepoint(txn):
+            await accessor.quarantine_event(txn, str(event.id), reason)
+    except Exception as quarantine_error:
+        # The batch must not die for one row's bookkeeping; the row stays
+        # pending and the next claim tries the quarantine again.
+        logger.error(
+            f"event {event.id} ({event.source}/{event.topic}) could not be "
+            f"quarantined, stays pending: {quarantine_error}"
+        )
+        return
+    logger.error(
+        f"event {event.id} ({event.source}/{event.topic}) quarantined after "
+        f"{event.attempts} attempts: {error}"
+    )
 
 
 async def _process_one(txn: DbTxn, event: RawEvent) -> None:
