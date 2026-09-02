@@ -18,7 +18,7 @@ from app.core.logger import logger
 from app.crm.outreach.db import accessor
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.nodes import _BOOKKEEPING_KEYS, _BOOKKEEPING_PREFIXES
-from app.crm.outreach.repeat import apply_repeat
+from app.crm.outreach.repeat import _as_number, apply_repeat
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import RawEvent
 from app.crm.shared.normalize import normalize_phone
@@ -105,6 +105,7 @@ async def consume_attributed_event(
     # UPDATE's status <> 'exited' keeps the two verdicts apart. A keyed
     # tier whose payload field is missing cannot say which run it is
     # about and is skipped; the unkeyed tier still applies.
+    goal_patch = _goal_patch(event) if goal_matches else None
     for flow, definition in goal_matches:
         for tier in definition.goal_tiers(event.topic):
             key: Optional[Tuple[str, str]] = None
@@ -120,6 +121,7 @@ async def consume_attributed_event(
                 tier.exit_reason,
                 event.occurred_at,
                 key,
+                goal_patch,
             )
     for flow, node in listening:
         answer = event.payload.get(node.key or "")
@@ -144,6 +146,26 @@ async def consume_attributed_event(
         )
     for flow, definition in entry_matches:
         await _try_enrol(flow, definition, event, customer_id, handles)
+
+
+# Where an order's amount lives in a payload, most specific first —
+# Shopify's total_price, the generic amount.
+_AMOUNT_KEYS = ("total_price", "amount")
+
+
+def _goal_patch(event: RawEvent) -> dict:
+    """PURE: what a run keeps about the letter that ended it (phase 09):
+    the topic, the letter's id, and — when the payload says so as a
+    number — the amount, as the payload gave it (Shopify posts money as
+    "1850.00"; a float here would lose that spelling). The summary sums
+    it over goal_met rows; a non-numeric value is simply absent."""
+    goal: dict = {"topic": event.topic, "event_id": str(event.id)}
+    for key in _AMOUNT_KEYS:
+        value = event.payload.get(key)
+        if _as_number(value) is not None:
+            goal["amount"] = value
+            break
+    return {"goal": goal}
 
 
 def reply_key(node_id: str) -> str:

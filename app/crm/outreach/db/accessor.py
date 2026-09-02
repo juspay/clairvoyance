@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 from app.crm.outreach.db.decoder import (
+    decode_customer_run,
     decode_run,
+    decode_run_summary,
     decode_workflow,
     decode_workflow_summary,
 )
@@ -22,6 +24,7 @@ from app.crm.outreach.db.queries import (
     advance_run_query,
     cancel_open_runs_query,
     claim_due_runs_query,
+    customer_runs_query,
     exit_run_query,
     get_workflow_query,
     insert_enrollment_query,
@@ -40,8 +43,15 @@ from app.crm.outreach.db.queries import (
     source_event_used_query,
     sweep_exited_runs_query,
     update_draft_query,
+    workflow_summary_query,
 )
-from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowSummary
+from app.crm.outreach.schemas import (
+    CustomerRun,
+    EnrollmentRun,
+    Workflow,
+    WorkflowRunSummary,
+    WorkflowSummary,
+)
 from app.crm.shared.db import crm_connection
 
 
@@ -291,9 +301,16 @@ async def cancel_open_runs(
     exit_reason: str,
     occurred_at: Optional[datetime] = None,
     key: Optional[Tuple[str, str]] = None,
+    context_patch: Optional[Dict[str, Any]] = None,
 ) -> int:
     query, values = cancel_open_runs_query(
-        merchant_id, workflow_id, customer_id, exit_reason, occurred_at, key
+        merchant_id,
+        workflow_id,
+        customer_id,
+        exit_reason,
+        occurred_at,
+        key,
+        context_patch,
     )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
@@ -327,3 +344,24 @@ async def sweep_exited_runs(cutoff: datetime, batch: int) -> int:
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return len(rows)
+
+
+async def workflow_summary(
+    merchant_id: str,
+    workflow_id: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> WorkflowRunSummary:
+    query, values = workflow_summary_query(merchant_id, workflow_id, since, until)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return decode_run_summary(rows)
+
+
+async def customer_runs(
+    merchant_id: str, customer_id: str, limit: int
+) -> List[CustomerRun]:
+    query, values = customer_runs_query(merchant_id, customer_id, limit)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_customer_run(row) for row in rows]

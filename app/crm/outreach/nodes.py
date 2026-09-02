@@ -52,6 +52,7 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 _BOOKKEEPING_KEYS = (
     "source_event_id",
     "entered_event_at",  # entry.py: when the founding letter happened (G7)
+    "goal",  # entry.py: the letter that ended the run, and its amount (phase 09)
     "phone",
     "customer_mobile_number",
     "repeat_event_ids",  # repeat.py: which letters already patched this run
