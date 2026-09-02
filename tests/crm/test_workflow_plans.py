@@ -1,7 +1,16 @@
 """W1 publish-validator laws: the exact edit classes canon T19 says the
 validator must block, each as a red test."""
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
+import pytest
+
+import app.crm.outreach.plans as plans
 from app.crm.outreach.plans import validate_definition
+from app.crm.outreach.schemas import Workflow
+
+NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 
 
 def _definition(**overrides):
@@ -203,3 +212,152 @@ def test_changing_entry_key_mid_flight_is_blocked() -> None:
         _definition(entry=keyed), occupied_nodes=["wait-30m"], live_entry=live_entry
     )
     assert any("entry rule changed" in p for p in problems)
+
+
+# --- rollout phase 01: B3 (entry compared by meaning) and B4 (draft -> live) ---
+
+_TERSE_DRAFT = {
+    "entry": {"topic": "checkout.initiated"},
+    "nodes": [{"id": "w", "type": "wait", "minutes": 30}],
+    "edges": [],
+    "goal": {"topics": ["order.placed"]},
+}
+_SPELLED_OUT_ENTRY = {
+    "topic": "checkout.initiated",
+    "where": {},
+    "reenter": False,
+    "cooldown_hours": 24.0,
+    "key": None,
+}
+
+
+def test_publish_compares_the_live_entry_by_meaning_not_spelling() -> None:
+    """B3: the live entry is whatever dict the last publish stored. A draft
+    that omits the defaults compared unequal to a live entry that spelled
+    them out (or the reverse) — a spurious "entry rule changed" refusal on
+    a re-publish that changed nothing about admission."""
+    assert (
+        validate_definition(
+            _TERSE_DRAFT, occupied_nodes=["w"], live_entry=_SPELLED_OUT_ENTRY
+        )
+        == []
+    )
+    explicit = {**_TERSE_DRAFT, "entry": _SPELLED_OUT_ENTRY}
+    assert (
+        validate_definition(
+            explicit, occupied_nodes=["w"], live_entry={"topic": "checkout.initiated"}
+        )
+        == []
+    )
+
+
+def test_a_live_entry_that_no_longer_parses_is_compared_raw() -> None:
+    """A legacy row whose entry fails today's shape cannot be normalised;
+    the raw dicts are compared as before, so a real change is still caught."""
+    problems = validate_definition(
+        _TERSE_DRAFT, occupied_nodes=["w"], live_entry={"topic": ""}
+    )
+    assert any("entry rule changed" in p for p in problems)
+
+
+def _workflow(status: str, definition) -> Workflow:
+    return Workflow(
+        id=uuid4(),
+        merchant_id="m1",
+        name="plan",
+        status=status,
+        version=0 if definition is None else 1,
+        created_by=None,
+        created_at=NOW,
+        updated_at=NOW,
+        definition=definition,
+        draft=_TERSE_DRAFT,
+    )
+
+
+@pytest.mark.asyncio
+async def test_going_live_on_a_never_published_draft_is_refused_before_the_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B4: migration 057's CHECK (status = 'draft' OR definition IS NOT
+    NULL) used to fire as an asyncpg error -> HTTP 500. The pre-read
+    refuses in logic (a 422), and the UPDATE is never issued — no driver
+    exception is raised, let alone caught outside db/."""
+
+    async def get_workflow(merchant_id: str, workflow_id: str) -> Workflow:
+        return _workflow("draft", None)
+
+    async def set_workflow_status(*args: object) -> None:
+        raise AssertionError("must not reach the UPDATE")
+
+    monkeypatch.setattr(plans.accessor, "get_workflow", get_workflow)
+    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await plans.set_status("m1", "wf-1", "live")
+    assert "publish" in refused.value.problems[0]
+
+
+@pytest.mark.asyncio
+async def test_pausing_or_archiving_a_never_published_draft_is_refused_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """057 admits a NULL definition only while status = 'draft', so paused
+    and archived hit the same CHECK as live — one pre-read covers all."""
+
+    async def get_workflow(merchant_id: str, workflow_id: str) -> Workflow:
+        return _workflow("draft", None)
+
+    async def set_workflow_status(*args: object) -> None:
+        raise AssertionError("must not reach the UPDATE")
+
+    monkeypatch.setattr(plans.accessor, "get_workflow", get_workflow)
+    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+    for wanted in ("paused", "archived"):
+        with pytest.raises(plans.WorkflowValidationError) as refused:
+            await plans.set_status("m1", "wf-1", wanted)
+        assert "publish a draft" in refused.value.problems[0], wanted
+
+
+@pytest.mark.asyncio
+async def test_a_published_plan_still_pauses_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published = _workflow("live", _TERSE_DRAFT)
+    writes: list = []
+
+    async def get_workflow(merchant_id: str, workflow_id: str) -> Workflow:
+        return published
+
+    async def set_workflow_status(
+        merchant_id: str, workflow_id: str, status: str
+    ) -> Workflow:
+        writes.append(status)
+        return published
+
+    monkeypatch.setattr(plans.accessor, "get_workflow", get_workflow)
+    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+    assert await plans.set_status("m1", "wf-1", "paused") is published
+    assert await plans.set_status("m1", "wf-1", "live") is published
+    assert writes == ["paused", "live"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_or_archived_plans_answer_none_for_the_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def set_workflow_status(*args: object) -> None:
+        raise AssertionError("must not reach the UPDATE")
+
+    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+
+    async def missing(merchant_id: str, workflow_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(plans.accessor, "get_workflow", missing)
+    assert await plans.set_status("m1", "wf-1", "live") is None
+
+    async def archived(merchant_id: str, workflow_id: str) -> Workflow:
+        return _workflow("archived", None)
+
+    monkeypatch.setattr(plans.accessor, "get_workflow", archived)
+    assert await plans.set_status("m1", "wf-1", "live") is None

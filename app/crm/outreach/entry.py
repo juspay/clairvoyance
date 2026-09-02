@@ -100,12 +100,24 @@ async def consume_attributed_event(
         )
     for flow, node in listening:
         answer = event.payload.get(node.key or "")
+        if answer is None:
+            # B1 (rollout phase 01): no key, no answer to branch on. Waking
+            # the run with {reply_<node>: None} made pick_next read "the
+            # alarm fired" and take the timeout edge at once — any letter
+            # on the listened topic without the key ended the listening
+            # window early. The window simply continues; only the alarm
+            # may time it out.
+            logger.info(
+                f"wait_event reply ignored: key {node.key!r} missing "
+                f"(workflow {flow.id}, event {event.id})"
+            )
+            continue
         await accessor.resume_run_on_event(
             event.merchant_id,
             str(flow.id),
             customer_id,
             node.id,
-            {reply_key(node.id): None if answer is None else str(answer)},
+            {reply_key(node.id): str(answer)},
         )
     for flow, definition in entry_matches:
         await _try_enrol(flow, definition, event, customer_id, handles)
