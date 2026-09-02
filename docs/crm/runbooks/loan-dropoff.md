@@ -78,8 +78,37 @@ Order does not matter — each clock only listens for its own stage topic.
   number) or a call template problem — fix, then
   `POST /workflows/<wf>/runs/<run>/resume?merchant_id=$M`.
 - **A customer's journey** = their runs across the five plans in stage
-  order; until phase 09 adds the read, query each plan's runs and match
-  `context.application_id`.
+  order: `GET /customers/<customer_id>/runs?merchant_id=$M` (see "How to
+  read the funnel").
+
+## How to read the funnel
+
+Per clock, the summary says how many customers reached that stage in the
+window and what happened next:
+
+```bash
+curl -sS "$BASE/workflows/<wf-for-a-stage>/summary?merchant_id=$M&since=<iso>&until=<iso>" -H "$H"
+```
+
+| Field | Meaning for a clock |
+|---|---|
+| `runs` | applications that reached this stage in the window |
+| `by_exit_reason.goal_met` | progressed to a later stage before the alarm |
+| `by_exit_reason.completed` | went quiet for 30 minutes and were called — the drop-offs at this stage |
+| `by_exit_reason.withdrawn` | rejected or withdrawn while on this stage |
+| `open.waiting` | still inside the 30-minute window |
+| `median_minutes_to_exit` | median time on this stage (progress or call) |
+
+Drop-off rate at a stage = `completed / runs`; the funnel is the five
+summaries side by side. `recovered_amount` is empty for the clocks (loan
+events carry no order amount).
+
+One application's journey — its runs across the five clocks, in the
+order the stages happened, each row naming its plan:
+
+```bash
+curl -sS "$BASE/customers/<customer_id>/runs?merchant_id=$M" -H "$H"
+```
 
 ## Exit reasons
 

@@ -5,6 +5,7 @@ Thin routes per module rules §1: auth via Depends, delegate to plans.py.
 Tenancy law: merchant_id is a required query param on every route.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -13,10 +14,19 @@ from pydantic import BaseModel, Field
 from app.core.logger.context import set_log_context
 from app.crm.auth import crm_admin_user
 from app.crm.outreach import plans, runs
-from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowSummary
+from app.crm.outreach.schemas import (
+    CustomerRun,
+    EnrollmentRun,
+    Workflow,
+    WorkflowRunSummary,
+    WorkflowSummary,
+)
 from app.schemas import UserInfo
 
 router = APIRouter()
+# The customer-facing door (/customers/{id}/runs) mounts under a different
+# prefix than the plans' router — the record module's two-router precedent.
+customer_router = APIRouter()
 
 
 class WorkflowCreate(BaseModel):
@@ -163,3 +173,26 @@ async def resume_run_route(
             detail="Run not found, not parked, or not this merchant's",
         )
     return run
+
+
+@router.get("/{workflow_id}/summary", response_model=WorkflowRunSummary)
+async def workflow_summary_route(
+    workflow_id: str,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    since: Optional[datetime] = Query(None, description="Window start on entered_at"),
+    until: Optional[datetime] = Query(None, description="Window end on entered_at"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> WorkflowRunSummary:
+    set_log_context(component="crm.workflows.summary", merchant_id=merchant_id)
+    return await runs.workflow_summary(merchant_id, workflow_id, since, until)
+
+
+@customer_router.get("/{customer_id}/runs", response_model=List[CustomerRun])
+async def customer_runs_route(
+    customer_id: str,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> List[CustomerRun]:
+    set_log_context(component="crm.workflows.journey", merchant_id=merchant_id)
+    return await runs.customer_runs(merchant_id, customer_id, limit)

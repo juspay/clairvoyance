@@ -19,7 +19,7 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.crm.outreach.db import accessor
-from app.crm.outreach.schemas import EnrollmentRun
+from app.crm.outreach.schemas import CustomerRun, EnrollmentRun, WorkflowRunSummary
 
 _LISTABLE_STATUSES = ("waiting", "parked", "exited")
 
@@ -46,6 +46,24 @@ async def resume_run(
     if run:
         logger.info(f"run resumed by operator: {run_id} (merchant {merchant_id})")
     return run
+
+
+async def workflow_summary(
+    merchant_id: str,
+    workflow_id: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> WorkflowRunSummary:
+    """The plan's report over a window of entered_at (rollout phase 09)."""
+    return await accessor.workflow_summary(merchant_id, workflow_id, since, until)
+
+
+async def customer_runs(
+    merchant_id: str, customer_id: str, limit: int
+) -> List[CustomerRun]:
+    """The customer's journey: her runs across every plan, in the order
+    they began (rollout phase 09)."""
+    return await accessor.customer_runs(merchant_id, customer_id, limit)
 
 
 async def run_retention_sweep_tick() -> None:

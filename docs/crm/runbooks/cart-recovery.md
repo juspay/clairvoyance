@@ -128,6 +128,32 @@ Goal comparisons are against the moment the **checkout update happened**
 (`entered_event_at`), not when we stored the run — an order that arrived
 late but happened after the abandonment still ends the run.
 
+## How to read the summary
+
+```bash
+curl -sS "$BASE/workflows/<wf>/summary?merchant_id=$M&since=2026-09-01T00:00:00Z&until=2026-09-08T00:00:00Z" -H "$H"
+```
+
+One object for the window (`since`/`until` bound `entered_at`; omit both
+for all time):
+
+| Field | Meaning |
+|---|---|
+| `runs` | runs that started in the window |
+| `open.waiting` / `open.parked` | still in flight / stuck for a human |
+| `by_exit_reason` | how the finished ones ended (`goal_met` = this cart recovered, `converted_elsewhere`, `completed`, `timed_out`, `ejected`) |
+| `median_minutes_to_exit` | median time from the checkout update to the exit, over finished runs |
+| `recovered_amount` | sum of the order amount on `goal_met` runs — the order's `total_price` as the relay delivered it, stored on the run when the goal ended it |
+
+Recovery rate = `goal_met / runs` once the window is old enough for every
+run to have finished (a day after `until`, for this board).
+
+A customer's runs across every plan, in the order they started:
+
+```bash
+curl -sS "$BASE/customers/<customer_id>/runs?merchant_id=$M" -H "$H"
+```
+
 ## Settings to change per merchant
 
 | Where | Word | Default in the document | Change when |

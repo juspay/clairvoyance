@@ -2,9 +2,15 @@
 DB-side translation only — never imported outside db/."""
 
 import json
-from typing import Any, Mapping
+from typing import Any, Dict, Iterable, Mapping, Optional
 
-from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowSummary
+from app.crm.outreach.schemas import (
+    CustomerRun,
+    EnrollmentRun,
+    Workflow,
+    WorkflowRunSummary,
+    WorkflowSummary,
+)
 
 
 def _jsonb(value: Any) -> Any:
@@ -53,4 +59,52 @@ def decode_run(row: Mapping[str, Any]) -> EnrollmentRun:
         enrollment_key=row["enrollment_key"],
         attempts=row["attempts"],
         last_error=row["last_error"],
+    )
+
+
+def decode_customer_run(row: Mapping[str, Any]) -> CustomerRun:
+    return CustomerRun(
+        **decode_run(row).model_dump(), workflow_name=row["workflow_name"]
+    )
+
+
+def _number(value: Any) -> Optional[float]:
+    """Total: a numeric/Decimal aggregate as a float, NULL as None."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def decode_run_summary(rows: Iterable[Mapping[str, Any]]) -> WorkflowRunSummary:
+    """Fold workflow_summary_query's grouping-set rows into one summary.
+    grouping_level 0 rows are one (status, exit_reason) each; the level-3
+    row (both columns grouped away) is the whole window. Total: an empty
+    window is a zero summary, never a raise."""
+    runs = 0
+    by_exit_reason: Dict[str, int] = {}
+    open_runs = {"waiting": 0, "parked": 0}
+    median: Optional[float] = None
+    recovered: Optional[float] = None
+    for row in rows:
+        if int(row["grouping_level"] or 0) == 3:
+            runs = int(row["runs"] or 0)
+            median = _number(row["median_minutes_to_exit"])
+            recovered = _number(row["recovered_amount"])
+            continue
+        status, reason = row["status"], row["exit_reason"]
+        if status in open_runs:
+            open_runs[status] += int(row["runs"] or 0)
+        elif reason:
+            by_exit_reason[reason] = by_exit_reason.get(reason, 0) + int(
+                row["runs"] or 0
+            )
+    return WorkflowRunSummary(
+        runs=runs,
+        by_exit_reason=by_exit_reason,
+        open=open_runs,
+        median_minutes_to_exit=median,
+        recovered_amount=recovered,
     )

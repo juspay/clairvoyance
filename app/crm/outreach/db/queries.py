@@ -445,6 +445,7 @@ def cancel_open_runs_query(
     exit_reason: str,
     occurred_at: Optional[datetime] = None,
     key: Optional[Tuple[str, str]] = None,
+    context_patch: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Any]]:
     """Goal-cancel (canon: the goal event resolves OPEN enrolments — open
     is waiting or parked; a parked run she has already satisfied must not
@@ -463,18 +464,12 @@ def cancel_open_runs_query(
 
     Keyed (phase 06): ``key = (run field, value)`` ends only the run the
     letter is about (context cart_token = the order's cart_token); the
-    unkeyed form is byte-identical to before."""
-    keyed = "AND context->>$6 = $7" if key else ""
-    query = f"""
-        UPDATE {ENROLLMENT_TABLE}
-        SET status = 'exited', exit_reason = $4, exited_at = now(),
-            wake_at = NULL
-        WHERE merchant_id = $1 AND workflow_id = $2 AND customer_id = $3
-          AND status <> 'exited'
-          AND ($5::timestamptz IS NULL OR COALESCE((context->>'entered_event_at')::timestamptz, entered_at) < $5::timestamptz)
-          {keyed}
-        RETURNING id
-    """
+    unkeyed form is byte-identical to before.
+
+    ``context_patch`` (phase 09) rides the same UPDATE — context ||
+    $n::jsonb — so the run remembers which letter ended it and what it
+    was worth (context.goal), for the summary's recovered revenue. Its
+    placeholder follows the optional key."""
     params: List[Any] = [
         merchant_id,
         workflow_id,
@@ -482,8 +477,24 @@ def cancel_open_runs_query(
         exit_reason,
         occurred_at,
     ]
+    keyed = ""
     if key:
+        keyed = "AND context->>$6 = $7"
         params.extend([key[0], key[1]])
+    patched = ""
+    if context_patch is not None:
+        patched = f", context = context || ${len(params) + 1}::jsonb"
+        params.append(json.dumps(context_patch))
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET status = 'exited', exit_reason = $4, exited_at = now(),
+            wake_at = NULL{patched}
+        WHERE merchant_id = $1 AND workflow_id = $2 AND customer_id = $3
+          AND status <> 'exited'
+          AND ($5::timestamptz IS NULL OR COALESCE((context->>'entered_event_at')::timestamptz, entered_at) < $5::timestamptz)
+          {keyed}
+        RETURNING id
+    """
     return query, params
 
 
@@ -529,6 +540,61 @@ def resume_run_query(
         RETURNING {_RUN_COLUMNS}
     """
     return query, [merchant_id, workflow_id, run_id]
+
+
+def workflow_summary_query(
+    merchant_id: str,
+    workflow_id: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> Tuple[str, List[Any]]:
+    """The plan's report (rollout phase 09, G9) in ONE statement. Grouping
+    sets give two kinds of row at once: one per (status, exit_reason) —
+    the open counts and the exits by reason — and the () row for the whole
+    window: total runs, the median minutes from entry to exit over the
+    finished ones, and the recovered amount (context.goal.amount summed
+    over goal_met rows, behind a numeric regex so a stray value can never
+    break the read). GROUPING() tells the decoder which row is which. The
+    window bounds entered_at; NULL bounds mean all time."""
+    query = f"""
+        SELECT status, exit_reason,
+               GROUPING(status, exit_reason) AS grouping_level,
+               count(*) AS runs,
+               percentile_cont(0.5) WITHIN GROUP (
+                   ORDER BY EXTRACT(EPOCH FROM (exited_at - entered_at)) / 60.0
+               ) FILTER (WHERE status = 'exited') AS median_minutes_to_exit,
+               sum(CASE WHEN exit_reason = 'goal_met'
+                         AND (context->'goal'->>'amount') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                        THEN (context->'goal'->>'amount')::numeric END) AS recovered_amount
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2
+          AND ($3::timestamptz IS NULL OR entered_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR entered_at < $4::timestamptz)
+        GROUP BY GROUPING SETS ((status, exit_reason), ())
+    """
+    return query, [merchant_id, workflow_id, since, until]
+
+
+_RUN_COLUMNS_OF_E = ", ".join(f"e.{c.strip()}" for c in _RUN_COLUMNS.split(","))
+
+
+def customer_runs_query(
+    merchant_id: str, customer_id: str, limit: int
+) -> Tuple[str, List[Any]]:
+    """The customer's journey (rollout phase 09): her runs across EVERY
+    plan in the order they began, each naming its plan — the loan funnel's
+    journey view while it runs as clocks. Both tables are outreach's; the
+    customer index carries the read."""
+    query = f"""
+        SELECT {_RUN_COLUMNS_OF_E}, w.name AS workflow_name
+        FROM {ENROLLMENT_TABLE} e
+        JOIN {WORKFLOW_TABLE} w
+          ON w.merchant_id = e.merchant_id AND w.id = e.workflow_id
+        WHERE e.merchant_id = $1 AND e.customer_id = $2
+        ORDER BY e.entered_at, e.id
+        LIMIT $3
+    """
+    return query, [merchant_id, customer_id, limit]
 
 
 def sweep_exited_runs_query(cutoff: datetime, batch: int) -> Tuple[str, List[Any]]:

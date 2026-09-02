@@ -24,5 +24,8 @@ router.include_router(record_api.journey_router, prefix="/customers", tags=["Jou
 router.include_router(record_api.ingest_router, prefix="/ingest", tags=["Ingest"])
 router.include_router(outreach_api.router, prefix="/workflows", tags=["Workflows"])
 router.include_router(
+    outreach_api.customer_router, prefix="/customers", tags=["Workflows"]
+)
+router.include_router(
     connectivity_api.router, prefix="/connectors", tags=["Connectors"]
 )

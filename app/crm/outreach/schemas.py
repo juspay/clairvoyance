@@ -168,6 +168,19 @@ class Workflow(WorkflowSummary):
     draft: Optional[Dict[str, Any]]
 
 
+class WorkflowRunSummary(BaseModel):
+    """One plan's runs over a window (rollout phase 09, G9): how many
+    started, how they ended, what is still in flight, how long they took,
+    and what the recovered ones were worth. ``WorkflowSummary`` is the
+    list shape, hence the name."""
+
+    runs: int
+    by_exit_reason: Dict[str, int]
+    open: Dict[str, int]
+    median_minutes_to_exit: Optional[float]
+    recovered_amount: Optional[float]
+
+
 class EnrollmentRun(BaseModel):
     """One person's run — the token (canon T20)."""
 
@@ -186,3 +199,10 @@ class EnrollmentRun(BaseModel):
     enrollment_key: str
     attempts: int
     last_error: Optional[str]
+
+
+class CustomerRun(EnrollmentRun):
+    """A run as the customer's journey lists it — across every plan, so
+    each row says which plan it belongs to (rollout phase 09)."""
+
+    workflow_name: str

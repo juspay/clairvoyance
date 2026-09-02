@@ -166,6 +166,46 @@ def cancels(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Any, ...]]:
     return calls
 
 
+def test_the_goal_cancel_stashes_the_goal_event_with_its_amount(
+    cancels: List[Tuple[Any, ...]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 09: the run remembers which letter ended it — and how much it
+    was worth, when the payload says so as a number — so the summary can
+    sum recovered revenue without re-reading the spine."""
+    patches: List[Any] = []
+
+    async def cancel_open_runs(*args: Any) -> int:
+        patches.append(args[6] if len(args) > 6 else None)
+        return 1
+
+    monkeypatch.setattr(entry.accessor, "cancel_open_runs", cancel_open_runs)
+    asyncio.run(
+        consume_attributed_event(
+            _order({"cart_token": "chk-1", "total_price": "1850.00"}), "c-1", {}
+        )
+    )
+    assert (
+        patches
+        == [
+            {
+                "goal": {
+                    "topic": "orders/create",
+                    "event_id": "ev-order",
+                    "amount": "1850.00",
+                }
+            }
+        ]
+        * 2
+    )  # both tiers' cancels carry it; only goal_met rows are summed
+    patches.clear()
+    asyncio.run(
+        consume_attributed_event(
+            _order({"cart_token": "chk-1", "total_price": "n/a"}), "c-1", {}
+        )
+    )
+    assert patches[0] == {"goal": {"topic": "orders/create", "event_id": "ev-order"}}
+
+
 def test_an_order_carrying_the_cart_token_is_judged_keyed_first(
     cancels: List[Tuple[Any, ...]],
 ) -> None:
