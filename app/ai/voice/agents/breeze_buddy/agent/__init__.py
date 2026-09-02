@@ -50,8 +50,8 @@ from app.ai.voice.agents.breeze_buddy.agent.transport import (
 )
 from app.ai.voice.agents.breeze_buddy.agent.utils import (
     end_call_with_errors,
+    prepare_initial_greeting_daily,
     send_initial_greeting,
-    send_initial_greeting_daily,
 )
 from app.ai.voice.agents.breeze_buddy.chat.voice_bridge import WidgetVoiceBridge
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
@@ -1100,15 +1100,19 @@ class Agent:
         # respond_immediately=False — same downstream behavior as telephony.
         # (Stream mode returned above — its greeting is spoken by the voice
         # bridge, not injected into an LLM context.)
-        if self.is_daily_mode and not self.is_stream_mode and self.task:
-            greeting_result = await send_initial_greeting_daily(
-                task=self.task,
+        # The audio itself is only queued after flow init below
+        daily_greeting_audio = None
+        daily_greeting_commit = None
+        if self.is_daily_mode and not self.is_stream_mode and self.transport:
+            greeting_result = await prepare_initial_greeting_daily(
                 lead=self.lead,
                 template=self.template,
                 errors=self.errors,
             )
             self.greeting_source = greeting_result.source
             self.greeting_text = greeting_result.text
+            daily_greeting_audio = greeting_result.audio
+            daily_greeting_commit = greeting_result.commit
 
             # Gemini Live + played greeting (Daily variant): the service was
             # built before the client connected, so apply the no-initial-
@@ -1188,6 +1192,18 @@ class Agent:
 
         await self.flow_manager.initialize(initial_node_config)
         logger.info(f"FlowManager initialized at node: {initial_node_name}")
+
+        # Daily greeting playback, strictly after flow init: initialize() only
+        # returns once the initial node's "function" pre-actions (mute_stt) have
+        # reached the end of the pipeline, so the mute window now starts when the
+        # greeting starts — as it does on telephony — instead of when it ends.
+        if daily_greeting_audio is not None and self.transport:
+            await self.transport.output().queue_frame(daily_greeting_audio)
+            logger.info(
+                f"Queued Daily initial greeting (source={self.greeting_source})"
+            )
+            if daily_greeting_commit is not None:
+                await daily_greeting_commit()
 
     # ══════════════════════════════════════════════════════════════════════
     # Run loop & pipeline generation
