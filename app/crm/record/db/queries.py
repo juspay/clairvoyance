@@ -44,16 +44,33 @@ def insert_event_query(
 
 def claim_pending_events_query(limit: int) -> Tuple[str, List[Any]]:
     """The lock IS the claim: FOR UPDATE SKIP LOCKED means concurrent
-    event-worker replicas never fight over the same row. Ordered by
-    received_at to match crm_event_raw_pending_ix (T13)."""
+    event-worker replicas never fight over the same row, and the lock is
+    held by the enclosing transaction (_pass_in_txn) until its commit.
+    Ordered by received_at to match crm_event_raw_pending_ix (T13) — the
+    CTE keeps that order on the rows handed back, which an UPDATE's
+    RETURNING alone does not promise.
+
+    The claim SPENDS an attempt (migration 062; the enrollment claim's
+    shape, 058): counted by the claim, not by the failure, so a crash
+    mid-row counts against the row and a poison row can no longer hide
+    at the head of the queue — the worker quarantines it once attempts
+    reach CRM_EVENT_MAX_ATTEMPTS."""
     query = f"""
-        SELECT id, merchant_id, source, topic, schema_version, external_id,
-               payload, received_at, occurred_at, customer_id
-        FROM {EVENT_RAW_TABLE}
-        WHERE processed_at IS NULL
-        ORDER BY received_at
-        LIMIT $1
-        FOR UPDATE SKIP LOCKED
+        WITH claimed AS (
+            UPDATE {EVENT_RAW_TABLE}
+            SET attempts = attempts + 1
+            WHERE id IN (
+                SELECT id FROM {EVENT_RAW_TABLE}
+                WHERE processed_at IS NULL
+                ORDER BY received_at
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, merchant_id, source, topic, schema_version,
+                      external_id, payload, received_at, occurred_at,
+                      customer_id, attempts
+        )
+        SELECT * FROM claimed ORDER BY received_at
     """
     return query, [limit]
 

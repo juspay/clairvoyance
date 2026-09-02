@@ -490,6 +490,11 @@ CRM_ROLE = os.environ.get("CRM_ROLE", "api").lower()
 CRM_WORKER_INTERVAL = _positive_float("CRM_WORKER_INTERVAL", 1.0)
 CRM_WORKER_BATCH = _positive_int("CRM_WORKER_BATCH", 100)
 CRM_WORKER_HEARTBEAT = _positive_float("CRM_WORKER_HEARTBEAT", 60.0)
+# Event worker: every claim spends one attempt on the row (migration 062,
+# the enrollment.attempts shape); a row whose consumer still raises at
+# this count is quarantined instead of sitting at the head of the queue
+# forever. Replay (clear processed_at/quarantine_reason) re-drives it.
+CRM_EVENT_MAX_ATTEMPTS = _positive_int("CRM_EVENT_MAX_ATTEMPTS", 5)
 
 # CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; pacing rides
 # CRM_WORKER_INTERVAL, but the batch is its own dial below). send() reaches

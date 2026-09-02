@@ -40,7 +40,8 @@ class Extracted(BaseModel):
 
 class RawEvent(BaseModel):
     """One claimed crm_event_raw row (T13). processed_at/quarantine_reason
-    aren't modeled: a claimed row is always still pending."""
+    aren't modeled: a claimed row is always still pending. ``attempts``
+    already counts the claim that handed the row over (062)."""
 
     id: str
     merchant_id: str
@@ -52,6 +53,7 @@ class RawEvent(BaseModel):
     received_at: datetime
     occurred_at: Optional[datetime] = None
     customer_id: Optional[str] = None
+    attempts: int = 0
 
 
 class EventIn(BaseModel):

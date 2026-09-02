@@ -76,3 +76,8 @@ Rules the template encodes:
   a deploy, never a migration.
 - Accessors reach these tables only through
   `app.crm.shared.db.crm_transaction()`.
+- On `crm_event_raw` the envelope columns (`processed_at`,
+  `quarantine_reason`, `customer_id`, `attempts`) are the only mutable
+  ones — the 051 immutability trigger (amended in 062) refuses every
+  ingestion field, and `attempts` is spent by the claim so a poison row
+  quarantines after `CRM_EVENT_MAX_ATTEMPTS` instead of looping forever.
