@@ -10,9 +10,11 @@ from app.crm.connectivity.db.decoders.installation import (
 from app.crm.connectivity.db.queries.installation import (
     installation_by_account_query,
     installation_by_id_query,
+    installation_for_inbound_query,
     installation_read_by_id_query,
     list_installations_query,
     revoke_installation_query,
+    update_installation_health_query,
     upsert_installation_query,
 )
 from app.crm.connectivity.schemas.connector import (
@@ -95,5 +97,34 @@ async def revoke_installation(
 ) -> Optional[InstallationRead]:
     """None = not this merchant's installation (fail closed on tenancy)."""
     query, values = revoke_installation_query(merchant_id, installation_id)
+    row = await conn.fetchrow(query, *values)
+    return decode_installation_read(row) if row is not None else None
+
+
+async def get_installation_for_inbound(
+    connector_key: str, external_account_id: str
+) -> Optional[ConnectorInstallation]:
+    """Whose account a provider-level fact arrived about — the merchant is
+    the ANSWER, not a parameter (installation_for_inbound_query says why it
+    has no merchant)."""
+    query, values = installation_for_inbound_query(connector_key, external_account_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_installation(row) if row is not None else None
+
+
+async def update_installation_health(
+    conn: DbTxn,
+    merchant_id: str,
+    installation_id: str,
+    *,
+    status: str,
+    health_detail: str,
+) -> Optional[InstallationRead]:
+    """Re-stamp status + health_detail together. None = not this merchant's
+    installation, or a revoked one (fail closed on both)."""
+    query, values = update_installation_health_query(
+        merchant_id, installation_id, status, health_detail
+    )
     row = await conn.fetchrow(query, *values)
     return decode_installation_read(row) if row is not None else None

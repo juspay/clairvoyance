@@ -17,6 +17,10 @@ checks above. The same fact, greppable:
 
     grep -rn "connectivity.providers" app/ | grep -v "^app/crm/connectivity/providers/"
 
+The other roots (connectors.py, ingress.py) are allowed because neither
+sends a message — the law protects the path to a customer, not every call
+to a vendor.
+
 Two things this file deliberately does NOT do:
 
   · Decide what a failure means. It reports; dispatch.py's retry ladder

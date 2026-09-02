@@ -411,3 +411,84 @@ async def _disconnect_in_txn(
         f"{len(paused)} binding(s) paused"
     )
     return installation
+
+
+async def resubscribe(
+    merchant_id: str, installation_id: str
+) -> Optional[InstallationRead]:
+    """Turn a connected account's webhooks (back) on — the recovery door.
+
+    Onboarding subscribes on its happy path but cannot run again: its
+    Embedded Signup code is one-shot. So a handshake that authenticated but
+    could not subscribe, or an account the provider quietly unsubscribed,
+    gets just the subscription step re-run from stored credentials —
+    ``disconnect`` with the opposite verb, same gather, then an atom that
+    re-stamps health.
+
+    Returns None when the installation is not this merchant's (fail closed
+    on tenancy, exactly like disconnect). Raises OnboardingError with a
+    sentence a merchant can act on for every other refusal — a silently
+    failed subscription looks healthy until somebody wonders why no events
+    ever arrive.
+    """
+    installation = await installation_accessor.get_installation(
+        merchant_id, installation_id
+    )
+    if installation is None:
+        return None
+
+    spec = connector_for(installation.connector_key)
+    if spec is None:
+        # Refusing beats guessing: running Meta's call against a connector
+        # that has no subscription step would send a request nothing there
+        # understands.
+        raise OnboardingError(
+            f"This account is a '{installation.connector_key}' connector, "
+            f"which has no webhook subscription to turn on."
+        )
+    if not installation.external_account_id:
+        raise OnboardingError("This account has no provider account id to subscribe.")
+
+    try:
+        bundle = await accounts.bundle_for(installation)
+    except accounts.AccountError:
+        # Vault row gone, deactivated, or undecryptable — one fact from
+        # here: no usable secret to subscribe with. (A vault OUTAGE raises
+        # past this except and surfaces as the route's 500, never as
+        # "reconnect your account" advice for a healthy credential.)
+        raise OnboardingError(
+            "This account's credentials are missing or unreadable. "
+            "Reconnect it first."
+        )
+
+    try:
+        await spec.onboarder.resubscribe(bundle, installation.external_account_id)
+    except ConnectorHandshakeError as e:
+        # The provider's own refusal, passed through: the merchant's "why"
+        # gets the provider's words, not our paraphrase.
+        logger.error(f"resubscribe: {installation.connector_key} refused — {e}")
+        raise OnboardingError(str(e)) from e
+
+    return await atomically(_resubscribe_in_txn, merchant_id, installation_id)
+
+
+async def _resubscribe_in_txn(
+    txn: DbTxn, merchant_id: str, installation_id: str
+) -> Optional[InstallationRead]:
+    """ATOMIC: the provider confirmed the subscription and the door's light
+    must say so in the same breath — a successful recovery that left the row
+    'degraded' would keep every send refusing (send fails closed on anything
+    but 'healthy'), and a health_detail whose why is now false contradicts
+    canon T11 (the light never contradicts the sentence)."""
+    detail = {
+        "level": "subscribed",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "why": None,
+    }
+    return await installation_accessor.update_installation_health(
+        txn,
+        merchant_id,
+        installation_id,
+        status=_STATUS_FOR_HEALTH["subscribed"],
+        health_detail=json.dumps(detail),
+    )

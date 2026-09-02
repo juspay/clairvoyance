@@ -30,11 +30,11 @@ PR time — earlier than a grant would fail:
   10. HANDLES STAY DOWN — connection()/crm_connection never appears in
      logic; accessors self-scope single statements and batch loops. A
      logic file touches a handle ONLY as an _in_txn body's txn param.
-  11. PROVIDER FACE CONFINEMENT — a provider package has more than one
-     face, and each face has exactly ONE composition root outside
-     providers/: the send door (the ADAPTERS assembly and <x>/adapter.py)
-     answers to send.py, the non-send faces (<x>/onboard.py,
-     <x>/templates.py) answer to connectors.py, and vendor transport
+  11. PROVIDER FACE CONFINEMENT — each provider face has exactly ONE
+     composition root outside providers/: the send door (the ADAPTERS
+     assembly and <x>/adapter.py) answers to send.py; <x>/onboard.py and
+     <x>/templates.py to connectors.py; <x>/inbound.py to ingress.py
+     (record's webhook bays, built here); and vendor transport
      (providers/meta/graph.py) never leaves providers/ at all.
   12. RECORD HEARS, NEVER CALLS — app/crm/record imports no subscriber
      module (identity + shared only): consumers register through
@@ -83,6 +83,9 @@ TABLE_OWNERS = {
 PROVIDER_ROOTS = {
     "send": "app/crm/connectivity/send.py",
     "connectors": "app/crm/connectivity/connectors.py",
+    # The inbound direction: ingress.py builds the spec record's webhook
+    # bays dispatch to, and is the one reader of a vendor's inbound face.
+    "ingress": "app/crm/connectivity/ingress.py",
 }
 PROVIDER_FACES = (
     # the ADAPTERS assembly itself, and every adapter behind it
@@ -97,8 +100,16 @@ PROVIDER_FACES = (
         re.compile(r"^app\.crm\.connectivity\.providers\.\w+\.templates\b"),
         ("connectors",),
     ),
-    # the ports both roots must name to type what they assemble
-    (re.compile(r"^app\.crm\.connectivity\.providers\.base\b"), ("send", "connectors")),
+    # the inbound face: signature, handshake, envelope -> letters
+    (
+        re.compile(r"^app\.crm\.connectivity\.providers\.\w+\.inbound\b"),
+        ("ingress",),
+    ),
+    # the ports every root must name to type what they assemble
+    (
+        re.compile(r"^app\.crm\.connectivity\.providers\.base\b"),
+        ("send", "connectors"),
+    ),
 )
 
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions

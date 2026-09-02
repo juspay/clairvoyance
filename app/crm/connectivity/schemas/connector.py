@@ -122,3 +122,13 @@ class InstallationRead(BaseModel):
     installed_at: datetime
     created_at: datetime
     updated_at: datetime
+
+
+class SubscriptionResult(BaseModel):
+    """What was resubscribed. The provider's account id is echoed so an
+    operator running the recovery across several accounts can see which one
+    answered."""
+
+    installation_id: str
+    external_account_id: str
+    subscribed: bool = True

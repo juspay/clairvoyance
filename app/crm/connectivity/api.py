@@ -3,7 +3,9 @@ check, delegate to contracts.py.
 
 Mounted at ``/connectors``. The paths carry no internal word (ADR 0022): a
 merchant connecting WhatsApp is connecting a CONNECTOR, which is the noun the
-console, the docs and the corpus all use.
+console, the docs and the corpus all use. The provider webhook bays are NOT
+here — their routes are record's (/ingest/webhooks/{provider}); webhooks.py
+registers this module's mechanics into them.
 
 **The routes are connector-agnostic.** ``POST /{connector_key}/onboard``
 takes a plain body and asks the CONNECTORS registry which model validates it.
@@ -25,7 +27,14 @@ so there is no single "current" one to infer from the token.
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Query,
+    status,
+)
 from pydantic import ValidationError
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -33,7 +42,10 @@ from app.core.logger.context import set_log_context
 from app.crm.auth import assert_merchant_access
 from app.crm.connectivity import contracts
 from app.crm.connectivity.onboarding import OnboardingError, UnknownConnectorError
-from app.crm.connectivity.schemas.connector import InstallationRead
+from app.crm.connectivity.schemas.connector import (
+    InstallationRead,
+    SubscriptionResult,
+)
 from app.crm.connectivity.schemas.template import (
     CreateTemplateDraftRequest,
     EditTemplateRequest,
@@ -52,10 +64,12 @@ router = APIRouter()
 
 
 def _bad_request(error: Exception) -> HTTPException:
+    """The caller's mistake, with the reason."""
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
 
 
 def _not_found(error: Exception) -> HTTPException:
+    """An absence, with the reason."""
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
 
 
@@ -105,6 +119,7 @@ async def list_installations_route(
     merchant_id: str = Query(..., description="Tenant scope — required"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ) -> List[InstallationRead]:
+    """Every connected account this merchant holds."""
     assert_merchant_access(current_user, merchant_id, "list connections")
     set_log_context(component="crm.connectivity.installations", merchant_id=merchant_id)
     return await contracts.list_installations(merchant_id)
@@ -116,6 +131,7 @@ async def get_installation_route(
     merchant_id: str = Query(..., description="Tenant scope — required"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ) -> InstallationRead:
+    """One connected account, merchant-scoped."""
     assert_merchant_access(current_user, merchant_id, "read a connection")
     set_log_context(component="crm.connectivity.installations", merchant_id=merchant_id)
     installation = await contracts.get_installation(merchant_id, installation_id)
@@ -134,6 +150,7 @@ async def disconnect_route(
     merchant_id: str = Query(..., description="Tenant scope — required"),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ) -> InstallationRead:
+    """Revoke a connected account; its pipes pause with it."""
     assert_merchant_access(current_user, merchant_id, "disconnect a connection")
     set_log_context(component="crm.connectivity.disconnect", merchant_id=merchant_id)
     installation = await contracts.disconnect(merchant_id, installation_id)
@@ -254,3 +271,37 @@ async def retire_template_route(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except TemplateError as e:
         raise _bad_request(e) from e
+
+
+@router.post(
+    "/installations/{installation_id}/subscribe",
+    response_model=SubscriptionResult,
+)
+async def subscribe_installation_route(
+    installation_id: str,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> SubscriptionResult:
+    """(Re)subscribe this connected account to our app's webhooks.
+
+    Onboarding subscribes on its happy path; this is the RECOVERY door — a
+    handshake that could not subscribe, or an account the provider quietly
+    unsubscribed — and it spends no fresh signup code, which re-onboarding
+    would require. 409 on refusal: understood and deliberately declined,
+    with a message the caller can act on. Success re-stamps the door's
+    health in the same act, so sends resolve again without a second button.
+    """
+    assert_merchant_access(current_user, merchant_id, "subscribe a connection")
+    set_log_context(component="crm.connectivity.subscribe", merchant_id=merchant_id)
+    try:
+        installation = await contracts.resubscribe(merchant_id, installation_id)
+    except OnboardingError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    if installation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found"
+        )
+    return SubscriptionResult(
+        installation_id=installation_id,
+        external_account_id=installation.external_account_id or "",
+    )

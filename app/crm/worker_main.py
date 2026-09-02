@@ -53,7 +53,7 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         dispatch_send,
         interval=CRM_WORKER_INTERVAL,
         # Its own dial, not CRM_WORKER_BATCH: a claimed batch must finish
-        # inside the claim lease (batch × send timeout < lease), or another
+        # inside the claim lease (batch x send timeout < lease), or another
         # pod's sweep re-sends the unworked tail — a real duplicate message.
         batch=CRM_DISPATCH_BATCH,
         stop_event=stop_event,

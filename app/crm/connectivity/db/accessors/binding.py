@@ -12,6 +12,7 @@ from app.crm.connectivity.db.queries.binding import (
     binding_by_address_query,
     binding_by_id_query,
     has_active_primary_binding_query,
+    inbound_binding_query,
     pause_bindings_for_installation_query,
     primary_binding_query,
     upsert_binding_query,
@@ -107,3 +108,15 @@ async def pause_bindings_for_installation(
     query, values = pause_bindings_for_installation_query(merchant_id, installation_id)
     rows = await conn.fetch(query, *values)
     return [decode_binding(row) for row in rows]
+
+
+async def get_binding_for_inbound(
+    channel: str, address: str
+) -> Optional[ChannelBinding]:
+    """Whose endpoint an inbound fact arrived on — the merchant is the ANSWER
+    here, not a parameter, so this is the one lookup that cannot be scoped by
+    it (see inbound_binding_query for the index that keeps it unambiguous)."""
+    query, values = inbound_binding_query(channel, address)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None

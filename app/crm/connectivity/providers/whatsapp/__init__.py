@@ -1,12 +1,15 @@
 """WhatsApp, straight at Meta's Cloud API — no aggregator in between.
 
-Four faces, one package:
+One package, its faces:
 
     adapter.py    the send door's child of ChannelAdapter
     classify.py   Meta's error codes, split by "could this succeed later?"
     payload.py    E.164 -> Meta's digits, variables -> template parameters
     onboard.py    Embedded Signup: code -> token -> number -> subscription
     templates.py  the WABA template registry face
+
+The inbound direction is NOT here: Meta's callbacks arrive per APP, not per
+product, so that face is vendor-level — providers/meta/inbound.py.
 
 Only the bundle keys live here, because both the send face and the onboarding
 face need them and neither may own them: onboarding WRITES the bundle,
