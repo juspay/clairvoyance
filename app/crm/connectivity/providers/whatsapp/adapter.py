@@ -42,10 +42,17 @@ from app.crm.connectivity.reasons import (
 from app.crm.connectivity.schemas import QueuedMessage, SendOutcome, SendRoute
 from app.crm.shared.redact import mask_address, mask_digit_runs
 
-# The Cloud API's own default, used only when the route resolved no language
-# — which the T23 lookup makes impossible for an approved template. It exists
-# so a future channel that does not pre-register templates cannot crash here.
+# The Cloud API's own default, used only when the route carries no registry
+# row — which the T23 lookup makes impossible on this channel, since WhatsApp
+# registers templates and the send door refuses before reaching here without
+# an approved one. Kept as the honest fallback rather than an assertion.
 DEFAULT_LANGUAGE = "en_US"
+
+
+def _language_of(route: SendRoute) -> str:
+    """The locale the registry approved this template in — WhatsApp's field
+    on the channel-neutral route."""
+    return route.template.language if route.template else DEFAULT_LANGUAGE
 
 
 class MetaWhatsAppAdapter(ChannelAdapter):
@@ -125,10 +132,7 @@ class MetaWhatsAppAdapter(ChannelAdapter):
             return SendOutcome(status="blocked", reason=REASON_BAD_VARIABLES)
 
         payload = build_send_body(
-            message.template_id,
-            route.template_language or DEFAULT_LANGUAGE,
-            recipient,
-            parameters,
+            message.template_id, _language_of(route), recipient, parameters
         )
         url = self.endpoint(route.binding.address)
 
@@ -160,10 +164,7 @@ class MetaWhatsAppAdapter(ChannelAdapter):
         which locale a merchant's template was actually approved in.
         """
         return build_send_body(
-            message.template_id or "",
-            route.template_language or DEFAULT_LANGUAGE,
-            recipient,
-            parameters,
+            message.template_id or "", _language_of(route), recipient, parameters
         )
 
     def read_response(

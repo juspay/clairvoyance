@@ -40,9 +40,15 @@ def decode_template(row: Mapping[str, Any]) -> TemplateRead:
 
 
 def decode_approved_template(row: Mapping[str, Any]) -> ApprovedTemplate:
-    """The send path's narrow read: which locale this approved name is in.
+    """The send path's narrow read: the facts an adapter needs to send.
 
     Deliberately not TemplateRead — the send path runs per message and has no
     use for a components blob it will never render.
     """
-    return ApprovedTemplate(id=str(row["id"]), language=row["language"])
+    return ApprovedTemplate(
+        id=str(row["id"]),
+        name=row["name"],
+        language=row["language"],
+        provider_template_id=row["provider_template_id"],
+        category=row["category"],
+    )

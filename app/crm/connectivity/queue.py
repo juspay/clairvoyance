@@ -12,14 +12,12 @@ producer as the owner of the validating dictionary.
 
 from typing import Any, Dict, Optional
 
+from app.crm.connectivity.channels import gate_handle_kind_for
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
 # T16 col 7. What caused the send; every funnel groups on this.
 SOURCE_KINDS = ("broadcast", "workflow", "agent", "transactional")
-
-# Channels whose address is a phone number; everything else is an email.
-_PHONE_CHANNELS = ("whatsapp", "sms", "voice", "rcs")
 
 # Purpose roots the gate's caps are set per (design/gate-mechanics.md §3);
 # the full dotted list is permission's (canon T14 CK), not ours.
@@ -29,10 +27,20 @@ PURPOSE_ROOTS = ("marketing", "utility", "transactional", "authentication")
 def normalize_address(channel: str, address: str) -> Optional[str]:
     """PURE: the writer normalizes (E.164 / lowercased email). A format
     mismatch on a suppressed value is how someone who said stop gets
-    contacted, so an unparseable address is refused, never stored."""
-    if channel in _PHONE_CHANNELS:
+    contacted, so an unparseable address is refused, never stored.
+
+    Which normalizer applies is the CHANNELS registry's answer — the same
+    handle kind the gate probes — not a second list kept here. A channel the
+    registry does not know is refused outright: the gate would fail closed on
+    it at dispatch anyway, and a manifest row that can never send is not
+    worth writing.
+    """
+    kind = gate_handle_kind_for(channel)
+    if kind == "phone":
         return normalize_phone(address)
-    return normalize_email(address)
+    if kind == "email":
+        return normalize_email(address)
+    return None
 
 
 def validate_proposal(source_kind: str, purpose_key: str) -> None:
