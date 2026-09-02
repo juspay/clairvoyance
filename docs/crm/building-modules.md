@@ -8,7 +8,7 @@ corpus wins. Migration conventions: [migrations.md](./migrations.md).
 
 ## The module skeleton (sealed — every `app/crm/<module>/` looks like this)
 
-```
+```text
 app/crm/<module>/
   __init__.py    # empty — exports NOTHING
   contracts.py   # THE public surface — re-exports from the logic files;
@@ -32,12 +32,12 @@ app/crm/<module>/
 form connectivity carries today, and the one a module takes on its next `db/`
 touch once one file would hold four tables or cross the ~500-line line:
 
-```
+```text
   db/
     __init__.py                  the door, unchanged
-    queries/    installation.py · binding.py · message.py
-    accessors/  installation.py · binding.py · message.py
-    decoders/   installation.py · binding.py · message.py
+    queries/    installation.py · binding.py · template.py · message.py
+    accessors/  installation.py · binding.py · template.py · message.py
+    decoders/   installation.py · binding.py · template.py · message.py
 ```
 
 Shared column lists move with their table. Import the table you mean by its

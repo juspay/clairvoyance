@@ -18,14 +18,12 @@ own onboarding. This is a deliberate early move to merchant-facing access
 (ADR 0007 rules phase 1 admin/S2S-only); admins still pass, so the pilot is
 unaffected.
 
-The template routes join this router with the template registry.
-
 ``merchant_id`` rides in the request — body for a POST, query for a GET — and
 is checked before anything else runs. A caller may hold several merchant_ids,
 so there is no single "current" one to infer from the token.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import ValidationError
@@ -35,7 +33,15 @@ from app.core.logger.context import set_log_context
 from app.crm.auth import assert_merchant_access
 from app.crm.connectivity import contracts
 from app.crm.connectivity.onboarding import OnboardingError, UnknownConnectorError
-from app.crm.connectivity.schemas import InstallationRead
+from app.crm.connectivity.schemas import (
+    CreateTemplateDraftRequest,
+    EditTemplateRequest,
+    InstallationRead,
+    RetireTemplateRequest,
+    SubmitTemplateRequest,
+    TemplateRead,
+)
+from app.crm.connectivity.templates import TemplateError, TemplateNotFoundError
 from app.schemas import UserInfo
 
 router = APIRouter()
@@ -134,3 +140,111 @@ async def disconnect_route(
             status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found"
         )
     return installation
+
+
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+#
+# No connector in these paths: the row's `channel` decides which provider
+# serves it, and the route never needs to know.
+
+
+@router.post("/templates", response_model=TemplateRead)
+async def create_template_route(
+    req: CreateTemplateDraftRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> TemplateRead:
+    assert_merchant_access(current_user, req.merchant_id, "create a template")
+    set_log_context(component="crm.connectivity.templates", merchant_id=req.merchant_id)
+    try:
+        return await contracts.create_template_draft(
+            req.merchant_id,
+            req.channel,
+            req.provider_account_ref,
+            req.name,
+            req.language,
+            req.components,
+        )
+    except TemplateError as e:
+        raise _bad_request(e) from e
+
+
+@router.get("/templates", response_model=List[TemplateRead])
+async def list_templates_route(
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    channel: Optional[str] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> List[TemplateRead]:
+    assert_merchant_access(current_user, merchant_id, "list templates")
+    set_log_context(component="crm.connectivity.templates", merchant_id=merchant_id)
+    return await contracts.list_templates(merchant_id, channel, status_filter)
+
+
+@router.get("/templates/{template_id}", response_model=TemplateRead)
+async def get_template_route(
+    template_id: str,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> TemplateRead:
+    assert_merchant_access(current_user, merchant_id, "read a template")
+    set_log_context(component="crm.connectivity.templates", merchant_id=merchant_id)
+    template = await contracts.get_template(merchant_id, template_id)
+    if template is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Template not found"
+        )
+    return template
+
+
+@router.post("/templates/{template_id}/submit", response_model=TemplateRead)
+async def submit_template_route(
+    template_id: str,
+    req: SubmitTemplateRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> TemplateRead:
+    assert_merchant_access(current_user, req.merchant_id, "submit a template")
+    set_log_context(component="crm.connectivity.templates", merchant_id=req.merchant_id)
+    try:
+        return await contracts.submit_template(
+            req.merchant_id, template_id, req.category
+        )
+    except TemplateNotFoundError as e:
+        raise _not_found(e) from e
+    except TemplateError as e:
+        raise _bad_request(e) from e
+
+
+@router.patch("/templates/{template_id}", response_model=TemplateRead)
+async def edit_template_route(
+    template_id: str,
+    req: EditTemplateRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> TemplateRead:
+    assert_merchant_access(current_user, req.merchant_id, "edit a template")
+    set_log_context(component="crm.connectivity.templates", merchant_id=req.merchant_id)
+    try:
+        return await contracts.edit_template(
+            req.merchant_id, template_id, req.components
+        )
+    except TemplateNotFoundError as e:
+        raise _not_found(e) from e
+    except TemplateError as e:
+        raise _bad_request(e) from e
+
+
+@router.post("/templates/{template_id}/retire", response_model=TemplateRead)
+async def retire_template_route(
+    template_id: str,
+    req: RetireTemplateRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> TemplateRead:
+    assert_merchant_access(current_user, req.merchant_id, "retire a template")
+    set_log_context(component="crm.connectivity.templates", merchant_id=req.merchant_id)
+    try:
+        return await contracts.retire_template(req.merchant_id, template_id)
+    except TemplateNotFoundError as e:
+        raise _not_found(e) from e
+    except TemplateError as e:
+        raise _bad_request(e) from e

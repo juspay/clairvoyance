@@ -783,7 +783,7 @@ async def PLIVO_INR_CONVERSION_RATE() -> float:
 
 # ----------------------------------------------------------------------------
 # CRM connectivity — the ceiling on ONE non-send Graph call (the Embedded
-# Signup handshake today; template registration next).
+# Signup handshake, and registering a message template).
 #
 # Dynamic rather than static by this file's own rule: it is awaited on every
 # call and nothing binds it at startup, so a Redis change takes effect on the

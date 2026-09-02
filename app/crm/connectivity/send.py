@@ -3,9 +3,11 @@
 Everything that must be true before a message reaches a person is checked
 here, once, for every channel: the gate granted it, the channel has an
 adapter, the merchant has a live pipe, the account behind it is healthy, its
-credentials decrypt. Any of those missing REFUSES the send — nothing falls
+credentials decrypt, and the template it names is APPROVED on that account
+(ADR 0011). Any of those missing REFUSES the send — nothing falls
 through to a default, because every plausible default (another number,
-another account) contacts somebody in a way they did not agree to.
+another account, another locale) contacts somebody in a way they did not
+agree to.
 
 The route is assembled here and handed to the adapter whole, which is what
 lets an adapter be tested without a database. Adapters live behind
@@ -29,6 +31,7 @@ from typing import Optional, Union
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
+from app.crm.connectivity import accounts, templates
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
@@ -42,28 +45,21 @@ from app.crm.connectivity.reasons import (
     REASON_NO_BINDING,
     REASON_NO_CREDENTIAL,
     REASON_NO_INSTALLATION,
+    REASON_NO_TEMPLATE,
     REASON_SEND_ERROR,
+    REASON_TEMPLATE_NOT_APPROVED,
     REASON_TIMEOUT,
 )
 from app.crm.connectivity.schemas import (
-    CredentialBundle,
     QueuedMessage,
     SendOutcome,
     SendRoute,
     SendToken,
 )
 from app.crm.shared.redact import mask_address
-from app.database.accessor.breeze_buddy.credentials import get_credential_by_id
 
 # All REASON_* words live in reasons.py — one file, one name per failure
 # mode. This door only raises them.
-
-# The only installation state a send may leave through — fail closed on
-# everything else, 'connecting' included. Onboarding (#1038) verifies the
-# token and number against the Graph API and writes the row as 'healthy'
-# directly, so 'connecting' is an unproven connection with no first-send
-# deadlock to earn it an exception.
-SENDABLE_INSTALLATION_STATES = frozenset({"healthy"})
 
 
 def _refused(reason: str) -> SendOutcome:
@@ -93,9 +89,13 @@ def token_grants(token: SendToken, message: QueuedMessage) -> bool:
 
 
 async def resolve_send_route(
-    merchant_id: str, channel: str, binding_id: Optional[str] = None
+    merchant_id: str,
+    channel: str,
+    binding_id: Optional[str] = None,
+    template_name: Optional[str] = None,
 ) -> Union[SendRoute, str]:
-    """Find the pipe, the account and the secrets — or the reason there is none.
+    """Find the pipe, the account, the secrets and the approved template — or
+    the reason there is none.
 
     Returns a SendRoute, or a refusal reason as a string. Not an exception:
     "this merchant has not connected WhatsApp" is an ordinary answer that
@@ -103,13 +103,10 @@ async def resolve_send_route(
 
     Order matters — the binding comes first because it is the merchant-scoped
     anchor, and everything after is reached THROUGH it, so no lookup here can
-    wander into another tenant's rows.
-
-    TODO(T23): once the template registry lands, look the template up here
-    and refuse with blocked/template_not_approved unless it is approved on
-    this account — taking the language from the registry row instead of
-    binding.capabilities (ADR 0011: a non-approved template is refused
-    BEFORE the provider call).
+    wander into another tenant's rows. The template is keyed by the
+    installation's provider account, so it comes after those two — but before
+    the vault, because it is a plain read and the vault read is a KMS
+    decrypt: the cheapest refusal should never pay for the dearest step.
     """
     binding = await binding_accessor.get_binding(merchant_id, channel, binding_id)
     if binding is None:
@@ -122,37 +119,42 @@ async def resolve_send_route(
     )
     if installation is None:
         return REASON_NO_INSTALLATION
-    if installation.status not in SENDABLE_INSTALLATION_STATES:
+    if not accounts.is_usable(installation):
         logger.warning(
             f"connectivity: installation {installation.id} is "
             f"'{installation.status}' — no route for {merchant_id}/{channel}"
         )
         return REASON_INSTALLATION_UNHEALTHY
 
-    if not installation.credential_id:
-        return REASON_NO_CREDENTIAL
-    # The vault (`credentials`) belongs to app/database, so it is read through
-    # ITS accessor, never raw SQL from here (table-ownership law). mask=False:
-    # the adapter needs the real secret, not the API's ****. raise_errors=True:
-    # None must mean "row gone/dead" (terminal below) — a pool blip on this
-    # read has to raise and ride send()'s catch into a retryable send_error,
-    # like the same blip on any other read in this resolver.
-    credential = await get_credential_by_id(
-        installation.credential_id, mask=False, raise_errors=True
+    if not template_name:
+        # The adapter refuses this too, but refusing here keeps the reason on
+        # the near side of the wire for every channel, not just WhatsApp's.
+        return REASON_NO_TEMPLATE
+    # ADR 0011: a non-approved template is refused BEFORE the provider call.
+    # The registry states the fact; the word for "no" is this door's.
+    language = await templates.approved_language(
+        merchant_id, channel, installation.external_account_id, template_name
     )
-    if credential is None or not credential.is_active or not credential.value:
-        # Vault row gone, deactivated, or it would not decrypt (an
-        # undecryptable value decodes as {}) — same thing to this message,
-        # and none of it is worth a retry.
-        return REASON_NO_CREDENTIAL
-    # Ownership cannot be compared HERE: the vault's scope column is
-    # reseller_id — one level above merchant (022) — and this module by law
-    # knows no reseller. The guard is the merchant-scoped installation fetch
-    # above; the onboarding sync that WRITES credential_id owns refusing a
-    # foreign reseller's bundle (NULL = global stays legal).
-    bundle = CredentialBundle(values=credential.value)
+    if language is None:
+        return REASON_TEMPLATE_NOT_APPROVED
 
-    return SendRoute(installation=installation, binding=binding, bundle=bundle)
+    try:
+        # The vault read is a KMS decrypt, so it comes last: the cheapest
+        # refusal should never pay for the dearest step. A DB failure here
+        # RAISES rather than answering "no credential" — it rides send()'s
+        # catch into a retryable send_error, like a blip on any other read.
+        bundle = await accounts.bundle_for(installation)
+    except accounts.AccountError:
+        # Vault row gone, deactivated, or it would not decrypt — none of it
+        # worth a retry.
+        return REASON_NO_CREDENTIAL
+
+    return SendRoute(
+        installation=installation,
+        binding=binding,
+        bundle=bundle,
+        template_language=language,
+    )
 
 
 async def _resolve_and_deliver(
@@ -165,7 +167,10 @@ async def _resolve_and_deliver(
     hung provider — same reassigned row, same double send.
     """
     route = await resolve_send_route(
-        message.merchant_id, message.channel, message.binding_id
+        message.merchant_id,
+        message.channel,
+        message.binding_id,
+        message.template_id,
     )
     if not isinstance(route, SendRoute):
         # No route, and the resolver said why. Its reason is the honest one.

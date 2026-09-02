@@ -42,19 +42,10 @@ from app.crm.connectivity.reasons import (
 from app.crm.connectivity.schemas import QueuedMessage, SendOutcome, SendRoute
 from app.crm.shared.redact import mask_address, mask_digit_runs
 
-# The Cloud API's own default when a binding declares no locale.
-#
-# INTERIM, and named so it is easy to find: which locale a merchant's
-# template was APPROVED in is a fact about the TEMPLATE, and the binding's
-# capabilities blob can disagree with what Meta actually approved. The
-# template registry (T23) is what will answer this, and this read goes away
-# when it does.
+# The Cloud API's own default, used only when the route resolved no language
+# — which the T23 lookup makes impossible for an approved template. It exists
+# so a future channel that does not pre-register templates cannot crash here.
 DEFAULT_LANGUAGE = "en_US"
-
-
-def _language_of(route: SendRoute) -> str:
-    """The locale to render this template in — from the binding, for now."""
-    return str(route.binding.capabilities.get("template_language") or DEFAULT_LANGUAGE)
 
 
 class MetaWhatsAppAdapter(ChannelAdapter):
@@ -134,7 +125,10 @@ class MetaWhatsAppAdapter(ChannelAdapter):
             return SendOutcome(status="blocked", reason=REASON_BAD_VARIABLES)
 
         payload = build_send_body(
-            message.template_id, _language_of(route), recipient, parameters
+            message.template_id,
+            route.template_language or DEFAULT_LANGUAGE,
+            recipient,
+            parameters,
         )
         url = self.endpoint(route.binding.address)
 
@@ -159,9 +153,17 @@ class MetaWhatsAppAdapter(ChannelAdapter):
         route: SendRoute,
         parameters: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """The Cloud API send body for this message on this route."""
+        """The Cloud API send body for this message on this route.
+
+        Language comes from the route, which resolve_send_route() took from
+        the approved template registry row (T23) — the one place that knows
+        which locale a merchant's template was actually approved in.
+        """
         return build_send_body(
-            message.template_id or "", _language_of(route), recipient, parameters
+            message.template_id or "",
+            route.template_language or DEFAULT_LANGUAGE,
+            recipient,
+            parameters,
         )
 
     def read_response(

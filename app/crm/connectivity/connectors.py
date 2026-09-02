@@ -25,9 +25,15 @@ from pydantic import BaseModel
 from app.crm.connectivity.providers.base import (
     ConnectorHandshakeError,
     ConnectorOnboarder,
+    ProviderError,
+    TemplateProvider,
+    TemplateProviderError,
 )
-from app.crm.connectivity.providers.whatsapp.onboard import WhatsappOnboarder
-from app.crm.connectivity.schemas import OnboardWhatsappRequest
+from app.crm.connectivity.providers.whatsapp.onboard import (
+    OnboardWhatsappRequest,
+    WhatsappOnboarder,
+)
+from app.crm.connectivity.providers.whatsapp.templates import WhatsappTemplates
 
 #: Re-exported so onboarding.py can name the error every onboarder raises.
 #: It cannot import providers/base itself — boundary rule 11 gives that file
@@ -36,13 +42,20 @@ __all__ = [
     "CONNECTORS",
     "ConnectorHandshakeError",
     "ConnectorSpec",
+    "ProviderError",
+    "TemplateProviderError",
     "connector_for",
+    "connector_for_channel",
+    "sending_connectors",
 ]
 
 
 @dataclass(frozen=True)
 class ConnectorSpec:
     """Everything the generic code needs to serve one connector."""
+
+    #: The registry key this spec is filed under.
+    key: str
 
     #: The channel its bindings carry, or None for a connector that does not
     #: SEND. Canon T11's vocabulary is shopify · whatsapp · instagram ·
@@ -55,6 +68,7 @@ class ConnectorSpec:
     #: Instagram and Messenger are two connectors on one Meta app.
     channel: Optional[str]
     onboarder: ConnectorOnboarder
+    templates: TemplateProvider
     #: The request model the onboard route validates its body against, so the
     #: route itself stays connector-agnostic.
     request_model: Type[BaseModel]
@@ -64,8 +78,10 @@ class ConnectorSpec:
 # the adapters.
 CONNECTORS: Dict[str, ConnectorSpec] = {
     "whatsapp": ConnectorSpec(
+        key="whatsapp",
         channel="whatsapp",
         onboarder=WhatsappOnboarder(),
+        templates=WhatsappTemplates(),
         request_model=OnboardWhatsappRequest,
     ),
 }
@@ -89,3 +105,24 @@ def sending_connectors() -> Dict[str, ConnectorSpec]:
     would make adding one fail two tests that are about sending.
     """
     return {key: spec for key, spec in CONNECTORS.items() if spec.channel is not None}
+
+
+def connector_for_channel(channel: str) -> Optional[ConnectorSpec]:
+    """The spec serving ``channel``, or None.
+
+    A template row carries a channel, not a connector key, so the template
+    lifecycle resolves its provider this way. Linear over a dict of a handful
+    of entries: a second index would be state to keep consistent for a lookup
+    that is never hot.
+
+    The falsy guard matters now that a spec's channel may be None: without it
+    a lookup for "no channel" would match a data connector — a door with no
+    pipe — and the template lifecycle would try to register a message shape
+    against something that cannot send one.
+    """
+    if not channel:
+        return None
+    for spec in CONNECTORS.values():
+        if spec.channel == channel:
+            return spec
+    return None

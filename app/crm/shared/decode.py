@@ -9,7 +9,7 @@ Imported directly (shared/ is exempt from the contracts-only rule).
 """
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def jsonb_object(value: Any) -> Dict[str, Any]:
@@ -28,6 +28,25 @@ def jsonb_object(value: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return {}
     return dict(value) if isinstance(value, dict) else {}
+
+
+def jsonb_list(value: Any) -> List[Any]:
+    """A jsonb column as a list. Anything else becomes an empty list.
+
+    Same totality contract as ``jsonb_object`` and the same reason for it: a
+    template's components are decoded inside a batch, where one raise would
+    strand every row beside it.
+
+    A stored object or scalar is DROPPED rather than wrapped — [42] is not
+    what "42" meant, and every caller reading a components list has already
+    handled the empty case.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+    return list(value) if isinstance(value, list) else []
 
 
 def uuid_or_none(value: Any) -> Optional[str]:

@@ -80,13 +80,18 @@ def assert_merchant_access(
         merchant_id not in current_user.merchant_ids
         and "*" not in current_user.merchant_ids
     ):
-        logger.warning(
-            f"User {current_user.username} attempted to {operation} for "
-            f"unauthorized merchant: {merchant_id}"
-        )
+        # merchant_id arrives in the request body and username off a token,
+        # so neither belongs inside the message: a newline in either forges a
+        # log line, and a log a reader cannot trust is worse than no log.
+        # Structured fields keep the audit detail without the interpolation.
+        logger.bind(
+            merchant_id=merchant_id,
+            username=current_user.username,
+            operation=operation,
+        ).warning("crm auth: denied access to a merchant outside the caller's scope")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied to merchant {merchant_id}",
+            detail="Access denied to this merchant",
         )
 
 
