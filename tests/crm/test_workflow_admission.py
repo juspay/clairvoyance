@@ -1,12 +1,20 @@
 """W2 admission guards (canon: entry carries reenter + cooldown, enforced
 for both doors) and arrival scheduling — pure decide functions."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, cast
+from uuid import UUID, uuid4
 
+import pytest
+
+import app.crm.outreach.enrol as enrol_mod
+from app.crm.outreach.db import DbTxn
 from app.crm.outreach.enrol import _admission, _first_wake
-from app.crm.outreach.schemas import WorkflowDefinition
+from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
+CUSTOMER = str(uuid4())
 
 
 def _definition(reenter: bool = True, cooldown_hours: float = 0.0, first_node=None):
@@ -122,3 +130,128 @@ def test_context_phone_is_normalized_for_the_send_path() -> None:
     # a clear reason, which beats losing the number at this seam.
     assert _phone_from_payload({"phone": "n/a"}) == "n/a"
     assert _phone_from_payload({}) is None
+
+
+# --- rollout phase 02 (B2): keyed plans judge admission per key, not per customer ---
+
+
+def _workflow(key: Optional[str], reenter: bool = False) -> Workflow:
+    entry: Dict[str, Any] = {"topic": "orders/create", "reenter": reenter}
+    if key:
+        entry["key"] = key
+    return Workflow(
+        id=uuid4(),
+        merchant_id="m1",
+        name="wismo",
+        status="live",
+        version=1,
+        created_by=None,
+        created_at=NOW,
+        updated_at=NOW,
+        definition={
+            "entry": entry,
+            "nodes": [{"id": "wait-30m", "type": "wait", "minutes": 30}],
+            "edges": [],
+            "goal": {"topics": ["order.delivered"]},
+        },
+        draft=None,
+    )
+
+
+class _History:
+    """The accessor slice _enrol_in_txn touches. The customer has ONE run
+    on this plan, five minutes old, keyed ORD-1; ORD-2 has never run."""
+
+    def __init__(self) -> None:
+        self.judged: List[Optional[str]] = []
+        self.inserted: List[str] = []
+
+    async def source_event_used(self, conn: Any, *args: Any) -> bool:
+        return False
+
+    async def admission_facts(
+        self,
+        conn: Any,
+        merchant_id: str,
+        workflow_id: str,
+        customer_id: str,
+        enrollment_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self.judged.append(enrollment_key)
+        if enrollment_key in (None, "ORD-1"):
+            return {"runs": 1, "latest_entered_at": NOW - timedelta(minutes=5)}
+        return {"runs": 0, "latest_entered_at": None}
+
+    async def insert_enrollment(
+        self,
+        conn: Any,
+        merchant_id: str,
+        workflow_id: str,
+        workflow_version: int,
+        customer_id: str,
+        current_node: str,
+        wake_at: datetime,
+        context: Dict[str, Any],
+        enrollment_key: str,
+    ) -> EnrollmentRun:
+        self.inserted.append(enrollment_key)
+        return EnrollmentRun(
+            id=uuid4(),
+            merchant_id=merchant_id,
+            workflow_id=UUID(workflow_id),
+            workflow_version=workflow_version,
+            customer_id=UUID(customer_id),
+            status="waiting",
+            current_node=current_node,
+            wake_at=wake_at,
+            entered_at=NOW,
+            exited_at=None,
+            exit_reason=None,
+            context=context,
+            enrollment_key=enrollment_key,
+            attempts=0,
+            last_error=None,
+        )
+
+
+def _enrol(history: _History, workflow: Workflow, key: str) -> Optional[EnrollmentRun]:
+    definition = WorkflowDefinition.model_validate(workflow.definition)
+    return asyncio.run(
+        enrol_mod._enrol_in_txn(
+            cast(DbTxn, object()), "m1", workflow, definition, CUSTOMER, {}, key
+        )
+    )
+
+
+def test_a_keyed_plan_admits_a_new_key_despite_the_customers_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B2: with the defaults (reenter False, cooldown 24h) the customer's
+    second order was refused as reenter_disabled, because admission
+    counted ALL her runs on the plan. "Has this ORDER ever run" is what
+    entry.key declared — a new order id has no history, so it is admitted."""
+    history = _History()
+    monkeypatch.setattr(enrol_mod, "accessor", history)
+    run = _enrol(history, _workflow(key="order_id"), "ORD-2")
+    assert run is not None and history.inserted == ["ORD-2"]
+    assert history.judged == ["ORD-2"]  # judged per key, never per customer
+
+
+def test_a_keyed_plan_still_refuses_a_key_that_already_ran(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    history = _History()
+    monkeypatch.setattr(enrol_mod, "accessor", history)
+    assert _enrol(history, _workflow(key="order_id"), "ORD-1") is None
+    assert history.inserted == [] and history.judged == ["ORD-1"]
+
+
+def test_an_unkeyed_plan_keeps_judging_the_customer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No entry.key: the key IS the customer id and the guards read her
+    whole history on the plan, exactly as before."""
+    history = _History()
+    monkeypatch.setattr(enrol_mod, "accessor", history)
+    assert _enrol(history, _workflow(key=None), CUSTOMER) is None
+    assert history.inserted == [] and history.judged == [None]

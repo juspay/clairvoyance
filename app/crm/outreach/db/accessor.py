@@ -123,9 +123,15 @@ async def live_workflows(merchant_id: str) -> List[Workflow]:
 
 
 async def admission_facts(
-    conn: asyncpg.Connection, merchant_id: str, workflow_id: str, customer_id: str
+    conn: asyncpg.Connection,
+    merchant_id: str,
+    workflow_id: str,
+    customer_id: str,
+    enrollment_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    query, values = admission_facts_query(merchant_id, workflow_id, customer_id)
+    query, values = admission_facts_query(
+        merchant_id, workflow_id, customer_id, enrollment_key
+    )
     row = await conn.fetchrow(query, *values)
     return {
         "runs": row["runs"] if row else 0,
