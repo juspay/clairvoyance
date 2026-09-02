@@ -1,0 +1,39 @@
+{
+  "id": 36201000012,
+  "token": "ck-88bb3c4d5e6f",
+  "cart_token": "c1-returning-33cc",
+  "email": "priya.sharma@example.com",
+  "phone": "+919876543210",
+  "gateway": "Cash on Delivery (COD)",
+  "buyer_accepts_marketing": false,
+  "created_at": "2026-09-02T10:05:11+05:30",
+  "updated_at": "2026-09-02T10:05:11+05:30",
+  "completed_at": null,
+  "abandoned_checkout_url": "https://demo-store.myshopify.com/12345/checkouts/ck-77aa2b3c4d5e/recover?key=abc",
+  "currency": "INR",
+  "subtotal_price": "2499.00",
+  "total_tax": "0.00",
+  "total_price": "2499.00",
+  "presentment_currency": "INR",
+  "source_name": "web",
+  "customer": {
+    "id": 7011200034,
+    "email": "priya.sharma@example.com",
+    "first_name": "Priya",
+    "last_name": "Sharma",
+    "phone": "+91 98765 43210",
+    "default_address": null
+  },
+  "billing_address": null,
+  "shipping_address": null,
+  "line_items": [
+    {
+      "id": 1301,
+      "title": "Air Runner Sneakers",
+      "quantity": 1,
+      "price": "2499.00",
+      "sku": "AR-42",
+      "variant_title": "42 / White"
+    }
+  ]
+}

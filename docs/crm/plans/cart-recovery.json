@@ -41,7 +41,10 @@
       "id": "wa-nudge",
       "type": "send",
       "channel": "whatsapp",
-      "template": "cart_recovery_1"
+      "template": "cart_recovery_1",
+      "variables": {
+        "1": "customer_name"
+      }
     },
     {
       "id": "wait-30m-2",

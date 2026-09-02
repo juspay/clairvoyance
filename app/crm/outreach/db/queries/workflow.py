@@ -55,8 +55,15 @@ def get_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[An
 def list_workflows_query(
     merchant_id: str, limit: int, offset: int
 ) -> Tuple[str, List[Any]]:
+    """entry_topic is the FIRST door's topic (a single-object entry, or
+    door 0 of a list): the summary's seen-this-week count is the first
+    door's; a multi-door plan's other doors are not summed here."""
     query = f"""
-        SELECT {_WORKFLOW_SUMMARY_COLUMNS}
+        SELECT {_WORKFLOW_SUMMARY_COLUMNS},
+               COALESCE(
+                   COALESCE(definition, draft) -> 'entry' ->> 'topic',
+                   COALESCE(definition, draft) -> 'entry' -> 0 ->> 'topic'
+               ) AS entry_topic
         FROM {WORKFLOW_TABLE}
         WHERE merchant_id = $1
         ORDER BY created_at DESC, id DESC

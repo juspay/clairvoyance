@@ -31,6 +31,15 @@ Paths below carry no `crm` segment on purpose: the CRM routers mount at the app 
    automatically: check with the connectivity owner. A send against an
    unapproved template is `blocked / template_not_approved`; the run
    still continues to the call.
+   **Map the template's blanks.** A send node posts EXACTLY the facts its
+   `variables` map names — `{"1": "customer_name"}` fills positional
+   `{{1}}`; a named template maps `{"name": "customer_name"}` — and
+   nothing when the map is empty. The plans ship with `{{1}}` ←
+   `customer_name`; if your approved `cart_recovery_1` has more blanks
+   (or none), edit the map to match before publishing: a count mismatch
+   is a terminal provider refusal on every send. Every fact must be a
+   declared `variable` field of the entry topic (`GET /catalog`), or
+   `current_node` / `current_stage`.
 4. **A Breeze Buddy call template** for the rescue call, belonging to the
    merchant (or global), with a `call_execution_config`. Its id replaces
    `TEMPLATE_ID_PLACEHOLDER`. Calls obey buddy's own calling hours,

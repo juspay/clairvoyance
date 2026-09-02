@@ -9,7 +9,7 @@ commerce) populate the same shape instead of the schema growing per arm.
 """
 
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -53,6 +53,9 @@ class Extracted(BaseModel):
     handles: Dict[str, str] = {}
     facts: Dict[str, Any] = {}
     about: Literal["customer", "merchant"] = ABOUT_CUSTOMER
+    # Declared template fill-ins (catalog fields flagged variable), resolved
+    # by the engine at decode so no consumer re-reads the payload.
+    variables: Dict[str, Any] = {}
 
 
 class RawEvent(BaseModel):
@@ -116,3 +119,99 @@ class EventReceipt(BaseModel):
 
     id: Optional[UUID] = None
     duplicate: bool = False
+
+
+# --- The event catalog (design/event-catalog.md, canon T24) ------------------
+
+# The closed type set a registration may use — each maps one-to-one onto the
+# where-grammar's operators (record/catalog.py OPS_BY_TYPE). Unknown types
+# are rejected at registration, never discovered at flow-publish.
+FieldType = Literal["text", "number", "choice", "boolean", "datetime", "phone"]
+IdentityRole = Literal["phone", "name", "email", "shopify_customer_id"]
+
+
+class CatalogField(BaseModel):
+    """One field of one event. `path` is identity (payload.gateway, or a bare
+    derived name like items_count); `label` is presentation and renames
+    freely. `ops` is filled by the catalog from the type — never authored."""
+
+    path: str
+    type: FieldType
+    label: str
+    keyable: bool = False
+    variable: bool = False
+    values: List[str] = Field(default_factory=list)
+    identity: Optional[IdentityRole] = None
+    derived: bool = False
+    deprecated: bool = False
+    # Code layer only: alternate paths tried in order after `path` (Shopify
+    # keeps a phone in four places). A registration may not carry them —
+    # precedence chains in jsonb are the DSL the ruling forbids.
+    fallbacks: List[str] = Field(default_factory=list)
+    ops: List[str] = Field(default_factory=list)
+
+
+class CatalogEntry(BaseModel):
+    """(source, topic) -> what this event is and what's inside it. `layer`
+    says who declared it: our code, or the vendor's registration (T24 row).
+    The editor is layer-blind."""
+
+    source: str
+    topic: str
+    label: str
+    group: str
+    layer: Literal["code", "registered"]
+    # WHO the letters of this topic are about (Extracted.about): a person
+    # (the default — no handle is a quarantine) or the MERCHANT (a template
+    # review, an account notice: no person by design, NULL customer, every
+    # consumer still hears it). The engine's vocabulary, so a source whose
+    # letters are merchant-level (WhatsApp's template/account topics) is a
+    # declared spec like any other — never a hand-written extractor.
+    about: Literal["customer", "merchant"] = ABOUT_CUSTOMER
+    goalable: bool = True
+    status: Literal["registered", "detected"] = "registered"
+    version: int = 1
+    fields: List[CatalogField] = Field(default_factory=list)
+    seen_7d: int = 0
+
+
+class SchemaRegistration(BaseModel):
+    """What a push vendor (or our ops, via the wizard) signs: the whole
+    field list for one topic, in OUR language."""
+
+    source: str = Field(min_length=1, max_length=64)
+    topic: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=120)
+    fields: List[CatalogField] = Field(min_length=1)
+
+
+class EventSchema(BaseModel):
+    """One crm_event_schema row (T24)."""
+
+    id: str
+    merchant_id: str
+    source: str
+    topic: str
+    label: Optional[str]
+    fields: List[CatalogField]
+    status: str
+    version: int
+    registered_by: Optional[str]
+    first_seen_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+
+class TopicCount(BaseModel):
+    source: str
+    topic: str
+    seen: int
+
+
+class SampledField(BaseModel):
+    """The wizard's pre-fill: one key seen in a vendor's recent traffic."""
+
+    path: str
+    type_guess: FieldType
+    seen: int
+    samples: List[Any]

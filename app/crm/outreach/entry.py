@@ -23,7 +23,7 @@ stays pending and returns next poll. Our writes commit on their own
 source-event check and the open-run unique — not by that rollback.
 """
 
-from typing import Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from app.core.logger import logger
 from app.crm.outreach.db.accessors import (
@@ -48,8 +48,9 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowNode,
 )
-from app.crm.record.contracts import RawEvent
+from app.crm.record.contracts import RawEvent, canonical_path, derive_for, field_value
 from app.crm.shared.normalize import normalize_phone
+from app.crm.shared.predicate import matches
 
 # Fallback only: where a phone hides in a payload when no extractor
 # handles were passed in (the voice mirrors, which send the flat shape).
@@ -92,7 +93,10 @@ def _phone_from_payload(payload: dict) -> str | None:
 
 
 async def consume_attributed_event(
-    event: RawEvent, customer_id: Optional[str], handles: Optional[dict] = None
+    event: RawEvent,
+    customer_id: Optional[str],
+    handles: Optional[dict] = None,
+    variables: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Match one just-attributed event against her open runs (each by its
     own version) and every live plan's entry (latest). customer_id
@@ -112,7 +116,12 @@ async def consume_attributed_event(
     the system: the number the sends dial is then the same number identity
     resolved on, so suppression matches by construction and a new source
     needs no teaching here. The payload search stays as the fallback for
-    the voice mirrors, which resolve before this consumer exists."""
+    the voice mirrors, which resolve before this consumer exists.
+
+    ``variables`` are the template fill-ins the catalog declared for this
+    (source, topic), resolved by the same engine — nested paths and derived
+    names (Shopify's customer_name) that the top-level scalar copy below
+    can never see."""
     if customer_id is None:
         return  # not about a person: nothing to admit, end or wake
     open_runs = await enrollment_accessor.open_runs_for_customer(
@@ -137,9 +146,16 @@ async def consume_attributed_event(
     for flow in flows:
         definition = WorkflowDefinition.model_validate(flow.definition)
         for door in definition.entries:
-            if door.topic == event.topic and _where_matches(door.where, event.payload):
+            if door.topic == event.topic and _where_matches(door, event):
                 await _try_enrol(
-                    flow, definition, door, event, customer_id, handles, open_runs
+                    flow,
+                    definition,
+                    door,
+                    event,
+                    customer_id,
+                    handles,
+                    open_runs,
+                    variables,
                 )
                 break  # topics are unique across a plan's doors
 
@@ -301,8 +317,16 @@ def _goal_patch(event: RawEvent) -> dict:
     return {"goal": goal}
 
 
-def _where_matches(where: dict, payload: dict) -> bool:
-    return all(payload.get(key) == value for key, value in where.items())
+def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
+    """One door's typed where-grammar against the payload
+    (shared/predicate.py); fields resolve through record's catalog paths —
+    dot-walks and the code layer's derived fields. No table read: the
+    validator guaranteed op-type fit at publish."""
+    derive = derive_for(event.source, event.topic)
+    return matches(
+        door.where,
+        lambda path: field_value(event.payload, path, derive),
+    )
 
 
 def _context_from_payload(payload: dict) -> dict:
@@ -336,11 +360,16 @@ async def _try_enrol(
     customer_id: str,
     handles: Optional[dict] = None,
     open_runs: Sequence[EnrollmentRun] = (),
+    variables: Optional[Dict[str, Any]] = None,
 ) -> None:
     admit, enrollment_key = _enrollment_key(door, event, str(flow.id))
     if not admit:
         return  # a keyed plan without its key: a refusal, not an error
     context = _context_from_payload(event.payload)
+    # The catalog's declared variables win over the scalar copy: the engine
+    # resolved them through the declared paths (customer_name from
+    # customer.first_name + last_name), and a bookkeeping name is still ours.
+    context.update(_context_from_payload(variables or {}))
     context["source_event_id"] = str(event.id)
     # When the founding letter HAPPENED (its own claim, else the envelope's
     # receipt): goals compare against this, not the row's insert time (G7).
@@ -426,7 +455,9 @@ def _enrollment_key(
     field = door.key
     if not field:
         return True, None
-    value = event.payload.get(field)
+    value = field_value(
+        event.payload, canonical_path(field), derive_for(event.source, event.topic)
+    )
     if value in (None, ""):
         logger.info(
             f"enrol skipped: entry.key {field!r} missing in payload "

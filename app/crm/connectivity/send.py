@@ -192,7 +192,10 @@ async def _resolve_and_deliver(
         f"to {mask_address(message.sent_to_address, message.channel)} "
         f"from binding {route.binding.id}"
     )
-    return await adapter.deliver(message, route)
+    outcome = await adapter.deliver(message, route)
+    if outcome.status != "accepted":
+        return outcome
+    return outcome.model_copy(update={"binding_id": str(route.binding.id)})
 
 
 async def send(send_token: SendToken, message: QueuedMessage) -> SendOutcome:

@@ -22,6 +22,7 @@ def decode_workflow_summary(row: Mapping[str, Any]) -> WorkflowSummary:
         created_by=row["created_by"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        entry_topic=row["entry_topic"] if "entry_topic" in row.keys() else None,
     )
 
 

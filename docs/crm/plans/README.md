@@ -22,6 +22,18 @@ in `stages.on_idle`; a stage may name its own under
 (`cart_recovery_1`) resolved against the merchant's approved templates;
 publish refuses an unknown or unapproved one (phase 08).
 
+A send node's `variables` map (`{"1": "customer_name"}`) is the ONLY
+thing posted to the provider as template fill-ins — one entry per blank,
+the fact a declared `variable` field of the entry topic (or
+`current_node` / `current_stage`, or a listened square's
+`facts_<square>_<key>`). The cart boards map `{{1}}` ← `customer_name`;
+edit the map to the merchant's approved template before publishing (the
+runbook's step 3). `test_plan_templates` validates every board against the
+CODE catalog (Shopify's declared fields); the loan board's `loan.*` topics
+are a vendor's, so the test supplies the registration the vendor signs at
+enrollment (`payload.application_id`, keyable) — publish on a real
+merchant needs that same `POST /ingest/schemas` first.
+
 `on_publish` (ADR 0023): the loan board declares `pin` — a journey lives
 for weeks and finishes on the document it entered under; a fix reaches
 the runs in flight only through the migrate-forward route. The cart

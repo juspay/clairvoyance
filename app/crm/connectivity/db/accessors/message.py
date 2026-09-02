@@ -80,6 +80,7 @@ async def apply_outcome(
     mark_sent: bool,
     attempt: int,
     retry_after_seconds: Optional[int] = None,
+    binding_id: Optional[str] = None,
 ) -> bool:
     """False means the row was no longer ours — another worker reclaimed it
     (``attempt`` is the claim's generation; a stale claim's write misses)."""
@@ -91,6 +92,7 @@ async def apply_outcome(
         mark_sent,
         attempt,
         retry_after_seconds,
+        binding_id,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)

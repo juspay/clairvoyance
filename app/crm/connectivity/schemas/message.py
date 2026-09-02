@@ -44,6 +44,10 @@ class SendOutcome(BaseModel):
 
     status: Literal["accepted", "failed", "blocked"]
     provider_message_id: Optional[str] = None
+    # Which pipe it LEFT on (T16 col 6; set-once on the row, migration 060):
+    # stamped by send() on an accepted outcome, None otherwise — a blocked or
+    # failed message never left, and a retry may leave on another pipe.
+    binding_id: Optional[str] = None
     reason: Optional[str] = None
     retryable: bool = False
 
