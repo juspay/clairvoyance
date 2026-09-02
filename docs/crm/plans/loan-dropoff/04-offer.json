@@ -1,0 +1,47 @@
+{
+  "entry": {
+    "topic": "loan.offer_accepted",
+    "key": "application_id",
+    "reenter": true,
+    "cooldown_hours": 1,
+    "on_repeat": "refresh_latest",
+    "debounce_minutes": 30
+  },
+  "goals": [
+    {
+      "topics": [
+        "loan.agreement_signed",
+        "loan.disbursed"
+      ],
+      "exit_reason": "goal_met"
+    },
+    {
+      "topics": [
+        "loan.rejected",
+        "loan.withdrawn"
+      ],
+      "exit_reason": "withdrawn"
+    }
+  ],
+  "exits": {
+    "max_age_days": 1
+  },
+  "nodes": [
+    {
+      "id": "wait-30m",
+      "type": "wait",
+      "minutes": 30
+    },
+    {
+      "id": "dropoff-call",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    }
+  ],
+  "edges": [
+    [
+      "wait-30m",
+      "dropoff-call"
+    ]
+  ]
+}
