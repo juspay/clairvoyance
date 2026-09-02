@@ -189,34 +189,55 @@ async def claim_due_runs(limit: int, lease_seconds: int) -> List[EnrollmentRun]:
 
 
 async def advance_run(
-    run_id: str, current_node: str, wake_at: datetime, context: Dict[str, Any]
-) -> None:
-    query, values = advance_run_query(run_id, current_node, wake_at, context)
+    run_id: str,
+    current_node: str,
+    wake_at: datetime,
+    context: Dict[str, Any],
+    leased_wake_at: datetime,
+) -> bool:
+    """True when the row still carried the lease (the write landed)."""
+    query, values = advance_run_query(
+        run_id, current_node, wake_at, context, leased_wake_at
+    )
     async with crm_connection() as conn:
-        await conn.execute(query, *values)
+        row = await conn.fetchrow(query, *values)
+    return row is not None
 
 
 async def exit_run(
     run_id: str,
     exit_reason: str,
+    leased_wake_at: datetime,
     current_node: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
-) -> None:
-    query, values = exit_run_query(run_id, exit_reason, current_node, context)
+) -> bool:
+    """True when the row still carried the lease (the write landed)."""
+    query, values = exit_run_query(
+        run_id, exit_reason, current_node, context, leased_wake_at
+    )
     async with crm_connection() as conn:
-        await conn.execute(query, *values)
+        row = await conn.fetchrow(query, *values)
+    return row is not None
 
 
-async def park_run(run_id: str, last_error: str) -> None:
-    query, values = park_run_query(run_id, last_error)
+async def park_run(run_id: str, last_error: str, leased_wake_at: datetime) -> bool:
+    """True when the row still carried the lease (the write landed)."""
+    query, values = park_run_query(run_id, last_error, leased_wake_at)
     async with crm_connection() as conn:
-        await conn.execute(query, *values)
+        row = await conn.fetchrow(query, *values)
+    return row is not None
 
 
-async def record_run_error(run_id: str, last_error: str, retry_in_seconds: int) -> None:
-    query, values = record_run_error_query(run_id, last_error, retry_in_seconds)
+async def record_run_error(
+    run_id: str, last_error: str, retry_in_seconds: int, leased_wake_at: datetime
+) -> bool:
+    """True when the row still carried the lease (the write landed)."""
+    query, values = record_run_error_query(
+        run_id, last_error, retry_in_seconds, leased_wake_at
+    )
     async with crm_connection() as conn:
-        await conn.execute(query, *values)
+        row = await conn.fetchrow(query, *values)
+    return row is not None
 
 
 async def resume_run_on_event(

@@ -56,30 +56,65 @@ async def claim_due_runs(batch: int) -> List[EnrollmentRun]:
 async def walk_run(run: EnrollmentRun) -> None:
     """Move one claimed token as far as it can go this visit. The claim
     already pushed wake_at one lease window, so every failure path below
-    retries by simply doing nothing — the clock brings the run back."""
+    retries by simply doing nothing — the clock brings the run back.
+
+    Every write this visit makes is conditional on that lease (P1,
+    rollout phase 03): the claim's wake_at is the generation token, and
+    every event-side writer (a reply, a repeat patch, a goal-cancel)
+    moves it. A miss means the run changed under us — defer: the lease
+    already re-arms the run, and the next claim re-reads it WITH the
+    reply and takes the right branch. Action nodes are idempotent
+    (dedupe run:node, uuid5 lead), so a re-executed visit is exactly as
+    safe as the lease retry this file already relied on."""
+    lease = run.wake_at
+    if lease is None:
+        # A claimed run always carries its lease (the claim wrote it, and
+        # waiting rows have wake_at NOT NULL). Anything else is a caller
+        # bug — and a write without a token would be a blind overwrite.
+        logger.error(f"walker: run {run.id} claimed without a lease — skipping")
+        return
     try:
         workflow = await accessor.get_workflow(run.merchant_id, str(run.workflow_id))
         if workflow is None or workflow.status == "archived":
-            await accessor.exit_run(str(run.id), "ejected")
+            if not await accessor.exit_run(str(run.id), "ejected", lease):
+                _deferred(run, "eject")
             return
         if workflow.status == "paused" or not workflow.definition:
             return  # the lease push IS the snooze; re-checked next wake
         definition = WorkflowDefinition.model_validate(workflow.definition)
-        await _advance(run, definition)
+        await _advance(run, definition, lease)
     except NodeParked as e:
-        await accessor.park_run(str(run.id), str(e))
-        logger.warning(f"walker: run {run.id} parked — {e}")
+        if await accessor.park_run(str(run.id), str(e), lease):
+            logger.warning(f"walker: run {run.id} parked — {e}")
+        else:
+            _deferred(run, "park")
     except Exception as e:
         if run.attempts >= CRM_WALKER_MAX_ATTEMPTS:
-            await accessor.park_run(str(run.id), f"attempts exhausted: {e}")
-            logger.error(f"walker: run {run.id} parked after retries — {e}")
+            if await accessor.park_run(str(run.id), f"attempts exhausted: {e}", lease):
+                logger.error(f"walker: run {run.id} parked after retries — {e}")
+            else:
+                _deferred(run, "park")
         else:
             retry_in = retry_delay_seconds(run.attempts, CRM_WALKER_LEASE_SECONDS)
-            await accessor.record_run_error(str(run.id), str(e), retry_in)
-            logger.warning(f"walker: run {run.id} retries in {retry_in}s — {e}")
+            if await accessor.record_run_error(str(run.id), str(e), retry_in, lease):
+                logger.warning(f"walker: run {run.id} retries in {retry_in}s — {e}")
+            else:
+                _deferred(run, "retry")
 
 
-async def _advance(run: EnrollmentRun, definition: WorkflowDefinition) -> None:
+def _deferred(run: EnrollmentRun, write: str) -> None:
+    """A CAS miss: the run moved under the lease (a reply or repeat landed
+    mid-visit). Nothing to undo — the event side's alarm stands and the
+    next claim re-reads the run as it now is."""
+    logger.info(
+        f"walker: run {run.id} changed under the lease ({write} skipped) — "
+        f"deferring to the next wake"
+    )
+
+
+async def _advance(
+    run: EnrollmentRun, definition: WorkflowDefinition, lease: datetime
+) -> None:
     nodes = {node.id: node for node in definition.nodes}
     outgoing = definition.outgoing()
     now = datetime.now(timezone.utc)
@@ -88,7 +123,8 @@ async def _advance(run: EnrollmentRun, definition: WorkflowDefinition) -> None:
     # timed_out no matter which square it stands on.
     max_age = timedelta(days=definition.exits.max_age_days)
     if now - run.entered_at > max_age:
-        await accessor.exit_run(str(run.id), "timed_out")
+        if not await accessor.exit_run(str(run.id), "timed_out", lease):
+            _deferred(run, "timed_out")
         return
 
     # Goal re-check at fire time — one indexed EXISTS via record's
@@ -99,7 +135,8 @@ async def _advance(run: EnrollmentRun, definition: WorkflowDefinition) -> None:
         definition.goal.topics,
         run.entered_at,
     ):
-        await accessor.exit_run(str(run.id), "goal_met")
+        if not await accessor.exit_run(str(run.id), "goal_met", lease):
+            _deferred(run, "goal_met")
         return
 
     current_id = run.current_node
@@ -117,9 +154,14 @@ async def _advance(run: EnrollmentRun, definition: WorkflowDefinition) -> None:
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
         if next_id is None:
-            await accessor.exit_run(
-                str(run.id), "completed", current_node=current_id, context=context
-            )
+            if not await accessor.exit_run(
+                str(run.id),
+                "completed",
+                lease,
+                current_node=current_id,
+                context=context,
+            ):
+                _deferred(run, "completed")
             return
 
         next_node = nodes.get(next_id)
@@ -127,12 +169,14 @@ async def _advance(run: EnrollmentRun, definition: WorkflowDefinition) -> None:
             raise NodeParked(f"edge points at unknown node {next_id}")
         if is_wait(next_node) and next_node.minutes:
             # Arrival scheduling: the wait's alarm starts now.
-            await accessor.advance_run(
+            if not await accessor.advance_run(
                 str(run.id),
                 next_id,
                 datetime.now(timezone.utc) + timedelta(minutes=next_node.minutes),
                 context,
-            )
+                lease,
+            ):
+                _deferred(run, f"advance to {next_id}")
             return
         current_id = next_id  # action node: execute in this same visit
 
