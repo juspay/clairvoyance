@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorkflowEntry(BaseModel):
@@ -41,12 +41,33 @@ class WorkflowEntry(BaseModel):
     debounce_minutes: float = Field(0, ge=0)
 
 
+class WorkflowGoalKey(BaseModel):
+    """What ties a goal letter to ONE run: the letter's payload field must
+    equal the run's context field (cart_token = cart_token). Compared as
+    text — keys are ids and tokens, never amounts."""
+
+    event: str = Field(min_length=1)
+    run: str = Field(min_length=1)
+
+
+# The reasons a goal TIER may end a run with (vocabulary in code; the 063
+# CHECK on the column is the closed superset). timed_out, ejected and
+# completed are the walker's own verdicts, never a tier's.
+GOAL_EXIT_REASONS = ("goal_met", "converted_elsewhere", "withdrawn")
+
+
 class WorkflowGoal(BaseModel):
-    """The 'she did the thing' topics: any one of them ends every open
-    run for the customer (match=customer; keyed matching lands with the
-    WISMO-style flows)."""
+    """One goal TIER (rollout phase 06): the 'she did the thing' topics,
+    optionally keyed to the run they are about, and the reason the run
+    exits with. Tiers are judged keyed-first (goal_tiers()): the keyed
+    tier says "THIS cart recovered" (goal_met); the unkeyed one says "she
+    bought something" and still ends every other open run — never nudge
+    someone who just bought — but as converted_elsewhere, so the funnel
+    can tell the two apart. A single unkeyed tier is today's behaviour."""
 
     topics: List[str] = Field(min_length=1)
+    key: Optional[WorkflowGoalKey] = None
+    exit_reason: str = "goal_met"
 
 
 class WorkflowExits(BaseModel):
@@ -89,12 +110,32 @@ class WorkflowDefinition(BaseModel):
     entry: WorkflowEntry
     nodes: List[WorkflowNode] = Field(min_length=1)
     edges: List[WorkflowEdge] = Field(default_factory=list)
-    goal: WorkflowGoal
+    goals: List[WorkflowGoal] = Field(min_length=1)
     exits: WorkflowExits = Field(default_factory=WorkflowExits)
     # What the plan's sends are for (canon T16 col 9, NOT NULL on the
     # manifest; the gate checks it against the grant). Required once the
     # plan has a send node; the send node copies it onto every row.
     purpose_key: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _goal_becomes_one_tier(cls, data: Any) -> Any:
+        """The singular `goal` (every document published before phase 06)
+        is one tier; `goals` is the list. Both at once is ambiguous."""
+        if isinstance(data, dict) and "goal" in data:
+            if "goals" in data:
+                raise ValueError("give goal or goals, not both")
+            data = dict(data)
+            data["goals"] = [data.pop("goal")]
+        return data
+
+    def goal_tiers(self, topic: Optional[str] = None) -> List[WorkflowGoal]:
+        """The tiers to judge, in judging order: keyed first (the more
+        specific claim — a run it ends is no longer open for the unkeyed
+        sweep), then unkeyed; document order within each. With a topic,
+        only the tiers listening for it."""
+        tiers = [t for t in self.goals if topic is None or topic in t.topics]
+        return [t for t in tiers if t.key] + [t for t in tiers if not t.key]
 
     def outgoing(self) -> Dict[str, List[Tuple[str, Optional[str]]]]:
         """node id -> [(next node id, on)], in document order."""

@@ -444,24 +444,47 @@ def cancel_open_runs_query(
     customer_id: str,
     exit_reason: str,
     occurred_at: Optional[datetime] = None,
+    key: Optional[Tuple[str, str]] = None,
 ) -> Tuple[str, List[Any]]:
     """Goal-cancel (canon: the goal event resolves OPEN enrolments — open
     is waiting or parked; a parked run she has already satisfied must not
     keep holding the open-run unique) — and the same shape ejects runs
-    when a flow is archived. Time-aware: only runs that began before the
-    goal event count, so a stale goal event redelivered later cannot end
-    a newer run; an unstamped event (occurred_at NULL) keeps today's
-    behaviour and ends every open run."""
+    when a flow is archived. Event-side: unconditional (the walker's
+    writes defer to it, phase 03).
+
+    Time-aware on the ENTRY EVENT (G7, phase 06): only runs whose
+    founding letter happened before the goal event count — the run's
+    context carries that moment (entered_event_at), with the row's
+    insert time as the fallback for runs written before the stamp — so a
+    late-delivered earlier-stage letter cannot keep a run alive past a
+    goal that truly happened after it, and a stale goal redelivered
+    later cannot end a newer run. An unstamped goal (occurred_at NULL)
+    keeps today's behaviour and ends every open run.
+
+    Keyed (phase 06): ``key = (run field, value)`` ends only the run the
+    letter is about (context cart_token = the order's cart_token); the
+    unkeyed form is byte-identical to before."""
+    keyed = "AND context->>$6 = $7" if key else ""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET status = 'exited', exit_reason = $4, exited_at = now(),
             wake_at = NULL
         WHERE merchant_id = $1 AND workflow_id = $2 AND customer_id = $3
           AND status <> 'exited'
-          AND ($5::timestamptz IS NULL OR entered_at < $5::timestamptz)
+          AND ($5::timestamptz IS NULL OR COALESCE((context->>'entered_event_at')::timestamptz, entered_at) < $5::timestamptz)
+          {keyed}
         RETURNING id
     """
-    return query, [merchant_id, workflow_id, customer_id, exit_reason, occurred_at]
+    params: List[Any] = [
+        merchant_id,
+        workflow_id,
+        customer_id,
+        exit_reason,
+        occurred_at,
+    ]
+    if key:
+        params.extend([key[0], key[1]])
+    return query, params
 
 
 def list_runs_query(

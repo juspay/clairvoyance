@@ -7,7 +7,7 @@ fail postures and serialization decisions live in the logic files
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from app.crm.record.db import DbTxn
 from app.crm.record.db.decoder import decode_journey_card, decode_raw_event
@@ -83,9 +83,15 @@ async def get_customer_journey(
 
 
 async def customer_has_event(
-    merchant_id: str, customer_id: str, topics: List[str], since: datetime
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Optional[Tuple[str, str]] = None,
 ) -> bool:
-    query, values = customer_has_event_query(merchant_id, customer_id, topics, since)
+    query, values = customer_has_event_query(
+        merchant_id, customer_id, topics, since, where
+    )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return bool(row["found"]) if row else False

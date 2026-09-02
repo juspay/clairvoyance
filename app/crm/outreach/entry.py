@@ -30,6 +30,13 @@ from app.crm.shared.normalize import normalize_phone
 # extractor's business, not this file's.
 _PHONE_PATHS = ("customer_mobile_number", "phone")
 
+# The founding letter's own pointers: written once at enrol, never moved
+# by a repeat (phase 00) — the id is what source_event_used dedupes on,
+# the time is what "did she buy AFTER the run began" is measured from
+# (G7): an order placed between the founding checkout and a later cart
+# update must keep counting as after.
+_FOUNDING_KEYS = ("source_event_id", "entered_event_at")
+
 # Small-facts cap (canon: context carries pointers "plus the few small
 # facts the sends will need" — never payload photocopies): scalars only,
 # short values only; the full letter already lives on the event row.
@@ -71,7 +78,7 @@ async def consume_attributed_event(
     the voice mirrors, which resolve before this consumer exists."""
     flows = await accessor.live_workflows(event.merchant_id)
     entry_matches: List[Tuple[Workflow, WorkflowDefinition]] = []
-    goal_matches: List[Workflow] = []
+    goal_matches: List[Tuple[Workflow, WorkflowDefinition]] = []
     listening: List[Tuple[Workflow, WorkflowNode]] = []
     for flow in flows:
         definition = WorkflowDefinition.model_validate(flow.definition)
@@ -79,25 +86,41 @@ async def consume_attributed_event(
             definition.entry.where, event.payload
         ):
             entry_matches.append((flow, definition))
-        if event.topic in definition.goal.topics:
-            goal_matches.append(flow)
+        if definition.goal_tiers(event.topic):
+            goal_matches.append((flow, definition))
         for node in definition.nodes:
             if node.type == "wait_event" and event.topic in node.topics:
                 listening.append((flow, node))
 
     # Goal first: an order arriving right behind its checkout must not
     # cancel the run that checkout is about to start. Then replies, then
-    # entries. Time-aware: only runs that began before the goal event end
-    # (decisions §5) — a stale goal redelivered by the spine cannot end a
-    # run born after it.
-    for flow in goal_matches:
-        await accessor.cancel_open_runs(
-            event.merchant_id,
-            str(flow.id),
-            customer_id,
-            "goal_met",
-            event.occurred_at,
-        )
+    # entries. Time-aware on the entry event: only runs whose founding
+    # letter happened before the goal event end (G7) — a stale goal
+    # redelivered by the spine cannot end a run born after it.
+    #
+    # Tiers are judged keyed-first (goal_tiers): the keyed tier ends the
+    # run the letter is ABOUT (context cart_token = payload cart_token) as
+    # goal_met; the unkeyed tier then sweeps whatever is still open as
+    # converted_elsewhere — the recovered run is already exited, so the
+    # UPDATE's status <> 'exited' keeps the two verdicts apart. A keyed
+    # tier whose payload field is missing cannot say which run it is
+    # about and is skipped; the unkeyed tier still applies.
+    for flow, definition in goal_matches:
+        for tier in definition.goal_tiers(event.topic):
+            key: Optional[Tuple[str, str]] = None
+            if tier.key:
+                value = event.payload.get(tier.key.event)
+                if value in (None, ""):
+                    continue
+                key = (tier.key.run, str(value))
+            await accessor.cancel_open_runs(
+                event.merchant_id,
+                str(flow.id),
+                customer_id,
+                tier.exit_reason,
+                event.occurred_at,
+                key,
+            )
     for flow, node in listening:
         answer = event.payload.get(node.key or "")
         if answer is None:
@@ -167,6 +190,9 @@ async def _try_enrol(
         return  # a keyed plan without its key: a refusal, not an error
     context = _context_from_payload(event.payload)
     context["source_event_id"] = str(event.id)
+    # When the founding letter HAPPENED (its own claim, else the envelope's
+    # receipt): goals compare against this, not the row's insert time (G7).
+    context["entered_event_at"] = (event.occurred_at or event.received_at).isoformat()
     phone = (handles or {}).get("phone") or _phone_from_payload(event.payload)
     if phone:
         context["phone"] = phone
@@ -184,9 +210,10 @@ async def _try_enrol(
         # a no-op, so no second signal from enrol() is needed. The repeat
         # is offered the SAME small facts enrol() was — the normalized
         # phone included, so a corrected number reaches the run — minus
-        # source_event_id: that pointer stays the founding event's, and
-        # patch_open_run_query refuses the founding event by it.
-        repeat_facts = {k: v for k, v in context.items() if k != "source_event_id"}
+        # the founding pointers (_FOUNDING_KEYS): the id is what
+        # patch_open_run_query refuses the founding event by, the time is
+        # what goals are measured from.
+        repeat_facts = {k: v for k, v in context.items() if k not in _FOUNDING_KEYS}
         await apply_repeat(
             event.merchant_id,
             str(flow.id),

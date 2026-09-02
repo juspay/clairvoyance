@@ -4,6 +4,7 @@ laws, and the validator's two entry rules."""
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import pytest
@@ -14,6 +15,8 @@ from app.crm.outreach.db.queries import patch_open_run_query
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.repeat import parse_repeat_policy, repeat_plan
 from app.crm.outreach.schemas import WorkflowDefinition
+
+_NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 
 
 def _definition(**entry_words: Any) -> WorkflowDefinition:
@@ -181,6 +184,8 @@ def test_a_refused_enrol_hands_the_repeat_to_apply_repeat(
         {
             "id": "ev-9",
             "merchant_id": "m1",
+            "received_at": _NOW,
+            "occurred_at": None,
             "payload": {
                 "order_id": "ORD-1",
                 "cart_value": 900,
@@ -209,7 +214,17 @@ def test_a_successful_enrol_never_calls_apply_repeat(
     monkeypatch.setattr(entry, "enrol", new_run)
     monkeypatch.setattr(entry, "apply_repeat", fake_apply)
     flow = type("F", (), {"id": "wf-1"})()
-    event = type("E", (), {"id": "ev-1", "merchant_id": "m1", "payload": {}})()
+    event = type(
+        "E",
+        (),
+        {
+            "id": "ev-1",
+            "merchant_id": "m1",
+            "received_at": _NOW,
+            "occurred_at": None,
+            "payload": {},
+        },
+    )()
     asyncio.run(entry._try_enrol(flow, _definition(on_repeat="accumulate"), event, "c"))
     assert calls == []
 
@@ -297,6 +312,8 @@ def test_the_repeat_carries_the_refreshed_phone_but_never_the_founding_id(
         {
             "id": "ev-9",
             "merchant_id": "m1",
+            "received_at": _NOW,
+            "occurred_at": None,
             "payload": {"customer_mobile_number": "9876543210", "cart_value": 900},
         },
     )()

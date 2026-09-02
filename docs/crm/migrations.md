@@ -81,3 +81,9 @@ Rules the template encodes:
   ones — the 051 immutability trigger (amended in 062) refuses every
   ingestion field, and `attempts` is spent by the claim so a poison row
   quarantines after `CRM_EVENT_MAX_ATTEMPTS` instead of looping forever.
+- `crm_workflow_enrollment.exit_reason` is a closed enum in a CHECK
+  (`goal_met`, `timed_out`, `withdrawn`, `ejected`, `completed`,
+  `converted_elsewhere` — the last added by 063 so a goal tier keyed to
+  the run's own cart can say "recovered" while any other order still ends
+  the run, distinguishably). A new reason is a migration that re-creates
+  the constraint under its explicit name, never an edit to 058/063.

@@ -13,6 +13,7 @@ from app.crm.outreach.db import DbTxn, accessor, atomically
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
+    GOAL_EXIT_REASONS,
     Workflow,
     WorkflowDefinition,
     WorkflowEntry,
@@ -64,6 +65,22 @@ def validate_definition(
             "entry.debounce_minutes needs a wait as the first node — there is "
             "no entry alarm to slide otherwise"
         )
+
+    # Goal tiers (phase 06): the reason is vocabulary, and one tier per
+    # reason — two tiers claiming goal_met could never be told apart.
+    reasons_seen = set()
+    for index, tier in enumerate(definition.goals):
+        if tier.exit_reason not in GOAL_EXIT_REASONS:
+            problems.append(
+                f"goal tier {index}: exit_reason {tier.exit_reason!r} is not one "
+                f"of {' · '.join(GOAL_EXIT_REASONS)}"
+            )
+        elif tier.exit_reason in reasons_seen:
+            problems.append(
+                f"goal tier {index}: exit_reason {tier.exit_reason!r} is already "
+                "used by an earlier tier — one tier per reason"
+            )
+        reasons_seen.add(tier.exit_reason)
 
     node_types = {node.id: node.type for node in definition.nodes}
     for src, dst in ((edge[0], edge[1]) for edge in definition.edges):
