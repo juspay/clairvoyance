@@ -107,8 +107,13 @@ class WorkflowSummary(BaseModel):
     status: str
     version: int
     created_by: Optional[str]
+    # Who last changed the plan (061) — the RBAC username, not the email:
+    # username is required where email is optional. None where nobody has
+    # edited, which the screen shows as a bare timestamp.
+    updated_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    entry: Optional[WorkflowEntry] = None
 
 
 class Workflow(WorkflowSummary):
@@ -116,6 +121,18 @@ class Workflow(WorkflowSummary):
 
     definition: Optional[Dict[str, Any]]
     draft: Optional[Dict[str, Any]]
+
+
+class RunCounts(BaseModel):
+    """A flow's header numbers. goal_met is the odd one out: an exit
+    REASON, not a status, so it sits inside `exited` and is counted
+    separately."""
+
+    total: int = 0
+    waiting: int = 0
+    parked: int = 0
+    exited: int = 0
+    goal_met: int = 0
 
 
 class EnrollmentRun(BaseModel):

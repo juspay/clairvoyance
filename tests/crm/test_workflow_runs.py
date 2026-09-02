@@ -1,5 +1,6 @@
 """Run-operations laws: resume touches only parked rows, the sweep only
-old exited rows (batched), the list is merchant-first."""
+old exited rows (batched), the list is merchant-first. Counting laws are
+test_workflow_counts.py."""
 
 from datetime import datetime, timezone
 

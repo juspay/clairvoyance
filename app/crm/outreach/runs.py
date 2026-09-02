@@ -5,9 +5,9 @@ RESUME — errors never silently discard a run", and exited rows age out
 ("the retention sweep reads exited_at ... most of what keeps the hot
 table small").
 
-Trivial logic today — each function is one accessor call — but api.py
-and workers.py cross through here, never db/ directly (the contracts
-seam every module keeps).
+What you DO to a run, one accessor call apiece; what a pile of runs
+MEANS is counts.py. api.py and workers.py cross through this file, never
+db/ directly (the contracts seam every module keeps).
 """
 
 from datetime import datetime, timedelta, timezone

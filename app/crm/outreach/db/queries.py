@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 WORKFLOW_TABLE = "crm_workflow"
 ENROLLMENT_TABLE = "crm_workflow_enrollment"
 _WORKFLOW_SUMMARY_COLUMNS = """
-    id, merchant_id, name, status, version, created_by,
+    id, merchant_id, name, status, version, created_by, updated_by,
     created_at, updated_at
 """
 
@@ -37,15 +37,20 @@ def insert_workflow_query(
 
 
 def update_draft_query(
-    merchant_id: str, workflow_id: str, draft: Dict[str, Any]
+    merchant_id: str,
+    workflow_id: str,
+    draft: Dict[str, Any],
+    updated_by: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     query = f"""
         UPDATE {WORKFLOW_TABLE}
-        SET draft = $3::jsonb, updated_at = now()
+        SET draft = $3::jsonb,
+            updated_by = COALESCE($4, updated_by),
+            updated_at = now()
         WHERE merchant_id = $1 AND id = $2
         RETURNING {_WORKFLOW_COLUMNS}
     """
-    return query, [merchant_id, workflow_id, json.dumps(draft)]
+    return query, [merchant_id, workflow_id, json.dumps(draft), updated_by]
 
 
 def get_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
@@ -61,7 +66,8 @@ def list_workflows_query(
     merchant_id: str, limit: int, offset: int
 ) -> Tuple[str, List[Any]]:
     query = f"""
-        SELECT {_WORKFLOW_SUMMARY_COLUMNS}
+        SELECT {_WORKFLOW_SUMMARY_COLUMNS.strip()},
+               COALESCE(definition, draft) -> 'entry' AS entry
         FROM {WORKFLOW_TABLE}
         WHERE merchant_id = $1
         ORDER BY created_at DESC, id DESC
@@ -70,7 +76,9 @@ def list_workflows_query(
     return query, [merchant_id, limit, offset]
 
 
-def publish_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
+def publish_workflow_query(
+    merchant_id: str, workflow_id: str, updated_by: Optional[str] = None
+) -> Tuple[str, List[Any]]:
     """Publish = copy draft -> definition, bump version (the audit stamp),
     go/stay live. Runs inside the publish atom AFTER the validator said
     yes — the WHERE re-checks a draft still exists so a racing publish
@@ -81,23 +89,26 @@ def publish_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, Lis
             draft = NULL,
             version = version + 1,
             status = CASE WHEN status = 'draft' THEN 'live' ELSE status END,
+            updated_by = COALESCE($3, updated_by),
             updated_at = now()
         WHERE merchant_id = $1 AND id = $2 AND draft IS NOT NULL
         RETURNING {_WORKFLOW_COLUMNS}
     """
-    return query, [merchant_id, workflow_id]
+    return query, [merchant_id, workflow_id, updated_by]
 
 
 def set_workflow_status_query(
-    merchant_id: str, workflow_id: str, status: str
+    merchant_id: str, workflow_id: str, status: str, updated_by: Optional[str] = None
 ) -> Tuple[str, List[Any]]:
     query = f"""
         UPDATE {WORKFLOW_TABLE}
-        SET status = $3, updated_at = now()
+        SET status = $3,
+            updated_by = COALESCE($4, updated_by),
+            updated_at = now()
         WHERE merchant_id = $1 AND id = $2 AND status <> 'archived'
         RETURNING {_WORKFLOW_COLUMNS}
     """
-    return query, [merchant_id, workflow_id, status]
+    return query, [merchant_id, workflow_id, status, updated_by]
 
 
 def live_workflows_query(merchant_id: str) -> Tuple[str, List[Any]]:
@@ -355,6 +366,32 @@ def list_runs_query(
         params.append(status)
     params.extend([limit, offset])
     return query, params
+
+
+def run_counts_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
+    """The flow header's numbers in ONE pass. Grouped by exit_reason too,
+    because 'goal met' is a reason, not a status."""
+    query = f"""
+        SELECT status, exit_reason, count(*) AS n
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2
+        GROUP BY status, exit_reason
+    """
+    return query, [merchant_id, workflow_id]
+
+
+def run_counts_all_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """Every plan's numbers in ONE pass — run_counts_query's grouping with
+    workflow_id moved from the WHERE into the key, on
+    crm_workflow_enrollment_merchant_ix (058). Twenty plans, one round trip
+    instead of twenty. Plans with no runs are simply absent."""
+    query = f"""
+        SELECT workflow_id, status, exit_reason, count(*) AS n
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1
+        GROUP BY workflow_id, status, exit_reason
+    """
+    return query, [merchant_id]
 
 
 def resume_run_query(
