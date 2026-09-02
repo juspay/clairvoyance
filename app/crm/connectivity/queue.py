@@ -12,7 +12,7 @@ producer as the owner of the validating dictionary.
 
 from typing import Any, Dict, Optional
 
-from app.crm.connectivity.db import accessor
+from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
 # T16 col 7. What caused the send; every funnel groups on this.
@@ -65,7 +65,7 @@ async def queue_message(
     sent_to = normalize_address(channel, address)
     if sent_to is None:
         raise ValueError(f"unusable {channel} address")
-    return await accessor.insert_message(
+    return await message_accessor.insert_message(
         merchant_id,
         customer_id,
         channel,

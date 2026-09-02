@@ -13,13 +13,13 @@ from pathlib import Path
 import pytest
 
 from app.crm.connectivity import send as send_module
-from app.crm.connectivity.db.queries import (
+from app.crm.connectivity.db.queries.binding import (
     binding_by_id_query,
     primary_binding_query,
 )
 from app.crm.connectivity.providers import ADAPTERS, adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
-from app.crm.connectivity.providers.whatsapp import MetaWhatsAppAdapter
+from app.crm.connectivity.providers.whatsapp.adapter import MetaWhatsAppAdapter
 from app.crm.connectivity.schemas import (
     ChannelBinding,
     ConnectorInstallation,
@@ -174,8 +174,14 @@ def _route(**overrides) -> SendRoute:
 
 
 class _FakeAccessor:
-    """Stands in for db/accessor so the door is testable without a database —
-    which is the whole reason routes are resolved in one place."""
+    """Stands in for the db/accessors modules send.py reads, so the door is
+    testable without a database — which is the whole reason routes are
+    resolved in one place.
+
+    One double for both modules on purpose: the point under test is the
+    ORDER of the resolver's reads and what it refuses on, and splitting it
+    would only make each test say which of them to seed.
+    """
 
     def __init__(self, binding=None, installation=None):
         """Test double."""
@@ -208,11 +214,17 @@ class _FakeAccessor:
         return _record
 
 
+def _patch_accessors(monkeypatch, fake) -> None:
+    """Point send.py's accessor modules at one double."""
+    for name in ("binding_accessor", "installation_accessor"):
+        monkeypatch.setattr(send_module, name, fake)
+
+
 @pytest.fixture
 def happy_accessor(monkeypatch) -> _FakeAccessor:
     """Test double."""
     fake = _FakeAccessor(binding=_binding(), installation=_installation())
-    monkeypatch.setattr(send_module, "accessor", fake)
+    _patch_accessors(monkeypatch, fake)
     _patch_credential(monkeypatch, _credential())
     return fake
 
@@ -370,7 +382,7 @@ async def test_a_broken_route_refuses_and_never_retries(
     monkeypatch, accessor_kwargs, credential, expected
 ) -> None:
     """A broken route refuses and never retries."""
-    monkeypatch.setattr(send_module, "accessor", _FakeAccessor(**accessor_kwargs))
+    _patch_accessors(monkeypatch, _FakeAccessor(**accessor_kwargs))
     _patch_credential(monkeypatch, credential)
     message = _message()
     outcome = await send(_token(message), message)
@@ -386,10 +398,8 @@ async def test_a_vault_outage_retries_instead_of_blocking(monkeypatch) -> None:
     # None from the vault means "row gone/dead" and is rightly terminal above;
     # a raising read is the pool blipping, and the same blip one line earlier
     # (on get_binding) already retries. One transient failure, one answer.
-    monkeypatch.setattr(
-        send_module,
-        "accessor",
-        _FakeAccessor(binding=_binding(), installation=_installation()),
+    _patch_accessors(
+        monkeypatch, _FakeAccessor(binding=_binding(), installation=_installation())
     )
 
     async def _outage(credential_id, mask=True, raise_errors=False):
@@ -409,9 +419,8 @@ async def test_an_unhealthy_installation_refuses(monkeypatch, status) -> None:
     """An unhealthy installation refuses."""
     # Each of these states was chosen by somebody or by a prior failure; a
     # send must not quietly ignore it.
-    monkeypatch.setattr(
-        send_module,
-        "accessor",
+    _patch_accessors(
+        monkeypatch,
         _FakeAccessor(binding=_binding(), installation=_installation(status=status)),
     )
     _patch_credential(monkeypatch, _credential())
@@ -459,7 +468,7 @@ def test_both_binding_lookups_are_pinned_to_their_channel() -> None:
 class _HangingAdapter(ChannelAdapter):
     channel = "whatsapp"
 
-    async def deliver(self, message, route_bundle, binding):
+    async def deliver(self, message, route):
         """Test double: adapter deliver with a scripted behaviour."""
         await asyncio.sleep(3600)
         raise AssertionError("unreachable")
@@ -494,7 +503,7 @@ async def test_a_hung_route_lookup_is_bounded_by_the_same_deadline(
             """Test double: the seeded binding, or a hang/None per scenario."""
             await asyncio.sleep(3600)
 
-    monkeypatch.setattr(send_module, "accessor", _HangingAccessor())
+    monkeypatch.setattr(send_module, "binding_accessor", _HangingAccessor())
     monkeypatch.setattr(send_module, "CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 0.05)
     message = _message()
     outcome = await send(_token(message), message)
@@ -516,7 +525,7 @@ async def test_an_escaping_exception_becomes_the_default_outcome(
     class _Raises(ChannelAdapter):
         channel = "whatsapp"
 
-        async def deliver(self, message, route_bundle, binding):
+        async def deliver(self, message, route):
             """Test double: adapter deliver with a scripted behaviour."""
             raise ValueError("classification escape")
 
@@ -569,7 +578,7 @@ async def test_a_credential_refusal_does_not_touch_connection_state(
     class _RejectsCredentials(ChannelAdapter):
         channel = "whatsapp"
 
-        async def deliver(self, message, route_bundle, binding):
+        async def deliver(self, message, route):
             """Test double: adapter deliver with a scripted behaviour."""
             return SendOutcome(status="failed", reason="190")
 
@@ -619,8 +628,16 @@ def test_the_vault_is_read_through_its_own_accessor() -> None:
     # Table-ownership law: `credentials` belongs to app/database, so the one
     # sanctioned seam is its accessor — no vault SQL in connectivity's
     # builders, and send.py's read really is app/database's function.
-    queries_source = Path("app/crm/connectivity/db/queries.py").read_text()
-    assert "credentials" not in queries_source
+    # The split put one file per table under db/queries/; the law is about
+    # all of them, so the assertion walks the folder rather than naming a
+    # file a future table would quietly escape. Matching on SQL position
+    # rather than the bare word: prose may say "credentials" (it is the name
+    # of the thing these tables point AT), a statement may not name it.
+    vault_in_sql = re.compile(
+        r'(?:FROM|INTO|UPDATE|JOIN)\s+"?credentials"?', re.IGNORECASE
+    )
+    for builder in Path("app/crm/connectivity/db/queries").glob("*.py"):
+        assert not vault_in_sql.search(builder.read_text()), builder
     assert (
         send_module.get_credential_by_id.__module__
         == "app.database.accessor.breeze_buddy.credentials"

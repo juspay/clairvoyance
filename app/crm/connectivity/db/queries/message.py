@@ -1,4 +1,5 @@
-"""SQL builders for crm_message. $1 placeholders only, never interpolation.
+"""SQL builders for crm_message (T16, the manifest). $1 placeholders only,
+never interpolation.
 
 Every builder emits a single statement, which Postgres runs atomically — so
 nothing here needs a transaction. The claim and the sweep are deliberately
@@ -12,18 +13,6 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 MESSAGE_TABLE = "crm_message"
-INSTALLATION_TABLE = "crm_connector_installation"
-BINDING_TABLE = "crm_channel_binding"
-
-INSTALLATION_COLUMNS = """
-    id, merchant_id, connector_key, external_account_id, display_label,
-    credential_id, status, token_expires_at
-"""
-
-BINDING_COLUMNS = """
-    id, merchant_id, channel, installation_id, address, capabilities,
-    is_primary, status
-"""
 
 # Named once so the claim's RETURNING and the decoder cannot drift apart.
 # next_attempt_at rides along for the queue-lag log line.
@@ -178,60 +167,3 @@ def apply_outcome_query(
         retry_after_seconds,
         attempt,
     ]
-
-
-def primary_binding_query(merchant_id: str, channel: str) -> Tuple[str, List[Any]]:
-    """The merchant's default pipe on a channel.
-
-    Only 'active': a paused or retired pipe must produce NO route rather than
-    fall through to another number — sending from an unexpected address is
-    worse than not sending. is_primary is partial-unique per (merchant,
-    channel), so this never has to choose between two rows.
-    """
-    query = f"""
-        SELECT {BINDING_COLUMNS}
-          FROM {BINDING_TABLE}
-         WHERE merchant_id = $1
-           AND channel = $2
-           AND is_primary
-           AND status = 'active'
-    """
-    return query, [merchant_id, channel]
-
-
-def binding_by_id_query(
-    merchant_id: str, binding_id: str, channel: str
-) -> Tuple[str, List[Any]]:
-    """One named pipe, scoped to its merchant AND channel in the WHERE clause
-    rather than checked afterwards.
-
-    The channel filter is not redundant with the id: binding_id is a bare
-    uuid with no FK, so a row could name a binding of a DIFFERENT channel,
-    whose address would then reach this channel's adapter as if it were its
-    own kind of endpoint. A mismatch must be 'no route'.
-    """
-    query = f"""
-        SELECT {BINDING_COLUMNS}
-          FROM {BINDING_TABLE}
-         WHERE merchant_id = $1
-           AND id = $2::uuid
-           AND channel = $3
-           AND status = 'active'
-    """
-    return query, [merchant_id, binding_id, channel]
-
-
-def installation_by_id_query(
-    merchant_id: str, installation_id: str
-) -> Tuple[str, List[Any]]:
-    """The account behind a pipe. Status is NOT filtered here — the caller
-    decides what an unhealthy installation means, and a route that silently
-    disappeared would be reported as 'no connection' when the truth is
-    'connection revoked'."""
-    query = f"""
-        SELECT {INSTALLATION_COLUMNS}
-          FROM {INSTALLATION_TABLE}
-         WHERE merchant_id = $1
-           AND id = $2::uuid
-    """
-    return query, [merchant_id, installation_id]

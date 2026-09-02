@@ -541,6 +541,16 @@ META_WHATSAPP_GRAPH_BASE_URL = os.environ.get(
 )
 META_WHATSAPP_GRAPH_VERSION = os.environ.get("META_WHATSAPP_GRAPH_VERSION", "v23.0")
 
+# The app identity behind Embedded Signup and every non-send Graph call.
+# APP_SECRET is also what will verify inbound Meta webhooks — the same secret
+# proves both directions — so it is named here once, for both.
+# Empty is a legal boot: a deployment that never connects WhatsApp needs
+# neither, and a Graph call without them fails loudly at the call, not at
+# import (there is no get_required_env() in this repo to lean on).
+META_APP_ID = os.environ.get("META_APP_ID", "")
+META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
+
+
 # Announcement Banner Configuration
 DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR = os.environ.get(
     "DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR", "white"

@@ -8,7 +8,7 @@ from typing import Any, List, Optional
 import pytest
 
 import app.crm.connectivity.queue as queue
-from app.crm.connectivity.db.queries import insert_message_query
+from app.crm.connectivity.db.queries.message import insert_message_query
 
 
 def _proposal(**overrides: Any) -> dict:
@@ -72,7 +72,7 @@ def test_queue_message_returns_id_then_none_on_retry(
         seen.append(args[3])  # the normalized address
         return "msg-1" if len(seen) == 1 else None
 
-    monkeypatch.setattr(queue.accessor, "insert_message", fake_insert)
+    monkeypatch.setattr(queue.message_accessor, "insert_message", fake_insert)
     first = asyncio.run(queue.queue_message(**_proposal()))
     second = asyncio.run(queue.queue_message(**_proposal()))
     assert (first, second) == ("msg-1", None)
@@ -85,6 +85,6 @@ def test_unusable_address_is_refused_before_any_write(
     async def never(*args: Any) -> Optional[str]:
         raise AssertionError("must not write")
 
-    monkeypatch.setattr(queue.accessor, "insert_message", never)
+    monkeypatch.setattr(queue.message_accessor, "insert_message", never)
     with pytest.raises(ValueError):
         asyncio.run(queue.queue_message(**_proposal(address="hello")))

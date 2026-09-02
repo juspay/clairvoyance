@@ -29,7 +29,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.crm.connectivity.channels import gate_handle_kind_for
-from app.crm.connectivity.db import accessor
+from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.reasons import (
     REASON_ATTEMPTS_EXHAUSTED,
     REASON_GATE_UNAVAILABLE,
@@ -242,7 +242,7 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
     # instead of waiting a tick. The sweep KILLS rather than requeues a row
     # out of attempts — every lap through it was a claim that really sent, so
     # an unbounded sweep would be an unbounded sender.
-    reclaimed, exhausted = await accessor.requeue_stale_claims(
+    reclaimed, exhausted = await message_accessor.requeue_stale_claims(
         CRM_DISPATCH_STALE_MINUTES, CRM_DISPATCH_MAX_ATTEMPTS
     )
     if reclaimed:
@@ -260,7 +260,7 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
             f"attempts: {sample_ids(exhausted)}"
         )
 
-    messages = await accessor.claim_queued_messages(batch)
+    messages = await message_accessor.claim_queued_messages(batch)
     _log_queue_lag(messages, batch)
     return messages
 
@@ -329,7 +329,7 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
     plan = plan_for_outcome(outcome, message.attempt, max_attempts)
 
     try:
-        applied = await accessor.apply_outcome(
+        applied = await message_accessor.apply_outcome(
             message.id,
             plan.status,
             plan.reason,

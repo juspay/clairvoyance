@@ -779,3 +779,38 @@ async def DRAGONTTS_HEALTH_TIMEOUT_S() -> float:
 async def PLIVO_INR_CONVERSION_RATE() -> float:
     """Returns PLIVO_INR_CONVERSION_RATE from Redis"""
     return await get_config("PLIVO_INR_CONVERSION_RATE", 80.0, float)
+
+
+# ----------------------------------------------------------------------------
+# CRM connectivity — the ceiling on ONE non-send Graph call (the Embedded
+# Signup handshake today; template registration next).
+#
+# Dynamic rather than static by this file's own rule: it is awaited on every
+# call and nothing binds it at startup, so a Redis change takes effect on the
+# next request instead of the next deploy. That is the whole reason to want
+# the dial — Meta degrades, the handshake starts timing out, and the fix is
+# to ride it out rather than to ship. Same shape as DRAGONTTS_HEALTH_TIMEOUT_S
+# above: a timeout on an outbound call to a dependency that has bad days.
+#
+# NOT to be confused with CRM_MESSAGE_SEND_TIMEOUT_SECONDS, which stays static
+# and must: it is a slice of the dispatcher's claim lease (batch x 2 x timeout
+# <= lease), so a live change there could silently break the arithmetic that
+# stops two pods sending one message twice. These calls ride an API request
+# with a human waiting on the answer and no lease to outlive, so they are safe
+# to turn.
+#
+# Resolution is Redis -> env -> the default below, and every failure falls
+# through, so an unreachable Redis simply yields the env value.
+# ----------------------------------------------------------------------------
+
+
+async def META_GRAPH_TIMEOUT_SECONDS() -> float:
+    """Seconds one Graph API call may take before it is abandoned."""
+    value = await get_config("META_GRAPH_TIMEOUT_SECONDS", 15.0, float)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid META_GRAPH_TIMEOUT_SECONDS value {value!r}; using 15.0"
+        )
+        return 15.0

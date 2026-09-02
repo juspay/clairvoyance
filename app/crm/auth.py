@@ -1,7 +1,8 @@
 """Auth dependencies for /crm routes (A5, ADR 0007).
 
 Phase 1's API surface is ops/admin + service-to-service only — no new auth
-system, no merchant-facing RBAC until the console fast-follow. Two doors:
+system, no merchant-facing RBAC until the console fast-follow. Three doors
+for callers we authenticate:
 
 - ``crm_admin_user`` — FastAPI dependency: existing RBAC bearer JWT,
   admin role required. Module routers put it in ``Depends(...)``.
@@ -14,8 +15,14 @@ system, no merchant-facing RBAC until the console fast-follow. Two doors:
   the lead door), else the per-merchant token above. One door, two kinds
   of caller; see its docstring for why the order is what it is.
 
-Webhook ingress from external providers (Shopify relay, WhatsApp) does NOT
-use these — it is signature-verified per source in record/api.py (A9).
+Merchant-facing routes (the connectors family) use a fourth:
+``assert_merchant_access`` — the same RBAC bearer JWT every other
+clairvoyance call carries, plus an explicit tenancy check on the
+merchant_id in the request. It is here so there is exactly one answer to
+"who may touch this merchant" across /crm.
+
+Webhook ingress from external providers (Shopify relay, Meta) does NOT
+use any of these — it is signature-verified per source in record/api.py (A9).
 """
 
 import hmac
@@ -27,6 +34,7 @@ from app.api.security.breeze_buddy.rbac_token import (
     get_current_user_with_rbac,
     rbac_token_manager,
 )
+from app.core.logger import logger
 from app.core.security.authorization import require_admin
 from app.database.accessor.breeze_buddy.merchants import (
     check_merchant_identifier_exists,
@@ -41,6 +49,45 @@ async def crm_admin_user(
     """Authenticated admin, or 403. The dependency every /crm admin route uses."""
     require_admin(current_user)
     return current_user
+
+
+def assert_merchant_access(
+    current_user: UserInfo, merchant_id: str, operation: str
+) -> None:
+    """The tenancy check, in one place, for merchant-facing CRM routes.
+
+    Fail closed: a caller who does not hold this merchant_id gets 403 before
+    anything reads or writes. Admins pass, and "*" is the full-access
+    wildcard the RBAC tokens already use.
+
+    merchant_id is taken from the REQUEST (body for a POST, query for a GET),
+    never derived from the token: a caller may hold several merchant_ids, so
+    there is no single "current" one to infer, and inferring the wrong one is
+    a cross-tenant write.
+
+    This lives here rather than in each router because it was already
+    duplicated once, and one home for "who may touch this merchant" is a
+    tenancy law rather than a style preference.
+
+    Buddy's own copy in app/api/routers/breeze_buddy/leads/rbac.py stays
+    where it is: boundary rule 4 lets app/api import only
+    app.crm.<module>.contracts, so it cannot reach this module at all. The
+    duplication there is enforced by the boundary, not overlooked.
+    """
+    if current_user.role == "admin":
+        return
+    if (
+        merchant_id not in current_user.merchant_ids
+        and "*" not in current_user.merchant_ids
+    ):
+        logger.warning(
+            f"User {current_user.username} attempted to {operation} for "
+            f"unauthorized merchant: {merchant_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied to merchant {merchant_id}",
+        )
 
 
 def _extract_token(request: Request) -> Optional[str]:
