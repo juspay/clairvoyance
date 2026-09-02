@@ -2,7 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from typing import Dict, List, cast
+from typing import Any, Dict, List, cast
 
 import pytest
 from fastapi import HTTPException, Request
@@ -228,3 +228,37 @@ def test_caller_fails_closed_when_token_lookup_raises(
 
     with pytest.raises(RuntimeError):
         asyncio.run(verify_s2s_caller("m1", _request({"x-s2s-token": "t"})))
+
+
+# --- the tenancy check merchant-facing CRM routes share ---------------------
+
+
+def _user(role: str = "user", merchant_ids=("shop",)) -> object:
+    """A UserInfo-shaped stand-in; only three fields are read."""
+    return SimpleNamespace(
+        role=role, merchant_ids=list(merchant_ids), username="someone"
+    )
+
+
+def test_a_caller_may_touch_their_own_merchant() -> None:
+    crm_auth.assert_merchant_access(cast(Any, _user()), "shop", "onboard")
+
+
+def test_a_caller_may_not_touch_another_merchant() -> None:
+    """Fail closed on tenancy: the 403 lands before anything reads or
+    writes, because merchant_id arrives in the REQUEST and a caller may hold
+    several — there is no single 'current' one to infer from the token."""
+    with pytest.raises(HTTPException) as caught:
+        crm_auth.assert_merchant_access(cast(Any, _user()), "rival", "onboard")
+    assert caught.value.status_code == 403
+
+
+def test_the_wildcard_and_admins_pass() -> None:
+    """Our team still drives the pilot: admins pass, so making these routes
+    merchant-facing does not take the surface away from ops."""
+    crm_auth.assert_merchant_access(
+        cast(Any, _user(merchant_ids=("*",))), "anything", "onboard"
+    )
+    crm_auth.assert_merchant_access(
+        cast(Any, _user(role="admin", merchant_ids=())), "anything", "onboard"
+    )

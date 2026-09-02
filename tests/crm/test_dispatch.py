@@ -8,7 +8,7 @@ from pathlib import Path
 from app.core.config.static import _positive_float, _positive_int
 from app.crm.connectivity import dispatch
 from app.crm.connectivity.channels import CHANNELS, gate_handle_kind_for
-from app.crm.connectivity.db.queries import (
+from app.crm.connectivity.db.queries.message import (
     CLAIMED_COLUMNS,
     apply_outcome_query,
     claim_queued_messages_query,
@@ -172,7 +172,7 @@ async def test_an_accepted_send_records_the_outcome(monkeypatch) -> None:
 
     monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", fake_send)
-    monkeypatch.setattr(dispatch.accessor, "apply_outcome", record_outcome)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
     assert written["sent"] == "m-1"
     assert written["token_names_message"] is True
@@ -200,7 +200,7 @@ async def test_a_raising_send_becomes_a_retryable_send_error(monkeypatch) -> Non
 
     monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", broken_send)
-    monkeypatch.setattr(dispatch.accessor, "apply_outcome", record_outcome)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(attempt=1), 3)
     # We don't know whether the provider saw it, so it requeues with a delay.
     assert written["status"] == STATUS_QUEUED
@@ -237,7 +237,7 @@ async def test_a_suppressed_address_is_blocked_and_the_adapter_never_called(
 
     monkeypatch.setattr(dispatch, "is_suppressed", suppressed)
     monkeypatch.setattr(dispatch, "send", exploding_send)
-    monkeypatch.setattr(dispatch.accessor, "apply_outcome", record_outcome)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
     assert written["status"] == STATUS_BLOCKED
     assert written["reason"] == REASON_SUPPRESSED
@@ -264,7 +264,7 @@ async def test_a_channel_the_gate_cannot_check_fails_closed(monkeypatch) -> None
         return True
 
     monkeypatch.setattr(dispatch, "send", exploding_send)
-    monkeypatch.setattr(dispatch.accessor, "apply_outcome", record_outcome)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     message = _message()
     message = message.model_copy(update={"channel": "carrier_pigeon"})
     await dispatch._dispatch_one(message, 3)
@@ -300,7 +300,7 @@ async def test_a_hung_gate_probe_is_bounded_and_fails_closed(monkeypatch) -> Non
     monkeypatch.setattr(dispatch, "is_suppressed", hanging_probe)
     monkeypatch.setattr(dispatch, "send", exploding_send)
     monkeypatch.setattr(dispatch, "CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(dispatch.accessor, "apply_outcome", record_outcome)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
     assert written["status"] == STATUS_BLOCKED
     assert written["reason"] == REASON_GATE_UNAVAILABLE
@@ -337,7 +337,7 @@ async def test_a_reclaimed_row_discards_the_late_outcome(monkeypatch) -> None:
 
     monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", fake_send)
-    monkeypatch.setattr(dispatch.accessor, "apply_outcome", reclaimed)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", reclaimed)
     await dispatch._dispatch_one(_message(), 3)
     # Discarded means one write attempt, no retry, no raise — their row now.
     assert calls == [STATUS_ACCEPTED]

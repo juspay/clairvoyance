@@ -70,6 +70,38 @@ def get_credentials_by_merchant_query(
         return text, []
 
 
+def get_credential_by_name_query(
+    reseller_id: Optional[str], name: str
+) -> Tuple[str, List[Any]]:
+    """Generate query to get one credential by its name.
+
+    One row, decrypted once — the alternative is reading every credential a
+    reseller owns and scanning for the name, which costs a KMS decrypt per
+    credential and grows with the reseller.
+
+    A reseller's own row WINS over the global fallback: NULLS LAST, not the
+    NULLS FIRST the list query uses. That query is a listing where globals
+    sensibly come first; this one picks a single winner, and an override that
+    loses to the thing it overrides is not an override.
+    """
+    if reseller_id:
+        text = f"""
+            SELECT * FROM "{CREDENTIALS_TABLE}"
+            WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
+            AND "name" = $2 AND "is_active" = TRUE
+            ORDER BY "reseller_id" NULLS LAST
+            LIMIT 1;
+        """
+        return text, [reseller_id, name]
+    else:
+        text = f"""
+            SELECT * FROM "{CREDENTIALS_TABLE}"
+            WHERE "reseller_id" IS NULL AND "name" = $1 AND "is_active" = TRUE
+            LIMIT 1;
+        """
+        return text, [name]
+
+
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
     text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "name" ASC;'

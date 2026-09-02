@@ -7,7 +7,8 @@ PR time — earlier than a grant would fail:
   1. TABLE OWNERSHIP — a quoted crm_*/platform_* table literal may appear
      only in its owning module's db/ package (+ migrations, tests, scripts).
   2. SQL CONFINEMENT — SQL statements inside app/crm live only in
-     db/queries*.py files.
+     db/queries*.py files, or in db/queries/<table>.py once a module's
+     db/ has split per table.
   3. DRIVER CONFINEMENT — within app/crm, `import asyncpg` is legal only
      in shared/db.py and */db/ packages.
   4. IMPORT DIRECTION — app/crm never imports app.ai; buddy (app/ai,
@@ -29,9 +30,12 @@ PR time — earlier than a grant would fail:
   10. HANDLES STAY DOWN — connection()/crm_connection never appears in
      logic; accessors self-scope single statements and batch loops. A
      logic file touches a handle ONLY as an _in_txn body's txn param.
-  11. ADAPTER CONFINEMENT — app.crm.connectivity.providers is imported
-     only by app/crm/connectivity/send.py and inside providers/ itself;
-     any other import reaches a provider around the send() door's checks.
+  11. PROVIDER FACE CONFINEMENT — a provider package has more than one
+     face, and each face has exactly ONE composition root outside
+     providers/: the send door (the ADAPTERS assembly and <x>/adapter.py)
+     answers to send.py, the non-send faces (<x>/onboard.py,
+     <x>/templates.py) answer to connectors.py, and vendor transport
+     (providers/meta/graph.py) never leaves providers/ at all.
   12. RECORD HEARS, NEVER CALLS — app/crm/record imports no subscriber
      module (identity + shared only): consumers register through
      record/consumers.py from worker_main, so subscriber -> record is the
@@ -63,6 +67,38 @@ TABLE_OWNERS = {
     "crm_channel_binding": "connectivity",
 }
 
+# ---- rule 11's map: one composition root per provider face ----------------
+#
+# The old rule was folder-shaped ("providers/ is send.py's alone") and the
+# scar it left is exact: onboarding's Graph calls were parked in a
+# module-root meta_graph.py to dodge it, and the confined adapter then
+# imported that unconfined file — a package reaching OUTWARD for its own
+# vendor code. So the rule follows the FACE, not the folder.
+#
+# base.py is readable from both roots on purpose: it holds abstract ports
+# and shared plumbing, no vendor and no transport, and naming a Protocol
+# reaches no provider. Anything else under providers/ stays inside it.
+PROVIDER_ROOTS = {
+    "send": "app/crm/connectivity/send.py",
+    "connectors": "app/crm/connectivity/connectors.py",
+}
+PROVIDER_FACES = (
+    # the ADAPTERS assembly itself, and every adapter behind it
+    (re.compile(r"^app\.crm\.connectivity\.providers$"), ("send",)),
+    (re.compile(r"^app\.crm\.connectivity\.providers\.\w+\.adapter\b"), ("send",)),
+    # the non-send faces: onboarding a door, registering a template
+    (
+        re.compile(r"^app\.crm\.connectivity\.providers\.\w+\.onboard\b"),
+        ("connectors",),
+    ),
+    (
+        re.compile(r"^app\.crm\.connectivity\.providers\.\w+\.templates\b"),
+        ("connectors",),
+    ),
+    # the ports both roots must name to type what they assemble
+    (re.compile(r"^app\.crm\.connectivity\.providers\.base\b"), ("send", "connectors")),
+)
+
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions
 # (the template.py DTO->engine scar predates the CRM; fixed with the
 # buddy restructure, not silently grown).
@@ -84,6 +120,10 @@ HANDLE_CALL = re.compile(
 CREATE_TABLE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:crm|platform)_\w+)", re.IGNORECASE
 )
+# Both shapes of the query layer: the flat db/queries.py a young module
+# starts with, and the db/queries/<table>.py it splits into once one file
+# would carry four tables (modules/00 §1, ~500-line hygiene).
+QUERIES_FILE = re.compile(r"/db/queries(?:[\w]*\.py|/[\w]+\.py)$")
 
 
 def crm_module_of(rp: str) -> str | None:
@@ -122,11 +162,12 @@ def check(root: Path = ROOT) -> list[str]:
                     )
 
         # 2. SQL confinement inside app/crm
-        if in_crm and not re.search(r"/db/queries[\w]*\.py$", rp):
+        if in_crm and not QUERIES_FILE.search(rp):
             if SQL_STMT.search(text):
                 errors.append(
                     f"{rp}: SQL statement outside db/queries — SQL builders "
-                    f"live only in the owning module's db/queries*.py"
+                    f"live only in the owning module's db/queries*.py "
+                    f"(or db/queries/<table>.py)"
                 )
 
         # 3. driver confinement inside app/crm
@@ -176,14 +217,20 @@ def check(root: Path = ROOT) -> list[str]:
                         f"{rp}: the data layer imports neither app.ai nor "
                         f"app.crm ({target}) — use the hook-registry pattern"
                     )
-            # 11. adapter confinement — providers/ sits behind the send() door
-            if target.startswith("app.crm.connectivity.providers"):
-                if rp != "app/crm/connectivity/send.py" and not rp.startswith(
-                    "app/crm/connectivity/providers/"
-                ):
+            # 11. provider-face confinement — one root per face
+            if target.startswith(
+                "app.crm.connectivity.providers"
+            ) and not rp.startswith("app/crm/connectivity/providers/"):
+                doors: tuple[str, ...] = ()
+                for pattern, roots in PROVIDER_FACES:
+                    if pattern.match(target):
+                        doors = tuple(PROVIDER_ROOTS[root] for root in roots)
+                        break
+                if rp not in doors:
+                    door = " or ".join(doors) if doors else "providers/ itself"
                     errors.append(
-                        f"{rp}: adapter import outside send.py ({target}) — "
-                        f"providers/ is reached only through the send() door"
+                        f"{rp}: provider face imported outside its door "
+                        f"({target}) — reachable only from {door}"
                     )
             # 12. record hears, never calls — the spine's owner imports no
             # subscriber (not even its contracts; worker_main registers them

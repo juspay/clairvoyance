@@ -163,7 +163,7 @@ def test_adapter_import_outside_send_fails(tmp_path: Path) -> None:
             )
         },
     )
-    assert any("adapter import outside send.py" in e for e in check(root))
+    assert any("provider face imported outside its door" in e for e in check(root))
 
 
 def test_send_and_providers_themselves_may_import_adapters(tmp_path: Path) -> None:
@@ -172,9 +172,12 @@ def test_send_and_providers_themselves_may_import_adapters(tmp_path: Path) -> No
         {
             "app/crm/connectivity/send.py": (
                 "from app.crm.connectivity.providers import adapter_for\n"
-            ),
-            "app/crm/connectivity/providers/whatsapp.py": (
                 "from app.crm.connectivity.providers.base import ChannelAdapter\n"
+                "from app.crm.connectivity.providers.whatsapp.adapter import A\n"
+            ),
+            "app/crm/connectivity/providers/whatsapp/adapter.py": (
+                "from app.crm.connectivity.providers.base import ChannelAdapter\n"
+                "from app.crm.connectivity.providers.meta.graph import call\n"
             ),
         },
     )
@@ -202,3 +205,92 @@ def test_record_may_import_identity_and_shared(tmp_path: Path) -> None:
         },
     )
     assert not any("record imports a subscriber" in e for e in check(root))
+
+
+# ---- rule 11 is face-precise: each face has ONE root outside providers/ ----
+
+
+def test_onboard_face_outside_connectors_fails(tmp_path: Path) -> None:
+    """The scar this rule exists for, in reverse: onboarding.py must reach a
+    provider's onboard face through connectors.py, never by importing it."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/onboarding.py": (
+                "from app.crm.connectivity.providers.whatsapp.onboard import W\n"
+            )
+        },
+    )
+    assert any("provider face imported outside its door" in e for e in check(root))
+
+
+def test_adapter_face_in_connectors_fails(tmp_path: Path) -> None:
+    """The other direction: connectors.py owns the non-send faces only. An
+    adapter reached from there would bypass send()'s checks."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/connectors.py": (
+                "from app.crm.connectivity.providers.whatsapp.adapter import A\n"
+            )
+        },
+    )
+    assert any("provider face imported outside its door" in e for e in check(root))
+
+
+def test_connectors_may_import_the_non_send_faces(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/connectors.py": (
+                "from app.crm.connectivity.providers.base import ConnectorOnboarder\n"
+                "from app.crm.connectivity.providers.whatsapp.onboard import W\n"
+                "from app.crm.connectivity.providers.whatsapp.templates import T\n"
+            )
+        },
+    )
+    assert check(root) == []
+
+
+def test_vendor_transport_never_leaves_providers(tmp_path: Path) -> None:
+    """meta/graph.py is the file the old rule pushed to the module root.
+    Neither root may import it — it is transport, not a face."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/connectors.py": (
+                "from app.crm.connectivity.providers.meta.graph import call\n"
+            )
+        },
+    )
+    assert any("providers/ itself" in e for e in check(root))
+
+
+# ---- rule 2 admits the per-table split of a module's db/ ------------------
+
+
+def test_sql_in_split_queries_folder_passes(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/db/queries/template.py": (
+                'T = "crm_channel_template"\n'
+                'q = "SELECT id FROM crm_channel_template"\n'
+            )
+        },
+    )
+    assert check(root) == []
+
+
+def test_sql_in_split_accessors_folder_fails(tmp_path: Path) -> None:
+    """The split moves the queries, not the confinement: an accessor under
+    db/accessors/ is still forbidden to carry SQL."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/db/accessors/template.py": (
+                'q = "SELECT id FROM crm_channel_template"\n'
+            )
+        },
+    )
+    assert any("SQL statement outside db/queries" in e for e in check(root))

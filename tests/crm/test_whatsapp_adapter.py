@@ -11,19 +11,23 @@ from typing import Any, Dict, Optional
 import httpx
 import pytest
 
-from app.crm.connectivity.providers import whatsapp as whatsapp_module
-from app.crm.connectivity.providers.whatsapp import (
+from app.crm.connectivity.providers.whatsapp import adapter as whatsapp_module
+from app.crm.connectivity.providers.whatsapp.adapter import MetaWhatsAppAdapter
+from app.crm.connectivity.providers.whatsapp.classify import (
     CREDENTIAL_CODES,
     RETRYABLE_CODES,
     TERMINAL_CODES,
-    MetaWhatsAppAdapter,
+)
+from app.crm.connectivity.providers.whatsapp.payload import (
     build_parameters,
     to_meta_recipient,
 )
 from app.crm.connectivity.schemas import (
     ChannelBinding,
+    ConnectorInstallation,
     CredentialBundle,
     QueuedMessage,
+    SendRoute,
 )
 
 ACCEPTED_BODY = {
@@ -74,6 +78,27 @@ def _bundle(**values) -> CredentialBundle:
     return CredentialBundle(values={"system_user_token": "tok", **values})
 
 
+def _installation(**overrides) -> ConnectorInstallation:
+    """The door a route hangs off; overrides replace any field."""
+    fields = dict(
+        id="i-1",
+        merchant_id="shop",
+        connector_key="whatsapp",
+        external_account_id="waba-1",
+        credential_id="cred-1",
+        status="healthy",
+    )
+    fields.update(overrides)
+    return ConnectorInstallation(**fields)
+
+
+def _route(**overrides) -> SendRoute:
+    """Everything send() resolves, handed to the adapter as one object."""
+    fields = dict(installation=_installation(), binding=_binding(), bundle=_bundle())
+    fields.update(overrides)
+    return SendRoute(**fields)
+
+
 def _mocked(monkeypatch, handler) -> Dict[str, Any]:
     """Point the adapter's HTTP client at a canned responder and capture the
     request it made."""
@@ -106,12 +131,19 @@ def _responds(status: int, body: Optional[dict] = None, text: Optional[str] = No
     return handler
 
 
-async def _deliver(monkeypatch, handler, message=None, binding=None, bundle=None):
+async def _deliver(
+    monkeypatch, handler, message=None, binding=None, bundle=None, route=None
+):
     """Run deliver() against a mocked transport; return (outcome, request seen)."""
     seen = _mocked(monkeypatch, handler)
-    outcome = await MetaWhatsAppAdapter().deliver(
-        message or _message(), bundle or _bundle(), binding or _binding()
-    )
+    if route is None:
+        overrides = {}
+        if binding is not None:
+            overrides["binding"] = binding
+        if bundle is not None:
+            overrides["bundle"] = bundle
+        route = _route(**overrides)
+    outcome = await MetaWhatsAppAdapter().deliver(message or _message(), route)
     return outcome, seen
 
 
@@ -149,11 +181,31 @@ async def test_the_body_names_a_template_and_never_a_rendered_string(
 def test_numeric_keys_become_positional_parameters_in_numeric_order() -> None:
     """Numeric keys become positional parameters in numeric order."""
     # Sorting as strings would put "10" before "2" and silently swap two
-    # values in a customer's message.
-    params = build_parameters({"2": "second", "10": "tenth", "1": "first"})
+    # values in a customer's message. Ten consecutive keys, because a
+    # template's placeholders run 1..N with no gaps — see the next test.
+    values = {str(n): f"v{n}" for n in (2, 10, 1, 7, 3, 9, 4, 8, 5, 6)}
+    params = build_parameters(values)
     assert isinstance(params, list)
-    assert [p["text"] for p in params] == ["first", "second", "tenth"]
+    assert [p["text"] for p in params] == [f"v{n}" for n in range(1, 11)]
     assert all("parameter_name" not in p for p in params)
+
+
+def test_gapped_positional_keys_are_refused_rather_than_compacted() -> None:
+    """Meta reads body parameters BY POSITION, so a gap renumbers everything
+    after it: {"1": name, "3": order} would send the order as {{2}} and leave
+    a template reading {{3}} a parameter short. The message still looks
+    delivered, with the wrong values in it — so the defect is named before
+    anything is posted."""
+    defect = build_parameters({"1": "Priya", "3": "ORD-42"})
+    assert isinstance(defect, str)
+    assert "no gaps" in defect
+
+
+def test_positional_keys_must_start_at_one() -> None:
+    """A set starting at 2 is the same corruption from the other end."""
+    defect = build_parameters({"2": "Priya", "3": "ORD-42"})
+    assert isinstance(defect, str)
+    assert "no gaps" in defect
 
 
 def test_named_keys_become_named_parameters() -> None:
@@ -222,7 +274,7 @@ async def test_mixed_variables_are_blocked_before_posting(monkeypatch) -> None:
     """Mixed variables are blocked before posting — OUR refusal, not Meta's."""
     seen = _mocked(monkeypatch, _responds(200, ACCEPTED_BODY))
     outcome = await MetaWhatsAppAdapter().deliver(
-        _message(variables={"1": "x", "otp": "y"}), _bundle(), _binding()
+        _message(variables={"1": "x", "otp": "y"}), _route()
     )
     assert outcome.status == "blocked"
     assert outcome.reason == "template_variables_invalid"
@@ -235,7 +287,7 @@ async def test_a_null_variable_is_blocked_before_posting(monkeypatch) -> None:
     """A null variable is blocked before posting — OUR refusal, not Meta's."""
     seen = _mocked(monkeypatch, _responds(200, ACCEPTED_BODY))
     outcome = await MetaWhatsAppAdapter().deliver(
-        _message(variables={"1": "Priya", "2": None}), _bundle(), _binding()
+        _message(variables={"1": "Priya", "2": None}), _route()
     )
     assert outcome.status == "blocked"
     assert outcome.reason == "template_variables_invalid"
@@ -244,21 +296,22 @@ async def test_a_null_variable_is_blocked_before_posting(monkeypatch) -> None:
     assert seen == {}
 
 
-def test_the_language_comes_from_the_binding(monkeypatch) -> None:
-    """The language comes from the binding."""
-    # A per-endpoint fact: one merchant's templates may be approved in a
-    # different locale from another's.
+def test_the_language_comes_from_the_binding_for_now() -> None:
+    """INTERIM: which locale a template was APPROVED in is a fact about the
+    TEMPLATE, and the binding's capabilities blob can disagree with what Meta
+    actually approved. The template registry (T23) is what will answer this;
+    until it lands the binding does, exactly as it did before."""
     adapter = MetaWhatsAppAdapter()
     parameters = build_parameters(_message().variables)
     assert isinstance(parameters, list)
     payload = adapter.build_payload(
         _message(),
         "919876543210",
-        _binding(capabilities={"template_language": "hi"}),
+        _route(binding=_binding(capabilities={"template_language": "hi"})),
         parameters,
     )
     assert payload["template"]["language"]["code"] == "hi"
-    default = adapter.build_payload(_message(), "919876543210", _binding(), parameters)
+    default = adapter.build_payload(_message(), "919876543210", _route(), parameters)
     assert default["template"]["language"]["code"] == "en_US"
 
 
@@ -270,7 +323,7 @@ async def test_a_bundle_without_a_token_is_blocked(monkeypatch) -> None:
     reason carries from resolve_send_route, never Meta's word 'failed'."""
     seen = _mocked(monkeypatch, _responds(200, ACCEPTED_BODY))
     outcome = await MetaWhatsAppAdapter().deliver(
-        _message(), CredentialBundle(values={"app_secret": "x"}), _binding()
+        _message(), _route(bundle=CredentialBundle(values={"app_secret": "x"}))
     )
     assert outcome.status == "blocked"
     assert outcome.reason == "connector_credential_missing"
@@ -283,9 +336,7 @@ async def test_a_bundle_without_a_token_is_blocked(monkeypatch) -> None:
 async def test_a_message_without_a_template_is_blocked(monkeypatch) -> None:
     """A message without a template is blocked — terminally, before posting."""
     seen = _mocked(monkeypatch, _responds(200, ACCEPTED_BODY))
-    outcome = await MetaWhatsAppAdapter().deliver(
-        _message(template_id=None), _bundle(), _binding()
-    )
+    outcome = await MetaWhatsAppAdapter().deliver(_message(template_id=None), _route())
     assert outcome.status == "blocked"
     assert outcome.reason == "template_missing"
     assert outcome.retryable is False
@@ -302,7 +353,7 @@ async def test_an_unusable_address_is_blocked_before_posting(
     saw it, so the manifest must not show the word reserved for Meta's no."""
     seen = _mocked(monkeypatch, _responds(200, ACCEPTED_BODY))
     outcome = await MetaWhatsAppAdapter().deliver(
-        _message(sent_to_address=address), _bundle(), _binding()
+        _message(sent_to_address=address), _route()
     )
     assert outcome.status == "blocked"
     assert outcome.reason == "recipient_address_invalid"

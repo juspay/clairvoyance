@@ -23,12 +23,28 @@ app/crm/<module>/
   db/            # ALL mechanics behind one hop — root stays the story
     __init__.py  # the db door: re-exports transaction, savepoint, DbTxn,
                  #   domain errors
-    accessor.py  # execute one query builder per function; no decisions.
-                 #   Splits as accessor_<table>.py when the module grows
-    queries.py   # SQL builders — (sql, params), $1 placeholders. Splits as
-                 #   queries_<table>.py when the module grows
+    accessor.py  # execute one query builder per function; no decisions
+    queries.py   # SQL builders — (sql, params), $1 placeholders
     decoder.py   # row -> schemas model, DB-side translation only
 ```
+
+**At scale the three files become three folders, one file per table** — the
+form connectivity carries today, and the one a module takes on its next `db/`
+touch once one file would hold four tables or cross the ~500-line line:
+
+```
+  db/
+    __init__.py                  the door, unchanged
+    queries/    installation.py · binding.py · message.py
+    accessors/  installation.py · binding.py · message.py
+    decoders/   installation.py · binding.py · message.py
+```
+
+Shared column lists move with their table. Import the table you mean by its
+full path (`from ...db.accessors import binding as binding_accessor`) — the
+sub-packages export nothing, so an accessor's imports say which table it
+touches without opening a second file. CI rule 2 admits both shapes; a file
+under `db/accessors/` or `db/decoders/` still may not carry SQL.
 
 **The layer law:** `api -> logic -> db/accessor -> db/queries`.
 **The boundary law:** logic owns transaction scope (atomicity is business
@@ -114,6 +130,14 @@ No service classes, no repository interfaces; pure core + thin shell.
 - God files (3,100-line types.py) — split before ~500 lines.
 - Router→router imports — routers call accessors/contracts only.
 - Re-export hub `__init__.py` — import by full path.
+- Parking a provider's code at the module root to dodge the adapter rule.
+  A connector has several FACES — send, onboard, templates — and CI rule 11
+  gives each ONE composition root outside `providers/`: adapters answer to
+  `send.py`, the non-send faces to `connectors.py`, vendor transport
+  (`providers/meta/graph.py`) to neither. The scar: when the rule was
+  folder-shaped, onboarding's Graph calls were moved to a root
+  `meta_graph.py` to get around it, and the confined adapter then imported
+  that unconfined file.
 - `app/crm` importing `app/ai` — never; buddy imports crm contracts, and
   the DB accessor layer imports NEITHER (use the hook registry pattern in
   `app/database/accessor/breeze_buddy/lead_call_tracker.py`).

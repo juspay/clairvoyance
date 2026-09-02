@@ -19,6 +19,7 @@ from app.database.queries.breeze_buddy.credentials import (
     delete_credential_query,
     get_all_credentials_query,
     get_credential_by_id_query,
+    get_credential_by_name_query,
     get_credentials_by_merchant_query,
     insert_credential_query,
     update_credential_query,
@@ -159,6 +160,28 @@ async def get_credential_by_id(
         if raise_errors:
             raise
         return None
+
+
+async def get_credential_by_name(
+    reseller_id: Optional[str],
+    name: str,
+    mask: bool = True,
+) -> Optional[Credential]:
+    """Get a credential by its name, without decrypting every other one the
+    reseller owns.
+
+    A query or decode failure RE-RAISES rather than folding into None. The
+    caller uses None to decide "no such credential, create one" — reading a
+    transient database failure as that would create a duplicate row and hide
+    the real fault behind it.
+    """
+    try:
+        query_text, values = get_credential_by_name_query(reseller_id, name)
+        result = await run_parameterized_query(query_text, values)
+        return decode_single_credential(result, mask=mask)
+    except Exception as e:
+        logger.opt(exception=e).error(f"Error getting credential by name '{name}'")
+        raise
 
 
 async def get_credentials_by_merchant(

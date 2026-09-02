@@ -29,7 +29,10 @@ from typing import Optional, Union
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
-from app.crm.connectivity.db import accessor
+from app.crm.connectivity.db.accessors import (
+    binding as binding_accessor,
+    installation as installation_accessor,
+)
 from app.crm.connectivity.providers import adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
 from app.crm.connectivity.reasons import (
@@ -101,20 +104,22 @@ async def resolve_send_route(
     Order matters — the binding comes first because it is the merchant-scoped
     anchor, and everything after is reached THROUGH it, so no lookup here can
     wander into another tenant's rows.
+
+    TODO(T23): once the template registry lands, look the template up here
+    and refuse with blocked/template_not_approved unless it is approved on
+    this account — taking the language from the registry row instead of
+    binding.capabilities (ADR 0011: a non-approved template is refused
+    BEFORE the provider call).
     """
-    # TODO(T23, #1038): once crm_template lands, look the template up here by
-    # (merchant_id, channel, name, language) and refuse with
-    # blocked/template_not_approved unless status='approved' — taking language
-    # from the registry instead of binding.capabilities.template_language
-    # (ADR 0011: a non-approved template is refused BEFORE the provider call).
-    # Owned by whichever of #1037/#1038 merges second.
-    binding = await accessor.get_binding(merchant_id, channel, binding_id)
+    binding = await binding_accessor.get_binding(merchant_id, channel, binding_id)
     if binding is None:
         # Never connected, paused, retired, or another merchant's row: from
         # the sender's side those are one fact, so they get one reason.
         return REASON_NO_BINDING
 
-    installation = await accessor.get_installation(merchant_id, binding.installation_id)
+    installation = await installation_accessor.get_installation(
+        merchant_id, binding.installation_id
+    )
     if installation is None:
         return REASON_NO_INSTALLATION
     if installation.status not in SENDABLE_INSTALLATION_STATES:
@@ -172,7 +177,7 @@ async def _resolve_and_deliver(
         f"to {mask_address(message.sent_to_address, message.channel)} "
         f"from binding {route.binding.id}"
     )
-    return await adapter.deliver(message, route.bundle, route.binding)
+    return await adapter.deliver(message, route)
 
 
 async def send(send_token: SendToken, message: QueuedMessage) -> SendOutcome:

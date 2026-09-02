@@ -1,29 +1,20 @@
-"""Mechanical DB access only — one query builder per function, no decisions.
+"""Mechanical DB access for crm_message — one query builder per function, no
+decisions.
 
-Every function self-scopes; see queries.py for why no transaction is needed.
+Every function self-scopes; see queries/message.py for why no transaction is
+needed.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.crm.connectivity.db.decoder import (
-    decode_binding,
-    decode_installation,
-    decode_queued_message,
-)
-from app.crm.connectivity.db.queries import (
+from app.crm.connectivity.db.decoders.message import decode_queued_message
+from app.crm.connectivity.db.queries.message import (
     apply_outcome_query,
-    binding_by_id_query,
     claim_queued_messages_query,
     insert_message_query,
-    installation_by_id_query,
-    primary_binding_query,
     requeue_stale_claims_query,
 )
-from app.crm.connectivity.schemas import (
-    ChannelBinding,
-    ConnectorInstallation,
-    QueuedMessage,
-)
+from app.crm.connectivity.schemas import QueuedMessage
 from app.crm.shared.db import crm_connection
 
 
@@ -103,27 +94,3 @@ async def apply_outcome(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return row is not None
-
-
-async def get_binding(
-    merchant_id: str, channel: str, binding_id: Optional[str]
-) -> Optional[ChannelBinding]:
-    """The pipe a message leaves on: the one it named, or the merchant's
-    default for that channel."""
-    if binding_id:
-        query, values = binding_by_id_query(merchant_id, binding_id, channel)
-    else:
-        query, values = primary_binding_query(merchant_id, channel)
-    async with crm_connection() as conn:
-        row = await conn.fetchrow(query, *values)
-    return decode_binding(row) if row is not None else None
-
-
-async def get_installation(
-    merchant_id: str, installation_id: str
-) -> Optional[ConnectorInstallation]:
-    """The account behind a pipe, merchant-scoped; None if it is not this tenant's."""
-    query, values = installation_by_id_query(merchant_id, installation_id)
-    async with crm_connection() as conn:
-        row = await conn.fetchrow(query, *values)
-    return decode_installation(row) if row is not None else None
