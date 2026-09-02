@@ -1154,10 +1154,16 @@ async def get_chat_transcript_handler(
     """
     messages = await list_chat_messages_for_session(session.id)
     turn_metrics = await list_chat_turn_metrics_for_session(session.id)
+    evaluation_messages = [
+        {"role": m.role.value, "content": m.content}
+        for m in messages
+        if (m.sender_type or "") not in {"human", "system", "internal"}
+    ]
     return ChatTranscriptResponse(
         session_id=session.id,
         template_id=session.template_id,
         status=session.status,
         messages=_sanitize_messages_for_widget(messages),
+        evaluation_messages=evaluation_messages,
         turn_metrics=turn_metrics,
     )

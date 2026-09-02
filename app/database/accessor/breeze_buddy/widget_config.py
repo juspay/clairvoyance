@@ -34,6 +34,8 @@ async def create_widget_config(
     max_concurrent_per_ip: int,
     max_voice_sessions_per_ip_hour: int,
     active: bool,
+    human_assist_enabled: bool = False,
+    human_assist_platform: str = "native",
 ) -> Optional[WidgetConfigResponse]:
     query, values = create_widget_config_query(
         reseller_id=reseller_id,
@@ -45,6 +47,8 @@ async def create_widget_config(
         max_messages_per_ip_hour=max_messages_per_ip_hour,
         max_concurrent_per_ip=max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=max_voice_sessions_per_ip_hour,
+        human_assist_enabled=human_assist_enabled,
+        human_assist_platform=human_assist_platform,
         active=active,
     )
     try:
@@ -160,6 +164,8 @@ async def update_widget_config(
     max_messages_per_ip_hour: Optional[int] = None,
     max_concurrent_per_ip: Optional[int] = None,
     max_voice_sessions_per_ip_hour: Optional[int] = None,
+    human_assist_enabled: Optional[bool] = None,
+    human_assist_platform: Optional[str] = None,
     active: Optional[bool] = None,
 ) -> Optional[WidgetConfigResponse]:
     query, values = update_widget_config_query(
@@ -170,6 +176,8 @@ async def update_widget_config(
         max_messages_per_ip_hour=max_messages_per_ip_hour,
         max_concurrent_per_ip=max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=max_voice_sessions_per_ip_hour,
+        human_assist_enabled=human_assist_enabled,
+        human_assist_platform=human_assist_platform,
         active=active,
     )
     if not values:

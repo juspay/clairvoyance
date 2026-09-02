@@ -34,6 +34,7 @@ class ChatEndedReason(str, Enum):
 
     USER_ENDED = "user_ended"
     IDLE_TIMEOUT = "idle_timeout"
+    HUMAN_ASSIST_ROLLOVER = "human_assist_rollover"
 
 
 class WidgetChannel(str, Enum):
@@ -45,6 +46,7 @@ class WidgetChannel(str, Enum):
 
     CHAT = "CHAT"
     VOICE = "VOICE"
+    HUMAN = "HUMAN"
     ENDED = "ENDED"
 
 
@@ -119,6 +121,7 @@ class ChatSession(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     current_channel: WidgetChannel = WidgetChannel.CHAT
     voice_lead_id: Optional[str] = None
+    handoff_happened: bool = False
     created_at: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -141,6 +144,11 @@ class ChatMessage(BaseModel):
     — the LLM never sees prior ui_ops, by design. ``None`` on user
     turns, on assistant turns that emitted no UI, and on rows written
     before migration 030.
+
+    ``sender_type`` (migration 044) is Human Assist attribution —
+    customer, buddy, human, system, or internal — layered on top of
+    ``role`` (which stays a strict user/assistant LLM turn shape).
+    ``None`` for ordinary, non-Live-Assist chat messages.
     """
 
     session_id: str
@@ -149,6 +157,7 @@ class ChatMessage(BaseModel):
     content: Optional[str] = None
     content_blocks: Optional[List[Dict[str, Any]]] = None
     ui_blocks: Optional[List[Dict[str, Any]]] = None
+    sender_type: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
@@ -391,6 +400,13 @@ class ChatTranscriptResponse(BaseModel):
     template_id: str
     status: ChatSessionStatus
     messages: List[ChatMessage]
+    evaluation_messages: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Customer and Buddy prose supplied to AI evaluators. Human-agent, "
+            "system, internal, and explicitly excluded rows are omitted."
+        ),
+    )
     turn_metrics: List[ChatTurnMetrics] = Field(
         default_factory=list,
         description="Per-turn latency/UI metrics (migration 032), one per "
@@ -785,6 +801,16 @@ class WidgetVoiceEndResponse(BaseModel):
     lead_id: Optional[str] = None
 
 
+class WidgetSessionRollover(BaseModel):
+    """Authenticated recovery credentials for a durable successor session."""
+
+    session_id: str
+    previous_session_id: str
+    current_channel: WidgetChannel
+    widget_token: str
+    ttl_seconds: int
+
+
 class WidgetSessionStateResponse(BaseModel):
     """Body of ``GET /widget/session/{id}``.
 
@@ -873,6 +899,14 @@ class WidgetSessionStateResponse(BaseModel):
             "Empty when nothing is awaiting a decision."
         ),
     )
+    session_rollover: Optional[WidgetSessionRollover] = Field(
+        None,
+        description=(
+            "Successor-session credentials when this session ended during a "
+            "repeat Human Assist handoff. Lets the widget recover if the "
+            "original SSE rollover frame was lost."
+        ),
+    )
 
 
 class WidgetTranscribeResponse(BaseModel):
@@ -922,6 +956,7 @@ __all__ = [
     "UpdateWidgetContextResponse",
     "WidgetVoiceConnectResponse",
     "WidgetVoiceEndResponse",
+    "WidgetSessionRollover",
     "WidgetSessionStateResponse",
     "WidgetTranscribeResponse",
 ]

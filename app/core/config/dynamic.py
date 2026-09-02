@@ -207,6 +207,54 @@ async def CHAT_HISTORY_REPLAY_LIMIT() -> int:
     return await get_config("CHAT_HISTORY_REPLAY_LIMIT", 100, int)
 
 
+async def HUMAN_ASSIST_CLAIM_TIMEOUT_SECONDS() -> int:
+    """How long a native Human Assist ticket may remain unclaimed.
+
+    PostgreSQL ``claim_deadline_at`` is authoritative; this value is read only
+    when the ticket is created. Default: five minutes.
+    """
+    return await get_config("HUMAN_ASSIST_CLAIM_TIMEOUT_SECONDS", 300, int)
+
+
+async def HUMAN_ASSIST_CUSTOMER_DISCONNECT_TIMEOUT_SECONDS() -> int:
+    """Close an active ticket after storefront heartbeats stop for this long.
+
+    A grace window avoids treating normal same-site navigations as a tab close.
+    Default: 45 seconds.
+    """
+    return await get_config("HUMAN_ASSIST_CUSTOMER_DISCONNECT_TIMEOUT_SECONDS", 45, int)
+
+
+async def HUMAN_ASSIST_PLATFORM_OPERATION_TIMEOUT_SECONDS() -> int:
+    """Maximum duration of one external Human Assist adapter operation.
+
+    This must remain comfortably below the non-renewing per-session lock TTL.
+    Default: 30 seconds.
+    """
+    return await get_config("HUMAN_ASSIST_PLATFORM_OPERATION_TIMEOUT_SECONDS", 30, int)
+
+
+async def HUMAN_ASSIST_LIFECYCLE_LOOP_INTERVAL_SECONDS() -> int:
+    """How often the Human Assist lifecycle sweep checks for claim-deadline
+    timeouts and disconnected customers.
+
+    NOTE: ``BackgroundTaskScheduler.register_task`` reads ``interval_seconds``
+    once at startup and never re-reads it, so a DevCycle/Redis change here
+    only takes effect after the next pod restart — unlike the thresholds
+    above, this is not truly live-tunable. Kept alongside them anyway for
+    operational consistency. Default: five seconds, substantially tighter
+    than the shared background-task cadence
+    (``BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS`` in static config).
+
+    Whether the sweep runs at all is gated separately by
+    ``ENABLE_HUMAN_ASSIST_LIFECYCLE_LOOP`` in static config — a plain env
+    flag, not Redis-backed, because Redis/DevCycle config is shared by
+    voice-agent pods and master Clairvoyance alike, and this loop must only
+    run on the master.
+    """
+    return await get_config("HUMAN_ASSIST_LIFECYCLE_LOOP_INTERVAL_SECONDS", 30, int)
+
+
 async def WIDGET_STT_MAX_AUDIO_BYTES() -> int:
     """Max audio upload accepted by ``POST /widget/session/{id}/transcribe``
     (push-to-talk). Clips are short; the default 10 MB sits well under

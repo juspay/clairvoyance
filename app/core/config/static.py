@@ -716,6 +716,15 @@ BACKGROUND_TASKS_LOOP_INTERVAL_SECONDS = int(
 ENABLE_BB_LANGFUSE_MONITORING_LOOP = (
     os.environ.get("ENABLE_BB_LANGFUSE_MONITORING_LOOP", "false").lower() == "true"
 )
+
+# Human Assist lifecycle sweep (claim-deadline timeouts, disconnected
+# customers — see docs/HUMAN_ASSIST_PLATFORM_ORCHESTRATOR.md). Static, not
+# Redis-backed: dynamic config is shared by voice-agent and master
+# Clairvoyance pods alike, but this loop should only run on the master.
+# Default false; set true via env only on the master Clairvoyance deployment.
+ENABLE_HUMAN_ASSIST_LIFECYCLE_LOOP = (
+    os.environ.get("ENABLE_HUMAN_ASSIST_LIFECYCLE_LOOP", "false").lower() == "true"
+)
 SCORE_CHECK_INTERVAL_SECONDS = int(
     os.environ.get("SCORE_CHECK_INTERVAL_SECONDS", "600")
 )  # 10 minutes

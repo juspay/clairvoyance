@@ -17,12 +17,13 @@ CHAT_TURN_METRICS_TABLE = "chat_turn_metrics"
 _SESSION_COLUMNS = """
     id, template_id, reseller_id, merchant_id,
     status, outcome, current_node, metadata,
-    current_channel, voice_lead_id,
+    current_channel, voice_lead_id, handoff_happened,
     created_at, last_activity_at, ended_at, ended_reason
 """
 
 _MESSAGE_COLUMNS = """
-    session_id, idx, role, content, content_blocks, ui_blocks, created_at
+    session_id, idx, role, content, content_blocks, ui_blocks,
+    sender_type, created_at
 """
 
 _AGENT_STATE_COLUMNS = """
@@ -97,6 +98,7 @@ def end_chat_session_query(
     query = f"""
         UPDATE {CHAT_SESSION_TABLE}
         SET status = 'ENDED',
+            current_channel = 'ENDED',
             outcome = COALESCE($1, outcome),
             ended_at = COALESCE(ended_at, now()),
             ended_reason = COALESCE(ended_reason, $2),
@@ -142,12 +144,17 @@ def list_idle_chat_sessions_query(
     """Sessions whose last_activity_at < cutoff and status ∈ statuses.
 
     Ordered ascending so the oldest are processed first by the sweeper.
+    Excludes current_channel='HUMAN' — those tickets have their own
+    claim-deadline/disconnect sweep and a relayed message doesn't bump
+    last_activity_at, so this generic sweep would force-end a live
+    human conversation as a false idle timeout.
     """
     query = f"""
         SELECT {_SESSION_COLUMNS}
         FROM {CHAT_SESSION_TABLE}
         WHERE status = ANY($1)
           AND last_activity_at < $2
+          AND current_channel IS DISTINCT FROM 'HUMAN'
         ORDER BY last_activity_at ASC
         LIMIT $3
     """
@@ -342,6 +349,7 @@ def insert_chat_message_query(
     content: Optional[str],
     content_blocks_json: Optional[str] = None,
     ui_blocks_json: Optional[str] = None,
+    sender_type: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Insert one message with auto-allocated idx (per-session monotonic).
 
@@ -357,10 +365,14 @@ def insert_chat_message_query(
     ``ui_blocks_json`` (migration 030) is the SpecStream ui_op list
     serialised to a JSON string. Consumed only by the widget resume
     path to repaint Tiles/Carousels; the LLM never sees this column.
+
+    ``sender_type`` (migration 044) is Human Assist attribution
+    (customer/buddy/human/system/internal); ``None`` for ordinary chat.
     """
     query = f"""
         INSERT INTO {CHAT_MESSAGE_TABLE} (
-            session_id, idx, role, content, content_blocks, ui_blocks
+            session_id, idx, role, content, content_blocks, ui_blocks,
+            sender_type
         )
         VALUES (
             $1,
@@ -370,11 +382,47 @@ def insert_chat_message_query(
                  WHERE session_id = $1),
                 0
             ),
-            $2, $3, $4::jsonb, $5::jsonb
+            $2, $3, $4::jsonb, $5::jsonb, $6
         )
         RETURNING {_MESSAGE_COLUMNS}
     """
-    return query, [session_id, role, content, content_blocks_json, ui_blocks_json]
+    return query, [
+        session_id,
+        role,
+        content,
+        content_blocks_json,
+        ui_blocks_json,
+        sender_type,
+    ]
+
+
+def list_chat_messages_after_idx_query(
+    session_id: str,
+    after_idx: int,
+) -> Tuple[str, List[Any]]:
+    """Visible delivery log after a caller's last observed message index.
+
+    Excludes internal rows and, for a session that rolled over from a
+    prior one, the idx=0 continuity summary (LLM-only context, never
+    shown to the customer/widget) — detected via chat_session's own
+    ``human_assist_lineage`` marker rather than a per-message tag.
+    """
+    query = f"""
+        SELECT {_MESSAGE_COLUMNS}
+        FROM {CHAT_MESSAGE_TABLE} m
+        WHERE m.session_id = $1
+          AND m.idx > $2
+          AND COALESCE(m.sender_type, '') <> 'internal'
+          AND NOT (
+              m.idx = 0
+              AND EXISTS (
+                  SELECT 1 FROM {CHAT_SESSION_TABLE} cs
+                  WHERE cs.id = $1 AND cs.metadata ? 'human_assist_lineage'
+              )
+          )
+        ORDER BY m.idx ASC
+    """
+    return query, [session_id, after_idx]
 
 
 def list_chat_messages_for_session_query(
@@ -397,19 +445,72 @@ def list_chat_messages_for_session_query(
         """
         return query, [session_id]
 
-    # Take the last ``limit`` rows (DESC + LIMIT) then re-sort ASC so
-    # the caller gets chronological order.
+    # Keep the rollover continuity row pinned even after a long human
+    # exchange pushes idx=0 outside the normal replay window. A session's
+    # own human_assist_lineage marker (set once, at rollover time) identifies
+    # it — idx=0 is deterministically where rollover_human_assist_session_query
+    # inserts the continuity row, so no per-message tag is needed.
     query = f"""
-        SELECT {_MESSAGE_COLUMNS} FROM (
+        WITH recent AS MATERIALIZED (
             SELECT {_MESSAGE_COLUMNS}
             FROM {CHAT_MESSAGE_TABLE}
             WHERE session_id = $1
             ORDER BY idx DESC
             LIMIT $2
-        ) recent
+        ),
+        rollover_context AS (
+            SELECT {_MESSAGE_COLUMNS}
+            FROM {CHAT_MESSAGE_TABLE} m
+            WHERE m.session_id = $1
+              AND m.idx = 0
+              AND EXISTS (
+                  SELECT 1 FROM {CHAT_SESSION_TABLE} cs
+                  WHERE cs.id = $1 AND cs.metadata ? 'human_assist_lineage'
+              )
+        )
+        SELECT {_MESSAGE_COLUMNS}
+        FROM (
+            SELECT * FROM recent
+            UNION ALL
+            SELECT * FROM rollover_context context_row
+            WHERE NOT EXISTS (
+                SELECT 1 FROM recent
+                WHERE recent.idx = context_row.idx
+            )
+        ) history
         ORDER BY idx ASC
     """
     return query, [session_id, limit]
+
+
+def list_visible_chat_messages_for_session_query(
+    session_id: str,
+) -> Tuple[str, List[Any]]:
+    """Widget-visible full history for session resume.
+
+    Same visibility rules as ``list_chat_messages_after_idx_query``:
+    excludes internal rows and, for a session that rolled over from a
+    prior one, the idx=0 continuity summary (LLM-only context, never
+    shown to the customer/widget). Scoped to its own query (rather than
+    folded into ``list_chat_messages_for_session_query``) so the other
+    callers of that function — transcript export, LLM-context replay —
+    keep their existing unfiltered behavior.
+    """
+    query = f"""
+        SELECT {_MESSAGE_COLUMNS}
+        FROM {CHAT_MESSAGE_TABLE} m
+        WHERE m.session_id = $1
+          AND COALESCE(m.sender_type, '') <> 'internal'
+          AND NOT (
+              m.idx = 0
+              AND EXISTS (
+                  SELECT 1 FROM {CHAT_SESSION_TABLE} cs
+                  WHERE cs.id = $1 AND cs.metadata ? 'human_assist_lineage'
+              )
+          )
+        ORDER BY m.idx ASC
+    """
+    return query, [session_id]
 
 
 # -- agent_session_state ------------------------------------------------------

@@ -43,6 +43,7 @@ def decode_chat_session(row: asyncpg.Record) -> Optional[ChatSession]:
         metadata=metadata,
         current_channel=WidgetChannel(channel_raw),
         voice_lead_id=str(voice_lead_id_raw) if voice_lead_id_raw else None,
+        handoff_happened=bool(row.get("handoff_happened", False)),
         created_at=row["created_at"],
         last_activity_at=row["last_activity_at"],
         ended_at=row.get("ended_at"),
@@ -68,6 +69,7 @@ def decode_chat_message(row: asyncpg.Record) -> Optional[ChatMessage]:
         content=row.get("content"),
         content_blocks=blocks_raw,
         ui_blocks=ui_raw,
+        sender_type=row.get("sender_type"),
         created_at=row["created_at"],
     )
 

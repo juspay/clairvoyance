@@ -26,10 +26,12 @@ from app.database.queries.breeze_buddy.chat_session import (
     get_agent_session_state_query,
     get_chat_session_by_id_query,
     insert_chat_message_query,
+    list_chat_messages_after_idx_query,
     list_chat_messages_for_session_query,
     list_chat_sessions_query,
     list_chat_turn_metrics_for_session_query,
     list_idle_chat_sessions_query,
+    list_visible_chat_messages_for_session_query,
     merge_client_context_query,
     record_chat_turn_metrics_query,
     set_chat_session_voice_lead_query,
@@ -229,6 +231,7 @@ async def insert_chat_message(
     content: Optional[str] = None,
     content_blocks: Optional[List[Dict[str, Any]]] = None,
     ui_blocks: Optional[List[Dict[str, Any]]] = None,
+    sender_type: Optional[str] = None,
 ) -> Optional[ChatMessage]:
     """Append one message; idx is auto-allocated atomically by the query.
 
@@ -243,6 +246,9 @@ async def insert_chat_message(
     during an assistant turn. Consumed only by the widget resume path
     to repaint Tiles/Carousels — the LLM never sees this column. Pass
     ``None`` (default) on user turns and on assistant turns without UI.
+
+    ``sender_type`` (migration 044) is Human Assist attribution
+    (customer/buddy/human/system/internal); ``None`` for ordinary chat.
     """
     query, values = insert_chat_message_query(
         session_id=session_id,
@@ -252,6 +258,7 @@ async def insert_chat_message(
             json.dumps(content_blocks) if content_blocks is not None else None
         ),
         ui_blocks_json=(json.dumps(ui_blocks) if ui_blocks else None),
+        sender_type=sender_type,
     )
     try:
         result = await run_parameterized_query(query, values)
@@ -286,6 +293,49 @@ async def list_chat_messages_for_session(
         return messages
     except Exception as e:
         logger.error(f"Error listing chat messages for session {session_id}: {e}")
+        raise
+
+
+async def list_visible_chat_messages_for_session(session_id: str) -> List[ChatMessage]:
+    """Widget-visible full history for session resume.
+
+    Excludes internal rows and the idx=0 rollover continuity summary —
+    see ``list_visible_chat_messages_for_session_query`` for details.
+    Dedicated to the widget resume caller so
+    ``list_chat_messages_for_session`` keeps returning the unfiltered
+    log for its other callers (transcript export, LLM-context replay).
+    """
+    query, values = list_visible_chat_messages_for_session_query(session_id)
+    try:
+        rows = await run_parameterized_query(query, values)
+        return [
+            decoded
+            for row in rows or []
+            if (decoded := decode_chat_message(row)) is not None
+        ]
+    except Exception as e:
+        logger.opt(exception=e).error(
+            f"Error listing visible chat messages for session {session_id}"
+        )
+        raise
+
+
+async def list_chat_messages_after_idx(
+    session_id: str, after_idx: int
+) -> List[ChatMessage]:
+    query, values = list_chat_messages_after_idx_query(session_id, after_idx)
+    try:
+        rows = await run_parameterized_query(query, values)
+        return [
+            decoded
+            for row in rows or []
+            if (decoded := decode_chat_message(row)) is not None
+        ]
+    except Exception as e:
+        logger.opt(exception=e).error(
+            f"Error listing chat messages after idx {after_idx} "
+            f"for session {session_id}"
+        )
         raise
 
 
