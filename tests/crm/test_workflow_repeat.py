@@ -152,9 +152,12 @@ def test_debounce_needs_a_wait_as_the_first_node() -> None:
 
 
 def test_changing_repeat_words_mid_flight_is_blocked_by_the_entry_guard() -> None:
+    """In migrate mode (ADR 0023): under pin the open runs keep their own
+    entry words and the guard does not apply."""
     live = _raw()["entry"]
+    migrating = {**_raw(on_repeat="refresh_latest"), "on_publish": "migrate"}
     problems = validate_definition(
-        _raw(on_repeat="refresh_latest"), occupied_nodes=["wait_10m"], live_entry=live
+        migrating, occupied_nodes=["wait_10m"], live_entry=live
     )
     assert any("entry rule changed" in p for p in problems)
 

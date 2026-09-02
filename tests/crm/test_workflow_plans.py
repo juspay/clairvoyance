@@ -106,28 +106,44 @@ def test_cooldown_cannot_be_negative() -> None:
     assert problems and "shape invalid" in problems[0]
 
 
-def test_occupied_node_deletion_fails() -> None:
-    """The stranding law: a document that removes a square waiting tokens
-    stand on must not publish."""
-    problems = validate_definition(_definition(), occupied_nodes=["old-node"])
+def test_occupied_node_deletion_fails_in_migrate_mode() -> None:
+    """The stranding law, now a migrate-mode precondition (ADR 0023): a
+    document that removes a square waiting tokens stand on must not be
+    migrated onto them."""
+    problems = validate_definition(
+        _definition(on_publish="migrate"), occupied_nodes=["old-node"]
+    )
     assert any("waiting runs standing on it" in p for p in problems)
+
+
+def test_occupied_node_deletion_is_fine_under_pin() -> None:
+    """pin (the default): runs in flight keep their version, so a new
+    document cannot strand anyone — the refusal does not apply."""
+    assert validate_definition(_definition(), occupied_nodes=["old-node"]) == []
+    assert (
+        validate_definition(_definition(on_publish="pin"), occupied_nodes=["old-node"])
+        == []
+    )
 
 
 def test_occupied_node_kept_passes() -> None:
     assert validate_definition(_definition(), occupied_nodes=["wait-30m"]) == []
 
 
-def test_publish_refuses_an_entry_change_while_runs_are_open() -> None:
+def test_publish_refuses_an_entry_change_while_runs_are_open_in_migrate_mode() -> None:
     draft = {
         "entry": {"topic": "cart.abandoned"},
         "nodes": [{"id": "w", "type": "wait", "minutes": 30}],
         "edges": [],
         "goal": {"topics": ["order.placed"]},
+        "on_publish": "migrate",
     }
     live_entry = {"topic": "checkout.initiated"}
     assert validate_definition(draft, occupied_nodes=["w"], live_entry=live_entry)
     assert not validate_definition(draft, occupied_nodes=[], live_entry=live_entry)
     assert not validate_definition(draft, occupied_nodes=["w"], live_entry=None)
+    pinned = {**draft, "on_publish": "pin"}
+    assert not validate_definition(pinned, occupied_nodes=["w"], live_entry=live_entry)
 
 
 _COD = {
@@ -207,11 +223,13 @@ def test_entry_key_is_document_vocabulary() -> None:
     assert problems and "shape invalid" in problems[0]
 
 
-def test_changing_entry_key_mid_flight_is_blocked() -> None:
+def test_changing_entry_key_mid_flight_is_blocked_in_migrate_mode() -> None:
     live_entry = {"topic": "checkout.initiated", "reenter": True, "cooldown_hours": 0}
     keyed = {**live_entry, "key": "order_id"}
     problems = validate_definition(
-        _definition(entry=keyed), occupied_nodes=["wait-30m"], live_entry=live_entry
+        _definition(entry=keyed, on_publish="migrate"),
+        occupied_nodes=["wait-30m"],
+        live_entry=live_entry,
     )
     assert any("entry rule changed" in p for p in problems)
 
@@ -238,13 +256,14 @@ def test_publish_compares_the_live_entry_by_meaning_not_spelling() -> None:
     that omits the defaults compared unequal to a live entry that spelled
     them out (or the reverse) — a spurious "entry rule changed" refusal on
     a re-publish that changed nothing about admission."""
+    migrating = {**_TERSE_DRAFT, "on_publish": "migrate"}
     assert (
         validate_definition(
-            _TERSE_DRAFT, occupied_nodes=["w"], live_entry=_SPELLED_OUT_ENTRY
+            migrating, occupied_nodes=["w"], live_entry=_SPELLED_OUT_ENTRY
         )
         == []
     )
-    explicit = {**_TERSE_DRAFT, "entry": _SPELLED_OUT_ENTRY}
+    explicit = {**migrating, "entry": _SPELLED_OUT_ENTRY}
     assert (
         validate_definition(
             explicit, occupied_nodes=["w"], live_entry={"topic": "checkout.initiated"}
@@ -257,7 +276,9 @@ def test_a_live_entry_that_no_longer_parses_is_compared_raw() -> None:
     """A legacy row whose entry fails today's shape cannot be normalised;
     the raw dicts are compared as before, so a real change is still caught."""
     problems = validate_definition(
-        _TERSE_DRAFT, occupied_nodes=["w"], live_entry={"topic": ""}
+        {**_TERSE_DRAFT, "on_publish": "migrate"},
+        occupied_nodes=["w"],
+        live_entry={"topic": ""},
     )
     assert any("entry rule changed" in p for p in problems)
 
@@ -403,6 +424,12 @@ class _PublishAccessor:
         self.published = True
         return _workflow("live", self.draft)
 
+    async def insert_version(self, conn: Any, *args: Any) -> None:
+        return None  # phase 11's row; pinned by test_workflow_versions.py
+
+    async def repin_open_runs(self, conn: Any, *args: Any) -> int:
+        return 0
+
 
 def _registry(
     monkeypatch: pytest.MonkeyPatch, status: Optional[str], registers: bool = True
@@ -421,7 +448,7 @@ def _registry(
 
 
 async def _publish(accessor: _PublishAccessor) -> Workflow:
-    return await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1")
+    return await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
 
 
 @pytest.mark.asyncio

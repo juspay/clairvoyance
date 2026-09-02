@@ -112,6 +112,13 @@ class WorkflowDefinition(BaseModel):
     edges: List[WorkflowEdge] = Field(default_factory=list)
     goals: List[WorkflowGoal] = Field(min_length=1)
     exits: WorkflowExits = Field(default_factory=WorkflowExits)
+    # ADR 0023: what a publish does to runs in flight. pin (default) — new
+    # entrants take the new version, runs in flight finish the one they
+    # entered under; migrate — every open run is re-pinned to the new
+    # version inside the publish atom, allowed only when the stranding
+    # validator passes (057's semantics as an opt-in mode). Vocabulary in
+    # code; the 064 CHECK on the stored column is the closed superset.
+    on_publish: Literal["pin", "migrate"] = "pin"
     # What the plan's sends are for (canon T16 col 9, NOT NULL on the
     # manifest; the gate checks it against the grant). Required once the
     # plan has a send node; the send node copies it onto every row.
