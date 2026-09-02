@@ -6,12 +6,25 @@ deliberately NOT exported here. workers.py calls outreach's entry-rules
 consumer, and outreach imports this file — exporting the pass here would
 close an import cycle. app/crm/worker_main.py, the one composition root,
 takes the pass from workers.py directly.
+
+Catalog exports (design/event-catalog.md): the publish validator gathers
+`catalog_fields` (both layers, cold read) before its pure validate; the
+entry evaluator resolves conditions with `field_value` + `derive_for`
+(code layer only — the flow runtime never reads T24); `topic_counts` is
+the seen-side of the flow list's "saw 240 · matched 3".
 """
 
+from app.crm.record.catalog import (
+    canonical_path,
+    catalog_fields,
+    derive_for,
+    topic_counts,
+)
 from app.crm.record.events import customer_has_event
+from app.crm.record.extractors.engine import field_value, variable_name
 from app.crm.record.ingest import record_event
 from app.crm.record.ingress import IngressSpec, register_ingress
-from app.crm.record.schemas import EventIn, RawEvent
+from app.crm.record.schemas import CatalogField, EventIn, RawEvent, TopicCount
 from app.crm.record.timeline import get_customer_journey
 
 __all__ = [
@@ -27,4 +40,12 @@ __all__ = [
     "IngressSpec",
     "register_ingress",
     "EventIn",
+    "CatalogField",
+    "TopicCount",
+    "canonical_path",
+    "catalog_fields",
+    "derive_for",
+    "field_value",
+    "topic_counts",
+    "variable_name",
 ]

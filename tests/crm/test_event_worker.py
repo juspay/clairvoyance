@@ -27,13 +27,15 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import pytest
 
 import app.crm.record.consumers as record_consumers
-import app.crm.record.extractors.shopify as shopify_extractor
+import app.crm.record.extractors.flat as flat_extractor
 import app.crm.record.workers as workers
 import app.crm.shared.worker as worker_mod
+from app.crm.record import catalog
 from app.crm.record.db import DbTxn
 from app.crm.record.db.decoder import decode_raw_event
 from app.crm.record.db.queries import claim_pending_events_query
 from app.crm.record.extractors import EXTRACTORS
+from app.crm.record.extractors.engine import DecodeSpec
 from app.crm.record.schemas import Extracted, RawEvent
 from app.crm.shared.worker import run_drain_loop
 
@@ -43,7 +45,7 @@ from app.crm.shared.worker import run_drain_loop
 
 
 async def _no_plans_live(
-    event: RawEvent, customer_id: str, handles: Dict[str, str]
+    event: RawEvent, customer_id: str, handles: Dict[str, str], variables: Any = None
 ) -> None:
     """The entry-rules consumer with no plans live: the pass must run the
     same with or without outreach reacting."""
@@ -56,6 +58,20 @@ def _no_outreach(monkeypatch: pytest.MonkeyPatch) -> None:
     # subscriber by name (rule 12) — tests wire the slot the same way
     # worker_main does.
     monkeypatch.setattr(record_consumers, "_CONSUMERS", [_no_plans_live])
+
+
+class _NoSchemas:
+    async def get_schema(self, merchant_id: str, source: str, topic: str) -> Any:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _fresh_catalog_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Discovery's known-set and the identity-mapping cache are process
+    state; each test starts cold, with no registration on file."""
+    catalog._KNOWN.clear()
+    catalog._SPEC_CACHE.clear()
+    monkeypatch.setattr(catalog, "accessor", _NoSchemas())
 
 
 class _FakeSavepoint:
@@ -79,6 +95,7 @@ class _FakeAccessor:
     def __init__(self) -> None:
         self.stamped: List[Tuple[str, Optional[str]]] = []
         self.quarantined: List[Tuple[str, str]] = []
+        self.detected: List[Tuple[str, str, str]] = []
 
     async def stamp_event(
         self, conn: Any, event_id: str, customer_id: Optional[str]
@@ -87,6 +104,14 @@ class _FakeAccessor:
 
     async def quarantine_event(self, conn: Any, event_id: str, reason: str) -> None:
         self.quarantined.append((event_id, reason))
+
+    async def insert_detected_schema(
+        self, conn: Any, merchant_id: str, source: str, topic: str
+    ) -> None:
+        self.detected.append((merchant_id, source, topic))
+
+    async def get_schema(self, merchant_id: str, source: str, topic: str) -> Any:
+        return None
 
 
 def _event(
@@ -159,7 +184,7 @@ def test_a_merchant_level_letter_is_processed_with_no_customer(
     heard: List[Tuple[Optional[str], Any]] = []
 
     async def consumer(
-        event: RawEvent, customer_id: Optional[str], handles: Any
+        event: RawEvent, customer_id: Optional[str], handles: Any, variables: Any = None
     ) -> None:
         heard.append((customer_id, handles))
 
@@ -455,7 +480,7 @@ def test_entry_rules_run_per_row_before_that_row_is_stamped(
     seen: List[Tuple[str, str]] = []
 
     async def fake_consume(
-        event: RawEvent, customer_id: str, handles: Dict[str, str]
+        event: RawEvent, customer_id: str, handles: Dict[str, str], variables: Any
     ) -> None:
         order.append("consume")
         seen.append((event.id, customer_id))
@@ -482,7 +507,10 @@ def test_entry_rules_never_run_for_a_quarantined_row(
     monkeypatch.setattr(workers, "accessor", fake_accessor)
 
     async def fail_consume(
-        event: RawEvent, customer_id: str, handles: Dict[str, str]
+        event: RawEvent,
+        customer_id: str,
+        handles: Dict[str, str],
+        variables: Any = None,
     ) -> None:
         raise AssertionError("entry rules must not see an unattributed row")
 
@@ -509,7 +537,10 @@ def test_a_failing_entry_rule_costs_its_own_row_only(
         return events
 
     async def poison_first(
-        event: RawEvent, customer_id: str, handles: Dict[str, str]
+        event: RawEvent,
+        customer_id: str,
+        handles: Dict[str, str],
+        variables: Any = None,
     ) -> None:
         if event.id == "evt-1":
             raise RuntimeError("workflow rule blew up")
@@ -574,7 +605,10 @@ def _poison_pass(
         return [event]
 
     async def poison(
-        event: RawEvent, customer_id: str, handles: Dict[str, str]
+        event: RawEvent,
+        customer_id: str,
+        handles: Dict[str, str],
+        variables: Any = None,
     ) -> None:
         raise RuntimeError("bad live definition")
 
@@ -980,131 +1014,6 @@ def test_heartbeat_counts_rows_since_the_last_beat(
     assert any(n == 3 for _, n in counted)
 
 
-# --- the Shopify extractor: a pipe's letter, read at the belt ---
-
-
-def test_shopify_extractor_reads_the_nested_customer_phone() -> None:
-    # The relay forwards Shopify's body unopened, so the phone arrives
-    # nested and the top-level one is usually null.
-    extracted = shopify_extractor.extract(
-        {
-            "phone": None,
-            "customer": {
-                "first_name": "Priya",
-                "last_name": "Sharma",
-                "phone": "+91 98765 43210",
-            },
-            "shipping_address": {"phone": "9999999999"},
-        }
-    )
-    assert extracted.handles["phone"] == "+919876543210"  # normalized
-    assert extracted.facts == {"name": "Priya Sharma"}
-
-
-def test_shopify_extractor_falls_back_to_the_shipping_contact() -> None:
-    # A guest checkout carries no customer object at all.
-    extracted = shopify_extractor.extract(
-        {
-            "shipping_address": {
-                "first_name": "Rohan",
-                "last_name": "Mehta",
-                "phone": "9876543210",
-            }
-        }
-    )
-    assert extracted.handles["phone"] == "+919876543210"
-    assert extracted.facts == {"name": "Rohan Mehta"}
-
-
-def test_shopify_extractor_never_invents_a_name() -> None:
-    # A placeholder would reach assert_facts as a real name claim and
-    # overwrite what we actually know. Absent is absent.
-    extracted = shopify_extractor.extract({"customer": {"phone": "9876543210"}})
-    assert extracted.facts == {}
-
-
-def test_shopify_extractor_skips_an_unusable_phone() -> None:
-    # normalize_phone returns None rather than writing a bad handle; with
-    # nothing usable the row quarantines no_handle and stays replayable.
-    extracted = shopify_extractor.extract({"customer": {"phone": "n/a"}})
-    assert "phone" not in extracted.handles
-
-
-def test_shopify_extractor_takes_the_email_too() -> None:
-    extracted = shopify_extractor.extract(
-        {"customer": {"email": "  Priya@Example.COM  ", "phone": "9876543210"}}
-    )
-    assert extracted.handles["email"] == "priya@example.com"
-
-
-def test_shopify_source_is_registered() -> None:
-    # Without the registration a raw Shopify body falls to _extract_flat,
-    # which looks for a top-level customer_mobile_number that is not
-    # there — every order would quarantine no_handle.
-    assert EXTRACTORS["shopify"] is shopify_extractor.extract
-
-
-def test_shopify_extractor_takes_the_customer_id_handle() -> None:
-    # The corpus's own example for this extractor is
-    # shopify/checkouts.create -> {phone, email, shopify_customer_id}.
-    extracted = shopify_extractor.extract(
-        {"customer": {"id": 77, "phone": "9876543210"}}
-    )
-    assert extracted.handles["shopify_customer_id"] == "77"
-
-
-def test_shopify_extractor_resolves_a_phoneless_checkout_frame() -> None:
-    # The checkouts/update stream's early frames carry no phone — she
-    # types it later — but a signed-in shopper's customer id is there
-    # from the first frame. Without this handle those frames quarantine
-    # no_handle; with it they attribute to the person.
-    extracted = shopify_extractor.extract(
-        {"token": "chk-88412", "phone": None, "customer": {"id": 77}}
-    )
-    assert extracted.handles == {"shopify_customer_id": "77"}
-    assert extracted.facts == {}
-
-
-def test_shopify_extractor_omits_the_id_handle_for_a_guest() -> None:
-    # A guest checkout carries no customer object at all.
-    extracted = shopify_extractor.extract({"shipping_address": {"phone": "9876543210"}})
-    assert "shopify_customer_id" not in extracted.handles
-
-
-def test_shopify_extractor_reads_the_default_address() -> None:
-    # design/ingest-doors names customer.default_address.phone as this
-    # extractor's mapping: a returning shopper's number often lives only
-    # there, with the customer object itself carrying none.
-    extracted = shopify_extractor.extract(
-        {
-            "customer": {
-                "id": 77,
-                "phone": None,
-                "default_address": {
-                    "phone": "9876543210",
-                    "first_name": "Priya",
-                    "last_name": "Sharma",
-                },
-            }
-        }
-    )
-    assert extracted.handles["phone"] == "+919876543210"
-    assert extracted.facts == {"name": "Priya Sharma"}
-
-
-def test_shopify_extractor_prefers_the_customer_phone_over_default_address() -> None:
-    # Probe order is the law: most specific first.
-    extracted = shopify_extractor.extract(
-        {
-            "customer": {
-                "phone": "+919999999999",
-                "default_address": {"phone": "9876543210"},
-            }
-        }
-    )
-    assert extracted.handles["phone"] == "+919999999999"
-
-
 def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
     # THE divergence this closes: the extractor searches four places for a
     # phone, the consumer's own payload reader searches three — and the
@@ -1121,7 +1030,7 @@ def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
     async def fake_facts(*a: Any, **k: Any) -> None:
         return None
 
-    async def fake_consume(event, customer_id, handles):  # type: ignore[no-untyped-def]
+    async def fake_consume(event, customer_id, handles, variables):  # type: ignore[no-untyped-def]
         seen["handles"] = handles
 
     workers.crm_resolve = fake_resolve  # type: ignore[assignment]
@@ -1132,6 +1041,8 @@ def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
         return None
 
     workers.accessor.stamp_event = fake_stamp  # type: ignore[assignment]
+    # the discovery nudge writes through the same accessor on a real txn
+    workers.accessor.insert_detected_schema = fake_stamp  # type: ignore[assignment]
 
     event = RawEvent(
         id="e1",
@@ -1150,3 +1061,112 @@ def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
 
     # the number the sends will dial is the number identity resolved on
     assert seen["handles"]["phone"] == "+919876543210"
+
+
+# ---------------------------------------------------------------------------
+# The catalog's hot-path pieces (canon T24 wiring)
+# ---------------------------------------------------------------------------
+
+
+def test_discovery_never_nudges_for_a_code_layer_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shopify's orders/create is declared in code: nobody has to register
+    it, so no detected row is written for it — the nudge is for vendors."""
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+
+    async def fake_resolve(merchant_id: str, handles: Dict[str, str], **kw: Any) -> str:
+        return "cust-1"
+
+    monkeypatch.setattr(workers, "crm_resolve", fake_resolve)
+    event = _event(
+        source="shopify",
+        topic="orders/create",
+        payload={"customer": {"phone": "9876543210"}},
+    )
+    _run(workers._process_one(_fake_txn(), event))
+    assert fake_accessor.detected == []
+    assert fake_accessor.stamped == [("evt-1", "cust-1")]
+
+
+def test_discovery_writes_the_nudge_row_once_per_topic_ever(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+
+    async def fake_resolve(merchant_id: str, handles: Dict[str, str], **kw: Any) -> str:
+        return "cust-1"
+
+    monkeypatch.setattr(workers, "crm_resolve", fake_resolve)
+
+    for i in range(3):
+        _run(workers._process_one(_fake_txn(), _event(event_id=f"evt-{i}")))
+    _run(
+        workers._process_one(
+            _fake_txn(), _event(event_id="evt-x", topic="lead.updated")
+        )
+    )
+
+    assert fake_accessor.detected == [
+        ("m1", "lead-api", "lead.pushed"),
+        ("m1", "lead-api", "lead.updated"),
+    ]
+
+
+def test_a_registered_identity_mapping_decodes_the_vendors_own_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NammaYatri marks rider_phone as identity:phone and never renames a
+    thing: the generic extractor reads the mapping, normalizes, resolves —
+    and the handles ride to the consumers like any extractor's would."""
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+
+    async def spec(merchant_id: str, source: str, topic: str) -> DecodeSpec:
+        return DecodeSpec(
+            identity={"phone": ["payload.rider.phone"], "name": ["payload.rider.name"]},
+            variables={"ride_id": "payload.ride_id"},
+        )
+
+    monkeypatch.setattr(catalog, "decode_spec", spec)
+
+    seen: Dict[str, Any] = {}
+
+    async def fake_resolve(merchant_id: str, handles: Dict[str, str], **kw: Any) -> str:
+        seen["handles"] = handles
+        return "cust-9"
+
+    facts_calls: List[Dict[str, Any]] = []
+
+    async def fake_assert_facts(
+        merchant_id: str, customer_id: str, facts: Dict[str, Any], **kw: Any
+    ) -> None:
+        facts_calls.append(facts)
+
+    monkeypatch.setattr(workers, "crm_resolve", fake_resolve)
+    monkeypatch.setattr(workers, "assert_facts", fake_assert_facts)
+
+    event = _event(
+        source="nammayatri",
+        topic="ride.cancelled",
+        payload={"ride_id": "R1", "rider": {"phone": "9876543210", "name": "Asha"}},
+    )
+    _run(workers._process_one(_fake_txn(), event))
+
+    assert seen["handles"] == {"phone": "+919876543210"}
+    assert facts_calls == [{"name": "Asha"}]
+    assert fake_accessor.stamped == [("evt-1", "cust-9")]
+
+
+def test_no_mapping_and_no_standard_keys_still_quarantines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+    event = _event(
+        source="nammayatri", topic="ride.cancelled", payload={"ride_id": "R1"}
+    )
+    _run(workers._process_one(_fake_txn(), event))
+    assert fake_accessor.quarantined == [("evt-1", "no_handle")]

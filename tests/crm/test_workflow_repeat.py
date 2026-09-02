@@ -199,6 +199,8 @@ def test_a_refused_enrol_hands_the_repeat_to_apply_repeat(
         {
             "id": "ev-9",
             "merchant_id": "m1",
+            "source": "lead-api",
+            "topic": "checkout.initiated",
             "received_at": _NOW,
             "occurred_at": None,
             "payload": {
@@ -236,6 +238,8 @@ def test_a_successful_enrol_never_calls_apply_repeat(
         {
             "id": "ev-1",
             "merchant_id": "m1",
+            "source": "lead-api",
+            "topic": "checkout.initiated",
             "received_at": _NOW,
             "occurred_at": None,
             "payload": {},
@@ -335,6 +339,8 @@ def test_the_repeat_carries_the_refreshed_phone_but_never_the_founding_id(
         {
             "id": "ev-9",
             "merchant_id": "m1",
+            "source": "lead-api",
+            "topic": "checkout.initiated",
             "received_at": _NOW,
             "occurred_at": None,
             "payload": {"customer_mobile_number": "9876543210", "cart_value": 900},

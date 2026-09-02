@@ -1,0 +1,89 @@
+{
+  "id": 5201000001,
+  "admin_graphql_api_id": "gid://shopify/Order/5201000001",
+  "name": "#1001",
+  "order_number": 1001,
+  "email": "priya.sharma@example.com",
+  "phone": null,
+  "cart_token": "c1-3f9a2b8e7d6c5b4a",
+  "checkout_token": "ck-77aa",
+  "token": "ord-tok-1",
+  "created_at": "2026-09-02T10:14:07+05:30",
+  "updated_at": "2026-09-02T11:02:40+05:30",
+  "processed_at": "2026-09-02T10:14:07+05:30",
+  "financial_status": "voided",
+  "fulfillment_status": null,
+  "gateway": "Cash on Delivery (COD)",
+  "payment_gateway_names": [
+    "Cash on Delivery (COD)"
+  ],
+  "currency": "INR",
+  "subtotal_price": "3097.00",
+  "total_discounts": "0.00",
+  "total_tax": "0.00",
+  "total_price": "3097.00",
+  "confirmed": true,
+  "test": false,
+  "buyer_accepts_marketing": false,
+  "taxes_included": true,
+  "source_name": "web",
+  "tags": "",
+  "customer": {
+    "id": 7011200034,
+    "email": "priya.sharma@example.com",
+    "first_name": "Priya",
+    "last_name": "Sharma",
+    "phone": "+91 98765 43210",
+    "state": "enabled",
+    "default_address": {
+      "first_name": "Priya",
+      "last_name": "Sharma",
+      "address1": "12 MG Road",
+      "city": "Bengaluru",
+      "province": "Karnataka",
+      "country_code": "IN",
+      "zip": "560001",
+      "phone": "+91 98765 43210"
+    }
+  },
+  "billing_address": {
+    "first_name": "Priya",
+    "last_name": "Sharma",
+    "address1": "12 MG Road",
+    "city": "Bengaluru",
+    "province": "Karnataka",
+    "country_code": "IN",
+    "zip": "560001",
+    "phone": "+91 98765 43210"
+  },
+  "shipping_address": {
+    "first_name": "Priya",
+    "last_name": "Sharma",
+    "address1": "12 MG Road",
+    "city": "Bengaluru",
+    "province": "Karnataka",
+    "country_code": "IN",
+    "zip": "560001",
+    "phone": "+91 98765 43210"
+  },
+  "line_items": [
+    {
+      "id": 1301,
+      "title": "Air Runner Sneakers",
+      "quantity": 1,
+      "price": "2499.00",
+      "sku": "AR-42",
+      "variant_title": "42 / White"
+    },
+    {
+      "id": 1302,
+      "title": "Ankle Socks (3 pack)",
+      "quantity": 2,
+      "price": "299.00",
+      "sku": "SK-3",
+      "variant_title": null
+    }
+  ],
+  "cancelled_at": "2026-09-02T11:02:40+05:30",
+  "cancel_reason": "customer"
+}

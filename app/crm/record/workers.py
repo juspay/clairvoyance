@@ -2,19 +2,22 @@
 claim a batch, then per row extract -> resolve() -> assert_facts() -> entry
 rules -> stamp, one commit.
 
-The pass knows no source by name: which extractor reads a payload is the
-registry's business (record/extractors), and this file only asks it."""
+The pass knows no source by name: which spec reads a payload is the
+catalog's business (record/catalog, record/extractors), and this file only
+asks it."""
 
 from datetime import datetime, timezone
-from typing import Dict, List, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from app.core.config.static import CRM_EVENT_MAX_ATTEMPTS
 from app.core.logger import logger
 from app.crm.identity.contracts import assert_facts, resolve as crm_resolve
+from app.crm.record import catalog
 from app.crm.record.consumers import consumers
 from app.crm.record.db import DbTxn, accessor, atomically, savepoint
-from app.crm.record.extractors import DEFAULT_EXTRACTOR, EXTRACTORS
-from app.crm.record.schemas import ABOUT_MERCHANT, RawEvent
+from app.crm.record.extractors import EXTRACTORS, engine
+from app.crm.record.extractors.engine import EMPTY_SPEC, DecodeSpec
+from app.crm.record.schemas import ABOUT_MERCHANT, Extracted, RawEvent
 
 
 async def run_pass(limit: int) -> List[RawEvent]:
@@ -79,11 +82,15 @@ async def _after_failed_row(txn: DbTxn, event: RawEvent, error: Exception) -> No
 class _Processed(NamedTuple):
     """What the processor made of one row: the customer it is about (None
     for a merchant-level letter — canon T13 col 14's "processed but not
-    about a person"), the handles the extractor found, and whether the row
-    quarantined itself (then nothing else may touch it)."""
+    about a person"), the handles the spec found the person by, the
+    template fill-ins the catalog declared for this (source, topic) —
+    resolved by the engine at decode so no consumer re-reads the payload —
+    and whether the row quarantined itself (then nothing else may touch
+    it)."""
 
     customer_id: Optional[str]
     handles: Dict[str, str]
+    variables: Dict[str, Any]
     quarantined: bool
 
 
@@ -93,15 +100,21 @@ async def _process_one(txn: DbTxn, event: RawEvent) -> None:
     letter (``Extracted.about == "merchant"``) is processed with a NULL
     customer: every consumer still hears it, and the stamp writes
     processed_at with customer_id NULL — forever, correctly."""
+    await _discover_topic(txn, event)
     outcome = await _run_processor(txn, event)
     if outcome.quarantined:
         return
-    await _consume_attributed_event(event, outcome.customer_id, outcome.handles)
+    await _consume_attributed_event(
+        event, outcome.customer_id, outcome.handles, outcome.variables
+    )
     await accessor.stamp_event(txn, str(event.id), outcome.customer_id)
 
 
 async def _consume_attributed_event(
-    event: RawEvent, customer_id: Optional[str], handles: Dict[str, str]
+    event: RawEvent,
+    customer_id: Optional[str],
+    handles: Dict[str, str],
+    variables: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Consumer slot: per row, inside its savepoint, before its stamp, so a
     poison consumer costs one row per poll. A raise here leaves the row
@@ -113,38 +126,75 @@ async def _consume_attributed_event(
     an account notice): the letter still reaches every consumer, and each
     decides whether a letter with no person is its business.
 
-    The extractor's handles ride along so no consumer re-hunts what this
-    pass already found. Two searches would drift — and did: a Shopify
-    order with its phone only in customer.default_address resolved here and
-    then parked at the first call node, because the payload re-search did
-    not know that path."""
+    The spec's handles and variables ride along so no consumer re-hunts
+    what this pass already found. Two searches would drift — and did: a
+    Shopify order with its phone only in customer.default_address resolved
+    here and then parked at the first call node, because the payload
+    re-search did not know that path."""
     for consume in consumers():
-        await consume(event, customer_id, handles)
+        await consume(event, customer_id, handles, variables or {})
+
+
+async def _discover_topic(txn: DbTxn, event: RawEvent) -> None:
+    """The unregistered-topic nudge (canon T24): one INSERT per new
+    (merchant, source, topic) EVER; the in-process known-set means the hot
+    path never probes. Inside the row's savepoint — a failure here fails
+    the row, so the nudge can never be lost silently."""
+    key = (event.merchant_id, event.source, event.topic)
+    if catalog.is_known(key):
+        return
+    if catalog.code_spec(event.source, event.topic) is not None:
+        # The code layer already declares this event: there is nothing to
+        # nudge anyone to register, and a detected row here would be noise
+        # the merge has to ignore.
+        catalog.mark_known(key)
+        return
+    await accessor.insert_detected_schema(
+        txn, event.merchant_id, event.source, event.topic
+    )
+    catalog.mark_known(key)
+
+
+def _extract(event: RawEvent, spec: DecodeSpec) -> Extracted:
+    """The decode step (pure). One engine, two spec sources: the letter is
+    read by its spec — a code CatalogEntry or the vendor's registration —
+    over the flat shape. The few sources still decoding by hand (EXTRACTORS)
+    keep their function until they become specs; a code-catalog source is
+    never in both (pinned)."""
+    extract = EXTRACTORS.get(event.source)
+    if extract is not None:
+        return extract(event.payload)
+    return engine.extract(event.payload, spec)
 
 
 async def _run_processor(txn: DbTxn, event: RawEvent) -> _Processed:
     """extract -> resolve() (or pass through a set customer_id) -> assert_facts().
     Quarantines what it cannot attribute; a failed assert_facts never fails the row.
 
-    Returns the customer AND the handles the extractor found, so the one
-    source-aware discovery in the system is this one. A letter the
-    extractor declares ABOUT THE MERCHANT skips resolve() and facts — there
-    is no person to find or describe — and comes back with no customer and
-    no quarantine: processed, NULL, correctly (canon T13 col 14)."""
-    extract = EXTRACTORS.get(event.source, DEFAULT_EXTRACTOR)
+    Returns the customer, the handles the engine found the person by, and
+    the template variables the catalog declared — so the one source-aware
+    read of the payload in the system is this one. A letter the spec
+    declares ABOUT THE MERCHANT skips resolve() and facts — there is no
+    person to find or describe — and comes back with no customer and no
+    quarantine: processed, NULL, correctly (canon T13 col 14)."""
+    spec = EMPTY_SPEC
+    if event.source not in EXTRACTORS:
+        # Code layer: pure. Registered layer: a cached read (T24 stays cold).
+        # A failure here raises: the row stays pending and returns next poll
+        # — never a terminal quarantine.
+        spec = await catalog.decode_spec(event.merchant_id, event.source, event.topic)
     try:
-        extracted = extract(event.payload)
+        extracted = _extract(event, spec)
     except Exception as e:
         await accessor.quarantine_event(txn, str(event.id), f"extractor_error: {e}")
-        return _Processed(None, {}, quarantined=True)
-
+        return _Processed(None, {}, {}, quarantined=True)
     customer_id = event.customer_id
     if not customer_id and extracted.about == ABOUT_MERCHANT:
-        return _Processed(None, {}, quarantined=False)
+        return _Processed(None, {}, extracted.variables, quarantined=False)
     if not customer_id:
         if not extracted.handles:
             await accessor.quarantine_event(txn, str(event.id), "no_handle")
-            return _Processed(None, {}, quarantined=True)
+            return _Processed(None, {}, {}, quarantined=True)
         try:
             customer_id = str(
                 await crm_resolve(
@@ -156,8 +206,7 @@ async def _run_processor(txn: DbTxn, event: RawEvent) -> _Processed:
             )
         except ValueError as e:
             await accessor.quarantine_event(txn, str(event.id), f"unresolvable: {e}")
-            return _Processed(None, {}, quarantined=True)
-
+            return _Processed(None, {}, {}, quarantined=True)
     if extracted.facts:
         try:
             await assert_facts(
@@ -169,7 +218,9 @@ async def _run_processor(txn: DbTxn, event: RawEvent) -> _Processed:
             )
         except Exception as e:
             logger.warning(f"event {event.id}: assert_facts failed, dropping: {e}")
-    return _Processed(customer_id, extracted.handles, quarantined=False)
+    return _Processed(
+        customer_id, extracted.handles, extracted.variables, quarantined=False
+    )
 
 
 def _log_queue_lag(events: List[RawEvent], limit: int) -> None:

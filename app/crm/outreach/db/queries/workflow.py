@@ -56,7 +56,11 @@ def list_workflows_query(
     merchant_id: str, limit: int, offset: int
 ) -> Tuple[str, List[Any]]:
     query = f"""
-        SELECT {_WORKFLOW_SUMMARY_COLUMNS}
+        SELECT {_WORKFLOW_SUMMARY_COLUMNS},
+               COALESCE(
+                   COALESCE(definition, draft) -> 'entry' ->> 'topic',
+                   COALESCE(definition, draft) -> 'entry' -> 0 ->> 'topic'
+               ) AS entry_topic
         FROM {WORKFLOW_TABLE}
         WHERE merchant_id = $1
         ORDER BY created_at DESC, id DESC

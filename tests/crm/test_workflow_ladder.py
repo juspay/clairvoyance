@@ -348,6 +348,11 @@ async def test_create_and_draft_store_the_ladder_and_its_board(
 
     monkeypatch.setattr(plans.workflow_accessor, "insert_workflow", insert_workflow)
     monkeypatch.setattr(plans.workflow_accessor, "update_draft", update_draft)
+
+    async def no_catalogs(merchant_id: str, raw: Dict[str, Any]) -> plans.Catalogs:
+        return None  # nothing gathered (a DB read): shape laws are the point here
+
+    monkeypatch.setattr(plans, "_gather_catalogs", no_catalogs)
     await plans.create_workflow("m1", "loan-dropoff", _ladder(), "ops@x")
     await plans.update_draft("m1", "wf-1", _ladder())
     assert stored == [expand_stages(_ladder())] * 2

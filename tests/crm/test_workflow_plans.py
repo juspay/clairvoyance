@@ -15,6 +15,8 @@ from app.crm.outreach.schemas import (
     Workflow,
     WorkflowDefinition,
 )
+from app.crm.record.catalog import code_entries
+from app.crm.record.schemas import CatalogField
 from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
@@ -22,7 +24,11 @@ NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 
 def _definition(**overrides):
     base = {
-        "entry": {"topic": "checkout.initiated", "reenter": True, "cooldown_hours": 0},
+        "entry": {
+            "topic": "checkout.initiated",
+            "reenter": True,
+            "cooldown_hours": 0,
+        },
         "nodes": [
             {"id": "wait-30m", "type": "wait", "minutes": 30},
             {"id": "rescue-call", "type": "call", "template_id": "tpl-1"},
@@ -152,7 +158,10 @@ def test_publish_refuses_an_entry_change_while_runs_are_open_in_migrate_mode() -
 
 
 _COD = {
-    "entry": {"topic": "orders/create", "where": {"gateway": "COD"}},
+    "entry": {
+        "topic": "orders/create",
+        "where": [{"field": "payload.gateway", "op": "is", "value": "COD"}],
+    },
     "nodes": [
         {
             "id": "ask",
@@ -787,3 +796,128 @@ def test_else_is_one_catch_all_arrow_out_of_a_listening_square() -> None:
     plain = [["call", "after-call"], ["again", "done", "else"]]
     problems = validate_definition(_definition(nodes=_CALL_THEN_LISTEN, edges=plain))
     assert any("only a wait_event" in p and "again" in p for p in problems)
+
+
+def _orders_create_catalog() -> Dict[str, CatalogField]:
+    entry = next(e for e in code_entries() if e.topic == "orders/create")
+    return {f.path: f for f in entry.fields}
+
+
+def test_each_door_is_checked_against_its_own_topics_catalog() -> None:
+    """Phase 15 x the catalog: the laws run once per door. A declared
+    field on the orders/create door passes; a where on a door whose topic
+    no layer knows is refused; a door-list still refuses the legacy map."""
+    doors = {
+        **_LADDER,
+        "entry": [
+            {
+                "topic": "orders/create",
+                "start": "at-profile",
+                "where": [{"field": "payload.gateway", "op": "is", "value": "COD"}],
+            },
+            {
+                "topic": "loan.kyc_completed",
+                "start": "at-kyc",
+                "where": [{"field": "payload.stage", "op": "is", "value": "kyc"}],
+            },
+        ],
+    }
+    del doors["key"]  # application_id is not a declared field on orders/create
+    catalogs: plans.Catalogs = {
+        "orders/create": _orders_create_catalog(),
+        "loan.kyc_completed": None,
+    }
+    problems = validate_definition(doors, catalogs=catalogs)
+    assert problems == [
+        "topic 'loan.kyc_completed' is not in the catalog — register its schema "
+        "(or declare it in code) before filtering, keying or templating on it"
+    ]
+    legacy = {
+        **doors,
+        "entry": [doors["entry"][0], {**doors["entry"][1], "where": {"stage": "kyc"}}],
+    }
+    assert any("equality map is retired" in p for p in validate_definition(legacy))
+
+
+def _send(**words) -> Dict[str, Any]:
+    node = {"id": "confirm", "type": "send", "channel": "whatsapp", "template": "t"}
+    node.update(words)
+    return {
+        **_COD,
+        "nodes": [node],
+        "edges": [],
+        "purpose_key": "utility.order.confirm",
+    }
+
+
+def test_send_variables_map_shape_laws() -> None:
+    assert validate_definition(_send()) == []  # no blanks: zero parameters
+    assert validate_definition(_send(variables={"1": "customer_name"})) == []
+    problems = validate_definition(_send(variables={"1": "name", "order_no": "name"}))
+    assert any("mix positional" in p for p in problems)
+    problems = validate_definition(_send(variables={"": "name"}))
+    assert any("template blank on the left" in p for p in problems)
+
+
+def test_send_variables_must_be_declared_variable_fields_on_the_entry_topic() -> None:
+    """event-catalog.md: template variables ONLY from declared fields —
+    the derived customer_name and Shopify's own order name pass; a typo,
+    a bool field, and an identity (phone) do not."""
+    catalogs: plans.Catalogs = {"orders/create": _orders_create_catalog()}
+    ok = _send(variables={"customer_name": "customer_name", "order_no": "name"})
+    assert validate_definition(ok, catalogs=catalogs) == []
+    for fact in ("customer_nmae", "confirmed", "phone"):
+        problems = validate_definition(_send(variables={"1": fact}), catalogs=catalogs)
+        assert any(
+            f"<- {fact!r} is not a declared variable field" in p for p in problems
+        ), fact
+    # an unknown topic may trigger a plan, but its facts cannot fill a template
+    unknown = {**_send(variables={"1": "name"}), "entry": {"topic": "ride.done"}}
+    problems = validate_definition(unknown, catalogs={"ride.done": None})
+    assert any("before filtering, keying or templating" in p for p in problems)
+
+
+def test_send_variables_may_name_a_stage_letters_fact_and_the_square() -> None:
+    """Phase 16 x the map: a wait_event square's letter is reachable as
+    facts_<square>_<key> for the variable fields its topics declare, and
+    the walker's own current_node / current_stage are always allowed."""
+    orders = _orders_create_catalog()
+    doc: Dict[str, Any] = {
+        **_COD,
+        "nodes": [
+            {
+                "id": "ask",
+                "type": "wait_event",
+                "topics": ["orders/paid"],
+                "key": "$topic",
+                "minutes": 60,
+                "stage": "paid",
+            },
+            {
+                "id": "thanks",
+                "type": "send",
+                "channel": "whatsapp",
+                "template": "t",
+                "variables": {
+                    "1": "facts_ask_name",
+                    "2": "current_stage",
+                    "3": "customer_name",
+                },
+            },
+        ],
+        "edges": [["ask", "thanks", "orders/paid"]],
+        "purpose_key": "utility.order.thanks",
+    }
+    catalogs: plans.Catalogs = {"orders/create": orders, "orders/paid": orders}
+    assert validate_definition(doc, catalogs=catalogs) == []
+    bad = {
+        **doc,
+        "nodes": [
+            doc["nodes"][0],
+            {**doc["nodes"][1], "variables": {"1": "facts_ask_confirmed"}},
+        ],
+    }
+    problems = validate_definition(bad, catalogs=catalogs)
+    assert any(
+        "'facts_ask_confirmed' is not a declared variable field" in p for p in problems
+    )

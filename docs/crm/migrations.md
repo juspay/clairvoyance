@@ -64,7 +64,9 @@ Rules the template encodes:
   the writes (identity → crm_customer; platform → platform_identity, Permission
   squad owns it; permission →
   crm_consent_*, crm_decision_log; connectivity → installations, bindings,
-  templates, crm_message; record → crm_event_raw; outreach →
+  templates, crm_message; record → crm_event_raw and `crm_event_schema`
+  (068, canon T24 — a push vendor's registered event schema, one row per
+  (merchant, source, topic); `status` is a closed enum in a CHECK); outreach →
   segments/workflows/broadcasts — note the P2 outreach table must be
   `crm_campaign` to avoid colliding with buddy's existing `campaign`;
   `crm_workflow_version` (064, ADR 0023) is outreach's too — the
@@ -93,3 +95,7 @@ Rules the template encodes:
   the run's own cart can say "recovered" while any other order still ends
   the run, distinguishably). A new reason is a migration that re-creates
   the constraint under its explicit name, never an edit to 058/063.
+- `crm_workflow.definition/draft -> entry.where` is a typed condition list
+  (069 rewrote the pre-catalog equality maps in place; data-only). Rows in
+  `crm_workflow_version` are immutable and were NOT rewritten — the entry
+  model converts a legacy map on read, so a pinned document still parses.

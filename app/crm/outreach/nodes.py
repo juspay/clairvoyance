@@ -97,14 +97,12 @@ def without_reply(context: Dict[str, Any], node_id: str) -> Dict[str, Any]:
     return {key: value for key, value in context.items() if key != reply_key(node_id)}
 
 
-# Facts the lead machine consumes itself, not the template: kept in the
-# call payload, dropped from send variables.
-_LEAD_ONLY_KEYS = ("reporting_webhook_url",)
-
 # The merchant's own id for the thing this call is about. Buddy's reporter
 # echoes lead.request_id back to the merchant as orderId on every outcome
 # webhook — nautilus matches it to the Shopify order, so it must be THEIR
-# id, not ours. The run id is the fallback for a plan with no order.
+# id, not ours. On a KEYED plan that is the enrollment key itself (entry.key
+# names the order field — Shopify's `id`, a platform-wide unique); the flat
+# keys below serve unkeyed plans, and the run id is the last fallback.
 _REQUEST_ID_KEYS = ("order_id", "request_id")
 
 Validate = Callable[[WorkflowNode, WorkflowDefinition], List[str]]
@@ -156,6 +154,29 @@ def _validate_send(node: WorkflowNode, definition: WorkflowDefinition) -> List[s
         problems.append(
             f"send node {node.id}: the plan needs a purpose_key "
             "(what its sends are for, e.g. utility.order.cod_confirm)"
+        )
+    problems.extend(_variable_map_problems(node))
+    return problems
+
+
+def _variable_map_problems(node: WorkflowNode) -> List[str]:
+    """PURE: the shape laws of a send node's {blank: fact} map — names on
+    both sides, and one parameter style per template (a provider takes
+    positional "1","2" OR named, never a mix; refusing here beats a
+    refusal at dispatch). Whether each fact is DECLARED is the catalog
+    law, checked at publish (plans.py) where the catalog is at hand."""
+    problems = []
+    for blank, fact in node.variables.items():
+        if not blank.strip() or not fact.strip():
+            problems.append(
+                f"send node {node.id}: variables map needs a template blank on "
+                f"the left and a run fact on the right (got {blank!r}: {fact!r})"
+            )
+    positional = [b for b in node.variables if b.isascii() and b.isdigit()]
+    if positional and len(positional) != len(node.variables):
+        problems.append(
+            f'send node {node.id}: variables mix positional ("1", "2") and '
+            "named blanks — a template takes one style"
         )
     return problems
 
@@ -240,7 +261,15 @@ async def execute_call(
                 "workflow_id": str(run.workflow_id),
                 "enrollment_id": str(run.id),
             },
-            request_id=lead_request_id(run.context, str(run.id)),
+            request_id=lead_request_id(
+                run.context,
+                str(run.id),
+                (
+                    run.enrollment_key
+                    if any(door.key for door in definition.entries)
+                    else None
+                ),
+            ),
             execution_mode=ExecutionMode.TELEPHONY,
             status=LeadCallStatus.BACKLOG,
         )
@@ -271,6 +300,16 @@ async def execute_send(
     if not definition.purpose_key:
         raise NodeParked(f"send node {node.id}: plan has no purpose_key")
 
+    try:
+        variables = send_variables(node.variables, run.context, node)
+    except KeyError as e:
+        raise NodeParked(
+            f"send node {node.id}: mapped fact {e.args[0]!r} is not in the run "
+            "context — the entry event did not carry it"
+        ) from e
+    except ValueError as e:
+        raise NodeParked(f"send node {node.id}: {e}") from e
+
     dedupe_key = f"{run.id}:{node.id}"
     try:
         message_id = await queue_message(
@@ -282,7 +321,7 @@ async def execute_send(
             source_id=str(run.id),
             purpose_key=definition.purpose_key,
             template_id=node.template,
-            variables=send_variables(run.context, node),
+            variables=variables,
             dedupe_key=dedupe_key,
         )
     except ValueError as e:
@@ -299,9 +338,15 @@ async def execute_send(
 # --- the small pure helpers the actions share ---
 
 
-def lead_request_id(context: Dict[str, Any], run_id: str) -> str:
-    """PURE: the merchant's order/request id from the run's facts, else
-    a traceable wf-<run id>."""
+def lead_request_id(
+    context: Dict[str, Any], run_id: str, enrollment_key: Optional[str] = None
+) -> str:
+    """PURE: what this run is ABOUT, for the merchant — the enrollment key
+    when the plan is keyed (the order id the author named), else the
+    merchant's order/request id from the run's facts, else a traceable
+    wf-<run id>."""
+    if enrollment_key:
+        return str(enrollment_key)
     for key in _REQUEST_ID_KEYS:
         value = context.get(key)
         if value not in (None, ""):
@@ -350,25 +395,33 @@ def run_facts(
 
 
 def send_variables(
-    context: Dict[str, Any], node: Optional[WorkflowNode] = None
+    mapping: Dict[str, str],
+    context: Dict[str, Any],
+    node: Optional[WorkflowNode] = None,
 ) -> Dict[str, Any]:
-    """PURE: the template's fill-ins = the run's facts minus what only
-    the lead machine reads, and only what a provider can render: text and
-    numbers. A bool or a None among the variables makes the WhatsApp face
-    refuse the whole message terminally (connectivity renders nothing it
-    cannot spell — "True" or "None" inside a customer's message is
-    corruption that looks delivered), and with every listened letter's
-    facts riding along (phase 16) such values are ordinary, not rare."""
-    return {
-        key: value
-        for key, value in run_facts(context, node).items()
-        if key not in _LEAD_ONLY_KEYS
-        and isinstance(value, (str, int, float))
-        and not isinstance(value, bool)
-    }
+    """PURE: the template's fill-ins = EXACTLY the facts the send node
+    mapped, {blank: facts[fact]} over run_facts (so a blank may name a
+    stage's letter, facts_<square>_<key>, or current_node/current_stage)
+    — no map, no parameters. Bookkeeping is never mapped: the validator
+    only admits declared names on the right-hand side.
 
+    Two honest refusals, both parking the run rather than posting a
+    half-filled or misspelled message: a mapped fact absent from the run
+    (KeyError(fact)), and a mapped value a provider cannot render — a
+    bool, a None, a list (ValueError naming the fact): "True" or "None"
+    inside a customer's message is corruption that looks delivered."""
+    facts = run_facts(context, node)
+    variables: Dict[str, Any] = {}
+    for blank, fact in mapping.items():
+        value = facts[fact]
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ValueError(
+                f"mapped fact {fact!r} is {type(value).__name__}, not text — "
+                "a template blank needs text or a number"
+            )
+        variables[blank] = value
+    return variables
 
-# --- THE registry: the vocabulary, one entry per word ---
 
 NODE_TYPES: Dict[str, NodeSpec] = {
     "wait": NodeSpec(validate=_validate_wait, execute=None, is_wait=True),

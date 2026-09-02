@@ -496,6 +496,10 @@ CRM_WORKER_HEARTBEAT = _positive_float("CRM_WORKER_HEARTBEAT", 60.0)
 # forever. Replay (clear processed_at/quarantine_reason) re-drives it.
 CRM_EVENT_MAX_ATTEMPTS = _positive_int("CRM_EVENT_MAX_ATTEMPTS", 5)
 
+# How long the event worker trusts its in-process copy of a vendor's registered
+# identity mapping (T24 is cold by design; the hot path reads the cache).
+CRM_SCHEMA_CACHE_SECONDS = _positive_float("CRM_SCHEMA_CACHE_SECONDS", 60.0)
+
 # CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; pacing rides
 # CRM_WORKER_INTERVAL, but the batch is its own dial below). send() reaches
 # real providers behind a thin permission slice: dispatch._gate probes

@@ -342,6 +342,7 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
             # newer claim bumped attempt, our late outcome must miss.
             message.attempt,
             _jittered(plan.retry_after_seconds),
+            binding_id=outcome.binding_id,
         )
     except Exception as e:
         # Leave it claimed; the sweep will hand it to another worker.

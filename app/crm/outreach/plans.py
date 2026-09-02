@@ -27,18 +27,38 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowSummary,
 )
+from app.crm.record.contracts import (
+    CatalogField,
+    canonical_path,
+    catalog_fields,
+    topic_counts,
+    variable_name,
+)
+from app.crm.shared.predicate import Condition, as_number
+
+SEEN_WINDOW_DAYS = 7
+
+# The catalog handed to validate_definition: topic -> (path -> field, both
+# layers), with None for a topic no layer knows — every door's topic and
+# every listened topic. None altogether = the caller gathered nothing
+# (unit callers): shape laws only.
+Catalogs = Optional[Dict[str, Optional[Dict[str, CatalogField]]]]
 
 
 def validate_definition(
     raw: Dict[str, Any],
     occupied_nodes: Optional[List[str]] = None,
     live_entry: Optional[Dict[str, Any]] = None,
+    catalogs: Catalogs = None,
 ) -> List[str]:
     """PURE decide: every law the document must satisfy, as a list of
     human-readable problems (empty = valid). occupied_nodes are the
     squares open tokens stand on — publish must not delete one, and while
     any exist the entry rule (live_entry) must not change under them
-    (canon T19: no changing entry semantics mid-flight).
+    (canon T19: no changing entry semantics mid-flight). catalogs maps each
+    topic to its merged field map (gathered by the caller — this function
+    never reads); a topic mapped to None is one no layer declares, so
+    nothing may be filtered, keyed or templated on it.
 
     A ladder (phase 17) is expanded first, so every law below judges the
     board it means — and the stored form, the ladder beside its own
@@ -56,6 +76,19 @@ def validate_definition(
         return [f"definition shape invalid: {e}"]
 
     problems: List[str] = []
+    raw_entry = raw.get("entry")
+    raw_doors = raw_entry if isinstance(raw_entry, list) else [raw_entry]
+    if any(
+        isinstance(door, dict) and isinstance(door.get("where"), dict) and door["where"]
+        for door in raw_doors
+    ):
+        # The model reads a map for the immutable rows 069 could not rewrite;
+        # a document being WRITTEN today must speak the typed grammar.
+        problems.append(
+            "entry.where is a list of conditions [{field, op, value}] — the "
+            "equality map is retired (migration 069)"
+        )
+    problems.extend(_entry_against_catalog(definition, catalogs))
     node_ids = [node.id for node in definition.nodes]
     seen = set()
     for node_id in node_ids:
@@ -234,6 +267,140 @@ def validate_migration(
     return problems
 
 
+def _entry_against_catalog(
+    definition: WorkflowDefinition, catalogs: Catalogs
+) -> List[str]:
+    """The catalog laws (event-catalog.md §Ownership): conditions,
+    entry.key and the send nodes' template variables come ONLY from
+    declared fields; an op only from the field's type; a deprecated field
+    is a warning, not a refusal. One pass per door (phase 15): each door's
+    topic is the catalog its words are checked against — a send node's
+    mapped facts must be declared on EVERY door's topic, since a run may
+    enter through any of them."""
+    if catalogs is None:
+        return []  # nothing gathered (pure-unit callers): shape laws only
+    problems: List[str] = []
+    mapped = [
+        (node.id, blank, fact)
+        for node in definition.nodes
+        if node.type == "send"
+        for blank, fact in node.variables.items()
+    ]
+    listened = _listened_facts(definition, catalogs)
+    for entry in definition.entries:
+        topic = entry.topic
+        fields = catalogs.get(topic)
+        if fields is None:
+            if entry.where or entry.key or mapped:
+                problems.append(
+                    f"topic {topic!r} is not in the catalog — register its "
+                    "schema (or declare it in code) before filtering, keying "
+                    "or templating on it"
+                )
+            continue
+        declared = {variable_name(f.path) for f in fields.values() if f.variable}
+        allowed = declared | _WALKER_FACTS | listened
+        for node_id, blank, fact in mapped:
+            if fact not in allowed:
+                problems.append(
+                    f"send node {node_id}: variable {blank!r} <- {fact!r} is not "
+                    f"a declared variable field (topic {topic!r}; declared: "
+                    f"{', '.join(sorted(declared)) or 'none'})"
+                )
+        for condition in entry.where:
+            problems.extend(
+                f"{p} (topic {topic!r})"
+                for p in _condition_against_catalog(condition, fields)
+            )
+        if entry.key:
+            key_path = canonical_path(entry.key)
+            field = fields.get(key_path)
+            if field is None:
+                problems.append(
+                    f"entry.key {entry.key!r} is not a declared field (topic {topic!r})"
+                )
+            elif not field.keyable:
+                problems.append(
+                    f"entry.key {entry.key!r} is not keyable (topic {topic!r})"
+                )
+    return problems
+
+
+# Facts the walker computes for a template at the square (nodes.run_facts,
+# phase 16) — never a producer's, so no catalog declares them.
+_WALKER_FACTS = frozenset({"current_node", "current_stage"})
+
+
+def _listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
+    """PURE: every facts_<square>_<key> a send may name — a wait_event
+    square's letter (phase 16: kept under context.facts.<square>) exposes
+    the variable fields declared for ANY topic that square listens on."""
+    names: set = set()
+    if catalogs is None:
+        return names
+    for node in definition.nodes:
+        if node.type != "wait_event":
+            continue
+        for topic in node.topics:
+            for field in (catalogs.get(topic) or {}).values():
+                if field.variable:
+                    names.add(f"facts_{node.id}_{variable_name(field.path)}")
+    return names
+
+
+def _condition_against_catalog(
+    condition: Condition, fields: Dict[str, CatalogField]
+) -> List[str]:
+    field = fields.get(condition.field)
+    if field is None:
+        return [f"where: {condition.field!r} is not a declared field"]
+    if condition.op not in field.ops:
+        return [
+            f"where: {condition.op!r} is not an op for {condition.field!r} "
+            f"({field.type}; allowed: {', '.join(field.ops) or 'none'})"
+        ]
+    if field.deprecated:
+        logger.warning(f"where: {condition.field!r} is deprecated in the catalog")
+    values = condition.value if condition.op == "in" else [condition.value]
+    if condition.op == "exists":
+        return []
+    if field.type == "choice" and field.values:
+        bad = [v for v in values if str(v) not in field.values]
+        if bad:
+            return [f"where: {condition.field!r} has no value {bad[0]!r}"]
+    if field.type == "number" and any(as_number(v) is None for v in values):
+        return [f"where: {condition.field!r} is a number"]
+    if field.type == "boolean" and any(not isinstance(v, bool) for v in values):
+        return [f"where: {condition.field!r} is a yes/no"]
+    return []
+
+
+async def _gather_catalogs(merchant_id: str, raw: Dict[str, Any]) -> Catalogs:
+    """topic -> merged field map (None = unknown topic) for every door's
+    topic and every listened topic — the cold read the pure validator
+    receives as an argument. Read off the EXPANDED document (phase 17): a
+    ladder has no doors or squares until expand_stages mints them; a
+    ladder that will not expand gathers nothing and the validator says why."""
+    if isinstance(raw, dict) and raw.get("stages") is not None:
+        try:
+            raw = expand_stages(raw)
+        except Exception:  # LadderProblem / pydantic — validate_definition reports it
+            return {}
+    entry = raw.get("entry") if isinstance(raw, dict) else None
+    doors = entry if isinstance(entry, list) else [entry]
+    topics = {
+        str(door["topic"])
+        for door in doors
+        if isinstance(door, dict) and door.get("topic")
+    }
+    # …and every topic a wait_event square listens on: its letter's facts
+    # (phase 16) are what a send may name as facts_<square>_<key>.
+    for node in raw.get("nodes") or [] if isinstance(raw, dict) else []:
+        if isinstance(node, dict) and node.get("type") == "wait_event":
+            topics.update(str(t) for t in node.get("topics") or [] if t)
+    return {topic: await catalog_fields(merchant_id, topic) for topic in topics}
+
+
 async def create_workflow(
     merchant_id: str, name: str, definition: Dict[str, Any], created_by: Optional[str]
 ) -> Workflow:
@@ -242,7 +409,8 @@ async def create_workflow(
     never in ways that break the editor. A ladder (phase 17) is stored
     with the board it expands to: the author's intent beside what the
     walker reads."""
-    problems = validate_definition(definition)
+    catalogs = await _gather_catalogs(merchant_id, definition)
+    problems = validate_definition(definition, catalogs=catalogs)
     if problems:
         raise WorkflowValidationError(problems)
     return await workflow_accessor.insert_workflow(
@@ -253,7 +421,8 @@ async def create_workflow(
 async def update_draft(
     merchant_id: str, workflow_id: str, definition: Dict[str, Any]
 ) -> Optional[Workflow]:
-    problems = validate_definition(definition)
+    catalogs = await _gather_catalogs(merchant_id, definition)
+    problems = validate_definition(definition, catalogs=catalogs)
     if problems:
         raise WorkflowValidationError(problems)
     return await workflow_accessor.update_draft(
@@ -264,11 +433,21 @@ async def update_draft(
 async def publish_workflow(
     merchant_id: str, workflow_id: str, published_by: Optional[str] = None
 ) -> Workflow:
-    return await atomically(_publish_in_txn, merchant_id, workflow_id, published_by)
+    draft = await workflow_accessor.get_workflow(merchant_id, workflow_id)
+    catalogs = await _gather_catalogs(
+        merchant_id, (draft.draft if draft else None) or {}
+    )
+    return await atomically(
+        _publish_in_txn, merchant_id, workflow_id, published_by, catalogs
+    )
 
 
 async def _publish_in_txn(
-    txn: DbTxn, merchant_id: str, workflow_id: str, published_by: Optional[str]
+    txn: DbTxn,
+    merchant_id: str,
+    workflow_id: str,
+    published_by: Optional[str],
+    catalogs: Catalogs = None,
 ) -> Workflow:
     """ATOMIC: the validate, the copy, the version row and (migrate) the
     re-pin share one fate — the document the validator approved must be
@@ -292,7 +471,10 @@ async def _publish_in_txn(
     occupied = await enrollment_accessor.occupied_nodes(txn, merchant_id, workflow_id)
     live_entry = (workflow.definition or {}).get("entry")
     problems = validate_definition(
-        draft, occupied_nodes=occupied, live_entry=live_entry
+        draft,
+        occupied_nodes=occupied,
+        live_entry=live_entry,
+        catalogs=catalogs,
     )
     if problems:
         raise WorkflowValidationError(problems)
@@ -400,7 +582,25 @@ async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]
 async def list_workflows(
     merchant_id: str, limit: int, offset: int
 ) -> List[WorkflowSummary]:
-    return await workflow_accessor.list_workflows(merchant_id, limit, offset)
+    """The list, decorated with seen-vs-matched for the window: events on
+    each plan's entry topic (record's count, any source) against runs it
+    started — "saw 240 · matched 3" is a dashboard fact, never a stored one."""
+    summaries = await workflow_accessor.list_workflows(merchant_id, limit, offset)
+    if not summaries:
+        return summaries
+    seen: Dict[str, int] = {}
+    for count in await topic_counts(merchant_id, SEEN_WINDOW_DAYS):
+        seen[count.topic] = seen.get(count.topic, 0) + count.seen
+    started = await enrollment_accessor.enrollment_counts(merchant_id, SEEN_WINDOW_DAYS)
+    return [
+        s.model_copy(
+            update={
+                "seen_7d": seen.get(s.entry_topic or "", 0),
+                "matched_7d": started.get(str(s.id), 0),
+            }
+        )
+        for s in summaries
+    ]
 
 
 class WorkflowValidationError(Exception):

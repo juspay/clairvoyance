@@ -160,6 +160,33 @@ def _wire(
     return run
 
 
+def test_declared_variables_ride_into_the_run_context_and_win(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The engine resolved the catalog's variable fields (nested paths,
+    derived names) — they land in context beside the scalar copy and
+    override it; a bookkeeping name in the variables is still ours."""
+    calls: List[Any] = []
+    _wire(monkeypatch, _flow(), calls)
+    event = _event("checkout.initiated")
+    asyncio.run(
+        entry.consume_attributed_event(
+            event,
+            "cust-1",
+            variables={
+                "customer_name": "Priya Sharma",
+                "cart_value": 2999,
+                "source_event_id": "forged",
+            },
+        )
+    )
+    ((kind, kwargs),) = calls
+    assert kind == "enrol"
+    assert kwargs["context"]["customer_name"] == "Priya Sharma"
+    assert kwargs["context"]["cart_value"] == 2999  # declared beats the scalar copy
+    assert kwargs["context"]["source_event_id"] == event.id
+
+
 def test_entry_topic_enrols_with_phone_and_small_facts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -271,7 +298,10 @@ def test_a_failure_propagates_to_the_row_savepoint(
 # --- W5: entry.where and wait_event ---
 
 _COD_DEFINITION = {
-    "entry": {"topic": "orders/create", "where": {"gateway": "COD"}},
+    "entry": {
+        "topic": "orders/create",
+        "where": [{"field": "payload.gateway", "op": "is", "value": "COD"}],
+    },
     "nodes": [
         {
             "id": "ask",
@@ -350,18 +380,26 @@ def test_pick_next_takes_the_answer_edge_or_timeout() -> None:
 # --- the send node proposes one manifest row ---
 
 
-def test_send_variables_are_the_small_facts_only() -> None:
+def test_send_variables_are_only_the_mapped_facts() -> None:
+    """A template with two blanks handed 27 facts is refused by every
+    provider (the COD demo: 'confirmed' is bool) — the send node names
+    which fact fills which blank, and an unmapped template posts none."""
     context = {
         "phone": "+91…",
         "customer_mobile_number": "98450 12345",
         "source_event_id": "e1",
-        "name": "Priya",
+        "customer_name": "Priya",
+        "name": "#1001",
         "cart_value": 1999,
+        "confirmed": True,
         "lead_call": "L1",
         "message_ask": "M1",
         "reply_reply": "YES",
     }
-    assert send_variables(context) == {"name": "Priya", "cart_value": 1999}
+    assert send_variables(
+        {"customer_name": "customer_name", "order_no": "name"}, context
+    ) == {"customer_name": "Priya", "order_no": "#1001"}
+    assert send_variables({}, context) == {}  # hello_world: zero parameters
 
 
 # --- entry.key: what a run is about (canon T20 col 13, ruled 31 Aug 2026) ---
