@@ -17,4 +17,4 @@
 - Suite green; boundary clean; §16.3 G8 → done.
 
 ## Out of scope
-- Ladder expansion (17). List-shaped facts (G4, backlog).
+- Ladder expansion (17). List-shaped facts (phase 21).

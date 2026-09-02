@@ -29,4 +29,4 @@ We run the whole rollout ourselves. #1041 (`manas-narra:feat/crm-repeat-entries`
 - `GREATEST` semantics for debounce. `pin`-vs-`migrate` is irrelevant here (phase 11).
 
 ## Out of scope
-- Generalising repeats beyond the entry node (phase 16). Manas's open questions on list-shaped facts / `accumulate(<field>)` (backlog G4).
+- Generalising repeats beyond the entry node (phase 16). Manas's open questions on list-shaped facts / `accumulate(<field>)` (phase 21).

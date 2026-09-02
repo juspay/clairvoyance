@@ -17,4 +17,4 @@
 - Suite green; boundary clean (hook registration, no direct cross import); config documented in `app/core/config/static.py` beside `CRM_RUN_RETENTION_DAYS`.
 
 ## Out of scope
-- UI for versions. Buddy template deletion guard (backlog).
+- UI for versions. Buddy template deletion guard (phase 28).

@@ -23,4 +23,4 @@ A `send` node names a `template` by NAME; today the first sign it is wrong is a 
 - Language ambiguity (approved in two languages) is refused here exactly as `approved_template` refuses it at send time — same rule, earlier.
 
 ## Out of scope
-- Variable-shape validation against `components` (backlog).
+- Variable-shape validation against `components` (phase 34, N15/N16 warnings territory; not scheduled as a refusal).

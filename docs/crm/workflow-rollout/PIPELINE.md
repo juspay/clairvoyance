@@ -1,4 +1,4 @@
-# The pipeline — how the 20 phases get merged, in what order, by one agent
+# The pipeline — how the 36 phases get merged, in what order, by one agent
 
 This is the operating document for the queue in `README.md`. It answers: what
 merges first, what runs in parallel, how status is tracked, and the exact
@@ -44,7 +44,7 @@ The loop is:
    they unblock.
 2. You review and merge. Then paste the **continue prompt**. The agent
    re-checks which phases are now unblocked, works them, stops, reports.
-3. Repeat until phase 19 is merged.
+3. Repeat until phase 35 is merged.
 
 A phase is DONE only when its PR is merged AND `pytest tests/crm` is green on
 `release` afterwards. The PR list is the ledger — every rollout PR carries
@@ -59,12 +59,17 @@ queue's state. Phase files are never edited to say "done".
 | 1 | 02 · 03 | 01 merged (02, 03); | `outreach/db/queries.py` (02, 03) |
 | 2 | 06 → then 07 · 08 · 09 | 06 after 01 and 03; 07 after 00, 02, 06; 08 and 09 after 06 | `plans.py` (06, 08), `entry.py` (06, 09) |
 | 3 | 11 → 12 → 13 → 14 | 11 after 10 merged (needs your sign-off on the ADR); each after the previous | sequential by design |
-| 4 | 15 → 16 → 17 | 15 after 13; 16 after 00 and 15; 17 after 14, 15, 16 | `schemas.py`, `entry.py`, `walker.py`, `nodes.py` — sequential |
+| 4 | 15 → 16 → 17 → 20 | 15 after 13; 16 after 00 and 15; 17 after 14, 15, 16; 20 after 15 and 16 (do it after 17 to keep the wave serial) | `schemas.py`, `entry.py`, `walker.py`, `nodes.py` — sequential |
 | 5 | 18 · 19 | 18 after 15 and #1040/#1052 merged; 19 after #1021 merged | independent |
+| 6 | 21 · 22 · 23 → 24 · 25 · 26 | 21 after 16; 22 after 20 and #987; 23 after 20; 24 after 18; 25 after 17, 20, 21; 26 after 19 | `nodes.py`, `schemas.py`, `plans.py` in 21–25 — serial merges; 26 is connectivity-only |
+| 7 | 27 · 28 · 29 · 30 · 31 · 32 · 33 · 34 → 35 | each per its *Depends on*; 29 and 35 need a ruling/ADR sign-off first | mostly disjoint modules; 34 last of the small ones, 35 last of all |
 
 Milestones: **M1/M2** cart board publishable + loan clocks live after wave 2
 (phase 07); **M3** versioning after wave 3; **M4** loan funnel is one pinned
-board after wave 4; **M5** feedback loops + compliance after wave 5.
+board after wave 4; **M5** feedback loops + compliance after wave 5; **M6**
+product vocabulary (condition/http/split/handoff/simulate/pacing) after wave
+6; **M7** every probable issue and nit from the read-through closed after
+wave 7 — the queue is then empty.
 
 Merge order within a wave when several PRs are open: lowest phase number
 first; ask the agent to rebase the rest (the continue prompt does that).
@@ -79,6 +84,10 @@ first; ask the agent to rebase the rest (the continue prompt does that).
 - Wave 4: phase 17's expander test ("every node lists all downstream
   topics") is the gate.
 - Wave 5: 19 is compliance — review with #1021's author.
+- Wave 6: 22 (http) is an outbound-fetch surface — review with #987's author;
+  24 (handoff) coordinate with #963.
+- Wave 7: 29 and 35 each start with a ruling from Swaroop (ADR 0021 intent;
+  ADR 0023 partitioning). The agent is told to ask, not assume.
 
 ## The kick-off prompt (paste once, at the start)
 
@@ -92,7 +101,7 @@ first; ask the agent to rebase the rest (the continue prompt does that).
 > `docs/crm/workflow-rollout/context/README.md`; then
 > `docs/crm/workflow-rollout/context/reading-notes.md` in full (it is the
 > source of truth for intent) and `context/nits.md`. Then read every phase
-> file `00`–`19` and `99-backlog.md` once, so you know the whole queue before
+> file `00`–`35` once, so you know the whole queue before
 > touching the first phase. Then read the current code of `app/crm/outreach`,
 > `app/crm/record`, `app/crm/shared` and `scripts/check_crm_boundaries.py`
 > against the notes and tell me in one paragraph anything that has drifted

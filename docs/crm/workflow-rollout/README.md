@@ -1,4 +1,4 @@
-# CRM workflow rollout — the ordered implementation queue (20 phases 00–19 + backlog)
+# CRM workflow rollout — the ordered implementation queue (36 phases 00–35)
 
 This folder is the ordered, PR-sized backlog for taking the CRM workflow layer
 (`app/crm/outreach`, with touches in `record`, `connectivity`, `app/ai`) from
@@ -58,7 +58,8 @@ PR has not merged yet.
 - Fail CLOSED anywhere permission-adjacent; buddy-side mirrors fail OPEN.
 - Logs never carry a phone/email; use `app/crm/shared/redact.py`.
 - Do not widen a phase. If you find an adjacent bug, note it in the PR
-  description and leave it for its own phase (or `99-backlog.md`).
+  description and leave it for its own phase; if none fits, say so and the
+  dispatcher adds one.
 - The PR description states: the phase number, what changed, the red test(s),
   and any *Decisions already made* you disagreed with.
 
@@ -85,10 +86,40 @@ PR has not merged yet.
 | 17 | `stages` ladder sugar + loan funnel migration to a board | feat + docs | 14, 15, 16 |
 | 18 | Outcome feedback into runs (G2, G3) | feat | PRs #1040/#1052 merged; 15 |
 | 19 | Permission-gate wiring (G1) | feat | PR #1021 merged |
-| 99 | Backlog (G4, G5, G6, G10, G11, remaining nits) | — | — |
+| 20 | `condition` node — branch on run and customer facts (G5 part 1, N1) | feat | 15, 16 |
+| 21 | Letter facts — list-shaped payload data reaches templates at fire time (G4) | feat | 16 |
+| 22 | `http` action node (G5 part 2) | feat | 15, 16, 20; PR #987 merged |
+| 23 | `split` node — deterministic percentage branches (G5 part 3) | feat | 20 |
+| 24 | `handoff` node + `crm_handoff` — a human closes it, the run continues (G6) | feat + migration | 15, 18; coordinate PR #963 |
+| 25 | Simulate — dry-run a plan against a sample event (G10) | feat | 17, 20, 21 |
+| 26 | Send pacing per merchant and channel (G11) | feat | 19 |
+| 27 | Re-drive quarantined spine events | feat | 04 |
+| 28 | Buddy call-template retirement guard against pinned versions | fix (buddy) | 14 |
+| 29 | Staple carries the loser's handles (P3) | fix | ruling vs ADR 0021 |
+| 30 | Tenancy FK on enrollment.customer_id (P4) | migration | — |
+| 31 | Suppression probes by channel (P6) | feat | 19 |
+| 32 | Redact run context on read (P7) | fix | 16 |
+| 33 | Ingest body cap that actually caps (P8) | fix | — |
+| 34 | Hygiene sweep (N2–N3, N8–N17) | fix | 06, 20 |
+| 35 | Scale hardening — spine retention and the partitioning ADR | docs + migration | 27; ADR sign-off |
 
 Phases 00–09 need no canon change. Phase 10 is the canon decision; 11–17
-build on it. 18 and 19 are gated on other people's PRs and can slide. Phase
+build on it. 18 and 19 are gated on other people's PRs and can slide. 20–26
+are the product vocabulary (wave 6); 27–35 are hardening and hygiene (wave
+7), closing every gap and probable issue the read-through found. There is
+no backlog file: everything found has a phase or is listed under *Not doing*.
+
+## Not doing (decisions, not deferrals)
+
+- **In-call WhatsApp (`send_whatsapp` builtin)** — dropped 2026-09-02. The
+  cart flow's WhatsApp is the workflow's `send` node only.
+- **Merchant console / visual builder** — a separate product surface, not
+  this repo's queue. Phase 25 (simulate) and the `stages` sugar (17) are what
+  it will call.
+- **Producer-owed scalar summaries** (manas's option a on #1041) — rejected in
+  favour of phase 21's fire-time letter read.
+- **Item-overlap goal logic** ("did the new order contain the abandoned
+  items") — not expressible and not wanted; goal tiers (06) cover the cases. Phase
 05 does not exist (its content became phase 00 when we decided to land
 #1041 ourselves); numbering was kept so cross-references stay stable.
 

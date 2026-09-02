@@ -25,4 +25,4 @@
 - Attempts counted by the claim, not by the failure, so a crash mid-row counts.
 
 ## Out of scope
-- An operator endpoint to re-drive quarantined rows (backlog).
+- An operator endpoint to re-drive quarantined rows (phase 27).
