@@ -19,6 +19,11 @@ REASON_NO_ADAPTER = "channel_not_supported"
 REASON_NO_BINDING = "no_active_binding"
 REASON_NO_INSTALLATION = "connector_not_installed"
 REASON_INSTALLATION_UNHEALTHY = "connector_unhealthy"
+# The T23 registry says this name is not approved for this account — never
+# registered, still pending, rejected, deleted, or approved in more than one
+# language with nothing on the row to choose between them. ADR 0011: refused
+# on OUR side of the wire, so the provider never sees it.
+REASON_TEMPLATE_NOT_APPROVED = "template_not_approved"
 
 # Retryable, unlike the refusals above — both mean "no answer", and no
 # answer is not "no": the provider may have taken the message. The timeout

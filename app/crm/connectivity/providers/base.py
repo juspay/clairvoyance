@@ -1,27 +1,28 @@
 """The ports a provider package implements — one per face.
 
-A connector is not one thing. WhatsApp is a send adapter and an onboarding
-handshake, and the two answer to different callers: send.py drives the
-first, connectors.py the second. Naming them as separate ports is what lets
-`onboarding.py` stay generic — the vocabulary dispatches through a registry
-instead of branching on `if connector == "whatsapp"`.
+A connector is not one thing. WhatsApp is a send adapter, an onboarding
+handshake and a template registry, and those three answer to different
+callers: send.py drives the first, connectors.py the other two. Naming them
+as separate ports is what lets `onboarding.py` and `templates.py` stay
+generic — the vocabulary dispatches through a registry instead of branching
+on `if connector == "whatsapp"`.
 
     ChannelAdapter       build the request, read the answer      -> send.py
     ConnectorOnboarder   turn a signup payload into a door       -> connectors.py
+    TemplateProvider     register and track a message shape      -> connectors.py
 
-A third face — registering the message shapes a provider pre-approves —
-joins them with the template registry.
-
-The split that matters for both: a provider CLASSIFIES or NORMALISES, it
-never DECIDES. An adapter reports what the provider did and
+The split that matters for all three: a provider CLASSIFIES or NORMALISES,
+it never DECIDES. An adapter reports what the provider did and
 dispatch.plan_for_outcome turns that into queued / failed / dead; an
 onboarder reports how far up the health ladder it got and onboarding.py
-turns that into a status. A provider reaching for policy would give each
-channel its own private answer to "why", and there would stop being one.
+turns that into a status; a template face returns Meta's words in the
+canon's lowercase vocabulary and templates.py decides which transition that
+allows. A provider reaching for policy would give each channel its own
+private answer to "why", and there would stop being one.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Dict, Optional, Protocol
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Protocol
 
 import httpx
 
@@ -30,9 +31,11 @@ from app.crm.connectivity.reasons import REASON_TRANSPORT
 from app.crm.connectivity.schemas import (
     CredentialBundle,
     OnboardResult,
+    ProviderTemplateState,
     QueuedMessage,
     SendOutcome,
     SendRoute,
+    TemplateDraft,
 )
 from app.crm.shared.redact import mask_address
 
@@ -100,15 +103,30 @@ class ChannelAdapter(ABC):
         return body if isinstance(body, dict) else {}
 
 
-class ConnectorHandshakeError(Exception):
+class ProviderError(Exception):
+    """A provider DECLARED a refusal — the base every face raises under.
+
+    The one distinction generic code needs: a refusal it may repeat to the
+    merchant, versus a bug it must not. Messages on this type are written FOR
+    the merchant ("that number is not on this account", "component BODY has
+    too many variables") and the logic file passes them through verbatim;
+    anything else becomes a fixed sentence, because an arbitrary exception's
+    text is an internal detail and an API response is not the place to learn
+    it.
+
+    It is a base rather than two unrelated types so the contract is stated
+    once: the next face — an SMS-DLT registry, a Zendesk handshake — declares
+    its refusals by subclassing, and the pass-through rule already covers it.
+    Each face still gets its own leaf so a caller CAN narrow when it has a
+    reason to.
+    """
+
+
+class ConnectorHandshakeError(ProviderError):
     """A provider refused a step of its onboarding handshake.
 
-    The type every ConnectorOnboarder raises, so generic code can tell a
-    refusal it may repeat to the merchant from a bug it must not. Messages
-    on this type are written FOR the merchant — "that number is not on this
-    account" — and onboarding.py passes them through; anything else becomes
-    a fixed sentence, because an arbitrary exception's text is an internal
-    detail and the API response is not the place to learn it.
+    The type every ConnectorOnboarder raises; onboarding.py passes its
+    message through.
     """
 
 
@@ -154,6 +172,60 @@ class ConnectorOnboarder(Protocol):
         proceeds, because refusing to disconnect locally when the provider
         is unreachable would trap the merchant.
         """
+
+
+class TemplateProviderError(ProviderError):
+    """A provider refused a template operation.
+
+    The twin of ConnectorHandshakeError: a provider describing why it
+    rejected components is describing the merchant's OWN template, so
+    templates.py passes the message through.
+    """
+
+
+class TemplateProvider(Protocol):
+    """One provider's template-registry face.
+
+    Every method returns a NORMALISED ProviderTemplateState: uppercase-vs-
+    lowercase is Meta's quirk, not the registry's, so it is spent here and
+    never crosses into templates.py.
+    """
+
+    #: Whether an already-registered template can be edited in place.
+    #: Meta re-reviews the SAME row (approved/rejected/paused -> pending);
+    #: SMS-DLT cannot, and must be retired and re-registered under a new id.
+    #: templates.py branches on this instead of on a provider name.
+    edits_in_place: bool
+
+    async def submit(
+        self, bundle: CredentialBundle, account_ref: str, draft: TemplateDraft
+    ) -> ProviderTemplateState:
+        """Register a draft for review and report what the provider assigned."""
+
+    async def edit(
+        self,
+        bundle: CredentialBundle,
+        account_ref: str,
+        provider_template_id: str,
+        components: List[Dict[str, Any]],
+    ) -> ProviderTemplateState:
+        """Replace a registered template's components in place."""
+
+    async def retire(
+        self,
+        bundle: CredentialBundle,
+        account_ref: str,
+        provider_template_id: str,
+        name: str,
+        language: str,
+    ) -> None:
+        """Withdraw ONE registered template — this name in this language."""
+
+    def normalize_event(
+        self, topic: str, value: Mapping[str, Any]
+    ) -> Optional[ProviderTemplateState]:
+        """One webhook payload -> the registry's vocabulary, or None if this
+        letter says nothing about a template."""
 
 
 class AdapterRegistryError(LookupError):

@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from app.crm.connectivity import send as send_module
+from app.crm.connectivity import (
+    accounts as accounts_module,
+    send as send_module,
+    templates as templates_module,
+)
 from app.crm.connectivity.db.queries.binding import (
     binding_by_id_query,
     primary_binding_query,
@@ -21,6 +25,7 @@ from app.crm.connectivity.providers import ADAPTERS, adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
 from app.crm.connectivity.providers.whatsapp.adapter import MetaWhatsAppAdapter
 from app.crm.connectivity.schemas import (
+    ApprovedTemplate,
     ChannelBinding,
     ConnectorInstallation,
     CredentialBundle,
@@ -159,7 +164,7 @@ def _patch_credential(monkeypatch, credential) -> None:
         assert raise_errors is True
         return credential
 
-    monkeypatch.setattr(send_module, "get_credential_by_id", _get)
+    monkeypatch.setattr(accounts_module, "get_credential_by_id", _get)
 
 
 def _route(**overrides) -> SendRoute:
@@ -173,20 +178,26 @@ def _route(**overrides) -> SendRoute:
     return SendRoute(**fields)
 
 
+#: What the registry answers for an approved template, unless a test seeds
+#: something else. One row = one language = sendable.
+_APPROVED = [ApprovedTemplate(id="t-1", language="en_US")]
+
+
 class _FakeAccessor:
-    """Stands in for the db/accessors modules send.py reads, so the door is
+    """Stands in for every db/accessors module send.py reads, so the door is
     testable without a database — which is the whole reason routes are
     resolved in one place.
 
-    One double for both modules on purpose: the point under test is the
+    One double for three modules on purpose: the point under test is the
     ORDER of the resolver's reads and what it refuses on, and splitting it
-    would only make each test say which of them to seed.
+    into three doubles would only make each test say which of them to seed.
     """
 
-    def __init__(self, binding=None, installation=None):
+    def __init__(self, binding=None, installation=None, approved=None):
         """Test double."""
         self._binding = binding
         self._installation = installation
+        self._approved = _APPROVED if approved is None else approved
         self.writes: list = []
 
     async def get_binding(self, merchant_id, channel, binding_id):
@@ -196,6 +207,12 @@ class _FakeAccessor:
     async def get_installation(self, merchant_id, installation_id):
         """Test double: the seeded installation."""
         return self._installation
+
+    async def approved_templates_for_send(
+        self, merchant_id, channel, provider_account_ref, name
+    ):
+        """Test double: the seeded registry answer for this template name."""
+        return self._approved
 
     def __getattr__(self, name):
         """Anything beyond the reads above is recorded, not raised.
@@ -215,9 +232,15 @@ class _FakeAccessor:
 
 
 def _patch_accessors(monkeypatch, fake) -> None:
-    """Point send.py's accessor modules at one double."""
+    """Point every accessor the send path reaches at one double.
+
+    The registry read moved to templates.py (it owns crm_channel_template's
+    reads), so the double is installed there rather than on send.py — the
+    resolver's behaviour under test is unchanged either way.
+    """
     for name in ("binding_accessor", "installation_accessor"):
         monkeypatch.setattr(send_module, name, fake)
+    monkeypatch.setattr(templates_module, "template_accessor", fake)
 
 
 @pytest.fixture
@@ -406,7 +429,7 @@ async def test_a_vault_outage_retries_instead_of_blocking(monkeypatch) -> None:
         """Test double: the pool dies mid-read."""
         raise ConnectionError("pool exhausted")
 
-    monkeypatch.setattr(send_module, "get_credential_by_id", _outage)
+    monkeypatch.setattr(accounts_module, "get_credential_by_id", _outage)
     message = _message()
     outcome = await send(_token(message), message)
     assert outcome.status == "failed"
@@ -441,10 +464,13 @@ async def test_a_connecting_installation_refuses(happy_accessor) -> None:
 
 async def test_a_resolved_route_carries_the_whole_context(happy_accessor) -> None:
     """A resolved route carries the whole context."""
-    route = await resolve_send_route("shop", "whatsapp", None)
+    route = await resolve_send_route("shop", "whatsapp", None, "order_update_v1")
     assert isinstance(route, SendRoute)
     assert route.binding.address == "1234567890"
     assert route.bundle.secret("system_user_token") == "tok"
+    # And the language the registry approved, which is the whole reason the
+    # adapter no longer reads it off the binding.
+    assert route.template_language == "en_US"
 
 
 def test_both_binding_lookups_are_pinned_to_their_channel() -> None:
@@ -639,9 +665,27 @@ def test_the_vault_is_read_through_its_own_accessor() -> None:
     for builder in Path("app/crm/connectivity/db/queries").glob("*.py"):
         assert not vault_in_sql.search(builder.read_text()), builder
     assert (
-        send_module.get_credential_by_id.__module__
+        accounts_module.get_credential_by_id.__module__
         == "app.database.accessor.breeze_buddy.credentials"
     )
+
+
+def test_one_home_for_the_account_policy() -> None:
+    """The usable-states set and the vault sequence live in accounts.py only.
+
+    Two definitions of one policy is a policy that changes in one place and
+    not the other — the day a degraded door may register templates but not
+    send, the miss would be silent. Same reason the registry read belongs to
+    templates.py: send.py owning a second read on crm_channel_template would
+    be a second answer to "is this approved".
+    """
+    send_src = Path("app/crm/connectivity/send.py").read_text()
+    templates_src = Path("app/crm/connectivity/templates.py").read_text()
+    for src in (send_src, templates_src):
+        assert "get_credential_by_id" not in src
+        assert '!= "healthy"' not in src and 'frozenset({"healthy"})' not in src
+    assert "template_accessor" not in send_src
+    assert accounts_module.USABLE_INSTALLATION_STATES == frozenset({"healthy"})
 
 
 def test_both_tables_are_created_together() -> None:
@@ -760,3 +804,132 @@ def test_a_binding_cannot_hang_off_another_tenants_installation() -> None:
     sql = _table_ddl("crm_channel_binding")
     assert "FOREIGN KEY (merchant_id, installation_id)" in sql
     assert "REFERENCES crm_connector_installation (merchant_id, id)" in sql
+
+
+# --- the T23 send-time template lookup (ADR 0011) ---------------------------
+#
+# A non-approved template must be refused BEFORE the provider call. Without
+# this, a pending or rejected name goes to Meta and fails there — the wrong
+# side of the wire, where it costs an attempt, a rate-limit budget and a
+# support ticket instead of a manifest row with an honest reason.
+
+
+class _CountingAdapter(ChannelAdapter):
+    """Records whether the send path ever reached a provider."""
+
+    channel = "whatsapp"
+
+    def __init__(self):
+        """Test double."""
+        self.calls = 0
+
+    async def deliver(self, message, route):
+        """Test double: count the call that should never happen."""
+        self.calls += 1
+        return SendOutcome(status="accepted", provider_message_id="wamid.1")
+
+
+@pytest.fixture
+def counting_adapter(monkeypatch) -> _CountingAdapter:
+    """Test double."""
+    adapter = _CountingAdapter()
+    monkeypatch.setattr(send_module, "adapter_for", lambda channel: adapter)
+    return adapter
+
+
+async def test_an_approved_template_passes_to_the_adapter(
+    monkeypatch, happy_accessor, counting_adapter
+) -> None:
+    """One approved row, so exactly one language — the send may proceed."""
+    message = _message()
+    outcome = await send(_token(message), message)
+    assert outcome.status == "accepted"
+    assert counting_adapter.calls == 1
+
+
+@pytest.mark.parametrize(
+    "approved,why",
+    [
+        ([], "never registered, pending, rejected or deleted"),
+        (
+            [
+                ApprovedTemplate(id="t-1", language="en_US"),
+                ApprovedTemplate(id="t-2", language="hi_IN"),
+            ],
+            "approved in more than one language",
+        ),
+    ],
+)
+async def test_a_template_that_is_not_one_approved_row_is_refused(
+    monkeypatch, counting_adapter, approved, why
+) -> None:
+    """Zero rows and many rows are one fact from the sender's side.
+
+    The ambiguous case earns the same refusal rather than a default: a
+    manifest row carries the template NAME and no language, so picking one
+    locale would be guessing which language a customer reads — and the wrong
+    guess sends an unreadable message under a merchant's name.
+    """
+    _patch_accessors(
+        monkeypatch,
+        _FakeAccessor(
+            binding=_binding(), installation=_installation(), approved=approved
+        ),
+    )
+    _patch_credential(monkeypatch, _credential())
+    message = _message()
+    outcome = await send(_token(message), message)
+    assert outcome.status == "blocked", why
+    assert outcome.reason == "template_not_approved"
+    assert outcome.retryable is False
+    # The provider never saw it, which is the whole point.
+    assert counting_adapter.calls == 0
+
+
+async def test_a_message_naming_no_template_never_reaches_a_provider(
+    monkeypatch, happy_accessor, counting_adapter
+) -> None:
+    """Refused in the resolver rather than in the adapter, so the reason is
+    the same for every channel instead of one per adapter."""
+    message = _message(template_id=None)
+    outcome = await send(_token(message), message)
+    assert outcome.status == "blocked"
+    assert outcome.reason == "template_missing"
+    assert counting_adapter.calls == 0
+
+
+async def test_the_route_carries_the_registrys_language_not_the_bindings(
+    monkeypatch,
+) -> None:
+    """Which locale a template was APPROVED in is a fact about the template.
+
+    The binding's capabilities blob used to answer this, and could disagree
+    with what the provider actually approved — the interim the manifest
+    adapter's own docstring named.
+    """
+    _patch_accessors(
+        monkeypatch,
+        _FakeAccessor(
+            binding=_binding(capabilities={"template_language": "de_DE"}),
+            installation=_installation(),
+            approved=[ApprovedTemplate(id="t-1", language="hi_IN")],
+        ),
+    )
+    _patch_credential(monkeypatch, _credential())
+    route = await resolve_send_route("shop", "whatsapp", None, "order_update_v1")
+    assert isinstance(route, SendRoute)
+    assert route.template_language == "hi_IN"
+
+
+def test_the_lookup_is_scoped_to_the_merchants_own_account() -> None:
+    """The registry's natural key includes the provider account, so one
+    merchant's approved template can never be resolved for another's."""
+    from app.crm.connectivity.db.queries.template import (
+        approved_template_for_send_query,
+    )
+
+    sql, values = approved_template_for_send_query("shop", "whatsapp", "waba-1", "n")
+    assert "merchant_id = $1" in sql
+    assert "provider_account_ref = $3" in sql
+    assert "status = 'approved'" in sql
+    assert values == ["shop", "whatsapp", "waba-1", "n"]

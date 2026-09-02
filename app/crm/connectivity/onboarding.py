@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.core.logger.context import update_log_context
+from app.crm.connectivity import accounts
 from app.crm.connectivity.connectors import (
     ConnectorHandshakeError,
     ConnectorSpec,
@@ -41,13 +42,11 @@ from app.crm.connectivity.db.accessors import (
 )
 from app.crm.connectivity.schemas import (
     ConnectorInstallation,
-    CredentialBundle,
     InstallationRead,
     OnboardResult,
 )
 from app.database.accessor.breeze_buddy.credentials import (
     create_credential,
-    get_credential_by_id,
     get_credential_by_name,
     update_credential,
 )
@@ -366,19 +365,16 @@ async def _revoke_at_provider(
     if spec is None or not installation.credential_id:
         return
     try:
-        credential = await get_credential_by_id(
-            installation.credential_id, mask=False, raise_errors=True
-        )
-        if credential is None or not credential.value:
-            return
-        await spec.onboarder.revoke(
-            CredentialBundle(values=credential.value),
-            installation.external_account_id,
-        )
+        bundle = await accounts.bundle_for(installation)
+        await spec.onboarder.revoke(bundle, installation.external_account_id)
+    except accounts.AccountError:
+        # No usable credential to revoke WITH. Nothing to tell the provider,
+        # and nothing to warn about — the local disconnect proceeds.
+        return
     except Exception as e:
-        logger.warning(
+        logger.opt(exception=e).warning(
             f"disconnect: could not revoke {connector_key} subscription for "
-            f"installation {installation.id}: {e}"
+            f"installation {installation.id}"
         )
 
 

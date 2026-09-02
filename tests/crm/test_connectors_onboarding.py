@@ -13,12 +13,16 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.crm.connectivity import onboarding as onboarding_module
+from app.crm.connectivity import (
+    accounts as accounts_module,
+    onboarding as onboarding_module,
+)
 from app.crm.connectivity.channels import CHANNELS
 from app.crm.connectivity.connectors import (
     CONNECTORS,
     ConnectorSpec,
     connector_for,
+    connector_for_channel,
     sending_connectors,
 )
 from app.crm.connectivity.db import UniqueViolation
@@ -31,6 +35,7 @@ from app.crm.connectivity.onboarding import (
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.providers.meta import graph as graph_module
 from app.crm.connectivity.providers.whatsapp.onboard import (
+    OnboardWhatsappRequest,
     WhatsappOnboarder,
     WhatsappOnboardingError,
 )
@@ -39,7 +44,6 @@ from app.crm.connectivity.schemas import (
     ConnectorInstallation,
     InstallationRead,
     OnboardResult,
-    OnboardWhatsappRequest,
 )
 
 # --- the registry -----------------------------------------------------------
@@ -61,12 +65,21 @@ def test_every_connector_channel_has_an_adapter() -> None:
     assert {s.channel for s in sending_connectors().values()} <= set(ADAPTERS)
 
 
+def test_every_spec_knows_the_key_it_is_filed_under() -> None:
+    """The spec carries its own key so one lookup answers both "which
+    provider" and "what is it called" — an installation row is keyed by
+    connector_key, and without this the caller scans the registry a second
+    time to re-derive what it just found."""
+    assert all(key == spec.key for key, spec in CONNECTORS.items())
+
+
 def test_the_registry_is_the_vocabulary() -> None:
     """An unknown key resolves to nothing — the dict IS the list of
     connectors, so asking for one that is not in it is asking for something
     that does not exist."""
     assert connector_for("whatsapp") is not None
     assert connector_for("telegram") is None
+    assert connector_for_channel("whatsapp") is not None
 
 
 async def test_an_unknown_connector_is_refused_by_name() -> None:
@@ -362,13 +375,27 @@ class _Credential:
 
 
 def _patch_onboarding(
-    monkeypatch, *, result=None, installations=None, bindings=None, onboarder=None
+    monkeypatch,
+    *,
+    result=None,
+    installations=None,
+    bindings=None,
+    onboarder=None,
+    channel="whatsapp",
 ):
-    """Wire onboarding.py to doubles: merchant, vault, accessors, atom."""
+    """Wire onboarding.py to doubles: merchant, vault, accessors, atom.
+
+    The ONE place a ConnectorSpec is built. A test that needs a different
+    onboarder passes one in rather than assembling its own spec — otherwise
+    every field the registry grows has to be added to every test body, and
+    the type checker is the only thing that notices when it isn't.
+    """
     onboarder = onboarder or _StubOnboarder(result or _result())
     spec = ConnectorSpec(
-        channel="whatsapp",
+        key="whatsapp",
+        channel=channel,
         onboarder=onboarder,
+        templates=CONNECTORS["whatsapp"].templates,
         request_model=OnboardWhatsappRequest,
     )
     monkeypatch.setattr(onboarding_module, "connector_for", lambda key: spec)
@@ -580,7 +607,7 @@ async def test_disconnect_tells_the_provider_before_it_touches_the_rows(
         """Test double: the vault read behind the revoke."""
         return _Credential()
 
-    monkeypatch.setattr(onboarding_module, "get_credential_by_id", _credential)
+    monkeypatch.setattr(accounts_module, "get_credential_by_id", _credential)
 
     result = await disconnect("shop", "i-1")
     assert result is not None and result.status == "revoked"
@@ -614,16 +641,7 @@ async def test_a_providers_own_refusal_reaches_the_merchant(monkeypatch) -> None
                 "phone number PN9 is not on this WhatsApp Business Account"
             )
 
-    _patch_onboarding(monkeypatch)
-    monkeypatch.setattr(
-        onboarding_module,
-        "connector_for",
-        lambda key: ConnectorSpec(
-            channel="whatsapp",
-            onboarder=_Refuses(_result()),
-            request_model=OnboardWhatsappRequest,
-        ),
-    )
+    _patch_onboarding(monkeypatch, onboarder=_Refuses(_result()))
     with pytest.raises(OnboardingError, match="not on this WhatsApp Business Account"):
         await onboard("shop", "whatsapp", _request().model_dump())
 
@@ -640,16 +658,7 @@ async def test_an_unexpected_exception_does_not_reach_the_caller(
             """Test double: a bug, not a refusal."""
             raise KeyError("internal_pool_handle_7f3a")
 
-    _patch_onboarding(monkeypatch)
-    monkeypatch.setattr(
-        onboarding_module,
-        "connector_for",
-        lambda key: ConnectorSpec(
-            channel="whatsapp",
-            onboarder=_Explodes(_result()),
-            request_model=OnboardWhatsappRequest,
-        ),
-    )
+    _patch_onboarding(monkeypatch, onboarder=_Explodes(_result()))
     with pytest.raises(OnboardingError) as caught:
         await onboard("shop", "whatsapp", _request().model_dump())
     assert "internal_pool_handle_7f3a" not in str(caught.value)
@@ -775,13 +784,7 @@ async def test_a_door_with_no_channel_onboards_without_a_binding(
     with no pipe. A Shopify OAuth install is a COMPLETE onboarding with
     nothing to bind, so the atom must not try."""
     bindings = _FakeBindingAccessor()
-    _patch_onboarding(monkeypatch, bindings=bindings)
-    spec = ConnectorSpec(
-        channel=None,
-        onboarder=_StubOnboarder(_result()),
-        request_model=OnboardWhatsappRequest,
-    )
-    monkeypatch.setattr(onboarding_module, "connector_for", lambda key: spec)
+    _patch_onboarding(monkeypatch, bindings=bindings, channel=None)
     installation = await onboard("shop", "shopify", _request().model_dump())
     assert installation is not None
     assert bindings.upserts == [], "a door with no channel writes no pipe"

@@ -14,6 +14,8 @@ once the ingress bay is live.
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel, Field
+
 from app.core.config.static import META_APP_ID, META_APP_SECRET
 from app.core.logger import logger
 from app.crm.connectivity.providers.base import ConnectorHandshakeError
@@ -37,6 +39,26 @@ _NO_RECEIVER_WHY = (
     "subscribed to the WABA; nothing consumes its events yet — delivery "
     "receipts, inbound replies and template status updates are not processed"
 )
+
+
+class OnboardWhatsappRequest(BaseModel):
+    """Body for POST /connectors/whatsapp/onboard.
+
+    Lives with the face, not in the module's generic schemas: the route
+    takes a plain dict and asks the registry which model validates it, so
+    this model's only consumer is this package's ConnectorSpec entry. Left
+    in schemas.py, Instagram's and Messenger's would land beside it and the
+    generic file would become a provider dump — the exact scatter the
+    package split exists to prevent.
+    """
+
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    code: str = Field(..., description="Embedded Signup authorization code")
+    waba_id: str = Field(..., description="WhatsApp Business Account id")
+    phone_number_id: str = Field(..., description="Meta phone_number_id")
+    display_label: Optional[str] = Field(
+        None, description="What the merchant calls this account in the console"
+    )
 
 
 class WhatsappOnboardingError(ConnectorHandshakeError):

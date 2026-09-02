@@ -541,9 +541,9 @@ META_WHATSAPP_GRAPH_BASE_URL = os.environ.get(
 )
 META_WHATSAPP_GRAPH_VERSION = os.environ.get("META_WHATSAPP_GRAPH_VERSION", "v23.0")
 
-# The app identity behind Embedded Signup and every non-send Graph call.
-# APP_SECRET is also what will verify inbound Meta webhooks — the same secret
-# proves both directions — so it is named here once, for both.
+# The app identity behind Embedded Signup and every non-send Graph call
+# (code exchange, template registration). APP_SECRET is also what will verify
+# inbound Meta webhooks — the same secret proves both directions.
 # Empty is a legal boot: a deployment that never connects WhatsApp needs
 # neither, and a Graph call without them fails loudly at the call, not at
 # import (there is no get_required_env() in this repo to lean on).

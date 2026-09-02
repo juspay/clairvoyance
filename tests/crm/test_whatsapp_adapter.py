@@ -93,8 +93,17 @@ def _installation(**overrides) -> ConnectorInstallation:
 
 
 def _route(**overrides) -> SendRoute:
-    """Everything send() resolves, handed to the adapter as one object."""
-    fields = dict(installation=_installation(), binding=_binding(), bundle=_bundle())
+    """Everything send() resolves, handed to the adapter as one object.
+
+    template_language defaults to what the registry would have supplied for
+    an approved template — the adapter never reads it from the binding.
+    """
+    fields = dict(
+        installation=_installation(),
+        binding=_binding(),
+        bundle=_bundle(),
+        template_language="en_US",
+    )
     fields.update(overrides)
     return SendRoute(**fields)
 
@@ -296,22 +305,30 @@ async def test_a_null_variable_is_blocked_before_posting(monkeypatch) -> None:
     assert seen == {}
 
 
-def test_the_language_comes_from_the_binding_for_now() -> None:
-    """INTERIM: which locale a template was APPROVED in is a fact about the
-    TEMPLATE, and the binding's capabilities blob can disagree with what Meta
-    actually approved. The template registry (T23) is what will answer this;
-    until it lands the binding does, exactly as it did before."""
+def test_the_language_comes_from_the_template_registry() -> None:
+    """The language comes from the route, which took it from the registry."""
+    # Which locale a template was APPROVED in is a fact about the template,
+    # not about the endpoint — the binding's capabilities blob used to answer
+    # this, and could disagree with what Meta actually approved.
     adapter = MetaWhatsAppAdapter()
     parameters = build_parameters(_message().variables)
     assert isinstance(parameters, list)
     payload = adapter.build_payload(
-        _message(),
-        "919876543210",
-        _route(binding=_binding(capabilities={"template_language": "hi"})),
-        parameters,
+        _message(), "919876543210", _route(template_language="hi"), parameters
     )
     assert payload["template"]["language"]["code"] == "hi"
-    default = adapter.build_payload(_message(), "919876543210", _route(), parameters)
+
+
+def test_a_route_without_a_language_falls_back_rather_than_crashing() -> None:
+    """A route with no language still renders — the T23 lookup makes this
+    unreachable for WhatsApp, so it exists so a channel that does not
+    pre-register templates cannot take the worker down."""
+    adapter = MetaWhatsAppAdapter()
+    parameters = build_parameters(_message().variables)
+    assert isinstance(parameters, list)
+    default = adapter.build_payload(
+        _message(), "919876543210", _route(template_language=None), parameters
+    )
     assert default["template"]["language"]["code"] == "en_US"
 
 

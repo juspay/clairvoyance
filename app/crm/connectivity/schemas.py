@@ -3,7 +3,7 @@ nothing internal — api.py, contracts.py, the provider ports and the tests
 all read their vocabulary from here."""
 
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -123,6 +123,11 @@ class SendRoute(BaseModel):
     installation: ConnectorInstallation
     binding: ChannelBinding
     bundle: CredentialBundle
+    # The locale the template registry says this merchant's template was
+    # APPROVED in (T23). Optional only so a future channel that does not
+    # pre-register templates can leave it unset — for a channel that does,
+    # resolve_send_route refuses before the adapter rather than passing None.
+    template_language: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +190,56 @@ class OnboardResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Template registry — the shapes crossing the TemplateProvider port
+# ---------------------------------------------------------------------------
+
+
+class TemplateDraft(BaseModel):
+    """What a provider needs to register a template. The local row's id and
+    status are deliberately absent: the provider has no business knowing
+    them, and passing them invites a face to make a lifecycle decision."""
+
+    name: str
+    language: str
+    category: str
+    components: List[Dict[str, Any]]
+
+
+class ApprovedTemplate(BaseModel):
+    """The send path's answer from the registry: this name is approved, and
+    this is the locale it was approved in.
+
+    Narrow on purpose. resolve_send_route runs once per message, and the row
+    it needs an answer from carries a components blob the send path will
+    never render — the provider does the rendering.
+    """
+
+    id: str
+    language: str
+
+
+class ProviderTemplateState(BaseModel):
+    """A provider's answer about one template, in the CANON's vocabulary.
+
+    Normalisation happens in the provider face, never here and never in
+    templates.py: Meta shouting APPROVED while canon T23 spells it
+    'approved' is Meta's quirk, and a registry that stored both would have
+    every status filter silently return the wrong half of its rows. That is
+    not hypothetical — it shipped once and was found by running it.
+    """
+
+    provider_template_id: Optional[str] = None
+    name: Optional[str] = None
+    language: Optional[str] = None
+    status: Optional[str] = None
+    #: The category the provider ASSIGNED, which may differ from the one we
+    #: requested — the difference is a price change, so it is kept visible.
+    category: Optional[str] = None
+    quality: Optional[str] = None
+    rejection_reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # The API surface — request bodies and read models
 # ---------------------------------------------------------------------------
 #
@@ -193,23 +248,6 @@ class OnboardResult(BaseModel):
 # no single "current" one to infer, and inferring the wrong one is a
 # cross-tenant write. api.py validates it against the caller's RBAC scope
 # before anything else runs (fail closed on tenancy).
-
-
-class OnboardWhatsappRequest(BaseModel):
-    """Body for POST /connectors/whatsapp/onboard.
-
-    Named by the whatsapp ConnectorSpec, not by the route — the route takes
-    a dict and asks the registry which model validates it, so adding a
-    connector adds no branch here.
-    """
-
-    merchant_id: str = Field(..., description="Tenant scope — required")
-    code: str = Field(..., description="Embedded Signup authorization code")
-    waba_id: str = Field(..., description="WhatsApp Business Account id")
-    phone_number_id: str = Field(..., description="Meta phone_number_id")
-    display_label: Optional[str] = Field(
-        None, description="What the merchant calls this account in the console"
-    )
 
 
 class InstallationRead(BaseModel):
@@ -229,5 +267,67 @@ class InstallationRead(BaseModel):
     last_event_at: Optional[datetime] = None
     health_detail: Dict[str, Any] = Field(default_factory=dict)
     installed_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateTemplateDraftRequest(BaseModel):
+    """Body for POST /connectors/templates. ``components`` is stored verbatim — the
+    provider's own registered structure — and is never validated against
+    their schema here: that is the provider's job at submission time, and a
+    second validator would refuse shapes they accept."""
+
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    channel: str = Field(..., description="Must name a registered connector")
+    provider_account_ref: str = Field(
+        ..., description="The account that owns this template (a WABA id)"
+    )
+    name: str = Field(..., description="What crm_message.template_id will store")
+    language: str = Field(
+        ..., description="The provider's key is (account, name, language)"
+    )
+    components: List[Dict[str, Any]] = Field(
+        ..., description="The registered structure, verbatim"
+    )
+
+
+class SubmitTemplateRequest(BaseModel):
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    category: str = Field(..., description="MARKETING · UTILITY · AUTHENTICATION")
+
+
+class EditTemplateRequest(BaseModel):
+    merchant_id: str = Field(..., description="Tenant scope — required")
+    components: List[Dict[str, Any]] = Field(
+        ..., description="Replacement components, verbatim"
+    )
+
+
+class RetireTemplateRequest(BaseModel):
+    merchant_id: str = Field(..., description="Tenant scope — required")
+
+
+class TemplateRead(BaseModel):
+    """One registry row (T23). ``category`` is what the provider ASSIGNED and
+    ``submitted_category`` what we asked for — the difference is a price
+    change, so both stay visible rather than one overwriting the other."""
+
+    id: str
+    merchant_id: str
+    channel: str
+    provider_account_ref: str
+    name: str
+    language: str
+    provider_template_id: Optional[str] = None
+    category: Optional[str] = None
+    submitted_category: Optional[str] = None
+    category_updated_at: Optional[datetime] = None
+    components: List[Dict[str, Any]] = Field(default_factory=list)
+    status: str
+    status_updated_at: datetime
+    rejection_reason: Optional[str] = None
+    quality: str
+    quality_updated_at: Optional[datetime] = None
+    last_synced_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
