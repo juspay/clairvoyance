@@ -47,6 +47,7 @@ from app.crm.connectivity.schemas.template import (
     TemplateRead,
 )
 from app.crm.connectivity.status import (
+    TEMPLATE_APPROVED,
     TEMPLATE_DRAFT,
     TEMPLATE_IN_PLACE_EDIT,
     TEMPLATE_LOCAL_EDIT,
@@ -500,6 +501,42 @@ async def list_templates(
     merchant_id: str, channel: Optional[str] = None, status: Optional[str] = None
 ) -> List[TemplateRead]:
     return await template_accessor.list_templates(merchant_id, channel, status)
+
+
+async def template_status(merchant_id: str, channel: str, name: str) -> Optional[str]:
+    """Is this template NAME publishable on this channel — the registry's
+    one publish-time read (rollout phase 08, G12), beside approved_template
+    (the send-time read) so every read of the table stays in this file.
+
+    A workflow's send node names a template and a channel, never the
+    provider account that will serve it (the route picks that at send
+    time), so the question is asked across the merchant's accounts:
+
+      * None — no row under that name: never registered here;
+      * "approved" — every account holding the name holds exactly ONE
+        approved row (the send door will find its one row whichever
+        account the route picks);
+      * "approved in N languages" — some account holds several approved
+        rows: the ambiguity approved_template refuses at send time,
+        refused here first — same rule, earlier;
+      * otherwise the newest row's status (pending, rejected, deleted…),
+        so the refusal can say why.
+    """
+    rows = await template_accessor.templates_by_name(merchant_id, channel, name)
+    if not rows:
+        return None
+    approved_per_account: Dict[str, int] = {}
+    for row in rows:
+        if row.status == TEMPLATE_APPROVED:
+            approved_per_account[row.provider_account_ref] = (
+                approved_per_account.get(row.provider_account_ref, 0) + 1
+            )
+    if approved_per_account:
+        crowded = max(approved_per_account.values())
+        if crowded > 1:
+            return f"approved in {crowded} languages"
+        return TEMPLATE_APPROVED
+    return rows[0].status
 
 
 async def approved_template(

@@ -2,11 +2,13 @@
 validator must block, each as a red test."""
 
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import uuid4
 
 import pytest
 
 import app.crm.outreach.plans as plans
+from app.crm.outreach.db import DbTxn
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.schemas import Workflow
 
@@ -361,3 +363,129 @@ async def test_unknown_or_archived_plans_answer_none_for_the_404(
 
     monkeypatch.setattr(plans.accessor, "get_workflow", archived)
     assert await plans.set_status("m1", "wf-1", "live") is None
+
+
+# --- rollout phase 08 (G12): publish asks the template registry about every send node ---
+
+_SEND_PLAN: Dict[str, Any] = {
+    "entry": {"topic": "checkouts/update", "reenter": True, "cooldown_hours": 0},
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {
+            "id": "wa-nudge",
+            "type": "send",
+            "channel": "whatsapp",
+            "template": "cart_recovery_1",
+        },
+    ],
+    "edges": [["wait-30m", "wa-nudge"]],
+    "goal": {"topics": ["orders/create"]},
+    "purpose_key": "marketing.cart.recovery",
+}
+
+
+class _PublishAccessor:
+    """The accessor slice _publish_in_txn touches: a live plan with a draft
+    waiting, no occupied squares, and apply_publish recording whether the
+    copy happened."""
+
+    def __init__(self, draft: Dict[str, Any]) -> None:
+        self.draft = draft
+        self.published = False
+
+    async def workflow_for_publish(self, conn: Any, m: str, w: str) -> Workflow:
+        return _workflow("live", _TERSE_DRAFT).model_copy(update={"draft": self.draft})
+
+    async def occupied_nodes(self, conn: Any, m: str, w: str) -> List[str]:
+        return []
+
+    async def apply_publish(self, conn: Any, m: str, w: str) -> Workflow:
+        self.published = True
+        return _workflow("live", self.draft)
+
+
+def _registry(
+    monkeypatch: pytest.MonkeyPatch, status: Optional[str], registers: bool = True
+) -> List[Tuple[str, str, str]]:
+    asked: List[Tuple[str, str, str]] = []
+
+    async def template_status(
+        merchant_id: str, channel: str, name: str
+    ) -> Optional[str]:
+        asked.append((merchant_id, channel, name))
+        return status
+
+    monkeypatch.setattr(plans, "template_status", template_status)
+    monkeypatch.setattr(plans, "registers_templates_for", lambda channel: registers)
+    return asked
+
+
+async def _publish(accessor: _PublishAccessor) -> Workflow:
+    return await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1")
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_send_node_whose_template_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G12: today the first sign of a wrong template name is a blocked
+    send hours later. The registry can answer at publish."""
+    accessor = _PublishAccessor(_SEND_PLAN)
+    monkeypatch.setattr(plans, "accessor", accessor)
+    asked = _registry(monkeypatch, status=None)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "send node wa-nudge: template 'cart_recovery_1' is not registered on "
+        "whatsapp for this merchant"
+    ]
+    assert asked == [("m1", "whatsapp", "cart_recovery_1")]
+    assert accessor.published is False
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_send_node_whose_template_is_not_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _PublishAccessor(_SEND_PLAN)
+    monkeypatch.setattr(plans, "accessor", accessor)
+    _registry(monkeypatch, status="pending")
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "send node wa-nudge: template 'cart_recovery_1' is 'pending', not approved"
+    ]
+    assert accessor.published is False
+
+
+@pytest.mark.asyncio
+async def test_publish_proceeds_when_the_template_is_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _PublishAccessor(_SEND_PLAN)
+    monkeypatch.setattr(plans, "accessor", accessor)
+    _registry(monkeypatch, status="approved")
+    published = await _publish(accessor)
+    assert accessor.published is True and published.status == "live"
+
+
+@pytest.mark.asyncio
+async def test_a_plan_without_send_nodes_never_asks_the_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _PublishAccessor(_TERSE_DRAFT)
+    monkeypatch.setattr(plans, "accessor", accessor)
+    asked = _registry(monkeypatch, status=None)
+    await _publish(accessor)
+    assert asked == [] and accessor.published is True
+
+
+@pytest.mark.asyncio
+async def test_a_channel_that_does_not_register_templates_is_not_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _PublishAccessor(_SEND_PLAN)
+    monkeypatch.setattr(plans, "accessor", accessor)
+    asked = _registry(monkeypatch, status=None, registers=False)
+    await _publish(accessor)
+    assert asked == [] and accessor.published is True

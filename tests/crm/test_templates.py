@@ -665,3 +665,90 @@ def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
     sql, values = record_in_place_edit_query("shop", "t-1", "[]", "pending", "approved")
     assert "AND status = $5" in sql
     assert values[-1] == "approved"
+
+
+# --- rollout phase 08: the registry's publish-time read ----------------------
+
+from app.crm.connectivity import channels as channels_module, contracts
+from app.crm.connectivity.db.queries.template import templates_by_name_query
+from app.crm.connectivity.templates import template_status
+
+
+def test_templates_by_name_read_is_merchant_first_and_parameterised() -> None:
+    sql, params = templates_by_name_query("m1", "whatsapp", "cart_recovery_1")
+    assert "merchant_id = $1" in sql and "channel = $2" in sql and "name = $3" in sql
+    assert "ORDER BY status_updated_at DESC" in sql
+    assert params == ["m1", "whatsapp", "cart_recovery_1"]
+    assert "cart_recovery_1" not in sql  # a value never reaches SQL as text
+
+
+def _registry_row(
+    status: str, language: str = "en", account: str = "waba-1"
+) -> TemplateRead:
+    now = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
+    return TemplateRead(
+        id=f"t-{status}-{language}-{account}",
+        merchant_id="m1",
+        channel="whatsapp",
+        provider_account_ref=account,
+        name="cart_recovery_1",
+        language=language,
+        status=status,
+        status_updated_at=now,
+        quality="UNKNOWN",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+class _ByNameAccessor:
+    def __init__(self, rows: List[TemplateRead]) -> None:
+        self.rows = rows
+
+    async def templates_by_name(
+        self, merchant_id: str, channel: str, name: str
+    ) -> List[TemplateRead]:
+        return self.rows
+
+
+@pytest.mark.parametrize(
+    ("rows", "verdict"),
+    [
+        ([], None),
+        ([_registry_row("approved")], "approved"),
+        ([_registry_row("pending"), _registry_row("deleted")], "pending"),
+        (
+            [_registry_row("approved", "en"), _registry_row("approved", "hi")],
+            "approved in 2 languages",
+        ),
+        (
+            [
+                _registry_row("approved", "en", "waba-1"),
+                _registry_row("approved", "en", "waba-2"),
+            ],
+            "approved",
+        ),
+    ],
+    ids=[
+        "no-row",
+        "one-approved",
+        "newest-status",
+        "two-languages-one-account",
+        "one-per-account",
+    ],
+)
+async def test_template_status_answers_for_the_publish_check(
+    monkeypatch, rows: List[TemplateRead], verdict: Optional[str]
+) -> None:
+    """None: never registered. "approved": every account holding the name
+    holds exactly one approved row. Two approved languages on one account
+    is the ambiguity the send door refuses — same rule, earlier. Otherwise
+    the newest row's status, so the publish message can say why."""
+    monkeypatch.setattr(templates_module, "template_accessor", _ByNameAccessor(rows))
+    assert await template_status("m1", "whatsapp", "cart_recovery_1") == verdict
+
+
+def test_the_publish_check_is_on_the_contract_surface() -> None:
+    assert "template_status" in contracts.__all__
+    assert "registers_templates_for" in contracts.__all__
+    assert contracts.registers_templates_for is channels_module.registers_templates_for

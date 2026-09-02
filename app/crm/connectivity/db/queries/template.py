@@ -92,6 +92,25 @@ def list_templates_query(
     return query, [merchant_id, channel, status]
 
 
+def templates_by_name_query(
+    merchant_id: str, channel: str, name: str
+) -> Tuple[str, List[Any]]:
+    """The publish-time read (rollout phase 08, G12): every row registered
+    under this NAME on this channel for this merchant, across provider
+    accounts and languages, newest status first. The send door resolves an
+    account before it looks a name up; publish cannot know the account yet,
+    so it reads them all and templates.template_status judges."""
+    query = f"""
+        SELECT {TEMPLATE_COLUMNS}
+          FROM {TEMPLATE_TABLE}
+         WHERE merchant_id = $1
+           AND channel = $2
+           AND name = $3
+         ORDER BY status_updated_at DESC, created_at DESC
+    """
+    return query, [merchant_id, channel, name]
+
+
 def approved_template_for_send_query(
     merchant_id: str, channel: str, provider_account_ref: str, name: str
 ) -> Tuple[str, List[Any]]:
