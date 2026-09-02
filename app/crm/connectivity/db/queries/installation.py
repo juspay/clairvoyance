@@ -155,3 +155,54 @@ def revoke_installation_query(
         RETURNING {INSTALLATION_READ_COLUMNS}
     """
     return query, [merchant_id, installation_id, INSTALLATION_REVOKED]
+
+
+def installation_for_inbound_query(
+    connector_key: str, external_account_id: str
+) -> Tuple[str, List[Any]]:
+    """The account a provider-level fact ARRIVED about — no merchant param.
+
+    NOT the merchant-scoped installation_by_account_query above: a template
+    or account notification names only the provider's account id (the WABA),
+    so this row is HOW the merchant is learned — the same posture, and the
+    same cross-tenant stakes, as inbound_binding_query in binding.py.
+    'revoked' rows are excluded: a disconnected account's facts have no
+    merchant that wants them, and a re-onboarded account gets a fresh row.
+    """
+    query = f"""
+        SELECT {INSTALLATION_COLUMNS}
+          FROM {INSTALLATION_TABLE}
+         WHERE connector_key = $1
+           AND external_account_id = $2
+           AND status <> $3
+         ORDER BY created_at DESC
+         LIMIT 1
+    """
+    return query, [connector_key, external_account_id, INSTALLATION_REVOKED]
+
+
+def update_installation_health_query(
+    merchant_id: str, installation_id: str, status: str, health_detail: str
+) -> Tuple[str, List[Any]]:
+    """Re-stamp the traffic light and the sentence under it, together.
+
+    One writer's one statement (canon T11): the resubscribe atom today, the
+    health probe when it lands. Never on a revoked row — recovery does not
+    resurrect a disconnected account.
+    """
+    query = f"""
+        UPDATE {INSTALLATION_TABLE}
+           SET status = $3,
+               health_detail = $4::jsonb
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND status <> $5
+        RETURNING {INSTALLATION_READ_COLUMNS}
+    """
+    return query, [
+        merchant_id,
+        installation_id,
+        status,
+        health_detail,
+        INSTALLATION_REVOKED,
+    ]

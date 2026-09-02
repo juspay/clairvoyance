@@ -346,6 +346,9 @@ class _StubOnboarder:
         self.gathered += 1
         return self.result
 
+    async def resubscribe(self, bundle, external_account_id):
+        """Test double: the port verb exists; these tests never call it."""
+
     async def revoke(self, bundle, external_account_id):
         """Test double: record that the provider was told."""
         self.revoked.append(external_account_id)
@@ -913,3 +916,348 @@ def test_route_answers_422_for_a_body_the_connector_cannot_validate(
     assert res.status_code == 422
     assert "waba_id" in res.text
     assert "super-secret-code" not in res.text
+
+
+# --- resubscribe: the recovery door (disconnect's opposite verb) -------------
+
+
+def _patch_resubscribe(
+    monkeypatch,
+    *,
+    installation="default",
+    bundle="default",
+    onboarder=None,
+    spec="default",
+):
+    """Wire onboarding.resubscribe to doubles; returns the recorders."""
+    provider_calls: List[tuple] = []
+    health_stamps: List[dict] = []
+
+    class _ResubOnboarder:
+        """Test double: records the provider call instead of making it."""
+
+        def identify(self, request):
+            """Test double: unused here."""
+            return (None, None)
+
+        async def gather(self, request):
+            """Test double: unused here."""
+            raise NotImplementedError
+
+        async def revoke(self, bundle, external_account_id):
+            """Test double: unused here."""
+
+        async def resubscribe(self, bundle, external_account_id):
+            """Test double."""
+            provider_calls.append((bundle, external_account_id))
+
+    row = (
+        _healthy_route(status="degraded") if installation == "default" else installation
+    )
+
+    async def _get_installation(merchant_id, installation_id):
+        """Test double: the seeded installation, tenancy applied upstream."""
+        return row
+
+    monkeypatch.setattr(
+        onboarding_module.installation_accessor,
+        "get_installation",
+        _get_installation,
+    )
+
+    async def _bundle_for(installation):
+        """Test double: the vault read."""
+        if bundle == "default":
+            from app.crm.connectivity.schemas.message import CredentialBundle
+
+            return CredentialBundle(values={"system_user_token": "tok"})
+        if isinstance(bundle, Exception):
+            raise bundle
+        return bundle
+
+    monkeypatch.setattr(onboarding_module.accounts, "bundle_for", _bundle_for)
+
+    if spec == "default":
+        built = ConnectorSpec(
+            key="whatsapp",
+            channel="whatsapp",
+            onboarder=onboarder or _ResubOnboarder(),
+            templates=CONNECTORS["whatsapp"].templates,
+            request_model=OnboardWhatsappRequest,
+        )
+    else:
+        built = spec
+    monkeypatch.setattr(onboarding_module, "connector_for", lambda key: built)
+
+    async def _atomically(fn, *args):
+        """Test double: run the atom body with a dummy handle."""
+        return await fn(None, *args)
+
+    monkeypatch.setattr(onboarding_module, "atomically", _atomically)
+
+    async def _update_health(
+        txn, merchant_id, installation_id, *, status, health_detail
+    ):
+        """Test double: record the re-stamp and answer like the accessor."""
+        health_stamps.append(
+            {
+                "merchant_id": merchant_id,
+                "installation_id": installation_id,
+                "status": status,
+                "health_detail": health_detail,
+            }
+        )
+        return _installation_read(status=status)
+
+    monkeypatch.setattr(
+        onboarding_module.installation_accessor,
+        "update_installation_health",
+        _update_health,
+    )
+    return provider_calls, health_stamps
+
+
+async def test_resubscribe_calls_the_provider_with_the_stored_bundle(
+    monkeypatch,
+) -> None:
+    """Resubscribe calls the provider with the stored bundle."""
+    provider_calls, _ = _patch_resubscribe(monkeypatch)
+    result = await onboarding_module.resubscribe("m-1", "i-1")
+    assert result is not None
+    assert len(provider_calls) == 1
+    bundle, account_id = provider_calls[0]
+    assert bundle.secret("system_user_token") == "tok"
+    assert account_id == _healthy_route().external_account_id
+
+
+async def test_a_successful_resubscribe_restamps_health(monkeypatch) -> None:
+    # Finding 5: a recovery that leaves the row 'degraded' keeps every send
+    # refusing, and a why that is now false contradicts canon T11.
+    """A successful resubscribe restamps health."""
+    import json as _json
+
+    _, health_stamps = _patch_resubscribe(monkeypatch)
+    result = await onboarding_module.resubscribe("m-1", "i-1")
+    assert result is not None and result.status == "healthy"
+    assert len(health_stamps) == 1
+    stamp = health_stamps[0]
+    assert stamp["status"] == "healthy"
+    detail = _json.loads(stamp["health_detail"])
+    assert detail["level"] == "subscribed" and detail["why"] is None
+    assert detail["checked_at"]
+
+
+async def test_a_foreign_tenants_installation_is_simply_not_found(
+    monkeypatch,
+) -> None:
+    """A foreign tenant's installation is simply not found."""
+    _patch_resubscribe(monkeypatch, installation=None)
+
+    async def _none(merchant_id, installation_id):
+        """Test double: not this merchant's row."""
+        return None
+
+    monkeypatch.setattr(
+        onboarding_module.installation_accessor, "get_installation", _none
+    )
+    assert await onboarding_module.resubscribe("m-1", "i-1") is None
+
+
+async def test_a_connector_without_the_verb_is_refused_before_the_vault(
+    monkeypatch,
+) -> None:
+    """A connector without the verb is refused before the vault."""
+    vault_reads: List[str] = []
+    _patch_resubscribe(monkeypatch, spec=None)
+    monkeypatch.setattr(onboarding_module, "connector_for", lambda key: None)
+
+    async def _recording_bundle(installation):
+        """Test double: must never be reached."""
+        vault_reads.append(installation.id)
+
+    monkeypatch.setattr(onboarding_module.accounts, "bundle_for", _recording_bundle)
+    with pytest.raises(OnboardingError) as caught:
+        await onboarding_module.resubscribe("m-1", "i-1")
+    assert "no webhook subscription" in str(caught.value)
+    assert vault_reads == []
+
+
+async def test_unusable_credentials_are_a_refusal_not_a_crash(monkeypatch) -> None:
+    """Unusable credentials are a refusal, not a crash."""
+    _patch_resubscribe(monkeypatch, bundle=accounts_module.AccountError("gone"))
+    with pytest.raises(OnboardingError) as caught:
+        await onboarding_module.resubscribe("m-1", "i-1")
+    assert "credentials" in str(caught.value)
+
+
+async def test_a_vault_outage_is_not_reported_as_a_refusal(monkeypatch) -> None:
+    # An outage must surface as an incident (the route's 500), never as
+    # "reconnect your account" advice for an account whose credentials are
+    # fine.
+    """A vault outage is not reported as a refusal."""
+    _patch_resubscribe(monkeypatch, bundle=ConnectionError("pool down"))
+    with pytest.raises(ConnectionError):
+        await onboarding_module.resubscribe("m-1", "i-1")
+
+
+async def test_a_provider_refusal_passes_through_in_its_own_words(
+    monkeypatch,
+) -> None:
+    """A provider refusal passes through in its own words."""
+
+    class _Refusing:
+        """Test double: the provider said no, in its own words."""
+
+        def identify(self, request):
+            """Test double: unused here."""
+            return (None, None)
+
+        async def gather(self, request):
+            """Test double: unused here."""
+            raise NotImplementedError
+
+        async def revoke(self, bundle, external_account_id):
+            """Test double: unused here."""
+
+        async def resubscribe(self, bundle, external_account_id):
+            """Test double."""
+            raise WhatsappOnboardingError("that number is not on this account")
+
+    _, health_stamps = _patch_resubscribe(monkeypatch, onboarder=_Refusing())
+    with pytest.raises(OnboardingError) as caught:
+        await onboarding_module.resubscribe("m-1", "i-1")
+    assert "that number is not on this account" in str(caught.value)
+    # And no re-stamp: a refused recovery must not turn the light green.
+    assert health_stamps == []
+
+
+async def test_the_whatsapp_face_translates_graph_errors(monkeypatch) -> None:
+    # Rule 11: GraphError never leaves the package; its detail does.
+    """The whatsapp face translates graph errors."""
+    from app.crm.connectivity.providers.meta.graph import GraphError
+    from app.crm.connectivity.providers.whatsapp import onboard as onboard_module
+    from app.crm.connectivity.schemas.message import CredentialBundle
+
+    async def _graph_refuses(waba_id, token):
+        """Test double: Meta refused at the wire."""
+        raise GraphError("(#200) permissions error", code="200")
+
+    monkeypatch.setattr(onboard_module, "subscribe", _graph_refuses)
+    with pytest.raises(WhatsappOnboardingError) as caught:
+        await WhatsappOnboarder().resubscribe(
+            CredentialBundle(values={"system_user_token": "tok"}), "waba-1"
+        )
+    assert "(#200) permissions error" in str(caught.value)
+    assert isinstance(caught.value.__cause__, GraphError)
+
+
+async def test_the_whatsapp_face_refuses_a_bundle_without_a_token(
+    monkeypatch,
+) -> None:
+    """The whatsapp face refuses a bundle without a token."""
+    from app.crm.connectivity.providers.whatsapp import onboard as onboard_module
+    from app.crm.connectivity.schemas.message import CredentialBundle
+
+    calls: List[tuple] = []
+
+    async def _record(waba_id, token):
+        """Test double: must never be reached."""
+        calls.append((waba_id, token))
+
+    monkeypatch.setattr(onboard_module, "subscribe", _record)
+    with pytest.raises(WhatsappOnboardingError) as caught:
+        await WhatsappOnboarder().resubscribe(CredentialBundle(values={}), "waba-1")
+    assert "access token" in str(caught.value)
+    assert calls == []
+
+
+# --- the subscribe route ------------------------------------------------------
+
+
+def _client(monkeypatch, user_merchants=("shop",)):
+    """A TestClient with auth overridden — tenancy and error mapping run for
+    real."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+    from app.crm.connectivity import api as connectivity_api
+
+    app = FastAPI()
+    app.include_router(connectivity_api.router, prefix="/connectors")
+    app.dependency_overrides[get_current_user_with_rbac] = lambda: SimpleNamespace(
+        role="user", merchant_ids=list(user_merchants), username="tester"
+    )
+    return TestClient(app)
+
+
+def test_the_subscribe_route_reports_a_refusal_as_409(monkeypatch) -> None:
+    # Understood and deliberately declined — with a sentence the merchant
+    # can act on, not a 400's "you asked wrong".
+    """The subscribe route reports a refusal as 409."""
+    from app.crm.connectivity import contracts
+
+    async def refuses(merchant_id, installation_id):
+        """Test double: the door refused."""
+        raise OnboardingError("This account's credentials are missing or unreadable.")
+
+    monkeypatch.setattr(contracts, "resubscribe", refuses)
+    response = _client(monkeypatch).post(
+        "/connectors/installations/i-1/subscribe", params={"merchant_id": "shop"}
+    )
+    assert response.status_code == 409
+    assert "credentials" in response.json()["detail"]
+
+
+def test_the_subscribe_route_hides_a_foreign_installation_as_404(
+    monkeypatch,
+) -> None:
+    """The subscribe route hides a foreign installation as 404."""
+    from app.crm.connectivity import contracts
+
+    async def not_found(merchant_id, installation_id):
+        """Test double: not this merchant's row."""
+        return None
+
+    monkeypatch.setattr(contracts, "resubscribe", not_found)
+    response = _client(monkeypatch).post(
+        "/connectors/installations/i-1/subscribe", params={"merchant_id": "shop"}
+    )
+    assert response.status_code == 404
+
+
+def test_the_subscribe_route_echoes_what_was_subscribed(monkeypatch) -> None:
+    """The subscribe route echoes what was subscribed."""
+    from app.crm.connectivity import contracts
+
+    async def succeeds(merchant_id, installation_id):
+        """Test double: the door subscribed and re-stamped health."""
+        return _installation_read(status="healthy")
+
+    monkeypatch.setattr(contracts, "resubscribe", succeeds)
+    response = _client(monkeypatch).post(
+        "/connectors/installations/i-1/subscribe", params={"merchant_id": "shop"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["subscribed"] is True and body["installation_id"] == "i-1"
+
+
+def test_the_subscribe_route_refuses_a_foreign_merchant_before_the_door(
+    monkeypatch,
+) -> None:
+    """The subscribe route refuses a foreign merchant before the door."""
+    from app.crm.connectivity import contracts
+
+    reached: List[str] = []
+
+    async def records(merchant_id, installation_id):
+        """Test double: must never be reached."""
+        reached.append(merchant_id)
+
+    monkeypatch.setattr(contracts, "resubscribe", records)
+    response = _client(monkeypatch, user_merchants=("someone-else",)).post(
+        "/connectors/installations/i-1/subscribe", params={"merchant_id": "shop"}
+    )
+    assert response.status_code == 403
+    assert reached == []

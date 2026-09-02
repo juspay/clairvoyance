@@ -244,6 +244,27 @@ class WhatsappOnboarder:
             health_why=health_why,
         )
 
+    async def resubscribe(
+        self, bundle: CredentialBundle, external_account_id: str
+    ) -> None:
+        """Turn this WABA's webhooks (back) on — revoke's opposite verb.
+
+        Vendor errors leave as WhatsappOnboardingError (the port family):
+        GraphError never crosses the package boundary, though its detail
+        does — Meta's own words are what the merchant's refusal should
+        carry.
+        """
+        token = bundle.secret(TOKEN_KEY)
+        if not token:
+            raise WhatsappOnboardingError(
+                "This account's credentials hold no usable access token. "
+                "Reconnect it first."
+            )
+        try:
+            await subscribe(external_account_id, token)
+        except GraphError as e:
+            raise WhatsappOnboardingError(e.detail) from e
+
     async def revoke(self, bundle: CredentialBundle, external_account_id: str) -> None:
         """Tell Meta to stop sending this account's events.
 

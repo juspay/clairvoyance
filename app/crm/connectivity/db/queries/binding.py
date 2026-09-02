@@ -2,7 +2,11 @@
 
 from typing import Any, List, Tuple
 
-from app.crm.connectivity.status import BINDING_ACTIVE, BINDING_PAUSED
+from app.crm.connectivity.status import (
+    BINDING_ACTIVE,
+    BINDING_PAUSED,
+    BINDING_RETIRED,
+)
 
 BINDING_TABLE = "crm_channel_binding"
 
@@ -158,3 +162,26 @@ def pause_bindings_for_installation_query(
         RETURNING {BINDING_COLUMNS}
     """
     return query, [merchant_id, installation_id, BINDING_PAUSED, BINDING_ACTIVE]
+
+
+def inbound_binding_query(channel: str, address: str) -> Tuple[str, List[Any]]:
+    """The pipe an inbound fact ARRIVED on — the one lookup with no merchant.
+
+    NOT the merchant-scoped binding_by_address_query above: a delivery
+    receipt or a reply names only the receiving endpoint, so this row is HOW
+    the merchant is learned. The WHERE matches 057's
+    crm_channel_binding_address_uq predicate exactly — (channel, address)
+    WHERE status <> 'retired' — so at most one row can come back; widened,
+    a recycled number could match a retired row too, and filing under the
+    wrong merchant is a cross-tenant leak. 'paused' is included where the
+    send path takes 'active' only: pausing stops SENDING, not facts about
+    already-sent messages from arriving.
+    """
+    query = f"""
+        SELECT {BINDING_COLUMNS}
+          FROM {BINDING_TABLE}
+         WHERE channel = $1
+           AND address = $2
+           AND status <> $3
+    """
+    return query, [channel, address, BINDING_RETIRED]

@@ -32,3 +32,14 @@ TEMPLATE_TOPICS = (
     TOPIC_TEMPLATE_CATEGORY,
     TOPIC_TEMPLATE_QUALITY,
 )
+
+#: What became of a message WE sent — one letter per transition, whatever
+#: channel carried it (the channel rides in the event's source and payload).
+TOPIC_STATUS = "message.status"
+
+#: A customer wrote back to us.
+TOPIC_INBOUND = "message.inbound"
+
+#: A provider said something about the connected account itself (a review
+#: decision, a ban, a tier change) — the letters the health probe will read.
+TOPIC_ACCOUNT = "account.update"

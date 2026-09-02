@@ -172,6 +172,19 @@ class ConnectorOnboarder(Protocol):
         is unreachable would trap the merchant.
         """
 
+    async def resubscribe(
+        self, bundle: CredentialBundle, external_account_id: str
+    ) -> None:
+        """Turn this account's webhooks (back) on — revoke's opposite verb,
+        same signature. The recovery door: onboarding subscribes on its
+        happy path but cannot run again (its signup code is one-shot), so
+        this re-runs just the subscription step from stored credentials.
+
+        NOT best-effort: raises the module's own error type on a provider
+        refusal, because the caller re-stamps health on success and must
+        not on failure.
+        """
+
 
 class TemplateProviderError(ProviderError):
     """A provider refused a template operation.

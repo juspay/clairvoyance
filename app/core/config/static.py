@@ -547,13 +547,19 @@ META_WHATSAPP_GRAPH_BASE_URL = os.environ.get(
 META_WHATSAPP_GRAPH_VERSION = os.environ.get("META_WHATSAPP_GRAPH_VERSION", "v23.0")
 
 # The app identity behind Embedded Signup and every non-send Graph call
-# (code exchange, template registration). APP_SECRET is also what will verify
-# inbound Meta webhooks — the same secret proves both directions.
-# Empty is a legal boot: a deployment that never connects WhatsApp needs
-# neither, and a Graph call without them fails loudly at the call, not at
-# import (there is no get_required_env() in this repo to lean on).
+# (code exchange, template registration). APP_SECRET also verifies inbound
+# Meta webhooks — one secret proves both directions — and both are
+# PLATFORM-level by necessity: the payload naming the merchant cannot be
+# trusted until the signature is verified, and verifying it needs the
+# secret. Empty is a legal boot (a deployment that never connects WhatsApp
+# needs neither): a Graph call without them fails loudly at the call, and an
+# inbound webhook is REFUSED — fail closed, or anyone can write delivery
+# receipts to us.
 META_APP_ID = os.environ.get("META_APP_ID", "")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
+
+# Echoed back once, when the callback URL is registered in the Meta app.
+META_WEBHOOK_VERIFY_TOKEN = os.environ.get("META_WEBHOOK_VERIFY_TOKEN", "")
 
 
 # Announcement Banner Configuration
