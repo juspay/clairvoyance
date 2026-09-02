@@ -35,6 +35,8 @@ from app.crm.outreach.db.queries import (
     record_run_error_query,
     resume_run_on_event_query,
     resume_run_query,
+    run_counts_all_query,
+    run_counts_query,
     set_workflow_status_query,
     source_event_used_query,
     sweep_exited_runs_query,
@@ -55,9 +57,12 @@ async def insert_workflow(
 
 
 async def update_draft(
-    merchant_id: str, workflow_id: str, draft: Dict[str, Any]
+    merchant_id: str,
+    workflow_id: str,
+    draft: Dict[str, Any],
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
-    query, values = update_draft_query(merchant_id, workflow_id, draft)
+    query, values = update_draft_query(merchant_id, workflow_id, draft, updated_by)
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
@@ -98,17 +103,22 @@ async def occupied_nodes(
 
 
 async def apply_publish(
-    conn: asyncpg.Connection, merchant_id: str, workflow_id: str
+    conn: asyncpg.Connection,
+    merchant_id: str,
+    workflow_id: str,
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
-    query, values = publish_workflow_query(merchant_id, workflow_id)
+    query, values = publish_workflow_query(merchant_id, workflow_id, updated_by)
     row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
 
 
 async def set_workflow_status(
-    merchant_id: str, workflow_id: str, status: str
+    merchant_id: str, workflow_id: str, status: str, updated_by: Optional[str] = None
 ) -> Optional[Workflow]:
-    query, values = set_workflow_status_query(merchant_id, workflow_id, status)
+    query, values = set_workflow_status_query(
+        merchant_id, workflow_id, status, updated_by
+    )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
@@ -252,6 +262,22 @@ async def list_runs(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_run(row) for row in rows]
+
+
+async def run_counts(merchant_id: str, workflow_id: str) -> List[Dict[str, Any]]:
+    """Raw (status, exit_reason, n) rows — counts.py folds them."""
+    query, values = run_counts_query(merchant_id, workflow_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [dict(row) for row in rows]
+
+
+async def run_counts_all(merchant_id: str) -> List[Dict[str, Any]]:
+    """Raw rows for every plan this merchant has — counts.py folds them."""
+    query, values = run_counts_all_query(merchant_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [dict(row) for row in rows]
 
 
 async def resume_run(

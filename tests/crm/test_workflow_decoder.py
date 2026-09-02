@@ -5,7 +5,11 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.crm.outreach.db.decoder import decode_run, decode_workflow
+from app.crm.outreach.db.decoder import (
+    decode_run,
+    decode_workflow,
+    decode_workflow_summary,
+)
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
 
@@ -45,6 +49,7 @@ def test_decode_workflow_carries_both_documents() -> None:
         "status": "live",
         "version": 3,
         "created_by": "ops@x",
+        "updated_by": "priya@x",
         "created_at": NOW,
         "updated_at": NOW,
         "definition": json.dumps(definition),
@@ -54,3 +59,46 @@ def test_decode_workflow_carries_both_documents() -> None:
     assert workflow.definition == definition
     assert workflow.draft is None
     assert workflow.version == 3
+    assert workflow.updated_by == "priya@x"
+    # The detail read does not select entry — it carries the whole document.
+    assert workflow.entry is None
+
+
+def test_summary_decodes_the_list_only_entry() -> None:
+    """list_workflows_query is the one read that selects `entry`, and
+    asyncpg hands jsonb back as text."""
+    row = {
+        "id": uuid4(),
+        "merchant_id": "m1",
+        "name": "cod-confirmation",
+        "status": "live",
+        "version": 3,
+        "created_by": "ops@x",
+        "updated_by": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+        "entry": json.dumps({"topic": "orders/create", "where": {"gateway": "COD"}}),
+    }
+    summary = decode_workflow_summary(row)
+    assert summary.entry is not None
+    assert summary.entry.topic == "orders/create"
+    assert summary.entry.where == {"gateway": "COD"}
+    # Nobody has edited it since creation — the screen shows a bare time.
+    assert summary.updated_by is None
+
+
+def test_summary_tolerates_a_row_without_entry() -> None:
+    """Every other read selects the summary columns without entry, so the
+    key is absent — not null."""
+    row = {
+        "id": uuid4(),
+        "merchant_id": "m1",
+        "name": "cod-confirmation",
+        "status": "draft",
+        "version": 0,
+        "created_by": None,
+        "updated_by": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+    }
+    assert decode_workflow_summary(row).entry is None

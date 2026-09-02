@@ -14,7 +14,9 @@ from app.crm.outreach.db.queries import (
     park_run_query,
     publish_workflow_query,
     record_run_error_query,
+    set_workflow_status_query,
     source_event_used_query,
+    update_draft_query,
 )
 from app.crm.record.db.queries import customer_has_event_query
 
@@ -63,6 +65,26 @@ def test_publish_requires_a_draft_to_exist() -> None:
     sql, _ = publish_workflow_query("m1", "wf-1")
     assert "draft IS NOT NULL" in sql
     assert "version = version + 1" in sql
+
+
+def test_the_three_edit_writes_stamp_who_made_the_change() -> None:
+    """Draft save, publish and status change — creation is created_by's."""
+    for sql, params, author_pos in (
+        (*update_draft_query("m1", "wf-1", {"entry": {}}, "priya@x"), 3),
+        (*publish_workflow_query("m1", "wf-1", "priya@x"), 2),
+        (*set_workflow_status_query("m1", "wf-1", "paused", "priya@x"), 3),
+    ):
+        assert "updated_at = now()" in sql
+        assert f"updated_by = COALESCE(${author_pos + 1}, updated_by)" in sql
+        assert params[author_pos] == "priya@x"
+
+
+def test_an_unattributed_write_keeps_the_previous_editors_name() -> None:
+    """COALESCE, not assignment: an unattributed save must not erase the
+    name on the one before it."""
+    sql, params = update_draft_query("m1", "wf-1", {"entry": {}})
+    assert "COALESCE($4, updated_by)" in sql
+    assert params[3] is None
 
 
 def test_park_only_moves_waiting_runs() -> None:

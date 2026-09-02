@@ -94,19 +94,29 @@ async def create_workflow(
 
 
 async def update_draft(
-    merchant_id: str, workflow_id: str, definition: Dict[str, Any]
+    merchant_id: str,
+    workflow_id: str,
+    definition: Dict[str, Any],
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
     problems = validate_definition(definition)
     if problems:
         raise WorkflowValidationError(problems)
-    return await accessor.update_draft(merchant_id, workflow_id, definition)
+    return await accessor.update_draft(merchant_id, workflow_id, definition, updated_by)
 
 
-async def publish_workflow(merchant_id: str, workflow_id: str) -> Workflow:
-    return await atomically(_publish_in_txn, merchant_id, workflow_id)
+async def publish_workflow(
+    merchant_id: str, workflow_id: str, updated_by: Optional[str] = None
+) -> Workflow:
+    return await atomically(_publish_in_txn, merchant_id, workflow_id, updated_by)
 
 
-async def _publish_in_txn(txn: DbTxn, merchant_id: str, workflow_id: str) -> Workflow:
+async def _publish_in_txn(
+    txn: DbTxn,
+    merchant_id: str,
+    workflow_id: str,
+    updated_by: Optional[str] = None,
+) -> Workflow:
     """ATOMIC: the validate and the copy share one fate — the document the
     validator approved must be the exact document that becomes live, and
     the occupied-squares read must not race a walker moving tokens."""
@@ -122,7 +132,7 @@ async def _publish_in_txn(txn: DbTxn, merchant_id: str, workflow_id: str) -> Wor
     )
     if problems:
         raise WorkflowValidationError(problems)
-    published = await accessor.apply_publish(txn, merchant_id, workflow_id)
+    published = await accessor.apply_publish(txn, merchant_id, workflow_id, updated_by)
     if published is None:  # a racing publish consumed the draft first
         raise WorkflowValidationError(["draft already published"])
     logger.info(
@@ -133,14 +143,16 @@ async def _publish_in_txn(txn: DbTxn, merchant_id: str, workflow_id: str) -> Wor
 
 
 async def set_status(
-    merchant_id: str, workflow_id: str, status: str
+    merchant_id: str, workflow_id: str, status: str, updated_by: Optional[str] = None
 ) -> Optional[Workflow]:
     """live <-> paused, or archived (terminal). Archiving force-exits open
     runs as 'ejected' at the walker's next claim — the paused/archived
     check happens there, so no sweep is needed here."""
     if status not in ("live", "paused", "archived"):
         raise WorkflowValidationError([f"unknown status: {status}"])
-    return await accessor.set_workflow_status(merchant_id, workflow_id, status)
+    return await accessor.set_workflow_status(
+        merchant_id, workflow_id, status, updated_by
+    )
 
 
 async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]:

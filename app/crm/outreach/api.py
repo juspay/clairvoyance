@@ -12,8 +12,13 @@ from pydantic import BaseModel, Field
 
 from app.core.logger.context import set_log_context
 from app.crm.auth import crm_admin_user
-from app.crm.outreach import plans, runs
-from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowSummary
+from app.crm.outreach import counts, plans, runs
+from app.crm.outreach.schemas import (
+    EnrollmentRun,
+    RunCounts,
+    Workflow,
+    WorkflowSummary,
+)
 from app.schemas import UserInfo
 
 router = APIRouter()
@@ -56,6 +61,15 @@ async def list_workflows_route(
     return await plans.list_workflows(merchant_id, limit, offset)
 
 
+@router.get("/runs/counts", response_model=Dict[str, RunCounts])
+async def run_counts_all_route(
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> Dict[str, RunCounts]:
+    set_log_context(component="crm.workflows.run_counts_all", merchant_id=merchant_id)
+    return await counts.fold_counts_by_workflow(merchant_id)
+
+
 @router.get("/{workflow_id}", response_model=Workflow)
 async def get_workflow_route(
     workflow_id: str,
@@ -80,7 +94,9 @@ async def update_draft_route(
 ) -> Workflow:
     set_log_context(component="crm.workflows.draft", merchant_id=merchant_id)
     try:
-        workflow = await plans.update_draft(merchant_id, workflow_id, body.definition)
+        workflow = await plans.update_draft(
+            merchant_id, workflow_id, body.definition, current_user.username
+        )
     except plans.WorkflowValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
@@ -100,7 +116,9 @@ async def publish_workflow_route(
 ) -> Workflow:
     set_log_context(component="crm.workflows.publish", merchant_id=merchant_id)
     try:
-        return await plans.publish_workflow(merchant_id, workflow_id)
+        return await plans.publish_workflow(
+            merchant_id, workflow_id, current_user.username
+        )
     except plans.WorkflowNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
@@ -119,7 +137,9 @@ async def set_workflow_status_route(
     current_user: UserInfo = Depends(crm_admin_user),
 ) -> Workflow:
     set_log_context(component="crm.workflows.status", merchant_id=merchant_id)
-    workflow = await plans.set_status(merchant_id, workflow_id, body.status)
+    workflow = await plans.set_status(
+        merchant_id, workflow_id, body.status, current_user.username
+    )
     if workflow is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -141,6 +161,16 @@ async def list_runs_route(
 ) -> List[EnrollmentRun]:
     set_log_context(component="crm.workflows.runs", merchant_id=merchant_id)
     return await runs.list_runs(merchant_id, workflow_id, run_status, limit, offset)
+
+
+@router.get("/{workflow_id}/runs/counts", response_model=RunCounts)
+async def run_counts_route(
+    workflow_id: str,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> RunCounts:
+    set_log_context(component="crm.workflows.run_counts", merchant_id=merchant_id)
+    return await counts.fold_counts(merchant_id, workflow_id)
 
 
 @router.post("/{workflow_id}/runs/{run_id}/resume", response_model=EnrollmentRun)
