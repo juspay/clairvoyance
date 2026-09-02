@@ -12,7 +12,12 @@ from app.core.logger import logger
 from app.crm.outreach.db import DbTxn, accessor, atomically
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.repeat import parse_repeat_policy
-from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowSummary
+from app.crm.outreach.schemas import (
+    Workflow,
+    WorkflowDefinition,
+    WorkflowEntry,
+    WorkflowSummary,
+)
 
 TIMEOUT = "timeout"
 
@@ -80,7 +85,7 @@ def validate_definition(
                 problems.append(f"node {src} has {len(arrows)} outgoing edges")
 
     if occupied_nodes and live_entry is not None:
-        if raw.get("entry") != live_entry:
+        if _entry_changed(raw.get("entry"), live_entry):
             problems.append(
                 "entry rule changed while runs are open — pause the plan and "
                 "let them finish, or publish the entry change as a new plan"
@@ -94,6 +99,22 @@ def validate_definition(
             )
 
     return problems
+
+
+def _entry_changed(raw_entry: Any, live_entry: Dict[str, Any]) -> bool:
+    """PURE: does the draft's entry MEAN something different from the live
+    one? Compared as validated models, so a draft that omits the defaults
+    and a live entry that spells them out read equal (B3, rollout phase
+    01) — a raw-dict compare refused every re-publish that changed nothing
+    about admission. A live entry that no longer parses (a legacy row from
+    before a word was added) cannot be normalised: then the raw dicts are
+    compared, exactly as before."""
+    try:
+        draft = WorkflowEntry.model_validate(raw_entry).model_dump()
+        live = WorkflowEntry.model_validate(live_entry).model_dump()
+    except Exception:
+        return raw_entry != live_entry
+    return draft != live
 
 
 async def create_workflow(
@@ -152,9 +173,27 @@ async def set_status(
 ) -> Optional[Workflow]:
     """live <-> paused, or archived (terminal). Archiving force-exits open
     runs as 'ejected' at the walker's next claim — the paused/archived
-    check happens there, so no sweep is needed here."""
+    check happens there, so no sweep is needed here.
+
+    Returns None for an unknown, foreign or archived plan (the door's
+    404, as before). Leaving 'draft' needs a published document: migration
+    057's CHECK (status = 'draft' OR definition IS NOT NULL) admits a NULL
+    definition only while the plan is a draft, so live, paused and
+    archived on a never-published draft all used to surface as a driver
+    error — a 500. The pre-read decides it here as one validation miss
+    (B4, rollout phase 01); a driver exception is never caught in logic."""
     if status not in ("live", "paused", "archived"):
         raise WorkflowValidationError([f"unknown status: {status}"])
+    workflow = await accessor.get_workflow(merchant_id, workflow_id)
+    if workflow is None or workflow.status == "archived":
+        return None
+    if not workflow.definition:
+        verb = {
+            "live": "going live",
+            "paused": "pausing it",
+            "archived": "archiving it",
+        }
+        raise WorkflowValidationError([f"publish a draft before {verb[status]}"])
     return await accessor.set_workflow_status(merchant_id, workflow_id, status)
 
 

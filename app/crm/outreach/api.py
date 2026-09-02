@@ -119,7 +119,12 @@ async def set_workflow_status_route(
     current_user: UserInfo = Depends(crm_admin_user),
 ) -> Workflow:
     set_log_context(component="crm.workflows.status", merchant_id=merchant_id)
-    workflow = await plans.set_status(merchant_id, workflow_id, body.status)
+    try:
+        workflow = await plans.set_status(merchant_id, workflow_id, body.status)
+    except plans.WorkflowValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        )
     if workflow is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
