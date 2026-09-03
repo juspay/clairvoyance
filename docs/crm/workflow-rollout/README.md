@@ -58,7 +58,7 @@ PR has not merged yet.
 - Fail CLOSED anywhere permission-adjacent; buddy-side mirrors fail OPEN.
 - Logs never carry a phone/email; use `app/crm/shared/redact.py`.
 - Do not widen a phase. If you find an adjacent bug, note it in the PR
-  description and leave it for its own phase (or `99-backlog.md`).
+  description and leave it for its own phase or track.
 - The PR description states: the phase number, what changed, the red test(s),
   and any *Decisions already made* you disagreed with.
 
@@ -85,7 +85,6 @@ PR has not merged yet.
 | 17 | `stages` ladder sugar + loan funnel migration to a board | feat + docs | 14, 15, 16 |
 | 18 | Outcome feedback into runs (G2, G3) — **call half landed (#1076)**; the message half (receipts, STOP) waits | feat | PRs #1040/#1052 merged; 15 |
 | 19 | Permission-gate wiring (G1) — **deferred (2026-09-03): revisit after #1021 merges** | feat | PR #1021 merged |
-| 99 | Backlog (G4, G5, G6, G10, G11, remaining nits) | — | — |
 
 Phases 00–09 need no canon change. Phase 10 is the canon decision; 11–17
 build on it. 18 and 19 are gated on other people's PRs and can slide.
@@ -108,3 +107,11 @@ build on it. 18 and 19 are gated on other people's PRs and can slide.
 Deliberately NOT in the queue (decision, 2026-09-02): a `send_whatsapp`
 builtin for WhatsApp from inside a buddy call. The cart flow's WhatsApp is
 the workflow's `send` node only. Do not add it back without a new decision.
+
+## What comes after this queue
+
+Everything the read-through found that is still open — the product node
+vocabulary, human handoff, spine operations, send pacing, per-channel
+suppression, identity and outreach hardening — lives in
+`../workflow-enhancements/` as seven independent tracks, one agent each.
+`99-backlog.md` is gone; every item in it has a step there.
