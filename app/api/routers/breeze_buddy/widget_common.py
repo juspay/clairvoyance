@@ -41,6 +41,16 @@ from app.services.redis.rate_limit import check_rate_limit
 _RATE_WINDOW_SECONDS = 3600
 _RATE_LIMIT_PREFIX = "widget"
 
+# The Origin header is spoofable from a non-browser client and the
+# public_widget_key is public, so per-IP limits alone don't bound a merchant's
+# aggregate spend once an attacker rotates source IPs (PT-18). This multiplier
+# turns each per-IP cap into an additional key-wide (cross-IP) cap, so no single
+# action can be amplified past `multiplier x per-IP limit` no matter how many
+# IPs are used. Each action keeps its own counter (see
+# _enforce_widget_aggregate_limit), so the ceiling on a key is the sum of its
+# per-action caps rather than one shared budget.
+_WIDGET_AGGREGATE_MULTIPLIER = 20
+
 
 def client_ip(request: Request) -> str:
     """Best-effort caller IP for rate-limit keying.
@@ -137,6 +147,41 @@ async def _enforce_widget_ip_limit(
     )
 
 
+async def _enforce_widget_aggregate_limit(
+    *, bucket: str, limit: int, widget_config_id: str
+) -> None:
+    """Raise 429 when one public_widget_key exceeds this action's cross-IP cap.
+
+    Keyed on ``widget_config_id`` ONLY (no client IP), so rotating source IPs
+    cannot escape it (PT-18). Fail-closed on Redis outage, like the per-IP cap.
+
+    Note the cap is *per action type*, not one shared budget: the bucket name is
+    part of the key, so ``message`` and ``transcribe`` each carry their own
+    cross-IP ceiling. That is deliberate — the per-action limits differ by an
+    order of magnitude, and collapsing them into one counter would let cheap
+    calls exhaust the budget for expensive ones. It does mean total spend on a
+    key is bounded by the *sum* of the per-action caps, not by any single one.
+    """
+    decision = await check_rate_limit(
+        bucket=f"{bucket}:agg",
+        identifier=widget_config_id,
+        limit=limit,
+        window_seconds=_RATE_WINDOW_SECONDS,
+        prefix=_RATE_LIMIT_PREFIX,
+        fail_closed=True,
+    )
+    if decision.allowed:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=(
+            f"Widget usage limit hit ({decision.count}/{decision.limit} per hour "
+            "for this widget). Try again later."
+        ),
+        headers={"Retry-After": str(decision.retry_after_seconds)},
+    )
+
+
 async def resolve_widget_config_for_request(
     *,
     request: Request,
@@ -205,6 +250,13 @@ async def resolve_widget_config_for_request(
         limit=effective_limit,
         widget_config_id=cfg.id,
     )
+    # Cross-IP aggregate cap so IP rotation can't run up unbounded spend on this
+    # merchant's public_widget_key (PT-18).
+    await _enforce_widget_aggregate_limit(
+        bucket=rate_bucket,
+        limit=effective_limit * _WIDGET_AGGREGATE_MULTIPLIER,
+        widget_config_id=cfg.id,
+    )
     return cfg
 
 
@@ -224,6 +276,12 @@ async def enforce_widget_ip_limit(
         request=request,
         bucket=bucket,
         limit=limit,
+        widget_config_id=widget_config_id,
+    )
+    # Cross-IP aggregate cap on this follow-up action too (PT-18).
+    await _enforce_widget_aggregate_limit(
+        bucket=bucket,
+        limit=limit * _WIDGET_AGGREGATE_MULTIPLIER,
         widget_config_id=widget_config_id,
     )
 

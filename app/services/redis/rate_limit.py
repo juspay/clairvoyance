@@ -115,7 +115,19 @@ async def check_rate_limit(
         if count == 1:
             # New bucket — set TTL just past the window edge so the key
             # is readable for the full window before Redis evicts it.
-            await redis.expire(key, window_seconds + 5)
+            #
+            # If the TTL never lands, drop the counter. INCR and EXPIRE are two
+            # round trips, and only the count == 1 branch ever sets a TTL, so a
+            # key that survives a failed EXPIRE is immortal: no later call can
+            # repair it, and once it climbs past `limit` a fail_closed caller
+            # (the widget caps) would 429 that key forever rather than for one
+            # window. Deleting costs at most one under-counted request.
+            if not await redis.expire(key, window_seconds + 5):
+                logger.warning(
+                    f"rate_limit: could not set TTL on bucket={bucket!r}; "
+                    "dropping the counter rather than leaving it immortal"
+                )
+                await redis.delete(key)
     except Exception as exc:
         if fail_closed:
             logger.warning(

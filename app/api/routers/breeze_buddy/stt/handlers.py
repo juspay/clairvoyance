@@ -256,7 +256,7 @@ async def handle_transcription_stream(ws: WebSocket) -> None:
     await ws.accept()
 
     try:
-        user = get_user_from_websocket(ws)
+        user = await get_user_from_websocket(ws)
     except HTTPException as e:
         await _reject_stream(ws, _WS_UNAUTHORIZED, str(e.detail), "unauthorized")
         return

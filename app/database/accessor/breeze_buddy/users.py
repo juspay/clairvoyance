@@ -34,6 +34,7 @@ from app.database.queries.breeze_buddy.users import (
 )
 from app.schemas.breeze_buddy.auth import UserInDB, UserRole
 from app.schemas.breeze_buddy.users import UserResponse
+from app.services.redis.client import get_redis_service
 
 
 async def check_username_exists(username: str) -> bool:
@@ -120,6 +121,71 @@ async def get_user_in_db_by_id(user_id: str) -> Optional[UserInDB]:
     except Exception as e:
         logger.error(f"Error fetching user by id '{user_id}': {e}")
         raise
+
+
+# Short-lived cache so the per-request liveness recheck (PT-22) is not a DB
+# round-trip on every authenticated call.
+#
+# Disabling an account takes effect immediately on the happy path, because
+# update/delete call invalidate_user_active_cache(). The TTL bounds the
+# WORST case only — if that invalidation is lost (Redis blip, or an account
+# disabled by a path that bypasses the accessor), a cached "active" answer can
+# survive at most this many seconds. It is deliberately not the primary
+# control: token revocation (token_revocation.py) is uncached and is the
+# hard-stop for a compromised token.
+_USER_ACTIVE_CACHE_TTL = 10
+_USER_ACTIVE_CACHE_PREFIX = "user_active:"
+
+
+async def is_user_active(user_id: str) -> bool:
+    """Return whether a user exists and is active.
+
+    Cached in Redis for a few seconds. A *Redis* failure fails OPEN: the cache is
+    only an optimisation, and the authoritative DB read still runs behind it.
+
+    A *database* failure fails CLOSED. Returning True there would accept tokens
+    belonging to disabled and deleted users for as long as the database was
+    unreachable, which is precisely the window an attacker with a stolen token
+    wants. Failing closed costs little in practice: every authenticated handler
+    reads the database anyway, so a database outage is not a state in which
+    requests would otherwise be served.
+    """
+    cache_key = f"{_USER_ACTIVE_CACHE_PREFIX}{user_id}"
+    try:
+        redis = await get_redis_service()
+        cached = await redis.get(cache_key)
+        if cached is not None:
+            return cached == "1"
+    except Exception as e:
+        logger.error(f"user-active cache read failed for {user_id}: {e}")
+
+    try:
+        user = await get_user_in_db_by_id(user_id)
+        active = bool(user and user.is_active)
+    except Exception as e:
+        logger.opt(exception=e).error(
+            "user-active DB lookup failed for {} (failing closed)", user_id
+        )
+        return False
+
+    try:
+        redis = await get_redis_service()
+        await redis.setex(
+            cache_key, "1" if active else "0", ttl_seconds=_USER_ACTIVE_CACHE_TTL
+        )
+    except Exception as e:
+        logger.error(f"user-active cache write failed for {user_id}: {e}")
+
+    return active
+
+
+async def invalidate_user_active_cache(user_id: str) -> None:
+    """Drop the cached liveness flag so a status change takes effect at once."""
+    try:
+        redis = await get_redis_service()
+        await redis.delete(f"{_USER_ACTIVE_CACHE_PREFIX}{user_id}")
+    except Exception as e:
+        logger.error(f"user-active cache invalidation failed for {user_id}: {e}")
 
 
 async def create_merchant_and_user_atomically(
@@ -405,6 +471,10 @@ async def update_user(
 
             if row:
                 logger.info(f"Updated user: {user_id}")
+                if is_active is not None:
+                    # Status changed — drop the liveness cache so a disable
+                    # takes effect on the very next request (PT-22).
+                    await invalidate_user_active_cache(user_id)
                 return decode_user(row)
 
             return None
@@ -434,6 +504,8 @@ async def delete_user(user_id: str) -> bool:
 
         if row:
             logger.info(f"Deleted user: {user_id}")
+            # Cut off any outstanding tokens for the deleted user immediately.
+            await invalidate_user_active_cache(user_id)
             return True
 
         check_query = "SELECT role FROM users WHERE id = $1"

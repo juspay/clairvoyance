@@ -13,8 +13,9 @@ Endpoints:
   POST /auth/switch-account — switch to sibling account (authenticated)
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
+from app.api.routers.breeze_buddy.auth.rate_limit import enforce_credential_rate_limit
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import TokenResponse, UserInfo
 from app.schemas.breeze_buddy.signup import (
@@ -46,7 +47,10 @@ router = APIRouter()
     summary="Merchant self-service registration (username/password)",
     tags=["signup"],
 )
-async def signup_with_password(request: MerchantSignupRequest) -> TokenResponse:
+async def signup_with_password(
+    request: MerchantSignupRequest, http_request: Request
+) -> TokenResponse:
+    await enforce_credential_rate_limit(http_request, request.username)
     return await signup_with_password_handler(request)
 
 
@@ -77,9 +81,12 @@ async def google_signup(request: GoogleMerchantSignupRequest) -> TokenResponse:
     summary="List all accounts for an email (account picker)",
     tags=["signup"],
 )
-async def list_accounts(request: ListAccountsRequest) -> AccountsResponse:
+async def list_accounts(
+    request: ListAccountsRequest, http_request: Request
+) -> AccountsResponse:
+    await enforce_credential_rate_limit(http_request, request.email)
     accounts = await list_accounts_handler(
-        id_token=request.id_token, email=request.email
+        id_token=request.id_token, email=request.email, password=request.password
     )
     return AccountsResponse(accounts=accounts)
 
@@ -90,7 +97,14 @@ async def list_accounts(request: ListAccountsRequest) -> AccountsResponse:
     summary="Select an account and mint JWT",
     tags=["signup"],
 )
-async def select_account(request: SelectAccountRequest) -> TokenResponse:
+async def select_account(
+    request: SelectAccountRequest, http_request: Request
+) -> TokenResponse:
+    # This endpoint verifies a password too, so it needs the same cap as
+    # /auth/accounts and /auth/login. Without it an attacker who knows an
+    # account_id can guess passwords here at full speed and never touch a
+    # rate-limited route (PT-19). Bucketed on the account being targeted.
+    await enforce_credential_rate_limit(http_request, request.account_id)
     return await select_account_handler(
         account_id=request.account_id,
         id_token=request.id_token,

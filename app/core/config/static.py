@@ -653,6 +653,20 @@ ENABLE_SIGTERM_HANDLER = (
 BOT_MAX_DRAIN_SECONDS = int(os.environ.get("BOT_MAX_DRAIN_SECONDS", "25"))
 
 # Redis Configuration
+# Brute-force rate limiting for the unauthenticated credential endpoints
+# (/login, /auth/s2s/token, /signup, /auth/accounts). Fixed-window caps per
+# client IP and per username/email, layered on top of bcrypt + the timing
+# equalization (PT-16) so online guessing is bounded. Set a cap to 0 to disable
+# that dimension. Enforcement fails OPEN on a Redis outage (see
+# app/api/routers/breeze_buddy/auth/rate_limit.py) so a Redis blip can't lock
+# every operator out of login.
+AUTH_RATE_LIMIT_PER_IP_PER_HOUR = int(
+    os.environ.get("AUTH_RATE_LIMIT_PER_IP_PER_HOUR", "40")
+)
+AUTH_RATE_LIMIT_PER_USERNAME_PER_HOUR = int(
+    os.environ.get("AUTH_RATE_LIMIT_PER_USERNAME_PER_HOUR", "15")
+)
+
 REDIS_HOST = os.getenv("REDIS_HOST", "")
 REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
