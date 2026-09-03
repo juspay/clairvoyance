@@ -7,15 +7,16 @@ from datetime import datetime, timezone
 from app.crm.outreach.db.queries import (
     admission_facts_query,
     advance_run_query,
-    cancel_open_runs_query,
+    cancel_run_query,
     claim_due_runs_query,
     exit_run_query,
     insert_enrollment_query,
     live_workflows_query,
+    open_runs_for_customer_query,
     park_run_query,
     publish_workflow_query,
     record_run_error_query,
-    resume_run_on_event_query,
+    resume_run_by_id_query,
     source_event_used_query,
 )
 from app.crm.record.db.queries import customer_has_event_query
@@ -42,9 +43,30 @@ def test_enrollment_insert_binds_everything_positionally() -> None:
 
 
 def test_goal_cancel_ends_every_open_run_including_parked() -> None:
-    sql, params = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met")
+    sql, params = cancel_run_query("m1", "run-1", "goal_met")
     assert "status <> 'exited'" in sql and "status = 'waiting'" not in sql
     assert params[0] == "m1"
+
+
+def test_goal_cancel_and_reply_name_the_run_they_are_about() -> None:
+    """Phase 13: the tier or listening node that matched is the RUN'S
+    version's, so the write names the run — merchant first, then id — and
+    a sibling run on another version is never touched."""
+    sql, params = cancel_run_query("m1", "run-1", "goal_met")
+    assert "WHERE merchant_id = $1 AND id = $2" in sql
+    assert params[:2] == ["m1", "run-1"]
+    sql, params = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
+    assert "WHERE merchant_id = $1 AND id = $2" in sql
+    assert "status = 'waiting' AND current_node = $3" in sql
+    assert "RETURNING id" in sql
+    assert params == ["m1", "run-1", "ask", json.dumps({"reply_ask": "YES"})]
+
+
+def test_open_runs_for_customer_is_merchant_first_and_open_only() -> None:
+    sql, params = open_runs_for_customer_query("m1", "c-1")
+    assert "WHERE merchant_id = $1 AND customer_id = $2" in sql
+    assert "status <> 'exited'" in sql
+    assert params == ["m1", "c-1"]
 
 
 def test_goal_cancel_is_time_aware_on_the_entry_event_and_null_safe() -> None:
@@ -52,28 +74,28 @@ def test_goal_cancel_is_time_aware_on_the_entry_event_and_null_safe() -> None:
     EVENT happened, not after the row was inserted — a late-delivered
     earlier-stage letter must not keep a run alive past a goal that truly
     happened after it. entered_at stays the fallback for older rows."""
-    sql, params = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met", NOW)
+    sql, params = cancel_run_query("m1", "run-1", "goal_met", NOW)
     assert (
         "COALESCE((context->>'entered_event_at')::timestamptz, entered_at) "
-        "< $5::timestamptz" in sql
+        "< $4::timestamptz" in sql
     )
-    assert "$5::timestamptz IS NULL OR" in sql
-    assert params[4] == NOW
-    _, params = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met")
-    assert params[4] is None  # unstamped goal keeps today's behaviour
+    assert "$4::timestamptz IS NULL OR" in sql
+    assert params[3] == NOW
+    _, params = cancel_run_query("m1", "run-1", "goal_met")
+    assert params[3] is None  # unstamped goal keeps today's behaviour
 
 
 def test_goal_cancel_can_be_keyed_to_the_run_it_is_about() -> None:
     """A keyed tier ends only the run whose context field equals the
     letter's payload field (cart_token = cart_token); the unkeyed form is
     byte-identical to before."""
-    sql, params = cancel_open_runs_query(
-        "m1", "wf-1", "c-1", "goal_met", NOW, key=("cart_token", "chk-88412")
+    sql, params = cancel_run_query(
+        "m1", "run-1", "goal_met", NOW, key=("cart_token", "chk-88412")
     )
-    assert "AND context->>$6 = $7" in sql
-    assert params[5:] == ["cart_token", "chk-88412"]
-    sql, params = cancel_open_runs_query("m1", "wf-1", "c-1", "converted_elsewhere")
-    assert "$6" not in sql and len(params) == 5
+    assert "AND context->>$5 = $6" in sql
+    assert params[4:] == ["cart_token", "chk-88412"]
+    sql, params = cancel_run_query("m1", "run-1", "converted_elsewhere")
+    assert "$5" not in sql and len(params) == 4
 
 
 def test_goal_recheck_can_be_keyed_to_the_run_it_is_about() -> None:
@@ -136,9 +158,9 @@ def test_walker_writes_are_conditional_on_the_leased_wake_at() -> None:
 def test_event_side_writes_stay_unconditional() -> None:
     """The reply and the goal-cancel are the event side: they always win
     over a walker mid-visit (the walker defers on its CAS miss)."""
-    sql, _ = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met")
+    sql, _ = cancel_run_query("m1", "run-1", "goal_met")
     assert "AND wake_at =" not in sql
-    sql, _ = resume_run_on_event_query("m1", "wf-1", "c-1", "ask", {"reply_ask": "YES"})
+    sql, _ = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
     assert "AND wake_at =" not in sql
 
 

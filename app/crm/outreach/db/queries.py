@@ -335,7 +335,7 @@ def exit_run_query(
     at-least-once redelivery enrol a second run from a stale checkout.
 
     The lease is the generation: a write under a stale lease is a no-op
-    (P1). The event side's exit is cancel_open_runs_query, unconditional."""
+    (P1). The event side's exit is cancel_run_query, unconditional."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET status = 'exited', exit_reason = $2, exited_at = now(),
@@ -387,30 +387,94 @@ def record_run_error_query(
     return query, [run_id, last_error, retry_in_seconds, leased_wake_at]
 
 
-def resume_run_on_event_query(
-    merchant_id: str,
-    workflow_id: str,
-    customer_id: str,
-    node_id: str,
-    context_patch: Dict[str, Any],
+def open_runs_for_customer_query(
+    merchant_id: str, customer_id: str
 ) -> Tuple[str, List[Any]]:
-    """W5: the reply reaches the token. Only a run still standing on the
-    listening square is touched — a late or repeated reply changes
-    nothing. The answer is recorded on the run BEFORE anything fires
-    (canon T20), and wake_at = now() hands it to the walker."""
+    """The consumer's per-run read (rollout phase 13): this customer's
+    open runs across every plan, so goals and listening are judged
+    against each run's PINNED version. The customer index carries it; a
+    customer with nothing open costs one empty indexed read."""
+    query = f"""
+        SELECT {_RUN_COLUMNS}
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND customer_id = $2 AND status <> 'exited'
+        ORDER BY entered_at, id
+    """
+    return query, [merchant_id, customer_id]
+
+
+def resume_run_by_id_query(
+    merchant_id: str, run_id: str, node_id: str, context_patch: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """W5: the reply reaches the token — by run id (phase 13), because
+    the listening square is the RUN'S version's, and a sibling run on
+    another version must never be woken by a square it does not have.
+    Only a run still standing on that square is touched — a late or
+    repeated reply changes nothing. The answer is recorded on the run
+    BEFORE anything fires (canon T20), and wake_at = now() hands it to
+    the walker. Event-side: unconditional (the walker's writes defer to
+    it, phase 03)."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
-        SET context = context || $5::jsonb, wake_at = now(), last_error = NULL
-        WHERE merchant_id = $1 AND workflow_id = $2 AND customer_id = $3
-          AND status = 'waiting' AND current_node = $4
+        SET context = context || $4::jsonb, wake_at = now(), last_error = NULL
+        WHERE merchant_id = $1 AND id = $2
+          AND status = 'waiting' AND current_node = $3
+        RETURNING id
     """
-    return query, [
-        merchant_id,
-        workflow_id,
-        customer_id,
-        node_id,
-        json.dumps(context_patch),
-    ]
+    return query, [merchant_id, run_id, node_id, json.dumps(context_patch)]
+
+
+def cancel_run_query(
+    merchant_id: str,
+    run_id: str,
+    exit_reason: str,
+    occurred_at: Optional[datetime] = None,
+    key: Optional[Tuple[str, str]] = None,
+    context_patch: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, List[Any]]:
+    """Goal-cancel, by run id (phase 13): the tier that matched is the
+    RUN'S version's, so the write names the run — a v3 goal never touches
+    a sibling run on v5. Open is waiting or parked (canon: the goal event
+    resolves OPEN enrolments; a parked run she has already satisfied must
+    not keep holding the open-run unique). Event-side: unconditional (the
+    walker's writes defer to it, phase 03).
+
+    Time-aware on the ENTRY EVENT (G7, phase 06): only a run whose
+    founding letter happened before the goal event ends — its context
+    carries that moment (entered_event_at), with the row's insert time as
+    the fallback for runs written before the stamp — so a late-delivered
+    earlier-stage letter cannot keep a run alive past a goal that truly
+    happened after it, and a stale goal redelivered later cannot end a
+    newer run. An unstamped goal (occurred_at NULL) ends the run.
+
+    Keyed (phase 06): ``key = (run field, value)`` re-asserts in the
+    statement what the consumer judged from the row it read — the run is
+    still the one the letter is about.
+
+    ``context_patch`` (phase 09) rides the same UPDATE — context ||
+    $n::jsonb — so the run remembers which letter ended it and what it
+    was worth (context.goal), for the summary's recovered revenue. Its
+    placeholder follows the optional key."""
+    params: List[Any] = [merchant_id, run_id, exit_reason, occurred_at]
+    keyed = ""
+    if key:
+        keyed = "AND context->>$5 = $6"
+        params.extend([key[0], key[1]])
+    patched = ""
+    if context_patch is not None:
+        patched = f", context = context || ${len(params) + 1}::jsonb"
+        params.append(json.dumps(context_patch))
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET status = 'exited', exit_reason = $3, exited_at = now(),
+            wake_at = NULL{patched}
+        WHERE merchant_id = $1 AND id = $2
+          AND status <> 'exited'
+          AND ($4::timestamptz IS NULL OR COALESCE((context->>'entered_event_at')::timestamptz, entered_at) < $4::timestamptz)
+          {keyed}
+        RETURNING id
+    """
+    return query, params
 
 
 def patch_open_run_query(
@@ -426,7 +490,7 @@ def patch_open_run_query(
     debounce_minutes: float,
 ) -> Tuple[str, List[Any]]:
     """Repeat entries (modules/05 §Repeat entries): ONE idempotent UPDATE
-    in the resume_run_on_event shape. Touches only a run still standing on
+    in the reply's shape (resume_run_by_id_query). Touches only a run still standing on
     its first square (status waiting, current_node = the entry node) — a
     run past it is never patched. Found by enrollment_key so a keyed plan's
     order edit patches ITS order's run. The event marks itself used in
@@ -493,66 +557,6 @@ def patch_open_run_query(
         max_value,
         debounce_minutes,
     ]
-
-
-def cancel_open_runs_query(
-    merchant_id: str,
-    workflow_id: str,
-    customer_id: str,
-    exit_reason: str,
-    occurred_at: Optional[datetime] = None,
-    key: Optional[Tuple[str, str]] = None,
-    context_patch: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, List[Any]]:
-    """Goal-cancel (canon: the goal event resolves OPEN enrolments — open
-    is waiting or parked; a parked run she has already satisfied must not
-    keep holding the open-run unique) — and the same shape ejects runs
-    when a flow is archived. Event-side: unconditional (the walker's
-    writes defer to it, phase 03).
-
-    Time-aware on the ENTRY EVENT (G7, phase 06): only runs whose
-    founding letter happened before the goal event count — the run's
-    context carries that moment (entered_event_at), with the row's
-    insert time as the fallback for runs written before the stamp — so a
-    late-delivered earlier-stage letter cannot keep a run alive past a
-    goal that truly happened after it, and a stale goal redelivered
-    later cannot end a newer run. An unstamped goal (occurred_at NULL)
-    keeps today's behaviour and ends every open run.
-
-    Keyed (phase 06): ``key = (run field, value)`` ends only the run the
-    letter is about (context cart_token = the order's cart_token); the
-    unkeyed form is byte-identical to before.
-
-    ``context_patch`` (phase 09) rides the same UPDATE — context ||
-    $n::jsonb — so the run remembers which letter ended it and what it
-    was worth (context.goal), for the summary's recovered revenue. Its
-    placeholder follows the optional key."""
-    params: List[Any] = [
-        merchant_id,
-        workflow_id,
-        customer_id,
-        exit_reason,
-        occurred_at,
-    ]
-    keyed = ""
-    if key:
-        keyed = "AND context->>$6 = $7"
-        params.extend([key[0], key[1]])
-    patched = ""
-    if context_patch is not None:
-        patched = f", context = context || ${len(params) + 1}::jsonb"
-        params.append(json.dumps(context_patch))
-    query = f"""
-        UPDATE {ENROLLMENT_TABLE}
-        SET status = 'exited', exit_reason = $4, exited_at = now(),
-            wake_at = NULL{patched}
-        WHERE merchant_id = $1 AND workflow_id = $2 AND customer_id = $3
-          AND status <> 'exited'
-          AND ($5::timestamptz IS NULL OR COALESCE((context->>'entered_event_at')::timestamptz, entered_at) < $5::timestamptz)
-          {keyed}
-        RETURNING id
-    """
-    return query, params
 
 
 def list_runs_query(

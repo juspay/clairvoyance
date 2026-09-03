@@ -1,8 +1,17 @@
 """The entry-rules consumer (W4 + W5) — outreach's subscription on the
-event spine: an attributed event whose topic matches a LIVE plan's entry
-starts a run (enrol()); one matching a plan's goal ends open runs
-(goal-cancel); one a wait_event node listens for wakes the run standing
-on that node with the answer written in its context (W5).
+event spine. One consumer, two reads (ADR 0023 §4; the sentence in
+docs/crm/workflow-rollout/context/reading-notes.md §15.3):
+
+  1. HER OPEN RUNS, each judged by the version it entered under
+     (definitions.py): a goal tier of THAT document ends the run
+     (goal-cancel); a wait_event square of THAT document wakes it with
+     the answer written in its context (W5). A v3 run is ended by v3's
+     goals and woken by v3's listening even after v5 changed them, and
+     every write names the run it is about. A migrate plan is the
+     degenerate case — every open run pinned to the latest — same path,
+     no branch.
+  2. THE LIVE PLANS, latest document: an entry match starts a run
+     (enrol()) — a new run always begins on the newest version.
 
 A consumer is a function, not a loop (worker-runtime.md): the event
 worker's pass calls consume_attributed_event() per row, inside that row's
@@ -12,14 +21,19 @@ stays pending and returns next poll. Our writes commit on their own
 source-event check and the open-run unique — not by that rollback.
 """
 
-from typing import List, Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from app.core.logger import logger
 from app.crm.outreach.db import accessor
+from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.nodes import _BOOKKEEPING_KEYS, _BOOKKEEPING_PREFIXES
 from app.crm.outreach.repeat import _as_number, apply_repeat
-from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowNode
+from app.crm.outreach.schemas import (
+    EnrollmentRun,
+    Workflow,
+    WorkflowDefinition,
+)
 from app.crm.record.contracts import RawEvent
 from app.crm.shared.normalize import normalize_phone
 
@@ -66,9 +80,15 @@ def _phone_from_payload(payload: dict) -> str | None:
 async def consume_attributed_event(
     event: RawEvent, customer_id: str, handles: Optional[dict] = None
 ) -> None:
-    """Match one just-attributed event against every live plan's entry and
-    goal topics. customer_id arrives separately: the row object still
-    carries the pre-stamp value.
+    """Match one just-attributed event against her open runs (each by its
+    own version) and every live plan's entry (latest). customer_id
+    arrives separately: the row object still carries the pre-stamp
+    value.
+
+    Order: every open run first — its goal, then its reply — and entries
+    last. An order arriving right behind its checkout must not cancel the
+    run that checkout is about to start; and a run a goal just ended is
+    not woken by the same letter.
 
     ``handles`` is what the source's extractor already found. Taking it
     rather than re-reading the payload keeps ONE source-aware discovery in
@@ -76,54 +96,76 @@ async def consume_attributed_event(
     resolved on, so suppression matches by construction and a new source
     needs no teaching here. The payload search stays as the fallback for
     the voice mirrors, which resolve before this consumer exists."""
+    open_runs = await accessor.open_runs_for_customer(event.merchant_id, customer_id)
+    goal_patch = _goal_patch(event) if open_runs else None
+    for run in open_runs:
+        definition = await definition_for(run)
+        if definition is None:
+            # No version row for the pin: nothing honest can be judged for
+            # this run here; the walker parks it at its next claim.
+            logger.warning(
+                f"run {run.id}: definition v{run.workflow_version} missing — "
+                f"goals and listening not judged (event {event.id})"
+            )
+            continue
+        if await _end_on_goal(run, definition, event, goal_patch):
+            continue  # exited: there is nothing left to wake
+        await _wake_on_reply(run, definition, event)
+
     flows = await accessor.live_workflows(event.merchant_id)
-    entry_matches: List[Tuple[Workflow, WorkflowDefinition]] = []
-    goal_matches: List[Tuple[Workflow, WorkflowDefinition]] = []
-    listening: List[Tuple[Workflow, WorkflowNode]] = []
     for flow in flows:
         definition = WorkflowDefinition.model_validate(flow.definition)
         if definition.entry.topic == event.topic and _where_matches(
             definition.entry.where, event.payload
         ):
-            entry_matches.append((flow, definition))
-        if definition.goal_tiers(event.topic):
-            goal_matches.append((flow, definition))
-        for node in definition.nodes:
-            if node.type == "wait_event" and event.topic in node.topics:
-                listening.append((flow, node))
+            await _try_enrol(flow, definition, event, customer_id, handles, open_runs)
 
-    # Goal first: an order arriving right behind its checkout must not
-    # cancel the run that checkout is about to start. Then replies, then
-    # entries. Time-aware on the entry event: only runs whose founding
-    # letter happened before the goal event end (G7) — a stale goal
-    # redelivered by the spine cannot end a run born after it.
-    #
-    # Tiers are judged keyed-first (goal_tiers): the keyed tier ends the
-    # run the letter is ABOUT (context cart_token = payload cart_token) as
-    # goal_met; the unkeyed tier then sweeps whatever is still open as
-    # converted_elsewhere — the recovered run is already exited, so the
-    # UPDATE's status <> 'exited' keeps the two verdicts apart. A keyed
-    # tier whose payload field is missing cannot say which run it is
-    # about and is skipped; the unkeyed tier still applies.
-    goal_patch = _goal_patch(event) if goal_matches else None
-    for flow, definition in goal_matches:
-        for tier in definition.goal_tiers(event.topic):
-            key: Optional[Tuple[str, str]] = None
-            if tier.key:
-                value = event.payload.get(tier.key.event)
-                if value in (None, ""):
-                    continue
-                key = (tier.key.run, str(value))
-            await accessor.cancel_open_runs(
-                event.merchant_id,
-                str(flow.id),
-                customer_id,
-                tier.exit_reason,
-                event.occurred_at,
-                key,
-                goal_patch,
-            )
-    for flow, node in listening:
+
+async def _end_on_goal(
+    run: EnrollmentRun,
+    definition: WorkflowDefinition,
+    event: RawEvent,
+    goal_patch: Optional[dict],
+) -> bool:
+    """Judge this run against ITS document's goal tiers, keyed-first
+    (goal_tiers, phase 06): "THIS cart recovered" (goal_met) beats "she
+    bought something" (converted_elsewhere), and the first tier that ends
+    the run is its verdict — no second tier sweeps an exited run. A keyed
+    tier whose payload field is missing cannot say which run it is about
+    and is skipped; one naming another run of hers is not this run's.
+    Time-aware on the founding letter (G7) in the statement. Returns True
+    when the run ended."""
+    for tier in definition.goal_tiers(event.topic):
+        key: Optional[Tuple[str, str]] = None
+        if tier.key:
+            value = event.payload.get(tier.key.event)
+            if value in (None, ""):
+                continue
+            if str(run.context.get(tier.key.run, "")) != str(value):
+                continue  # about another run of hers
+            key = (tier.key.run, str(value))
+        if await accessor.cancel_run(
+            run.merchant_id,
+            str(run.id),
+            tier.exit_reason,
+            event.occurred_at,
+            key,
+            goal_patch,
+        ):
+            return True
+    return False
+
+
+async def _wake_on_reply(
+    run: EnrollmentRun, definition: WorkflowDefinition, event: RawEvent
+) -> None:
+    """A wait_event square of ITS document listening on this topic wakes
+    the run with the answer — the statement decides whether the token is
+    standing there (a reply to a square it has left, or not yet reached,
+    changes nothing)."""
+    for node in definition.nodes:
+        if node.type != "wait_event" or event.topic not in node.topics:
+            continue
         answer = event.payload.get(node.key or "")
         if answer is None:
             # B1 (rollout phase 01): no key, no answer to branch on. Waking
@@ -134,18 +176,12 @@ async def consume_attributed_event(
             # may time it out.
             logger.info(
                 f"wait_event reply ignored: key {node.key!r} missing "
-                f"(workflow {flow.id}, event {event.id})"
+                f"(run {run.id}, event {event.id})"
             )
             continue
-        await accessor.resume_run_on_event(
-            event.merchant_id,
-            str(flow.id),
-            customer_id,
-            node.id,
-            {reply_key(node.id): str(answer)},
+        await accessor.resume_run_by_id(
+            run.merchant_id, str(run.id), node.id, {reply_key(node.id): str(answer)}
         )
-    for flow, definition in entry_matches:
-        await _try_enrol(flow, definition, event, customer_id, handles)
 
 
 # Where an order's amount lives in a payload, most specific first —
@@ -206,6 +242,7 @@ async def _try_enrol(
     event: RawEvent,
     customer_id: str,
     handles: Optional[dict] = None,
+    open_runs: Sequence[EnrollmentRun] = (),
 ) -> None:
     admit, enrollment_key = _enrollment_key(definition, event, str(flow.id))
     if not admit:
@@ -227,23 +264,49 @@ async def _try_enrol(
     )
     if run is None:
         # Refused — most often because a run for this key is already open.
-        # The plan's repeat words decide what that open run does with the
-        # repeat (repeat.py); the UPDATE's WHERE makes every other refusal
-        # a no-op, so no second signal from enrol() is needed. The repeat
-        # is offered the SAME small facts enrol() was — the normalized
-        # phone included, so a corrected number reaches the run — minus
-        # the founding pointers (_FOUNDING_KEYS): the id is what
-        # patch_open_run_query refuses the founding event by, the time is
-        # what goals are measured from.
+        # THAT run's repeat words decide what it does with the repeat
+        # (repeat.py; its own version's, phase 13); the UPDATE's WHERE
+        # makes every other refusal a no-op, so no second signal from
+        # enrol() is needed. The repeat is offered the SAME small facts
+        # enrol() was — the normalized phone included, so a corrected
+        # number reaches the run — minus the founding pointers
+        # (_FOUNDING_KEYS): the id is what patch_open_run_query refuses
+        # the founding event by, the time is what goals are measured from.
+        key = enrollment_key or customer_id
         repeat_facts = {k: v for k, v in context.items() if k not in _FOUNDING_KEYS}
         await apply_repeat(
             event.merchant_id,
             str(flow.id),
-            enrollment_key or customer_id,
-            definition,
+            key,
+            await _repeat_definition(open_runs, flow, key, definition),
             str(event.id),
             repeat_facts,
         )
+
+
+async def _repeat_definition(
+    open_runs: Sequence[EnrollmentRun],
+    flow: Workflow,
+    enrollment_key: str,
+    latest: WorkflowDefinition,
+) -> WorkflowDefinition:
+    """The repeat's words are the OPEN RUN'S version's: its on_repeat and
+    debounce, and its first square's id — v5 may have renamed the entry
+    node, and the patch's `current_node = entry node` guard would then
+    never find a v3 run. The run was read at the top of this pass; when
+    it is not among her open runs (a keyed run that resolved to another
+    customer, or a sibling tick opened it after the read) the latest
+    document stands in — exactly the pre-pinning behaviour."""
+    for run in open_runs:
+        if (
+            str(run.workflow_id) == str(flow.id)
+            and run.enrollment_key == enrollment_key
+        ):
+            pinned = await definition_for(run)
+            if pinned is not None:
+                return pinned
+            break
+    return latest
 
 
 def _enrollment_key(

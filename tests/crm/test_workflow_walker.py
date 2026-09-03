@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 
+import app.crm.outreach.definitions as definitions
 import app.crm.outreach.walker as walker
 from app.crm.outreach.nodes import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
@@ -115,6 +116,13 @@ class _Writes:
         return self.matched
 
 
+def _install(monkeypatch: pytest.MonkeyPatch, writes: _Writes) -> None:
+    """The walker writes through its accessor; the pinned document comes
+    through definitions.py's (phase 13) — one fake serves both doors."""
+    monkeypatch.setattr(walker, "accessor", writes)
+    monkeypatch.setattr(definitions, "accessor", writes)
+
+
 @pytest.fixture
 def no_goal(monkeypatch: pytest.MonkeyPatch) -> None:
     async def never(*args: Any, **kwargs: Any) -> bool:
@@ -132,7 +140,7 @@ def test_advance_carries_the_lease_it_was_claimed_under(
     monkeypatch: pytest.MonkeyPatch, no_goal: None
 ) -> None:
     writes = _Writes(matched=True, definition=_TWO_WAITS)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     run = _run()
     _advance(writes, run)
     ((verb, args),) = writes.calls
@@ -154,7 +162,7 @@ def test_a_missed_cas_on_advance_defers_without_raising_or_exiting(
     walker neither raises nor writes anything else — the next claim
     re-reads the run with the reply in it."""
     writes = _Writes(matched=False, definition=_TWO_WAITS)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     _advance(writes, _run())
     assert [verb for verb, _ in writes.calls] == ["advance"]
 
@@ -163,7 +171,7 @@ def test_a_missed_cas_on_exit_defers_too(
     monkeypatch: pytest.MonkeyPatch, no_goal: None
 ) -> None:
     writes = _Writes(matched=False, definition=_ONE_WAIT)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     run = _run()
     _advance(writes, run)
     ((verb, args),) = writes.calls
@@ -175,7 +183,7 @@ def test_a_park_under_a_stale_lease_is_a_no_op(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     writes = _Writes(matched=False, definition=_TWO_WAITS)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
 
     async def parked(*args: Any) -> None:
         raise NodeParked("template gone")
@@ -190,7 +198,7 @@ def test_a_retry_under_a_stale_lease_is_a_no_op(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     writes = _Writes(matched=False, definition=_TWO_WAITS)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
 
     async def flaky(*args: Any) -> None:
         raise RuntimeError("provider hiccup")
@@ -249,7 +257,7 @@ def _goal_recheck(
 
 def test_this_cart_recovered_exits_goal_met(monkeypatch: pytest.MonkeyPatch) -> None:
     writes = _Writes(matched=True, definition=_TIERED)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     asked = _goal_recheck(monkeypatch, {("cart_token", "chk-1"): True})
     _advance(writes, _tiered_run())
     ((verb, args),) = writes.calls
@@ -262,7 +270,7 @@ def test_another_order_exits_converted_elsewhere(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     writes = _Writes(matched=True, definition=_TIERED)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     asked = _goal_recheck(monkeypatch, {None: True})
     _advance(writes, _tiered_run())
     ((verb, args),) = writes.calls
@@ -276,7 +284,7 @@ def test_a_run_without_the_key_falls_back_to_the_row_time_and_the_unkeyed_tier(
     """An older row (no entered_event_at) compares against entered_at, and
     a run whose context lacks the key field cannot match a keyed tier."""
     writes = _Writes(matched=True, definition=_TIERED)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     asked = _goal_recheck(monkeypatch, {})
     run = _run()
     _advance(writes, run)
@@ -291,7 +299,7 @@ def test_walk_run_never_writes_without_a_lease(
     rows have wake_at NOT NULL). Without one there is no token to write
     under, and a blind overwrite is exactly the bug this phase closes."""
     writes = _Writes(matched=True, definition=_TWO_WAITS)
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     asyncio.run(walker.walk_run(_run(wake_at=None)))
     assert writes.calls == []
 
@@ -321,7 +329,7 @@ def _pinned_run(version: int) -> EnrollmentRun:
 def cold_cache() -> None:
     """The definition cache is process-wide and never invalidates
     (versions are immutable) — each test starts it empty."""
-    walker._definitions.clear()
+    definitions._definitions.clear()
 
 
 def test_the_walker_executes_the_version_the_run_entered_under(
@@ -331,7 +339,7 @@ def test_the_walker_executes_the_version_the_run_entered_under(
     entered under v3 (wait-30m -> wait-1d) and finishes on v3. The pin is
     read by (merchant, workflow, version), never from crm_workflow."""
     writes = _Writes(matched=True, definition=_V4, versions={3: _V3, 4: _V4})
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     run = _pinned_run(3)
     asyncio.run(walker.walk_run(run))
     ((verb, args),) = writes.calls
@@ -346,7 +354,7 @@ def test_a_missing_version_parks_the_run_honestly(
     a silent fallback to the live document (which would execute a plan
     the run did not enter under)."""
     writes = _Writes(matched=True, definition=_V4, versions={4: _V4})
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     run = _pinned_run(3)
     asyncio.run(walker.walk_run(run))
     ((verb, args),) = writes.calls
@@ -362,7 +370,7 @@ def test_a_pinned_version_is_read_once_per_process(
     run on the same (workflow, version) is served from the walker's cache
     without a read."""
     writes = _Writes(matched=True, definition=_V3, versions={3: _V3})
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     first = _pinned_run(3)
     second = _pinned_run(3)
     second.workflow_id = first.workflow_id
@@ -375,19 +383,19 @@ def test_a_pinned_version_is_read_once_per_process(
 def test_the_cache_is_bounded_and_evicts_the_least_recently_used(
     monkeypatch: pytest.MonkeyPatch, cold_cache: None
 ) -> None:
-    monkeypatch.setattr(walker, "_DEFINITION_CACHE_SIZE", 2)
+    monkeypatch.setattr(definitions, "_DEFINITION_CACHE_SIZE", 2)
     writes = _Writes(matched=True, definition=_V3, versions={1: _V3, 2: _V3, 3: _V3})
-    monkeypatch.setattr(walker, "accessor", writes)
+    _install(monkeypatch, writes)
     runs = [_pinned_run(version) for version in (1, 2, 3)]
     for run in runs[1:]:
         run.workflow_id = runs[0].workflow_id
 
     async def read_in_order() -> None:
-        await walker._definition_for(runs[0])  # v1: miss
-        await walker._definition_for(runs[1])  # v2: miss
-        await walker._definition_for(runs[0])  # v1: hit, now most recent
-        await walker._definition_for(runs[2])  # v3: miss, evicts v2
-        await walker._definition_for(runs[1])  # v2: miss again
+        await definitions.definition_for(runs[0])  # v1: miss
+        await definitions.definition_for(runs[1])  # v2: miss
+        await definitions.definition_for(runs[0])  # v1: hit, now most recent
+        await definitions.definition_for(runs[2])  # v3: miss, evicts v2
+        await definitions.definition_for(runs[1])  # v2: miss again
 
     asyncio.run(read_in_order())
     assert [version for _, _, version in writes.definition_reads] == [1, 2, 3, 2]

@@ -5,15 +5,16 @@ goal before entry, unmatched topics ignored, and a failure that propagates
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
-from typing import Any, List
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 import pytest
 
+import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.workers as outreach_workers
 from app.crm.outreach.nodes import send_variables
-from app.crm.outreach.schemas import Workflow, WorkflowDefinition
+from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
 from app.crm.outreach.walker import pick_next
 from app.crm.record.contracts import RawEvent
 from app.crm.worker_main import ROLES
@@ -87,27 +88,75 @@ def _event(topic: str, merchant_id: str = "m1") -> RawEvent:
     )
 
 
-def _wire(monkeypatch: pytest.MonkeyPatch, flow: Workflow, calls: List[Any]) -> None:
+def _open_run(flow: Workflow) -> EnrollmentRun:
+    """One open run of hers on the plan's first square, pinned to the
+    version the live row carries (phase 13: goals and listening are judged
+    per open run, by its own version)."""
+    first_node = (flow.definition or {})["nodes"][0]["id"]
+    return EnrollmentRun(
+        id=uuid.uuid4(),
+        merchant_id=flow.merchant_id,
+        workflow_id=flow.id,
+        workflow_version=flow.version,
+        customer_id=uuid.uuid4(),
+        status="waiting",
+        current_node=first_node,
+        wake_at=NOW + timedelta(minutes=30),
+        entered_at=NOW - timedelta(hours=1),
+        exited_at=None,
+        exit_reason=None,
+        context={"phone": "+919845012345"},
+        enrollment_key="cust-1",
+        attempts=0,
+        last_error=None,
+    )
+
+
+def _wire(
+    monkeypatch: pytest.MonkeyPatch, flow: Workflow, calls: List[Any]
+) -> EnrollmentRun:
+    run = _open_run(flow)
+    definitions._definitions.clear()
+
     async def live_workflows(merchant_id: str) -> List[Workflow]:
         # The read is tenant-scoped in SQL: another merchant sees no plans.
         return [flow] if merchant_id == flow.merchant_id else []
 
-    async def cancel_open_runs(*args: Any) -> int:
+    async def open_runs_for_customer(
+        merchant_id: str, customer_id: str
+    ) -> List[EnrollmentRun]:
+        return [run] if merchant_id == flow.merchant_id else []
+
+    async def get_definition(
+        merchant_id: str, workflow_id: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        return (
+            flow.definition
+            if (workflow_id, version) == (str(flow.id), flow.version)
+            else None
+        )
+
+    async def cancel_run(*args: Any) -> bool:
         calls.append(("cancel", args))
-        return 1
+        return True
 
-    async def resume_run_on_event(*args: Any) -> None:
+    async def resume_run_by_id(*args: Any) -> bool:
         calls.append(("resume", args))
-
-    monkeypatch.setattr(entry.accessor, "resume_run_on_event", resume_run_on_event)
+        return True
 
     async def fake_enrol(**kwargs: Any) -> object:
         calls.append(("enrol", kwargs))
         return object()
 
     monkeypatch.setattr(entry.accessor, "live_workflows", live_workflows)
-    monkeypatch.setattr(entry.accessor, "cancel_open_runs", cancel_open_runs)
+    monkeypatch.setattr(
+        entry.accessor, "open_runs_for_customer", open_runs_for_customer
+    )
+    monkeypatch.setattr(entry.accessor, "get_definition", get_definition)
+    monkeypatch.setattr(entry.accessor, "cancel_run", cancel_run)
+    monkeypatch.setattr(entry.accessor, "resume_run_by_id", resume_run_by_id)
     monkeypatch.setattr(entry, "enrol", fake_enrol)
+    return run
 
 
 def test_entry_topic_enrols_with_phone_and_small_facts(
@@ -179,10 +228,10 @@ def test_extractor_handles_beat_the_payload_fallback(
 
 def test_goal_topic_cancels_open_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: List[Any] = []
-    _wire(monkeypatch, _flow(), calls)
+    run = _wire(monkeypatch, _flow(), calls)
     asyncio.run(entry.consume_attributed_event(_event("order.placed"), "cust-1"))
-    assert calls[0][0] == "cancel" and calls[0][1][2] == "cust-1"
-    assert calls[0][1][4] == NOW  # the goal's occurred_at bounds the cancel
+    assert calls[0][0] == "cancel" and calls[0][1][1] == str(run.id)
+    assert calls[0][1][3] == NOW  # the goal's occurred_at bounds the cancel
 
 
 def test_goal_runs_before_entry_when_a_topic_is_both(
@@ -270,8 +319,7 @@ def test_reply_wakes_the_run_standing_on_the_listening_node(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: List[Any] = []
-    flow = _cod_flow()
-    _wire(monkeypatch, flow, calls)
+    run = _wire(monkeypatch, _cod_flow(), calls)
     asyncio.run(
         entry.consume_attributed_event(
             _event_with("button.reply", {"button_id": "YES"}), "cust-1"
@@ -279,7 +327,7 @@ def test_reply_wakes_the_run_standing_on_the_listening_node(
     )
     ((kind, args),) = calls
     assert kind == "resume"
-    assert args == ("m1", str(flow.id), "cust-1", "ask", {"reply_ask": "YES"})
+    assert args == ("m1", str(run.id), "ask", {"reply_ask": "YES"})
 
 
 def test_pick_next_takes_the_answer_edge_or_timeout() -> None:

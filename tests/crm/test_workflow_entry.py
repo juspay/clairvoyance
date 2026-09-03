@@ -1,24 +1,33 @@
-"""The entry-rules consumer's listening path (W5) — rollout phase 01, B1.
+"""The entry-rules consumer — one consumer, two reads (ADR 0023 §4;
+context/reading-notes.md §15.3; rollout phase 13).
 
-A wait_event reply whose payload lacks the node's key must NOT wake the
-run. Written as {reply_<node>: None} with wake_at = now, the walker's
-pick_next read None as "the alarm fired" and took the timeout edge at
-once: any letter on the listened topic without the key ended the
-listening window early and mis-routed. The fix is at the consumer — no
-resume without an answer — while pick_next keeps its alarm semantics,
-pinned here so the two halves cannot drift apart."""
+Read one: HER OPEN RUNS, each judged by the version it entered under —
+a v3 run is ended by v3's goals and woken by v3's wait_event squares even
+after v5 changed them, and every goal-cancel and reply names the run it
+is about, never a sibling on another version. Read two: THE LIVE PLANS,
+latest document — a new run always starts on the newest version.
+
+Carried forward from earlier phases, now per run: B1 (phase 01 — no
+resume without an answer), goal tiers keyed-first with the entry event's
+time (phase 06), the goal stash (phase 09)."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.plans import TIMEOUT
-from app.crm.outreach.schemas import Workflow, WorkflowDefinition, WorkflowNode
+from app.crm.outreach.schemas import (
+    EnrollmentRun,
+    Workflow,
+    WorkflowDefinition,
+    WorkflowNode,
+)
 from app.crm.outreach.walker import pick_next
 from app.crm.record.schemas import RawEvent
 
@@ -42,79 +51,6 @@ _LISTENING_PLAN = {
     "goal": {"topics": ["order.confirmed"]},
 }
 
-
-def _flow() -> Workflow:
-    return Workflow(
-        id=uuid4(),
-        merchant_id="m1",
-        name="cod-confirm",
-        status="live",
-        version=1,
-        created_by=None,
-        created_at=NOW,
-        updated_at=NOW,
-        definition=_LISTENING_PLAN,
-        draft=None,
-    )
-
-
-def _reply(payload: Dict[str, Any]) -> RawEvent:
-    return RawEvent(
-        id="ev-1",
-        merchant_id="m1",
-        source="whatsapp",
-        topic="button.reply",
-        schema_version="1",
-        external_id="wamid-1",
-        payload=payload,
-        received_at=NOW,
-        occurred_at=NOW,
-    )
-
-
-@pytest.fixture
-def resumes(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Any, ...]]:
-    """One live listening plan; every resume the consumer asks for is
-    recorded. Goal-cancel must never be reached (no goal topic matches)."""
-    calls: List[Tuple[Any, ...]] = []
-
-    async def live_workflows(merchant_id: str) -> List[Workflow]:
-        return [_flow()]
-
-    async def resume_run_on_event(*args: Any) -> None:
-        calls.append(args)
-
-    async def cancel_open_runs(*args: Any, **kwargs: Any) -> int:
-        raise AssertionError("a button reply is not a goal event")
-
-    monkeypatch.setattr(entry.accessor, "live_workflows", live_workflows)
-    monkeypatch.setattr(entry.accessor, "resume_run_on_event", resume_run_on_event)
-    monkeypatch.setattr(entry.accessor, "cancel_open_runs", cancel_open_runs)
-    return calls
-
-
-def test_a_reply_carrying_the_key_wakes_the_listening_run(
-    resumes: List[Tuple[Any, ...]],
-) -> None:
-    asyncio.run(consume_attributed_event(_reply({"button_id": "YES"}), "c-1", {}))
-    ((merchant, _workflow_id, customer, node, patch),) = resumes
-    assert (merchant, customer, node) == ("m1", "c-1", "ask")
-    assert patch == {"reply_ask": "YES"}
-
-
-def test_a_reply_without_the_key_never_wakes_the_run(
-    resumes: List[Tuple[Any, ...]],
-) -> None:
-    """B1: with no answer there is nothing to branch on. Resuming with
-    None made the walker take the timeout edge immediately — the listening
-    window ended early on an unrelated letter. The window continues; only
-    the alarm may time it out."""
-    asyncio.run(consume_attributed_event(_reply({"text": "hello"}), "c-1", {}))
-    assert resumes == []
-
-
-# --- rollout phase 06: goal tiers with a key, and the entry event's time ---
-
 _CART_PLAN = {
     "entry": {"topic": "checkouts/update", "reenter": True, "cooldown_hours": 0},
     "nodes": [{"id": "wait-30m", "type": "wait", "minutes": 30}],
@@ -130,101 +66,386 @@ _CART_PLAN = {
 }
 
 
-def _order(payload: Dict[str, Any]) -> RawEvent:
+def _flow(definition: Dict[str, Any] = _LISTENING_PLAN, version: int = 1) -> Workflow:
+    return Workflow(
+        id=uuid4(),
+        merchant_id="m1",
+        name="plan",
+        status="live",
+        version=version,
+        created_by=None,
+        created_at=NOW,
+        updated_at=NOW,
+        definition=definition,
+        draft=None,
+    )
+
+
+def _run(
+    flow: Workflow,
+    version: int,
+    node: str,
+    context: Optional[Dict[str, Any]] = None,
+    key: str = "c-1",
+) -> EnrollmentRun:
+    return EnrollmentRun(
+        id=uuid4(),
+        merchant_id="m1",
+        workflow_id=flow.id,
+        workflow_version=version,
+        customer_id=uuid4(),
+        status="waiting",
+        current_node=node,
+        wake_at=NOW + timedelta(minutes=30),
+        entered_at=NOW - timedelta(hours=1),
+        exited_at=None,
+        exit_reason=None,
+        context={"phone": "+919876543210", **(context or {})},
+        enrollment_key=key,
+        attempts=0,
+        last_error=None,
+    )
+
+
+def _event(topic: str, payload: Dict[str, Any], event_id: str = "ev-1") -> RawEvent:
     return RawEvent(
-        id="ev-order",
+        id=event_id,
         merchant_id="m1",
         source="shopify",
-        topic="orders/create",
+        topic=topic,
         schema_version="1",
-        external_id="orders/create:1",
+        external_id=f"{topic}:{event_id}",
         payload=payload,
         received_at=NOW,
         occurred_at=NOW,
     )
 
 
+class _Spine:
+    """The accessor slice the consumer reads and writes through: the live
+    plans, her open runs and the version rows are seeded; every write is
+    recorded by the run it named. A run ends once — a second cancel of
+    the same run answers False, as the UPDATE's status guard would."""
+
+    def __init__(
+        self,
+        flows: List[Workflow],
+        runs: List[EnrollmentRun],
+        versions: Dict[Tuple[UUID, int], Dict[str, Any]],
+    ) -> None:
+        self.flows = flows
+        self.runs = runs
+        self.versions = {(str(wf), v): d for (wf, v), d in versions.items()}
+        self.definition_reads: List[Tuple[str, int]] = []
+        self.cancels: List[Tuple[str, str, Optional[Tuple[str, str]], Any]] = []
+        self.resumes: List[Tuple[str, str, Dict[str, Any]]] = []
+        self.exited: set = set()
+
+    async def live_workflows(self, merchant_id: str) -> List[Workflow]:
+        return list(self.flows)
+
+    async def open_runs_for_customer(
+        self, merchant_id: str, customer_id: str
+    ) -> List[EnrollmentRun]:
+        return list(self.runs)
+
+    async def get_definition(
+        self, merchant_id: str, workflow_id: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        self.definition_reads.append((workflow_id, version))
+        return self.versions.get((workflow_id, version))
+
+    async def cancel_run(
+        self,
+        merchant_id: str,
+        run_id: str,
+        exit_reason: str,
+        occurred_at: Optional[datetime] = None,
+        key: Optional[Tuple[str, str]] = None,
+        context_patch: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        self.cancels.append((run_id, exit_reason, key, context_patch))
+        if run_id in self.exited:
+            return False
+        self.exited.add(run_id)
+        return True
+
+    async def resume_run_by_id(
+        self, merchant_id: str, run_id: str, node_id: str, patch: Dict[str, Any]
+    ) -> bool:
+        self.resumes.append((run_id, node_id, patch))
+        return True
+
+
+def _install(monkeypatch: pytest.MonkeyPatch, spine: _Spine) -> None:
+    definitions._definitions.clear()
+    for name in (
+        "live_workflows",
+        "open_runs_for_customer",
+        "get_definition",
+        "cancel_run",
+        "resume_run_by_id",
+    ):
+        monkeypatch.setattr(entry.accessor, name, getattr(spine, name))
+
+
+def _consume(event: RawEvent) -> None:
+    asyncio.run(consume_attributed_event(event, "c-1", {}))
+
+
+# --- phase 01, B1: no resume without an answer ---
+
+
 @pytest.fixture
-def cancels(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[Any, ...]]:
-    calls: List[Tuple[Any, ...]] = []
-
-    async def live_workflows(merchant_id: str) -> List[Workflow]:
-        flow = _flow()
-        flow.definition = _CART_PLAN
-        return [flow]
-
-    async def cancel_open_runs(*args: Any) -> int:
-        calls.append((args[3], args[5] if len(args) > 5 else None))
-        return 1
-
-    async def resume_run_on_event(*args: Any) -> None:
-        raise AssertionError("an order is not a reply")
-
-    monkeypatch.setattr(entry.accessor, "live_workflows", live_workflows)
-    monkeypatch.setattr(entry.accessor, "cancel_open_runs", cancel_open_runs)
-    monkeypatch.setattr(entry.accessor, "resume_run_on_event", resume_run_on_event)
-    return calls
+def listening(monkeypatch: pytest.MonkeyPatch) -> _Spine:
+    flow = _flow()
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): _LISTENING_PLAN})
+    _install(monkeypatch, spine)
+    return spine
 
 
-def test_the_goal_cancel_stashes_the_goal_event_with_its_amount(
-    cancels: List[Tuple[Any, ...]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Phase 09: the run remembers which letter ended it — and how much it
-    was worth, when the payload says so as a number — so the summary can
-    sum recovered revenue without re-reading the spine."""
-    patches: List[Any] = []
-
-    async def cancel_open_runs(*args: Any) -> int:
-        patches.append(args[6] if len(args) > 6 else None)
-        return 1
-
-    monkeypatch.setattr(entry.accessor, "cancel_open_runs", cancel_open_runs)
-    asyncio.run(
-        consume_attributed_event(
-            _order({"cart_token": "chk-1", "total_price": "1850.00"}), "c-1", {}
-        )
-    )
-    assert (
-        patches
-        == [
-            {
-                "goal": {
-                    "topic": "orders/create",
-                    "event_id": "ev-order",
-                    "amount": "1850.00",
-                }
-            }
-        ]
-        * 2
-    )  # both tiers' cancels carry it; only goal_met rows are summed
-    patches.clear()
-    asyncio.run(
-        consume_attributed_event(
-            _order({"cart_token": "chk-1", "total_price": "n/a"}), "c-1", {}
-        )
-    )
-    assert patches[0] == {"goal": {"topic": "orders/create", "event_id": "ev-order"}}
+def test_a_reply_carrying_the_key_wakes_the_listening_run(listening: _Spine) -> None:
+    _consume(_event("button.reply", {"button_id": "YES"}))
+    (run,) = listening.runs
+    assert listening.resumes == [(str(run.id), "ask", {"reply_ask": "YES"})]
+    assert listening.cancels == []  # a button reply is not a goal event
 
 
-def test_an_order_carrying_the_cart_token_is_judged_keyed_first(
-    cancels: List[Tuple[Any, ...]],
-) -> None:
-    """THIS cart recovered -> goal_met on the run keyed to it; any other
-    open run of hers still ends, as converted_elsewhere (never nudge
-    someone who just bought). The keyed tier runs first so the recovered
-    run is already exited when the unkeyed tier sweeps."""
-    asyncio.run(consume_attributed_event(_order({"cart_token": "chk-1"}), "c-1", {}))
-    assert cancels == [
-        ("goal_met", ("cart_token", "chk-1")),
-        ("converted_elsewhere", None),
+def test_a_reply_without_the_key_never_wakes_the_run(listening: _Spine) -> None:
+    """B1: with no answer there is nothing to branch on. Resuming with
+    None made the walker take the timeout edge immediately — the listening
+    window ended early on an unrelated letter. The window continues; only
+    the alarm may time it out."""
+    _consume(_event("button.reply", {"text": "hello"}))
+    assert listening.resumes == []
+
+
+# --- phase 06 + 09: goal tiers keyed-first, per run; the goal stash ---
+
+
+@pytest.fixture
+def carts(monkeypatch: pytest.MonkeyPatch) -> _Spine:
+    """Two open cart runs of hers on one keyed plan: chk-1 and chk-2."""
+    flow = _flow(_CART_PLAN)
+    runs = [
+        _run(flow, 1, "wait-30m", {"cart_token": "chk-1"}, key="chk-1"),
+        _run(flow, 1, "wait-30m", {"cart_token": "chk-2"}, key="chk-2"),
+    ]
+    spine = _Spine([flow], runs, {(flow.id, 1): _CART_PLAN})
+    _install(monkeypatch, spine)
+    return spine
+
+
+def test_an_order_carrying_the_cart_token_is_judged_keyed_first(carts: _Spine) -> None:
+    """THIS cart recovered -> goal_met on the run keyed to it, and that
+    run is ended once (the keyed tier's verdict stands; the unkeyed tier
+    never sweeps it). Any other open run of hers still ends, as
+    converted_elsewhere (never nudge someone who just bought)."""
+    _consume(_event("orders/create", {"cart_token": "chk-1"}))
+    first, second = carts.runs
+    assert [(r, reason, key) for r, reason, key, _ in carts.cancels] == [
+        (str(first.id), "goal_met", ("cart_token", "chk-1")),
+        (str(second.id), "converted_elsewhere", None),
     ]
 
 
-def test_an_order_without_the_key_can_only_end_runs_elsewhere(
-    cancels: List[Tuple[Any, ...]],
+def test_an_order_without_the_key_can_only_end_runs_elsewhere(carts: _Spine) -> None:
+    _consume(_event("orders/create", {"total_price": "1850.00"}))
+    assert [reason for _, reason, _, _ in carts.cancels] == ["converted_elsewhere"] * 2
+
+
+def test_the_goal_cancel_stashes_the_goal_event_with_its_amount(carts: _Spine) -> None:
+    """Phase 09: the run remembers which letter ended it — and how much it
+    was worth, when the payload says so as a number — so the summary can
+    sum recovered revenue without re-reading the spine."""
+    _consume(
+        _event(
+            "orders/create",
+            {"cart_token": "chk-1", "total_price": "1850.00"},
+            "ev-order",
+        )
+    )
+    stash = {
+        "goal": {"topic": "orders/create", "event_id": "ev-order", "amount": "1850.00"}
+    }
+    assert [patch for _, _, _, patch in carts.cancels] == [stash, stash]
+    carts.cancels.clear()
+    _consume(
+        _event(
+            "orders/create", {"cart_token": "chk-1", "total_price": "n/a"}, "ev-order"
+        )
+    )
+    assert carts.cancels[0][3] == {
+        "goal": {"topic": "orders/create", "event_id": "ev-order"}
+    }
+
+
+# --- phase 13: each open run is judged by the version it entered under ---
+
+# One keyed order plan, three versions apart: v3's goal is the payment, v5
+# moved the goal to fulfilment, renamed the listening topic AND the entry
+# topic. Order A entered under v3, order B under v5; both are open.
+_V3 = {
+    "entry": {
+        "topic": "orders/create",
+        "key": "order_id",
+        "on_repeat": "refresh_latest",
+    },
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {
+            "id": "ask",
+            "type": "wait_event",
+            "topics": ["button.reply"],
+            "key": "button_id",
+            "minutes": 60,
+        },
+    ],
+    "edges": [["wait-30m", "ask"]],
+    "goals": [
+        {
+            "topics": ["orders/paid"],
+            "key": {"event": "order_id", "run": "order_id"},
+            "exit_reason": "goal_met",
+        }
+    ],
+}
+_V5 = {
+    "entry": {"topic": "orders/confirmed", "key": "order_id", "on_repeat": "ignore"},
+    "nodes": [
+        {"id": "hold-30m", "type": "wait", "minutes": 30},
+        {
+            "id": "ask",
+            "type": "wait_event",
+            "topics": ["list.reply"],
+            "key": "button_id",
+            "minutes": 60,
+        },
+    ],
+    "edges": [["hold-30m", "ask"]],
+    "goals": [
+        {
+            "topics": ["orders/fulfilled"],
+            "key": {"event": "order_id", "run": "order_id"},
+            "exit_reason": "goal_met",
+        }
+    ],
+}
+
+
+@pytest.fixture
+def two_versions(monkeypatch: pytest.MonkeyPatch) -> _Spine:
+    flow = _flow(_V5, version=5)
+    runs = [
+        _run(flow, 3, "ask", {"order_id": "A"}, key="A"),
+        _run(flow, 5, "ask", {"order_id": "B"}, key="B"),
+    ]
+    spine = _Spine([flow], runs, {(flow.id, 3): _V3, (flow.id, 5): _V5})
+    _install(monkeypatch, spine)
+    return spine
+
+
+def test_a_goal_ends_only_the_runs_whose_own_version_names_it(
+    two_versions: _Spine,
 ) -> None:
-    asyncio.run(consume_attributed_event(_order({"total_price": "1850.00"}), "c-1", {}))
-    assert cancels == [("converted_elsewhere", None)]
+    """orders/paid is v3's goal, not v5's: order A's run ends, order B's
+    is untouched — even though the live plan (v5) has no such goal."""
+    a, b = two_versions.runs
+    _consume(_event("orders/paid", {"order_id": "A"}))
+    assert [(r, reason) for r, reason, _, _ in two_versions.cancels] == [
+        (str(a.id), "goal_met")
+    ]
+    two_versions.cancels.clear()
+    _consume(_event("orders/fulfilled", {"order_id": "B"}))
+    assert [(r, reason) for r, reason, _, _ in two_versions.cancels] == [
+        (str(b.id), "goal_met")
+    ]
+
+
+def test_a_reply_wakes_only_the_runs_whose_own_version_listens_for_it(
+    two_versions: _Spine,
+) -> None:
+    a, b = two_versions.runs
+    _consume(_event("button.reply", {"button_id": "YES"}))
+    assert two_versions.resumes == [(str(a.id), "ask", {"reply_ask": "YES"})]
+    two_versions.resumes.clear()
+    _consume(_event("list.reply", {"button_id": "NO"}))
+    assert two_versions.resumes == [(str(b.id), "ask", {"reply_ask": "NO"})]
+
+
+def test_entries_still_match_the_latest_version(
+    two_versions: _Spine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new run always starts on the newest document: v5's entry topic
+    enrols, v3's old one no longer does."""
+    enrolled: List[Any] = []
+
+    async def enrol(**kwargs: Any) -> object:
+        enrolled.append(kwargs["workflow"].version)
+        return object()
+
+    monkeypatch.setattr(entry, "enrol", enrol)
+    _consume(_event("orders/confirmed", {"order_id": "C"}))
+    assert enrolled == [5]
+    _consume(_event("orders/create", {"order_id": "D"}))
+    assert enrolled == [5]
+
+
+def test_a_repeat_is_judged_by_the_open_runs_own_version(
+    two_versions: _Spine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refused enrol is a repeat of order A's run, which entered under
+    v3: its repeat words (refresh_latest) and its first square (wait-30m)
+    are v3's — the live v5 says ignore and renamed the square, and with
+    v5's words the patch would never find the run."""
+    repeats: List[Any] = []
+
+    async def refused(**kwargs: Any) -> None:
+        return None
+
+    async def apply_repeat(*args: Any) -> bool:
+        repeats.append(args)
+        return True
+
+    monkeypatch.setattr(entry, "enrol", refused)
+    monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
+    # v5's entry topic, but the order is A's -> the open run on v3
+    _consume(_event("orders/confirmed", {"order_id": "A"}))
+    ((_, _, key, definition, _, _),) = repeats
+    assert key == "A"
+    assert definition.entry.on_repeat == "refresh_latest"
+    assert definition.nodes[0].id == "wait-30m"
+
+
+def test_a_run_whose_version_is_missing_is_skipped_not_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No version row for a pin: that run is neither ended nor woken (the
+    walker parks it honestly at its next claim); her other runs are still
+    judged, and the row is never left pending by a raise."""
+    flow = _flow(_V5, version=5)
+    orphan = _run(flow, 2, "ask", {"order_id": "A"}, key="A")
+    fine = _run(flow, 5, "ask", {"order_id": "B"}, key="B")
+    spine = _Spine([flow], [orphan, fine], {(flow.id, 5): _V5})
+    _install(monkeypatch, spine)
+    _consume(_event("orders/fulfilled", {"order_id": "B"}))
+    assert [r for r, _, _, _ in spine.cancels] == [str(fine.id)]
+
+
+def test_each_pinned_version_is_read_once_across_her_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = _flow(_V5, version=5)
+    runs = [_run(flow, 5, "ask", {"order_id": k}, key=k) for k in ("A", "B", "C")]
+    spine = _Spine([flow], runs, {(flow.id, 5): _V5})
+    _install(monkeypatch, spine)
+    _consume(_event("list.reply", {"button_id": "YES"}))
+    assert len(spine.resumes) == 3
+    assert spine.definition_reads == [(str(flow.id), 5)]
+
+
+# --- carried: the founding stamp, and pick_next's alarm law ---
 
 
 def test_enrol_stamps_the_entry_events_time_and_repeats_never_move_it(

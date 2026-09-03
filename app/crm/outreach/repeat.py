@@ -18,13 +18,16 @@ and at 10:19 she gets ONE message, about the biggest cart, after she has
 actually gone quiet.
 
 Mechanics: gather (the repeat's small facts) -> decide (PURE: what to write)
--> apply (ONE idempotent UPDATE, the resume_run_on_event shape):
+-> apply (ONE idempotent UPDATE, the reply's shape):
 `WHERE status='waiting' AND current_node = <entry node>` — a run past its
 first square is NEVER patched; what it already said was true when it said
 it. Each event marks itself used (context.repeat_event_ids), so the spine's
 at-least-once redelivery cannot slide the alarm twice for one event. The
 row is found by enrollment_key, not customer_id: with entry.key an order
-edit must patch ITS order's run, never a sibling's.
+edit must patch ITS order's run, never a sibling's. The words judged are
+the OPEN RUN'S version's (phase 13): the consumer hands over the pinned
+definition of the run it found, so a v3 run keeps v3's on_repeat and its
+first square's id even after v5 renamed both.
 
 Plan vocabulary, never walker behaviour: WISMO (keyed) and transactional
 flows leave on_repeat at ignore and debounce at 0.

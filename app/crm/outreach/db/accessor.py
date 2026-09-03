@@ -23,7 +23,7 @@ from app.crm.outreach.db.decoder import (
 from app.crm.outreach.db.queries import (
     admission_facts_query,
     advance_run_query,
-    cancel_open_runs_query,
+    cancel_run_query,
     claim_due_runs_query,
     customer_runs_query,
     exit_run_query,
@@ -36,12 +36,13 @@ from app.crm.outreach.db.queries import (
     list_workflows_query,
     live_workflows_query,
     occupied_nodes_query,
+    open_runs_for_customer_query,
     park_run_query,
     patch_open_run_query,
     publish_workflow_query,
     record_run_error_query,
     repin_open_runs_query,
-    resume_run_on_event_query,
+    resume_run_by_id_query,
     resume_run_query,
     set_workflow_status_query,
     source_event_used_query,
@@ -294,18 +295,42 @@ async def record_run_error(
     return row is not None
 
 
-async def resume_run_on_event(
+async def open_runs_for_customer(
+    merchant_id: str, customer_id: str
+) -> List[EnrollmentRun]:
+    query, values = open_runs_for_customer_query(merchant_id, customer_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_run(row) for row in rows]
+
+
+async def resume_run_by_id(
+    merchant_id: str, run_id: str, node_id: str, context_patch: Dict[str, Any]
+) -> bool:
+    """True when the run was standing on the listening square and took
+    the answer."""
+    query, values = resume_run_by_id_query(merchant_id, run_id, node_id, context_patch)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
+
+
+async def cancel_run(
     merchant_id: str,
-    workflow_id: str,
-    customer_id: str,
-    node_id: str,
-    context_patch: Dict[str, Any],
-) -> None:
-    query, values = resume_run_on_event_query(
-        merchant_id, workflow_id, customer_id, node_id, context_patch
+    run_id: str,
+    exit_reason: str,
+    occurred_at: Optional[datetime] = None,
+    key: Optional[Tuple[str, str]] = None,
+    context_patch: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True when the run was open (and, keyed, still the one the letter
+    is about) and ended."""
+    query, values = cancel_run_query(
+        merchant_id, run_id, exit_reason, occurred_at, key, context_patch
     )
     async with crm_connection() as conn:
-        await conn.execute(query, *values)
+        row = await conn.fetchrow(query, *values)
+    return row is not None
 
 
 async def patch_open_run(
@@ -336,29 +361,6 @@ async def patch_open_run(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return row is not None
-
-
-async def cancel_open_runs(
-    merchant_id: str,
-    workflow_id: str,
-    customer_id: str,
-    exit_reason: str,
-    occurred_at: Optional[datetime] = None,
-    key: Optional[Tuple[str, str]] = None,
-    context_patch: Optional[Dict[str, Any]] = None,
-) -> int:
-    query, values = cancel_open_runs_query(
-        merchant_id,
-        workflow_id,
-        customer_id,
-        exit_reason,
-        occurred_at,
-        key,
-        context_patch,
-    )
-    async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
-    return len(rows)
 
 
 async def list_runs(
