@@ -487,7 +487,11 @@ def open_runs_for_customer_query(
 
 
 def resume_run_by_id_query(
-    merchant_id: str, run_id: str, node_id: str, context_patch: Dict[str, Any]
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    context_patch: Dict[str, Any],
+    facts: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Any]]:
     """W5: the reply reaches the token — by run id (phase 13), because
     the listening square is the RUN'S version's, and a sibling run on
@@ -496,15 +500,39 @@ def resume_run_by_id_query(
     repeated reply changes nothing. The answer is recorded on the run
     BEFORE anything fires (canon T20), and wake_at = now() hands it to
     the walker. Event-side: unconditional (the walker's writes defer to
-    it, phase 03)."""
+    it, phase 03).
+
+    Phase 16: the letter's scalar facts land under context.facts.<square>
+    — namespaced, so two stages' payloads never collide; a second letter
+    on the same square replaces that square's facts (anything that is not
+    an object under `facts` — a legacy scalar a producer once sent — is
+    replaced, never concatenated into an array). And a PARKED run
+    hears its square too: an event is evidence the customer moved, so a
+    parked run that hears it is no longer stuck on the thing that parked
+    it — it becomes waiting with its failure counter forgiven (the human
+    resume's semantics, now event-driven) and, as for any reply, its
+    last_error cleared: the letter IS the step that unstuck it."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
-        SET context = context || $4::jsonb, wake_at = now(), last_error = NULL
+        SET context = context || $4::jsonb
+                || jsonb_build_object('facts',
+                       CASE WHEN jsonb_typeof(context->'facts') = 'object' THEN context->'facts' ELSE '{{}}'::jsonb END
+                       || jsonb_build_object($3::text, $5::jsonb)),
+            wake_at = now(),
+            last_error = NULL,
+            status = 'waiting',
+            attempts = CASE WHEN status = 'parked' THEN 0 ELSE attempts END
         WHERE merchant_id = $1 AND id = $2
-          AND status = 'waiting' AND current_node = $3
+          AND status IN ('waiting', 'parked') AND current_node = $3
         RETURNING id
     """
-    return query, [merchant_id, run_id, node_id, json.dumps(context_patch)]
+    return query, [
+        merchant_id,
+        run_id,
+        node_id,
+        json.dumps(context_patch),
+        json.dumps(facts or {}),
+    ]
 
 
 def cancel_run_query(
@@ -592,12 +620,16 @@ def patch_open_run_query(
     max_field: Optional[str],
     max_value: Optional[float],
     debounce_minutes: float,
+    anywhere: bool = False,
 ) -> Tuple[str, List[Any]]:
     """Repeat entries (modules/05 §Repeat entries): ONE idempotent UPDATE
-    in the reply's shape (resume_run_by_id_query). Touches only a run still standing on
-    its first square (status waiting, current_node = the entry node) — a
-    run past it is never patched. Found by enrollment_key so a keyed plan's
-    order edit patches ITS order's run. The event marks itself used in
+    in the reply's shape (resume_run_by_id_query). Touches only a run still
+    standing on the door's start square (status waiting, current_node =
+    the start) — a run past it is never patched — unless the door says
+    restart_on_repeat (phase 16, G8: ``anywhere``): then a repeat of the
+    door's topic re-arms whichever square the run stands on, "KYC retried,
+    the timer restarts". Found by enrollment_key so a keyed plan's order
+    edit patches ITS order's run. The event marks itself used in
     context.repeat_event_ids, so a redelivered repeat matches zero rows and
     the alarm cannot slide twice for one letter.
 
@@ -644,7 +676,7 @@ def patch_open_run_query(
                            ELSE wake_at END,
             last_error = NULL
         WHERE merchant_id = $1 AND workflow_id = $2::uuid AND enrollment_key = $3
-          AND status = 'waiting' AND current_node = $4
+          AND status = 'waiting' AND ($11::boolean OR current_node = $4)
           AND NOT (COALESCE(context->'repeat_event_ids', '[]'::jsonb) ? $5::text)
           AND context->>'source_event_id' IS DISTINCT FROM $5::text
         RETURNING id
@@ -660,6 +692,7 @@ def patch_open_run_query(
         max_field,
         max_value,
         debounce_minutes,
+        anywhere,
     ]
 
 

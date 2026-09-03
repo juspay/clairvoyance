@@ -173,7 +173,12 @@ async def _wake_on_reply(
     """A wait_event square of ITS document listening on this topic wakes
     the run with the answer — the statement decides whether the token is
     standing there (a reply to a square it has left, or not yet reached,
-    changes nothing)."""
+    changes nothing), waiting or parked (phase 16: an event is evidence
+    the customer moved). The letter's scalar facts ride along under the
+    square (context.facts.<square>), so a later call can say what this
+    stage's letter said; the same bridge enrol uses, so bookkeeping names
+    and nested payload never reach the run."""
+    facts = _context_from_payload(event.payload)
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
@@ -194,7 +199,11 @@ async def _wake_on_reply(
             )
             continue
         await accessor.resume_run_by_id(
-            run.merchant_id, str(run.id), node.id, {reply_key(node.id): str(answer)}
+            run.merchant_id,
+            str(run.id),
+            node.id,
+            {reply_key(node.id): str(answer)},
+            facts,
         )
 
 

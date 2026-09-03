@@ -39,6 +39,11 @@ class WorkflowEntry(BaseModel):
     on_repeat: str = "ignore"
     # Every matching repeat slides the entry wait's alarm to now + this.
     debounce_minutes: float = Field(0, ge=0)
+    # Phase 16 (G8): a repeat of this door's topic re-arms the run's CURRENT
+    # square, not only the start square — "KYC retried, the timer restarts"
+    # — sliding its alarm by debounce_minutes and merging the facts. Needs
+    # debounce_minutes > 0 (validated), or there is nothing to re-arm.
+    restart_on_repeat: bool = False
 
 
 class WorkflowEntryAt(WorkflowEntry):
@@ -60,6 +65,7 @@ _SHARED_ENTRY_WORDS = (
     "key",
     "on_repeat",
     "debounce_minutes",
+    "restart_on_repeat",
 )
 
 
@@ -119,6 +125,11 @@ class WorkflowNode(BaseModel):
     template_id: Optional[str] = None
     topics: List[str] = Field(default_factory=list)
     key: Optional[str] = None
+    # Phase 16: an optional stage label the square belongs to. It rides to
+    # templates as current_stage ("you stopped at {current_stage}") — one
+    # call template for a whole board. The stages ladder (phase 17) sets it
+    # for every square it expands.
+    stage: Optional[str] = Field(None, min_length=1)
 
 
 # An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a

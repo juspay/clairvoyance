@@ -79,7 +79,9 @@ Order does not matter — each clock only listens for its own stage topic.
 - **Parked runs:** `GET /workflows/<wf>/runs?merchant_id=$M&status=parked`.
   Almost always `no phone in run context` (the lender omitted the
   number) or a call template problem — fix, then
-  `POST /workflows/<wf>/runs/<run>/resume?merchant_id=$M`.
+  `POST /workflows/<wf>/runs/<run>/resume?merchant_id=$M`. A stage event
+  the parked run's square listens for resumes it by itself (and clears
+  `last_error`, unlike the manual resume).
 - **A customer's journey** = their runs across the five plans in stage
   order: `GET /customers/<customer_id>/runs?merchant_id=$M` (see "How to
   read the funnel").

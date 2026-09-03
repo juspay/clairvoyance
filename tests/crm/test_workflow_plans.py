@@ -672,3 +672,21 @@ def test_the_migrate_guard_compares_doors_as_a_list() -> None:
     }
     problems = validate_definition(moved, occupied_nodes=["at-kyc"], live_entry=live)
     assert any("entry rule changed" in p for p in problems)
+
+
+# --- rollout phase 16: a square may carry a stage label; a door the restart word ---
+
+
+def test_a_square_may_carry_a_stage_label_and_a_door_the_restart_word() -> None:
+    doc = {
+        **_LADDER,
+        "restart_on_repeat": True,
+        "debounce_minutes": 10,
+        "nodes": [{**_LADDER["nodes"][0], "stage": "profile"}] + _LADDER["nodes"][1:],
+    }
+    assert validate_definition(doc) == []
+    definition = WorkflowDefinition.model_validate(doc)
+    assert definition.nodes[0].stage == "profile" and definition.nodes[1].stage is None
+    assert all(
+        d.restart_on_repeat and d.debounce_minutes == 10 for d in definition.entries
+    )

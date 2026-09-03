@@ -139,6 +139,7 @@ class _Spine:
         self.definition_reads: List[Tuple[str, int]] = []
         self.cancels: List[Tuple[str, str, Optional[Tuple[str, str]], Any]] = []
         self.resumes: List[Tuple[str, str, Dict[str, Any]]] = []
+        self.facts: List[Tuple[str, str, Any]] = []
         self.exited: set = set()
 
     async def live_workflows(self, merchant_id: str) -> List[Workflow]:
@@ -171,9 +172,15 @@ class _Spine:
         return True
 
     async def resume_run_by_id(
-        self, merchant_id: str, run_id: str, node_id: str, patch: Dict[str, Any]
+        self,
+        merchant_id: str,
+        run_id: str,
+        node_id: str,
+        patch: Dict[str, Any],
+        facts: Optional[Dict[str, Any]] = None,
     ) -> bool:
         self.resumes.append((run_id, node_id, patch))
+        self.facts.append((run_id, node_id, facts))
         return True
 
 
@@ -576,3 +583,30 @@ def test_each_door_starts_the_run_on_its_own_square(
         ("loan.kyc_completed", "at-kyc"),
         ("loan.profile_created", "at-profile"),
     ]
+
+
+# --- rollout phase 16: the letter's facts ride with the reply; a parked run
+# hears its square ---
+
+
+def test_a_reply_carries_the_letters_scalar_facts_for_its_square(
+    listening: _Spine,
+) -> None:
+    """The scalar facts of the letter (never nested objects, never the
+    walker's bookkeeping names) are offered under the square that heard
+    it, so a later call template can say what this stage's letter said."""
+    (run,) = listening.runs
+    run.status = "parked"  # an event moves a parked run too (the statement decides)
+    _consume(
+        _event(
+            "button.reply",
+            {
+                "button_id": "YES",
+                "amount": 5,
+                "nested": {"a": 1},
+                "reply_ask": "forged",
+            },
+        )
+    )
+    assert listening.resumes == [(str(run.id), "ask", {"reply_ask": "YES"})]
+    assert listening.facts == [(str(run.id), "ask", {"button_id": "YES", "amount": 5})]

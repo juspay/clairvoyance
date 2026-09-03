@@ -327,7 +327,13 @@ def test_reply_wakes_the_run_standing_on_the_listening_node(
     )
     ((kind, args),) = calls
     assert kind == "resume"
-    assert args == ("m1", str(run.id), "ask", {"reply_ask": "YES"})
+    assert args == (
+        "m1",
+        str(run.id),
+        "ask",
+        {"reply_ask": "YES"},
+        {"button_id": "YES"},
+    )
 
 
 def test_pick_next_takes_the_answer_edge_or_timeout() -> None:
