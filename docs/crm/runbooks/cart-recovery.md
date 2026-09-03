@@ -74,8 +74,14 @@ curl -sS -X POST "$BASE/workflows/<wf>/status?merchant_id=$M" -H "$H" -H "$J" \
 ```
 
 Publishing again later: put the new document in `draft`, then `publish`.
-While runs are open the validator refuses removing a node they stand on
-and changing the `entry` words; pause the plan and let them finish, or
+**Runs finish on the version they entered under** (ADR 0023): a publish
+makes version N+1 for new checkouts, and every run already in flight
+keeps executing the version N it started on — the walker reads each
+run's pinned document, never the live one. To reach the runs in flight
+too (a template name fixed, a delay shortened), declare
+`"on_publish": "migrate"` in the document: then the publish re-pins every
+open run to N+1, and the validator refuses removing a node they stand on
+or changing the `entry` words — pause the plan and let them finish, or
 publish the change as a new plan.
 
 ## Watch it run
@@ -102,7 +108,8 @@ wait for a human; `last_error` says why:
 | `… no phone in run context` | the checkout had no phone we could read (email-only checkout); nothing to fix — archive or ignore |
 | `call node …: template … not found` / `no call_execution_config` | replace the placeholder / configure the buddy template |
 | `send node …: <reason>` | the channel/address was refused at queue time (bad number) |
-| `node X not in live definition` | drift across an archive/re-create; re-publish with the node or archive the plan |
+| `node X not in definition vN` | drift across an archive/re-create; re-publish with the node or archive the plan |
+| `definition vN missing` | the run's pinned version row is gone (should never happen — versions a run references are retained); archive the plan or re-create it |
 | `attempts exhausted: …` | a transient error kept failing (provider, DB); check the cause |
 
 ```bash

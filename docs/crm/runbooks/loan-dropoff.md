@@ -70,9 +70,12 @@ Order does not matter — each clock only listens for its own stage topic.
   `POST /workflows/<wf>/status {"status": "paused"}` — its open runs
   snooze (the walker skips them) and no new runs start; `live` resumes.
 - **Change a stage's timing or template:** put the new document in
-  `draft`, `publish`. Clocks are empty most of the time (runs live ~30
-  minutes), so the stranding guard rarely bites; if it does, pause, wait
-  half an hour, publish.
+  `draft`, `publish`. Runs finish on the version they entered under (ADR
+  0023): the ~30-minute runs already open keep the old timing and the new
+  ones take the new document, so nothing is stranded and nothing needs
+  pausing. Declare `"on_publish": "migrate"` only when the change must
+  reach the open runs too — then the stranding guard applies (pause, wait
+  half an hour, publish).
 - **Parked runs:** `GET /workflows/<wf>/runs?merchant_id=$M&status=parked`.
   Almost always `no phone in run context` (the lender omitted the
   number) or a call template problem — fix, then

@@ -1,8 +1,16 @@
 """The walker (W3) — the clock that moves tokens. NOT an engine (canon:
-"wake_at + the live document IS the engine"): claim due runs off the
-partial index, read the plan LIVE, execute the current node, write the
-next alarm. Correctness rides the wake_at lease + idempotent writes,
-never worker uniqueness — scale is replicas.
+"wake_at + the document IS the engine"): claim due runs off the partial
+index, read the plan the run ENTERED UNDER, execute the current node,
+write the next alarm. Correctness rides the wake_at lease + idempotent
+writes, never worker uniqueness — scale is replicas.
+
+Which document (ADR 0023, rollout phase 12): the run's own pin —
+crm_workflow_enrollment.workflow_version names the crm_workflow_version
+row it executes, so a run finishes on the version it entered under while
+new entrants take the newest; `on_publish: migrate` re-pins open runs
+inside the publish atom instead. The live row is still read, for its
+STATUS only (archived ejects, paused snoozes); its definition column is
+never what a run executes.
 
 The node vocabulary — what each square does when the token lands, and
 whether landing means waiting — lives in nodes.py (NODE_TYPES); the walker
@@ -14,6 +22,7 @@ goal-cancel is the fast path; this is the belt-and-suspenders.
 """
 
 import random
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,6 +45,17 @@ _MAX_STEPS_PER_VISIT = 10
 # Transient-failure retry: exponential from the lease, capped, ±20% jitter
 # (canon T20: "backoff with jitter written into wake_at").
 _RETRY_CAP_SECONDS = 3600
+
+# The pinned documents this process has already read, by (workflow_id,
+# version). A version row is immutable (064's trigger refuses every
+# UPDATE; phase 14's sweep deletes only versions no run references), so a
+# cached document is true for as long as the process lives: the cache
+# never invalidates, it only evicts — least recently used first, once it
+# holds more than the bound. Sized for one merchant fleet's live versions
+# many times over; §14.7's cost of pinning is otherwise one indexed point
+# read per claim.
+_DEFINITION_CACHE_SIZE = 512
+_definitions: OrderedDict[Tuple[str, int], WorkflowDefinition] = OrderedDict()
 
 
 def retry_delay_seconds(attempts: int, base: int) -> int:
@@ -79,9 +99,9 @@ async def walk_run(run: EnrollmentRun) -> None:
             if not await accessor.exit_run(str(run.id), "ejected", lease):
                 _deferred(run, "eject")
             return
-        if workflow.status == "paused" or not workflow.definition:
+        if workflow.status == "paused":
             return  # the lease push IS the snooze; re-checked next wake
-        definition = WorkflowDefinition.model_validate(workflow.definition)
+        definition = await _definition_for(run)
         await _advance(run, definition, lease)
     except NodeParked as e:
         if await accessor.park_run(str(run.id), str(e), lease):
@@ -100,6 +120,27 @@ async def walk_run(run: EnrollmentRun) -> None:
                 logger.warning(f"walker: run {run.id} retries in {retry_in}s — {e}")
             else:
                 _deferred(run, "retry")
+
+
+async def _definition_for(run: EnrollmentRun) -> WorkflowDefinition:
+    """The document this run executes: its pin, by (workflow, version),
+    from the cache or one point read. No such version row is an honest
+    park — never a fallback to the live document, which would execute a
+    plan the run did not enter under (phase 14's retention must keep
+    every version an open run references, so this is drift, not life)."""
+    key = (str(run.workflow_id), run.workflow_version)
+    cached = _definitions.get(key)
+    if cached is not None:
+        _definitions.move_to_end(key)
+        return cached
+    document = await accessor.get_definition(run.merchant_id, key[0], key[1])
+    if document is None:
+        raise NodeParked(f"definition v{run.workflow_version} missing")
+    definition = WorkflowDefinition.model_validate(document)
+    _definitions[key] = definition
+    while len(_definitions) > _DEFINITION_CACHE_SIZE:
+        _definitions.popitem(last=False)
+    return definition
 
 
 def _deferred(run: EnrollmentRun, write: str) -> None:
@@ -152,9 +193,12 @@ async def _advance(
     for _ in range(_MAX_STEPS_PER_VISIT):
         node = nodes.get(current_id)
         if node is None:
-            # The publish validator forbids stranding, so this is drift
-            # (e.g. a run parked across an archive/re-create) — honest park.
-            raise NodeParked(f"node {current_id} not in live definition")
+            # A pinned version never loses a node under a run (pin), and
+            # the migrate validator forbids stranding — so this is drift
+            # (e.g. a run parked across an archive/re-create): honest park.
+            raise NodeParked(
+                f"node {current_id} not in definition v{run.workflow_version}"
+            )
 
         execute = NODE_TYPES[node.type].execute
         if execute is not None:  # a wait's action IS the alarm
