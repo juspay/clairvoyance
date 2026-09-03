@@ -9,7 +9,7 @@ commerce) populate the same shape instead of the schema growing per arm.
 """
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -30,12 +30,29 @@ class JourneyCard(BaseModel):
     source_kind: str
 
 
+#: Who a letter is about — the extractor's answer, never the pass's guess.
+ABOUT_CUSTOMER = "customer"
+ABOUT_MERCHANT = "merchant"
+
+
 class Extracted(BaseModel):
     """One producer's payload, translated: handles resolve() may probe on and
-    facts assert_facts() may assert, in the canon's attribute vocabulary."""
+    facts assert_facts() may assert, in the canon's attribute vocabulary.
+
+    ``about`` says WHO the letter concerns. ``customer`` (the default): a
+    person — no handle found is a quarantine (``no_handle``), replayable
+    once the extractor learns the shape. ``merchant``: the letter names no
+    person BY DESIGN (a template review, an account notice, a shop-level
+    change) — the pass skips resolve(), stamps a NULL customer (canon T13
+    col 14: "processed but not about a person — NULL forever, correctly")
+    and still hands the letter to every consumer, which decides for itself
+    whether a letter with no person is its business. The extractor is the
+    one source-aware place, so it is the one that can tell "no person here
+    by design" from "could not find the person"."""
 
     handles: Dict[str, str] = {}
     facts: Dict[str, Any] = {}
+    about: Literal["customer", "merchant"] = ABOUT_CUSTOMER
 
 
 class RawEvent(BaseModel):

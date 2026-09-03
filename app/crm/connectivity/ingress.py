@@ -29,27 +29,37 @@ from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
 )
-from app.crm.connectivity.schemas.ingress import OWNER_PHONE_NUMBER, ProviderLetter
+from app.crm.connectivity.schemas.ingress import OWNER_ENDPOINT, ProviderLetter
 from app.crm.record.contracts import EventIn, IngressSpec
 
 
 async def _merchant_for(letter: ProviderLetter) -> Optional[str]:
     """Whose letter this is — the one permission-adjacent lookup, one place.
 
-    A receiving endpoint resolves through its binding; a provider account
-    resolves through its installation. None means nobody owns it, and the
-    caller drops the letter (filing it under any merchant would be a
-    cross-tenant leak).
+    A receiving endpoint resolves through its binding, keyed by the
+    letter's CHANNEL; a provider account resolves through its
+    installation, keyed by the letter's CONNECTOR KEY. Never by ``source``
+    — that is the spine word, and the three coincide only for Meta. None
+    means nobody owns it, and the caller drops the letter (filing it
+    under any merchant would be a cross-tenant leak).
     """
-    if letter.owner_kind == OWNER_PHONE_NUMBER:
+    if letter.owner_kind == OWNER_ENDPOINT:
         binding = await binding_accessor.get_binding_for_inbound(
-            letter.source, letter.owner_id
+            letter.channel, letter.owner_id
         )
         return binding.merchant_id if binding else None
     installation = await installation_accessor.get_installation_for_inbound(
-        letter.source, letter.owner_id
+        letter.connector_key, letter.owner_id
     )
     return installation.merchant_id if installation else None
+
+
+def _owner_key(letter: ProviderLetter) -> tuple:
+    """PURE: what makes two letters share one owner lookup."""
+    scope = (
+        letter.channel if letter.owner_kind == OWNER_ENDPOINT else letter.connector_key
+    )
+    return (letter.owner_kind, scope, letter.owner_id)
 
 
 async def resolve_letters(letters: List[ProviderLetter]) -> List[EventIn]:
@@ -62,13 +72,13 @@ async def resolve_letters(letters: List[ProviderLetter]) -> List[EventIn]:
     """
     merchants: Dict[tuple, Optional[str]] = {}
     for letter in letters:
-        key = (letter.owner_kind, letter.source, letter.owner_id)
+        key = _owner_key(letter)
         if key not in merchants:
             merchants[key] = await _merchant_for(letter)
 
     out: List[EventIn] = []
     for letter in letters:
-        merchant_id = merchants[(letter.owner_kind, letter.source, letter.owner_id)]
+        merchant_id = merchants[_owner_key(letter)]
         if merchant_id is None:
             logger.warning(
                 f"ingress: {letter.source} webhook for a "

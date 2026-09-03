@@ -3,7 +3,7 @@ WHO, and the import arrow only ever points subscriber -> record."""
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -13,7 +13,9 @@ from app.crm.record.consumers import consumers, register_consumer
 from app.crm.record.schemas import RawEvent
 
 
-async def _consumer_a(event: RawEvent, customer_id: str, handles: Any) -> None:
+async def _consumer_a(
+    event: RawEvent, customer_id: Optional[str], handles: Any
+) -> None:
     return None
 
 
@@ -46,10 +48,10 @@ def test_the_pass_runs_every_registered_consumer_in_order(
     # with zero edits in the pass.
     ran: List[str] = []
 
-    async def first(event: RawEvent, customer_id: str, handles: Any) -> None:
+    async def first(event: RawEvent, customer_id: Optional[str], handles: Any) -> None:
         ran.append(f"first:{customer_id}:{(handles or {}).get('phone')}")
 
-    async def second(event: RawEvent, customer_id: str, handles: Any) -> None:
+    async def second(event: RawEvent, customer_id: Optional[str], handles: Any) -> None:
         ran.append(f"second:{customer_id}")
 
     monkeypatch.setattr(record_consumers, "_CONSUMERS", [first, second])

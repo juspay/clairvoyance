@@ -135,6 +135,72 @@ def test_missing_phone_quarantines_and_never_stamps(
     assert fake_accessor.stamped == []
 
 
+def test_a_merchant_level_letter_is_processed_with_no_customer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Canon T13 col 14: "processed but not about a person (template.status,
+    # receipts) — NULL forever, correctly". A template review names no
+    # person BY DESIGN: not a quarantine, not a resolve — a NULL stamp, and
+    # every consumer still hears it (the template-status consumer is
+    # exactly who it is for).
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+
+    async def never_resolve(*args: Any, **kwargs: Any) -> str:
+        raise AssertionError("a merchant-level letter must never resolve()")
+
+    async def never_assert(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("a merchant-level letter has no person to describe")
+
+    monkeypatch.setattr(workers, "crm_resolve", never_resolve)
+    monkeypatch.setattr(workers, "assert_facts", never_assert)
+    monkeypatch.setitem(
+        EXTRACTORS, "registry-test", lambda payload: Extracted(about="merchant")
+    )
+    heard: List[Tuple[Optional[str], Any]] = []
+
+    async def consumer(
+        event: RawEvent, customer_id: Optional[str], handles: Any
+    ) -> None:
+        heard.append((customer_id, handles))
+
+    monkeypatch.setattr(record_consumers, "_CONSUMERS", [consumer])
+
+    event = _event(
+        source="registry-test",
+        topic="template.status",
+        payload={"event": "APPROVED", "message_template_id": "t-1"},
+    )
+    _run(workers._process_one(_fake_txn(), event))
+
+    assert fake_accessor.quarantined == []
+    assert fake_accessor.stamped == [("evt-1", None)]
+    assert heard == [(None, {})]
+
+
+def test_a_customer_letter_with_no_handle_still_quarantines_by_default() -> None:
+    # The word defaults to customer, so nothing an extractor does not say
+    # changes: no handle stays a quarantine, replayable when the extractor
+    # learns the shape.
+    assert Extracted().about == "customer"
+    assert Extracted(handles={}).about == "customer"
+
+
+def test_a_pretrusted_customer_id_wins_over_a_merchant_word(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A producer that already stamped the customer (the voice mirrors) is
+    # believed; the extractor's word only matters when nobody is named.
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+    monkeypatch.setitem(
+        EXTRACTORS, "registry-test", lambda payload: Extracted(about="merchant")
+    )
+    event = _event(source="registry-test", customer_id="cust-77", payload={})
+    _run(workers._process_one(_fake_txn(), event))
+    assert fake_accessor.stamped == [("evt-1", "cust-77")]
+
+
 def test_unresolvable_phone_quarantines_and_never_stamps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

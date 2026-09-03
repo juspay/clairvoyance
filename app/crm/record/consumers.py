@@ -20,10 +20,17 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from app.crm.record.schemas import RawEvent
 
-# One attributed event in: (event, customer_id, handles). ``handles`` is
+# One processed event in: (event, customer_id, handles). ``handles`` is
 # what the source's extractor found — a consumer never re-hunts the
 # payload (two searches drift; the parked-Shopify-run scar is the proof).
-Consumer = Callable[[RawEvent, str, Optional[Dict[str, str]]], Awaitable[None]]
+# ``customer_id`` is None for a MERCHANT-LEVEL letter (Extracted.about ==
+# "merchant": a template review, an account notice): a consumer that is
+# only about people returns at once; a consumer about the merchant's own
+# things — template status, account health — is exactly who those letters
+# are for. Every consumer hears every letter; none is filtered here.
+Consumer = Callable[
+    [RawEvent, Optional[str], Optional[Dict[str, str]]], Awaitable[None]
+]
 
 _CONSUMERS: List[Consumer] = []
 

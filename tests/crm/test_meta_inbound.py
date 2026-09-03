@@ -172,7 +172,7 @@ def test_a_status_becomes_one_letter_per_transition() -> None:
         (TOPIC_STATUS, f"{OUT_WAMID}:read"),
     ]
     assert all(
-        l.owner_kind == inbound.OWNER_PHONE_NUMBER and l.owner_id == NUMBER for l in out
+        l.owner_kind == inbound.OWNER_ENDPOINT and l.owner_id == NUMBER for l in out
     )
 
 
@@ -271,9 +271,29 @@ def test_both_kinds_ride_one_callback() -> None:
         )
     )
     assert {l.owner_kind for l in out} == {
-        inbound.OWNER_PHONE_NUMBER,
+        inbound.OWNER_ENDPOINT,
         inbound.OWNER_ACCOUNT,
     }
+
+
+def test_every_letter_carries_the_three_words_named_apart() -> None:
+    # schemas.ingress.ProviderLetter: source is the spine's word, channel
+    # the binding's, connector_key the installation's. They coincide for
+    # Meta, so the face must still say all three — the root never assumes.
+    """Every letter carries source, channel and connector_key, named apart."""
+    out = inbound.letters(
+        _body(
+            ("messages", _value(statuses=[_status()])),
+            ("message_template_status_update", {"event": "APPROVED"}),
+        )
+    )
+    assert len(out) == 2
+    for letter in out:
+        assert (letter.source, letter.channel, letter.connector_key) == (
+            "whatsapp",
+            "whatsapp",
+            "whatsapp",
+        )
 
 
 @pytest.mark.parametrize(

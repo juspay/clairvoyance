@@ -529,3 +529,21 @@ async def test_the_migrate_route_threads_the_versions_and_answers_the_count(
     )
     assert (result.from_version, result.to_version, result.moved) == (3, 4, 5)
     assert seen == [("m1", "wf-1", 3, 4)]
+
+
+# --- versions are never deleted (ADR 0023 §5; migration 067) ------------------
+
+
+def test_versions_are_undeletable_by_trigger_not_by_discipline() -> None:
+    # 064 shipped the UPDATE guard and said a sweep would delete old
+    # versions; the sweep was dropped and the decision became "kept for
+    # the life of the plan". With one DB role, a decision kept by
+    # discipline is not kept — 067 refuses every DELETE in the table.
+    from pathlib import Path as _Path
+
+    sql = _Path("app/database/migrations/067_crm_workflow_version_delete_guard.sql")
+    assert sql.exists(), "the DELETE guard migration is missing"
+    text = sql.read_text()
+    assert "BEFORE DELETE ON crm_workflow_version" in text
+    assert "RAISE EXCEPTION" in text
+    assert "crm_workflow_version_delete_guard" in text

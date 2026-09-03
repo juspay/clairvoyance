@@ -98,7 +98,7 @@ build on it. 18 and 19 are gated on other people's PRs and can slide.
   webhooks) and #1052 (extractor) merge. A second PR under the same file.
 - **19** — deferred, by decision, until #1021 merges. Today #1021 conflicts
   with release, carries migrations numbered 055/056 (both long taken; the
-  next free number is 066), and exposes `record_consent` / `log_decision`
+  next free number moves with every merge — renumber at rebase), and exposes `record_consent` / `log_decision`
   only — no `may_contact`. Phase 19 is the call-site wiring of that
   decision, so it needs the PR rebased, renumbered and extended (or a phase
   file defining the decision contract) before it can start. Phase

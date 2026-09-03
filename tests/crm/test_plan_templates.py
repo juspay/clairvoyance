@@ -61,6 +61,9 @@ def test_every_plan_template_validates(path: Path) -> None:
 
 def test_cart_recovery_is_the_final_shape_from_the_notes() -> None:
     doc = _load(CART)
+    # §16.1: runs are a day long, so a template fix should reach every
+    # waiting run — migrate, under the stranding validator (ADR 0023).
+    assert doc["on_publish"] == "migrate"
     entry = doc["entry"]
     assert entry["topic"] == "checkouts/update"
     assert entry["reenter"] is True and entry["cooldown_hours"] == 24
