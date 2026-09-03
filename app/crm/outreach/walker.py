@@ -95,8 +95,8 @@ async def walk_run(run: EnrollmentRun) -> None:
         if definition is None:
             # No version row for the pin: an honest park — never a fallback
             # to the live document, which would execute a plan the run did
-            # not enter under (phase 14's retention keeps every version an
-            # open run references, so this is drift, not life).
+            # not enter under (versions are never deleted, ADR 0023 §5, so
+            # this is drift, not life).
             raise NodeParked(f"definition v{run.workflow_version} missing")
         await _advance(run, definition, lease)
     except NodeParked as e:

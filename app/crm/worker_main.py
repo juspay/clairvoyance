@@ -12,10 +12,15 @@ from app.core.config.static import (
     POSTGRES_MAX_OVERFLOW,
     POSTGRES_POOL_SIZE,
 )
-from app.crm.connectivity.contracts import claim_sends, dispatch_send
+from app.crm.connectivity.contracts import (
+    claim_sends,
+    dispatch_send,
+    register_retire_guard,
+)
 from app.crm.outreach.contracts import (
     claim_due_runs,
     consume_attributed_event,
+    template_references,
     walk_run,
 )
 from app.crm.record.consumers import register_consumer
@@ -27,6 +32,12 @@ from app.crm.shared.worker import run_drain_loop
 # import always runs subscriber -> record, never back (checker rule 12).
 # Segments and the transactional-send consumer (A13) each add one line here.
 register_consumer(consume_attributed_event)
+# The same inversion for connectivity's template retire guard (phase 14):
+# connectivity may not import outreach, so this root hands outreach's
+# "who would still send this template" into connectivity's slot.
+# app/main.py imports this module, so the API pod (where the retire route
+# lives) is wired too.
+register_retire_guard(template_references)
 
 ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
     "event-worker": lambda stop_event: run_drain_loop(

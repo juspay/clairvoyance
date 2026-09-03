@@ -24,6 +24,10 @@ What is here, and why each thing is on the surface:
 - ``template_status`` / ``registers_templates_for`` — what outreach's
   publish asks so a send node naming an unknown or unapproved template
   is refused at publish, not blocked at dispatch hours later (phase 08).
+- ``register_retire_guard`` — the slot worker_main fills with outreach's
+  count of open runs naming a template, so retire can refuse to pull a
+  template from under a run in flight without this module importing
+  outreach (phase 14; the record/consumers.py inversion).
 
 Provider-decided template state (approved, rejected, a re-categorisation)
 arrives as webhooks, and the consumer that applies them joins this surface
@@ -48,6 +52,7 @@ from app.crm.connectivity.templates import (
     edit as edit_template,
     get as get_template,
     list_templates,
+    register_retire_guard,
     retire as retire_template,
     submit as submit_template,
     template_status,
@@ -74,4 +79,6 @@ __all__ = [
     # the publish-time check (outreach asks)
     "template_status",
     "registers_templates_for",
+    # the retire guard slot (worker_main fills)
+    "register_retire_guard",
 ]

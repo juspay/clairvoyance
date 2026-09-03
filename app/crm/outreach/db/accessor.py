@@ -17,6 +17,7 @@ from app.crm.outreach.db.decoder import (
     decode_customer_run,
     decode_run,
     decode_run_summary,
+    decode_version,
     decode_workflow,
     decode_workflow_summary,
 )
@@ -33,8 +34,12 @@ from app.crm.outreach.db.queries import (
     insert_version_query,
     insert_workflow_query,
     list_runs_query,
+    list_versions_query,
     list_workflows_query,
+    live_plans_naming_template_query,
     live_workflows_query,
+    lock_template_shared_query,
+    occupied_nodes_on_version_query,
     occupied_nodes_query,
     open_runs_for_customer_query,
     park_run_query,
@@ -42,8 +47,10 @@ from app.crm.outreach.db.queries import (
     publish_workflow_query,
     record_run_error_query,
     repin_open_runs_query,
+    repin_runs_on_version_query,
     resume_run_by_id_query,
     resume_run_query,
+    runs_referencing_template_query,
     set_workflow_status_query,
     source_event_used_query,
     sweep_exited_runs_query,
@@ -56,8 +63,10 @@ from app.crm.outreach.schemas import (
     Workflow,
     WorkflowRunSummary,
     WorkflowSummary,
+    WorkflowVersion,
 )
 from app.crm.shared.db import crm_connection
+from app.crm.shared.locks import template_lock_key
 
 
 async def insert_workflow(
@@ -159,6 +168,77 @@ async def get_definition(
         return None
     definition = decode_jsonb(row["definition"])
     return definition if isinstance(definition, dict) else None
+
+
+async def lock_templates_shared(
+    conn: asyncpg.Connection, merchant_id: str, templates: List[Tuple[str, str]]
+) -> None:
+    """Inside the caller's atom: take the template lock SHARED for every
+    (channel, name) the document being pinned sends. In a stable order,
+    so two pinners of the same document never wait on each other's second
+    key (they never do anyway — shared locks do not conflict — but a
+    stable order is free)."""
+    for channel, name in sorted(set(templates)):
+        query, values = lock_template_shared_query(
+            template_lock_key(merchant_id, channel, name)
+        )
+        await conn.execute(query, *values)
+
+
+async def pinned_definition(
+    conn: asyncpg.Connection, merchant_id: str, workflow_id: str, version: int
+) -> Optional[Dict[str, Any]]:
+    """The pinned document inside the caller's atom (conn param) —
+    migrate-forward validates the exact documents it moves runs between."""
+    query, values = get_definition_query(merchant_id, workflow_id, version)
+    row = await conn.fetchrow(query, *values)
+    if row is None:
+        return None
+    definition = decode_jsonb(row["definition"])
+    return definition if isinstance(definition, dict) else None
+
+
+async def occupied_nodes_on_version(
+    conn: asyncpg.Connection, merchant_id: str, workflow_id: str, version: int
+) -> List[str]:
+    query, values = occupied_nodes_on_version_query(merchant_id, workflow_id, version)
+    rows = await conn.fetch(query, *values)
+    return [row["current_node"] for row in rows]
+
+
+async def repin_runs_on_version(
+    conn: asyncpg.Connection,
+    merchant_id: str,
+    workflow_id: str,
+    from_version: int,
+    to_version: int,
+) -> int:
+    query, values = repin_runs_on_version_query(
+        merchant_id, workflow_id, from_version, to_version
+    )
+    rows = await conn.fetch(query, *values)
+    return len(rows)
+
+
+async def list_versions(merchant_id: str, workflow_id: str) -> List[WorkflowVersion]:
+    query, values = list_versions_query(merchant_id, workflow_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_version(row) for row in rows]
+
+
+async def runs_referencing_template(merchant_id: str, channel: str, name: str) -> int:
+    query, values = runs_referencing_template_query(merchant_id, channel, name)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return int(row["runs"]) if row is not None else 0
+
+
+async def live_plans_naming_template(merchant_id: str, channel: str, name: str) -> int:
+    query, values = live_plans_naming_template_query(merchant_id, channel, name)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return int(row["plans"]) if row is not None else 0
 
 
 async def set_workflow_status(

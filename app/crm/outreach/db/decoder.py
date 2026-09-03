@@ -10,6 +10,7 @@ from app.crm.outreach.schemas import (
     Workflow,
     WorkflowRunSummary,
     WorkflowSummary,
+    WorkflowVersion,
 )
 
 
@@ -39,6 +40,16 @@ def decode_workflow(row: Mapping[str, Any]) -> Workflow:
         **decode_workflow_summary(row).model_dump(),
         definition=_jsonb(row["definition"]),
         draft=_jsonb(row["draft"]),
+    )
+
+
+def decode_version(row: Mapping[str, Any]) -> WorkflowVersion:
+    return WorkflowVersion(
+        version=row["version"],
+        on_publish=row["on_publish"],
+        published_by=row["published_by"],
+        published_at=row["published_at"],
+        open_runs=int(row["open_runs"] or 0),
     )
 
 

@@ -321,6 +321,14 @@ def record_in_place_edit_query(
     return query, [merchant_id, template_id, components_json, status, expected_status]
 
 
+def lock_template_exclusive_query(key: int) -> Tuple[str, List[Any]]:
+    """The retiring side of the template lock (shared/locks.py): held
+    EXCLUSIVE for the rest of the transaction — waits for every in-flight
+    pinner of this template to commit, and makes later pinners wait for
+    the verdict."""
+    return "SELECT pg_advisory_xact_lock($1::bigint)", [key]
+
+
 def retire_template_query(merchant_id: str, template_id: str) -> Tuple[str, List[Any]]:
     """status -> deleted. Never a DELETE: crm_message rows name this template
     by name, and "what did we send in August" must stay answerable."""

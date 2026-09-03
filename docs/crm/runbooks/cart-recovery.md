@@ -84,6 +84,18 @@ open run to N+1, and the validator refuses removing a node they stand on
 or changing the `entry` words — pause the plan and let them finish, or
 publish the change as a new plan.
 
+To push a fix to runs already in flight on a `pin` plan (a wrong template
+id on the call node, say): publish the fixed document as version N+1, then
+move them — `POST /workflows/<wf>/versions/N/migrate?merchant_id=$M&to=N+1`
+(admin). It answers how many moved, and refuses (422) when N+1 drops a
+square those runs stand on or changes the `entry`.
+`GET /workflows/<wf>/versions?merchant_id=$M` lists every version with the
+open runs still executing it; versions are kept for the life of the plan,
+so an exited run's version always says what it executed. A WhatsApp
+template cannot be retired (409) while an open run's version still names
+it, or while a live or paused plan's latest document does — let the runs
+finish or migrate them, and republish the plan without it.
+
 ## Watch it run
 
 ```bash
@@ -109,7 +121,7 @@ wait for a human; `last_error` says why:
 | `call node …: template … not found` / `no call_execution_config` | replace the placeholder / configure the buddy template |
 | `send node …: <reason>` | the channel/address was refused at queue time (bad number) |
 | `node X not in definition vN` | drift across an archive/re-create; re-publish with the node or archive the plan |
-| `definition vN missing` | the run's pinned version row is gone (should never happen — versions a run references are retained); archive the plan or re-create it |
+| `definition vN missing` | the run's pinned version row is gone (should never happen — versions are never deleted); archive the plan or re-create it |
 | `attempts exhausted: …` | a transient error kept failing (provider, DB); check the cause |
 
 ```bash

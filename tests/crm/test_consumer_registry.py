@@ -92,3 +92,76 @@ def test_record_imports_no_subscriber() -> None:
             if needle in text:
                 offenders[str(py)] = needle
     assert offenders == {}
+
+
+def test_worker_main_registers_the_template_retire_guard() -> None:
+    # Phase 14: the same inversion for connectivity's retire guard —
+    # connectivity may not import outreach (outreach already imports its
+    # contracts; the reverse arrow would close a cycle), so worker_main
+    # hands outreach's count into connectivity's slot.
+    import app.crm.worker_main  # noqa: F401  (registration is an import effect)
+    from app.crm.connectivity import templates as connectivity_templates
+    from app.crm.outreach.contracts import template_references
+
+    assert connectivity_templates._retire_guard is template_references
+
+
+def test_the_api_process_wires_the_guard_through_worker_main() -> None:
+    # app/main.py imports worker_main (for start/stop of the worker role),
+    # so the API pod — where the retire route lives — registers it too.
+    # Read from the AST, so a commented-out or string-quoted mention can
+    # never satisfy this.
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path("app/main.py").read_text())
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    } | {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert "app.crm.worker_main" in imported
+
+
+def test_connectivity_imports_no_outreach() -> None:
+    # The structural half of the guard: the hook exists so this stays true.
+    # Judged from each file's import nodes — absolute or relative — so a
+    # `from ..outreach import x` is caught and a mention in a comment or
+    # docstring is not.
+    import ast
+    import pathlib
+
+    import app.crm.connectivity.templates as connectivity_templates
+
+    package_dir = pathlib.Path(connectivity_templates.__file__).parent
+    offenders: List[str] = []
+    for py in package_dir.rglob("*.py"):
+        package = "app.crm.connectivity" + (
+            "." + ".".join(py.relative_to(package_dir).parent.parts)
+            if py.relative_to(package_dir).parent.parts
+            else ""
+        )
+        for node in ast.walk(ast.parse(py.read_text())):
+            targets: List[str] = []
+            if isinstance(node, ast.Import):
+                targets = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    base = package.split(".")[
+                        : len(package.split(".")) - node.level + 1
+                    ]
+                    targets = [".".join(base + ([node.module] if node.module else []))]
+                elif node.module:
+                    targets = [node.module]
+            offenders.extend(
+                f"{py}: {target}"
+                for target in targets
+                if target == "app.crm.outreach"
+                or target.startswith("app.crm.outreach.")
+            )
+    assert offenders == []

@@ -11,7 +11,8 @@ The lifecycle, and where each rule lives:
     submit   claim -> provider -> record  draft -> submitting -> pending
     edit     draft: local; otherwise      approved/rejected/paused -> pending
              in place at the provider     (only if the provider supports it)
-    retire   provider, then local         -> deleted
+    retire   local (guarded), then       -> deleted
+             provider best-effort
 
 Two things this file deliberately does NOT do.
 
@@ -26,7 +27,7 @@ twenty-three hours out of twenty-four for zero information, and the one it
 would catch arrives as a webhook anyway.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity import accounts
@@ -63,6 +64,31 @@ class TemplateError(Exception):
 
 class TemplateNotFoundError(TemplateError):
     """No such template for this merchant — a 404, not a 400."""
+
+
+class TemplateInUseError(TemplateError):
+    """Workflows still name this template — open runs by their pinned
+    document, or live/paused plans by their latest — a 409, not a 400:
+    let the runs finish or migrate them, and republish the plans without
+    it."""
+
+
+# The retire guard (rollout phase 14): outreach's answer to "who would
+# still send this template?" — (merchant_id, channel, name) ->
+# (open runs whose PINNED document names it, live or paused plans whose
+# LATEST document names it). Connectivity may not import outreach
+# (outreach already reads this module's contracts; the reverse arrow would
+# close an import cycle), so the slot is filled by the composition root,
+# app/crm/worker_main.py — the record/consumers.py inversion (checker rule
+# 12), applied here. Empty until then, and retire() fails CLOSED on empty.
+RetireGuard = Callable[[str, str, str], Awaitable[Tuple[int, int]]]
+_retire_guard: Optional[RetireGuard] = None
+
+
+def register_retire_guard(guard: RetireGuard) -> None:
+    """Idempotent: imports can run more than once (tests, reload)."""
+    global _retire_guard
+    _retire_guard = guard
 
 
 def _as_template_error(error: Exception) -> TemplateError:
@@ -453,6 +479,14 @@ async def retire(merchant_id: str, template_id: str) -> TemplateRead:
     if template is None:
         raise TemplateNotFoundError("no such template")
 
+    # Local first, guarded, in one atom: a workflow that would still send
+    # this template (ADR 0023) refuses the withdrawal before the row or
+    # the provider is touched — and the check sits in the same
+    # transaction as the write, so no provider round-trip separates them.
+    updated = await atomically(_retire_in_txn, merchant_id, template)
+    if updated is None:
+        raise TemplateNotFoundError("no such template")
+
     if template.provider_template_id is not None:
         try:
             spec = _spec_for(template.channel)
@@ -475,17 +509,50 @@ async def retire(merchant_id: str, template_id: str) -> TemplateRead:
                 f"retiring locally anyway"
             )
 
-    updated = await atomically(_retire_in_txn, merchant_id, template_id)
-    if updated is None:
-        raise TemplateNotFoundError("no such template")
     return updated
 
 
 async def _retire_in_txn(
-    txn: DbTxn, merchant_id: str, template_id: str
+    txn: DbTxn, merchant_id: str, template: TemplateRead
 ) -> Optional[TemplateRead]:
-    """ATOMIC: one statement — the same single door every transition uses."""
-    return await template_accessor.retire_template(txn, merchant_id, template_id)
+    """ATOMIC: the template lock, the reference check and the local
+    withdrawal share one fate — the lock (shared/locks.py, EXCLUSIVE) is
+    taken first, so every in-flight enrol, publish or migrate that pins
+    this template has committed before the count reads (it sees their
+    rows), and any that arrives later waits for this verdict; the guard
+    reads through outreach's own connection (the resolve()-inside-the-
+    pass precedent), which is exactly why the lock is a Postgres advisory
+    key both modules derive and neither module's table."""
+    await template_accessor.lock_template_exclusive(
+        txn, merchant_id, template.channel, template.name
+    )
+    open_runs, plans = await _workflows_naming(merchant_id, template)
+    if open_runs or plans:
+        raise TemplateInUseError(
+            f"template '{template.name}' on {template.channel} is still named by "
+            f"{open_runs} open workflow run(s) and {plans} live or paused plan(s) "
+            f"— let the runs finish or migrate them, and republish the plans "
+            f"without it, before retiring it"
+        )
+    return await template_accessor.retire_template(txn, merchant_id, template.id)
+
+
+async def _workflows_naming(
+    merchant_id: str, template: TemplateRead
+) -> Tuple[int, int]:
+    """GATHER for retire: (open runs whose pinned document sends this
+    template, live or paused plans whose latest document does). Fails
+    CLOSED without a registered guard — a missing registration is a
+    wiring bug, never permission to delete what a run is about to send."""
+    if _retire_guard is None:
+        logger.error(
+            "template retire guard is not registered — refusing to retire; "
+            "app/crm/worker_main.py must register outreach's template_references"
+        )
+        raise TemplateError(
+            "template retirement is not wired: the workflow guard is not registered"
+        )
+    return await _retire_guard(merchant_id, template.channel, template.name)
 
 
 # ---------------------------------------------------------------------------

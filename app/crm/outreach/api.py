@@ -13,13 +13,15 @@ from pydantic import BaseModel, Field
 
 from app.core.logger.context import set_log_context
 from app.crm.auth import crm_admin_user
-from app.crm.outreach import plans, runs
+from app.crm.outreach import plans, runs, versions
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
+    VersionMigration,
     Workflow,
     WorkflowRunSummary,
     WorkflowSummary,
+    WorkflowVersion,
 )
 from app.schemas import UserInfo
 
@@ -187,6 +189,48 @@ async def workflow_summary_route(
 ) -> WorkflowRunSummary:
     set_log_context(component="crm.workflows.summary", merchant_id=merchant_id)
     return await runs.workflow_summary(merchant_id, workflow_id, since, until)
+
+
+@router.get("/{workflow_id}/versions", response_model=List[WorkflowVersion])
+async def list_versions_route(
+    workflow_id: str,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> List[WorkflowVersion]:
+    """Every published version, newest first, with the open runs still
+    executing it (ADR 0023)."""
+    set_log_context(component="crm.workflows.versions", merchant_id=merchant_id)
+    return await versions.list_versions(merchant_id, workflow_id)
+
+
+@router.post(
+    "/{workflow_id}/versions/{from_version}/migrate", response_model=VersionMigration
+)
+async def migrate_version_route(
+    workflow_id: str,
+    from_version: int,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    to: int = Query(..., ge=1, description="The version those runs will execute"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> VersionMigration:
+    """Move every open run pinned to from_version under `to` — how a fix
+    reaches runs in flight on a pin-mode plan. Refused (422) when `to`
+    drops a square they stand on or changes the entry."""
+    set_log_context(component="crm.workflows.migrate", merchant_id=merchant_id)
+    try:
+        moved = await versions.migrate_forward(
+            merchant_id, workflow_id, from_version, to
+        )
+    except versions.VersionNotFound as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{e} not found for this workflow",
+        )
+    except plans.WorkflowValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        )
+    return VersionMigration(from_version=from_version, to_version=to, moved=moved)
 
 
 @customer_router.get("/{customer_id}/runs", response_model=List[CustomerRun])

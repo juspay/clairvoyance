@@ -153,6 +153,89 @@ def get_definition_query(
     return query, [merchant_id, workflow_id, version]
 
 
+def lock_template_shared_query(key: int) -> Tuple[str, List[Any]]:
+    """The pinning side of the template lock (shared/locks.py): held
+    SHARED for the rest of the transaction, so pinners never block one
+    another and a retirement (EXCLUSIVE) waits for them to commit."""
+    return "SELECT pg_advisory_xact_lock_shared($1::bigint)", [key]
+
+
+def occupied_nodes_on_version_query(
+    merchant_id: str, workflow_id: str, version: int
+) -> Tuple[str, List[Any]]:
+    """migrate-forward's occupied-square read (rollout phase 14): the
+    squares open runs pinned to THIS version stand on — the target must
+    keep every one of them."""
+    query = f"""
+        SELECT DISTINCT current_node
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2 AND workflow_version = $3
+          AND status <> 'exited'
+    """
+    return query, [merchant_id, workflow_id, version]
+
+
+def repin_runs_on_version_query(
+    merchant_id: str, workflow_id: str, from_version: int, to_version: int
+) -> Tuple[str, List[Any]]:
+    """migrate-forward (rollout phase 14): every open run pinned to
+    from_version now executes to_version — after validate_migration said
+    the target keeps every occupied square and the entry. Exited runs keep
+    the version they finished under: the audit fact."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET workflow_version = $4
+        WHERE merchant_id = $1 AND workflow_id = $2 AND workflow_version = $3
+          AND status <> 'exited'
+        RETURNING id
+    """
+    return query, [merchant_id, workflow_id, from_version, to_version]
+
+
+def list_versions_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
+    """The versions list (rollout phase 14): every published document,
+    newest first, with the open runs still pinned to it — what to migrate
+    from. Both tables are outreach's."""
+    query = f"""
+        SELECT v.version, v.on_publish, v.published_by, v.published_at,
+               (SELECT count(*) FROM {ENROLLMENT_TABLE} e
+                 WHERE e.merchant_id = v.merchant_id
+                   AND e.workflow_id = v.workflow_id
+                   AND e.workflow_version = v.version
+                   AND e.status <> 'exited') AS open_runs
+        FROM {VERSION_TABLE} v
+        WHERE v.merchant_id = $1 AND v.workflow_id = $2
+        ORDER BY v.version DESC
+    """
+    return query, [merchant_id, workflow_id]
+
+
+def runs_referencing_template_query(
+    merchant_id: str, channel: str, name: str
+) -> Tuple[str, List[Any]]:
+    """The template retirement guard's count (rollout phase 14): open runs
+    whose PINNED document has a send node on this channel naming this
+    template — judged by the version each run executes, never the live
+    one. jsonb_array_elements over the document's nodes, so it needs no
+    index while the table is small; index later if hot."""
+    query = f"""
+        SELECT count(*) AS runs
+        FROM {ENROLLMENT_TABLE} e
+        JOIN {VERSION_TABLE} v
+          ON v.merchant_id = e.merchant_id
+         AND v.workflow_id = e.workflow_id
+         AND v.version = e.workflow_version
+        WHERE e.merchant_id = $1 AND e.status <> 'exited'
+          AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements(v.definition->'nodes') AS node
+              WHERE node->>'type' = 'send'
+                AND node->>'channel' = $2
+                AND node->>'template' = $3
+          )
+    """
+    return query, [merchant_id, channel, name]
+
+
 def set_workflow_status_query(
     merchant_id: str, workflow_id: str, status: str
 ) -> Tuple[str, List[Any]]:
@@ -475,6 +558,27 @@ def cancel_run_query(
         RETURNING id
     """
     return query, params
+
+
+def live_plans_naming_template_query(
+    merchant_id: str, channel: str, name: str
+) -> Tuple[str, List[Any]]:
+    """The retirement guard's second count (rollout phase 14): plans that
+    are live, or paused and able to go live, whose LATEST document has a
+    send node on this channel naming this template — their next entrant
+    would be pinned to a withdrawn template just as an open run is."""
+    query = f"""
+        SELECT count(*) AS plans
+        FROM {WORKFLOW_TABLE} w
+        WHERE w.merchant_id = $1 AND w.status IN ('live', 'paused')
+          AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') AS node
+              WHERE node->>'type' = 'send'
+                AND node->>'channel' = $2
+                AND node->>'template' = $3
+          )
+    """
+    return query, [merchant_id, channel, name]
 
 
 def patch_open_run_query(
