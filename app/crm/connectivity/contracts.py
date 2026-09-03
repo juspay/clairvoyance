@@ -59,15 +59,17 @@ from app.crm.connectivity.onboarding import (
     resubscribe,
 )
 from app.crm.connectivity.queue import queue_message
+from app.crm.connectivity.retire_guard import register_retire_guard
+from app.crm.connectivity.template_reads import (
+    get as get_template,
+    list_templates,
+    template_status,
+)
 from app.crm.connectivity.templates import (
     create_draft as create_template_draft,
     edit as edit_template,
-    get as get_template,
-    list_templates,
-    register_retire_guard,
     retire as retire_template,
     submit as submit_template,
-    template_status,
 )
 
 __all__ = [

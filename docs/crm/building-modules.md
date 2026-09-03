@@ -44,7 +44,39 @@ Shared column lists move with their table. Import the table you mean by its
 full path (`from ...db.accessors import binding as binding_accessor`) — the
 sub-packages export nothing, so an accessor's imports say which table it
 touches without opening a second file. CI rule 2 admits both shapes; a file
-under `db/accessors/` or `db/decoders/` still may not carry SQL.
+under `db/accessors/` or `db/decoders/` still may not carry SQL. Outreach
+took the shape 3 Sep 2026 (three tables: workflow · enrollment · version).
+
+**`schemas.py` becomes `schemas/` the same way** — one file per table family
+(connectivity: `connector.py` · `message.py` · `template.py`), plus a port
+file where a seam needs a neutral shape (`ingress.py`) and `tenancy.py` for
+the `TenantScoped` request base. `__init__` exports nothing; import the
+family you mean.
+
+**Vocabulary files, one word each, one home each**: `reasons.py` (why a send
+was refused — T16 col 13), `topics.py` (what a letter is CALLED on the spine —
+T13 col 4), `status.py` (every status word this module BRANCHES on, one
+section per table — the manifest's included). SQL never spells a status:
+builders bind them as `$n` (importing the constant is fine; interpolating it
+into the statement is the blocker `tests/crm/test_vocabulary.py` walks the
+builders for). A table whose words live in a logic file is the two-definitions
+scar — `dispatch.py` held the manifest's for three days.
+
+**The tenancy door is ONE dependency**: `merchant_scope(operation, component)`
+in `app/crm/auth.py` finds the merchant (query on a GET, the `TenantScoped`
+body on a POST/PATCH), runs the check, sets the log context and hands the
+merchant to the handler. Every merchant-facing route DECLARES it; a test walks
+the router and fails on one that does not (`test_connectivity_routes.py`).
+Status codes come from ONE route class (`TranslatingRoute`) that maps the
+module's exception families — a route never writes `try/except HTTPException`.
+
+**Slots are filled at the composition root** (corpus modules/00 §11): when A
+needs B's answer but B already imports A's contracts, A owns `register_*` with
+a FAIL-CLOSED default and `app/crm/worker_main.py` fills it — consumers
+(record), INGRESS entries (record), the template retire guard (connectivity,
+`retire_guard.py`). `shared/locks.py` is the legal leaf both sides derive an
+advisory-lock key from; each module executes the lock through its own
+`db/queries`.
 
 **The layer law:** `api -> logic -> db/accessor -> db/queries`.
 **The boundary law:** logic owns transaction scope (atomicity is business

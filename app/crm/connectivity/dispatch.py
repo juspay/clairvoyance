@@ -39,6 +39,13 @@ from app.crm.connectivity.reasons import (
 )
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
+from app.crm.connectivity.status import (
+    MESSAGE_ACCEPTED,
+    MESSAGE_BLOCKED,
+    MESSAGE_DEAD,
+    MESSAGE_FAILED,
+    MESSAGE_QUEUED,
+)
 from app.crm.platform.contracts import is_suppressed
 
 LOG_COMPONENT = "crm.connectivity.dispatch"
@@ -53,14 +60,10 @@ LOG_ID_SAMPLE = 100
 # CRM_DISPATCH_MAX_ATTEMPTS cannot silently park a message for hours.
 RETRY_MAX_SECONDS = 300
 
+# The manifest's words live in status.py (one home, four vocabularies):
 # 'failed' is the provider refusing for good; 'blocked' is US refusing
 # (gate, no route); 'dead' is us running out of retries. A merchant asking
 # why nothing arrived needs to know which (T16 col 12).
-STATUS_QUEUED = "queued"
-STATUS_ACCEPTED = "accepted"
-STATUS_FAILED = "failed"
-STATUS_BLOCKED = "blocked"
-STATUS_DEAD = "dead"
 
 # All REASON_* words live in reasons.py — one file, one name per failure
 # mode. Channel metadata (which handle kind the gate probes) lives in
@@ -103,19 +106,19 @@ def plan_for_outcome(
     Pure, so the whole retry policy is testable without a database.
     ``attempt`` already counts this try — the claim increments it.
     """
-    if outcome.status == STATUS_ACCEPTED:
+    if outcome.status == MESSAGE_ACCEPTED:
         return DispatchPlan(
-            status=STATUS_ACCEPTED,
+            status=MESSAGE_ACCEPTED,
             reason=None,
             provider_message_id=outcome.provider_message_id,
             mark_sent=True,
         )
 
-    if outcome.status == STATUS_BLOCKED:
+    if outcome.status == MESSAGE_BLOCKED:
         # OUR refusal: terminal, nothing was sent, and retrying cannot
         # change what WE decided (T16: blocked vs failed vs dead).
         return DispatchPlan(
-            status=STATUS_BLOCKED,
+            status=MESSAGE_BLOCKED,
             reason=outcome.reason or REASON_GATE_UNAVAILABLE,
             provider_message_id=None,
             mark_sent=False,
@@ -126,7 +129,7 @@ def plan_for_outcome(
 
     if not outcome.retryable:
         return DispatchPlan(
-            status=STATUS_FAILED,
+            status=MESSAGE_FAILED,
             reason=reason,
             provider_message_id=outcome.provider_message_id,
             mark_sent=False,
@@ -135,7 +138,7 @@ def plan_for_outcome(
     if attempt >= max_attempts:
         # Our reason, not the provider's last error — we stopped, they didn't.
         return DispatchPlan(
-            status=STATUS_DEAD,
+            status=MESSAGE_DEAD,
             reason=REASON_ATTEMPTS_EXHAUSTED,
             provider_message_id=outcome.provider_message_id,
             mark_sent=False,
@@ -149,7 +152,7 @@ def plan_for_outcome(
     # response we lost, the retry sends again. Bounded by the claim lease,
     # not eliminated.
     return DispatchPlan(
-        status=STATUS_QUEUED,
+        status=MESSAGE_QUEUED,
         reason=reason,
         provider_message_id=outcome.provider_message_id,
         mark_sent=False,
@@ -313,7 +316,7 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         # cannot probe), not policy — the one refusal an operator must notice.
         log = logger.error if refusal == REASON_GATE_UNAVAILABLE else logger.warning
         log(f"message {message.id} blocked by gate — {refusal}")
-        outcome = SendOutcome(status=STATUS_BLOCKED, reason=refusal)
+        outcome = SendOutcome(status=MESSAGE_BLOCKED, reason=refusal)
     else:
         try:
             outcome = await send(mint_send_token(message), message)
@@ -322,7 +325,7 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
             # saw it. opt(exception=) — loguru drops exc_info's stack.
             logger.opt(exception=e).error(f"send raised for message {message.id}")
             outcome = SendOutcome(
-                status=STATUS_FAILED, reason=REASON_SEND_ERROR, retryable=True
+                status=MESSAGE_FAILED, reason=REASON_SEND_ERROR, retryable=True
             )
 
     # message.attempt already counts this try — the claim incremented it.

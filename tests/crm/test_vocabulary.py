@@ -20,12 +20,18 @@ from app.crm.connectivity import accounts, status
 
 QUERIES_DIR = Path(__file__).resolve().parents[2] / "app/crm/connectivity/db/queries"
 
-#: Every word of all three vocabularies, as SQL would spell it.
+#: Every word of all four vocabularies, as SQL would spell it.
 STATUS_WORDS = sorted(
     v
     for k, v in vars(status).items()
     if not k.startswith("_") and isinstance(v, str) and k.isupper()
 )
+
+#: The tables this module writes a status on — a FIXED list, so a fifth
+#: table whose words never reach status.py cannot hide from this test the
+#: way crm_message's did (its words lived in dispatch.py and its SQL spelled
+#: 'sending' while every check here passed — the 3 Sep 2026 audit).
+STATUS_FAMILIES = ("TEMPLATE_", "INSTALLATION_", "BINDING_", "MESSAGE_")
 
 
 #: Names in status.py, so an interpolated constant is recognised by NAME as
@@ -100,6 +106,24 @@ def test_no_status_word_is_spelled_inside_a_sql_string() -> None:
                         f"a status is a VALUE and binds as $n, never as f-string text"
                     )
     assert not offences, "\n".join(offences)
+
+
+def test_every_table_family_has_its_words_in_status_py() -> None:
+    """Each family must export at least its column default; a table whose
+    vocabulary lives elsewhere is invisible to the SQL walk above."""
+    for family in STATUS_FAMILIES:
+        words = [k for k in vars(status) if k.startswith(family) and k.isupper()]
+        assert words, f"{family} words are not in status.py"
+    # the manifest's ladder, as canon T16 col 12 spells it
+    assert status.MESSAGE_QUEUED == "queued" and status.MESSAGE_SENDING == "sending"
+    assert status.MESSAGE_DEAD == "dead"
+
+
+def test_no_second_home_for_the_manifest_words() -> None:
+    """dispatch.py once defined STATUS_QUEUED… beside status.py's words."""
+    from app.crm.connectivity import dispatch
+
+    assert not [n for n in vars(dispatch) if n.startswith("STATUS_")]
 
 
 def test_the_builders_were_actually_read() -> None:

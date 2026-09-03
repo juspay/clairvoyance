@@ -39,7 +39,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
-from app.crm.outreach.db import accessor
+from app.crm.outreach.db.accessors import (
+    enrollment as enrollment_accessor,
+)
 from app.crm.outreach.schemas import WorkflowEntry, WorkflowEntryAt
 
 # The words, exactly as the corpus writes them. refresh_max carries its
@@ -155,7 +157,7 @@ async def apply_repeat(
     plan = repeat_plan(door, facts)
     if plan.is_noop:
         return False  # ignore + no debounce: exactly today's behaviour
-    patched = await accessor.patch_open_run(
+    patched = await enrollment_accessor.patch_open_run(
         merchant_id,
         workflow_id,
         enrollment_key,

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.crm.outreach.db.queries import (
+from app.crm.outreach.db.queries.enrollment import (
     list_runs_query,
     resume_run_query,
     sweep_exited_runs_query,

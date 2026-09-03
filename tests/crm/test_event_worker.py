@@ -27,7 +27,6 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import pytest
 
 import app.crm.record.consumers as record_consumers
-import app.crm.record.extractors.flat as flat_extractor
 import app.crm.record.extractors.shopify as shopify_extractor
 import app.crm.record.workers as workers
 import app.crm.shared.worker as worker_mod

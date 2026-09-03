@@ -9,7 +9,7 @@ route that lost its admin dependency or its mount fails here."""
 
 import inspect
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict
 from uuid import uuid4
 
 from fastapi.routing import APIRoute
@@ -17,8 +17,11 @@ from fastapi.routing import APIRoute
 import app.crm.api as crm_api
 import app.crm.outreach.api as outreach_api
 from app.crm.auth import crm_admin_user
-from app.crm.outreach.db.decoder import decode_customer_run, decode_run_summary
-from app.crm.outreach.db.queries import (
+from app.crm.outreach.db.decoders.enrollment import (
+    decode_customer_run,
+    decode_run_summary,
+)
+from app.crm.outreach.db.queries.enrollment import (
     cancel_run_query,
     customer_runs_query,
     workflow_summary_query,

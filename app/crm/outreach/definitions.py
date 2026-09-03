@@ -17,7 +17,9 @@ Logic, not db: the only db-world import is the module's accessor door.
 from collections import OrderedDict
 from typing import Optional, Tuple
 
-from app.crm.outreach.db import accessor
+from app.crm.outreach.db.accessors import (
+    version as version_accessor,
+)
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition
 
 # Sized for one merchant fleet's live versions many times over; §14.7's
@@ -38,7 +40,7 @@ async def definition_for(run: EnrollmentRun) -> Optional[WorkflowDefinition]:
     if cached is not None:
         _definitions.move_to_end(key)
         return cached
-    document = await accessor.get_definition(run.merchant_id, key[0], key[1])
+    document = await version_accessor.get_definition(run.merchant_id, key[0], key[1])
     if document is None:
         return None
     definition = WorkflowDefinition.model_validate(document)

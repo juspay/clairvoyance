@@ -1,56 +1,16 @@
-"""Row -> domain shapes for the outreach module (module rules §1).
-DB-side translation only — never imported outside db/."""
+"""row -> schema translation for crm_workflow_enrollment (T20) — one table, one file (module rules §1 at scale;
+outreach took the shape 3 Sep 2026, structure PR 2). DB-side translation only — never
+imported outside db/.
+"""
 
-import json
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
-    Workflow,
     WorkflowRunSummary,
-    WorkflowSummary,
-    WorkflowVersion,
 )
-
-
-def _jsonb(value: Any) -> Any:
-    """asyncpg hands jsonb back as text unless a codec is registered —
-    decode defensively, the record-module precedent."""
-    if isinstance(value, str):
-        return json.loads(value)
-    return value
-
-
-def decode_workflow_summary(row: Mapping[str, Any]) -> WorkflowSummary:
-    return WorkflowSummary(
-        id=row["id"],
-        merchant_id=row["merchant_id"],
-        name=row["name"],
-        status=row["status"],
-        version=row["version"],
-        created_by=row["created_by"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-    )
-
-
-def decode_workflow(row: Mapping[str, Any]) -> Workflow:
-    return Workflow(
-        **decode_workflow_summary(row).model_dump(),
-        definition=_jsonb(row["definition"]),
-        draft=_jsonb(row["draft"]),
-    )
-
-
-def decode_version(row: Mapping[str, Any]) -> WorkflowVersion:
-    return WorkflowVersion(
-        version=row["version"],
-        on_publish=row["on_publish"],
-        published_by=row["published_by"],
-        published_at=row["published_at"],
-        open_runs=int(row["open_runs"] or 0),
-    )
+from app.crm.shared.decode import jsonb_value as _jsonb
 
 
 def decode_run(row: Mapping[str, Any]) -> EnrollmentRun:

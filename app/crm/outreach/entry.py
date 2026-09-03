@@ -26,7 +26,10 @@ source-event check and the open-run unique — not by that rollback.
 from typing import Optional, Sequence, Tuple
 
 from app.core.logger import logger
-from app.crm.outreach.db import accessor
+from app.crm.outreach.db.accessors import (
+    enrollment as enrollment_accessor,
+    workflow as workflow_accessor,
+)
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.nodes import (
@@ -112,7 +115,9 @@ async def consume_attributed_event(
     the voice mirrors, which resolve before this consumer exists."""
     if customer_id is None:
         return  # not about a person: nothing to admit, end or wake
-    open_runs = await accessor.open_runs_for_customer(event.merchant_id, customer_id)
+    open_runs = await enrollment_accessor.open_runs_for_customer(
+        event.merchant_id, customer_id
+    )
     goal_patch = _goal_patch(event) if open_runs else None
     for run in open_runs:
         definition = await definition_for(run)
@@ -128,7 +133,7 @@ async def consume_attributed_event(
             continue  # exited: there is nothing left to wake
         await _wake_on_reply(run, definition, event)
 
-    flows = await accessor.live_workflows(event.merchant_id)
+    flows = await workflow_accessor.live_workflows(event.merchant_id)
     for flow in flows:
         definition = WorkflowDefinition.model_validate(flow.definition)
         for door in definition.entries:
@@ -162,7 +167,7 @@ async def _end_on_goal(
             if str(run.context.get(tier.key.run, "")) != str(value):
                 continue  # about another run of hers
             key = (tier.key.run, str(value))
-        if await accessor.cancel_run(
+        if await enrollment_accessor.cancel_run(
             run.merchant_id,
             str(run.id),
             tier.exit_reason,
@@ -208,7 +213,7 @@ async def _wake_on_reply(
         # facts of THIS letter win the next call even after the run has
         # moved on (nodes.run_facts; a ladder hears a stage's letter on
         # the square it leaves).
-        await accessor.resume_run_by_id(
+        await enrollment_accessor.resume_run_by_id(
             run.merchant_id,
             str(run.id),
             node.id,

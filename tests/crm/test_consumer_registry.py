@@ -102,10 +102,10 @@ def test_worker_main_registers_the_template_retire_guard() -> None:
     # contracts; the reverse arrow would close a cycle), so worker_main
     # hands outreach's count into connectivity's slot.
     import app.crm.worker_main  # noqa: F401  (registration is an import effect)
-    from app.crm.connectivity import templates as connectivity_templates
+    from app.crm.connectivity import retire_guard as connectivity_retire_guard
     from app.crm.outreach.contracts import template_references
 
-    assert connectivity_templates._retire_guard is template_references
+    assert connectivity_retire_guard._retire_guard is template_references
 
 
 def test_the_api_process_wires_the_guard_through_worker_main() -> None:

@@ -326,7 +326,8 @@ def lock_template_exclusive_query(key: int) -> Tuple[str, List[Any]]:
     EXCLUSIVE for the rest of the transaction — waits for every in-flight
     pinner of this template to commit, and makes later pinners wait for
     the verdict."""
-    return "SELECT pg_advisory_xact_lock($1::bigint)", [key]
+    query = "SELECT pg_advisory_xact_lock($1::bigint)"
+    return query, [key]
 
 
 def retire_template_query(merchant_id: str, template_id: str) -> Tuple[str, List[Any]]:

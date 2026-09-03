@@ -11,7 +11,7 @@ import pytest
 
 import app.crm.outreach.entry as entry
 from app.crm.outreach import repeat
-from app.crm.outreach.db.queries import patch_open_run_query
+from app.crm.outreach.db.queries.enrollment import patch_open_run_query
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.repeat import parse_repeat_policy, repeat_plan
 from app.crm.outreach.schemas import WorkflowDefinition, WorkflowEntryAt
@@ -391,7 +391,7 @@ def test_apply_repeat_hands_the_restart_word_to_the_patch(
         seen.append(args)
         return True
 
-    monkeypatch.setattr(repeat.accessor, "patch_open_run", patch_open_run)
+    monkeypatch.setattr(repeat.enrollment_accessor, "patch_open_run", patch_open_run)
     door = _door(
         on_repeat="refresh_latest", debounce_minutes=10, restart_on_repeat=True
     )

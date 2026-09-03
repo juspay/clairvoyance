@@ -1,12 +1,15 @@
-"""The three status vocabularies this module writes, and the transition sets
+"""The four status vocabularies this module writes, and the transition sets
 that read them.
 
-ONE file, three sections, rather than three files: the vocabularies are small
-(7 · 5 · 3 words) and two of them are read TOGETHER at the only place that
-moves both — onboarding, where a door's status and its pipes' statuses change
-in one atom. Three modules would make that file import three names to state
-one transition, and would suggest the three lists change independently. They
-do not.
+ONE file, four sections, rather than four files: the vocabularies are small
+(7 · 5 · 3 · 9 words) and two of them are read TOGETHER at the only place
+that moves both — onboarding, where a door's status and its pipes' statuses
+change in one atom. Separate modules would make that file import several
+names to state one transition, and would suggest the lists change
+independently. They do not. The manifest's words (T16) joined 3 Sep 2026 —
+they had a second home in dispatch.py and were spelled as literals inside
+the claim and the sweep, which is exactly the two-definitions scar this file
+exists to close; the vocabulary test walks every builder for every word here.
 
 **These words are OPEN sets, not closed ones.** Migration 061 ships no CHECK
 on ``crm_channel_template.status`` and says why: the status vocabulary is the
@@ -91,3 +94,24 @@ BINDING_PAUSED = "paused"
 #: may have recycled it to someone else, so re-onboarding must RAISE rather
 #: than resurrect it.
 BINDING_RETIRED = "retired"
+
+# ---------------------------------------------------------------------------
+# crm_message (T16) — the manifest. Canon T16 col 12: one stamped word.
+# ---------------------------------------------------------------------------
+
+#: Migration 056's column default: proposed, gate not yet asked.
+MESSAGE_QUEUED = "queued"
+#: The in-flight word a claim stamps (T16 col 12, 29 Aug 2026): the claim
+#: must COMMIT before the provider call, so "claimed" is visible in the row.
+MESSAGE_SENDING = "sending"
+#: US refusing — the gate, no route (T16 col 13 carries the reason).
+MESSAGE_BLOCKED = "blocked"
+#: The provider took it; the receipt walker moves it on from here.
+MESSAGE_ACCEPTED = "accepted"
+MESSAGE_SENT = "sent"
+MESSAGE_DELIVERED = "delivered"
+MESSAGE_READ = "read"
+#: The provider refused for good.
+MESSAGE_FAILED = "failed"
+#: We ran out of retries — the provider never said no, we stopped asking.
+MESSAGE_DEAD = "dead"

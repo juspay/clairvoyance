@@ -14,6 +14,10 @@ The lifecycle, and where each rule lives:
     retire   local (guarded), then       -> deleted
              provider best-effort
 
+The registry's READS live in template_reads.py (get · list · the publish
+verdict · the send-time row) and the retire guard's slot in retire_guard.py;
+this file holds the transitions and nothing else.
+
 Two things this file deliberately does NOT do.
 
 **It does not decide what "editable" means for a provider.** Meta re-reviews
@@ -27,10 +31,10 @@ twenty-three hours out of twenty-four for zero information, and the one it
 would catch arrives as a webhook anyway.
 """
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
-from app.crm.connectivity import accounts
+from app.crm.connectivity import accounts, retire_guard
 from app.crm.connectivity.connectors import (
     ConnectorSpec,
     ProviderError,
@@ -42,13 +46,8 @@ from app.crm.connectivity.db.accessors import (
 )
 from app.crm.connectivity.schemas.connector import ConnectorInstallation
 from app.crm.connectivity.schemas.message import CredentialBundle
-from app.crm.connectivity.schemas.template import (
-    ApprovedTemplate,
-    TemplateDraft,
-    TemplateRead,
-)
+from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
 from app.crm.connectivity.status import (
-    TEMPLATE_APPROVED,
     TEMPLATE_DRAFT,
     TEMPLATE_IN_PLACE_EDIT,
     TEMPLATE_LOCAL_EDIT,
@@ -71,24 +70,6 @@ class TemplateInUseError(TemplateError):
     document, or live/paused plans by their latest — a 409, not a 400:
     let the runs finish or migrate them, and republish the plans without
     it."""
-
-
-# The retire guard (rollout phase 14): outreach's answer to "who would
-# still send this template?" — (merchant_id, channel, name) ->
-# (open runs whose PINNED document names it, live or paused plans whose
-# LATEST document names it). Connectivity may not import outreach
-# (outreach already reads this module's contracts; the reverse arrow would
-# close an import cycle), so the slot is filled by the composition root,
-# app/crm/worker_main.py — the record/consumers.py inversion (checker rule
-# 12), applied here. Empty until then, and retire() fails CLOSED on empty.
-RetireGuard = Callable[[str, str, str], Awaitable[Tuple[int, int]]]
-_retire_guard: Optional[RetireGuard] = None
-
-
-def register_retire_guard(guard: RetireGuard) -> None:
-    """Idempotent: imports can run more than once (tests, reload)."""
-    global _retire_guard
-    _retire_guard = guard
 
 
 def _as_template_error(error: Exception) -> TemplateError:
@@ -537,14 +518,16 @@ async def _retire_in_txn(
     return await template_accessor.retire_template(txn, merchant_id, template.id)
 
 
-async def _workflows_naming(
-    merchant_id: str, template: TemplateRead
-) -> Tuple[int, int]:
+async def _workflows_naming(merchant_id: str, template: TemplateRead) -> tuple:
     """GATHER for retire: (open runs whose pinned document sends this
-    template, live or paused plans whose latest document does). Fails
-    CLOSED without a registered guard — a missing registration is a
-    wiring bug, never permission to delete what a run is about to send."""
-    if _retire_guard is None:
+    template, live or paused plans whose latest document does) through the
+    slot worker_main fills (retire_guard.py). Fails CLOSED without a
+    registered guard — a missing registration is a wiring bug, never
+    permission to delete what a run is about to send."""
+    counts = await retire_guard.workflows_naming(
+        merchant_id, template.channel, template.name
+    )
+    if counts is None:
         logger.error(
             "template retire guard is not registered — refusing to retire; "
             "app/crm/worker_main.py must register outreach's template_references"
@@ -552,97 +535,4 @@ async def _workflows_naming(
         raise TemplateError(
             "template retirement is not wired: the workflow guard is not registered"
         )
-    return await _retire_guard(merchant_id, template.channel, template.name)
-
-
-# ---------------------------------------------------------------------------
-# reads
-# ---------------------------------------------------------------------------
-
-
-async def get(merchant_id: str, template_id: str) -> Optional[TemplateRead]:
-    return await template_accessor.get_template(merchant_id, template_id)
-
-
-async def list_templates(
-    merchant_id: str, channel: Optional[str] = None, status: Optional[str] = None
-) -> List[TemplateRead]:
-    return await template_accessor.list_templates(merchant_id, channel, status)
-
-
-async def template_status(merchant_id: str, channel: str, name: str) -> Optional[str]:
-    """Is this template NAME publishable on this channel — the registry's
-    one publish-time read (rollout phase 08, G12), beside approved_template
-    (the send-time read) so every read of the table stays in this file.
-
-    A workflow's send node names a template and a channel, never the
-    provider account that will serve it (the route picks that at send
-    time), so the question is asked across the merchant's accounts:
-
-      * None — no row under that name: never registered here;
-      * "approved" — every account holding the name holds exactly ONE
-        approved row (the send door will find its one row whichever
-        account the route picks);
-      * "approved in N languages" — some account holds several approved
-        rows: the ambiguity approved_template refuses at send time,
-        refused here first — same rule, earlier;
-      * otherwise the newest row's status (pending, rejected, deleted…),
-        so the refusal can say why.
-    """
-    rows = await template_accessor.templates_by_name(merchant_id, channel, name)
-    if not rows:
-        return None
-    approved_per_account: Dict[str, int] = {}
-    for row in rows:
-        if row.status == TEMPLATE_APPROVED:
-            approved_per_account[row.provider_account_ref] = (
-                approved_per_account.get(row.provider_account_ref, 0) + 1
-            )
-    if approved_per_account:
-        crowded = max(approved_per_account.values())
-        if crowded > 1:
-            return f"approved in {crowded} languages"
-        return TEMPLATE_APPROVED
-    return rows[0].status
-
-
-async def approved_template(
-    merchant_id: str, channel: str, provider_account_ref: str, name: str
-) -> Optional[ApprovedTemplate]:
-    """Is this template name approved on this account — and if so, the row.
-
-    The registry's one public read for the send path. It states a FACT and
-    nothing else — the caller owns the word for "no", exactly as the binding
-    and installation steps already separate the fact from the refusal. It also
-    keeps every read of the registry table in this file: two logic files
-    owning reads on one table is how two answers to "is this approved" appear.
-
-    The answer is the ROW, not one of its fields: which field a send needs is
-    the adapter's business (WhatsApp renders by language, SMS-DLT sends the
-    provider's id), and a registry that answered "the language" would be
-    answering WhatsApp's question for every channel.
-
-    None has three causes, and from the sender's side they are one fact:
-
-      * the name was never registered here;
-      * it is registered but pending / rejected / paused / deleted;
-      * it is approved in MORE THAN ONE language.
-
-    The last deserves the same None as the others rather than a default:
-    crm_message carries the template NAME and no language column, so picking a
-    locale would be guessing which language a customer reads, and a wrong
-    guess is an unreadable message sent under a merchant's name. When T16
-    grows a language column this becomes a lookup on the full natural key and
-    the ambiguity disappears — noted as the trail, not worked around here.
-    """
-    approved = await template_accessor.approved_templates_for_send(
-        merchant_id, channel, provider_account_ref, name
-    )
-    if len(approved) != 1:
-        logger.warning(
-            f"connectivity: template '{name}' on {provider_account_ref} has "
-            f"{len(approved)} approved rows for {merchant_id}/{channel} — "
-            f"exactly one is required to send"
-        )
-        return None
-    return approved[0]
+    return counts

@@ -18,7 +18,9 @@ from app.core.config.static import (
     CRM_RUN_SWEEP_BATCH_SIZE,
 )
 from app.core.logger import logger
-from app.crm.outreach.db import accessor
+from app.crm.outreach.db.accessors import (
+    enrollment as enrollment_accessor,
+)
 from app.crm.outreach.schemas import CustomerRun, EnrollmentRun, WorkflowRunSummary
 
 _LISTABLE_STATUSES = ("waiting", "parked", "exited")
@@ -33,7 +35,9 @@ async def list_runs(
 ) -> List[EnrollmentRun]:
     if status is not None and status not in _LISTABLE_STATUSES:
         raise ValueError(f"unknown run status: {status}")
-    return await accessor.list_runs(merchant_id, workflow_id, status, limit, offset)
+    return await enrollment_accessor.list_runs(
+        merchant_id, workflow_id, status, limit, offset
+    )
 
 
 async def resume_run(
@@ -42,7 +46,7 @@ async def resume_run(
     """Revive one parked run: wake now, failure counter forgiven. Returns
     None when the run isn't parked (or isn't this merchant's) — the
     walker claims it on its next tick."""
-    run = await accessor.resume_run(merchant_id, workflow_id, run_id)
+    run = await enrollment_accessor.resume_run(merchant_id, workflow_id, run_id)
     if run:
         logger.info(f"run resumed by operator: {run_id} (merchant {merchant_id})")
     return run
@@ -55,7 +59,9 @@ async def workflow_summary(
     until: Optional[datetime],
 ) -> WorkflowRunSummary:
     """The plan's report over a window of entered_at (rollout phase 09)."""
-    return await accessor.workflow_summary(merchant_id, workflow_id, since, until)
+    return await enrollment_accessor.workflow_summary(
+        merchant_id, workflow_id, since, until
+    )
 
 
 async def customer_runs(
@@ -63,7 +69,7 @@ async def customer_runs(
 ) -> List[CustomerRun]:
     """The customer's journey: her runs across every plan, in the order
     they began (rollout phase 09)."""
-    return await accessor.customer_runs(merchant_id, customer_id, limit)
+    return await enrollment_accessor.customer_runs(merchant_id, customer_id, limit)
 
 
 async def run_retention_sweep_tick() -> None:
@@ -74,7 +80,9 @@ async def run_retention_sweep_tick() -> None:
     leftovers go next pass."""
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=CRM_RUN_RETENTION_DAYS)
-        swept = await accessor.sweep_exited_runs(cutoff, CRM_RUN_SWEEP_BATCH_SIZE)
+        swept = await enrollment_accessor.sweep_exited_runs(
+            cutoff, CRM_RUN_SWEEP_BATCH_SIZE
+        )
         if swept:
             logger.info(
                 f"run retention sweep: removed {swept} exited runs "

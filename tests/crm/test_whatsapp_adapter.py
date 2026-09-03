@@ -29,6 +29,7 @@ from app.crm.connectivity.schemas.message import (
     SendRoute,
 )
 from app.crm.connectivity.schemas.template import ApprovedTemplate
+from tests.crm.doubles import stub_http
 
 ACCEPTED_BODY = {
     "messaging_product": "whatsapp",
@@ -115,22 +116,18 @@ def _route(**overrides) -> SendRoute:
 
 
 def _mocked(monkeypatch, handler) -> Dict[str, Any]:
-    """Point the adapter's HTTP client at a canned responder and capture the
-    request it made."""
+    """Point the adapter's HTTP client at a canned responder (the shared
+    stub, tests/crm/doubles.py) and keep the LAST request as the dict this
+    suite reads: url, headers, body."""
     seen: Dict[str, Any] = {}
 
-    def _capture(request: httpx.Request) -> httpx.Response:
-        """Record the outgoing request, then delegate to the handler."""
+    def _record(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
         seen["headers"] = dict(request.headers)
         seen["body"] = request.read().decode()
         return handler(request)
 
-    monkeypatch.setattr(
-        whatsapp_module,
-        "create_http_client",
-        lambda **_: httpx.AsyncClient(transport=httpx.MockTransport(_capture)),
-    )
+    stub_http(monkeypatch, whatsapp_module, _record)
     return seen
 
 
