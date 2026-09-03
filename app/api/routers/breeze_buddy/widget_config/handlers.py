@@ -112,6 +112,11 @@ async def create_widget_config_handler(
         max_concurrent_per_ip=body.max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=body.max_voice_sessions_per_ip_hour,
         active=body.active,
+        appearance=(
+            body.appearance.model_dump(exclude_none=True)
+            if body.appearance is not None
+            else None
+        ),
     )
     if not created:
         raise HTTPException(
@@ -240,6 +245,11 @@ async def update_widget_config_handler(
         max_concurrent_per_ip=body.max_concurrent_per_ip,
         max_voice_sessions_per_ip_hour=body.max_voice_sessions_per_ip_hour,
         active=body.active,
+        appearance=(
+            body.appearance.model_dump(exclude_none=True)
+            if body.appearance is not None
+            else None
+        ),
     )
     if updated is None:
         raise HTTPException(

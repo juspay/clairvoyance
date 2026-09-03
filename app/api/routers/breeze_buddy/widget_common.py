@@ -137,6 +137,29 @@ async def _enforce_widget_ip_limit(
     )
 
 
+def enforce_widget_origin(*, request: Request, cfg: WidgetConfigResponse) -> None:
+    """403 unless the caller's Origin (or Referer-derived origin) is in the
+    row's ``allowed_origins``. Empty list = deny-all. Shared by the
+    key-resolved session path and the shop-resolved storefront-config path
+    so the two doors can never drift on origin policy.
+    """
+    origin = _caller_origin(request)
+    if origin is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Origin required for widget routes",
+        )
+    if not cfg.allowed_origins or origin not in cfg.allowed_origins:
+        logger.warning(
+            f"widget: origin {origin!r} not in allowed_origins for "
+            f"widget_config={cfg.id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Origin not permitted for this widget",
+        )
+
+
 async def resolve_widget_config_for_request(
     *,
     request: Request,
@@ -180,21 +203,7 @@ async def resolve_widget_config_for_request(
             detail="Widget configuration not found",
         )
 
-    origin = _caller_origin(request)
-    if origin is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Origin required for widget routes",
-        )
-    if not cfg.allowed_origins or origin not in cfg.allowed_origins:
-        logger.warning(
-            f"widget: origin {origin!r} not in allowed_origins for "
-            f"widget_config={cfg.id}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Origin not permitted for this widget",
-        )
+    enforce_widget_origin(request=request, cfg=cfg)
 
     effective_limit = (
         rate_limit if rate_limit is not None else cfg.max_sessions_per_ip_hour
@@ -263,6 +272,7 @@ def options_cors_response() -> Response:
 __all__ = [
     "client_ip",
     "enforce_widget_ip_limit",
+    "enforce_widget_origin",
     "options_cors_response",
     "resolve_widget_config_for_request",
 ]

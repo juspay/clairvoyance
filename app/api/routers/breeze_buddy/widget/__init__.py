@@ -2,6 +2,7 @@
 
 Routes under ``/agent/voice/breeze-buddy/widget``:
 
+- ``GET  /widget/storefront-config``                    resolve merchant domain → config
 - ``POST /widget/session``                              create
 - ``POST /widget/session/{id}/message``                 chat turn (SSE)
 - ``POST /widget/session/{id}/intent``                  typed UI intent (SSE)
@@ -43,6 +44,7 @@ from app.schemas.breeze_buddy.chat import (
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
+from app.schemas.breeze_buddy.widget_config import StorefrontWidgetConfigResponse
 
 from .handlers import (
     approve_widget_tool_handler,
@@ -57,6 +59,7 @@ from .handlers import (
     voice_connect_handler,
     voice_end_handler,
 )
+from .storefront import storefront_widget_config_handler
 
 router = APIRouter(prefix="/widget", tags=["widget-session"])
 
@@ -64,6 +67,11 @@ router = APIRouter(prefix="/widget", tags=["widget-session"])
 # ---------------------------------------------------------------------------
 # CORS preflight (transport layer — application allowlist runs in handlers)
 # ---------------------------------------------------------------------------
+
+
+@router.options("/storefront-config")
+async def widget_storefront_config_preflight() -> Response:
+    return options_cors_response()
 
 
 @router.options("/session")
@@ -124,6 +132,17 @@ async def widget_end_preflight(session_id: str) -> Response:
 # ---------------------------------------------------------------------------
 # Public — auth via public_widget_key + Origin + per-IP rate limit
 # ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/storefront-config",
+    response_model=StorefrontWidgetConfigResponse,
+    summary="Resolve a merchant's storefront domain to its Assist widget config + appearance",
+)
+async def get_storefront_widget_config(
+    request: Request, merchant_domain: str
+) -> StorefrontWidgetConfigResponse:
+    return await storefront_widget_config_handler(request, merchant_domain)
 
 
 @router.post(

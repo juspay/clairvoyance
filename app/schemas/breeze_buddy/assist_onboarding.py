@@ -8,6 +8,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.breeze_buddy.widget_config import WidgetAppearance
+
 
 def _public_https_url(value: str, *, origin_only: bool) -> str:
     raw = value.strip()
@@ -88,6 +90,68 @@ class AssistOnboardingStreamRequest(BaseModel):
         return normalized
 
 
+class AssistOnboardRequest(BaseModel):
+    """Body of the non-streaming ``POST /assist/onboard`` (S2S).
+
+    The bare-metal install path: called by the Shopify-app layer at app
+    install. Creates only the un-personalized default — merchant row,
+    blueprint-derived template, widget config — and NEVER scrapes the
+    storefront; personalization is a later, dashboard-triggered action.
+
+    Tenancy is derived server-side from ``host_app`` + ``merchant_domain``
+    (see assist/commerce/tenancy.py): the breeze-buddy host app lands on
+    reseller ``BB_SHOPIFY`` with the plain domain; the standalone
+    buddy-assist app on ``BB_ASSIST`` with an ``assist-`` prefixed
+    merchant id. Callers cannot pick a namespace directly.
+    """
+
+    merchant_domain: str = Field(..., min_length=4, max_length=253)
+    host_app: Literal["buddy-assist", "breeze-buddy"] = "buddy-assist"
+    merchant_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    bot_brand_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    allowed_origins: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Extra allowed origins (e.g. the merchant's primary domain). "
+        "https://<merchant_domain> is always included.",
+    )
+    appearance: Optional[WidgetAppearance] = None
+    is_active: bool = True
+
+    @field_validator("merchant_name", "bot_brand_name")
+    @classmethod
+    def _strip_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _validate_extra_origins(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        for value in values:
+            if len(value) > 2048:
+                raise ValueError("allowed origin is too long")
+            origin = _public_https_url(value, origin_only=True)
+            if origin not in normalized:
+                normalized.append(origin)
+        return normalized
+
+
+class AssistOnboardResponse(BaseModel):
+    """Body of ``POST /assist/onboard``."""
+
+    success: Literal[True] = True
+    operation: Literal["created", "updated", "recovered"]
+    merchant_created: bool
+    template_id: str
+    template_name: str
+    widget_config: Dict[str, Any]
+
+
 class AssistOnboardingProgress(BaseModel):
     step: str
     status: Literal["running", "done"]
@@ -112,6 +176,8 @@ class AssistOnboardingCompletion(BaseModel):
 
 
 __all__ = [
+    "AssistOnboardRequest",
+    "AssistOnboardResponse",
     "AssistOnboardingCompletion",
     "AssistOnboardingError",
     "AssistOnboardingProgress",
