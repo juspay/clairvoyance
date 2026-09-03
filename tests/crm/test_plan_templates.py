@@ -19,6 +19,7 @@ from app.crm.outreach.schemas import WorkflowDefinition
 
 PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
 CART = PLANS / "cart-recovery.json"
+CART_FALLBACK = PLANS / "cart-recovery-fallback.json"
 LOAN = PLANS / "loan-dropoff.json"
 
 # The funnel, in order (§16.2): stage i listens for every stage after it;
@@ -49,7 +50,8 @@ def _slug(topic: str) -> str:
 def test_the_expected_documents_exist() -> None:
     assert CART.is_file(), CART
     assert LOAN.is_file(), LOAN
-    assert _every_plan() == [CART, LOAN]
+    assert CART_FALLBACK.is_file(), CART_FALLBACK
+    assert _every_plan() == [CART_FALLBACK, CART, LOAN]
 
 
 @pytest.mark.parametrize("path", _every_plan(), ids=lambda p: p.stem)
@@ -141,6 +143,47 @@ def test_the_loan_board_has_one_arrow_from_every_stage_to_every_later_one() -> N
         (t, f"at-{_slug(t)}") for t in LOAN_STAGES
     ]
     assert all(n.stage in LOAN_STAGES for n in definition.nodes)
+    # two applications of one customer are two runs: every listening square
+    # hears only the letter about ITS application (phase 18)
+    for node in definition.nodes:
+        if node.type == "wait_event":
+            assert node.match is not None, node.id
+            assert (node.match.payload, node.match.run) == ("application_id",) * 2
     # the offer stage waits longer, the others keep the ladder's clock
     assert by_id["at-offer-accepted"].minutes == 120
     assert by_id["at-kyc-completed"].minutes == 30
+
+
+def test_cart_recovery_fallback_is_the_cart_board_with_the_call_outcome_branch() -> (
+    None
+):
+    """Phase 18 (G2): the same board, and after the rescue call a listening
+    square hears THIS run's call.completed (match on enrollment_id) — the
+    dispatcher's own no-contact words go to a second WhatsApp, every other
+    outcome (the template's own words, or the alarm) keeps the post-call
+    listening day so an order within it still counts as recovered."""
+    base, doc = _load(CART), _load(CART_FALLBACK)
+    for word in ("entry", "goals", "exits", "purpose_key"):
+        assert doc[word] == base[word], word
+    assert [(n["type"], n.get("minutes")) for n in doc["nodes"]] == [
+        ("wait", 30),
+        ("send", None),
+        ("wait", 30),
+        ("call", None),
+        ("wait_event", 1440),
+        ("send", None),
+        ("wait", 1440),
+    ]
+    assert doc["nodes"][:4] == base["nodes"][:4]
+    after_call = doc["nodes"][4]
+    assert after_call["topics"] == ["call.completed"] and after_call["key"] == "outcome"
+    assert after_call["match"] == {"payload": "enrollment_id", "run": "id"}
+    assert doc["nodes"][5]["template"] == "cart_recovery_2"
+    labelled = {(e[1], e[2]) for e in doc["edges"] if e[0] == "after-call"}
+    assert labelled == {
+        ("wa-fallback", "NO_ANSWER"),
+        ("wa-fallback", "BUSY"),
+        ("wa-fallback", "EARLY_HANGUP"),
+        ("wait-1d", "else"),
+    }
+    assert ["wa-fallback", "wait-1d"] in doc["edges"]

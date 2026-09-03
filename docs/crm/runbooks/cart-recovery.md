@@ -96,6 +96,52 @@ template cannot be retired (409) while an open run's version still names
 it, or while a live or paused plan's latest document does — let the runs
 finish or migrate them, and republish the plan without it.
 
+## Variant: a fallback after the call (`docs/crm/plans/cart-recovery-fallback.json`)
+
+When the rescue call does not reach her — no answer, busy, an early
+hang-up — send a second WhatsApp instead of waiting a day in silence.
+The variant is the same board with one listening square after the call
+(rollout phase 18, G2):
+
+```json
+{"id": "after-call", "type": "wait_event", "topics": ["call.completed"],
+ "key": "outcome", "minutes": 1440,
+ "match": {"payload": "enrollment_id", "run": "id"}}
+```
+
+with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` → `wa-fallback`
+(a second template, `cart_recovery_2`) and `else` → `wait-1d`.
+
+- **Where the outcome comes from.** Every lead the walker places carries
+  the run's id (`enrollment_id`); when the lead finishes, buddy mirrors
+  `call.completed` onto the spine with `enrollment_id` and `outcome`, and
+  the consumer wakes the run standing on `after-call` with the outcome
+  as its answer.
+- **`match` says whose letter it is.** A customer can have two open runs
+  (two carts). `match` compares the letter's `enrollment_id` with the
+  run's own `id`, so one call's outcome never wakes the other run. The
+  run side may also name a context field (`lead_rescue-call`, or
+  `message_<node>` for delivery receipts once those letters exist).
+- **`else` is the catch-all arrow.** The outcome after a call that
+  connected is the buddy template's own word (`CONFIRMED`, `not_found`,
+  whatever the template sets) and cannot be listed; `else` takes every
+  answer the square did not name — the alarm too, when there is no
+  `timeout` arrow — so a connected call still keeps the day of listening
+  and an order inside it counts as recovered. The words buddy's
+  dispatcher writes itself: `NO_ANSWER`, `BUSY`, `EARLY_HANGUP`,
+  `BLACKLISTED`, `PRECHECK_FAILED`, `ABORT`/`ABORTED`, `TRANSFERRED`,
+  `UNKNOWN`.
+- **A retry is a second call square, never an arrow back.** The walker
+  mints one lead per (run, square); an arrow from `after-call` back to
+  `rescue-call` re-issues the same lead id, which the lead table absorbs
+  as a lease retry — no second call is placed. Name the retry
+  `rescue-call-2`.
+- **Delivery receipts and STOP** (the message half of phase 18) wait for
+  the WhatsApp webhook and extractor PRs (#1040, #1052).
+
+Publish it exactly like the board above; the second template must be
+approved on the merchant's WhatsApp account or publish refuses it.
+
 ## Watch it run
 
 ```bash

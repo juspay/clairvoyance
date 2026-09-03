@@ -13,7 +13,11 @@ import app.ai.voice.agents.breeze_buddy.crm_mirror as crm_mirror
 from app.ai.voice.agents.breeze_buddy.crm_mirror import (
     _created_lead_tap,
     _event_key,
+    _finished_lead_tap,
     is_non_customer_lead,
+)
+from app.database.decoder.breeze_buddy.lead_call_tracker import (
+    decode_lead_call_tracker,
 )
 from app.schemas import CallDirection, LeadCallTracker
 
@@ -103,3 +107,88 @@ def test_inbound_mirror_is_born_attributed(monkeypatch: pytest.MonkeyPatch) -> N
     assert event["topic"] == "call.inbound"
     assert event["customer_id"] == "cust-42"
     assert event["external_id"] == "call.inbound:CA123"
+
+
+# --- rollout phase 18: a call's outcome reaches the run that placed it ---
+
+
+def test_lead_model_and_decoder_carry_the_walkers_enrollment_stamp() -> None:
+    """Migration 059's column, exposed so the finished tap can pass it on
+    (the queries return whole rows; only the model and decoder lacked it)."""
+    lead = LeadCallTracker(id="L1", reseller_id="r1", template="t")
+    assert lead.enrollment_id is None
+    row = {
+        "id": "L1",
+        "telephony_number_id": None,
+        "reseller_id": "r1",
+        "template": "t",
+        "template_id": None,
+        "merchant_id": "m1",
+        "request_id": None,
+        "attempt_count": 0,
+        "next_attempt_at": None,
+        "payload": None,
+        "meta_data": None,
+        "recording_url": None,
+        "status": "FINISHED",
+        "outcome": "NO_ANSWER",
+        "call_id": "CA9",
+        "call_initiated_time": None,
+        "call_end_time": None,
+        "cost": None,
+        "is_locked": False,
+        "langfuse_scores": None,
+        "execution_mode": "TELEPHONY",
+        "call_direction": "OUTBOUND",
+        "customer_id": None,
+        "enrollment_id": "5c1d3a9e-0000-4000-8000-000000000001",
+        "created_at": None,
+        "updated_at": None,
+    }
+    decoded = decode_lead_call_tracker(row)  # type: ignore[arg-type]
+    assert decoded is not None
+    assert decoded.enrollment_id == "5c1d3a9e-0000-4000-8000-000000000001"
+
+
+def test_call_completed_mirror_names_the_run_and_the_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 18 (G2): the finished tap's call.completed carries the run
+    that placed the call (enrollment_id) and the outcome, so a listening
+    square after a call node can branch on THIS run's outcome — a customer
+    can have two runs, and one call's outcome must not wake the other's."""
+    recorded: List[Dict[str, Any]] = []
+
+    async def fake_record_event(**kw: Any) -> None:
+        recorded.append(kw)
+
+    def run_now(coro: Any, name: Optional[str] = None) -> None:
+        asyncio.run(coro)
+
+    monkeypatch.setattr(crm_mirror, "record_event", fake_record_event)
+    monkeypatch.setattr(crm_mirror, "spawn_background_task", run_now)
+    lead = LeadCallTracker(
+        id="L1",
+        reseller_id="r1",
+        template="t",
+        merchant_id="m1",
+        call_id="CA9",
+        customer_id="cust-1",
+        enrollment_id="run-1",
+        outcome="NO_ANSWER",
+        payload={"customer_mobile_number": "+919999999999"},
+    )
+    _finished_lead_tap(lead)
+    (event,) = recorded
+    assert event["topic"] == "call.completed" and event["customer_id"] == "cust-1"
+    assert event["payload"]["enrollment_id"] == "run-1"
+    assert event["payload"]["outcome"] == "NO_ANSWER"
+    assert event["payload"]["lead_id"] == "L1"
+    # a lead no run placed says nothing about a run (None is dropped)
+    recorded.clear()
+    _finished_lead_tap(
+        LeadCallTracker(
+            id="L2", reseller_id="r1", template="t", merchant_id="m1", call_id="CA10"
+        )
+    )
+    assert "enrollment_id" not in recorded[0]["payload"]

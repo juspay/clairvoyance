@@ -224,6 +224,7 @@ def _created_lead_tap(lead: LeadCallTracker) -> None:
                     occurred_at=lead.call_end_time,
                     call_id=lead.call_id,
                     outcome=lead.outcome,
+                    enrollment_id=lead.enrollment_id,
                     direction=getattr(lead.call_direction, "value", None),
                     started_at=lead.call_initiated_time,
                     ended_at=lead.call_end_time,
@@ -263,6 +264,10 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
                 customer_id=lead.customer_id,
                 call_id=lead.call_id,
                 outcome=lead.outcome,
+                # The run that placed the call (phase 18): a listening square
+                # after a call node matches on it, so one call's outcome never
+                # wakes the customer's other run.
+                enrollment_id=lead.enrollment_id,
                 direction=getattr(lead.call_direction, "value", None),
                 started_at=lead.call_initiated_time,
                 ended_at=lead.call_end_time,

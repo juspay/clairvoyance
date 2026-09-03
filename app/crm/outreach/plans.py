@@ -62,6 +62,11 @@ def validate_definition(
     # walker executes from, so validator and walker cannot disagree.
     for node in definition.nodes:
         problems.extend(NODE_TYPES[node.type].validate(node, definition))
+        if node.match is not None and node.type != "wait_event":
+            problems.append(
+                f"node {node.id}: match belongs to a wait_event — only a "
+                "listening square hears a letter"
+            )
 
     # The doors (phase 15): one per topic, each starting on a real square.
     # Repeat-entry words per door (repeat.py owns the vocabulary); debounce

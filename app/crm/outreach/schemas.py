@@ -106,6 +106,18 @@ class WorkflowExits(BaseModel):
     max_age_days: float = Field(7.0, gt=0)
 
 
+class WorkflowMatch(BaseModel):
+    """WHOSE letter a listening square hears (rollout phase 18): the
+    letter's payload field must equal the run's field — `id` (the run's
+    own id; a call's outcome names it as enrollment_id) or a context
+    field (lead_<node>, message_<node>). A customer can have two runs;
+    a letter about one call must never wake the other. Compared as text,
+    the goal-key precedent; a letter without the field is about nobody."""
+
+    payload: str = Field(min_length=1)
+    run: str = Field(min_length=1)
+
+
 class WorkflowNode(BaseModel):
     """One square of the board. Vocabulary is code, not CHECKs:
     wait (minutes) · send (channel + template, via connectivity) ·
@@ -115,7 +127,9 @@ class WorkflowNode(BaseModel):
     event's payload[key], or "timeout"). key: "$topic" (rollout phase 15)
     branches on the event's TOPIC instead — the edge's `on` is the topic
     string — so a stage board reads "she went to KYC" from the letter's
-    name; $topic is the only $-word."""
+    name; $topic is the only $-word. An edge labelled "else" (phase 18)
+    takes any answer the square did not name — the alarm too, when there
+    is no "timeout" edge."""
 
     id: str = Field(min_length=1)
     type: Literal["wait", "send", "call", "wait_event"]
@@ -130,6 +144,8 @@ class WorkflowNode(BaseModel):
     # call template for a whole board. The stages ladder (phase 17) sets it
     # for every square it expands.
     stage: Optional[str] = Field(None, min_length=1)
+    # Phase 18: only the letter about THIS run wakes the square.
+    match: Optional[WorkflowMatch] = None
 
 
 # An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a

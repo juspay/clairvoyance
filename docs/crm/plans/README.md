@@ -10,6 +10,7 @@ the PR that makes it.
 | File | Flow | Shape |
 |---|---|---|
 | `cart-recovery.json` | Cart abandonment (`context/reading-notes.md` §16.1) | one board: wait 30m → WhatsApp → wait 30m → rescue call → wait 1d |
+| `cart-recovery-fallback.json` | The cart board with a fallback after the call (rollout phase 18, G2) | after the rescue call, a listening square hears THIS run's `call.completed` (`match` on `enrollment_id`): no answer / busy / early hang-up → a second WhatsApp; `else` → the day of listening |
 | `loan-dropoff.json` | Loan-onboarding drop-off (§16.2; rollout phase 17) | one **pinned board** written as a `stages` ladder: five stages in order; quiet 30m on a stage (120m on the offer) → call → listen for a day → the end; expanded into the wait_event board at create/draft/publish |
 
 Placeholders: every `template_id` is the string `TEMPLATE_ID_PLACEHOLDER`
@@ -36,6 +37,9 @@ run stands on, `overrides` a stage's own clocks or action. The expander
 (`app/crm/outreach/ladder.py`) gives every stage an `at-`, `act-` and
 `after-` square and one labelled arrow to every later stage; the CI test
 computes that arrow set from the order and fails when the expansion
-differs — one missing arrow is one wrong phone call. The stored document
+differs — one missing arrow is one wrong phone call. A keyed ladder
+(top-level `key`) gives every listening square `match` on that key, so
+two applications of one customer never move on each other's letters
+(phase 18). The stored document
 carries both the ladder and the board it produced; a document may not
 draw `nodes`/`edges`/`entry` beside its ladder.

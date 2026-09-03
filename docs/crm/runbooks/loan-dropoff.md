@@ -17,7 +17,10 @@ and store both — `GET /workflows/<wf>` shows `stages` beside the
 `at-<stage>` (listening for every later stage, the idle clock),
 `act-<stage>` (the call) and `after-<stage>` (listening again, the
 post-call window); `<stage>` is the topic's last segment with `_` as `-`
-(`loan.kyc_completed` → `at-kyc-completed`). Versions are pinned
+(`loan.kyc_completed` → `at-kyc-completed`). Every listening square hears
+only letters about ITS application (`match` on `application_id`, phase
+18): two applications of one customer are two runs that never move on
+each other's letters. Versions are pinned
 (`on_publish: pin`, ADR 0023): a journey finishes on the document it
 entered under.
 

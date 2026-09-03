@@ -337,6 +337,10 @@ class LeadCallTracker(BaseModel):
     # CRM identity stamp (migration 050, A15) — written once by the
     # created-lead tap; later mirrors PASS it through, they never resolve.
     customer_id: Optional[str] = None
+    # The workflow run that placed this call (migration 059, ADR 0010) —
+    # stamped by the walker after insert; the finished tap mirrors it so
+    # the run can hear its own call's outcome (rollout phase 18).
+    enrollment_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
