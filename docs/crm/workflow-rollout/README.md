@@ -83,12 +83,25 @@ PR has not merged yet.
 | 15 | Topic branching + multi-topic entry + reply clearing | feat | 01, 13 |
 | 16 | Facts on resume, stage facts, parked runs movable, restart-on-repeat anywhere | feat | 00, 15 |
 | 17 | `stages` ladder sugar + loan funnel migration to a board | feat + docs | 14, 15, 16 |
-| 18 | Outcome feedback into runs (G2, G3) | feat | PRs #1040/#1052 merged; 15 |
-| 19 | Permission-gate wiring (G1) | feat | PR #1021 merged |
+| 18 | Outcome feedback into runs (G2, G3) — **call half landed (#1076)**; the message half (receipts, STOP) waits | feat | PRs #1040/#1052 merged; 15 |
+| 19 | Permission-gate wiring (G1) — **deferred (2026-09-03): revisit after #1021 merges** | feat | PR #1021 merged |
 | 99 | Backlog (G4, G5, G6, G10, G11, remaining nits) | — | — |
 
 Phases 00–09 need no canon change. Phase 10 is the canon decision; 11–17
-build on it. 18 and 19 are gated on other people's PRs and can slide. Phase
+build on it. 18 and 19 are gated on other people's PRs and can slide.
+
+**Status (2026-09-03):** phases 00–17 and the call half of 18 are merged
+(release `015231e`). What remains is gated on other people's PRs:
+
+- **18, message half** — delivery receipts (`message_for_provider_id`, the
+  receipt-topic injection) and STOP → suppression: after #1040 (WhatsApp
+  webhooks) and #1052 (extractor) merge. A second PR under the same file.
+- **19** — deferred, by decision, until #1021 merges. Today #1021 conflicts
+  with release, carries migrations numbered 055/056 (both long taken; the
+  next free number is 066), and exposes `record_consent` / `log_decision`
+  only — no `may_contact`. Phase 19 is the call-site wiring of that
+  decision, so it needs the PR rebased, renumbered and extended (or a phase
+  file defining the decision contract) before it can start. Phase
 05 does not exist (its content became phase 00 when we decided to land
 #1041 ourselves); numbering was kept so cross-references stay stable.
 
