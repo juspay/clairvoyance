@@ -8,6 +8,7 @@ Nothing reads the pin yet (phase 12); this phase makes the rows exist."""
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import uuid4
 
@@ -15,13 +16,19 @@ import pytest
 
 import app.crm.outreach.api as outreach_api
 import app.crm.outreach.plans as plans
+import app.crm.outreach.versions as versions
 from app.crm.outreach.db import DbTxn
 from app.crm.outreach.db.queries import (
     get_definition_query,
     insert_version_query,
+    list_versions_query,
+    live_plans_naming_template_query,
+    occupied_nodes_on_version_query,
     repin_open_runs_query,
+    repin_runs_on_version_query,
+    runs_referencing_template_query,
 )
-from app.crm.outreach.plans import validate_definition
+from app.crm.outreach.plans import validate_definition, validate_migration
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition
 from scripts.check_crm_boundaries import TABLE_OWNERS
 
@@ -126,6 +133,9 @@ class _PublishAccessor:
         published.version = 2
         return published
 
+    async def lock_templates_shared(self, conn: Any, *args: Any) -> None:
+        return None  # phase 14's lock; pinned by test_workflow_plans.py
+
     async def insert_version(self, conn: Any, *args: Any) -> None:
         self.versions.append(args)
 
@@ -217,3 +227,305 @@ async def test_the_publish_route_threads_the_publisher(
         "wf-1", merchant_id="m1", current_user=user
     )
     assert seen == [("m1", "wf-1", "ops@x")]
+
+
+# --- rollout phase 14: version operations — migrate-forward, the retirement
+# guard's count, the versions list ---
+
+# v3: wait, then a call. v4 fixes the call's template id (the typo-fix
+# case migrate-forward exists for); the two bad targets drop the occupied
+# square, or change the entry.
+_V3: Dict[str, Any] = {
+    **_PLAN,
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {"id": "call", "type": "call", "template_id": "tpl-1"},
+    ],
+    "edges": [["wait-30m", "call"]],
+}
+_V4_FIXED: Dict[str, Any] = {
+    **_V3,
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {"id": "call", "type": "call", "template_id": "tpl-2"},
+    ],
+}
+_V4_DROPS_CALL = _PLAN
+_V4_NEW_ENTRY: Dict[str, Any] = {
+    **_V3,
+    "entry": {**_V3["entry"], "topic": "checkout.started"},
+}
+
+
+def test_validate_migration_refuses_a_target_missing_an_occupied_square() -> None:
+    problems = validate_migration(_V3, _V4_DROPS_CALL, ["call"])
+    assert any("call" in p and "standing on it" in p for p in problems)
+
+
+def test_validate_migration_refuses_a_target_with_a_different_entry() -> None:
+    problems = validate_migration(_V3, _V4_NEW_ENTRY, ["wait-30m"])
+    assert any("entry rule" in p for p in problems)
+    # nothing pinned to the source: nothing in flight to re-admit — allowed
+    assert validate_migration(_V3, _V4_NEW_ENTRY, []) == []
+
+
+def test_validate_migration_accepts_a_target_keeping_every_square_and_the_entry() -> (
+    None
+):
+    assert validate_migration(_V3, _V4_FIXED, ["wait-30m", "call"]) == []
+    # by meaning, not spelling (B3): a target that spells out a default
+    spelled = {**_V4_FIXED, "entry": {**_V4_FIXED["entry"], "on_repeat": "ignore"}}
+    assert validate_migration(_V3, spelled, ["call"]) == []
+    # nothing standing anywhere: only the entry matters
+    assert validate_migration(_V3, _V4_DROPS_CALL, []) == []
+
+
+def test_validate_migration_reports_an_unparseable_document() -> None:
+    problems = validate_migration(_V3, {"entry": {}}, [])
+    assert problems and "shape invalid" in problems[0]
+
+
+# --- the builders ---
+
+
+def test_migration_reads_and_repins_only_runs_on_the_from_version() -> None:
+    sql, params = occupied_nodes_on_version_query("m1", "wf-1", 3)
+    assert "merchant_id = $1 AND workflow_id = $2 AND workflow_version = $3" in sql
+    assert "status <> 'exited'" in sql and params == ["m1", "wf-1", 3]
+    sql, params = repin_runs_on_version_query("m1", "wf-1", 3, 4)
+    assert "SET workflow_version = $4" in sql
+    assert "workflow_version = $3" in sql and "status <> 'exited'" in sql
+    assert "RETURNING id" in sql and params == ["m1", "wf-1", 3, 4]
+
+
+def test_versions_are_never_deleted() -> None:
+    """ADR 0023 §5 as amended: no sweep, no dial, no DELETE builder — an
+    exited run's workflow_version must keep answering what it executed."""
+    import app.crm.outreach.db.queries as queries
+
+    assert not [name for name in dir(queries) if "sweep" in name and "version" in name]
+    assert not hasattr(versions, "sweep_unreferenced_versions_tick")
+    assert "DELETE FROM crm_workflow_version" not in Path(queries.__file__).read_text()
+
+
+def test_runs_referencing_a_template_are_counted_by_their_pinned_document() -> None:
+    sql, params = runs_referencing_template_query("m1", "whatsapp", "cart_recovery_1")
+    assert "e.merchant_id = $1" in sql and "e.status <> 'exited'" in sql
+    assert "v.version = e.workflow_version" in sql
+    assert "jsonb_array_elements(v.definition->'nodes')" in sql
+    assert "node->>'type' = 'send'" in sql
+    assert "node->>'channel' = $2" in sql and "node->>'template' = $3" in sql
+    assert params == ["m1", "whatsapp", "cart_recovery_1"]
+
+
+def test_the_versions_list_is_merchant_first_newest_first_with_open_run_counts() -> (
+    None
+):
+    sql, params = list_versions_query("m1", "wf-1")
+    assert "FROM crm_workflow_version v" in sql
+    assert "v.merchant_id = $1 AND v.workflow_id = $2" in sql
+    assert "AS open_runs" in sql and "e.status <> 'exited'" in sql
+    assert "ORDER BY v.version DESC" in sql
+    assert params == ["m1", "wf-1"]
+
+
+def test_live_and_paused_plans_naming_a_template_are_counted_by_their_latest() -> None:
+    """The guard's second count: a plan with no run open right now still
+    strands its next entrant — live, or paused and able to go live."""
+    sql, params = live_plans_naming_template_query("m1", "whatsapp", "cart_recovery_1")
+    assert "FROM crm_workflow w" in sql
+    assert "w.merchant_id = $1" in sql and "w.status IN ('live', 'paused')" in sql
+    assert "jsonb_array_elements(w.definition->'nodes')" in sql
+    assert "node->>'channel' = $2" in sql and "node->>'template' = $3" in sql
+    assert params == ["m1", "whatsapp", "cart_recovery_1"]
+
+
+@pytest.mark.asyncio
+async def test_template_references_answers_both_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Counts:
+        async def runs_referencing_template(self, m: str, c: str, n: str) -> int:
+            return 2
+
+        async def live_plans_naming_template(self, m: str, c: str, n: str) -> int:
+            return 1
+
+    monkeypatch.setattr(versions, "accessor", _Counts())
+    assert await versions.template_references("m1", "whatsapp", "x") == (2, 1)
+
+
+# --- the migrate atom: validate, then one UPDATE, or nothing ---
+
+
+class _MigrateAccessor:
+    def __init__(
+        self, documents: Dict[int, Dict[str, Any]], occupied: List[str], moved: int = 2
+    ) -> None:
+        self.documents = documents
+        self.occupied = occupied
+        self.moved = moved
+        self.repins: List[Tuple[Any, ...]] = []
+        self.locked: List[List[Tuple[str, str]]] = []
+        self.order: List[str] = []
+
+    async def lock_templates_shared(
+        self, conn: Any, m: str, templates: List[Tuple[str, str]]
+    ) -> None:
+        self.locked.append(list(templates))
+        self.order.append("lock")
+
+    async def pinned_definition(
+        self, conn: Any, m: str, w: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        return self.documents.get(version)
+
+    async def occupied_nodes_on_version(
+        self, conn: Any, m: str, w: str, version: int
+    ) -> List[str]:
+        return list(self.occupied)
+
+    async def repin_runs_on_version(
+        self, conn: Any, m: str, w: str, from_version: int, to_version: int
+    ) -> int:
+        self.repins.append((m, w, from_version, to_version))
+        self.order.append("repin")
+        return self.moved
+
+
+async def _migrate(
+    monkeypatch: pytest.MonkeyPatch,
+    accessor: _MigrateAccessor,
+    from_version: int = 3,
+    to_version: int = 4,
+) -> int:
+    monkeypatch.setattr(versions, "accessor", accessor)
+    return await versions._migrate_forward_in_txn(
+        cast(DbTxn, object()), "m1", "wf-1", from_version, to_version
+    )
+
+
+@pytest.mark.asyncio
+async def test_migrate_forward_moves_every_open_run_on_the_from_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _MigrateAccessor({3: _V3, 4: _V4_FIXED}, occupied=["call"])
+    assert await _migrate(monkeypatch, accessor) == 2
+    assert accessor.repins == [("m1", "wf-1", 3, 4)]
+
+
+@pytest.mark.asyncio
+async def test_migrate_forward_refuses_a_stranding_target_before_any_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _MigrateAccessor({3: _V3, 4: _V4_DROPS_CALL}, occupied=["call"])
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _migrate(monkeypatch, accessor)
+    assert any("standing on it" in p for p in refused.value.problems)
+    assert accessor.repins == []
+
+
+@pytest.mark.asyncio
+async def test_migrate_forward_needs_both_versions_and_a_real_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(versions.VersionNotFound):
+        await _migrate(monkeypatch, _MigrateAccessor({3: _V3}, []), 3, 4)
+    with pytest.raises(versions.VersionNotFound):
+        await _migrate(monkeypatch, _MigrateAccessor({4: _V4_FIXED}, []), 3, 4)
+    with pytest.raises(plans.WorkflowValidationError):
+        await _migrate(monkeypatch, _MigrateAccessor({3: _V3}, []), 3, 3)
+
+
+_V4_SENDS: Dict[str, Any] = {
+    **_V4_FIXED,
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {"id": "call", "type": "call", "template_id": "tpl-2"},
+        {"id": "wa", "type": "send", "channel": "whatsapp", "template": "cart_1"},
+    ],
+    "edges": [["wait-30m", "call"], ["call", "wa"]],
+    "purpose_key": "marketing.cart.recovery",
+}
+
+
+@pytest.mark.asyncio
+async def test_migrate_forward_refuses_a_target_whose_template_is_no_longer_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The target is an old version: what was approved at its publish may
+    have been retired since. Publish's own check runs on the target, under
+    the shared template lock, before any run is moved."""
+    accessor = _MigrateAccessor({3: _V3, 4: _V4_SENDS}, occupied=["call"])
+
+    async def retired(merchant_id: str, definition: WorkflowDefinition) -> List[str]:
+        accessor.order.append("check")
+        return ["send node wa: template 'cart_1' is 'deleted', not approved"]
+
+    monkeypatch.setattr(plans, "_template_problems", retired)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _migrate(monkeypatch, accessor)
+    assert any("not approved" in p for p in refused.value.problems)
+    assert accessor.repins == []
+    assert accessor.locked == [[("whatsapp", "cart_1")]]
+    assert accessor.order == ["lock", "check"]
+
+
+@pytest.mark.asyncio
+async def test_migrate_forward_holds_the_targets_templates_then_checks_then_moves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _MigrateAccessor({3: _V3, 4: _V4_SENDS}, occupied=["call"])
+
+    async def approved(merchant_id: str, definition: WorkflowDefinition) -> List[str]:
+        accessor.order.append("check")
+        return []
+
+    monkeypatch.setattr(plans, "_template_problems", approved)
+    assert await _migrate(monkeypatch, accessor) == 2
+    assert accessor.order == ["lock", "check", "repin"]
+
+
+# --- the template lock (shared/locks.py): one key, two sides ---
+
+
+def test_the_template_lock_key_is_stable_and_bigint_sized() -> None:
+    from app.crm.shared.locks import template_lock_key
+
+    key = template_lock_key("m1", "whatsapp", "cart_1")
+    assert key == template_lock_key("m1", "whatsapp", "cart_1")
+    assert key != template_lock_key("m1", "whatsapp", "cart_2")
+    assert key != template_lock_key("m2", "whatsapp", "cart_1")
+    assert -(2**63) <= key < 2**63
+
+
+def test_pinners_lock_shared_and_retirement_locks_exclusive() -> None:
+    from app.crm.connectivity.db.queries.template import lock_template_exclusive_query
+    from app.crm.outreach.db.queries import lock_template_shared_query
+
+    sql, params = lock_template_shared_query(42)
+    assert "pg_advisory_xact_lock_shared($1::bigint)" in sql and params == [42]
+    sql, params = lock_template_exclusive_query(42)
+    assert "pg_advisory_xact_lock($1::bigint)" in sql and "_shared" not in sql
+    assert params == [42]
+
+
+@pytest.mark.asyncio
+async def test_the_migrate_route_threads_the_versions_and_answers_the_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: List[Tuple[Any, ...]] = []
+
+    async def migrate_forward(
+        merchant_id: str, workflow_id: str, from_version: int, to_version: int
+    ) -> int:
+        seen.append((merchant_id, workflow_id, from_version, to_version))
+        return 5
+
+    monkeypatch.setattr(versions, "migrate_forward", migrate_forward)
+    user = cast(Any, type("U", (), {"email": "ops@x"})())
+    result = await outreach_api.migrate_version_route(
+        "wf-1", 3, merchant_id="m1", to=4, current_user=user
+    )
+    assert (result.from_version, result.to_version, result.moved) == (3, 4, 5)
+    assert seen == [("m1", "wf-1", 3, 4)]

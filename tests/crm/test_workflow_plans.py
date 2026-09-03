@@ -10,7 +10,10 @@ import pytest
 import app.crm.outreach.plans as plans
 from app.crm.outreach.db import DbTxn
 from app.crm.outreach.plans import validate_definition
-from app.crm.outreach.schemas import Workflow
+from app.crm.outreach.schemas import (
+    Workflow,
+    WorkflowDefinition,
+)
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -413,6 +416,8 @@ class _PublishAccessor:
     def __init__(self, draft: Dict[str, Any]) -> None:
         self.draft = draft
         self.published = False
+        self.locked: List[List[Tuple[str, str]]] = []
+        self.order: List[str] = []
 
     async def workflow_for_publish(self, conn: Any, m: str, w: str) -> Workflow:
         return _workflow("live", _TERSE_DRAFT).model_copy(update={"draft": self.draft})
@@ -420,8 +425,15 @@ class _PublishAccessor:
     async def occupied_nodes(self, conn: Any, m: str, w: str) -> List[str]:
         return []
 
+    async def lock_templates_shared(
+        self, conn: Any, m: str, templates: List[Tuple[str, str]]
+    ) -> None:
+        self.locked.append(list(templates))
+        self.order.append("lock")
+
     async def apply_publish(self, conn: Any, m: str, w: str) -> Workflow:
         self.published = True
+        self.order.append("publish")
         return _workflow("live", self.draft)
 
     async def insert_version(self, conn: Any, *args: Any) -> None:
@@ -516,3 +528,25 @@ async def test_a_channel_that_does_not_register_templates_is_not_asked(
     asked = _registry(monkeypatch, status=None, registers=False)
     await _publish(accessor)
     assert asked == [] and accessor.published is True
+
+
+@pytest.mark.asyncio
+async def test_publish_holds_the_templates_it_sends_before_asking_the_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 14: the template lock (shared/locks.py) is taken SHARED for
+    every template the draft sends BEFORE the approval check, so a
+    retirement cannot commit between "approved" and the version row."""
+    accessor = _PublishAccessor(_SEND_PLAN)
+    monkeypatch.setattr(plans, "accessor", accessor)
+
+    async def template_status(merchant_id: str, channel: str, name: str) -> str:
+        accessor.order.append("ask")
+        return "approved"
+
+    monkeypatch.setattr(plans, "template_status", template_status)
+    monkeypatch.setattr(plans, "registers_templates_for", lambda channel: True)
+    await _publish(accessor)
+    expected = WorkflowDefinition.model_validate(_SEND_PLAN).send_templates()
+    assert expected and accessor.locked == [expected]
+    assert accessor.order == ["lock", "ask", "publish"]

@@ -79,7 +79,7 @@ PR has not merged yet.
 | 11 | Version storage + `on_publish` word | feat + migration | 10 |
 | 12 | Walker reads the pinned definition; migrate mode | feat | 11 |
 | 13 | Entry consumer evaluates per-run versions | feat | 12 |
-| 14 | Version operations (drain/migrate-forward, retention, template guard) | feat | 13 |
+| 14 | Version operations (drain/migrate-forward, template guard; retention dropped — versions are kept) | feat | 13 |
 | 15 | Topic branching + multi-topic entry + reply clearing | feat | 01, 13 |
 | 16 | Facts on resume, stage facts, parked runs movable, restart-on-repeat anywhere | feat | 00, 15 |
 | 17 | `stages` ladder sugar + loan funnel migration to a board | feat + docs | 14, 15, 16 |

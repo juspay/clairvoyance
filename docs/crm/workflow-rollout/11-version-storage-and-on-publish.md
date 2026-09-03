@@ -18,7 +18,7 @@ CREATE TABLE crm_workflow_version (
 );
 CREATE UNIQUE INDEX crm_workflow_version_uq ON crm_workflow_version (merchant_id, workflow_id, version);
 ```
-- Immutability trigger: refuse UPDATE of `definition`/`version` (copy the 051 pattern). No DELETE grant changes (one role) — the retention sweep (phase 14) deletes only unreferenced versions.
+- Immutability trigger: refuse UPDATE of `definition`/`version` (copy the 051 pattern). No DELETE grant changes (one role). *(Phase 14 later decided versions are never deleted — ADR 0023 §5 as amended; 064's "the retention sweep deletes unreferenced versions" comment is superseded.)*
 - Backfill in the same migration: `INSERT … SELECT merchant_id, id, version, definition FROM crm_workflow WHERE definition IS NOT NULL` so every existing live plan has its current version row.
 - `TABLE_OWNERS["crm_workflow_version"] = "outreach"`; `docs/crm/migrations.md` entry.
 ### Vocabulary

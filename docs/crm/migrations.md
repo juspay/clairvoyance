@@ -69,7 +69,9 @@ Rules the template encodes:
   `crm_campaign` to avoid colliding with buddy's existing `campaign`;
   `crm_workflow_version` (064, ADR 0023) is outreach's too — the
   immutable per-publish document runs are pinned to, rows only, never
-  edits; its `on_publish` is a closed enum in a CHECK).
+  edits and never deletes (ADR 0023 §5 as amended: no retention sweep;
+  064's comment saying otherwise is superseded); its `on_publish` is a
+  closed enum in a CHECK).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)

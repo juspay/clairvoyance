@@ -41,7 +41,11 @@ from app.crm.connectivity.schemas.template import (
     SubmitTemplateRequest,
     TemplateRead,
 )
-from app.crm.connectivity.templates import TemplateError, TemplateNotFoundError
+from app.crm.connectivity.templates import (
+    TemplateError,
+    TemplateInUseError,
+    TemplateNotFoundError,
+)
 from app.schemas import UserInfo
 
 router = APIRouter()
@@ -246,5 +250,7 @@ async def retire_template_route(
         return await contracts.retire_template(req.merchant_id, template_id)
     except TemplateNotFoundError as e:
         raise _not_found(e) from e
+    except TemplateInUseError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except TemplateError as e:
         raise _bad_request(e) from e

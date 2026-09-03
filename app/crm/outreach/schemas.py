@@ -119,6 +119,17 @@ class WorkflowDefinition(BaseModel):
     # validator passes (057's semantics as an opt-in mode). Vocabulary in
     # code; the 064 CHECK on the stored column is the closed superset.
     on_publish: Literal["pin", "migrate"] = "pin"
+
+    def send_templates(self) -> List[Tuple[str, str]]:
+        """PURE: every (channel, template name) a send node of this document
+        names — what a run pinned to it may send, and so what the pinning
+        paths lock shared against a retirement (phase 14)."""
+        return [
+            (node.channel, node.template)
+            for node in self.nodes
+            if node.type == "send" and node.channel and node.template
+        ]
+
     # What the plan's sends are for (canon T16 col 9, NOT NULL on the
     # manifest; the gate checks it against the grant). Required once the
     # plan has a send node; the send node copies it onto every row.
@@ -186,6 +197,26 @@ class WorkflowRunSummary(BaseModel):
     open: Dict[str, int]
     median_minutes_to_exit: Optional[float]
     recovered_amount: Optional[float]
+
+
+class WorkflowVersion(BaseModel):
+    """One published document of a plan (ADR 0023) and how many open runs
+    still execute it — the versions list (rollout phase 14)."""
+
+    version: int
+    on_publish: str
+    published_by: Optional[str]
+    published_at: datetime
+    open_runs: int
+
+
+class VersionMigration(BaseModel):
+    """What a migrate-forward did: every open run that was pinned to
+    from_version now executes to_version."""
+
+    from_version: int
+    to_version: int
+    moved: int
 
 
 class EnrollmentRun(BaseModel):

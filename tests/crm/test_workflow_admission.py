@@ -158,6 +158,9 @@ def _workflow(key: Optional[str], reenter: bool = False) -> Workflow:
     )
 
 
+_REAL_ACCESSOR = enrol_mod.accessor
+
+
 class _History:
     """The accessor slice _enrol_in_txn touches. The customer has ONE run
     on this plan, five minutes old, keyed ORD-1; ORD-2 has never run."""
@@ -165,9 +168,17 @@ class _History:
     def __init__(self) -> None:
         self.judged: List[Optional[str]] = []
         self.inserted: List[str] = []
+        self.locked: List[List[Any]] = []
+        self.order: List[str] = []
 
     async def source_event_used(self, conn: Any, *args: Any) -> bool:
         return False
+
+    async def lock_templates_shared(
+        self, conn: Any, merchant_id: str, templates: List[Any]
+    ) -> None:
+        self.locked.append(list(templates))
+        self.order.append("lock")
 
     async def admission_facts(
         self,
@@ -195,6 +206,7 @@ class _History:
         enrollment_key: str,
     ) -> EnrollmentRun:
         self.inserted.append(enrollment_key)
+        self.order.append("insert")
         return EnrollmentRun(
             id=uuid4(),
             merchant_id=merchant_id,
@@ -255,3 +267,45 @@ def test_an_unkeyed_plan_keeps_judging_the_customer(
     monkeypatch.setattr(enrol_mod, "accessor", history)
     assert _enrol(history, _workflow(key=None), CUSTOMER) is None
     assert history.inserted == [] and history.judged == [None]
+
+
+def test_enrol_holds_the_templates_the_document_sends_before_the_insert() -> None:
+    """Phase 14: the run being born may send these templates, so the enrol
+    atom takes the template lock SHARED for each of them (shared/locks.py)
+    before its insert — a retirement's EXCLUSIVE lock then waits for this
+    row to commit and counts it, instead of racing past it."""
+    history = _History()
+    enrol_mod.accessor = history  # type: ignore[assignment]
+    try:
+        workflow = Workflow(
+            id=uuid4(),
+            merchant_id="m1",
+            name="nudge",
+            status="live",
+            version=1,
+            created_by=None,
+            created_at=NOW,
+            updated_at=NOW,
+            draft=None,
+            definition={
+                "entry": {"topic": "checkouts/update", "key": "order_id"},
+                "nodes": [
+                    {"id": "wait-30m", "type": "wait", "minutes": 30},
+                    {
+                        "id": "wa",
+                        "type": "send",
+                        "channel": "whatsapp",
+                        "template": "cart_recovery_1",
+                    },
+                ],
+                "edges": [["wait-30m", "wa"]],
+                "goal": {"topics": ["orders/create"]},
+                "purpose_key": "marketing.cart.recovery",
+            },
+        )
+        run = _enrol(history, workflow, "ORD-2")
+    finally:
+        enrol_mod.accessor = _REAL_ACCESSOR  # type: ignore[assignment]
+    assert run is not None
+    assert history.locked == [[("whatsapp", "cart_recovery_1")]]
+    assert history.order == ["lock", "insert"]

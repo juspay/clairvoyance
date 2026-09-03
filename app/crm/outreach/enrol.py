@@ -95,7 +95,9 @@ async def _enrol_in_txn(
 ) -> Optional[EnrollmentRun]:
     """ATOMIC: the admission facts and the insert share one fate — the
     guards must judge the same history the new row joins, and the
-    source-event idempotency read must not race a sibling tick."""
+    source-event idempotency read must not race a sibling tick — and the
+    templates this document sends are held SHARED (shared/locks.py) so a
+    retirement cannot commit between its count and this insert."""
     source_event_id = context.get("source_event_id")
     if source_event_id and await accessor.source_event_used(
         txn, merchant_id, str(workflow.id), customer_id, str(source_event_id)
@@ -123,6 +125,7 @@ async def _enrol_in_txn(
         )
         return None
 
+    await accessor.lock_templates_shared(txn, merchant_id, definition.send_templates())
     run = await accessor.insert_enrollment(
         txn,
         merchant_id,

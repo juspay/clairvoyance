@@ -18,6 +18,7 @@ from app.crm.connectivity.db.queries.template import (
     claim_for_submit_query,
     insert_template_draft_query,
     list_templates_query,
+    lock_template_exclusive_query,
     record_in_place_edit_query,
     record_submission_query,
     release_submit_claim_query,
@@ -29,6 +30,7 @@ from app.crm.connectivity.db.queries.template import (
 )
 from app.crm.connectivity.schemas.template import ApprovedTemplate, TemplateRead
 from app.crm.shared.db import DbTxn, crm_connection
+from app.crm.shared.locks import template_lock_key
 
 # ---------------------------------------------------------------------------
 # Reads
@@ -185,6 +187,17 @@ async def record_in_place_edit(
     )
     row = await conn.fetchrow(query, *values)
     return decode_template(row) if row is not None else None
+
+
+async def lock_template_exclusive(
+    conn: DbTxn, merchant_id: str, channel: str, name: str
+) -> None:
+    """Inside the caller's atom: the template lock, EXCLUSIVE, for the rest
+    of the transaction."""
+    query, values = lock_template_exclusive_query(
+        template_lock_key(merchant_id, channel, name)
+    )
+    await conn.execute(query, *values)
 
 
 async def retire_template(

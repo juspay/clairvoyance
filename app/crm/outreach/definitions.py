@@ -4,10 +4,10 @@ consumer's per-run pass (phase 13).
 
 A run's pin — crm_workflow_enrollment.workflow_version — names the
 crm_workflow_version row it executes. Rows there are immutable (064's
-trigger refuses every UPDATE; phase 14's sweep deletes only versions no
-run references), so a document read once is true for as long as the
-process lives: the cache below never invalidates, it only evicts — least
-recently used first, past the bound. A migrate publish re-pins open runs
+trigger refuses every UPDATE) and never deleted (ADR 0023 §5), so a
+document read once is true for as long as the process lives: the cache
+below never invalidates, it only evicts — least recently used first, past
+the bound. A migrate publish re-pins open runs
 by changing the run's version NUMBER, so the next read of that run lands
 on a different key with nothing to invalidate.
 

@@ -29,6 +29,7 @@ from app.crm.connectivity.schemas.message import CredentialBundle
 from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
 from app.crm.connectivity.templates import (
     TemplateError,
+    TemplateInUseError,
     TemplateNotFoundError,
     create_draft,
     edit,
@@ -249,6 +250,10 @@ class _FakeTemplateAccessor:
         self.edited_from = expected_status
         return _template(status=status, components=comps)
 
+    async def lock_template_exclusive(self, txn, merchant_id, channel, name):
+        """Test double: the template lock, taken exclusive (phase 14)."""
+        self.calls.append("lock")
+
     async def retire_template(self, txn, merchant_id, template_id):
         """Test double: record the retirement."""
         self.calls.append("retire")
@@ -340,11 +345,16 @@ def _patch(monkeypatch, *, templates=None, installation=None, provider=None):
         """Test double: the vault read."""
         return _Credential()
 
+    async def _no_open_runs(merchant_id: str, channel: str, name: str) -> tuple:
+        """Test double: the retire guard (phase 14) finds nothing naming it."""
+        return (0, 0)
+
     monkeypatch.setattr(templates_module, "template_accessor", accessor)
     monkeypatch.setattr(accounts_module, "installation_accessor", installations)
     monkeypatch.setattr(templates_module, "atomically", _atomically)
     monkeypatch.setattr(accounts_module, "get_credential_by_id", _credential)
     monkeypatch.setattr(templates_module, "connector_for_channel", lambda c: spec)
+    monkeypatch.setattr(templates_module, "_retire_guard", _no_open_runs)
     return accessor, face
 
 
@@ -491,6 +501,120 @@ async def test_retiring_still_happens_when_the_provider_is_down(
     )
     updated = await retire("shop", "t-1")
     assert updated.status == "deleted"
+
+
+# --- the retirement guard (rollout phase 14): a template an open workflow
+# run still names cannot be withdrawn under it ---
+
+
+def _approved() -> _FakeTemplateAccessor:
+    return _FakeTemplateAccessor(
+        _template(status="approved", provider_template_id="T-1")
+    )
+
+
+async def test_retire_is_refused_while_open_runs_name_the_template(
+    monkeypatch,
+) -> None:
+    """The guard is outreach's answer to "who would still send this?" —
+    open runs by their PINNED document, live/paused plans by their latest
+    — asked through the hook, never a cross import. A count refuses the
+    retirement before the provider or the row is touched, and says how
+    many of each."""
+    accessor, face = _patch(monkeypatch, templates=_approved())
+    asked: List[tuple] = []
+
+    async def two_runs(merchant_id: str, channel: str, name: str) -> tuple:
+        asked.append((merchant_id, channel, name))
+        return (2, 0)
+
+    monkeypatch.setattr(templates_module, "_retire_guard", two_runs)
+    with pytest.raises(TemplateInUseError, match="2 open workflow run"):
+        await retire("shop", "t-1")
+    template = accessor.template
+    assert template is not None
+    assert asked == [("shop", template.channel, template.name)]
+    assert "retire" not in accessor.calls and face.retired == []
+
+
+async def test_retire_is_refused_while_a_live_plan_names_the_template(
+    monkeypatch,
+) -> None:
+    """No run open right now, but a live plan's latest document sends it:
+    its next entrant would be pinned to a withdrawn template. Refused the
+    same way."""
+    accessor, face = _patch(monkeypatch, templates=_approved())
+
+    async def one_plan(merchant_id: str, channel: str, name: str) -> tuple:
+        return (0, 1)
+
+    monkeypatch.setattr(templates_module, "_retire_guard", one_plan)
+    with pytest.raises(TemplateInUseError, match="1 live or paused plan"):
+        await retire("shop", "t-1")
+    assert "retire" not in accessor.calls and face.retired == []
+
+
+async def test_retire_proceeds_when_no_open_run_names_the_template(
+    monkeypatch,
+) -> None:
+    accessor, face = _patch(monkeypatch, templates=_approved())
+    updated = await retire("shop", "t-1")
+    assert updated.status == "deleted" and accessor.calls == ["lock", "retire"]
+
+
+async def test_retire_withdraws_locally_with_the_check_before_the_provider(
+    monkeypatch,
+) -> None:
+    """The exclusive template lock, the check and the local withdrawal
+    share one transaction, in that order, and the provider call comes
+    after — no provider round-trip separates the check from the commit,
+    and no pinner can commit between them (the CodeRabbit finding on
+    #1071; the interleaving itself is proven on Postgres in the PR)."""
+    order: List[str] = []
+
+    class _Recording(_FakeTemplateAccessor):
+        async def lock_template_exclusive(self, txn, merchant_id, channel, name):
+            """Test double: the exclusive lock, in order."""
+            order.append("lock")
+
+        async def retire_template(self, txn, merchant_id, template_id):
+            """Test double: local withdrawal, in order."""
+            order.append("local")
+            return await super().retire_template(txn, merchant_id, template_id)
+
+    class _Face(_StubTemplates):
+        async def retire(
+            self, bundle, account_ref, provider_template_id, name, language
+        ):
+            """Test double: the provider call, in order."""
+            order.append("provider")
+            await super().retire(
+                bundle, account_ref, provider_template_id, name, language
+            )
+
+    async def checked(merchant_id: str, channel: str, name: str) -> tuple:
+        order.append("check")
+        return (0, 0)
+
+    _patch(
+        monkeypatch,
+        templates=_Recording(_template(status="approved", provider_template_id="T-1")),
+        provider=_Face(),
+    )
+    monkeypatch.setattr(templates_module, "_retire_guard", checked)
+    updated = await retire("shop", "t-1")
+    assert updated.status == "deleted"
+    assert order == ["lock", "check", "local", "provider"]
+
+
+async def test_retire_fails_closed_when_no_guard_is_registered(monkeypatch) -> None:
+    """A missing registration is a wiring bug, not permission to delete:
+    refuse, and say so in the log."""
+    accessor, face = _patch(monkeypatch, templates=_approved())
+    monkeypatch.setattr(templates_module, "_retire_guard", None)
+    with pytest.raises(TemplateError, match="not wired"):
+        await retire("shop", "t-1")
+    assert "retire" not in accessor.calls and face.retired == []
 
 
 async def test_an_unknown_template_is_a_not_found(monkeypatch) -> None:

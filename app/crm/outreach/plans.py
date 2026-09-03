@@ -141,6 +141,44 @@ def _entry_changed(raw_entry: Any, live_entry: Dict[str, Any]) -> bool:
     return draft != live
 
 
+def validate_migration(
+    from_doc: Dict[str, Any], to_doc: Dict[str, Any], occupied_nodes: List[str]
+) -> List[str]:
+    """PURE decide (rollout phase 14): may the open runs pinned to from_doc
+    be moved under to_doc? The stranding laws as a function — the same two
+    a migrate-mode publish enforces: every square those runs stand on
+    exists in the target, and the target's entry means the same (by
+    meaning, B3). Both documents are published versions, so their per-node
+    laws already held at their own publish."""
+    try:
+        WorkflowDefinition.model_validate(from_doc)
+        target = WorkflowDefinition.model_validate(to_doc)
+    except Exception as e:  # pydantic's message is already precise
+        return [f"definition shape invalid: {e}"]
+
+    problems: List[str] = []
+    # Both laws guard runs IN FLIGHT (the same condition the migrate-mode
+    # publish applies): with no open run pinned to the source, there is
+    # nothing to strand and nothing to re-admit — the move is a no-op and
+    # is allowed as one.
+    if occupied_nodes and _entry_changed(
+        to_doc.get("entry"), from_doc.get("entry") or {}
+    ):
+        problems.append(
+            "entry rule differs between the two versions — runs cannot move "
+            "under a different admission rule; publish the entry change as a "
+            "new plan"
+        )
+    squares = {node.id for node in target.nodes}
+    for occupied in occupied_nodes:
+        if occupied not in squares:
+            problems.append(
+                f"node {occupied} has waiting runs standing on it — the target "
+                "version does not have it and would strand every one"
+            )
+    return problems
+
+
 async def create_workflow(
     merchant_id: str, name: str, definition: Dict[str, Any], created_by: Optional[str]
 ) -> Workflow:
@@ -176,7 +214,9 @@ async def _publish_in_txn(
     the exact document that becomes live AND the one the new version row
     holds, the occupied-squares read must not race a walker moving tokens,
     and a migrate must never leave a run pointing at a version that did
-    not get written (ADR 0023)."""
+    not get written (ADR 0023). The templates the draft sends are held
+    SHARED (shared/locks.py) from before the approval check, so a
+    retirement cannot slip between "approved" and the version row."""
     workflow = await accessor.workflow_for_publish(txn, merchant_id, workflow_id)
     if workflow is None:
         raise WorkflowNotFound(workflow_id)
@@ -191,6 +231,7 @@ async def _publish_in_txn(
     if problems:
         raise WorkflowValidationError(problems)
     definition = WorkflowDefinition.model_validate(draft)
+    await accessor.lock_templates_shared(txn, merchant_id, definition.send_templates())
     problems = await _template_problems(merchant_id, definition)
     if problems:
         raise WorkflowValidationError(problems)
