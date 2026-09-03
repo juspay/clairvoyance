@@ -550,3 +550,125 @@ async def test_publish_holds_the_templates_it_sends_before_asking_the_registry(
     expected = WorkflowDefinition.model_validate(_SEND_PLAN).send_templates()
     assert expected and accessor.locked == [expected]
     assert accessor.order == ["lock", "ask", "publish"]
+
+
+# --- rollout phase 15: entry as a list of doors, and $topic on wait_event ---
+
+_LADDER: Dict[str, Any] = {
+    "entry": [
+        {"topic": "loan.profile_created", "start": "at-profile"},
+        {"topic": "loan.kyc_completed", "start": "at-kyc"},
+    ],
+    "reenter": True,
+    "cooldown_hours": 0,
+    "key": "application_id",
+    "nodes": [
+        {
+            "id": "at-profile",
+            "type": "wait_event",
+            "key": "$topic",
+            "minutes": 30,
+            "topics": ["loan.kyc_completed"],
+        },
+        {"id": "call-profile", "type": "call", "template_id": "tpl-p"},
+        {"id": "at-kyc", "type": "wait", "minutes": 30},
+        {"id": "call-kyc", "type": "call", "template_id": "tpl-k"},
+    ],
+    "edges": [
+        ["at-profile", "at-kyc", "loan.kyc_completed"],
+        ["at-profile", "call-profile", "timeout"],
+        ["at-kyc", "call-kyc"],
+    ],
+    "goal": {"topics": ["loan.disbursed"]},
+}
+
+
+def test_entry_as_a_list_of_doors_validates_and_a_single_entry_still_does() -> None:
+    assert validate_definition(_LADDER) == []
+    doors = WorkflowDefinition.model_validate(_LADDER).entries
+    assert [(d.topic, d.start) for d in doors] == [
+        ("loan.profile_created", "at-profile"),
+        ("loan.kyc_completed", "at-kyc"),
+    ]
+    # the shared words at the top level reach every door
+    assert all(
+        d.reenter and d.cooldown_hours == 0 and d.key == "application_id" for d in doors
+    )
+    # a door may override them
+    overridden = {
+        **_LADDER,
+        "entry": [{**_LADDER["entry"][0], "cooldown_hours": 2}, _LADDER["entry"][1]],
+    }
+    d0, d1 = WorkflowDefinition.model_validate(overridden).entries
+    assert (d0.cooldown_hours, d1.cooldown_hours) == (2, 0)
+    # a single-entry plan is one door starting on nodes[0]
+    (door,) = WorkflowDefinition.model_validate(_definition()).entries
+    assert (door.topic, door.start) == ("checkout.initiated", "wait-30m")
+    assert validate_definition(_definition()) == []
+
+
+def test_a_plan_needs_at_least_one_door() -> None:
+    """An empty door list would parse, publish, and never start a run —
+    and enrol() has no first door to fall back on."""
+    problems = validate_definition({**_LADDER, "entry": []})
+    assert any("at least one door" in p for p in problems)
+
+
+def test_a_door_must_start_on_a_real_square_and_topics_must_be_unique() -> None:
+    bad_start = {
+        **_LADDER,
+        "entry": [{"topic": "loan.profile_created", "start": "nowhere"}],
+    }
+    problems = validate_definition(bad_start)
+    assert any("nowhere" in p and "start" in p for p in problems)
+    twice = {
+        **_LADDER,
+        "entry": [
+            {"topic": "loan.profile_created", "start": "at-profile"},
+            {"topic": "loan.profile_created", "start": "at-kyc"},
+        ],
+    }
+    problems = validate_definition(twice)
+    assert any("loan.profile_created" in p and "twice" in p for p in problems)
+
+
+def test_topic_is_the_only_dollar_word_a_wait_event_may_branch_on() -> None:
+    assert validate_definition(_LADDER) == []
+    other = {
+        **_LADDER,
+        "nodes": [{**_LADDER["nodes"][0], "key": "$payload"}] + _LADDER["nodes"][1:],
+    }
+    problems = validate_definition(other)
+    assert any("$payload" in p and "$topic" in p for p in problems)
+
+
+def test_debounce_needs_a_wait_at_each_doors_own_start() -> None:
+    bouncing = {
+        **_LADDER,
+        "entry": [
+            {
+                "topic": "loan.profile_created",
+                "start": "call-profile",
+                "debounce_minutes": 10,
+            },
+            {"topic": "loan.kyc_completed", "start": "at-kyc", "debounce_minutes": 10},
+        ],
+    }
+    problems = validate_definition(bouncing)
+    assert any("loan.profile_created" in p and "alarm" in p for p in problems)
+    assert not any("loan.kyc_completed" in p for p in problems)
+
+
+def test_the_migrate_guard_compares_doors_as_a_list() -> None:
+    live = _LADDER["entry"]
+    same = {**_LADDER, "on_publish": "migrate"}
+    assert validate_definition(same, occupied_nodes=["at-kyc"], live_entry=live) == []
+    moved = {
+        **same,
+        "entry": [
+            _LADDER["entry"][0],
+            {"topic": "loan.kyc_completed", "start": "call-kyc"},
+        ],
+    }
+    problems = validate_definition(moved, occupied_nodes=["at-kyc"], live_entry=live)
+    assert any("entry rule changed" in p for p in problems)

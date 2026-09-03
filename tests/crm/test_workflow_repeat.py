@@ -5,7 +5,7 @@ laws, and the validator's two entry rules."""
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
@@ -14,9 +14,20 @@ from app.crm.outreach import repeat
 from app.crm.outreach.db.queries import patch_open_run_query
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.repeat import parse_repeat_policy, repeat_plan
-from app.crm.outreach.schemas import WorkflowDefinition
+from app.crm.outreach.schemas import WorkflowDefinition, WorkflowEntryAt
 
 _NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
+
+
+def _door(**entry_words: Any) -> Any:
+    """The plan's one door (phase 15): its entry words + start square."""
+    return _definition(**entry_words).entries[0]
+
+
+def _with_door(
+    definition: WorkflowDefinition,
+) -> Tuple[WorkflowDefinition, WorkflowEntryAt]:
+    return definition, definition.entries[0]
 
 
 def _definition(**entry_words: Any) -> WorkflowDefinition:
@@ -50,7 +61,7 @@ def test_vocabulary_is_the_corpus_four() -> None:
 
 
 def test_defaults_are_todays_behaviour() -> None:
-    plan = repeat_plan(_definition(), {"cart_value": 800})
+    plan = repeat_plan(_door(), {"cart_value": 800})
     assert plan.is_noop  # ignore + debounce 0 -> no statement at all
 
 
@@ -58,14 +69,14 @@ def test_defaults_are_todays_behaviour() -> None:
 
 
 def test_refresh_latest_always_takes_the_new_facts() -> None:
-    plan = repeat_plan(_definition(on_repeat="refresh_latest"), {"cart_value": 300})
+    plan = repeat_plan(_door(on_repeat="refresh_latest"), {"cart_value": 300})
     assert plan.patch == {"cart_value": 300} and plan.max_field is None
     assert not plan.accumulate and not plan.is_noop
 
 
 def test_refresh_max_names_the_field_and_the_number() -> None:
     plan = repeat_plan(
-        _definition(on_repeat="refresh_max(cart_value)"), {"cart_value": "4500"}
+        _door(on_repeat="refresh_max(cart_value)"), {"cart_value": "4500"}
     )
     assert plan.max_field == "cart_value" and plan.max_value == 4500.0
     assert plan.patch == {"cart_value": "4500"}
@@ -73,7 +84,7 @@ def test_refresh_max_names_the_field_and_the_number() -> None:
 
 def test_refresh_max_with_a_non_numeric_value_never_wins() -> None:
     plan = repeat_plan(
-        _definition(on_repeat="refresh_max(cart_value)", debounce_minutes=10),
+        _door(on_repeat="refresh_max(cart_value)", debounce_minutes=10),
         {"cart_value": "n/a"},
     )
     assert plan.patch == {} and plan.max_field is None
@@ -81,12 +92,12 @@ def test_refresh_max_with_a_non_numeric_value_never_wins() -> None:
 
 
 def test_accumulate_appends() -> None:
-    plan = repeat_plan(_definition(on_repeat="accumulate"), {"order_id": "B"})
+    plan = repeat_plan(_door(on_repeat="accumulate"), {"order_id": "B"})
     assert plan.accumulate and plan.patch == {"order_id": "B"}
 
 
 def test_ignore_with_debounce_slides_without_touching_facts() -> None:
-    plan = repeat_plan(_definition(debounce_minutes=5), {"cart_value": 1})
+    plan = repeat_plan(_door(debounce_minutes=5), {"cart_value": 1})
     assert plan.patch == {} and plan.debounce_minutes == 5 and not plan.is_noop
 
 
@@ -196,10 +207,11 @@ def test_a_refused_enrol_hands_the_repeat_to_apply_repeat(
             },
         },
     )()
-    asyncio.run(entry._try_enrol(flow, definition, event, "cust-1"))
-    ((merchant, wf, key, defn, event_id, facts),) = calls
+    asyncio.run(entry._try_enrol(flow, *_with_door(definition), event, "cust-1"))
+    ((merchant, wf, key, door, event_id, facts),) = calls
     assert (merchant, wf, key, event_id) == ("m1", "wf-1", "ORD-1", "ev-9")
-    assert facts["cart_value"] == 900 and defn is definition
+    assert facts["cart_value"] == 900
+    assert (door.on_repeat, door.start) == ("refresh_latest", "wait_10m")
 
 
 def test_a_successful_enrol_never_calls_apply_repeat(
@@ -228,7 +240,11 @@ def test_a_successful_enrol_never_calls_apply_repeat(
             "payload": {},
         },
     )()
-    asyncio.run(entry._try_enrol(flow, _definition(on_repeat="accumulate"), event, "c"))
+    asyncio.run(
+        entry._try_enrol(
+            flow, *_with_door(_definition(on_repeat="accumulate")), event, "c"
+        )
+    )
     assert calls == []
 
 
@@ -267,7 +283,7 @@ def test_refresh_max_ignores_non_finite_numbers() -> None:
         assert repeat._as_number(junk) is None, junk
     assert repeat._as_number("4500") == 4500.0 and repeat._as_number(12) == 12.0
     plan = repeat_plan(
-        _definition(on_repeat="refresh_max(cart_value)"), {"cart_value": "inf"}
+        _door(on_repeat="refresh_max(cart_value)"), {"cart_value": "inf"}
     )
     assert plan.patch == {} and plan.max_field is None
 
@@ -321,7 +337,9 @@ def test_the_repeat_carries_the_refreshed_phone_but_never_the_founding_id(
         },
     )()
     asyncio.run(
-        entry._try_enrol(flow, _definition(on_repeat="refresh_latest"), event, "c")
+        entry._try_enrol(
+            flow, *_with_door(_definition(on_repeat="refresh_latest")), event, "c"
+        )
     )
     ((_, _, _, _, _, facts),) = calls
     assert facts["phone"] == "+919876543210"

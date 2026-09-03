@@ -40,7 +40,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.outreach.db import accessor
-from app.crm.outreach.schemas import WorkflowDefinition
+from app.crm.outreach.schemas import WorkflowEntry, WorkflowEntryAt
 
 # The words, exactly as the corpus writes them. refresh_max carries its
 # field in parentheses: refresh_max(cart_value).
@@ -112,8 +112,8 @@ def _as_number(value: Any) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
-def repeat_plan(definition: WorkflowDefinition, facts: Dict[str, Any]) -> RepeatPlan:
-    """PURE decide: given the plan's entry words and the repeat's small
+def repeat_plan(door: WorkflowEntry, facts: Dict[str, Any]) -> RepeatPlan:
+    """PURE decide: given the door's entry words and the repeat's small
     facts, what does the open run get?
 
       ignore          -> nothing in context (the alarm may still slide)
@@ -123,9 +123,9 @@ def repeat_plan(definition: WorkflowDefinition, facts: Dict[str, Any]) -> Repeat
                          new value never wins)
       accumulate      -> the facts are appended under repeat_items
     """
-    parsed = parse_repeat_policy(definition.entry.on_repeat)
+    parsed = parse_repeat_policy(door.on_repeat)
     policy, field = parsed if parsed else (POLICY_IGNORE, None)
-    debounce = float(definition.entry.debounce_minutes or 0)
+    debounce = float(door.debounce_minutes or 0)
     if policy == POLICY_REFRESH_LATEST:
         return RepeatPlan(dict(facts), False, None, None, debounce)
     if policy == POLICY_REFRESH_MAX:
@@ -142,22 +142,23 @@ async def apply_repeat(
     merchant_id: str,
     workflow_id: str,
     enrollment_key: str,
-    definition: WorkflowDefinition,
+    door: WorkflowEntryAt,
     event_id: str,
     facts: Dict[str, Any],
 ) -> bool:
-    """A refused enrol may be a repeat of an open run on the entry square.
-    Returns True when a run was patched. Zero rows is the normal answer
-    for "not a repeat" (nothing open, or the run already moved on) and
-    for a redelivered event (it marked itself used the first time)."""
-    plan = repeat_plan(definition, facts)
+    """A refused enrol may be a repeat of an open run standing on the
+    door's start square. Returns True when a run was patched. Zero rows
+    is the normal answer for "not a repeat" (nothing open, or the run
+    already moved on) and for a redelivered event (it marked itself used
+    the first time)."""
+    plan = repeat_plan(door, facts)
     if plan.is_noop:
         return False  # ignore + no debounce: exactly today's behaviour
     patched = await accessor.patch_open_run(
         merchant_id,
         workflow_id,
         enrollment_key,
-        definition.nodes[0].id,
+        door.start,
         event_id,
         plan.patch,
         plan.accumulate,
@@ -168,6 +169,6 @@ async def apply_repeat(
     if patched:
         logger.info(
             f"repeat entry applied: workflow {workflow_id} key {enrollment_key} "
-            f"policy {definition.entry.on_repeat} debounce {plan.debounce_minutes}m"
+            f"policy {door.on_repeat} debounce {plan.debounce_minutes}m"
         )
     return patched

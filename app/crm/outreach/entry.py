@@ -10,8 +10,10 @@ docs/crm/workflow-rollout/context/reading-notes.md §15.3):
      every write names the run it is about. A migrate plan is the
      degenerate case — every open run pinned to the latest — same path,
      no branch.
-  2. THE LIVE PLANS, latest document: an entry match starts a run
-     (enrol()) — a new run always begins on the newest version.
+  2. THE LIVE PLANS, latest document: a door match (phase 15: a plan
+     lists its doors, one per topic, each naming the square its run
+     starts on) starts a run (enrol()) — a new run always begins on the
+     newest version.
 
 A consumer is a function, not a loop (worker-runtime.md): the event
 worker's pass calls consume_attributed_event() per row, inside that row's
@@ -27,12 +29,19 @@ from app.core.logger import logger
 from app.crm.outreach.db import accessor
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
-from app.crm.outreach.nodes import _BOOKKEEPING_KEYS, _BOOKKEEPING_PREFIXES
+from app.crm.outreach.nodes import (
+    _BOOKKEEPING_KEYS,
+    _BOOKKEEPING_PREFIXES,
+    TOPIC_KEY,
+    reply_key,
+)
 from app.crm.outreach.repeat import _as_number, apply_repeat
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     Workflow,
     WorkflowDefinition,
+    WorkflowEntry,
+    WorkflowEntryAt,
 )
 from app.crm.record.contracts import RawEvent
 from app.crm.shared.normalize import normalize_phone
@@ -115,10 +124,12 @@ async def consume_attributed_event(
     flows = await accessor.live_workflows(event.merchant_id)
     for flow in flows:
         definition = WorkflowDefinition.model_validate(flow.definition)
-        if definition.entry.topic == event.topic and _where_matches(
-            definition.entry.where, event.payload
-        ):
-            await _try_enrol(flow, definition, event, customer_id, handles, open_runs)
+        for door in definition.entries:
+            if door.topic == event.topic and _where_matches(door.where, event.payload):
+                await _try_enrol(
+                    flow, definition, door, event, customer_id, handles, open_runs
+                )
+                break  # topics are unique across a plan's doors
 
 
 async def _end_on_goal(
@@ -166,7 +177,10 @@ async def _wake_on_reply(
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
-        answer = event.payload.get(node.key or "")
+        # $topic (phase 15): the branch is the letter's NAME, not a field.
+        answer = (
+            event.topic if node.key == TOPIC_KEY else event.payload.get(node.key or "")
+        )
         if answer is None:
             # B1 (rollout phase 01): no key, no answer to branch on. Waking
             # the run with {reply_<node>: None} made pick_next read "the
@@ -204,11 +218,6 @@ def _goal_patch(event: RawEvent) -> dict:
     return {"goal": goal}
 
 
-def reply_key(node_id: str) -> str:
-    """Where a wait_event node's answer lives in the run's context."""
-    return f"reply_{node_id}"
-
-
 def _where_matches(where: dict, payload: dict) -> bool:
     return all(payload.get(key) == value for key, value in where.items())
 
@@ -239,12 +248,13 @@ def _context_from_payload(payload: dict) -> dict:
 async def _try_enrol(
     flow: Workflow,
     definition: WorkflowDefinition,
+    door: WorkflowEntryAt,
     event: RawEvent,
     customer_id: str,
     handles: Optional[dict] = None,
     open_runs: Sequence[EnrollmentRun] = (),
 ) -> None:
-    admit, enrollment_key = _enrollment_key(definition, event, str(flow.id))
+    admit, enrollment_key = _enrollment_key(door, event, str(flow.id))
     if not admit:
         return  # a keyed plan without its key: a refusal, not an error
     context = _context_from_payload(event.payload)
@@ -261,6 +271,7 @@ async def _try_enrol(
         customer_id=customer_id,
         context=context,
         enrollment_key=enrollment_key,
+        door=door,
     )
     if run is None:
         # Refused — most often because a run for this key is already open.
@@ -278,25 +289,29 @@ async def _try_enrol(
             event.merchant_id,
             str(flow.id),
             key,
-            await _repeat_definition(open_runs, flow, key, definition),
+            await _repeat_door(open_runs, flow, key, door.topic, door),
             str(event.id),
             repeat_facts,
         )
 
 
-async def _repeat_definition(
+async def _repeat_door(
     open_runs: Sequence[EnrollmentRun],
     flow: Workflow,
     enrollment_key: str,
-    latest: WorkflowDefinition,
-) -> WorkflowDefinition:
-    """The repeat's words are the OPEN RUN'S version's: its on_repeat and
-    debounce, and its first square's id — v5 may have renamed the entry
-    node, and the patch's `current_node = entry node` guard would then
-    never find a v3 run. The run was read at the top of this pass; when
-    it is not among her open runs (a keyed run that resolved to another
-    customer, or a sibling tick opened it after the read) the latest
-    document stands in — exactly the pre-pinning behaviour."""
+    topic: str,
+    latest: WorkflowEntryAt,
+) -> WorkflowEntryAt:
+    """The repeat's words are the OPEN RUN'S version's door: its on_repeat
+    and debounce, and the square it starts on — v5 may have renamed the
+    start square, and the patch's `current_node = start` guard would then
+    never find a v3 run. That version's door for this topic; if it has
+    none (the door is newer than the run), its first door — the patch's
+    guard makes a wrong square a no-op, never a wrong write. The run was
+    read at the top of this pass; when it is not among her open runs (a
+    keyed run that resolved to another customer, or a sibling tick opened
+    it after the read) the latest door stands in — exactly the
+    pre-pinning behaviour."""
     for run in open_runs:
         if (
             str(run.workflow_id) == str(flow.id)
@@ -304,21 +319,22 @@ async def _repeat_definition(
         ):
             pinned = await definition_for(run)
             if pinned is not None:
-                return pinned
+                doors = pinned.entries
+                return next((d for d in doors if d.topic == topic), doors[0])
             break
     return latest
 
 
 def _enrollment_key(
-    definition: WorkflowDefinition, event: RawEvent, workflow_id: str
+    door: WorkflowEntry, event: RawEvent, workflow_id: str
 ) -> Tuple[bool, Optional[str]]:
-    """PURE decide: (admit, key). No entry.key -> (True, None): enrol()
-    falls back to the customer id, canon's default. entry.key set -> the
+    """PURE decide: (admit, key). No door.key -> (True, None): enrol()
+    falls back to the customer id, canon's default. door.key set -> the
     payload's value for it. The author declared runs are per <field>; an
     event without that field cannot honestly start one, so it is refused
     like any other admission miss — never silently re-keyed to the
     customer, which would coalesce what the author said to keep apart."""
-    field = definition.entry.key
+    field = door.key
     if not field:
         return True, None
     value = event.payload.get(field)

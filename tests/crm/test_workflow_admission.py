@@ -35,33 +35,33 @@ def _definition(reenter: bool = True, cooldown_hours: float = 0.0, first_node=No
 
 
 def test_first_run_admits() -> None:
-    admit, reason = _admission(_definition(), 0, None, NOW)
+    admit, reason = _admission(_definition().entries[0], 0, None, NOW)
     assert admit and reason == "admitted"
 
 
 def test_reenter_disabled_blocks_second_run() -> None:
     admit, reason = _admission(
-        _definition(reenter=False), 1, NOW - timedelta(days=2), NOW
+        _definition(reenter=False).entries[0], 1, NOW - timedelta(days=2), NOW
     )
     assert not admit and reason == "reenter_disabled"
 
 
 def test_cooldown_blocks_inside_window() -> None:
     admit, reason = _admission(
-        _definition(cooldown_hours=24), 1, NOW - timedelta(hours=5), NOW
+        _definition(cooldown_hours=24).entries[0], 1, NOW - timedelta(hours=5), NOW
     )
     assert not admit and reason == "cooldown_active"
 
 
 def test_cooldown_admits_after_window() -> None:
     admit, reason = _admission(
-        _definition(cooldown_hours=24), 1, NOW - timedelta(hours=25), NOW
+        _definition(cooldown_hours=24).entries[0], 1, NOW - timedelta(hours=25), NOW
     )
     assert admit
 
 
 def test_first_wake_of_wait_node_is_arrival_plus_delay() -> None:
-    assert _first_wake(_definition(), NOW) == NOW + timedelta(minutes=30)
+    assert _first_wake(_definition().nodes[0], NOW) == NOW + timedelta(minutes=30)
 
 
 def test_first_wake_of_wait_event_node_is_arrival_plus_delay() -> None:
@@ -78,14 +78,14 @@ def test_first_wake_of_wait_event_node_is_arrival_plus_delay() -> None:
             "minutes": 30,
         }
     )
-    assert _first_wake(definition, NOW) == NOW + timedelta(minutes=30)
+    assert _first_wake(definition.nodes[0], NOW) == NOW + timedelta(minutes=30)
 
 
 def test_first_wake_of_action_node_is_immediate() -> None:
     definition = _definition(
         first_node={"id": "call-now", "type": "call", "template_id": "t"}
     )
-    assert _first_wake(definition, NOW) == NOW
+    assert _first_wake(definition.nodes[0], NOW) == NOW
 
 
 def test_context_passthrough_keeps_scalars_drops_structures() -> None:
@@ -230,7 +230,14 @@ def _enrol(history: _History, workflow: Workflow, key: str) -> Optional[Enrollme
     definition = WorkflowDefinition.model_validate(workflow.definition)
     return asyncio.run(
         enrol_mod._enrol_in_txn(
-            cast(DbTxn, object()), "m1", workflow, definition, CUSTOMER, {}, key
+            cast(DbTxn, object()),
+            "m1",
+            workflow,
+            definition,
+            definition.entries[0],
+            CUSTOMER,
+            {},
+            key,
         )
     )
 

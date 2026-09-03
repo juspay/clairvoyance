@@ -60,6 +60,24 @@ _BOOKKEEPING_KEYS = (
 )
 _BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_")
 
+# The one $-word a wait_event may branch on (rollout phase 15): the
+# event's TOPIC rather than a payload field.
+TOPIC_KEY = "$topic"
+
+
+def reply_key(node_id: str) -> str:
+    """Where a wait_event square's answer lives in the run's context."""
+    return f"reply_{node_id}"
+
+
+def without_reply(context: Dict[str, Any], node_id: str) -> Dict[str, Any]:
+    """PURE: the context with this square's answer cleared — written when
+    the token leaves the square (phase 15). A door may start a run on any
+    square, so a square can be revisited; a stale answer left behind
+    would resolve the revisit at once, on the old reply."""
+    return {key: value for key, value in context.items() if key != reply_key(node_id)}
+
+
 # Facts the lead machine consumes itself, not the template: kept in the
 # call payload, dropped from send variables.
 _LEAD_ONLY_KEYS = ("reporting_webhook_url",)
@@ -139,6 +157,11 @@ def _validate_wait_event(
         problems.append(f"wait_event node {node.id} needs topics")
     if not node.key:
         problems.append(f"wait_event node {node.id} needs a payload key")
+    elif node.key.startswith("$") and node.key != TOPIC_KEY:
+        problems.append(
+            f"wait_event node {node.id}: key {node.key!r} — the only $-word is "
+            f"{TOPIC_KEY} (branch on the event's topic)"
+        )
     return problems
 
 
