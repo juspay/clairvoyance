@@ -569,6 +569,26 @@ EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY", "")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
 # Exotel Webhook Authentication - required for inbound webhook security
 EXOTEL_WEBHOOK_AUTH_TOKEN = os.getenv("EXOTEL_WEBHOOK_AUTH_TOKEN", "")
+
+# Enforce provider signature/token verification on all telephony webhooks
+# (Twilio X-Twilio-Signature, Plivo V3 signature, Exotel auth_token). Secure by
+# default; only set to "false" as a temporary operational escape hatch. Requires
+# TWILIO_AUTH_TOKEN / PLIVO_AUTH_TOKEN / EXOTEL_WEBHOOK_AUTH_TOKEN and a correct
+# APP_BASE_URL to be configured for the corresponding providers.
+ENFORCE_TELEPHONY_WEBHOOK_SIGNATURES = (
+    os.environ.get("ENFORCE_TELEPHONY_WEBHOOK_SIGNATURES", "true").lower() == "true"
+)
+
+# Public path prefix that an ingress strips before the request reaches us.
+# Twilio and Plivo sign the exact externally-visible URL, so if the ingress
+# rewrites e.g. https://host/agent/voice/x -> /x, the path we see is not the
+# path that was signed and every legitimate webhook fails verification. This is
+# deliberately an env var and NOT read from X-Forwarded-Prefix: that header is
+# caller-controlled, and letting a caller choose the string that goes into the
+# signed message turns the verifier into a signature oracle.
+TELEPHONY_WEBHOOK_PATH_PREFIX = os.environ.get(
+    "TELEPHONY_WEBHOOK_PATH_PREFIX", ""
+).rstrip("/")
 AWS_VAYU_URL = os.environ.get("AWS_VAYU_URL")
 AWS_VAYU_READ_API_KEY = os.environ.get("AWS_VAYU_READ_API_KEY")
 AWS_VAYU_WRITE_API_KEY = os.environ.get("AWS_VAYU_WRITE_API_KEY")
