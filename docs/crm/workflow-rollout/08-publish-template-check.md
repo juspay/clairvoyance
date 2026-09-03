@@ -21,6 +21,7 @@ A `send` node names a `template` by NAME; today the first sign it is wrong is a 
 ## Decisions already made
 - Refuse, don't warn: an unapproved template on a LIVE plan is a guaranteed blocked send.
 - Language ambiguity (approved in two languages) is refused here exactly as `approved_template` refuses it at send time — same rule, earlier.
+- *(Amended 2026-09-04: `template_status` is verdict-shaped since #1080 — `{publishable, reason}` — and asks the question of the ACCOUNT the route will send from: the merchant's primary active pipe on the channel and its installation, exactly as `resolve_send_route` picks it. "Approved on some account" passed publish and then blocked every send when the approval sat on an account the route never uses; "clean on every account" would refuse a board for a pending copy on an account it never sends from. Same rule, earlier, on the same account.)*
 
 ## Out of scope
 - Variable-shape validation against `components` (backlog).

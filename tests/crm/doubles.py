@@ -80,6 +80,9 @@ class FakeInstallationAccessor:
         self.upsert_returns = upsert_returns
         self.written: Optional[Dict[str, Any]] = None
 
+    async def get_installation(self, merchant_id, installation_id):
+        return self.installation
+
     async def get_installation_by_account(self, merchant_id, key, account_ref):
         if self.existing_account is not None:
             return self.existing_account
