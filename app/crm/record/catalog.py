@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config.static import CRM_SCHEMA_CACHE_SECONDS
 from app.crm.record.db import accessor
-from app.crm.record.extractors import shopify
+from app.crm.record.extractors import shopify, whatsapp
 from app.crm.record.extractors.engine import (
     EMPTY_SPEC,
     PAYLOAD_PREFIX,
@@ -77,18 +77,25 @@ SchemaKey = Tuple[str, str, str]  # (merchant_id, source, topic)
 # The engine (extractors/engine.py) executes these exactly as it executes a
 # registered vendor row: one decode engine, two spec sources.
 
+_SPEC_MODULES = (shopify, whatsapp)
+
 CATALOG: Dict[Tuple[str, str], CatalogEntry] = {
-    (entry.source, entry.topic): entry for entry in shopify.ENTRIES
+    (entry.source, entry.topic): entry
+    for module in _SPEC_MODULES
+    for entry in module.ENTRIES
 }
 
 # (source, topic) -> derived field -> derive(payload). A spec module exports
 # its derivers once; every entry of that source that declares a derived field
 # gets it from here (pinned: declared == provided, per entry).
+_DERIVERS_BY_SOURCE: Dict[str, Dict[str, Deriver]] = {
+    module.SOURCE: module.DERIVERS for module in _SPEC_MODULES
+}
 DERIVE: Dict[Tuple[str, str], Dict[str, Deriver]] = {
     key: {
-        f.path: shopify.DERIVERS[f.path]
+        f.path: _DERIVERS_BY_SOURCE[entry.source][f.path]
         for f in entry.fields
-        if f.derived and f.path in shopify.DERIVERS
+        if f.derived and f.path in _DERIVERS_BY_SOURCE[entry.source]
     }
     for key, entry in CATALOG.items()
 }

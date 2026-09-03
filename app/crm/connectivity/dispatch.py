@@ -36,6 +36,7 @@ from app.crm.connectivity.reasons import (
     REASON_PROVIDER_REJECTED,
     REASON_SEND_ERROR,
     REASON_SUPPRESSED,
+    readable_reason,
 )
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
@@ -335,7 +336,11 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         applied = await message_accessor.apply_outcome(
             message.id,
             plan.status,
-            plan.reason,
+            # The row says what happened, not which code said it: a provider
+            # code becomes its meaning here, once, at the only place an
+            # outcome is written. The code itself stays in the adapter's log
+            # line, which is what matches the provider's documentation.
+            readable_reason(plan.reason),
             plan.provider_message_id,
             plan.mark_sent,
             # The claim's generation: if the sweep reassigned this row and a

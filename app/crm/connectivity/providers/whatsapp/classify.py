@@ -31,6 +31,7 @@ TERMINAL_CODES = {
     "131008",  # required parameter missing
     "131009",  # parameter value invalid
     "131026",  # undeliverable: recipient cannot receive WhatsApp messages
+    "131030",  # recipient not in the allowed list (a test number's own limit)
     "131047",  # 24-hour window closed — a template is the fix, not a retry
     "132000",  # template param count mismatch
     "132001",  # template does not exist
@@ -50,6 +51,11 @@ CREDENTIAL_CODES = {
     "10",  # permission denied
     "190",  # invalid or expired access token
     "200",  # permissions error
+    # Access denied on the ASSET: the token is valid and scoped, but this
+    # app/business may not use this number. Left unnamed it fell to the
+    # unknown-4xx default, which is right about not retrying and silent
+    # about why — and this is the class an operator must act on.
+    "131005",
     "133010",  # phone number not registered for Cloud API
 }
 

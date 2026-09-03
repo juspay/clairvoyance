@@ -109,11 +109,16 @@ def _run(
     )
 
 
-def _event(topic: str, payload: Dict[str, Any], event_id: str = "ev-1") -> RawEvent:
+def _event(
+    topic: str,
+    payload: Dict[str, Any],
+    event_id: str = "ev-1",
+    source: str = "shopify",
+) -> RawEvent:
     return RawEvent(
         id=event_id,
         merchant_id="m1",
-        source="shopify",
+        source=source,
         topic=topic,
         schema_version="1",
         external_id=f"{topic}:{event_id}",
@@ -233,6 +238,69 @@ def test_a_reply_without_the_key_never_wakes_the_run(listening: _Spine) -> None:
     the alarm may time it out."""
     _consume(_event("button.reply", {"text": "hello"}))
     assert listening.resumes == []
+
+
+# --- the answer resolves through the catalog, derived fields included ---
+
+
+def _tap_plan(key: str) -> Dict[str, Any]:
+    return {
+        "entry": {"topic": "orders/create"},
+        "nodes": [
+            {
+                "id": "ask",
+                "type": "wait_event",
+                "topics": ["message.inbound"],
+                "key": key,
+                "minutes": 30,
+            }
+        ],
+        "edges": [],
+        "goal": {"topics": ["order.confirmed"]},
+    }
+
+
+# A WhatsApp button tap as the door files it: the answer lives at
+# messages[0].button.payload — nothing at the top level.
+_TAP = {
+    "messages": [
+        {"type": "button", "button": {"payload": "CONFIRM_ORDER", "text": "Confirm"}}
+    ]
+}
+
+
+def test_a_button_tap_wakes_the_square_through_the_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A button tap wakes the square through the catalog."""
+    # The square's key resolves like entry.where already does: whatsapp's
+    # reply is a DERIVED field (the answer sits inside a list the path
+    # grammar never indexes), so a top-level read finds nothing and the
+    # tap is indistinguishable from silence — the run times out CALLED.
+    plan = _tap_plan("reply")
+    flow = _flow(plan)
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    _consume(_event("message.inbound", _TAP, source="whatsapp"))
+    assert spine.resumes == [
+        (str(run.id), "ask", {"reply_ask": "CONFIRM_ORDER", "latest_letter": "ask"})
+    ]
+
+
+def test_the_same_tap_without_its_key_is_still_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same tap without its key is still ignored."""
+    # B1 holds through the catalog read: a key naming nothing — derived
+    # or top-level — is no answer, and only the alarm may end the window.
+    plan = _tap_plan("nonexistent")
+    flow = _flow(plan)
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    _consume(_event("message.inbound", _TAP, source="whatsapp"))
+    assert spine.resumes == []
 
 
 # --- phase 06 + 09: goal tiers keyed-first, per run; the goal stash ---

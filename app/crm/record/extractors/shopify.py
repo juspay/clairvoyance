@@ -24,6 +24,7 @@ Fixtures under tests/crm/fixtures/shopify/ pin every path and fallback.
 
 from typing import Any, Dict, List, Optional
 
+from app.crm.record.extractors.engine import Deriver
 from app.crm.record.schemas import CatalogEntry, CatalogField
 
 SOURCE = "shopify"
@@ -93,7 +94,7 @@ def first_item_name(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-DERIVERS = {
+DERIVERS: Dict[str, Deriver] = {
     "customer_name": customer_name,
     "items_count": items_count,
     "first_item_name": first_item_name,
