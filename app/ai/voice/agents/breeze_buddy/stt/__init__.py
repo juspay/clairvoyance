@@ -122,9 +122,19 @@ async def create_stt_from_config(config: STTConfiguration):
             sx.context if sx and sx.context else BREEZE_BUDDY_SONIOX_CONTEXT
         )
         effective_model = sx.model if sx and sx.model else BREEZE_BUDDY_SONIOX_MODEL
+        effective_max_endpoint_delay_ms = (
+            sx.max_endpoint_delay_ms
+            if sx and sx.max_endpoint_delay_ms is not None
+            else BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS
+        )
 
         if sx and sx.context:
             logger.info("Using template-specific Soniox context")
+        if sx and sx.max_endpoint_delay_ms is not None:
+            logger.info(
+                "Using template-specific Soniox max_endpoint_delay_ms: {}",
+                sx.max_endpoint_delay_ms,
+            )
 
         language = _normalize_language(config.language)
         enable_lang_id = sx.enable_language_identification if sx else None
@@ -135,7 +145,7 @@ async def create_stt_from_config(config: STTConfiguration):
                 vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
                 language_hints=language or BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
                 context_json=effective_context,
-                max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
+                max_endpoint_delay_ms=effective_max_endpoint_delay_ms,
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),
                 enable_language_identification=enable_lang_id,
