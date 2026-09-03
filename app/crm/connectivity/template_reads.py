@@ -13,10 +13,14 @@ approved" appear; that is why the send door and the publish check both ask
 here, and why the transitions file reads nothing itself.
 """
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from app.core.logger import logger
-from app.crm.connectivity.db.accessors import template as template_accessor
+from app.crm.connectivity.db.accessors import (
+    binding as binding_accessor,
+    installation as installation_accessor,
+    template as template_accessor,
+)
 from app.crm.connectivity.schemas.template import (
     ApprovedTemplate,
     TemplateRead,
@@ -37,48 +41,72 @@ async def list_templates(
 
 async def template_status(merchant_id: str, channel: str, name: str) -> TemplateVerdict:
     """Is this template NAME publishable on this channel — the registry's
-    one publish-time read (rollout phase 08, G12).
+    one publish-time read (rollout phase 08, G12), asked of the ACCOUNT the
+    route will send from.
 
-    A workflow's send node names a template and a channel, never the
-    provider account that will serve it (the route picks that at send
-    time), so the question is asked across the merchant's accounts:
+    A workflow's send node names a template and a channel, never a provider
+    account; the route picks the account at send time — and it always picks
+    the same one: the merchant's primary active pipe on the channel
+    (partial-unique, primary_binding_query) and that pipe's installation.
+    So this is the send door's question asked early, of that one account.
+    Not "approved somewhere" (an approval on a second account the route
+    never uses passed publish and then blocked every send — the #1080
+    review), and not "clean on every account" (a pending copy on a second
+    account would refuse a board that only ever sends from the first):
 
-      * no row under that name — never registered here;
-      * every account holding the name holds exactly ONE approved row —
-        publishable (the send door will find its one row whichever account
-        the route picks);
-      * some account holds several approved rows — the ambiguity
+      * no active primary pipe on the channel — nothing can send; say so;
+      * no row under that name on the sending account — never registered
+        there (a row on another account does not count);
+      * more than one approved row there — the language ambiguity
         approved_template refuses at send time, refused here first;
-      * otherwise the newest row's status, so the refusal can say why.
+      * no approved row — the newest row's status, so the refusal says why;
+      * exactly one approved row — publishable.
 
-    Verdict-shaped (3 Sep 2026 audit): outreach reads ``publishable`` and
-    quotes ``reason``; it never compares a status word of this module's
-    across the seam. ``reason`` is the clause after the template's name.
+    Verdict-shaped: outreach reads ``publishable`` and quotes ``reason``
+    (the clause after the template's name); it never compares a status word
+    across the seam. A send node that names its own pipe
+    (Message.binding_id — nothing sets it today) is the trigger for this
+    read to take that binding instead of the primary: the same lookup, one
+    parameter earlier.
     """
-    rows = await template_accessor.templates_by_name(merchant_id, channel, name)
+    binding = await binding_accessor.get_binding(merchant_id, channel, None)
+    installation = (
+        await installation_accessor.get_installation(
+            merchant_id, binding.installation_id
+        )
+        if binding is not None
+        else None
+    )
+    if installation is None:
+        return TemplateVerdict(
+            publishable=False,
+            reason=f"cannot be sent: no active primary {channel} pipe is connected",
+        )
+    account = installation.external_account_id
+    rows = [
+        row
+        for row in await template_accessor.templates_by_name(merchant_id, channel, name)
+        if row.provider_account_ref == account
+    ]
     if not rows:
         return TemplateVerdict(
             publishable=False,
-            reason=f"is not registered on {channel} for this merchant",
+            reason=f"is not registered on the sending {channel} account ({account})",
         )
-    approved_per_account: Dict[str, int] = {}
-    for row in rows:
-        if row.status == TEMPLATE_APPROVED:
-            approved_per_account[row.provider_account_ref] = (
-                approved_per_account.get(row.provider_account_ref, 0) + 1
-            )
-    if approved_per_account:
-        crowded = max(approved_per_account.values())
-        if crowded > 1:
-            return TemplateVerdict(
-                publishable=False,
-                reason=f"is approved in {crowded} languages on one account — "
-                "exactly one is required to send",
-            )
-        return TemplateVerdict(publishable=True)
-    return TemplateVerdict(
-        publishable=False, reason=f"is '{rows[0].status}', not approved"
-    )
+    approved = [row for row in rows if row.status == TEMPLATE_APPROVED]
+    if len(approved) > 1:
+        return TemplateVerdict(
+            publishable=False,
+            reason=f"is approved in {len(approved)} languages on the sending "
+            f"{channel} account — exactly one is required to send",
+        )
+    if not approved:
+        return TemplateVerdict(
+            publishable=False,
+            reason=f"is '{rows[0].status}', not approved, on the sending "
+            f"{channel} account",
+        )
+    return TemplateVerdict(publishable=True)
 
 
 async def approved_template(

@@ -25,7 +25,7 @@ from app.crm.connectivity.providers.whatsapp.templates import (
     WhatsappTemplates,
     _from_meta,
 )
-from app.crm.connectivity.schemas.connector import ConnectorInstallation
+from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
 from app.crm.connectivity.schemas.message import CredentialBundle
 from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
 from app.crm.connectivity.template_reads import template_status
@@ -812,6 +812,50 @@ class _ByNameAccessor:
         return self.rows
 
 
+class _PrimaryPipe:
+    """The route's first read: the merchant's primary pipe on the channel."""
+
+    def __init__(self, binding: Optional[ChannelBinding]) -> None:
+        self.binding = binding
+
+    async def get_binding(
+        self, merchant_id: str, channel: str, binding_id: Optional[str]
+    ) -> Optional[ChannelBinding]:
+        assert binding_id is None, "the publish check asks for the PRIMARY pipe"
+        return self.binding
+
+
+def _sends_from(account: str, monkeypatch, rows: List[TemplateRead]) -> None:
+    """Wire the publish check so the route would send from ``account``."""
+    installation = ConnectorInstallation(
+        id="inst-1",
+        merchant_id="m1",
+        connector_key="whatsapp",
+        external_account_id=account,
+        status="healthy",
+    )
+    binding = ChannelBinding(
+        id="b-1",
+        merchant_id="m1",
+        channel="whatsapp",
+        installation_id="inst-1",
+        address="15550001",
+        is_primary=True,
+        status="active",
+    )
+    monkeypatch.setattr(
+        template_reads_module, "binding_accessor", _PrimaryPipe(binding)
+    )
+    monkeypatch.setattr(
+        template_reads_module,
+        "installation_accessor",
+        FakeInstallationAccessor(installation),
+    )
+    monkeypatch.setattr(
+        template_reads_module, "template_accessor", _ByNameAccessor(rows)
+    )
+
+
 @pytest.mark.parametrize(
     ("rows", "verdict"),
     [
@@ -819,50 +863,100 @@ class _ByNameAccessor:
             [],
             TemplateVerdict(
                 publishable=False,
-                reason="is not registered on whatsapp for this merchant",
+                reason="is not registered on the sending whatsapp account (waba-1)",
             ),
         ),
-        ([_registry_row("approved")], TemplateVerdict(publishable=True)),
         (
-            [_registry_row("pending"), _registry_row("deleted")],
-            TemplateVerdict(publishable=False, reason="is 'pending', not approved"),
+            [_registry_row("approved", "en", "waba-1")],
+            TemplateVerdict(publishable=True),
         ),
         (
-            [_registry_row("approved", "en"), _registry_row("approved", "hi")],
+            [
+                _registry_row("pending", "en", "waba-1"),
+                _registry_row("deleted", "en", "waba-1"),
+            ],
             TemplateVerdict(
                 publishable=False,
-                reason="is approved in 2 languages on one account — exactly one "
-                "is required to send",
+                reason="is 'pending', not approved, on the sending whatsapp account",
             ),
         ),
         (
             [
                 _registry_row("approved", "en", "waba-1"),
+                _registry_row("approved", "hi", "waba-1"),
+            ],
+            TemplateVerdict(
+                publishable=False,
+                reason="is approved in 2 languages on the sending whatsapp account — "
+                "exactly one is required to send",
+            ),
+        ),
+        (
+            # Approved only on an account the route never uses: the #1080
+            # review's case — publish used to pass, every send then blocked.
+            [_registry_row("approved", "en", "waba-2")],
+            TemplateVerdict(
+                publishable=False,
+                reason="is not registered on the sending whatsapp account (waba-1)",
+            ),
+        ),
+        (
+            # A pending copy on a second account is not the sending
+            # account's problem: refusing here would block a board that only
+            # ever sends from waba-1.
+            [
+                _registry_row("approved", "en", "waba-1"),
+                _registry_row("pending", "en", "waba-2"),
+            ],
+            TemplateVerdict(publishable=True),
+        ),
+        (
+            # Two languages on the OTHER account do not crowd this one.
+            [
+                _registry_row("approved", "en", "waba-1"),
                 _registry_row("approved", "en", "waba-2"),
+                _registry_row("approved", "hi", "waba-2"),
             ],
             TemplateVerdict(publishable=True),
         ),
     ],
     ids=[
         "no-row",
-        "one-approved",
-        "newest-status",
-        "two-languages-one-account",
-        "one-per-account",
+        "one-approved-on-the-sending-account",
+        "newest-status-on-the-sending-account",
+        "two-languages-on-the-sending-account",
+        "approved-only-elsewhere",
+        "pending-elsewhere-is-not-our-problem",
+        "crowded-elsewhere-is-not-our-problem",
     ],
 )
-async def test_template_status_answers_for_the_publish_check(
+async def test_template_status_answers_for_the_sending_account(
     monkeypatch, rows: List[TemplateRead], verdict: TemplateVerdict
 ) -> None:
-    """Never registered; every account holding the name holds exactly one
-    approved row (publishable); two approved languages on one account — the
-    ambiguity the send door refuses, refused here first; otherwise the
-    newest row's status, so the publish message can say why. Verdict-shaped:
+    """The publish check is the send door's question asked early, of the
+    account the route will pick — the primary pipe's installation — so a
+    row on any other account neither helps nor hurts. Verdict-shaped:
     outreach quotes the reason and never compares a status word."""
-    monkeypatch.setattr(
-        template_reads_module, "template_accessor", _ByNameAccessor(rows)
-    )
+    _sends_from("waba-1", monkeypatch, rows)
     assert await template_status("m1", "whatsapp", "cart_recovery_1") == verdict
+
+
+async def test_template_status_with_no_primary_pipe_says_so(monkeypatch) -> None:
+    """No active primary pipe on the channel: nothing can send, and the
+    registry is not even consulted — the refusal names the real problem."""
+
+    class _Untouched:
+        async def templates_by_name(self, *args):
+            raise AssertionError("no pipe, no registry read")
+
+    monkeypatch.setattr(template_reads_module, "binding_accessor", _PrimaryPipe(None))
+    monkeypatch.setattr(template_reads_module, "template_accessor", _Untouched())
+    assert await template_status(
+        "m1", "whatsapp", "cart_recovery_1"
+    ) == TemplateVerdict(
+        publishable=False,
+        reason="cannot be sent: no active primary whatsapp pipe is connected",
+    )
 
 
 def test_the_publish_check_is_on_the_contract_surface() -> None:
