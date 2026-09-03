@@ -10,7 +10,13 @@ from app.crm.outreach.db.queries.enrollment import (
     resume_run_query,
     sweep_exited_runs_query,
 )
-from app.crm.outreach.nodes import lead_request_id, run_facts, send_variables
+from app.crm.outreach.nodes import (
+    action_webhook_url,
+    lead_request_id,
+    run_facts,
+    send_variables,
+    shopify_order_id,
+)
 from app.crm.outreach.runs import list_runs
 from app.crm.outreach.schemas import WorkflowNode
 from app.crm.outreach.walker import retry_delay_seconds
@@ -85,6 +91,32 @@ def test_lead_request_id_is_the_merchants_order_id_else_the_run() -> None:
     assert lead_request_id({"request_id": "req-9"}, "r-1") == "req-9"
     assert lead_request_id({"order_id": ""}, "r-1") == "wf-r-1"
     assert lead_request_id({}, "r-1") == "wf-r-1"
+
+
+def test_shopify_order_id_is_the_producers_order_id() -> None:
+    assert shopify_order_id({"order_id": "o-1001"}) == "o-1001"
+    assert shopify_order_id({"order_id": 4567}) == "4567"
+    assert shopify_order_id({"order_id": ""}) is None
+    assert shopify_order_id({}) is None
+
+
+def test_action_webhook_url_prefers_the_payload_over_the_nodes_own_field() -> None:
+    node = WorkflowNode(
+        id="n",
+        type="action",
+        add_shopify_tag=["vip"],
+        webhook_url="https://node.example/hook",
+    )
+    assert action_webhook_url(
+        {"reporting_webhook_url": "https://lead.example/hook"}, node
+    ) == ("https://lead.example/hook")
+    assert action_webhook_url({}, node) == "https://node.example/hook"
+    assert (
+        action_webhook_url(
+            {}, WorkflowNode(id="n", type="action", add_shopify_tag=["vip"])
+        )
+        is None
+    )
 
 
 def test_the_current_squares_facts_win_and_every_squares_stay_reachable() -> None:
