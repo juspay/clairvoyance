@@ -1,128 +1,23 @@
-"""SQL builders for crm_workflow (T19) and crm_workflow_enrollment (T20).
-$1 placeholders only — every value parameterized.
-
-Two kinds of writer touch a run, and the law between them (P1, rollout
-phase 03): WALKER writes (advance, exit, park, record error) are
-compare-and-set on the leased wake_at — the claim pushed wake_at one
-lease window and returned it, so that value is the generation the visit
-holds; a write carrying a stale lease matches zero rows. EVENT-SIDE writes
-(goal-cancel, a wait_event reply, a repeat patch) are unconditional and
-always move wake_at — the event wins, the walker defers to its next wake.
+"""SQL builders for crm_workflow_enrollment (T20) — one table, one file (module rules §1 at scale;
+outreach took the shape 3 Sep 2026, structure PR 2). $1 placeholders only — every value
+parameterized.
 """
 
 import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-WORKFLOW_TABLE = "crm_workflow"
-ENROLLMENT_TABLE = "crm_workflow_enrollment"
-VERSION_TABLE = "crm_workflow_version"
-_WORKFLOW_SUMMARY_COLUMNS = """
-    id, merchant_id, name, status, version, created_by,
-    created_at, updated_at
-"""
-
-# Detail adds the two documents — the list never fetches them.
-_WORKFLOW_COLUMNS = _WORKFLOW_SUMMARY_COLUMNS + ", definition, draft"
+from app.crm.outreach.db.queries.tables import (
+    ENROLLMENT_TABLE,
+    VERSION_TABLE,
+    WORKFLOW_TABLE,
+)
 
 _RUN_COLUMNS = """
     id, merchant_id, workflow_id, workflow_version, customer_id, status,
     current_node, wake_at, entered_at, exited_at, exit_reason, context,
     enrollment_key, attempts, last_error
 """
-
-
-def insert_workflow_query(
-    merchant_id: str, name: str, draft: Dict[str, Any], created_by: Optional[str]
-) -> Tuple[str, List[Any]]:
-    """A new plan is born as a draft — the walker cannot see it until
-    publish copies draft -> definition."""
-    query = f"""
-        INSERT INTO {WORKFLOW_TABLE} (merchant_id, name, draft, created_by)
-        VALUES ($1, $2, $3::jsonb, $4)
-        RETURNING {_WORKFLOW_COLUMNS}
-    """
-    return query, [merchant_id, name, json.dumps(draft), created_by]
-
-
-def update_draft_query(
-    merchant_id: str, workflow_id: str, draft: Dict[str, Any]
-) -> Tuple[str, List[Any]]:
-    query = f"""
-        UPDATE {WORKFLOW_TABLE}
-        SET draft = $3::jsonb, updated_at = now()
-        WHERE merchant_id = $1 AND id = $2
-        RETURNING {_WORKFLOW_COLUMNS}
-    """
-    return query, [merchant_id, workflow_id, json.dumps(draft)]
-
-
-def get_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
-    query = f"""
-        SELECT {_WORKFLOW_COLUMNS}
-        FROM {WORKFLOW_TABLE}
-        WHERE merchant_id = $1 AND id = $2
-    """
-    return query, [merchant_id, workflow_id]
-
-
-def list_workflows_query(
-    merchant_id: str, limit: int, offset: int
-) -> Tuple[str, List[Any]]:
-    query = f"""
-        SELECT {_WORKFLOW_SUMMARY_COLUMNS}
-        FROM {WORKFLOW_TABLE}
-        WHERE merchant_id = $1
-        ORDER BY created_at DESC, id DESC
-        LIMIT $2 OFFSET $3
-    """
-    return query, [merchant_id, limit, offset]
-
-
-def publish_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
-    """Publish = copy draft -> definition, bump version (the audit stamp),
-    go/stay live. Runs inside the publish atom AFTER the validator said
-    yes — the WHERE re-checks a draft still exists so a racing publish
-    cannot double-bump."""
-    query = f"""
-        UPDATE {WORKFLOW_TABLE}
-        SET definition = draft,
-            draft = NULL,
-            version = version + 1,
-            status = CASE WHEN status = 'draft' THEN 'live' ELSE status END,
-            updated_at = now()
-        WHERE merchant_id = $1 AND id = $2 AND draft IS NOT NULL
-        RETURNING {_WORKFLOW_COLUMNS}
-    """
-    return query, [merchant_id, workflow_id]
-
-
-def insert_version_query(
-    merchant_id: str,
-    workflow_id: str,
-    version: int,
-    definition: Dict[str, Any],
-    on_publish: str,
-    published_by: Optional[str],
-) -> Tuple[str, List[Any]]:
-    """One immutable row per publish (ADR 0023, phase 11): the document
-    that became live, under the mode it declared. No ON CONFLICT — a
-    second row for the same version is a bug the unique index must
-    surface, never a merge."""
-    query = f"""
-        INSERT INTO {VERSION_TABLE}
-            (merchant_id, workflow_id, version, definition, on_publish, published_by)
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-        RETURNING id
-    """
-    return query, [
-        merchant_id,
-        workflow_id,
-        version,
-        json.dumps(definition),
-        on_publish,
-        published_by,
-    ]
 
 
 def repin_open_runs_query(
@@ -139,25 +34,6 @@ def repin_open_runs_query(
         RETURNING id
     """
     return query, [merchant_id, workflow_id, version]
-
-
-def get_definition_query(
-    merchant_id: str, workflow_id: str, version: int
-) -> Tuple[str, List[Any]]:
-    """The pinned document, by the pin (phase 12's read)."""
-    query = f"""
-        SELECT definition
-        FROM {VERSION_TABLE}
-        WHERE merchant_id = $1 AND workflow_id = $2 AND version = $3
-    """
-    return query, [merchant_id, workflow_id, version]
-
-
-def lock_template_shared_query(key: int) -> Tuple[str, List[Any]]:
-    """The pinning side of the template lock (shared/locks.py): held
-    SHARED for the rest of the transaction, so pinners never block one
-    another and a retirement (EXCLUSIVE) waits for them to commit."""
-    return "SELECT pg_advisory_xact_lock_shared($1::bigint)", [key]
 
 
 def occupied_nodes_on_version_query(
@@ -192,24 +68,6 @@ def repin_runs_on_version_query(
     return query, [merchant_id, workflow_id, from_version, to_version]
 
 
-def list_versions_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
-    """The versions list (rollout phase 14): every published document,
-    newest first, with the open runs still pinned to it — what to migrate
-    from. Both tables are outreach's."""
-    query = f"""
-        SELECT v.version, v.on_publish, v.published_by, v.published_at,
-               (SELECT count(*) FROM {ENROLLMENT_TABLE} e
-                 WHERE e.merchant_id = v.merchant_id
-                   AND e.workflow_id = v.workflow_id
-                   AND e.workflow_version = v.version
-                   AND e.status <> 'exited') AS open_runs
-        FROM {VERSION_TABLE} v
-        WHERE v.merchant_id = $1 AND v.workflow_id = $2
-        ORDER BY v.version DESC
-    """
-    return query, [merchant_id, workflow_id]
-
-
 def runs_referencing_template_query(
     merchant_id: str, channel: str, name: str
 ) -> Tuple[str, List[Any]]:
@@ -234,31 +92,6 @@ def runs_referencing_template_query(
           )
     """
     return query, [merchant_id, channel, name]
-
-
-def set_workflow_status_query(
-    merchant_id: str, workflow_id: str, status: str
-) -> Tuple[str, List[Any]]:
-    query = f"""
-        UPDATE {WORKFLOW_TABLE}
-        SET status = $3, updated_at = now()
-        WHERE merchant_id = $1 AND id = $2 AND status <> 'archived'
-        RETURNING {_WORKFLOW_COLUMNS}
-    """
-    return query, [merchant_id, workflow_id, status]
-
-
-def live_workflows_query(merchant_id: str) -> Tuple[str, List[Any]]:
-    """The entry-rule processor's read: this merchant's live plans, on
-    the (merchant_id, status) index — the read runs once per attributed
-    event inside the event worker's pass, so it must never scan other
-    tenants' plans (nor validate them in Python)."""
-    query = f"""
-        SELECT {_WORKFLOW_COLUMNS}
-        FROM {WORKFLOW_TABLE}
-        WHERE merchant_id = $1 AND status = 'live'
-    """
-    return query, [merchant_id]
 
 
 def occupied_nodes_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
@@ -586,27 +419,6 @@ def cancel_run_query(
         RETURNING id
     """
     return query, params
-
-
-def live_plans_naming_template_query(
-    merchant_id: str, channel: str, name: str
-) -> Tuple[str, List[Any]]:
-    """The retirement guard's second count (rollout phase 14): plans that
-    are live, or paused and able to go live, whose LATEST document has a
-    send node on this channel naming this template — their next entrant
-    would be pinned to a withdrawn template just as an open run is."""
-    query = f"""
-        SELECT count(*) AS plans
-        FROM {WORKFLOW_TABLE} w
-        WHERE w.merchant_id = $1 AND w.status IN ('live', 'paused')
-          AND EXISTS (
-              SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') AS node
-              WHERE node->>'type' = 'send'
-                AND node->>'channel' = $2
-                AND node->>'template' = $3
-          )
-    """
-    return query, [merchant_id, channel, name]
 
 
 def patch_open_run_query(

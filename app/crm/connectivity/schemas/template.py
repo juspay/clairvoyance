@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.crm.connectivity.schemas.tenancy import TenantScoped
+
 
 class TemplateDraft(BaseModel):
     """What a provider needs to register a template. The local row's id and
@@ -63,13 +65,12 @@ class ProviderTemplateState(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class CreateTemplateDraftRequest(BaseModel):
+class CreateTemplateDraftRequest(TenantScoped):
     """Body for POST /connectors/templates. ``components`` is stored verbatim — the
     provider's own registered structure — and is never validated against
     their schema here: that is the provider's job at submission time, and a
     second validator would refuse shapes they accept."""
 
-    merchant_id: str = Field(..., description="Tenant scope — required")
     channel: str = Field(..., description="Must name a registered connector")
     provider_account_ref: str = Field(
         ..., description="The account that owns this template (a WABA id)"
@@ -83,8 +84,7 @@ class CreateTemplateDraftRequest(BaseModel):
     )
 
 
-class SubmitTemplateRequest(BaseModel):
-    merchant_id: str = Field(..., description="Tenant scope — required")
+class SubmitTemplateRequest(TenantScoped):
     category: str = Field(
         ...,
         description=(
@@ -94,15 +94,27 @@ class SubmitTemplateRequest(BaseModel):
     )
 
 
-class EditTemplateRequest(BaseModel):
-    merchant_id: str = Field(..., description="Tenant scope — required")
+class EditTemplateRequest(TenantScoped):
     components: List[Dict[str, Any]] = Field(
         ..., description="Replacement components, verbatim"
     )
 
 
-class RetireTemplateRequest(BaseModel):
-    merchant_id: str = Field(..., description="Tenant scope — required")
+class RetireTemplateRequest(TenantScoped):
+    """Body for POST /connectors/templates/{id}/retire — the tenant, nothing
+    else; the id rides in the path."""
+
+
+class TemplateVerdict(BaseModel):
+    """The publish-time answer for one template NAME on one channel (rollout
+    phase 08, G12), verdict-shaped so the words stay inside connectivity:
+    outreach reads ``publishable`` and quotes ``reason`` — it never compares a
+    status word across the module seam. ``reason`` is the clause after the
+    template's name in a refusal ("is 'pending', not approved"); None when
+    publishable."""
+
+    publishable: bool
+    reason: Optional[str] = None
 
 
 class TemplateRead(BaseModel):

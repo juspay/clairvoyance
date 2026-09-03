@@ -15,7 +15,7 @@ import pytest
 from app.crm.connectivity import (
     accounts as accounts_module,
     send as send_module,
-    templates as templates_module,
+    template_reads as template_reads_module,
 )
 from app.crm.connectivity.db.queries.binding import (
     binding_by_id_query,
@@ -240,7 +240,7 @@ def _patch_accessors(monkeypatch, fake) -> None:
     """
     for name in ("binding_accessor", "installation_accessor"):
         monkeypatch.setattr(send_module, name, fake)
-    monkeypatch.setattr(templates_module, "template_accessor", fake)
+    monkeypatch.setattr(template_reads_module, "template_accessor", fake)
 
 
 @pytest.fixture

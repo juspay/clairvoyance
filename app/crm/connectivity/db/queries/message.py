@@ -12,6 +12,16 @@ reads it through that layer's accessor, never SQL from here.
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.crm.connectivity.reasons import (
+    REASON_ATTEMPTS_EXHAUSTED,
+    REASON_RECLAIMED_STALE_CLAIM,
+)
+from app.crm.connectivity.status import (
+    MESSAGE_DEAD,
+    MESSAGE_QUEUED,
+    MESSAGE_SENDING,
+)
+
 MESSAGE_TABLE = "crm_message"
 
 # Named once so the claim's RETURNING and the decoder cannot drift apart.
@@ -72,13 +82,13 @@ def claim_queued_messages_query(batch_size: int) -> Tuple[str, List[Any]]:
     """
     query = f"""
         UPDATE {MESSAGE_TABLE}
-           SET status = 'sending',
+           SET status = $2,
                claimed_at = now(),
                attempt = attempt + 1
          WHERE id IN (
                SELECT id
                  FROM {MESSAGE_TABLE}
-                WHERE status = 'queued'
+                WHERE status = $3
                   AND next_attempt_at <= now()
                 ORDER BY next_attempt_at
                 LIMIT $1
@@ -86,7 +96,7 @@ def claim_queued_messages_query(batch_size: int) -> Tuple[str, List[Any]]:
          )
         RETURNING {CLAIMED_COLUMNS}
     """
-    return query, [batch_size]
+    return query, [batch_size, MESSAGE_SENDING, MESSAGE_QUEUED]
 
 
 def requeue_stale_claims_query(
@@ -108,16 +118,23 @@ def requeue_stale_claims_query(
     query = f"""
         UPDATE {MESSAGE_TABLE}
            SET status = CASE WHEN attempt >= $2::int
-                             THEN 'dead' ELSE 'queued' END,
+                             THEN $3::text ELSE $4::text END,
                reason = CASE WHEN attempt >= $2::int
-                             THEN 'max_attempts_exhausted'
-                             ELSE 'reclaimed_stale_claim' END,
+                             THEN $5::text ELSE $6::text END,
                claimed_at = NULL
-         WHERE status = 'sending'
+         WHERE status = $7
            AND claimed_at < now() - make_interval(mins => $1::int)
         RETURNING id, status
     """
-    return query, [stale_minutes, max_attempts]
+    return query, [
+        stale_minutes,
+        max_attempts,
+        MESSAGE_DEAD,
+        MESSAGE_QUEUED,
+        REASON_ATTEMPTS_EXHAUSTED,
+        REASON_RECLAIMED_STALE_CLAIM,
+        MESSAGE_SENDING,
+    ]
 
 
 def apply_outcome_query(
@@ -154,7 +171,7 @@ def apply_outcome_query(
                    ELSE now() + make_interval(secs => $6::int)
                END
          WHERE id = $1
-           AND status = 'sending'
+           AND status = $8
            AND attempt = $7::int
         RETURNING id
     """
@@ -166,4 +183,5 @@ def apply_outcome_query(
         mark_sent,
         retry_after_seconds,
         attempt,
+        MESSAGE_SENDING,
     ]

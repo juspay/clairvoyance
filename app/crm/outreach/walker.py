@@ -31,7 +31,10 @@ from app.core.config.static import (
     CRM_WALKER_MAX_ATTEMPTS,
 )
 from app.core.logger import logger
-from app.crm.outreach.db import accessor
+from app.crm.outreach.db.accessors import (
+    enrollment as enrollment_accessor,
+    workflow as workflow_accessor,
+)
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.nodes import (
     ELSE,
@@ -66,7 +69,7 @@ async def claim_due_runs(batch: int) -> List[EnrollmentRun]:
     wake_at lease push — one UPDATE that moves the alarm one lease window
     forward IS the lock, so replicas never collide and a crashed claim
     self-heals when the pushed alarm comes due again."""
-    return await accessor.claim_due_runs(batch, CRM_WALKER_LEASE_SECONDS)
+    return await enrollment_accessor.claim_due_runs(batch, CRM_WALKER_LEASE_SECONDS)
 
 
 async def walk_run(run: EnrollmentRun) -> None:
@@ -90,9 +93,11 @@ async def walk_run(run: EnrollmentRun) -> None:
         logger.error(f"walker: run {run.id} claimed without a lease — skipping")
         return
     try:
-        workflow = await accessor.get_workflow(run.merchant_id, str(run.workflow_id))
+        workflow = await workflow_accessor.get_workflow(
+            run.merchant_id, str(run.workflow_id)
+        )
         if workflow is None or workflow.status == "archived":
-            if not await accessor.exit_run(str(run.id), "ejected", lease):
+            if not await enrollment_accessor.exit_run(str(run.id), "ejected", lease):
                 _deferred(run, "eject")
             return
         if workflow.status == "paused":
@@ -106,19 +111,23 @@ async def walk_run(run: EnrollmentRun) -> None:
             raise NodeParked(f"definition v{run.workflow_version} missing")
         await _advance(run, definition, lease)
     except NodeParked as e:
-        if await accessor.park_run(str(run.id), str(e), lease):
+        if await enrollment_accessor.park_run(str(run.id), str(e), lease):
             logger.warning(f"walker: run {run.id} parked — {e}")
         else:
             _deferred(run, "park")
     except Exception as e:
         if run.attempts >= CRM_WALKER_MAX_ATTEMPTS:
-            if await accessor.park_run(str(run.id), f"attempts exhausted: {e}", lease):
+            if await enrollment_accessor.park_run(
+                str(run.id), f"attempts exhausted: {e}", lease
+            ):
                 logger.error(f"walker: run {run.id} parked after retries — {e}")
             else:
                 _deferred(run, "park")
         else:
             retry_in = retry_delay_seconds(run.attempts, CRM_WALKER_LEASE_SECONDS)
-            if await accessor.record_run_error(str(run.id), str(e), retry_in, lease):
+            if await enrollment_accessor.record_run_error(
+                str(run.id), str(e), retry_in, lease
+            ):
                 logger.warning(f"walker: run {run.id} retries in {retry_in}s — {e}")
             else:
                 _deferred(run, "retry")
@@ -145,7 +154,7 @@ async def _advance(
     # timed_out no matter which square it stands on.
     max_age = timedelta(days=definition.exits.max_age_days)
     if now - run.entered_at > max_age:
-        if not await accessor.exit_run(str(run.id), "timed_out", lease):
+        if not await enrollment_accessor.exit_run(str(run.id), "timed_out", lease):
             _deferred(run, "timed_out")
         return
 
@@ -165,7 +174,9 @@ async def _advance(
         if await customer_has_event(
             run.merchant_id, str(run.customer_id), tier.topics, since, where
         ):
-            if not await accessor.exit_run(str(run.id), tier.exit_reason, lease):
+            if not await enrollment_accessor.exit_run(
+                str(run.id), tier.exit_reason, lease
+            ):
                 _deferred(run, tier.exit_reason)
             return
 
@@ -192,7 +203,7 @@ async def _advance(
             # revisited — a stale reply would resolve the revisit at once.
             context = without_reply(context, node.id)
         if next_id is None:
-            if not await accessor.exit_run(
+            if not await enrollment_accessor.exit_run(
                 str(run.id),
                 "completed",
                 lease,
@@ -207,7 +218,7 @@ async def _advance(
             raise NodeParked(f"edge points at unknown node {next_id}")
         if is_wait(next_node) and next_node.minutes:
             # Arrival scheduling: the wait's alarm starts now.
-            if not await accessor.advance_run(
+            if not await enrollment_accessor.advance_run(
                 str(run.id),
                 next_id,
                 datetime.now(timezone.utc) + timedelta(minutes=next_node.minutes),

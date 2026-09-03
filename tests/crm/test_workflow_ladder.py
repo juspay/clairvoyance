@@ -17,6 +17,7 @@ from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import run_facts
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition
+from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 THREE = ["loan.profile_created", "loan.kyc_completed", "loan.bank_linked"]
@@ -345,8 +346,8 @@ async def test_create_and_draft_store_the_ladder_and_its_board(
         stored.append(draft)
         return _workflow("draft", None, draft)
 
-    monkeypatch.setattr(plans.accessor, "insert_workflow", insert_workflow)
-    monkeypatch.setattr(plans.accessor, "update_draft", update_draft)
+    monkeypatch.setattr(plans.workflow_accessor, "insert_workflow", insert_workflow)
+    monkeypatch.setattr(plans.workflow_accessor, "update_draft", update_draft)
     await plans.create_workflow("m1", "loan-dropoff", _ladder(), "ops@x")
     await plans.update_draft("m1", "wf-1", _ladder())
     assert stored == [expand_stages(_ladder())] * 2
@@ -398,7 +399,7 @@ async def test_publish_takes_the_stored_ladder_and_refuses_a_drifted_board(
     never published half-and-half."""
     stored = expand_stages(_ladder())
     accessor = _PublishAccessor(stored)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
     published = await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
     assert published.definition == stored
     assert accessor.versions == [(1, stored)]
@@ -410,7 +411,7 @@ async def test_publish_takes_the_stored_ladder_and_refuses_a_drifted_board(
             for n in stored["nodes"]
         ],
     }
-    monkeypatch.setattr(plans, "accessor", _PublishAccessor(drifted))
+    patch_accessors(monkeypatch, plans, _PublishAccessor(drifted))
     with pytest.raises(plans.WorkflowValidationError) as refused:
         await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
     assert any("stages" in p and "nodes" in p for p in refused.value.problems)
@@ -418,7 +419,7 @@ async def test_publish_takes_the_stored_ladder_and_refuses_a_drifted_board(
     # a ladder saved WITHOUT its board (never by create/draft — a direct
     # write) is refused as well: apply_publish copies the draft verbatim,
     # and a live document without squares would park every run
-    monkeypatch.setattr(plans, "accessor", _PublishAccessor(_ladder()))
+    patch_accessors(monkeypatch, plans, _PublishAccessor(_ladder()))
     with pytest.raises(plans.WorkflowValidationError) as refused:
         await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
     assert any("without its board" in p for p in refused.value.problems)

@@ -15,6 +15,7 @@ from app.crm.connectivity.db.queries.message import (
     requeue_stale_claims_query,
 )
 from app.crm.connectivity.schemas.message import QueuedMessage
+from app.crm.connectivity.status import MESSAGE_QUEUED
 from app.crm.shared.db import crm_connection
 
 
@@ -66,8 +67,8 @@ async def requeue_stale_claims(
     query, values = requeue_stale_claims_query(stale_minutes, max_attempts)
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
-    requeued = [str(row["id"]) for row in rows if row["status"] == "queued"]
-    dead = [str(row["id"]) for row in rows if row["status"] != "queued"]
+    requeued = [str(row["id"]) for row in rows if row["status"] == MESSAGE_QUEUED]
+    dead = [str(row["id"]) for row in rows if row["status"] != MESSAGE_QUEUED]
     return requeued, dead
 
 

@@ -28,12 +28,12 @@ from app.crm.connectivity.connectors import (
 from app.crm.connectivity.db import UniqueViolation
 from app.crm.connectivity.onboarding import (
     OnboardingError,
+    ResubscribeRefused,
     UnknownConnectorError,
     disconnect,
     onboard,
 )
 from app.crm.connectivity.providers import ADAPTERS
-from app.crm.connectivity.providers.meta import graph as graph_module
 from app.crm.connectivity.providers.whatsapp.onboard import (
     OnboardWhatsappRequest,
     WhatsappOnboarder,
@@ -44,6 +44,10 @@ from app.crm.connectivity.schemas.connector import (
     ConnectorInstallation,
     InstallationRead,
     OnboardResult,
+)
+from tests.crm.doubles import (
+    FakeInstallationAccessor,
+    stub_graph,
 )
 
 # --- the registry -----------------------------------------------------------
@@ -89,23 +93,6 @@ async def test_an_unknown_connector_is_refused_by_name() -> None:
 
 
 # --- the WhatsApp handshake -------------------------------------------------
-
-
-def _graph(monkeypatch, handler) -> List[httpx.Request]:
-    """Point the shared Graph transport at a canned responder."""
-    seen: List[httpx.Request] = []
-
-    def _capture(request: httpx.Request) -> httpx.Response:
-        """Record the outgoing request, then delegate to the handler."""
-        seen.append(request)
-        return handler(request)
-
-    monkeypatch.setattr(
-        graph_module,
-        "create_http_client",
-        lambda **_: httpx.AsyncClient(transport=httpx.MockTransport(_capture)),
-    )
-    return seen
 
 
 def _meta_stub(
@@ -174,7 +161,7 @@ async def test_an_expiry_becomes_a_real_deadline(monkeypatch) -> None:
     non-NULL rows, so a discarded expiry is a door that claims to hold a
     permanent credential and goes dark on day sixty with a green light.
     """
-    _graph(monkeypatch, _meta_stub(expires_in=5184000))
+    stub_graph(monkeypatch, _meta_stub(expires_in=5184000))
     result = await WhatsappOnboarder().gather(_request())
     assert result.token_expires_at is not None
     expected = datetime.now(timezone.utc) + timedelta(seconds=5184000)
@@ -184,14 +171,14 @@ async def test_an_expiry_becomes_a_real_deadline(monkeypatch) -> None:
 async def test_no_expiry_stays_an_honest_null(monkeypatch) -> None:
     """Some tokens genuinely never expire, and NULL has to keep meaning that
     rather than 'we forgot to look'."""
-    _graph(monkeypatch, _meta_stub(expires_in=None))
+    stub_graph(monkeypatch, _meta_stub(expires_in=None))
     result = await WhatsappOnboarder().gather(_request())
     assert result.token_expires_at is None
 
 
 async def test_the_token_never_rides_the_query_string(monkeypatch) -> None:
     """A bearer token in a URL reaches proxy logs and browser history."""
-    seen = _graph(monkeypatch, _meta_stub())
+    seen = stub_graph(monkeypatch, _meta_stub())
     await WhatsappOnboarder().gather(_request())
     for request in seen:
         assert "access_token=" not in str(request.url)
@@ -202,7 +189,7 @@ async def test_the_token_never_rides_the_query_string(monkeypatch) -> None:
 async def test_a_number_not_on_the_account_is_refused(monkeypatch) -> None:
     """Both ids arrive from a page we do not control; binding a number that
     is not on the account would build a door onto someone else's endpoint."""
-    _graph(monkeypatch, _meta_stub())
+    stub_graph(monkeypatch, _meta_stub())
     with pytest.raises(WhatsappOnboardingError):
         await WhatsappOnboarder().gather(_request(phone_number_id="PN-OTHER"))
 
@@ -211,49 +198,13 @@ async def test_a_failed_subscription_reports_a_lower_rung(monkeypatch) -> None:
     """Not a refusal: the account is real and the token works. What is
     missing is the event stream, which is a DEGRADED door with a why — and
     refusing outright would leave the merchant with a spent signup code."""
-    _graph(monkeypatch, _meta_stub(subscribe_ok=False))
+    stub_graph(monkeypatch, _meta_stub(subscribe_ok=False))
     result = await WhatsappOnboarder().gather(_request())
     assert result.health_level == "authenticated"
     assert result.health_why
 
 
 # --- onboarding's four steps ------------------------------------------------
-
-
-#: The accessor's positional signature after ``txn``, named once so the
-#: assertions read as facts about the row rather than about tuple indices.
-_UPSERT_FIELDS = (
-    "merchant_id",
-    "connector_key",
-    "external_account_id",
-    "display_label",
-    "credential_id",
-    "status",
-    "token_expires_at",
-    "health_detail_json",
-)
-
-
-class _FakeInstallationAccessor:
-    """Stands in for db/accessors/installation."""
-
-    def __init__(self, upsert_returns=None, existing_account=None):
-        """Test double."""
-        self.upsert_returns = upsert_returns
-        self.existing_account = existing_account
-        self.written: Optional[Dict[str, Any]] = None
-
-    async def get_installation_by_account(self, merchant_id, key, account_id):
-        """Test double: the pre-check's read — nothing connected by default."""
-        return self.existing_account
-
-    async def upsert_installation(self, txn, *args):
-        """Test double: record the write by field name, return the seeded row."""
-        # strict: the double records the write BY FIELD NAME, so if the
-        # accessor's signature grows a column the assertions would silently
-        # start reading the wrong one. This makes that a failure instead.
-        self.written = dict(zip(_UPSERT_FIELDS, args, strict=True))
-        return self.upsert_returns
 
 
 class _FakeBindingAccessor:
@@ -426,7 +377,7 @@ def _patch_onboarding(
     monkeypatch.setattr(
         onboarding_module,
         "installation_accessor",
-        installations or _FakeInstallationAccessor(_installation_read()),
+        installations or FakeInstallationAccessor(upsert_returns=_installation_read()),
     )
     monkeypatch.setattr(
         onboarding_module, "binding_accessor", bindings or _FakeBindingAccessor()
@@ -481,7 +432,7 @@ async def test_the_status_is_derived_from_the_health_rung(
     on a door whose subscription failed means receipts and inbound STOPs
     never arrive while the screen says everything is fine.
     """
-    installations = _FakeInstallationAccessor(_installation_read())
+    installations = FakeInstallationAccessor(upsert_returns=_installation_read())
     _patch_onboarding(
         monkeypatch,
         result=_result(health_level=level, health_why="because"),
@@ -496,7 +447,7 @@ async def test_the_expiry_reaches_the_row(monkeypatch) -> None:
     """What the handshake learned about the token's life has to be written,
     or the refresh job never sees this door."""
     expires = datetime.now(timezone.utc) + timedelta(days=60)
-    installations = _FakeInstallationAccessor(_installation_read())
+    installations = FakeInstallationAccessor(upsert_returns=_installation_read())
     _patch_onboarding(
         monkeypatch,
         result=_result(token_expires_at=expires),
@@ -512,7 +463,7 @@ async def test_a_disabled_connection_is_not_resurrected(monkeypatch) -> None:
     undo it. The upsert's WHERE declines and returns nothing; the refusal
     names what to do about it."""
     _patch_onboarding(
-        monkeypatch, installations=_FakeInstallationAccessor(upsert_returns=None)
+        monkeypatch, installations=FakeInstallationAccessor(upsert_returns=None)
     )
     with pytest.raises(OnboardingError, match="disabled"):
         await onboard("shop", "whatsapp", _request().model_dump())
@@ -709,7 +660,7 @@ async def test_an_unconfirmed_subscription_degrades_rather_than_aborting(
     abort onboarding — leaving the merchant with a spent one-time code and no
     connection. The account is real and its token works; only the event
     stream is missing, which is a degraded door with a why."""
-    _graph(monkeypatch, _meta_stub(subscribe_silent=True))
+    stub_graph(monkeypatch, _meta_stub(subscribe_silent=True))
     result = await WhatsappOnboarder().gather(_request())
     assert result.health_level == "authenticated"
     assert result.health_why
@@ -719,7 +670,7 @@ async def test_a_number_on_a_later_page_is_still_found(monkeypatch) -> None:
     """Meta returns 25 numbers a page. Without following the cursor, a
     business with more than one page has a legitimate number refused as "not
     on this account" — a wrong answer, not a slow one."""
-    _graph(monkeypatch, _meta_stub(phone_pages=3))
+    stub_graph(monkeypatch, _meta_stub(phone_pages=3))
     result = await WhatsappOnboarder().gather(_request())
     assert result.external_account_id == "waba-1"
 
@@ -735,7 +686,7 @@ async def test_the_app_secret_never_rides_the_query_string(monkeypatch) -> None:
     Both OAuth exchanges POST it in the body — a query string reaches proxy
     access logs, browser history and every intermediary's request log.
     """
-    seen = _graph(monkeypatch, _meta_stub())
+    seen = stub_graph(monkeypatch, _meta_stub())
     await WhatsappOnboarder().gather(_request())
     for request in seen:
         assert "client_secret=" not in str(request.url)
@@ -757,7 +708,7 @@ async def test_a_disabled_connection_refuses_before_the_code_is_spent(
     the cheap answer."""
     onboarder = _patch_onboarding(
         monkeypatch,
-        installations=_FakeInstallationAccessor(
+        installations=FakeInstallationAccessor(
             _installation_read(), existing_account=_healthy_route("disabled")
         ),
     )
@@ -1198,8 +1149,12 @@ def test_the_subscribe_route_reports_a_refusal_as_409(monkeypatch) -> None:
     from app.crm.connectivity import contracts
 
     async def refuses(merchant_id, installation_id):
-        """Test double: the door refused."""
-        raise OnboardingError("This account's credentials are missing or unreadable.")
+        """Test double: the door refused — the declared type, so the one
+        translator answers 409 (a plain OnboardingError is the caller's
+        mistake, 400)."""
+        raise ResubscribeRefused(
+            "This account's credentials are missing or unreadable."
+        )
 
     monkeypatch.setattr(contracts, "resubscribe", refuses)
     response = _client(monkeypatch).post(

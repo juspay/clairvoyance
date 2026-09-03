@@ -18,19 +18,22 @@ import app.crm.outreach.api as outreach_api
 import app.crm.outreach.plans as plans
 import app.crm.outreach.versions as versions
 from app.crm.outreach.db import DbTxn
-from app.crm.outreach.db.queries import (
-    get_definition_query,
-    insert_version_query,
-    list_versions_query,
-    live_plans_naming_template_query,
+from app.crm.outreach.db.queries.enrollment import (
     occupied_nodes_on_version_query,
     repin_open_runs_query,
     repin_runs_on_version_query,
     runs_referencing_template_query,
 )
+from app.crm.outreach.db.queries.version import (
+    get_definition_query,
+    insert_version_query,
+    list_versions_query,
+)
+from app.crm.outreach.db.queries.workflow import live_plans_naming_template_query
 from app.crm.outreach.plans import validate_definition, validate_migration
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition
 from scripts.check_crm_boundaries import TABLE_OWNERS
+from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
@@ -148,7 +151,7 @@ async def _publish(
     monkeypatch: pytest.MonkeyPatch, draft: Dict[str, Any], occupied: List[str]
 ) -> _PublishAccessor:
     accessor = _PublishAccessor(draft, occupied)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
 
     async def no_templates(
         merchant_id: str, definition: WorkflowDefinition
@@ -202,7 +205,7 @@ async def test_a_migrating_publish_that_would_strand_is_refused_before_any_write
         "nodes": [{"id": "wait-1h", "type": "wait", "minutes": 60}],
     }
     accessor = _PublishAccessor(draft, occupied=["wait-30m"])
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
     with pytest.raises(plans.WorkflowValidationError) as refused:
         await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
     assert any("waiting runs standing on it" in p for p in refused.value.problems)
@@ -301,11 +304,22 @@ def test_migration_reads_and_repins_only_runs_on_the_from_version() -> None:
 def test_versions_are_never_deleted() -> None:
     """ADR 0023 §5 as amended: no sweep, no dial, no DELETE builder — an
     exited run's workflow_version must keep answering what it executed."""
-    import app.crm.outreach.db.queries as queries
+    import importlib
+    import pkgutil
 
-    assert not [name for name in dir(queries) if "sweep" in name and "version" in name]
+    import app.crm.outreach.db.queries as queries_pkg
+
+    builders = [
+        name
+        for _, module, _ in pkgutil.iter_modules(queries_pkg.__path__)
+        for name in dir(importlib.import_module(f"{queries_pkg.__name__}.{module}"))
+    ]
+    assert not [name for name in builders if "sweep" in name and "version" in name]
     assert not hasattr(versions, "sweep_unreferenced_versions_tick")
-    assert "DELETE FROM crm_workflow_version" not in Path(queries.__file__).read_text()
+    assert all(
+        "DELETE FROM crm_workflow_version" not in p.read_text()
+        for p in Path(queries_pkg.__file__).parent.glob("*.py")
+    )
 
 
 def test_runs_referencing_a_template_are_counted_by_their_pinned_document() -> None:
@@ -351,7 +365,7 @@ async def test_template_references_answers_both_counts(
         async def live_plans_naming_template(self, m: str, c: str, n: str) -> int:
             return 1
 
-    monkeypatch.setattr(versions, "accessor", _Counts())
+    patch_accessors(monkeypatch, versions, _Counts())
     assert await versions.template_references("m1", "whatsapp", "x") == (2, 1)
 
 
@@ -399,7 +413,7 @@ async def _migrate(
     from_version: int = 3,
     to_version: int = 4,
 ) -> int:
-    monkeypatch.setattr(versions, "accessor", accessor)
+    patch_accessors(monkeypatch, versions, accessor)
     return await versions._migrate_forward_in_txn(
         cast(DbTxn, object()), "m1", "wf-1", from_version, to_version
     )
@@ -501,7 +515,7 @@ def test_the_template_lock_key_is_stable_and_bigint_sized() -> None:
 
 def test_pinners_lock_shared_and_retirement_locks_exclusive() -> None:
     from app.crm.connectivity.db.queries.template import lock_template_exclusive_query
-    from app.crm.outreach.db.queries import lock_template_shared_query
+    from app.crm.outreach.db.queries.version import lock_template_shared_query
 
     sql, params = lock_template_shared_query(42)
     assert "pg_advisory_xact_lock_shared($1::bigint)" in sql and params == [42]

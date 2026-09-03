@@ -4,20 +4,22 @@ predicates present, the claim's lease semantics, idempotent stamps."""
 import json
 from datetime import datetime, timezone
 
-from app.crm.outreach.db.queries import (
+from app.crm.outreach.db.queries.enrollment import (
     admission_facts_query,
     advance_run_query,
     cancel_run_query,
     claim_due_runs_query,
     exit_run_query,
     insert_enrollment_query,
-    live_workflows_query,
     open_runs_for_customer_query,
     park_run_query,
-    publish_workflow_query,
     record_run_error_query,
     resume_run_by_id_query,
     source_event_used_query,
+)
+from app.crm.outreach.db.queries.workflow import (
+    live_workflows_query,
+    publish_workflow_query,
 )
 from app.crm.record.db.queries import customer_has_event_query
 

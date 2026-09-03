@@ -10,7 +10,12 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
-from app.crm.outreach.db import DbTxn, accessor, atomically
+from app.crm.outreach.db import DbTxn, atomically
+from app.crm.outreach.db.accessors import (
+    enrollment as enrollment_accessor,
+    version as version_accessor,
+    workflow as workflow_accessor,
+)
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.repeat import parse_repeat_policy
@@ -240,7 +245,7 @@ async def create_workflow(
     problems = validate_definition(definition)
     if problems:
         raise WorkflowValidationError(problems)
-    return await accessor.insert_workflow(
+    return await workflow_accessor.insert_workflow(
         merchant_id, name, expand_stages(definition), created_by
     )
 
@@ -251,7 +256,7 @@ async def update_draft(
     problems = validate_definition(definition)
     if problems:
         raise WorkflowValidationError(problems)
-    return await accessor.update_draft(
+    return await workflow_accessor.update_draft(
         merchant_id, workflow_id, expand_stages(definition)
     )
 
@@ -276,13 +281,15 @@ async def _publish_in_txn(
     ladder draft must already carry its board (phase 17): the copy is
     verbatim, so a ladder saved without one would go live without
     squares."""
-    workflow = await accessor.workflow_for_publish(txn, merchant_id, workflow_id)
+    workflow = await workflow_accessor.workflow_for_publish(
+        txn, merchant_id, workflow_id
+    )
     if workflow is None:
         raise WorkflowNotFound(workflow_id)
     draft = workflow.draft
     if not draft:
         raise WorkflowValidationError(["nothing to publish — draft is empty"])
-    occupied = await accessor.occupied_nodes(txn, merchant_id, workflow_id)
+    occupied = await enrollment_accessor.occupied_nodes(txn, merchant_id, workflow_id)
     live_entry = (workflow.definition or {}).get("entry")
     problems = validate_definition(
         draft, occupied_nodes=occupied, live_entry=live_entry
@@ -297,16 +304,18 @@ async def _publish_in_txn(
             ]
         )
     definition = WorkflowDefinition.model_validate(draft)
-    await accessor.lock_templates_shared(txn, merchant_id, definition.send_templates())
+    await version_accessor.lock_templates_shared(
+        txn, merchant_id, definition.send_templates()
+    )
     problems = await _template_problems(merchant_id, definition)
     if problems:
         raise WorkflowValidationError(problems)
-    published = await accessor.apply_publish(txn, merchant_id, workflow_id)
+    published = await workflow_accessor.apply_publish(txn, merchant_id, workflow_id)
     if published is None:  # a racing publish consumed the draft first
         raise WorkflowValidationError(["draft already published"])
     # The version row holds the document that just became live — the draft
     # apply_publish copied verbatim — under the mode it declared.
-    await accessor.insert_version(
+    await version_accessor.insert_version(
         txn,
         merchant_id,
         workflow_id,
@@ -317,7 +326,7 @@ async def _publish_in_txn(
     )
     repinned = 0
     if definition.on_publish == "migrate":
-        repinned = await accessor.repin_open_runs(
+        repinned = await enrollment_accessor.repin_open_runs(
             txn, merchant_id, workflow_id, published.version
         )
     logger.info(
@@ -345,16 +354,12 @@ async def _template_problems(
             continue  # the validator already demands both on a send node
         if not registers_templates_for(node.channel):
             continue  # a channel with no registry (email) has nothing to ask
-        status = await template_status(merchant_id, node.channel, node.template)
-        if status is None:
+        verdict = await template_status(merchant_id, node.channel, node.template)
+        if not verdict.publishable:
+            # The registry's own words for why (its reason clause); outreach
+            # never compares a status word across the seam.
             problems.append(
-                f"send node {node.id}: template '{node.template}' is not "
-                f"registered on {node.channel} for this merchant"
-            )
-        elif status != "approved":
-            problems.append(
-                f"send node {node.id}: template '{node.template}' is "
-                f"'{status}', not approved"
+                f"send node {node.id}: template '{node.template}' {verdict.reason}"
             )
     return problems
 
@@ -375,7 +380,7 @@ async def set_status(
     (B4, rollout phase 01); a driver exception is never caught in logic."""
     if status not in ("live", "paused", "archived"):
         raise WorkflowValidationError([f"unknown status: {status}"])
-    workflow = await accessor.get_workflow(merchant_id, workflow_id)
+    workflow = await workflow_accessor.get_workflow(merchant_id, workflow_id)
     if workflow is None or workflow.status == "archived":
         return None
     if not workflow.definition:
@@ -385,17 +390,17 @@ async def set_status(
             "archived": "archiving it",
         }
         raise WorkflowValidationError([f"publish a draft before {verb[status]}"])
-    return await accessor.set_workflow_status(merchant_id, workflow_id, status)
+    return await workflow_accessor.set_workflow_status(merchant_id, workflow_id, status)
 
 
 async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]:
-    return await accessor.get_workflow(merchant_id, workflow_id)
+    return await workflow_accessor.get_workflow(merchant_id, workflow_id)
 
 
 async def list_workflows(
     merchant_id: str, limit: int, offset: int
 ) -> List[WorkflowSummary]:
-    return await accessor.list_workflows(merchant_id, limit, offset)
+    return await workflow_accessor.list_workflows(merchant_id, limit, offset)
 
 
 class WorkflowValidationError(Exception):

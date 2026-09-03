@@ -21,11 +21,6 @@ from app.crm.connectivity.dispatch import (
     REASON_SEND_ERROR,
     REASON_SUPPRESSED,
     RETRY_MAX_SECONDS,
-    STATUS_ACCEPTED,
-    STATUS_BLOCKED,
-    STATUS_DEAD,
-    STATUS_FAILED,
-    STATUS_QUEUED,
     _jittered,
     backoff_seconds,
     plan_for_outcome,
@@ -34,6 +29,14 @@ from app.crm.connectivity.dispatch import (
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.reasons import REASON_RECLAIMED_STALE_CLAIM
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
+from app.crm.connectivity.status import (
+    MESSAGE_ACCEPTED,
+    MESSAGE_BLOCKED,
+    MESSAGE_DEAD,
+    MESSAGE_FAILED,
+    MESSAGE_QUEUED,
+    MESSAGE_SENDING,
+)
 from app.crm.shared.decode import jsonb_object
 from scripts.check_crm_boundaries import TABLE_OWNERS
 
@@ -58,7 +61,7 @@ def test_accepted_records_the_provider_id_and_stamps_sent() -> None:
     plan = plan_for_outcome(
         SendOutcome(status="accepted", provider_message_id="wamid.X"), 1, 3
     )
-    assert plan.status == STATUS_ACCEPTED
+    assert plan.status == MESSAGE_ACCEPTED
     assert plan.provider_message_id == "wamid.X"
     assert plan.mark_sent is True
     assert plan.reason is None
@@ -69,7 +72,7 @@ def test_retryable_failure_goes_back_on_the_queue() -> None:
     plan = plan_for_outcome(
         SendOutcome(status="failed", reason="rate_limited", retryable=True), 1, 3
     )
-    assert plan.status == STATUS_QUEUED
+    assert plan.status == MESSAGE_QUEUED
     assert plan.reason == "rate_limited"
     assert plan.mark_sent is False
 
@@ -80,7 +83,7 @@ def test_retryable_failure_goes_dead_on_the_last_attempt() -> None:
         SendOutcome(status="failed", reason="rate_limited", retryable=True), 3, 3
     )
     # 'dead' (we stopped trying), not 'failed' (the wire said no).
-    assert plan.status == STATUS_DEAD
+    assert plan.status == MESSAGE_DEAD
     assert plan.reason == REASON_ATTEMPTS_EXHAUSTED
 
 
@@ -89,7 +92,7 @@ def test_permanent_failure_never_retries_however_many_attempts_remain() -> None:
     plan = plan_for_outcome(
         SendOutcome(status="failed", reason="template_not_approved"), 1, 99
     )
-    assert plan.status == STATUS_FAILED
+    assert plan.status == MESSAGE_FAILED
     assert plan.reason == "template_not_approved"
 
 
@@ -118,7 +121,7 @@ def test_our_refusal_lands_as_blocked_terminal_and_unsent() -> None:
     plan = plan_for_outcome(
         SendOutcome(status="blocked", reason=REASON_SUPPRESSED), 1, 3
     )
-    assert plan.status == STATUS_BLOCKED
+    assert plan.status == MESSAGE_BLOCKED
     assert plan.reason == REASON_SUPPRESSED
     assert plan.mark_sent is False
     assert plan.retry_after_seconds is None
@@ -176,7 +179,7 @@ async def test_an_accepted_send_records_the_outcome(monkeypatch) -> None:
     await dispatch._dispatch_one(_message(), 3)
     assert written["sent"] == "m-1"
     assert written["token_names_message"] is True
-    assert written["status"] == STATUS_ACCEPTED
+    assert written["status"] == MESSAGE_ACCEPTED
     assert written["mark_sent"] is True
     # The write carries the claim's generation, so a stale claim's late
     # outcome cannot land on a row a newer claim now owns.
@@ -203,7 +206,7 @@ async def test_a_raising_send_becomes_a_retryable_send_error(monkeypatch) -> Non
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(attempt=1), 3)
     # We don't know whether the provider saw it, so it requeues with a delay.
-    assert written["status"] == STATUS_QUEUED
+    assert written["status"] == MESSAGE_QUEUED
     assert written["reason"] == REASON_SEND_ERROR
     assert written["retry"] is not None and written["retry"] >= 1
 
@@ -239,7 +242,7 @@ async def test_a_suppressed_address_is_blocked_and_the_adapter_never_called(
     monkeypatch.setattr(dispatch, "send", exploding_send)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
-    assert written["status"] == STATUS_BLOCKED
+    assert written["status"] == MESSAGE_BLOCKED
     assert written["reason"] == REASON_SUPPRESSED
     assert written["mark_sent"] is False
 
@@ -268,7 +271,7 @@ async def test_a_channel_the_gate_cannot_check_fails_closed(monkeypatch) -> None
     message = _message()
     message = message.model_copy(update={"channel": "carrier_pigeon"})
     await dispatch._dispatch_one(message, 3)
-    assert written["status"] == STATUS_BLOCKED
+    assert written["status"] == MESSAGE_BLOCKED
     assert written["reason"] == REASON_GATE_UNAVAILABLE
 
 
@@ -302,7 +305,7 @@ async def test_a_hung_gate_probe_is_bounded_and_fails_closed(monkeypatch) -> Non
     monkeypatch.setattr(dispatch, "CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
-    assert written["status"] == STATUS_BLOCKED
+    assert written["status"] == MESSAGE_BLOCKED
     assert written["reason"] == REASON_GATE_UNAVAILABLE
     assert written["mark_sent"] is False
 
@@ -340,7 +343,7 @@ async def test_a_reclaimed_row_discards_the_late_outcome(monkeypatch) -> None:
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", reclaimed)
     await dispatch._dispatch_one(_message(), 3)
     # Discarded means one write attempt, no retry, no raise — their row now.
-    assert calls == [STATUS_ACCEPTED]
+    assert calls == [MESSAGE_ACCEPTED]
 
 
 def test_jitter_stays_in_bounds_and_never_reaches_zero() -> None:
@@ -361,9 +364,9 @@ def test_claim_is_race_safe_across_pods() -> None:
     """Claim is race safe across pods."""
     query, values = claim_queued_messages_query(25)
     assert "FOR UPDATE SKIP LOCKED" in query
-    assert "status = 'queued'" in query
+    assert "WHERE status = $3" in query
     assert "LIMIT $1" in query
-    assert values == [25]
+    assert values == [25, MESSAGE_SENDING, MESSAGE_QUEUED]
 
 
 # --- log lines stay bounded --------------------------------------------------
@@ -455,7 +458,7 @@ def test_requeue_carries_a_delay_and_terminal_outcomes_do_not() -> None:
     requeued = plan_for_outcome(
         SendOutcome(status="failed", reason="131049", retryable=True), 1, 3
     )
-    assert requeued.status == STATUS_QUEUED
+    assert requeued.status == MESSAGE_QUEUED
     assert requeued.retry_after_seconds and requeued.retry_after_seconds > 0
 
     for terminal in (
@@ -509,9 +512,18 @@ def test_outcome_write_is_guarded_by_the_claim() -> None:
     query, values = apply_outcome_query(
         "m-1", "accepted", None, "wamid.X", True, 2, None
     )
-    assert "status = 'sending'" in query
+    assert "AND status = $8" in query
     assert "attempt = $7::int" in query
-    assert values == ["m-1", "accepted", None, "wamid.X", True, None, 2]
+    assert values == [
+        "m-1",
+        "accepted",
+        None,
+        "wamid.X",
+        True,
+        None,
+        2,
+        MESSAGE_SENDING,
+    ]
 
 
 def test_outcome_write_never_erases_a_known_provider_id() -> None:
@@ -523,12 +535,20 @@ def test_outcome_write_never_erases_a_known_provider_id() -> None:
 def test_stale_sweep_targets_only_expired_claims() -> None:
     """Stale sweep targets only expired claims."""
     query, values = requeue_stale_claims_query(5, 3)
-    assert "status = 'sending'" in query
+    assert "WHERE status = $7" in query
     assert "make_interval(mins => $1::int)" in query
     # The reclaim reason the sweep writes is manifest vocabulary, so the
     # word must be the one reasons.py declares — not a SQL-only spelling.
-    assert f"'{REASON_RECLAIMED_STALE_CLAIM}'" in query
-    assert values == [5, 3]
+    assert REASON_RECLAIMED_STALE_CLAIM in values  # bound as $6, never SQL text
+    assert values == [
+        5,
+        3,
+        MESSAGE_DEAD,
+        MESSAGE_QUEUED,
+        REASON_ATTEMPTS_EXHAUSTED,
+        REASON_RECLAIMED_STALE_CLAIM,
+        MESSAGE_SENDING,
+    ]
 
 
 def test_stale_sweep_kills_rows_that_are_out_of_attempts() -> None:
@@ -541,11 +561,19 @@ def test_stale_sweep_kills_rows_that_are_out_of_attempts() -> None:
     # copies instead of one per stale window, forever.
     query, values = requeue_stale_claims_query(5, 3)
     assert "attempt >= $2::int" in query
-    assert "'dead'" in query
+    assert MESSAGE_DEAD in values and "THEN $3::text ELSE $4::text" in query
     # Same word as plan_for_outcome's dead: we stopped, the provider didn't.
-    assert f"'{REASON_ATTEMPTS_EXHAUSTED}'" in query
+    assert REASON_ATTEMPTS_EXHAUSTED in values  # bound as $5, never SQL text
     assert "RETURNING id, status" in query
-    assert values == [5, 3]
+    assert values == [
+        5,
+        3,
+        MESSAGE_DEAD,
+        MESSAGE_QUEUED,
+        REASON_ATTEMPTS_EXHAUSTED,
+        REASON_RECLAIMED_STALE_CLAIM,
+        MESSAGE_SENDING,
+    ]
 
 
 def test_builders_parameterize_every_value() -> None:
@@ -694,7 +722,7 @@ def test_the_work_queue_is_a_partial_index() -> None:
     """The work queue is a partial index."""
     sql = _ddl()
     assert "crm_message_queued_ix" in sql
-    assert "WHERE status = 'queued'" in sql
+    assert "WHERE status = 'queued'" in sql  # DDL: the partial index's predicate
     assert "crm_message_claimed_ix" in sql
 
 

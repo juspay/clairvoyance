@@ -26,7 +26,7 @@ use any of these — it is signature-verified per source in record/api.py (A9).
 """
 
 import hmac
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -35,6 +35,7 @@ from app.api.security.breeze_buddy.rbac_token import (
     rbac_token_manager,
 )
 from app.core.logger import logger
+from app.core.logger.context import set_log_context
 from app.core.security.authorization import require_admin
 from app.database.accessor.breeze_buddy.merchants import (
     check_merchant_identifier_exists,
@@ -93,6 +94,57 @@ def assert_merchant_access(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied to this merchant",
         )
+
+
+#: The attribute the route-walk test looks for — a dependency produced by
+#: merchant_scope() carries it, so "every route declares the tenancy door"
+#: is a structural fact CI can read off the router, not a convention.
+MERCHANT_SCOPE_MARK = "is_merchant_scope"
+
+
+def merchant_scope(operation: str, component: str) -> Callable[..., Awaitable[str]]:
+    """The tenancy door as a route's DECLARED dependency (ADR 0007 amendment).
+
+    One dependency does what every merchant-facing route used to spell by
+    hand in three lines: find the merchant the request is about (the
+    ``merchant_id`` query param on a GET, the ``merchant_id`` body field on
+    a POST/PATCH/PUT — the TenantScoped base every request model inherits),
+    run the tenancy check, set the log context, and hand the merchant to the
+    handler. Declared, not called, for the reason the ingest door gives: a
+    route without its auth dependency is a BLOCKER, and a declaration is
+    what a test can walk the router for.
+
+    ``operation`` is the audit word ("retire a template"); ``component`` is
+    the log context's. Fail closed: no merchant in the request is a 400
+    before anything reads or writes.
+    """
+
+    async def _scope(
+        request: Request,
+        current_user: UserInfo = Depends(get_current_user_with_rbac),
+    ) -> str:
+        merchant_id: Optional[str] = request.query_params.get("merchant_id")
+        if not merchant_id and request.method in ("POST", "PUT", "PATCH"):
+            # Starlette caches the body, so the handler's own model parse
+            # reads the same bytes afterwards — one read, two readers.
+            try:
+                body = await request.json()
+            except Exception:
+                body = None
+            if isinstance(body, dict):
+                candidate = body.get("merchant_id")
+                merchant_id = candidate if isinstance(candidate, str) else None
+        if not merchant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="merchant_id is required",
+            )
+        assert_merchant_access(current_user, merchant_id, operation)
+        set_log_context(component=component, merchant_id=merchant_id)
+        return merchant_id
+
+    setattr(_scope, MERCHANT_SCOPE_MARK, True)
+    return _scope
 
 
 def _extract_token(request: Request) -> Optional[str]:

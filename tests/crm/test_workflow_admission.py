@@ -12,6 +12,7 @@ import app.crm.outreach.enrol as enrol_mod
 from app.crm.outreach.db import DbTxn
 from app.crm.outreach.enrol import _admission, _first_wake
 from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
+from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
 CUSTOMER = str(uuid4())
@@ -158,7 +159,7 @@ def _workflow(key: Optional[str], reenter: bool = False) -> Workflow:
     )
 
 
-_REAL_ACCESSOR = enrol_mod.accessor
+_REAL_ACCESSORS = (enrol_mod.enrollment_accessor, enrol_mod.version_accessor)
 
 
 class _History:
@@ -250,7 +251,7 @@ def test_a_keyed_plan_admits_a_new_key_despite_the_customers_history(
     counted ALL her runs on the plan. "Has this ORDER ever run" is what
     entry.key declared — a new order id has no history, so it is admitted."""
     history = _History()
-    monkeypatch.setattr(enrol_mod, "accessor", history)
+    patch_accessors(monkeypatch, enrol_mod, history)
     run = _enrol(history, _workflow(key="order_id"), "ORD-2")
     assert run is not None and history.inserted == ["ORD-2"]
     assert history.judged == ["ORD-2"]  # judged per key, never per customer
@@ -260,7 +261,7 @@ def test_a_keyed_plan_still_refuses_a_key_that_already_ran(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     history = _History()
-    monkeypatch.setattr(enrol_mod, "accessor", history)
+    patch_accessors(monkeypatch, enrol_mod, history)
     assert _enrol(history, _workflow(key="order_id"), "ORD-1") is None
     assert history.inserted == [] and history.judged == ["ORD-1"]
 
@@ -271,7 +272,7 @@ def test_an_unkeyed_plan_keeps_judging_the_customer(
     """No entry.key: the key IS the customer id and the guards read her
     whole history on the plan, exactly as before."""
     history = _History()
-    monkeypatch.setattr(enrol_mod, "accessor", history)
+    patch_accessors(monkeypatch, enrol_mod, history)
     assert _enrol(history, _workflow(key=None), CUSTOMER) is None
     assert history.inserted == [] and history.judged == [None]
 
@@ -282,7 +283,8 @@ def test_enrol_holds_the_templates_the_document_sends_before_the_insert() -> Non
     before its insert — a retirement's EXCLUSIVE lock then waits for this
     row to commit and counts it, instead of racing past it."""
     history = _History()
-    enrol_mod.accessor = history  # type: ignore[assignment]
+    enrol_mod.enrollment_accessor = history  # type: ignore[assignment]
+    enrol_mod.version_accessor = history  # type: ignore[assignment]
     try:
         workflow = Workflow(
             id=uuid4(),
@@ -312,7 +314,7 @@ def test_enrol_holds_the_templates_the_document_sends_before_the_insert() -> Non
         )
         run = _enrol(history, workflow, "ORD-2")
     finally:
-        enrol_mod.accessor = _REAL_ACCESSOR  # type: ignore[assignment]
+        enrol_mod.enrollment_accessor, enrol_mod.version_accessor = _REAL_ACCESSORS  # type: ignore[assignment]
     assert run is not None
     assert history.locked == [[("whatsapp", "cart_recovery_1")]]
     assert history.order == ["lock", "insert"]

@@ -202,14 +202,29 @@ def test_only_the_webhook_router_is_unauthenticated() -> None:
             if getattr(d, "call", None) is not None
         ]
 
+    def carries(route, name: str) -> bool:
+        """Whether the dependency tree declares ``name`` at any depth."""
+
+        def walk(dependant) -> bool:
+            for d in dependant.dependencies:
+                call = getattr(d, "call", None)
+                if call is not None and call.__name__ == name:
+                    return True
+                if walk(d):
+                    return True
+            return False
+
+        return walk(route.dependant)
+
     for route in record_api.webhook_router.routes:
         assert dependency_names(route) == [], getattr(route, "path", route)
-    # Every /connectors route carries the merchant-facing RBAC dependency —
-    # the tenancy check itself runs inside the handler via
-    # assert_merchant_access.
+    # Every /connectors route declares the tenancy door (merchant_scope),
+    # which itself depends on the merchant-facing RBAC dependency — so the
+    # walk looks one level in: the door, and the auth inside it.
     for route in connectivity_api.router.routes:
-        names = dependency_names(route)
-        assert "get_current_user_with_rbac" in names, getattr(route, "path", route)
+        assert carries(route, "get_current_user_with_rbac"), getattr(
+            route, "path", route
+        )
 
 
 def test_a_callback_carrying_no_letters_is_still_200(client, spec, spine) -> None:

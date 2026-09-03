@@ -31,6 +31,7 @@ from app.crm.outreach.schemas import (
 )
 from app.crm.outreach.walker import pick_next
 from app.crm.record.schemas import RawEvent
+from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -186,15 +187,18 @@ class _Spine:
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, spine: _Spine) -> None:
+    """Seed the spine on the per-table accessor each read lives in — the
+    workflow read, the run reads, and the pinned-definition read (which
+    definitions.py owns, on the version table)."""
     definitions._definitions.clear()
-    for name in (
-        "live_workflows",
-        "open_runs_for_customer",
-        "get_definition",
-        "cancel_run",
-        "resume_run_by_id",
+    for module, name in (
+        (entry.workflow_accessor, "live_workflows"),
+        (entry.enrollment_accessor, "open_runs_for_customer"),
+        (definitions.version_accessor, "get_definition"),
+        (entry.enrollment_accessor, "cancel_run"),
+        (entry.enrollment_accessor, "resume_run_by_id"),
     ):
-        monkeypatch.setattr(entry.accessor, name, getattr(spine, name))
+        monkeypatch.setattr(module, name, getattr(spine, name))
 
 
 def _consume(event: RawEvent) -> None:
@@ -851,7 +855,7 @@ def test_a_merchant_level_letter_starts_ends_and_wakes_nothing(
     # once — no open-run read, no entry match.
     import app.crm.outreach.entry as entry_module
 
-    monkeypatch.setattr(entry_module, "accessor", _UntouchableAccessor())
+    patch_accessors(monkeypatch, entry_module, _UntouchableAccessor())
     event = RawEvent(
         id="e-tpl",
         merchant_id="m1",

@@ -5,7 +5,8 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.crm.outreach.db.decoder import decode_run, decode_workflow
+from app.crm.outreach.db.decoders.enrollment import decode_run
+from app.crm.outreach.db.decoders.workflow import decode_workflow
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
 

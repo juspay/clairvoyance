@@ -77,6 +77,12 @@ class OnboardingError(Exception):
     """Onboarding refused before, or instead of, writing a connection."""
 
 
+class ResubscribeRefused(OnboardingError):
+    """The recovery door understood the request and deliberately declined —
+    a 409, not a 400: the account is not this connector's to subscribe, holds
+    no usable credentials, or the provider refused in its own words."""
+
+
 class UnknownConnectorError(OnboardingError):
     """No such connector_key — the registry IS the vocabulary, so this is a
     404 rather than a bad request."""
@@ -442,12 +448,14 @@ async def resubscribe(
         # Refusing beats guessing: running Meta's call against a connector
         # that has no subscription step would send a request nothing there
         # understands.
-        raise OnboardingError(
+        raise ResubscribeRefused(
             f"This account is a '{installation.connector_key}' connector, "
             f"which has no webhook subscription to turn on."
         )
     if not installation.external_account_id:
-        raise OnboardingError("This account has no provider account id to subscribe.")
+        raise ResubscribeRefused(
+            "This account has no provider account id to subscribe."
+        )
 
     try:
         bundle = await accounts.bundle_for(installation)
@@ -456,7 +464,7 @@ async def resubscribe(
         # here: no usable secret to subscribe with. (A vault OUTAGE raises
         # past this except and surfaces as the route's 500, never as
         # "reconnect your account" advice for a healthy credential.)
-        raise OnboardingError(
+        raise ResubscribeRefused(
             "This account's credentials are missing or unreadable. "
             "Reconnect it first."
         )
@@ -467,7 +475,7 @@ async def resubscribe(
         # The provider's own refusal, passed through: the merchant's "why"
         # gets the provider's words, not our paraphrase.
         logger.error(f"resubscribe: {installation.connector_key} refused — {e}")
-        raise OnboardingError(str(e)) from e
+        raise ResubscribeRefused(str(e)) from e
 
     return await atomically(_resubscribe_in_txn, merchant_id, installation_id)
 

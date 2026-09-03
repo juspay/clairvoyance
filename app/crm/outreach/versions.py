@@ -30,7 +30,12 @@ from typing import List, Tuple
 
 from app.core.logger import logger
 from app.crm.outreach import plans
-from app.crm.outreach.db import DbTxn, accessor, atomically
+from app.crm.outreach.db import DbTxn, atomically
+from app.crm.outreach.db.accessors import (
+    enrollment as enrollment_accessor,
+    version as version_accessor,
+    workflow as workflow_accessor,
+)
 from app.crm.outreach.plans import WorkflowValidationError, validate_migration
 from app.crm.outreach.schemas import WorkflowDefinition, WorkflowVersion
 
@@ -66,15 +71,17 @@ async def _migrate_forward_in_txn(
         raise WorkflowValidationError(
             [f"version {from_version} is already the version those runs execute"]
         )
-    source = await accessor.pinned_definition(
+    source = await version_accessor.pinned_definition(
         txn, merchant_id, workflow_id, from_version
     )
     if source is None:
         raise VersionNotFound(f"version {from_version}")
-    target = await accessor.pinned_definition(txn, merchant_id, workflow_id, to_version)
+    target = await version_accessor.pinned_definition(
+        txn, merchant_id, workflow_id, to_version
+    )
     if target is None:
         raise VersionNotFound(f"version {to_version}")
-    occupied = await accessor.occupied_nodes_on_version(
+    occupied = await enrollment_accessor.occupied_nodes_on_version(
         txn, merchant_id, workflow_id, from_version
     )
     problems = validate_migration(source, target, occupied)
@@ -84,13 +91,13 @@ async def _migrate_forward_in_txn(
     # have been retired since. The same check publish makes, under the
     # same lock — a run must never be moved onto a template it cannot send.
     target_definition = WorkflowDefinition.model_validate(target)
-    await accessor.lock_templates_shared(
+    await version_accessor.lock_templates_shared(
         txn, merchant_id, target_definition.send_templates()
     )
     problems = await plans._template_problems(merchant_id, target_definition)
     if problems:
         raise WorkflowValidationError(problems)
-    moved = await accessor.repin_runs_on_version(
+    moved = await enrollment_accessor.repin_runs_on_version(
         txn, merchant_id, workflow_id, from_version, to_version
     )
     logger.info(
@@ -103,7 +110,7 @@ async def _migrate_forward_in_txn(
 async def list_versions(merchant_id: str, workflow_id: str) -> List[WorkflowVersion]:
     """Every published document of the plan, newest first, each with the
     open runs still executing it."""
-    return await accessor.list_versions(merchant_id, workflow_id)
+    return await version_accessor.list_versions(merchant_id, workflow_id)
 
 
 async def template_references(
@@ -114,6 +121,10 @@ async def template_references(
     paused plans, by their LATEST document — the one their next entrant
     is pinned to). Connectivity's retire asks this inside its withdrawal
     atom, through the hook worker_main registers."""
-    open_runs = await accessor.runs_referencing_template(merchant_id, channel, name)
-    plans = await accessor.live_plans_naming_template(merchant_id, channel, name)
+    open_runs = await enrollment_accessor.runs_referencing_template(
+        merchant_id, channel, name
+    )
+    plans = await workflow_accessor.live_plans_naming_template(
+        merchant_id, channel, name
+    )
     return open_runs, plans

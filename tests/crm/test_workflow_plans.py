@@ -8,12 +8,14 @@ from uuid import uuid4
 import pytest
 
 import app.crm.outreach.plans as plans
+from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.outreach.db import DbTxn
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.schemas import (
     Workflow,
     WorkflowDefinition,
 )
+from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -316,8 +318,10 @@ async def test_going_live_on_a_never_published_draft_is_refused_before_the_db(
     async def set_workflow_status(*args: object) -> None:
         raise AssertionError("must not reach the UPDATE")
 
-    monkeypatch.setattr(plans.accessor, "get_workflow", get_workflow)
-    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+    monkeypatch.setattr(plans.workflow_accessor, "get_workflow", get_workflow)
+    monkeypatch.setattr(
+        plans.workflow_accessor, "set_workflow_status", set_workflow_status
+    )
     with pytest.raises(plans.WorkflowValidationError) as refused:
         await plans.set_status("m1", "wf-1", "live")
     assert "publish" in refused.value.problems[0]
@@ -336,8 +340,10 @@ async def test_pausing_or_archiving_a_never_published_draft_is_refused_too(
     async def set_workflow_status(*args: object) -> None:
         raise AssertionError("must not reach the UPDATE")
 
-    monkeypatch.setattr(plans.accessor, "get_workflow", get_workflow)
-    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+    monkeypatch.setattr(plans.workflow_accessor, "get_workflow", get_workflow)
+    monkeypatch.setattr(
+        plans.workflow_accessor, "set_workflow_status", set_workflow_status
+    )
     for wanted in ("paused", "archived"):
         with pytest.raises(plans.WorkflowValidationError) as refused:
             await plans.set_status("m1", "wf-1", wanted)
@@ -360,8 +366,10 @@ async def test_a_published_plan_still_pauses_and_resumes(
         writes.append(status)
         return published
 
-    monkeypatch.setattr(plans.accessor, "get_workflow", get_workflow)
-    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+    monkeypatch.setattr(plans.workflow_accessor, "get_workflow", get_workflow)
+    monkeypatch.setattr(
+        plans.workflow_accessor, "set_workflow_status", set_workflow_status
+    )
     assert await plans.set_status("m1", "wf-1", "paused") is published
     assert await plans.set_status("m1", "wf-1", "live") is published
     assert writes == ["paused", "live"]
@@ -374,18 +382,20 @@ async def test_unknown_or_archived_plans_answer_none_for_the_404(
     async def set_workflow_status(*args: object) -> None:
         raise AssertionError("must not reach the UPDATE")
 
-    monkeypatch.setattr(plans.accessor, "set_workflow_status", set_workflow_status)
+    monkeypatch.setattr(
+        plans.workflow_accessor, "set_workflow_status", set_workflow_status
+    )
 
     async def missing(merchant_id: str, workflow_id: str) -> None:
         return None
 
-    monkeypatch.setattr(plans.accessor, "get_workflow", missing)
+    monkeypatch.setattr(plans.workflow_accessor, "get_workflow", missing)
     assert await plans.set_status("m1", "wf-1", "live") is None
 
     async def archived(merchant_id: str, workflow_id: str) -> Workflow:
         return _workflow("archived", None)
 
-    monkeypatch.setattr(plans.accessor, "get_workflow", archived)
+    monkeypatch.setattr(plans.workflow_accessor, "get_workflow", archived)
     assert await plans.set_status("m1", "wf-1", "live") is None
 
 
@@ -443,6 +453,18 @@ class _PublishAccessor:
         return 0
 
 
+def _verdict(status: Optional[str]) -> TemplateVerdict:
+    """The registry's verdict for a test's shorthand: None = never
+    registered, "approved" = publishable, any other word = that status."""
+    if status is None:
+        return TemplateVerdict(
+            publishable=False, reason="is not registered on whatsapp for this merchant"
+        )
+    if status == "approved":
+        return TemplateVerdict(publishable=True)
+    return TemplateVerdict(publishable=False, reason=f"is '{status}', not approved")
+
+
 def _registry(
     monkeypatch: pytest.MonkeyPatch, status: Optional[str], registers: bool = True
 ) -> List[Tuple[str, str, str]]:
@@ -450,9 +472,9 @@ def _registry(
 
     async def template_status(
         merchant_id: str, channel: str, name: str
-    ) -> Optional[str]:
+    ) -> TemplateVerdict:
         asked.append((merchant_id, channel, name))
-        return status
+        return _verdict(status)
 
     monkeypatch.setattr(plans, "template_status", template_status)
     monkeypatch.setattr(plans, "registers_templates_for", lambda channel: registers)
@@ -470,7 +492,7 @@ async def test_publish_refuses_a_send_node_whose_template_is_unknown(
     """G12: today the first sign of a wrong template name is a blocked
     send hours later. The registry can answer at publish."""
     accessor = _PublishAccessor(_SEND_PLAN)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
     asked = _registry(monkeypatch, status=None)
     with pytest.raises(plans.WorkflowValidationError) as refused:
         await _publish(accessor)
@@ -487,7 +509,7 @@ async def test_publish_refuses_a_send_node_whose_template_is_not_approved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     accessor = _PublishAccessor(_SEND_PLAN)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
     _registry(monkeypatch, status="pending")
     with pytest.raises(plans.WorkflowValidationError) as refused:
         await _publish(accessor)
@@ -502,7 +524,7 @@ async def test_publish_proceeds_when_the_template_is_approved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     accessor = _PublishAccessor(_SEND_PLAN)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
     _registry(monkeypatch, status="approved")
     published = await _publish(accessor)
     assert accessor.published is True and published.status == "live"
@@ -513,7 +535,7 @@ async def test_a_plan_without_send_nodes_never_asks_the_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     accessor = _PublishAccessor(_TERSE_DRAFT)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
     asked = _registry(monkeypatch, status=None)
     await _publish(accessor)
     assert asked == [] and accessor.published is True
@@ -524,7 +546,7 @@ async def test_a_channel_that_does_not_register_templates_is_not_asked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     accessor = _PublishAccessor(_SEND_PLAN)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
     asked = _registry(monkeypatch, status=None, registers=False)
     await _publish(accessor)
     assert asked == [] and accessor.published is True
@@ -538,11 +560,13 @@ async def test_publish_holds_the_templates_it_sends_before_asking_the_registry(
     every template the draft sends BEFORE the approval check, so a
     retirement cannot commit between "approved" and the version row."""
     accessor = _PublishAccessor(_SEND_PLAN)
-    monkeypatch.setattr(plans, "accessor", accessor)
+    patch_accessors(monkeypatch, plans, accessor)
 
-    async def template_status(merchant_id: str, channel: str, name: str) -> str:
+    async def template_status(
+        merchant_id: str, channel: str, name: str
+    ) -> TemplateVerdict:
         accessor.order.append("ask")
-        return "approved"
+        return TemplateVerdict(publishable=True)
 
     monkeypatch.setattr(plans, "template_status", template_status)
     monkeypatch.setattr(plans, "registers_templates_for", lambda channel: True)

@@ -25,6 +25,7 @@ import app.crm.outreach.definitions as definitions
 import app.crm.outreach.walker as walker
 from app.crm.outreach.nodes import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
+from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 LEASE = NOW + timedelta(seconds=300)
@@ -119,8 +120,8 @@ class _Writes:
 def _install(monkeypatch: pytest.MonkeyPatch, writes: _Writes) -> None:
     """The walker writes through its accessor; the pinned document comes
     through definitions.py's (phase 13) — one fake serves both doors."""
-    monkeypatch.setattr(walker, "accessor", writes)
-    monkeypatch.setattr(definitions, "accessor", writes)
+    patch_accessors(monkeypatch, walker, writes)
+    patch_accessors(monkeypatch, definitions, writes)
 
 
 @pytest.fixture

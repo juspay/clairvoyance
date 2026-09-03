@@ -10,7 +10,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
-from app.crm.outreach.db import DbTxn, UniqueViolation, accessor, atomically
+from app.crm.outreach.db import DbTxn, UniqueViolation, atomically
+from app.crm.outreach.db.accessors import (
+    enrollment as enrollment_accessor,
+    version as version_accessor,
+)
 from app.crm.outreach.nodes import is_wait
 from app.crm.outreach.schemas import (
     EnrollmentRun,
@@ -111,7 +115,7 @@ async def _enrol_in_txn(
     templates this document sends are held SHARED (shared/locks.py) so a
     retirement cannot commit between its count and this insert."""
     source_event_id = context.get("source_event_id")
-    if source_event_id and await accessor.source_event_used(
+    if source_event_id and await enrollment_accessor.source_event_used(
         txn, merchant_id, str(workflow.id), customer_id, str(source_event_id)
     ):
         return None  # this event already made its run (at-least-once scan)
@@ -119,7 +123,7 @@ async def _enrol_in_txn(
     # Keyed plan: the guards judge THIS key's history (B2 — "one run per
     # <field>" means reenter/cooldown are about the order, not the
     # customer). Unkeyed: the key is the customer id and the read is hers.
-    facts = await accessor.admission_facts(
+    facts = await enrollment_accessor.admission_facts(
         txn,
         merchant_id,
         str(workflow.id),
@@ -138,8 +142,10 @@ async def _enrol_in_txn(
     start = next((node for node in definition.nodes if node.id == door.start), None)
     if start is None:  # the validator forbids this; drift is an error, not a run
         raise ValueError(f"door {door.topic!r} starts on unknown node {door.start!r}")
-    await accessor.lock_templates_shared(txn, merchant_id, definition.send_templates())
-    run = await accessor.insert_enrollment(
+    await version_accessor.lock_templates_shared(
+        txn, merchant_id, definition.send_templates()
+    )
+    run = await enrollment_accessor.insert_enrollment(
         txn,
         merchant_id,
         str(workflow.id),

@@ -35,7 +35,7 @@ from typing import Optional, Union
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
-from app.crm.connectivity import accounts, templates
+from app.crm.connectivity import accounts, template_reads
 from app.crm.connectivity.channels import registers_templates_for
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
@@ -142,7 +142,7 @@ async def resolve_send_route(
             # The adapter refuses this too, but refusing here keeps the
             # reason on the near side of the wire for every such channel.
             return REASON_NO_TEMPLATE
-        template = await templates.approved_template(
+        template = await template_reads.approved_template(
             merchant_id, channel, installation.external_account_id, template_name
         )
         if template is None:

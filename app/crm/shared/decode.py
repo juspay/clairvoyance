@@ -53,3 +53,11 @@ def uuid_or_none(value: Any) -> Optional[str]:
     """A uuid column as a string, preserving NULL as None — asyncpg hands
     back UUID objects, schemas type these as Optional[str]."""
     return str(value) if value is not None else None
+
+
+def jsonb_value(value: Any) -> Any:
+    """asyncpg hands jsonb back as text unless a codec is registered —
+    decode defensively, the record-module precedent."""
+    if isinstance(value, str):
+        return json.loads(value)
+    return value

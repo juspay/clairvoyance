@@ -9,16 +9,17 @@ every language variant with it.
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import httpx
 import pytest
 
 from app.crm.connectivity import (
     accounts as accounts_module,
+    retire_guard as retire_guard_module,
+    template_reads as template_reads_module,
     templates as templates_module,
 )
-from app.crm.connectivity.providers.meta import graph as graph_module
 from app.crm.connectivity.providers.whatsapp.templates import (
     WhatsappTemplateError,
     WhatsappTemplates,
@@ -27,6 +28,7 @@ from app.crm.connectivity.providers.whatsapp.templates import (
 from app.crm.connectivity.schemas.connector import ConnectorInstallation
 from app.crm.connectivity.schemas.message import CredentialBundle
 from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
+from app.crm.connectivity.template_reads import template_status
 from app.crm.connectivity.templates import (
     TemplateError,
     TemplateInUseError,
@@ -37,6 +39,7 @@ from app.crm.connectivity.templates import (
     submit,
 )
 from scripts.check_crm_boundaries import TABLE_OWNERS
+from tests.crm.doubles import FakeInstallationAccessor, stub_graph
 
 # --- the provider face ------------------------------------------------------
 
@@ -55,23 +58,6 @@ def test_meta_shouting_becomes_the_canon_dictionary() -> None:
     assert _from_meta("  ") is None
 
 
-def _graph(monkeypatch, handler) -> List[httpx.Request]:
-    """Point the shared Graph transport at a canned responder."""
-    seen: List[httpx.Request] = []
-
-    def _capture(request: httpx.Request) -> httpx.Response:
-        """Record the outgoing request, then delegate to the handler."""
-        seen.append(request)
-        return handler(request)
-
-    monkeypatch.setattr(
-        graph_module,
-        "create_http_client",
-        lambda **_: httpx.AsyncClient(transport=httpx.MockTransport(_capture)),
-    )
-    return seen
-
-
 def _bundle() -> CredentialBundle:
     return CredentialBundle(values={"system_user_token": "tok"})
 
@@ -82,7 +68,7 @@ async def test_a_submitted_template_keeps_metas_own_verdict(monkeypatch) -> None
     The category especially: a provider may assign a different one from the
     one requested, and theirs is what the merchant is billed at.
     """
-    _graph(
+    stub_graph(
         monkeypatch,
         lambda _r: httpx.Response(
             200, json={"id": "T-1", "status": "PENDING", "category": "UTILITY"}
@@ -103,7 +89,7 @@ async def test_a_submitted_template_keeps_metas_own_verdict(monkeypatch) -> None
 async def test_a_submission_without_an_id_is_a_failure(monkeypatch) -> None:
     """Without the provider's id no webhook can ever be matched to this row,
     so a 200 that omits it is not a success."""
-    _graph(monkeypatch, lambda _r: httpx.Response(200, json={"status": "PENDING"}))
+    stub_graph(monkeypatch, lambda _r: httpx.Response(200, json={"status": "PENDING"}))
     with pytest.raises(Exception):
         await WhatsappTemplates().submit(
             _bundle(),
@@ -119,7 +105,9 @@ async def test_retiring_one_language_carries_the_provider_id(monkeypatch) -> Non
     variant of it. Retiring order_update/en_US would silently delete
     order_update/hi_IN on Meta while our hi_IN row still read 'approved' —
     and the first send on it would fail at Meta with 132001."""
-    seen = _graph(monkeypatch, lambda _r: httpx.Response(200, json={"success": True}))
+    seen = stub_graph(
+        monkeypatch, lambda _r: httpx.Response(200, json={"success": True})
+    )
     await WhatsappTemplates().retire(
         _bundle(), "waba-1", "T-1", "order_update", "en_US"
     )
@@ -260,18 +248,6 @@ class _FakeTemplateAccessor:
         return _template(status="deleted")
 
 
-class _FakeInstallationAccessor:
-    """Stands in for db/accessors/installation."""
-
-    def __init__(self, installation=None):
-        """Test double."""
-        self.installation = installation
-
-    async def get_installation_by_account(self, merchant_id, key, account_ref):
-        """Test double: the seeded door for that provider account."""
-        return self.installation
-
-
 class _StubTemplates:
     """A TemplateProvider with scripted behaviour."""
 
@@ -325,7 +301,7 @@ def _healthy(**overrides) -> ConnectorInstallation:
 def _patch(monkeypatch, *, templates=None, installation=None, provider=None):
     """Wire templates.py to doubles."""
     accessor = templates or _FakeTemplateAccessor()
-    installations = _FakeInstallationAccessor(
+    installations = FakeInstallationAccessor(
         _healthy() if installation is None else installation
     )
     face = provider or _StubTemplates()
@@ -354,7 +330,7 @@ def _patch(monkeypatch, *, templates=None, installation=None, provider=None):
     monkeypatch.setattr(templates_module, "atomically", _atomically)
     monkeypatch.setattr(accounts_module, "get_credential_by_id", _credential)
     monkeypatch.setattr(templates_module, "connector_for_channel", lambda c: spec)
-    monkeypatch.setattr(templates_module, "_retire_guard", _no_open_runs)
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", _no_open_runs)
     return accessor, face
 
 
@@ -372,7 +348,7 @@ async def test_a_draft_on_an_unconnected_account_is_refused(monkeypatch) -> None
     to submit with, so it is refused here rather than at submit."""
     _patch(monkeypatch, installation=None)
     monkeypatch.setattr(
-        accounts_module, "installation_accessor", _FakeInstallationAccessor(None)
+        accounts_module, "installation_accessor", FakeInstallationAccessor(None)
     )
     with pytest.raises(TemplateError, match="no connected account"):
         await create_draft("shop", "whatsapp", "waba-9", "n", "en_US", [])
@@ -528,7 +504,7 @@ async def test_retire_is_refused_while_open_runs_name_the_template(
         asked.append((merchant_id, channel, name))
         return (2, 0)
 
-    monkeypatch.setattr(templates_module, "_retire_guard", two_runs)
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", two_runs)
     with pytest.raises(TemplateInUseError, match="2 open workflow run"):
         await retire("shop", "t-1")
     template = accessor.template
@@ -548,7 +524,7 @@ async def test_retire_is_refused_while_a_live_plan_names_the_template(
     async def one_plan(merchant_id: str, channel: str, name: str) -> tuple:
         return (0, 1)
 
-    monkeypatch.setattr(templates_module, "_retire_guard", one_plan)
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", one_plan)
     with pytest.raises(TemplateInUseError, match="1 live or paused plan"):
         await retire("shop", "t-1")
     assert "retire" not in accessor.calls and face.retired == []
@@ -601,7 +577,7 @@ async def test_retire_withdraws_locally_with_the_check_before_the_provider(
         templates=_Recording(_template(status="approved", provider_template_id="T-1")),
         provider=_Face(),
     )
-    monkeypatch.setattr(templates_module, "_retire_guard", checked)
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", checked)
     updated = await retire("shop", "t-1")
     assert updated.status == "deleted"
     assert order == ["lock", "check", "local", "provider"]
@@ -611,7 +587,7 @@ async def test_retire_fails_closed_when_no_guard_is_registered(monkeypatch) -> N
     """A missing registration is a wiring bug, not permission to delete:
     refuse, and say so in the log."""
     accessor, face = _patch(monkeypatch, templates=_approved())
-    monkeypatch.setattr(templates_module, "_retire_guard", None)
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", None)
     with pytest.raises(TemplateError, match="not wired"):
         await retire("shop", "t-1")
     assert "retire" not in accessor.calls and face.retired == []
@@ -795,7 +771,8 @@ def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
 
 from app.crm.connectivity import channels as channels_module, contracts
 from app.crm.connectivity.db.queries.template import templates_by_name_query
-from app.crm.connectivity.templates import template_status
+from app.crm.connectivity.schemas.template import TemplateVerdict
+from app.crm.connectivity.templates import TemplateInUseError as _InUse  # noqa: F401
 
 
 def test_templates_by_name_read_is_merchant_first_and_parameterised() -> None:
@@ -838,19 +815,32 @@ class _ByNameAccessor:
 @pytest.mark.parametrize(
     ("rows", "verdict"),
     [
-        ([], None),
-        ([_registry_row("approved")], "approved"),
-        ([_registry_row("pending"), _registry_row("deleted")], "pending"),
+        (
+            [],
+            TemplateVerdict(
+                publishable=False,
+                reason="is not registered on whatsapp for this merchant",
+            ),
+        ),
+        ([_registry_row("approved")], TemplateVerdict(publishable=True)),
+        (
+            [_registry_row("pending"), _registry_row("deleted")],
+            TemplateVerdict(publishable=False, reason="is 'pending', not approved"),
+        ),
         (
             [_registry_row("approved", "en"), _registry_row("approved", "hi")],
-            "approved in 2 languages",
+            TemplateVerdict(
+                publishable=False,
+                reason="is approved in 2 languages on one account — exactly one "
+                "is required to send",
+            ),
         ),
         (
             [
                 _registry_row("approved", "en", "waba-1"),
                 _registry_row("approved", "en", "waba-2"),
             ],
-            "approved",
+            TemplateVerdict(publishable=True),
         ),
     ],
     ids=[
@@ -862,13 +852,16 @@ class _ByNameAccessor:
     ],
 )
 async def test_template_status_answers_for_the_publish_check(
-    monkeypatch, rows: List[TemplateRead], verdict: Optional[str]
+    monkeypatch, rows: List[TemplateRead], verdict: TemplateVerdict
 ) -> None:
-    """None: never registered. "approved": every account holding the name
-    holds exactly one approved row. Two approved languages on one account
-    is the ambiguity the send door refuses — same rule, earlier. Otherwise
-    the newest row's status, so the publish message can say why."""
-    monkeypatch.setattr(templates_module, "template_accessor", _ByNameAccessor(rows))
+    """Never registered; every account holding the name holds exactly one
+    approved row (publishable); two approved languages on one account — the
+    ambiguity the send door refuses, refused here first; otherwise the
+    newest row's status, so the publish message can say why. Verdict-shaped:
+    outreach quotes the reason and never compares a status word."""
+    monkeypatch.setattr(
+        template_reads_module, "template_accessor", _ByNameAccessor(rows)
+    )
     assert await template_status("m1", "whatsapp", "cart_recovery_1") == verdict
 
 

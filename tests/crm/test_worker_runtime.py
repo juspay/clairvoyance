@@ -13,6 +13,7 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.workers as outreach_workers
+from app.crm.outreach.db.accessors import version as version_accessor
 from app.crm.outreach.nodes import send_variables
 from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
 from app.crm.outreach.walker import pick_next
@@ -148,13 +149,13 @@ def _wire(
         calls.append(("enrol", kwargs))
         return object()
 
-    monkeypatch.setattr(entry.accessor, "live_workflows", live_workflows)
+    monkeypatch.setattr(entry.workflow_accessor, "live_workflows", live_workflows)
     monkeypatch.setattr(
-        entry.accessor, "open_runs_for_customer", open_runs_for_customer
+        entry.enrollment_accessor, "open_runs_for_customer", open_runs_for_customer
     )
-    monkeypatch.setattr(entry.accessor, "get_definition", get_definition)
-    monkeypatch.setattr(entry.accessor, "cancel_run", cancel_run)
-    monkeypatch.setattr(entry.accessor, "resume_run_by_id", resume_run_by_id)
+    monkeypatch.setattr(version_accessor, "get_definition", get_definition)
+    monkeypatch.setattr(entry.enrollment_accessor, "cancel_run", cancel_run)
+    monkeypatch.setattr(entry.enrollment_accessor, "resume_run_by_id", resume_run_by_id)
     monkeypatch.setattr(entry, "enrol", fake_enrol)
     return run
 
