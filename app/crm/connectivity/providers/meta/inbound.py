@@ -23,7 +23,7 @@ needs the secret.
 import hashlib
 import hmac
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional
 
 from app.core.config.static import (
     META_APP_SECRET,
@@ -33,7 +33,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.crm.connectivity.schemas.ingress import (
     OWNER_ACCOUNT,
-    OWNER_PHONE_NUMBER,
+    OWNER_ENDPOINT,
     ProviderLetter,
 )
 from app.crm.connectivity.topics import (
@@ -48,10 +48,25 @@ from app.crm.connectivity.topics import (
 SIGNATURE_HEADER = "x-hub-signature-256"
 _SIGNATURE_PREFIX = "sha256="
 
-# The body's ``object`` -> the source word its letters carry on the spine.
-# A closed map: an object we do not serve yields no letters (and the root
-# logs it), never a guessed source.
-_SOURCE_FOR_OBJECT = {"whatsapp_business_account": "whatsapp"}
+
+class _Words(NamedTuple):
+    """The three words a product's letters carry (schemas.ingress.ProviderLetter
+    says why three): the spine's source, the binding's channel, the
+    installation's connector key. For Meta's products they coincide; the
+    map still names all three so the ingress root never has to assume it."""
+
+    source: str
+    channel: str
+    connector_key: str
+
+
+# The body's ``object`` -> the words its letters carry. A closed map: an
+# object we do not serve yields no letters (and the root logs it), never a
+# guessed source. Instagram is one more line: ("instagram", "instagram",
+# "instagram").
+_WORDS_FOR_OBJECT = {
+    "whatsapp_business_account": _Words("whatsapp", "whatsapp", "whatsapp"),
+}
 
 # Meta's change fields for template/account facts -> our spine topics
 # (topics.py owns the vocabulary; Meta's field names stay in this file).
@@ -132,8 +147,8 @@ def letters(body: Dict[str, Any]) -> List[ProviderLetter]:
     discard the good ones beside it. An ``object`` we do not serve yields
     nothing at all: a guessed source would file letters no consumer reads.
     """
-    source = _SOURCE_FOR_OBJECT.get(str(body.get("object") or ""))
-    if source is None:
+    words = _WORDS_FOR_OBJECT.get(str(body.get("object") or ""))
+    if words is None:
         return []
 
     out: List[ProviderLetter] = []
@@ -156,13 +171,13 @@ def letters(body: Dict[str, Any]) -> List[ProviderLetter]:
                 continue
             field = str(change.get("field") or "")
             if field in _TOPIC_FOR_FIELD:
-                letter = _account_letter(source, waba_id, field, value, entry_time)
+                letter = _account_letter(words, waba_id, field, value, entry_time)
                 if letter is not None:
                     out.append(letter)
             else:
                 # The "messages" field — and, totally, anything unknown that
                 # still carries a receiving number and message items.
-                out.extend(_message_letters(source, value))
+                out.extend(_message_letters(words, value))
     return out
 
 
@@ -193,7 +208,7 @@ def _narrowed(value: Dict[str, Any], key: str, item: Dict[str, Any]) -> Dict[str
     return narrowed
 
 
-def _message_letters(source: str, value: Dict[str, Any]) -> List[ProviderLetter]:
+def _message_letters(words: _Words, value: Dict[str, Any]) -> List[ProviderLetter]:
     """One "messages" value -> a letter per status and per inbound message.
 
     statuses[] — what became of a message WE sent; Meta sends one per
@@ -221,9 +236,11 @@ def _message_letters(source: str, value: Dict[str, Any]) -> List[ProviderLetter]
                 continue
             out.append(
                 ProviderLetter(
-                    owner_kind=OWNER_PHONE_NUMBER,
+                    owner_kind=OWNER_ENDPOINT,
                     owner_id=number,
-                    source=source,
+                    source=words.source,
+                    channel=words.channel,
+                    connector_key=words.connector_key,
                     topic=TOPIC_STATUS,
                     external_id=f"{message_id}:{state}",
                     payload=_narrowed(value, "statuses", status),
@@ -242,9 +259,11 @@ def _message_letters(source: str, value: Dict[str, Any]) -> List[ProviderLetter]
                 continue
             out.append(
                 ProviderLetter(
-                    owner_kind=OWNER_PHONE_NUMBER,
+                    owner_kind=OWNER_ENDPOINT,
                     owner_id=number,
-                    source=source,
+                    source=words.source,
+                    channel=words.channel,
+                    connector_key=words.connector_key,
                     topic=TOPIC_INBOUND,
                     external_id=str(message_id),
                     payload=_narrowed(value, "messages", message),
@@ -256,7 +275,7 @@ def _message_letters(source: str, value: Dict[str, Any]) -> List[ProviderLetter]
 
 
 def _account_letter(
-    source: str,
+    words: _Words,
     waba_id: str,
     field: str,
     value: Dict[str, Any],
@@ -280,7 +299,9 @@ def _account_letter(
     return ProviderLetter(
         owner_kind=OWNER_ACCOUNT,
         owner_id=waba_id,
-        source=source,
+        source=words.source,
+        channel=words.channel,
+        connector_key=words.connector_key,
         topic=_TOPIC_FOR_FIELD[field],
         external_id=f"{waba_id}:{subject}:{event}:{ts}",
         payload=value,

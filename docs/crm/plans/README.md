@@ -24,10 +24,11 @@ publish refuses an unknown or unapproved one (phase 08).
 
 `on_publish` (ADR 0023): the loan board declares `pin` — a journey lives
 for weeks and finishes on the document it entered under; a fix reaches
-the runs in flight only through the migrate-forward route. The cart board
-carries no `on_publish` word and so defaults to `pin` too; the notes'
-intent for it (`migrate`, §16.1 — runs are a day long, a template fix
-should reach every waiting run) is not in the document yet.
+the runs in flight only through the migrate-forward route. The cart
+boards declare `migrate` (§16.1): runs are a day long, so a template fix
+should reach every waiting run — and the stranding validator still guards
+every such publish (an occupied square may not vanish, the entry may not
+change while runs are open).
 
 The ladder (`stages`, phase 17): `order` is the funnel, `idle_minutes` the
 "went quiet on a stage" clock, `on_idle` the action it fires (a call or a

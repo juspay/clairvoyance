@@ -29,6 +29,14 @@ class IngressSpec(NamedTuple):
     already resolved — envelope fields only, never a reading of the
     payload's contents (a semantic problem is quarantine's job, not the
     door's).
+
+    ``verify`` sees the body and the headers — enough for a provider that
+    signs with ONE platform secret (Meta: one app, one secret). Named
+    trigger, not built ahead of its provider: the first provider whose
+    signing secret is PER MERCHANT (a per-account aggregator key) adds a
+    bay token to the path — ``/ingest/webhooks/{provider}/{bay}`` — and
+    ``verify`` gains the request's path params, so the credential can be
+    found before the signature is checked.
     """
 
     verify: Callable[[bytes, Mapping[str, str]], bool]

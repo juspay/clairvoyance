@@ -830,3 +830,36 @@ def test_on_a_keyed_ladder_a_stage_letter_moves_only_its_own_application(
     assert {r[0] for r in spine.resumes} == {str(b.id)}
     assert (str(b.id), "at-profile-created") in [(r[0], r[1]) for r in spine.resumes]
     assert repeats == []  # B's square answered it: moved, not a repeat
+
+
+# --- merchant-level letters (Extracted.about == "merchant") -------------------
+
+
+class _UntouchableAccessor:
+    """Any attribute read is a failure: the consumer must return before it
+    reaches the database for a letter that names no person."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"accessor.{name} touched for a merchant-level letter")
+
+
+def test_a_merchant_level_letter_starts_ends_and_wakes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A template review or an account notice has no person: outreach's
+    # business begins where a customer does, so the consumer returns at
+    # once — no open-run read, no entry match.
+    import app.crm.outreach.entry as entry_module
+
+    monkeypatch.setattr(entry_module, "accessor", _UntouchableAccessor())
+    event = RawEvent(
+        id="e-tpl",
+        merchant_id="m1",
+        source="whatsapp",
+        topic="template.status",
+        schema_version="v23.0",
+        external_id="waba:t-1:APPROVED:1",
+        payload={"event": "APPROVED"},
+        received_at=datetime.now(timezone.utc),
+    )
+    asyncio.run(entry_module.consume_attributed_event(event, None, {}))

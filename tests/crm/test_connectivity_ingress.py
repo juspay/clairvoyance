@@ -217,6 +217,53 @@ async def test_an_unowned_waba_drops_only_its_own_letters(monkeypatch) -> None:
     assert [letter.topic for letter in letters] == [TOPIC_STATUS]
 
 
+async def test_owners_are_looked_up_by_channel_and_connector_key_never_source(
+    monkeypatch,
+) -> None:
+    # The three words coincide for Meta; an SMS aggregator's face would say
+    # source "msg91", channel "sms", connector_key "msg91". The binding is
+    # keyed by the CHANNEL and the installation by the CONNECTOR KEY — a
+    # root that reached for `source` would look up nothing for it.
+    """Owners are looked up by channel and connector_key, never by source."""
+    from app.crm.connectivity.schemas.ingress import (
+        OWNER_ACCOUNT,
+        OWNER_ENDPOINT,
+        ProviderLetter,
+    )
+
+    doubles = _Fakes(
+        bindings={"SENDER-ID": _binding(address="SENDER-ID")},
+        installations={"acct-9": _installation()},
+    )
+    monkeypatch.setattr(ingress_module, "binding_accessor", doubles)
+    monkeypatch.setattr(ingress_module, "installation_accessor", doubles)
+
+    def letter(kind: str, owner: str, topic: str) -> ProviderLetter:
+        return ProviderLetter(
+            owner_kind=kind,
+            owner_id=owner,
+            source="msg91",
+            channel="sms",
+            connector_key="msg91",
+            topic=topic,
+            external_id=f"{owner}:{topic}",
+            payload={},
+            occurred_at=None,
+            schema_version="v1",
+        )
+
+    out = await ingress_module.resolve_letters(
+        [
+            letter(OWNER_ENDPOINT, "SENDER-ID", TOPIC_STATUS),
+            letter(OWNER_ACCOUNT, "acct-9", TOPIC_TEMPLATE_STATUS),
+        ]
+    )
+    assert [l.merchant_id for l in out] == ["shop", "shop"]
+    assert [l.source for l in out] == ["msg91", "msg91"]
+    assert doubles.binding_lookups == [("sms", "SENDER-ID")]
+    assert doubles.installation_lookups == [("msg91", "acct-9")]
+
+
 async def test_the_spec_is_assembled_from_the_meta_face() -> None:
     """The spec is assembled from the meta face."""
     from app.crm.connectivity.providers.meta import inbound

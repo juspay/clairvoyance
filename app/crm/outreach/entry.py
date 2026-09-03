@@ -89,12 +89,14 @@ def _phone_from_payload(payload: dict) -> str | None:
 
 
 async def consume_attributed_event(
-    event: RawEvent, customer_id: str, handles: Optional[dict] = None
+    event: RawEvent, customer_id: Optional[str], handles: Optional[dict] = None
 ) -> None:
     """Match one just-attributed event against her open runs (each by its
     own version) and every live plan's entry (latest). customer_id
     arrives separately: the row object still carries the pre-stamp
-    value.
+    value — and is None for a merchant-level letter (a template review,
+    an account notice), which has no person to start, end or wake a run
+    for: outreach's business begins where a customer does.
 
     Order: every open run first — its goal, then its reply — and entries
     last. An order arriving right behind its checkout must not cancel the
@@ -108,6 +110,8 @@ async def consume_attributed_event(
     resolved on, so suppression matches by construction and a new source
     needs no teaching here. The payload search stays as the fallback for
     the voice mirrors, which resolve before this consumer exists."""
+    if customer_id is None:
+        return  # not about a person: nothing to admit, end or wake
     open_runs = await accessor.open_runs_for_customer(event.merchant_id, customer_id)
     goal_patch = _goal_patch(event) if open_runs else None
     for run in open_runs:
