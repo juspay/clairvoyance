@@ -1,0 +1,122 @@
+{
+  "entry": {
+    "topic": "checkouts/update",
+    "reenter": true,
+    "cooldown_hours": 24,
+    "on_repeat": "refresh_latest",
+    "debounce_minutes": 30
+  },
+  "goals": [
+    {
+      "topics": [
+        "orders/create",
+        "orders/paid"
+      ],
+      "key": {
+        "event": "cart_token",
+        "run": "cart_token"
+      },
+      "exit_reason": "goal_met"
+    },
+    {
+      "topics": [
+        "orders/create",
+        "orders/paid"
+      ],
+      "exit_reason": "converted_elsewhere"
+    }
+  ],
+  "exits": {
+    "max_age_days": 7
+  },
+  "purpose_key": "marketing.cart.recovery",
+  "nodes": [
+    {
+      "id": "wait-30m",
+      "type": "wait",
+      "minutes": 30
+    },
+    {
+      "id": "wa-nudge",
+      "type": "send",
+      "channel": "whatsapp",
+      "template": "cart_recovery_1"
+    },
+    {
+      "id": "wait-30m-2",
+      "type": "wait",
+      "minutes": 30
+    },
+    {
+      "id": "rescue-call",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "after-call",
+      "type": "wait_event",
+      "topics": [
+        "call.completed"
+      ],
+      "key": "outcome",
+      "minutes": 1440,
+      "match": {
+        "payload": "enrollment_id",
+        "run": "id"
+      }
+    },
+    {
+      "id": "wa-fallback",
+      "type": "send",
+      "channel": "whatsapp",
+      "template": "cart_recovery_2"
+    },
+    {
+      "id": "wait-1d",
+      "type": "wait",
+      "minutes": 1440
+    }
+  ],
+  "edges": [
+    [
+      "wait-30m",
+      "wa-nudge"
+    ],
+    [
+      "wa-nudge",
+      "wait-30m-2"
+    ],
+    [
+      "wait-30m-2",
+      "rescue-call"
+    ],
+    [
+      "rescue-call",
+      "after-call"
+    ],
+    [
+      "after-call",
+      "wa-fallback",
+      "NO_ANSWER"
+    ],
+    [
+      "after-call",
+      "wa-fallback",
+      "BUSY"
+    ],
+    [
+      "after-call",
+      "wa-fallback",
+      "EARLY_HANGUP"
+    ],
+    [
+      "after-call",
+      "wait-1d",
+      "else"
+    ],
+    [
+      "wa-fallback",
+      "wait-1d"
+    ]
+  ]
+}

@@ -21,6 +21,7 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 from app.crm.outreach.entry import consume_attributed_event
+from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.nodes import TIMEOUT
 from app.crm.outreach.schemas import (
     EnrollmentRun,
@@ -672,3 +673,160 @@ def test_a_letter_the_square_listens_for_moves_the_run_and_is_not_its_repeat(
     assert len(spine.resumes) == 1
     ((_, _, key, door, event_id, _),) = repeats
     assert (key, door.topic, event_id) == ("L-1", "loan.profile_created", "ev-2")
+
+
+# --- rollout phase 18: a listening square hears only the letter about ITS run ---
+
+_CALL_PLAN: Dict[str, Any] = {
+    "entry": {"topic": "checkout.created", "key": "order_id"},
+    "nodes": [
+        {"id": "rescue-call", "type": "call", "template_id": "t"},
+        {
+            "id": "after-call",
+            "type": "wait_event",
+            "topics": ["call.completed"],
+            "key": "outcome",
+            "minutes": 1440,
+            "match": {"payload": "enrollment_id", "run": "id"},
+        },
+        {"id": "wa-fallback", "type": "wait", "minutes": 5},
+        {"id": "wait-1d", "type": "wait", "minutes": 1440},
+    ],
+    "edges": [
+        ["rescue-call", "after-call"],
+        ["after-call", "wa-fallback", "NO_ANSWER"],
+        ["after-call", "wait-1d", "else"],
+    ],
+    "goal": {"topics": ["order.placed"]},
+}
+
+
+def test_a_call_outcome_wakes_only_the_run_that_placed_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two runs of one customer (two orders) both wait after their calls.
+    The outcome letter names the run that placed the call (enrollment_id,
+    phase 18's mirror); the square's `match` compares it with the run's
+    own id, so only that run hears it. A letter that names no run wakes
+    neither — a claim about nobody is not a claim about this run."""
+    flow = _flow(_CALL_PLAN, version=1)
+    a = _run(flow, 1, "after-call", {"order_id": "A"}, key="A")
+    b = _run(flow, 1, "after-call", {"order_id": "B"}, key="B")
+    spine = _Spine([flow], [a, b], {(flow.id, 1): _CALL_PLAN})
+    _install(monkeypatch, spine)
+    _consume(
+        _event("call.completed", {"enrollment_id": str(b.id), "outcome": "NO_ANSWER"})
+    )
+    assert spine.resumes == [
+        (
+            str(b.id),
+            "after-call",
+            {"reply_after-call": "NO_ANSWER", "latest_letter": "after-call"},
+        )
+    ]
+    _consume(_event("call.completed", {"outcome": "BUSY"}, "ev-2"))
+    _consume(
+        _event(
+            "call.completed",
+            {"enrollment_id": "someone-else", "outcome": "BUSY"},
+            "ev-3",
+        )
+    )
+    assert len(spine.resumes) == 1
+
+
+def test_match_may_name_a_context_field_of_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run side of `match` is `id` or any context field — the lead the
+    call node wrote (lead_<node>), or the message a send queued
+    (message_<node>, for the receipts of #1040), compared as text."""
+    plan = {
+        **_CALL_PLAN,
+        "nodes": [
+            _CALL_PLAN["nodes"][0],
+            {
+                **_CALL_PLAN["nodes"][1],
+                "match": {"payload": "lead_id", "run": "lead_rescue-call"},
+            },
+            *_CALL_PLAN["nodes"][2:],
+        ],
+    }
+    flow = _flow(plan, version=1)
+    a = _run(
+        flow, 1, "after-call", {"order_id": "A", "lead_rescue-call": "L-A"}, key="A"
+    )
+    b = _run(
+        flow, 1, "after-call", {"order_id": "B", "lead_rescue-call": "L-B"}, key="B"
+    )
+    spine = _Spine([flow], [a, b], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    _consume(_event("call.completed", {"lead_id": "L-A", "outcome": "BUSY"}))
+    assert [r[0] for r in spine.resumes] == [str(a.id)]
+
+
+def test_else_catches_any_answer_without_an_arrow_of_its_own() -> None:
+    """Buddy's outcome after a connected call is the template's own word
+    (CONFIRMED, not_found, …), unknowable to the plan: `else` keeps the
+    post-call listening day for every outcome the plan did not name. A
+    named arrow wins over it; with no timeout arrow, the alarm takes it
+    too."""
+    node = WorkflowNode(
+        id="after-call",
+        type="wait_event",
+        topics=["call.completed"],
+        key="outcome",
+        minutes=5,
+    )
+    arrows: List[Tuple[str, Optional[str]]] = [
+        ("wa-fallback", "NO_ANSWER"),
+        ("wait-1d", "else"),
+    ]
+    assert pick_next(node, arrows, {"reply_after-call": "NO_ANSWER"}) == "wa-fallback"
+    assert pick_next(node, arrows, {"reply_after-call": "CONFIRMED"}) == "wait-1d"
+    assert pick_next(node, arrows, {}) == "wait-1d"
+    assert pick_next(node, arrows + [("end", TIMEOUT)], {}) == "end"
+    assert pick_next(node, arrows[:1], {"reply_after-call": "CONFIRMED"}) is None
+
+
+def test_on_a_keyed_ladder_a_stage_letter_moves_only_its_own_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One customer, two loan applications, both at the profile stage. The
+    KYC letter for application B moves B's run only — A keeps its clock."""
+    board = expand_stages(
+        {
+            "key": "application_id",
+            "reenter": True,
+            "cooldown_hours": 0,
+            "goals": [{"topics": ["loan.disbursed"]}],
+            "stages": {
+                "order": ["loan.profile_created", "loan.kyc_completed"],
+                "idle_minutes": 30,
+                "on_idle": {"type": "call", "template_id": "t"},
+                "after_action_minutes": 60,
+            },
+        }
+    )
+    flow = _flow(board, version=1)
+    a = _run(flow, 1, "at-profile-created", {"application_id": "A"}, key="A")
+    b = _run(flow, 1, "at-profile-created", {"application_id": "B"}, key="B")
+    spine = _Spine([flow], [a, b], {(flow.id, 1): board})
+    _install(monkeypatch, spine)
+    repeats: List[Any] = []
+
+    async def refused(**kwargs: Any) -> None:
+        return None  # the KYC door: a run for B is open
+
+    async def apply_repeat(*args: Any) -> bool:
+        repeats.append(args)
+        return True
+
+    monkeypatch.setattr(entry, "enrol", refused)
+    monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
+    _consume(_event("loan.kyc_completed", {"application_id": "B"}))
+    # one ask per listening square of B's document (at- and after-; the
+    # statement's current_node guard takes the one B stands on) — none for A
+    assert {r[0] for r in spine.resumes} == {str(b.id)}
+    assert (str(b.id), "at-profile-created") in [(r[0], r[1]) for r in spine.resumes]
+    assert repeats == []  # B's square answered it: moved, not a repeat

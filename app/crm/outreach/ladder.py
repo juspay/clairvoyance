@@ -30,10 +30,16 @@ Slugs: the topic's own name (after its last '.'), lowercased, every run
 of anything but letters and digits as one '-': loan.kyc_completed ->
 kyc-completed. No underscores on purpose — phase 16 flattens a square's
 facts as facts_<square>_<key>. Two stages that slug alike are refused.
+
+A keyed ladder (a top-level `key`, phase 18) listens only for letters
+about ITS key: every listening square carries match {payload: key, run:
+key} — the consumer wakes every open run of the customer whose square
+listens for a topic, and with two applications (two runs) a KYC letter
+for one would otherwise move both.
 """
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.outreach.nodes import TIMEOUT, TOPIC_KEY
 from app.crm.outreach.schemas import StageAction, Stages
@@ -79,7 +85,7 @@ def expand_stages(raw: Dict[str, Any]) -> Dict[str, Any]:
             "stages: restart_on_repeat is the ladder's to set — say it inside "
             "stages; remove the top-level word"
         )
-    nodes, edges, entry = _board(stages)
+    nodes, edges, entry = _board(stages, raw.get("key"))
     produced: Dict[str, Any] = {"nodes": nodes, "edges": edges, "entry": entry}
     for word in _EXPANDED_WORDS:
         if word in raw and raw[word] != produced[word]:
@@ -92,9 +98,10 @@ def expand_stages(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _board(
-    stages: Stages,
+    stages: Stages, key: Optional[str]
 ) -> Tuple[List[Dict[str, Any]], List[List[str]], List[Dict[str, Any]]]:
-    """PURE: the squares, the arrows and the doors of one ladder."""
+    """PURE: the squares, the arrows and the doors of one ladder; `key` is
+    the document's run key, which every listening square matches on."""
     slugs = [slug_of(topic) for topic in stages.order]
     by_slug: Dict[str, str] = {}
     for topic, slug in zip(stages.order, slugs):
@@ -139,9 +146,9 @@ def _board(
             edges.append([at, act])
             continue
         listens = [t for t, _ in later]
-        nodes.append(_listening_square(at, listens, idle, topic))
+        nodes.append(_listening_square(at, listens, idle, topic, key))
         nodes.append(_action_square(act, action, topic))
-        nodes.append(_listening_square(after, listens, after_action, topic))
+        nodes.append(_listening_square(after, listens, after_action, topic, key))
         for later_topic, later_slug in later:
             edges.append([at, f"at-{later_slug}", later_topic])
         edges.append([at, act, TIMEOUT])
@@ -152,9 +159,9 @@ def _board(
 
 
 def _listening_square(
-    node_id: str, topics: List[str], minutes: float, stage: str
+    node_id: str, topics: List[str], minutes: float, stage: str, key: Optional[str]
 ) -> Dict[str, Any]:
-    return {
+    square: Dict[str, Any] = {
         "id": node_id,
         "type": "wait_event",
         "key": TOPIC_KEY,
@@ -162,6 +169,9 @@ def _listening_square(
         "minutes": minutes,
         "stage": stage,
     }
+    if key:
+        square["match"] = {"payload": key, "run": key}
+    return square
 
 
 def _action_square(node_id: str, action: StageAction, stage: str) -> Dict[str, Any]:

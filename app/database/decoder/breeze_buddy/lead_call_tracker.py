@@ -46,6 +46,7 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
         execution_mode=ExecutionMode(row.get("execution_mode", "TELEPHONY")),
         call_direction=CallDirection(row.get("call_direction", "OUTBOUND")),
         customer_id=str(row["customer_id"]) if row.get("customer_id") else None,
+        enrollment_id=(str(row["enrollment_id"]) if row.get("enrollment_id") else None),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

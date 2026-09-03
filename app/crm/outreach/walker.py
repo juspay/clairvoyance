@@ -34,6 +34,7 @@ from app.core.logger import logger
 from app.crm.outreach.db import accessor
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.nodes import (
+    ELSE,
     NODE_TYPES,
     TIMEOUT,
     NodeParked,
@@ -244,12 +245,16 @@ def pick_next(
 ) -> Optional[str]:
     """PURE: which arrow leaves this square. A plain node has one. A
     wait_event node takes the arrow labelled with its answer, or
-    "timeout" when the alarm fired first; no matching arrow = the end."""
+    "timeout" when the alarm fired first, else the "else" arrow (phase
+    18) when it has one; no matching arrow = the end."""
     if node.type != "wait_event":
         return arrows[0][0] if arrows else None
     answer = context.get(reply_key(node.id))
     wanted = TIMEOUT if answer is None else answer
     for dst, on in arrows:
         if on == wanted:
+            return dst
+    for dst, on in arrows:
+        if on == ELSE:
             return dst
     return None

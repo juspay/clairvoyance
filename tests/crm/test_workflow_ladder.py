@@ -78,6 +78,7 @@ def test_three_stages_expand_to_the_exact_board() -> None:
         "topics": ["loan.kyc_completed", "loan.bank_linked"],
         "minutes": 30,
         "stage": "loan.profile_created",
+        "match": {"payload": "application_id", "run": "application_id"},
     }
     assert by_id["act-profile-created"] == {
         "id": "act-profile-created",
@@ -92,6 +93,7 @@ def test_three_stages_expand_to_the_exact_board() -> None:
         "topics": ["loan.kyc_completed", "loan.bank_linked"],
         "minutes": 1440,
         "stage": "loan.profile_created",
+        "match": {"payload": "application_id", "run": "application_id"},
     }
     assert by_id["at-kyc-completed"]["topics"] == ["loan.bank_linked"]
     assert by_id["after-kyc-completed"]["topics"] == ["loan.bank_linked"]
@@ -420,3 +422,25 @@ async def test_publish_takes_the_stored_ladder_and_refuses_a_drifted_board(
     with pytest.raises(plans.WorkflowValidationError) as refused:
         await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
     assert any("without its board" in p for p in refused.value.problems)
+
+
+def test_a_keyed_ladder_listens_only_for_letters_about_its_own_key() -> None:
+    """Phase 18: the consumer wakes every open run of the CUSTOMER whose
+    square listens for a topic — with two applications (two runs keyed
+    by application_id) a KYC letter for one would move both. A keyed
+    ladder sets `match` on every listening square from the document's
+    key: the letter's application_id must equal the run's. An unkeyed
+    ladder listens for every letter of the customer, as before; the last
+    stage's plain wait listens for nothing and carries no match."""
+    keyed = expand_stages(_ladder())
+    for node in keyed["nodes"]:
+        if node["type"] == "wait_event":
+            assert node["match"] == {
+                "payload": "application_id",
+                "run": "application_id",
+            }, node["id"]
+        else:
+            assert "match" not in node, node["id"]
+    unkeyed = expand_stages({k: v for k, v in _ladder().items() if k != "key"})
+    assert all("match" not in node for node in unkeyed["nodes"])
+    assert validate_definition(keyed) == [] and validate_definition(unkeyed) == []

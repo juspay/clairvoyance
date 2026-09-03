@@ -185,6 +185,8 @@ async def _wake_on_reply(
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
+        if not _is_about(node, event, run):
+            continue  # another run's letter (phase 18): not this square's
         answer = _answer_for(node, event)
         if answer is None:
             # B1 (rollout phase 01): no key, no answer to branch on. Waking
@@ -209,6 +211,21 @@ async def _wake_on_reply(
             {reply_key(node.id): answer, LATEST_LETTER_KEY: node.id},
             facts,
         )
+
+
+def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
+    """PURE: is this letter about THIS run, as the square's `match` asks
+    (phase 18)? The letter's field against the run's own id or a context
+    field, as text (the goal-key precedent). No match word = every
+    letter on the topic is hers; a letter without the field claims
+    nobody, so it is not hers either."""
+    if node.match is None:
+        return True
+    claimed = event.payload.get(node.match.payload)
+    if claimed is None:
+        return False
+    mine = str(run.id) if node.match.run == "id" else run.context.get(node.match.run)
+    return mine is not None and str(claimed) == str(mine)
 
 
 def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
@@ -247,7 +264,11 @@ async def _answered_by(
             if pinned is None:
                 return False
             square = next((n for n in pinned.nodes if n.id == run.current_node), None)
-            return square is not None and _answer_for(square, event) is not None
+            return (
+                square is not None
+                and _is_about(square, event, run)
+                and _answer_for(square, event) is not None
+            )
     return False
 
 

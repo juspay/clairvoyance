@@ -690,3 +690,76 @@ def test_a_square_may_carry_a_stage_label_and_a_door_the_restart_word() -> None:
     assert all(
         d.restart_on_repeat and d.debounce_minutes == 10 for d in definition.entries
     )
+
+
+# --- rollout phase 18: a listening square may say WHOSE letter it hears, and
+# may carry one catch-all arrow ---
+
+
+def _after_call(**words: Any) -> Dict[str, Any]:
+    return {
+        "id": "after-call",
+        "type": "wait_event",
+        "topics": ["call.completed"],
+        "key": "outcome",
+        "minutes": 1440,
+        **words,
+    }
+
+
+_CALL_THEN_LISTEN: List[Dict[str, Any]] = [
+    {"id": "call", "type": "call", "template_id": "t"},
+    _after_call(match={"payload": "enrollment_id", "run": "id"}),
+    {"id": "again", "type": "wait", "minutes": 5},
+    {"id": "done", "type": "wait", "minutes": 5},
+]
+
+
+def test_match_names_a_payload_field_and_a_run_field() -> None:
+    doc = _definition(
+        nodes=_CALL_THEN_LISTEN,
+        edges=[["call", "after-call"], ["after-call", "again", "NO_ANSWER"]],
+    )
+    assert validate_definition(doc) == []
+    square = WorkflowDefinition.model_validate(doc).nodes[1]
+    assert square.match is not None
+    assert (square.match.payload, square.match.run) == ("enrollment_id", "id")
+    # both halves are required and non-empty
+    for bad in ({"payload": "enrollment_id"}, {"payload": "", "run": "id"}):
+        problems = validate_definition(
+            _definition(nodes=[_after_call(match=bad)], edges=[])
+        )
+        assert any("shape invalid" in p for p in problems), bad
+
+
+def test_only_a_listening_square_may_say_whose_letter_it_hears() -> None:
+    problems = validate_definition(
+        _definition(
+            nodes=[
+                {
+                    "id": "w",
+                    "type": "wait",
+                    "minutes": 5,
+                    "match": {"payload": "enrollment_id", "run": "id"},
+                }
+            ],
+            edges=[],
+        )
+    )
+    assert any("w" in p and "match" in p and "wait_event" in p for p in problems)
+
+
+def test_else_is_one_catch_all_arrow_out_of_a_listening_square() -> None:
+    edges = [
+        ["call", "after-call"],
+        ["after-call", "again", "NO_ANSWER"],
+        ["after-call", "done", "else"],
+    ]
+    assert validate_definition(_definition(nodes=_CALL_THEN_LISTEN, edges=edges)) == []
+    twice = edges + [["after-call", "again", "else"]]
+    problems = validate_definition(_definition(nodes=_CALL_THEN_LISTEN, edges=twice))
+    assert any("after-call" in p and "same on" in p for p in problems)
+    # a plain square still has one unlabelled arrow, else included
+    plain = [["call", "after-call"], ["again", "done", "else"]]
+    problems = validate_definition(_definition(nodes=_CALL_THEN_LISTEN, edges=plain))
+    assert any("only a wait_event" in p and "again" in p for p in problems)
