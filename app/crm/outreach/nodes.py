@@ -58,14 +58,25 @@ _BOOKKEEPING_KEYS = (
     "repeat_event_ids",  # repeat.py: which letters already patched this run
     "repeat_items",  # repeat.py: accumulate's list — never a template variable
     "facts",  # entry.py: each square's letter, by square (phase 16) — flattened below
+    "latest_letter",  # entry.py: which square heard the most recent letter (phase 17)
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
 )
+# The pointer the consumer writes with every reply (phase 17): the square
+# that heard the most recent letter, so run_facts can let that letter win
+# — on a ladder the letter that moves the run is heard on the square it
+# LEAVES, and the action then executes as its own square, so "the current
+# square's facts" would never be the latest stage's.
+LATEST_LETTER_KEY = "latest_letter"
 _BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_")
 
 # The one $-word a wait_event may branch on (rollout phase 15): the
 # event's TOPIC rather than a payload field.
 TOPIC_KEY = "$topic"
+# The answer a wait_event square resolves on when its alarm fires first —
+# the label of the arrow a timeout takes. The validator's edge laws, the
+# walker's pick_next and the ladder's expansion all spell it from here.
+TIMEOUT = "timeout"
 
 
 def reply_key(node_id: str) -> str:
@@ -302,11 +313,13 @@ def run_facts(
 
     Phase 16: each square's letter lives under context.facts.<square>
     (entry.py writes it on resume). Flattened here for templates: the
-    top-level facts first, then the CURRENT square's override them (the
-    most recent stage wins the call), and every square's stay reachable as
-    facts_<square>_<key>. With the square given, current_node (and
-    current_stage when the square is labelled) ride along, so one call
-    template can say "you stopped at {current_stage}"."""
+    top-level facts first, then the LATEST letter's override them (the
+    square that heard it is context.latest_letter, phase 17 — the most
+    recent stage wins the call), then the CURRENT square's own, and every
+    square's stay reachable as facts_<square>_<key>. With the square
+    given, current_node (and current_stage when the square is labelled)
+    ride along, so one call template can say "you stopped at
+    {current_stage}"."""
     facts = {
         key: value
         for key, value in context.items()
@@ -318,6 +331,9 @@ def run_facts(
         if isinstance(letter, dict):
             for key, value in letter.items():
                 facts[f"facts_{square}_{key}"] = value
+    latest = context.get(LATEST_LETTER_KEY)
+    if isinstance(latest, str) and isinstance(by_square.get(latest), dict):
+        facts.update(by_square[latest])
     if node is not None:
         current = by_square.get(node.id)
         if isinstance(current, dict):

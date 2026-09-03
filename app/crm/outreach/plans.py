@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
 from app.crm.outreach.db import DbTxn, accessor, atomically
+from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
@@ -21,8 +22,6 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowSummary,
 )
-
-TIMEOUT = "timeout"
 
 
 def validate_definition(
@@ -35,7 +34,17 @@ def validate_definition(
     squares open tokens stand on — publish must not delete one, and while
     any exist the entry rule (live_entry) must not change under them
     (canon T19: no changing entry semantics mid-flight).
+
+    A ladder (phase 17) is expanded first, so every law below judges the
+    board it means — and the stored form, the ladder beside its own
+    expansion, reads as itself.
     """
+    try:
+        raw = expand_stages(raw)
+    except LadderProblem as e:
+        return [str(e)]
+    except ValueError as e:  # pydantic: the ladder's own shape
+        return [f"stages shape invalid: {e}"]
     try:
         definition = WorkflowDefinition.model_validate(raw)
     except Exception as e:  # pydantic's message is already precise
@@ -220,11 +229,15 @@ async def create_workflow(
 ) -> Workflow:
     """A new plan is born as a draft. Shape/law problems are rejected at
     the door — a draft may be imperfect only in ways publish will catch,
-    never in ways that break the editor."""
+    never in ways that break the editor. A ladder (phase 17) is stored
+    with the board it expands to: the author's intent beside what the
+    walker reads."""
     problems = validate_definition(definition)
     if problems:
         raise WorkflowValidationError(problems)
-    return await accessor.insert_workflow(merchant_id, name, definition, created_by)
+    return await accessor.insert_workflow(
+        merchant_id, name, expand_stages(definition), created_by
+    )
 
 
 async def update_draft(
@@ -233,7 +246,9 @@ async def update_draft(
     problems = validate_definition(definition)
     if problems:
         raise WorkflowValidationError(problems)
-    return await accessor.update_draft(merchant_id, workflow_id, definition)
+    return await accessor.update_draft(
+        merchant_id, workflow_id, expand_stages(definition)
+    )
 
 
 async def publish_workflow(
@@ -252,7 +267,10 @@ async def _publish_in_txn(
     and a migrate must never leave a run pointing at a version that did
     not get written (ADR 0023). The templates the draft sends are held
     SHARED (shared/locks.py) from before the approval check, so a
-    retirement cannot slip between "approved" and the version row."""
+    retirement cannot slip between "approved" and the version row. A
+    ladder draft must already carry its board (phase 17): the copy is
+    verbatim, so a ladder saved without one would go live without
+    squares."""
     workflow = await accessor.workflow_for_publish(txn, merchant_id, workflow_id)
     if workflow is None:
         raise WorkflowNotFound(workflow_id)
@@ -266,6 +284,13 @@ async def _publish_in_txn(
     )
     if problems:
         raise WorkflowValidationError(problems)
+    if expand_stages(draft) != draft:
+        raise WorkflowValidationError(
+            [
+                "draft is a ladder saved without its board — save the draft "
+                "again (PUT /draft) before publishing; publish copies it verbatim"
+            ]
+        )
     definition = WorkflowDefinition.model_validate(draft)
     await accessor.lock_templates_shared(txn, merchant_id, definition.send_templates())
     problems = await _template_problems(merchant_id, definition)

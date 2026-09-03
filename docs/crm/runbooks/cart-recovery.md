@@ -145,7 +145,7 @@ unstuck it), so the breadcrumb is only kept on a manual resume.
 | `completed` | the whole board ran (nudge, call, one day) with no order |
 | `timed_out` | the run outlived `exits.max_age_days` (7) — normally only a parked-then-resumed run |
 | `ejected` | the plan was archived while the run was open |
-| `withdrawn` | not used by this board (the loan clocks use it) |
+| `withdrawn` | not used by this board (the loan board uses it) |
 
 Goal comparisons are against the moment the **checkout update happened**
 (`entered_event_at`), not when we stored the run — an order that arrived

@@ -35,12 +35,12 @@ from app.crm.outreach.db import accessor
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.nodes import (
     NODE_TYPES,
+    TIMEOUT,
     NodeParked,
     is_wait,
     reply_key,
     without_reply,
 )
-from app.crm.outreach.plans import TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import customer_has_event
 

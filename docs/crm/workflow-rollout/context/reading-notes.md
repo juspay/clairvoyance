@@ -211,6 +211,8 @@ Requirements: customer-level; ~10 stage events (profile_created → kyc → bank
 ### Verdict
 Start with A (no code changes beyond #1041). B earns its keep only when per-journey funnel analytics or a single editable document matters, and it needs five small features plus the B1 fix first. A hybrid — A for behaviour + a reporting view joining a customer's runs across the stage plans in workflow order — gives most of B's analytics with none of its risk (one big plan's state machine parks every journey on a bug; entry edits are blocked while any run is open, and B's runs live for days).
 
+**Status (rollout phase 17, 2026-09-03): the loan funnel is a board as of phase 17** — `docs/crm/plans/loan-dropoff.json`, a `stages` ladder under `on_publish: pin`; the five clocks are cut over per `docs/crm/runbooks/loan-dropoff.md`.
+
 ## 14. Option B written out, why not B (plain-language version), industry practice, and the canon decision underneath
 
 ### 14.1 Option B, once B1 + four features exist (four stages shown; ten stages ≈ 30 nodes / 80 edges — console-generated only)
@@ -313,6 +315,8 @@ What would change the verdict: the console generates boards; per-journey state b
 - **Verdict with pinning + those five**: yes, the loan funnel can be a board, and one operating model (boards) beats two (boards + clocks). The remaining preference for clocks in enterprises is organisational (per-stage ownership, A/B), not technical — for a lender integrating via API, one pinned board is fine.
 - **Sequencing**: pinning touches storage, walker, entry consumer and canon — weeks, not days. Ship the loan funnel as clocks NOW (five tiny plans, disposable), build pinning + the five items, then migrate the funnel to one board. Nothing is wasted: the stage topics, call templates and goal lists carry over one-to-one.
 
+**Status (rollout phase 17, 2026-09-03): the loan funnel is a board as of phase 17** — `docs/crm/plans/loan-dropoff.json`, a `stages` ladder under `on_publish: pin`; the five clocks are cut over per `docs/crm/runbooks/loan-dropoff.md`.
+
 ## 15. End-to-end plan (agreed direction) and the "boards everywhere?" answer
 
 ### 15.1 The plan, in order
@@ -396,7 +400,7 @@ Assumed vocabulary after the plan: entry as object or list of `{topic, start}`; 
   "name": "loan-onboarding-dropoff",
   "on_publish": "pin",
   "key": "application_id",
-  "reenter": true, "cooldown_hours": 0,
+  "reenter": true, "cooldown_hours": 1,
   "exits": {"max_age_days": 30},
   "goals": [
     {"topics": ["loan.disbursed"], "exit_reason": "goal_met"},
@@ -415,7 +419,7 @@ Assumed vocabulary after the plan: entry as object or list of `{topic, start}`; 
   }
 }
 ```
-Expansion (validator-owned): entry = every stage topic → its `at-<stage>` node; per stage `at-<stage>` wait_event(`$topic`, downstream topics, idle_minutes) → timeout → `<on_idle>-<stage>` → `after-<stage>` wait_event(downstream, after_action_minutes) → timeout → completed; labelled edges to every downstream `at-*`; `restart_on_repeat` = the stage's own topic re-arms the current node's alarm (the #1041 debounce generalised to any node). `current_stage` rides run_facts so one call template can say "you stopped at KYC".
+Expansion (validator-owned): entry = every stage topic → its `at-<stage>` node; per stage `at-<stage>` wait_event(`$topic`, downstream topics, idle_minutes) → timeout → `<on_idle>-<stage>` → `after-<stage>` wait_event(downstream, after_action_minutes) → timeout → completed; labelled edges to every downstream `at-*`; `restart_on_repeat` = the stage's own topic re-arms the current node's alarm (the #1041 debounce generalised to any node). `current_stage` rides run_facts so one call template can say "you stopped at KYC". *Amended 2026-09-03 (phase 17):* `cooldown_hours` is 1, not 0 — the clocks' value; a stage letter delivered late, after the journey ended, must not open a run and call.
 
 ### 16.3 Will they be perfect? No. What still needs building (functionality, not bugs)
 | Gap | Affects | Why it matters | Where it lives |
