@@ -11,9 +11,18 @@ a dedicated rotate endpoint later; this PR keeps the surface minimal.
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+_APPEARANCE_DESCRIPTION = (
+    "Storefront widget appearance — colour, logos, header title, launcher "
+    "label, offsets. Stored and returned VERBATIM: Clairvoyance never reads a "
+    "key out of this object. Nautilus writes it and the widget consumes it, "
+    "so the two ends own the key names and a new appearance field needs no "
+    "change here. Empty object means 'not configured on this row' — callers "
+    "fall back to their own source."
+)
 
 
 class WidgetConfigCreate(BaseModel):
@@ -35,6 +44,9 @@ class WidgetConfigCreate(BaseModel):
     max_messages_per_ip_hour: int = Field(600, ge=0)
     max_concurrent_per_ip: int = Field(4, ge=0)
     max_voice_sessions_per_ip_hour: int = Field(10, ge=0)
+    appearance: Dict[str, Any] = Field(
+        default_factory=dict, description=_APPEARANCE_DESCRIPTION
+    )
     active: bool = Field(True, description="Inactive rows behave like 404.")
 
 
@@ -51,6 +63,9 @@ class WidgetConfigUpdate(BaseModel):
     max_messages_per_ip_hour: Optional[int] = Field(None, ge=0)
     max_concurrent_per_ip: Optional[int] = Field(None, ge=0)
     max_voice_sessions_per_ip_hour: Optional[int] = Field(None, ge=0)
+    appearance: Optional[Dict[str, Any]] = Field(
+        None, description=_APPEARANCE_DESCRIPTION
+    )
     active: Optional[bool] = None
 
 
@@ -67,6 +82,9 @@ class WidgetConfigResponse(BaseModel):
     max_messages_per_ip_hour: int = 600
     max_concurrent_per_ip: int = 4
     max_voice_sessions_per_ip_hour: int = 10
+    appearance: Dict[str, Any] = Field(
+        default_factory=dict, description=_APPEARANCE_DESCRIPTION
+    )
     active: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
