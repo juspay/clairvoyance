@@ -14,10 +14,18 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce.tenancy import (
+    assist_tenant,
+    normalize_merchant_domain,
+)
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.merchants import (
+    create_merchant,
+    get_merchant_by_merchant_identifier,
+)
 from app.database.accessor.breeze_buddy.template import (
     create_template,
     delete_template_if_not_referenced,
@@ -34,6 +42,8 @@ from app.schemas.breeze_buddy.assist_onboarding import (
     AssistOnboardingCompletion,
     AssistOnboardingError,
     AssistOnboardingStreamRequest,
+    AssistOnboardRequest,
+    AssistOnboardResponse,
 )
 from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
 from app.services.scraper.website.exceptions import (
@@ -308,7 +318,9 @@ async def _update_template(template: TemplateModel) -> TemplateModel:
 
 
 async def _create_widget(
-    body: AssistOnboardingStreamRequest, template_id: str
+    body: AssistOnboardingStreamRequest,
+    template_id: str,
+    appearance: Optional[Dict[str, Any]] = None,
 ) -> WidgetConfigResponse:
     created = await create_widget_config(
         reseller_id=body.reseller_id,
@@ -321,6 +333,7 @@ async def _create_widget(
         max_concurrent_per_ip=4,
         max_voice_sessions_per_ip_hour=10,
         active=body.is_active,
+        appearance=appearance,
     )
     if created is None:
         raise OnboardingFailure(
@@ -333,13 +346,17 @@ async def _create_widget(
 
 
 async def _update_widget(
-    widget: WidgetConfigResponse, body: AssistOnboardingStreamRequest, template_id: str
+    widget: WidgetConfigResponse,
+    body: AssistOnboardingStreamRequest,
+    template_id: str,
+    appearance: Optional[Dict[str, Any]] = None,
 ) -> WidgetConfigResponse:
     updated = await update_widget_config(
         widget.id,
         template_id=template_id,
         allowed_origins=body.allowed_origins,
         active=body.is_active,
+        appearance=appearance,
     )
     if updated is None:
         raise OnboardingFailure(
@@ -364,7 +381,191 @@ def _widget_payload(widget: WidgetConfigResponse) -> Dict[str, Any]:
         "max_concurrent_per_ip": widget.max_concurrent_per_ip,
         "max_voice_sessions_per_ip_hour": widget.max_voice_sessions_per_ip_hour,
         "active": widget.active,
+        "appearance": widget.appearance,
     }
+
+
+# What the brand-identity marker resolves to when the merchant has not
+# personalized yet. Honest with the model: no invented brand facts; the
+# live commerce tools are the only ground truth until the dashboard run.
+_BARE_WEBSITE_CONTEXT = (
+    "(No verified website context yet — this assistant has not been "
+    "personalized. Ground every catalog, price, and policy claim in live "
+    "commerce tool results; do not invent brand facts. The merchant can "
+    "personalize this assistant from the Buddy dashboard.)"
+)
+
+
+async def _ensure_assist_merchant(
+    reseller_id: str, merchant_id: str, merchant_domain: str, merchant_name: str
+) -> bool:
+    """Create the Assist merchant row if missing. Returns True when created.
+
+    Races with a concurrent install are settled by the PK: on a create
+    failure we re-check existence and treat "someone else won" as success.
+    """
+    existing = await get_merchant_by_merchant_identifier(merchant_id)
+    if existing is not None:
+        return False
+    try:
+        created = await create_merchant(
+            merchant_id=merchant_id,
+            reseller_id=reseller_id,
+            name=merchant_name,
+            description=f"Buddy Assist merchant - {merchant_domain}",
+            is_active=True,
+        )
+        if created is not None:
+            return True
+    except Exception:
+        pass
+    if await get_merchant_by_merchant_identifier(merchant_id) is not None:
+        return False
+    raise OnboardingFailure(
+        "ensuring_merchant",
+        "ONBOARDING_PERSISTENCE_FAILED",
+        "Could not create the Assist merchant.",
+        True,
+    )
+
+
+async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardResponse:
+    """Bare-metal install-time onboarding: merchant + blueprint template +
+    widget config, idempotently — and NO website scraping.
+
+    Same state machine as ``stream_assist_onboarding`` (widget row is the
+    source of truth; created / updated / recovered; template rollback on
+    widget-create failure) minus the personalization step: the brand
+    marker resolves to a placeholder that points the model at live tool
+    results, and the merchant personalizes later from the Buddy dashboard.
+    Raises ``OnboardingFailure``; the route maps it to HTTP.
+    """
+    merchant_domain = normalize_merchant_domain(body.merchant_domain)
+    reseller_id, merchant_id = assist_tenant(body.host_app, merchant_domain)
+    merchant_name = body.merchant_name or merchant_domain.removesuffix(".myshopify.com")
+    origins = [f"https://{merchant_domain}"] + [
+        origin
+        for origin in body.allowed_origins
+        if origin != f"https://{merchant_domain}"
+    ]
+    appearance = (
+        body.appearance.model_dump(exclude_none=True)
+        if body.appearance is not None
+        else None
+    )
+
+    internal = AssistOnboardingStreamRequest(
+        reseller_id=reseller_id,
+        merchant_id=merchant_id,
+        merchant_name=merchant_name,
+        website_url=f"https://{merchant_domain}",
+        is_shopify=True,
+        allowed_origins=origins,
+        bot_brand_name=body.bot_brand_name,
+        is_active=body.is_active,
+    )
+
+    merchant_created = await _ensure_assist_merchant(
+        reseller_id, merchant_id, merchant_domain, merchant_name
+    )
+
+    widget = await get_widget_config_by_reseller_merchant(
+        internal.reseller_id, internal.merchant_id
+    )
+    template_name = _template_name(internal.merchant_name)
+    existing_template: Optional[TemplateModel] = None
+    operation: Literal["created", "updated", "recovered"]
+
+    if widget is not None:
+        operation = "updated"
+        existing_template = await get_template_by_id(widget.template_id)
+        if existing_template is None:
+            raise OnboardingFailure(
+                "checking_widget",
+                "ONBOARDING_STATE_INVALID",
+                "The widget references a missing template.",
+            )
+        if (
+            existing_template.reseller_id != internal.reseller_id
+            or existing_template.merchant_id != internal.merchant_id
+        ):
+            raise OnboardingFailure(
+                "checking_widget",
+                "ONBOARDING_STATE_INVALID",
+                "The widget references a template outside its tenant scope.",
+            )
+    else:
+        existing_template = await get_template_in_scope(
+            internal.reseller_id, internal.merchant_id, template_name
+        )
+        operation = "recovered" if existing_template else "created"
+
+    # An existing template is NEVER rebuilt here: it may carry dashboard
+    # customization or a personalized prompt, and a reinstall must not wipe
+    # that back to bare-metal. The blueprint is consulted only when a
+    # template has to be created — so already-provisioned tenants keep
+    # working even before the blueprint row exists for this reseller.
+    created_template_id: Optional[str] = None
+    if existing_template is None:
+        default_template = await get_template_in_scope(
+            internal.reseller_id, None, DEFAULT_ASSIST_TEMPLATE_NAME
+        )
+        if default_template is None:
+            raise OnboardingFailure(
+                "loading_default_template",
+                "DEFAULT_TEMPLATE_NOT_FOUND",
+                "The default Assist template is not configured for this reseller.",
+            )
+        _validate_default_template(default_template)
+
+        candidate = build_merchant_template(
+            default_template=default_template,
+            body=internal,
+            website_context=_BARE_WEBSITE_CONTEXT,
+            template_id=str(uuid4()),
+            existing_template=None,
+        )
+        persisted_template = await _create_template(candidate)
+        created_template_id = persisted_template.id
+    else:
+        persisted_template = existing_template
+
+    if widget is None:
+        try:
+            persisted_widget = await _create_widget(
+                internal, persisted_template.id, appearance=appearance
+            )
+        except Exception:
+            if created_template_id:
+                try:
+                    await delete_template_if_not_referenced(created_template_id)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Assist onboarding cleanup failed for template "
+                        f"{created_template_id}: {cleanup_error}"
+                    )
+            raise
+    else:
+        persisted_widget = await _update_widget(
+            widget, internal, persisted_template.id, appearance=appearance
+        )
+
+    if created_template_id:
+        try:
+            await invalidate_template(persisted_template.id)
+        except Exception as cache_error:
+            logger.warning(
+                f"Assist template cache invalidation failed for "
+                f"{persisted_template.id}: {cache_error}"
+            )
+
+    return AssistOnboardResponse(
+        operation=operation,
+        merchant_created=merchant_created,
+        template_id=persisted_template.id,
+        template_name=persisted_template.name,
+        widget_config=_widget_payload(persisted_widget),
+    )
 
 
 async def stream_assist_onboarding(
@@ -560,6 +761,8 @@ __all__ = [
     "DEFAULT_ASSIST_TEMPLATE_NAME",
     "SHOPIFY_OPERATING_END_MARKER",
     "SHOPIFY_OPERATING_START_MARKER",
+    "OnboardingFailure",
     "build_merchant_template",
+    "onboard_assist_bare",
     "stream_assist_onboarding",
 ]

@@ -14,7 +14,7 @@ _COLUMNS = (
     "id, reseller_id, merchant_id, public_widget_key, template_id, "
     "allowed_origins, max_sessions_per_ip_hour, max_messages_per_ip_hour, "
     "max_concurrent_per_ip, max_voice_sessions_per_ip_hour, active, "
-    "created_at, updated_at"
+    "appearance, created_at, updated_at"
 )
 
 
@@ -30,15 +30,17 @@ def create_widget_config_query(
     max_concurrent_per_ip: int,
     max_voice_sessions_per_ip_hour: int,
     active: bool,
+    appearance_json: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     query = f"""
         INSERT INTO {WIDGET_CONFIG_TABLE} (
             reseller_id, merchant_id, public_widget_key, template_id,
             allowed_origins, max_sessions_per_ip_hour, max_messages_per_ip_hour,
             max_concurrent_per_ip, max_voice_sessions_per_ip_hour,
-            active, created_at, updated_at
+            active, appearance, created_at, updated_at
         ) VALUES (
-            $1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12
+            $1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10,
+            COALESCE($11::jsonb, '{{}}'::jsonb), $12, $13
         )
         RETURNING {_COLUMNS}
     """
@@ -54,6 +56,7 @@ def create_widget_config_query(
         int(max_concurrent_per_ip),
         int(max_voice_sessions_per_ip_hour),
         bool(active),
+        appearance_json,
         now,
         now,
     ]
@@ -157,9 +160,13 @@ def update_widget_config_query(
     max_concurrent_per_ip: Optional[int] = None,
     max_voice_sessions_per_ip_hour: Optional[int] = None,
     active: Optional[bool] = None,
+    appearance_json: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Returns ("", []) if no fields were provided — callers should treat
-    that as a no-op and return the current row."""
+    that as a no-op and return the current row.
+
+    ``appearance_json`` replaces the whole appearance object (the dashboard
+    always saves the full form); ``None`` leaves it untouched."""
     set_clauses: List[str] = []
     params: List[Any] = []
     idx = 1
@@ -197,6 +204,11 @@ def update_widget_config_query(
     if active is not None:
         set_clauses.append(f"active = ${idx}")
         params.append(bool(active))
+        idx += 1
+
+    if appearance_json is not None:
+        set_clauses.append(f"appearance = ${idx}::jsonb")
+        params.append(appearance_json)
         idx += 1
 
     if not set_clauses:
