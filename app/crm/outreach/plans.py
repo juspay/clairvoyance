@@ -81,6 +81,11 @@ def validate_definition(
                 f"entry {door.topic!r}: debounce_minutes needs a wait as its start "
                 "node — there is no entry alarm to slide otherwise"
             )
+        if door.restart_on_repeat and door.debounce_minutes <= 0:
+            problems.append(
+                f"entry {door.topic!r}: restart_on_repeat needs debounce_minutes > 0 "
+                "— there is nothing to re-arm otherwise"
+            )
 
     # Goal tiers (phase 06): the reason is vocabulary, and one tier per
     # reason — two tiers claiming goal_met could never be told apart.

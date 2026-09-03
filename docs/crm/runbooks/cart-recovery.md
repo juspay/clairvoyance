@@ -130,7 +130,11 @@ curl -sS -X POST "$BASE/workflows/<wf>/runs/<run>/resume?merchant_id=$M" -H "$H"
 
 `resume` puts the run back to `waiting` with `wake_at = now` and the
 failure counter forgiven; the walker retries the same node on its next
-tick. `last_error` stays visible until the next successful step.
+tick. `last_error` stays visible until the next successful step. An
+event the parked run's square listens for also resumes it by itself —
+the customer moved, so the run is no longer stuck on what parked it —
+but that path clears `last_error` at once (the letter is the step that
+unstuck it), so the breadcrumb is only kept on a manual resume.
 
 ## Exit reasons
 

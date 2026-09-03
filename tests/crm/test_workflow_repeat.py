@@ -117,7 +117,8 @@ def test_patch_touches_only_an_open_run_on_the_entry_square_by_key() -> None:
         4500.0,
         10.0,
     )
-    assert "status = 'waiting' AND current_node = $4" in sql
+    assert "status = 'waiting' AND ($11::boolean OR current_node = $4)" in sql
+    assert params[10] is False  # pinned to the start square unless restart_on_repeat
     assert "enrollment_key = $3" in sql and "customer_id" not in sql
     assert "NOT (COALESCE(context->'repeat_event_ids', '[]'::jsonb) ? $5::text)" in sql
     assert "make_interval(secs => $10::float8 * 60)" in sql
@@ -302,6 +303,9 @@ def test_a_payload_can_never_plant_bookkeeping_keys_in_context() -> None:
             "lead_call": "l-1",
             "message_wa": "m-1",
             "reply_ask": "YES",
+            "facts": "junk",  # phase 16: the per-square store is ours
+            "current_node": "forged",
+            "current_stage": "forged",
         }
     )
     assert context == {"item": "tv"}
@@ -345,3 +349,52 @@ def test_the_repeat_carries_the_refreshed_phone_but_never_the_founding_id(
     assert facts["phone"] == "+919876543210"
     assert facts["cart_value"] == 900
     assert "source_event_id" not in facts
+
+
+# --- rollout phase 16: restart_on_repeat — any square re-arms on its own
+# stage's repeat (G8; the #1041 patch generalised) ---
+
+
+def test_the_patch_leaves_the_start_square_only_with_restart_on_repeat() -> None:
+    _, params = patch_open_run_query(
+        "m1", "wf-1", "ORD-1", "wait_10m", "ev-1", {}, False, None, None, 10.0
+    )
+    assert params[10] is False
+    _, params = patch_open_run_query(
+        "m1",
+        "wf-1",
+        "ORD-1",
+        "wait_10m",
+        "ev-1",
+        {},
+        False,
+        None,
+        None,
+        10.0,
+        anywhere=True,
+    )
+    assert params[10] is True
+
+
+def test_restart_on_repeat_needs_a_debounce_to_re_arm() -> None:
+    problems = validate_definition(_raw(restart_on_repeat=True))
+    assert any("restart_on_repeat" in p and "debounce" in p for p in problems)
+    assert validate_definition(_raw(restart_on_repeat=True, debounce_minutes=10)) == []
+
+
+def test_apply_repeat_hands_the_restart_word_to_the_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: List[Any] = []
+
+    async def patch_open_run(*args: Any) -> bool:
+        seen.append(args)
+        return True
+
+    monkeypatch.setattr(repeat.accessor, "patch_open_run", patch_open_run)
+    door = _door(
+        on_repeat="refresh_latest", debounce_minutes=10, restart_on_repeat=True
+    )
+    asyncio.run(repeat.apply_repeat("m1", "wf-1", "ORD-1", door, "ev-1", {"cart": 1}))
+    ((*_, anywhere),) = seen
+    assert anywhere is True

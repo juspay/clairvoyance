@@ -12,6 +12,7 @@ from app.crm.outreach.db.queries import (
 )
 from app.crm.outreach.nodes import lead_request_id, run_facts, send_variables
 from app.crm.outreach.runs import list_runs
+from app.crm.outreach.schemas import WorkflowNode
 from app.crm.outreach.walker import retry_delay_seconds
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
@@ -84,3 +85,49 @@ def test_lead_request_id_is_the_merchants_order_id_else_the_run() -> None:
     assert lead_request_id({"request_id": "req-9"}, "r-1") == "req-9"
     assert lead_request_id({"order_id": ""}, "r-1") == "wf-r-1"
     assert lead_request_id({}, "r-1") == "wf-r-1"
+
+
+def test_the_current_squares_facts_win_and_every_squares_stay_reachable() -> None:
+    """Phase 16: a letter's facts land under facts.<square>. For the
+    template the current square's facts override the top-level ones (the
+    most recent stage wins), every square's stay reachable as
+    facts_<square>_<key>, the square itself rides as current_node (and
+    current_stage when labelled), and `facts` is bookkeeping."""
+    context = {
+        "phone": "+91",
+        "amount": 100,
+        "facts": {
+            "at-kyc": {"amount": 250, "doc": "pan"},
+            "at-bank": {"bank": "hdfc"},
+        },
+    }
+    node = WorkflowNode(
+        id="at-kyc",
+        type="wait_event",
+        topics=["loan.bank_linked"],
+        key="$topic",
+        minutes=30,
+        stage="kyc",
+    )
+    facts = run_facts(context, node)
+    assert facts["amount"] == 250 and facts["doc"] == "pan"
+    assert facts["facts_at-kyc_amount"] == 250 and facts["facts_at-bank_bank"] == "hdfc"
+    assert facts["current_node"] == "at-kyc" and facts["current_stage"] == "kyc"
+    assert "facts" not in facts and "phone" not in facts
+    plain = run_facts(context)
+    assert (
+        plain["amount"] == 100 and "current_node" not in plain and "facts" not in plain
+    )
+    assert plain["facts_at-bank_bank"] == "hdfc"
+    unlabelled = WorkflowNode(id="w", type="wait", minutes=1)
+    assert "current_stage" not in run_facts(context, unlabelled)
+    assert send_variables(context, node)["current_node"] == "at-kyc"
+
+
+def test_send_variables_carry_only_what_a_provider_can_render() -> None:
+    """A bool or a None among the variables makes the WhatsApp face refuse
+    the message terminally; the producer keeps text and numbers only. The
+    call payload is not narrowed — the lead machine spells its own."""
+    context = {"name": "Priya", "amount": 1999, "vip": True, "note": None, "score": 4.5}
+    assert send_variables(context) == {"name": "Priya", "amount": 1999, "score": 4.5}
+    assert run_facts(context)["vip"] is True

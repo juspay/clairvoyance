@@ -147,8 +147,9 @@ async def apply_repeat(
     facts: Dict[str, Any],
 ) -> bool:
     """A refused enrol may be a repeat of an open run standing on the
-    door's start square. Returns True when a run was patched. Zero rows
-    is the normal answer for "not a repeat" (nothing open, or the run
+    door's start square — or, when the door says restart_on_repeat (phase
+    16), on any square. Returns True when a run was patched. Zero rows is
+    the normal answer for "not a repeat" (nothing open, or the run
     already moved on) and for a redelivered event (it marked itself used
     the first time)."""
     plan = repeat_plan(door, facts)
@@ -165,6 +166,7 @@ async def apply_repeat(
         plan.max_field,
         plan.max_value,
         plan.debounce_minutes,
+        door.restart_on_repeat,
     )
     if patched:
         logger.info(

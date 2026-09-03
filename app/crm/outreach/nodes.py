@@ -57,6 +57,9 @@ _BOOKKEEPING_KEYS = (
     "customer_mobile_number",
     "repeat_event_ids",  # repeat.py: which letters already patched this run
     "repeat_items",  # repeat.py: accumulate's list — never a template variable
+    "facts",  # entry.py: each square's letter, by square (phase 16) — flattened below
+    "current_node",  # run_facts: computed from the square, never a producer's
+    "current_stage",
 )
 _BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_")
 
@@ -204,7 +207,7 @@ async def execute_call(
     # payload — {placeholder}s in the template resolve from these keys.
     # reporting_webhook_url rides too: the lead machine reads it from the
     # lead payload to report the call's outcome back to the merchant.
-    payload: Dict[str, Any] = run_facts(run.context)
+    payload: Dict[str, Any] = run_facts(run.context, node)
     payload["customer_mobile_number"] = phone
 
     try:
@@ -263,7 +266,7 @@ async def execute_send(
             source_id=str(run.id),
             purpose_key=definition.purpose_key,
             template_id=node.template,
-            variables=send_variables(run.context),
+            variables=send_variables(run.context, node),
             dedupe_key=dedupe_key,
         )
     except ValueError as e:
@@ -290,24 +293,57 @@ def lead_request_id(context: Dict[str, Any], run_id: str) -> str:
     return f"wf-{run_id}"
 
 
-def run_facts(context: Dict[str, Any]) -> Dict[str, Any]:
+def run_facts(
+    context: Dict[str, Any], node: Optional[WorkflowNode] = None
+) -> Dict[str, Any]:
     """PURE: the run's small facts = context minus the walker's own
     bookkeeping. The ONE filter both the call payload and the send
-    variables derive from, so they can never disagree on what is ours."""
-    return {
+    variables derive from, so they can never disagree on what is ours.
+
+    Phase 16: each square's letter lives under context.facts.<square>
+    (entry.py writes it on resume). Flattened here for templates: the
+    top-level facts first, then the CURRENT square's override them (the
+    most recent stage wins the call), and every square's stay reachable as
+    facts_<square>_<key>. With the square given, current_node (and
+    current_stage when the square is labelled) ride along, so one call
+    template can say "you stopped at {current_stage}"."""
+    facts = {
         key: value
         for key, value in context.items()
         if key not in _BOOKKEEPING_KEYS and not key.startswith(_BOOKKEEPING_PREFIXES)
     }
+    by_square = context.get("facts")
+    by_square = by_square if isinstance(by_square, dict) else {}
+    for square, letter in by_square.items():
+        if isinstance(letter, dict):
+            for key, value in letter.items():
+                facts[f"facts_{square}_{key}"] = value
+    if node is not None:
+        current = by_square.get(node.id)
+        if isinstance(current, dict):
+            facts.update(current)
+        facts["current_node"] = node.id
+        if node.stage:
+            facts["current_stage"] = node.stage
+    return facts
 
 
-def send_variables(context: Dict[str, Any]) -> Dict[str, Any]:
+def send_variables(
+    context: Dict[str, Any], node: Optional[WorkflowNode] = None
+) -> Dict[str, Any]:
     """PURE: the template's fill-ins = the run's facts minus what only
-    the lead machine reads."""
+    the lead machine reads, and only what a provider can render: text and
+    numbers. A bool or a None among the variables makes the WhatsApp face
+    refuse the whole message terminally (connectivity renders nothing it
+    cannot spell — "True" or "None" inside a customer's message is
+    corruption that looks delivered), and with every listened letter's
+    facts riding along (phase 16) such values are ordinary, not rare."""
     return {
         key: value
-        for key, value in run_facts(context).items()
+        for key, value in run_facts(context, node).items()
         if key not in _LEAD_ONLY_KEYS
+        and isinstance(value, (str, int, float))
+        and not isinstance(value, bool)
     }
 
 

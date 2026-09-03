@@ -57,9 +57,9 @@ def test_goal_cancel_and_reply_name_the_run_they_are_about() -> None:
     assert params[:2] == ["m1", "run-1"]
     sql, params = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
     assert "WHERE merchant_id = $1 AND id = $2" in sql
-    assert "status = 'waiting' AND current_node = $3" in sql
+    assert "status IN ('waiting', 'parked') AND current_node = $3" in sql
     assert "RETURNING id" in sql
-    assert params == ["m1", "run-1", "ask", json.dumps({"reply_ask": "YES"})]
+    assert params[:4] == ["m1", "run-1", "ask", json.dumps({"reply_ask": "YES"})]
 
 
 def test_open_runs_for_customer_is_merchant_first_and_open_only() -> None:
@@ -204,3 +204,35 @@ def test_goal_recheck_survives_a_null_occurred_at() -> None:
     sql, params = customer_has_event_query("m1", "c-1", ["order.placed"], NOW)
     assert "COALESCE(occurred_at, received_at) > $4" in sql
     assert params == ["m1", "c-1", ["order.placed"], NOW]
+
+
+# --- rollout phase 16: a letter carries its facts into the run, and moves a
+# parked one ---
+
+
+def test_a_reply_carries_the_letters_facts_under_its_square() -> None:
+    """Facts land under facts.<square> — namespaced, so two stages'
+    payloads never collide — beside the answer."""
+    sql, params = resume_run_by_id_query(
+        "m1", "run-1", "ask", {"reply_ask": "YES"}, {"button_id": "YES", "amount": 5}
+    )
+    assert "jsonb_build_object('facts'," in sql
+    assert (
+        "CASE WHEN jsonb_typeof(context->'facts') = 'object' "
+        "THEN context->'facts' ELSE '{}'::jsonb END" in sql
+    )
+    assert "|| jsonb_build_object($3::text, $5::jsonb)" in sql
+    assert params[4] == json.dumps({"button_id": "YES", "amount": 5})
+    _, params = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
+    assert params[4] == "{}"  # no facts offered: the square's entry stays empty
+
+
+def test_an_event_moves_a_parked_run_too() -> None:
+    """An event is evidence the customer moved; a parked run that hears it
+    is no longer stuck on the thing that parked it — it becomes waiting
+    with its failure counter forgiven, the human resume's semantics."""
+    sql, _ = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
+    set_clause, where_clause = sql.split("WHERE")
+    assert "status IN ('waiting', 'parked')" in where_clause
+    assert "status = 'waiting'" in set_clause
+    assert "CASE WHEN status = 'parked' THEN 0 ELSE attempts END" in set_clause

@@ -385,11 +385,17 @@ async def open_runs_for_customer(
 
 
 async def resume_run_by_id(
-    merchant_id: str, run_id: str, node_id: str, context_patch: Dict[str, Any]
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    context_patch: Dict[str, Any],
+    facts: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """True when the run was standing on the listening square and took
-    the answer."""
-    query, values = resume_run_by_id_query(merchant_id, run_id, node_id, context_patch)
+    """True when the run was standing on the listening square (waiting or
+    parked) and took the answer and the letter's facts."""
+    query, values = resume_run_by_id_query(
+        merchant_id, run_id, node_id, context_patch, facts
+    )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return row is not None
@@ -424,8 +430,10 @@ async def patch_open_run(
     max_field: Optional[str],
     max_value: Optional[float],
     debounce_minutes: float,
+    anywhere: bool = False,
 ) -> bool:
-    """True when an open run on the entry square took the repeat."""
+    """True when an open run on the door's start square (or, with
+    ``anywhere``, on any square) took the repeat."""
     query, values = patch_open_run_query(
         merchant_id,
         workflow_id,
@@ -437,6 +445,7 @@ async def patch_open_run(
         max_field,
         max_value,
         debounce_minutes,
+        anywhere,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
