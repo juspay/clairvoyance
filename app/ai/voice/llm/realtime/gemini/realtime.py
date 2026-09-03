@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from google.genai.types import ThinkingConfig
+from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
 from pipecat.services.google.gemini_live.llm import (
     GeminiLiveLLMService,
     GeminiVADParams,
@@ -64,6 +65,19 @@ def _parse_async_tool_payload(content: Any) -> Optional[dict]:
     return None
 
 
+def _context_message_as_dict(message: Any) -> dict:
+    """Normalize an LLMContextMessage entry to a plain dict.
+
+    pipecat 1.8.x stores provider-specific context messages as
+    ``LLMSpecificMessage`` dataclasses (``.llm`` / ``.message``) instead of
+    dict-like objects, so .get()-based scanning must unwrap them first.
+    """
+    if isinstance(message, LLMSpecificMessage):
+        payload = message.message
+        return payload if isinstance(payload, dict) else {}
+    return message if isinstance(message, dict) else {}
+
+
 class BuddyGeminiLiveLLMService(GeminiLiveLLMService):
     """GeminiLiveLLMService that actually delivers async-tool results.
 
@@ -102,7 +116,7 @@ class BuddyGeminiLiveLLMService(GeminiLiveLLMService):
         if self._context is None:
             await super()._process_completed_function_calls(send_new_results)
             return
-        messages = self._context.messages or []
+        messages = [_context_message_as_dict(m) for m in (self._context.messages or [])]
 
         # tool_call_id -> function name, from assistant tool_calls messages.
         id_to_name: dict = {}

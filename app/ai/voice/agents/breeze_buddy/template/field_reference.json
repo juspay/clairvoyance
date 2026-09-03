@@ -152,7 +152,7 @@
       }
     },
     "tts_configuration": {
-      "description": "Primary TTS provider, voice ID, model, and audio parameters. Use provider=elevenlabs for English/Hindi/North Indian templates. Use provider=cartesia as the base for South Indian or mixed-region templates.",
+      "description": "Primary TTS provider, voice ID, model, and audio parameters. Use provider=elevenlabs for English/Hindi/North Indian templates. Use provider=cartesia as the base for South Indian or mixed-region templates. ElevenLabs model 'eleven_v3_conversational' routes to the more expressive Eleven v3 (Text-to-Dialogue WebSocket); on v3 only 'stability' applies — speed/similarity_boost/enable_ssml_parsing are ignored. Default 'eleven_flash_v2_5' has the lowest latency; keep it for latency-sensitive outbound calls.",
       "example": {
         "provider": "elevenlabs",
         "voice_id": "iB2rIwm9cQCRGWoKDRtX",

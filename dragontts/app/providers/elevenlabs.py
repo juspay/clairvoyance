@@ -28,9 +28,11 @@ from app.core.config import PROVIDER_DEFAULTS, settings
 from app.core.logging import logger
 from app.providers import elevenlabs_pool
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
+from app.providers.elevenlabs_pool import is_elevenlabs_v3_model
 
 # Models that accept a language_code (the multilingual flash/turbo variants).
-# v3 and multilingual_v2 auto-detect language; English-only models ignore it.
+# v3 (via the Text-to-Dialogue socket) also takes language_code and covers
+# 70+ languages; multilingual_v2 auto-detects; English-only models ignore it.
 # Mirrors pipecat's ELEVENLABS_MULTILINGUAL_MODELS.
 _ELEVENLABS_MULTILINGUAL_MODELS = {"eleven_flash_v2_5", "eleven_turbo_v2_5"}
 
@@ -81,7 +83,7 @@ class ElevenLabsProvider(BaseTTSProvider):
             tuple[str, str, bool, str | None], elevenlabs_pool.ElevenLabsStreamPool
         ] = {}
 
-    def _voice_settings(self, params: dict) -> dict:
+    def _voice_settings(self, params: dict, model_id: str | None = None) -> dict:
         # Caller-supplied voice_settings win; otherwise build from the flat
         # tuning params. speed is ALWAYS set (explicit, else the DragonTTS
         # default) so an OMITTED speed and an EXPLICIT speed==default yield
@@ -96,14 +98,25 @@ class ElevenLabsProvider(BaseTTSProvider):
         if isinstance(vs, dict) and vs:
             vs = dict(vs)
             vs.setdefault("speed", speed)
-            return vs
-        settings: dict = {"speed": speed}
-        for key in ("stability", "similarity_boost"):
-            value = params.get(key)
-            if value is not None:
-                settings[key] = value
-        logger.info(f"ElevenLabs voice_settings: {settings}")
-        return settings
+        else:
+            vs = {"speed": speed}
+            for key in ("stability", "similarity_boost"):
+                value = params.get(key)
+                if value is not None:
+                    vs[key] = value
+        if is_elevenlabs_v3_model(model_id):
+            # Text-to-Dialogue reads ONLY stability; sending speed /
+            # similarity_boost would imply an effect the endpoint doesn't have
+            # (they're silently ignored). Keep stability when present.
+            dropped = sorted(k for k in vs if k != "stability")
+            if dropped:
+                logger.info(
+                    f"ElevenLabs v3 model {model_id}: dropping unsupported "
+                    f"voice_settings {dropped} (Text-to-Dialogue reads only stability)"
+                )
+            vs = {k: v for k, v in vs.items() if k == "stability"}
+        logger.info(f"ElevenLabs voice_settings: {vs}")
+        return vs
 
     def _get_pool(
         self,
@@ -128,8 +141,12 @@ class ElevenLabsProvider(BaseTTSProvider):
         # Non-multilingual models ignore language on the socket (the pool only
         # sends language_code for multilingual models), so normalize it out of
         # the key — otherwise identical requests that differ only by language
-        # each spin up a redundant warm socket (pool fragmentation).
-        if model_id not in _ELEVENLABS_MULTILINGUAL_MODELS:
+        # each spin up a redundant warm socket (pool fragmentation). v3 models
+        # DO take a connect-time language_code, so their key keeps it.
+        if (
+            model_id not in _ELEVENLABS_MULTILINGUAL_MODELS
+            and not is_elevenlabs_v3_model(model_id)
+        ):
             language = None
         key = (voice_id, model_id, enable_ssml_parsing, language)
         pool = self._pools.get(key)
@@ -225,18 +242,30 @@ class ElevenLabsProvider(BaseTTSProvider):
         payload = {
             "text": text,
             "model_id": final_model_id,
-            "voice_settings": self._voice_settings(params),
+            "voice_settings": self._voice_settings(params, final_model_id),
         }
-        # language_code: only the multilingual models (flash_v2_5/turbo_v2_5)
-        # accept it; v3/multilingual_v2 auto-detect, English-only models ignore
-        # it. Send the base subtag ("en"/"hi") — matches pipecat's use_base_code.
-        if final_model_id in _ELEVENLABS_MULTILINGUAL_MODELS and final_language:
+        # language_code: the multilingual models (flash_v2_5/turbo_v2_5) and
+        # the v3 models accept it; multilingual_v2 auto-detects, English-only
+        # models ignore it. Send the base subtag ("en"/"hi") — matches
+        # pipecat's use_base_code.
+        if (
+            final_model_id in _ELEVENLABS_MULTILINGUAL_MODELS
+            or is_elevenlabs_v3_model(final_model_id)
+        ) and final_language:
             payload["language_code"] = final_language.split("-")[0]
         if params.get("enable_ssml_parsing"):
             # SSML on: ElevenLabs parses <break time=".."/> etc. into real
             # pauses instead of reading the tags aloud. Default off; only sent
-            # when requested (all models except eleven_v3 support it).
-            payload["enable_ssml_parsing"] = True
+            # when requested. v3 does not support SSML parsing — silently
+            # reading the tags aloud would corrupt v3 audio, so the flag is
+            # dropped for v3 models instead of forwarded.
+            if is_elevenlabs_v3_model(final_model_id):
+                logger.warning(
+                    "enable_ssml_parsing requested with an eleven_v3 model — "
+                    "not supported on v3; ignoring"
+                )
+            else:
+                payload["enable_ssml_parsing"] = True
 
         logger.info(
             f"Synthesizing with ElevenLabs (pcm_16000): {text[:50]}... "
@@ -282,7 +311,10 @@ class ElevenLabsProvider(BaseTTSProvider):
         final_model_id = model if model else defaults["model"]
         final_language = language if language else defaults["language"]
 
-        msg = {"text": text, "voice_settings": self._voice_settings(params)}
+        msg = {
+            "text": text,
+            "voice_settings": self._voice_settings(params, final_model_id),
+        }
         # SSML is a connect-time socket setting (see _get_pool / pool URI), so it
         # selects which warm pool to use — not a per-message field.
         ssml = bool(params.get("enable_ssml_parsing"))

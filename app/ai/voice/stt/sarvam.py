@@ -62,28 +62,23 @@ def build_sarvam_stt(config: SarvamConfig):
     """Create a Sarvam STT service.
 
     Automatically determines which parameters to use based on the model type:
-    - 'saaras' models (STT-Translate): accepts prompt, auto-detects language
-    - 'saarika' models (pure STT): accepts language, ignores prompt
+    - 'saaras' models (STT-Translate): auto-detect language
+    - 'saarika' models (pure STT): use language parameter
+
+    The ``prompt`` setting was removed in pipecat 1.8.0 (SarvamSTTSettings
+    no longer accepts it); saaras models auto-detect the language regardless.
     """
-    # Initialize parameters based on model type
-    prompt_param = None
     language_param = None
 
-    if "saaras" in config.model.lower():
-        # STT-Translate model: accepts prompt, no language (auto-detects)
-        prompt_param = config.prompt if config.prompt else None
-        logger.debug(
-            f"Saaras model detected: using prompt={'set' if prompt_param else 'none'}, language auto-detection enabled"
-        )
-    else:
-        # saarika (pure STT) model: accepts language, no prompt
+    if "saaras" not in config.model.lower():
+        # saarika (pure STT) model: accepts language
         language_param = get_sarvam_language(language_code=config.language_code)
         logger.debug(
-            f"Saarika model detected: using language={'set' if language_param else 'none'}, prompt disabled"
+            f"Saarika model detected: using language={'set' if language_param else 'none'}"
         )
 
     logger.info(
-        f"Using Sarvam STT service with model={config.model}, language={'set' if language_param else 'none'}, prompt={'set' if prompt_param else 'none'}, vad_signals={config.vad_signals}, high_vad_sensitivity={config.high_vad_sensitivity}"
+        f"Using Sarvam STT service with model={config.model}, language={'set' if language_param else 'none'}, vad_signals={config.vad_signals}, high_vad_sensitivity={config.high_vad_sensitivity}"
     )
 
     return SarvamSTTService(
@@ -92,7 +87,6 @@ def build_sarvam_stt(config: SarvamConfig):
         sample_rate=config.sample_rate,
         settings=SarvamSTTService.Settings(
             language=language_param,
-            prompt=prompt_param,
             vad_signals=config.vad_signals if config.vad_signals is not None else True,
             high_vad_sensitivity=(
                 config.high_vad_sensitivity

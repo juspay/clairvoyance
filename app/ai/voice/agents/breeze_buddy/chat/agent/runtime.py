@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat_flows import FlowsFunctionSchema
+from pipecat.flows import FlowsFunctionSchema
 
 # Each tool-call → handler → re-invoke counts as one cycle. The guard stops a
 # pathological template (handler always returns a transition that loops back)
