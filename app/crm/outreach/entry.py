@@ -32,6 +32,7 @@ from app.crm.outreach.enrol import enrol
 from app.crm.outreach.nodes import (
     _BOOKKEEPING_KEYS,
     _BOOKKEEPING_PREFIXES,
+    LATEST_LETTER_KEY,
     TOPIC_KEY,
     reply_key,
 )
@@ -42,6 +43,7 @@ from app.crm.outreach.schemas import (
     WorkflowDefinition,
     WorkflowEntry,
     WorkflowEntryAt,
+    WorkflowNode,
 )
 from app.crm.record.contracts import RawEvent
 from app.crm.shared.normalize import normalize_phone
@@ -96,8 +98,9 @@ async def consume_attributed_event(
 
     Order: every open run first — its goal, then its reply — and entries
     last. An order arriving right behind its checkout must not cancel the
-    run that checkout is about to start; and a run a goal just ended is
-    not woken by the same letter.
+    run that checkout is about to start; a run a goal just ended is not
+    woken by the same letter; and a letter a run's square answered is not
+    also that run's repeat (_answered_by).
 
     ``handles`` is what the source's extractor already found. Taking it
     rather than re-reading the payload keeps ONE source-aware discovery in
@@ -182,10 +185,7 @@ async def _wake_on_reply(
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
-        # $topic (phase 15): the branch is the letter's NAME, not a field.
-        answer = (
-            event.topic if node.key == TOPIC_KEY else event.payload.get(node.key or "")
-        )
+        answer = _answer_for(node, event)
         if answer is None:
             # B1 (rollout phase 01): no key, no answer to branch on. Waking
             # the run with {reply_<node>: None} made pick_next read "the
@@ -198,13 +198,57 @@ async def _wake_on_reply(
                 f"(run {run.id}, event {event.id})"
             )
             continue
+        # The answer, and which square heard the latest letter — so the
+        # facts of THIS letter win the next call even after the run has
+        # moved on (nodes.run_facts; a ladder hears a stage's letter on
+        # the square it leaves).
         await accessor.resume_run_by_id(
             run.merchant_id,
             str(run.id),
             node.id,
-            {reply_key(node.id): str(answer)},
+            {reply_key(node.id): answer, LATEST_LETTER_KEY: node.id},
             facts,
         )
+
+
+def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
+    """PURE: what this letter answers on this square — the topic itself
+    for a $topic square (phase 15: the branch is the letter's NAME), else
+    the payload field the square branches on; None when the square is not
+    listening for the topic, or the field is missing (B1). The ONE
+    definition of "this letter is this square's answer": the wake and
+    the repeat refusal below both ask it."""
+    if node.type != "wait_event" or event.topic not in node.topics:
+        return None
+    answer = event.topic if node.key == TOPIC_KEY else event.payload.get(node.key or "")
+    return None if answer is None else str(answer)
+
+
+async def _answered_by(
+    open_runs: Sequence[EnrollmentRun],
+    flow: Workflow,
+    enrollment_key: str,
+    event: RawEvent,
+) -> bool:
+    """Is this letter the answer the open run's CURRENT square listens for
+    (by ITS version)? Then _wake_on_reply moved the run above, and the
+    refused enrol is not a repeat. Judged before apply_repeat because a
+    door that says restart_on_repeat patches the run on any square: it
+    would push the alarm the wake just set (now) back by the debounce, and
+    the token would sit on a square it has already answered — on a stages
+    ladder (phase 17), where every stage is a door AND every earlier
+    square listens for it, every stage clock would run twice."""
+    for run in open_runs:
+        if (
+            str(run.workflow_id) == str(flow.id)
+            and run.enrollment_key == enrollment_key
+        ):
+            pinned = await definition_for(run)
+            if pinned is None:
+                return False
+            square = next((n for n in pinned.nodes if n.id == run.current_node), None)
+            return square is not None and _answer_for(square, event) is not None
+    return False
 
 
 # Where an order's amount lives in a payload, most specific first —
@@ -293,6 +337,12 @@ async def _try_enrol(
         # (_FOUNDING_KEYS): the id is what patch_open_run_query refuses
         # the founding event by, the time is what goals are measured from.
         key = enrollment_key or customer_id
+        if await _answered_by(open_runs, flow, key, event):
+            logger.info(
+                f"run for {key} on {flow.id}: {event.topic} is its square's answer "
+                f"— moved, not a repeat (event {event.id})"
+            )
+            return
         repeat_facts = {k: v for k, v in context.items() if k not in _FOUNDING_KEYS}
         await apply_repeat(
             event.merchant_id,

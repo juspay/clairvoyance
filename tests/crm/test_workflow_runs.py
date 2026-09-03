@@ -131,3 +131,32 @@ def test_send_variables_carry_only_what_a_provider_can_render() -> None:
     context = {"name": "Priya", "amount": 1999, "vip": True, "note": None, "score": 4.5}
     assert send_variables(context) == {"name": "Priya", "amount": 1999, "score": 4.5}
     assert run_facts(context)["vip"] is True
+
+
+def test_the_latest_letters_facts_win_when_the_square_that_heard_it_is_behind() -> None:
+    """Phase 17: on a ladder the letter that moves the run is heard on the
+    square it LEAVES, and the action then executes as its own square, so
+    the current-square override never fires — a KYC-stage call would read
+    the founding letter's `stage`. The consumer points at the square that
+    heard the latest letter (latest_letter, bookkeeping); its facts overlay
+    the founding letter's — the most recent letter wins — and the current
+    square's own still win over both."""
+    context = {
+        "stage": "profile_created",
+        "amount": 100,
+        "facts": {"at-profile": {"stage": "kyc_completed", "amount": 250}},
+        "latest_letter": "at-profile",
+    }
+    act = WorkflowNode(id="act-kyc", type="call", template_id="t", stage="loan.kyc")
+    facts = run_facts(context, act)
+    assert facts["stage"] == "kyc_completed" and facts["amount"] == 250
+    assert facts["current_stage"] == "loan.kyc" and "latest_letter" not in facts
+    assert facts["facts_at-profile_stage"] == "kyc_completed"
+    assert run_facts(context)["stage"] == "kyc_completed"  # with no square given too
+    # the current square's own letter still wins over the latest one
+    context["facts"]["act-kyc"] = {"amount": 999}
+    assert run_facts(context, act)["amount"] == 999
+    assert run_facts(context, act)["stage"] == "kyc_completed"
+    # a pointer at a square with no letter changes nothing
+    assert run_facts({**context, "latest_letter": "gone"})["amount"] == 100
+    assert "latest_letter" not in send_variables(context, act)

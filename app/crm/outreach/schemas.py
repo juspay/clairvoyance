@@ -138,6 +138,61 @@ class WorkflowNode(BaseModel):
 WorkflowEdge = Union[Tuple[str, str], Tuple[str, str, str]]
 
 
+class StageAction(BaseModel):
+    """What a stage does when it goes quiet (rollout phase 17): the action
+    square minus the id and the stage label the expander mints — a call
+    (template_id) or a send (channel + template). The square's own laws
+    judge it once expanded (nodes.py): a send still needs the plan's
+    purpose_key, and an approved template at publish."""
+
+    type: Literal["call", "send"]
+    template_id: Optional[str] = None
+    channel: Optional[str] = None
+    template: Optional[str] = None
+
+
+class StageOverride(BaseModel):
+    """One stage's own clocks or action, where they differ from the
+    ladder's."""
+
+    idle_minutes: Optional[float] = Field(None, gt=0)
+    on_idle: Optional[StageAction] = None
+    after_action_minutes: Optional[float] = Field(None, gt=0)
+
+
+class Stages(BaseModel):
+    """The ladder (rollout phase 17; notes §16.2): an ordered funnel of
+    stage topics, one clock for "went quiet on a stage", one action when
+    it fires, one listening window after the action. ladder.py expands
+    it into the wait_event board: the author never draws the O(n²)
+    arrows and the walker never sees the word. Shape only here — the
+    expansion's laws (distinct square names, nothing hand-drawn beside
+    the ladder) are the expander's."""
+
+    order: List[str] = Field(min_length=2)
+    idle_minutes: float = Field(gt=0)
+    on_idle: StageAction
+    after_action_minutes: float = Field(gt=0)
+    # Phase 16's door word, set on every door the ladder mints: a stage's
+    # own letter, repeated, re-arms whatever square the run stands on.
+    restart_on_repeat: bool = False
+    overrides: Dict[str, StageOverride] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _stages_are_distinct_and_overrides_name_one(self) -> "Stages":
+        seen = set()
+        for topic in self.order:
+            if not topic:
+                raise ValueError("order: a stage topic cannot be empty")
+            if topic in seen:
+                raise ValueError(f"order: stage {topic!r} appears twice")
+            seen.add(topic)
+        for topic in self.overrides:
+            if topic not in seen:
+                raise ValueError(f"overrides: {topic!r} is not a stage in order")
+        return self
+
+
 class WorkflowDefinition(BaseModel):
     """THE plan, whole (canon T19). Node ids are minted by the author and
     never regenerated (the publish validator's first law).
@@ -159,6 +214,11 @@ class WorkflowDefinition(BaseModel):
     # validator passes (057's semantics as an opt-in mode). Vocabulary in
     # code; the 064 CHECK on the stored column is the closed superset.
     on_publish: Literal["pin", "migrate"] = "pin"
+    # Rollout phase 17: the ladder this board was expanded from, kept
+    # beside what it produced (nodes/edges/entry filled by
+    # ladder.expand_stages) so the console can re-edit the funnel. The
+    # validator refuses a ladder with a hand-drawn board beside it.
+    stages: Optional[Stages] = None
 
     def send_templates(self) -> List[Tuple[str, str]]:
         """PURE: every (channel, template name) a send node of this document

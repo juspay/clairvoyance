@@ -331,7 +331,7 @@ def test_reply_wakes_the_run_standing_on_the_listening_node(
         "m1",
         str(run.id),
         "ask",
-        {"reply_ask": "YES"},
+        {"reply_ask": "YES", "latest_letter": "ask"},
         {"button_id": "YES"},
     )
 

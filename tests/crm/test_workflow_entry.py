@@ -21,7 +21,7 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 from app.crm.outreach.entry import consume_attributed_event
-from app.crm.outreach.plans import TIMEOUT
+from app.crm.outreach.nodes import TIMEOUT
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     Workflow,
@@ -215,7 +215,9 @@ def listening(monkeypatch: pytest.MonkeyPatch) -> _Spine:
 def test_a_reply_carrying_the_key_wakes_the_listening_run(listening: _Spine) -> None:
     _consume(_event("button.reply", {"button_id": "YES"}))
     (run,) = listening.runs
-    assert listening.resumes == [(str(run.id), "ask", {"reply_ask": "YES"})]
+    assert listening.resumes == [
+        (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+    ]
     assert listening.cancels == []  # a button reply is not a goal event
 
 
@@ -375,10 +377,14 @@ def test_a_reply_wakes_only_the_runs_whose_own_version_listens_for_it(
 ) -> None:
     a, b = two_versions.runs
     _consume(_event("button.reply", {"button_id": "YES"}))
-    assert two_versions.resumes == [(str(a.id), "ask", {"reply_ask": "YES"})]
+    assert two_versions.resumes == [
+        (str(a.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+    ]
     two_versions.resumes.clear()
     _consume(_event("list.reply", {"button_id": "NO"}))
-    assert two_versions.resumes == [(str(b.id), "ask", {"reply_ask": "NO"})]
+    assert two_versions.resumes == [
+        (str(b.id), "ask", {"reply_ask": "NO", "latest_letter": "ask"})
+    ]
 
 
 def test_entries_still_match_the_latest_version(
@@ -557,7 +563,11 @@ def test_a_topic_keyed_square_wakes_with_the_topic_as_its_answer(
     # plan, so the letter wakes the run and starts nothing.
     _consume(_event("loan.bank_linked", {"application_id": "L-1"}))
     assert spine.resumes == [
-        (str(run.id), "at-profile", {"reply_at-profile": "loan.bank_linked"})
+        (
+            str(run.id),
+            "at-profile",
+            {"reply_at-profile": "loan.bank_linked", "latest_letter": "at-profile"},
+        )
     ]
 
 
@@ -608,5 +618,57 @@ def test_a_reply_carries_the_letters_scalar_facts_for_its_square(
             },
         )
     )
-    assert listening.resumes == [(str(run.id), "ask", {"reply_ask": "YES"})]
+    assert listening.resumes == [
+        (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+    ]
     assert listening.facts == [(str(run.id), "ask", {"button_id": "YES", "amount": 5})]
+
+
+# --- rollout phase 17 sweep: a letter that moves a run is its answer, never
+# also its repeat ---
+
+
+def test_a_letter_the_square_listens_for_moves_the_run_and_is_not_its_repeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A KYC letter arrives while the run stands on at-profile, which
+    listens for it: the reply moves the run (its alarm becomes now). The
+    same letter is also the KYC door's topic and enrol refuses it — a run
+    for this application is open — and with restart_on_repeat that
+    refusal would patch the run "anywhere", pushing the alarm the wake
+    just set back by the debounce: the token would sit half an hour on a
+    square it has already answered, and every stage clock of a ladder
+    would run twice. A letter the current square listens for is that
+    run's answer, not its repeat. The same stage's retry — a letter the
+    square does NOT listen for — is the repeat, as before."""
+    ladder = {**_LADDER, "restart_on_repeat": True, "debounce_minutes": 30}
+    flow = _flow(ladder, version=1)
+    run = _run(flow, 1, "at-profile", {"application_id": "L-1"}, key="L-1")
+    spine = _Spine([flow], [run], {(flow.id, 1): ladder})
+    _install(monkeypatch, spine)
+    repeats: List[Any] = []
+
+    async def refused(**kwargs: Any) -> None:
+        return None
+
+    async def apply_repeat(*args: Any) -> bool:
+        repeats.append(args)
+        return True
+
+    monkeypatch.setattr(entry, "enrol", refused)
+    monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
+    _consume(_event("loan.kyc_completed", {"application_id": "L-1"}))
+    assert spine.resumes == [
+        (
+            str(run.id),
+            "at-profile",
+            {"reply_at-profile": "loan.kyc_completed", "latest_letter": "at-profile"},
+        )
+    ]
+    assert repeats == []
+    # the profile stage retried: at-profile does not listen for its own
+    # topic, so this IS a repeat of the profile door
+    _consume(_event("loan.profile_created", {"application_id": "L-1"}, "ev-2"))
+    assert len(spine.resumes) == 1
+    ((_, _, key, door, event_id, _),) = repeats
+    assert (key, door.topic, event_id) == ("L-1", "loan.profile_created", "ev-2")
