@@ -19,7 +19,7 @@ import app.crm.outreach.api as outreach_api
 from app.crm.auth import crm_admin_user
 from app.crm.outreach.db.decoder import decode_customer_run, decode_run_summary
 from app.crm.outreach.db.queries import (
-    cancel_open_runs_query,
+    cancel_run_query,
     customer_runs_query,
     workflow_summary_query,
 )
@@ -63,24 +63,18 @@ def test_goal_cancel_can_stash_the_goal_on_the_runs_it_ends() -> None:
     patch = {
         "goal": {"topic": "orders/create", "event_id": "ev-1", "amount": "1850.00"}
     }
-    sql, params = cancel_open_runs_query(
-        "m1",
-        "wf-1",
-        "c-1",
-        "goal_met",
-        NOW,
-        key=("cart_token", "chk-1"),
-        context_patch=patch,
+    sql, params = cancel_run_query(
+        "m1", "run-1", "goal_met", NOW, key=("cart_token", "chk-1"), context_patch=patch
     )
-    assert "context = context || $8::jsonb" in sql and "AND context->>$6 = $7" in sql
-    assert len(params) == 8 and '"1850.00"' in params[7]
-    sql, params = cancel_open_runs_query(
-        "m1", "wf-1", "c-1", "converted_elsewhere", NOW, context_patch=patch
+    assert "context = context || $7::jsonb" in sql and "AND context->>$5 = $6" in sql
+    assert len(params) == 7 and '"1850.00"' in params[6]
+    sql, params = cancel_run_query(
+        "m1", "run-1", "converted_elsewhere", NOW, context_patch=patch
     )
-    assert "context = context || $6::jsonb" in sql and "$7" not in sql
-    assert len(params) == 6
-    sql, params = cancel_open_runs_query("m1", "wf-1", "c-1", "goal_met", NOW)
-    assert "context = context ||" not in sql and len(params) == 5
+    assert "context = context || $5::jsonb" in sql and "$6" not in sql
+    assert len(params) == 5
+    sql, params = cancel_run_query("m1", "run-1", "goal_met", NOW)
+    assert "context = context ||" not in sql and len(params) == 4
 
 
 def test_the_goal_stash_is_bookkeeping_not_a_template_variable() -> None:
