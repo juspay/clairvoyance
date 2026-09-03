@@ -412,10 +412,10 @@ def test_a_repeat_is_judged_by_the_open_runs_own_version(
     monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
     # v5's entry topic, but the order is A's -> the open run on v3
     _consume(_event("orders/confirmed", {"order_id": "A"}))
-    ((_, _, key, definition, _, _),) = repeats
+    ((_, _, key, door, _, _),) = repeats
     assert key == "A"
-    assert definition.entry.on_repeat == "refresh_latest"
-    assert definition.nodes[0].id == "wait-30m"
+    assert door.on_repeat == "refresh_latest"
+    assert door.start == "wait-30m"
 
 
 def test_a_run_whose_version_is_missing_is_skipped_not_fatal(
@@ -483,7 +483,9 @@ def test_enrol_stamps_the_entry_events_time_and_repeats_never_move_it(
         received_at=NOW,
         occurred_at=happened,
     )
-    asyncio.run(entry._try_enrol(_flow(), definition, event, "c-1", {}))
+    asyncio.run(
+        entry._try_enrol(_flow(), definition, definition.entries[0], event, "c-1", {})
+    )
     assert seen["enrol"]["entered_event_at"] == happened.isoformat()
     assert "entered_event_at" not in seen["repeat"]
     assert "source_event_id" not in seen["repeat"]
@@ -503,3 +505,74 @@ def test_the_alarm_path_still_times_a_listening_node_out() -> None:
     arrows: List[Tuple[str, Optional[str]]] = [("confirm", "YES"), ("call", TIMEOUT)]
     assert pick_next(node, arrows, {}) == "call"
     assert pick_next(node, arrows, {"reply_ask": "YES"}) == "confirm"
+
+
+# --- rollout phase 15: $topic branching, and a door per topic ---
+
+_LADDER: Dict[str, Any] = {
+    "entry": [
+        {"topic": "loan.profile_created", "start": "at-profile"},
+        {"topic": "loan.kyc_completed", "start": "at-kyc"},
+    ],
+    "key": "application_id",
+    "reenter": True,
+    "cooldown_hours": 0,
+    "nodes": [
+        {
+            "id": "at-profile",
+            "type": "wait_event",
+            "key": "$topic",
+            "minutes": 30,
+            "topics": ["loan.kyc_completed", "loan.bank_linked"],
+        },
+        {"id": "call-profile", "type": "call", "template_id": "tpl-p"},
+        {"id": "at-kyc", "type": "wait", "minutes": 30},
+    ],
+    "edges": [
+        ["at-profile", "at-kyc", "loan.kyc_completed"],
+        ["at-profile", "call-profile", "timeout"],
+    ],
+    "goal": {"topics": ["loan.disbursed"]},
+}
+
+
+def test_a_topic_keyed_square_wakes_with_the_topic_as_its_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """key: "$topic" — the branch is the event's TOPIC, not a payload
+    field, so a stage board can say "she went to KYC" from the letter's
+    name alone (§14.1 prerequisite 1)."""
+    flow = _flow(_LADDER, version=1)
+    run = _run(flow, 1, "at-profile", {"application_id": "L-1"}, key="L-1")
+    spine = _Spine([flow], [run], {(flow.id, 1): _LADDER})
+    _install(monkeypatch, spine)
+    # bank_linked is listened for at-profile but is not a door of this
+    # plan, so the letter wakes the run and starts nothing.
+    _consume(_event("loan.bank_linked", {"application_id": "L-1"}))
+    assert spine.resumes == [
+        (str(run.id), "at-profile", {"reply_at-profile": "loan.bank_linked"})
+    ]
+
+
+def test_each_door_starts_the_run_on_its_own_square(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A journey first seen at KYC enrols on the KYC square, not on
+    nodes[0] (§14.1 prerequisite 2)."""
+    flow = _flow(_LADDER, version=1)
+    spine = _Spine([flow], [], {(flow.id, 1): _LADDER})
+    _install(monkeypatch, spine)
+    doors: List[Tuple[str, str]] = []
+
+    async def enrol(**kwargs: Any) -> object:
+        doors.append((kwargs["door"].topic, kwargs["door"].start))
+        return object()
+
+    monkeypatch.setattr(entry, "enrol", enrol)
+    _consume(_event("loan.kyc_completed", {"application_id": "L-2"}))
+    _consume(_event("loan.profile_created", {"application_id": "L-3"}))
+    _consume(_event("loan.bank_linked", {"application_id": "L-4"}))  # no door
+    assert doors == [
+        ("loan.kyc_completed", "at-kyc"),
+        ("loan.profile_created", "at-profile"),
+    ]

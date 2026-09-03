@@ -33,8 +33,13 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.crm.outreach.db import accessor
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.entry import reply_key
-from app.crm.outreach.nodes import NODE_TYPES, NodeParked, is_wait
+from app.crm.outreach.nodes import (
+    NODE_TYPES,
+    NodeParked,
+    is_wait,
+    reply_key,
+    without_reply,
+)
 from app.crm.outreach.plans import TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import customer_has_event
@@ -180,6 +185,11 @@ async def _advance(
             context.update(await execute(run, node, definition))
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
+        if node.type == "wait_event":
+            # Leaving a listening square: its answer is spent (phase 15).
+            # A door may start a run on any square, so this one can be
+            # revisited — a stale reply would resolve the revisit at once.
+            context = without_reply(context, node.id)
         if next_id is None:
             if not await accessor.exit_run(
                 str(run.id),

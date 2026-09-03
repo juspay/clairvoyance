@@ -41,6 +41,28 @@ class WorkflowEntry(BaseModel):
     debounce_minutes: float = Field(0, ge=0)
 
 
+class WorkflowEntryAt(WorkflowEntry):
+    """One DOOR of a plan (rollout phase 15): the entry words plus the
+    square a run admitted through it starts on. A plan lists its doors
+    when a journey may first be seen at any stage — a customer who
+    appears at KYC starts on the KYC square, not on nodes[0]. The single
+    `entry` object is one door starting on nodes[0]."""
+
+    start: str = Field(min_length=1)
+
+
+# The admission words a plan may state ONCE at the top level for every
+# door (reenter, cooldown_hours, key, on_repeat, debounce_minutes); a door
+# may still say its own. Folded into each door before validation.
+_SHARED_ENTRY_WORDS = (
+    "reenter",
+    "cooldown_hours",
+    "key",
+    "on_repeat",
+    "debounce_minutes",
+)
+
+
 class WorkflowGoalKey(BaseModel):
     """What ties a goal letter to ONE run: the letter's payload field must
     equal the run's context field (cart_token = cart_token). Compared as
@@ -84,7 +106,10 @@ class WorkflowNode(BaseModel):
     call (template_id, via buddy's lead machine — ADR 0010) ·
     wait_event (topics + key + minutes: waits for an event OR the timer,
     whichever first; the branch taken is the edge whose `on` equals the
-    event's payload[key], or "timeout")."""
+    event's payload[key], or "timeout"). key: "$topic" (rollout phase 15)
+    branches on the event's TOPIC instead — the edge's `on` is the topic
+    string — so a stage board reads "she went to KYC" from the letter's
+    name; $topic is the only $-word."""
 
     id: str = Field(min_length=1)
     type: Literal["wait", "send", "call", "wait_event"]
@@ -103,11 +128,15 @@ WorkflowEdge = Union[Tuple[str, str], Tuple[str, str, str]]
 
 
 class WorkflowDefinition(BaseModel):
-    """THE plan, whole (canon T19). nodes[0] is the start square —
-    explicit convention, stated here once. Node ids are minted by the
-    author and never regenerated (the publish validator's first law)."""
+    """THE plan, whole (canon T19). Node ids are minted by the author and
+    never regenerated (the publish validator's first law).
 
-    entry: WorkflowEntry
+    `entry` is one door (an object — its run starts on nodes[0], the
+    explicit convention stated here once) or a LIST of doors (phase 15),
+    each naming its topic and the square its run starts on; `entries`
+    is always the list."""
+
+    entry: Union[WorkflowEntry, List[WorkflowEntryAt]]
     nodes: List[WorkflowNode] = Field(min_length=1)
     edges: List[WorkflowEdge] = Field(default_factory=list)
     goals: List[WorkflowGoal] = Field(min_length=1)
@@ -134,6 +163,32 @@ class WorkflowDefinition(BaseModel):
     # manifest; the gate checks it against the grant). Required once the
     # plan has a send node; the send node copies it onto every row.
     purpose_key: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _doors_take_the_shared_words(cls, data: Any) -> Any:
+        """The admission words stated once at the top level reach every
+        door; a door's own word wins (phase 15)."""
+        if isinstance(data, dict) and any(w in data for w in _SHARED_ENTRY_WORDS):
+            data = dict(data)
+            shared = {w: data.pop(w) for w in _SHARED_ENTRY_WORDS if w in data}
+            entry = data.get("entry")
+            if isinstance(entry, list):
+                data["entry"] = [
+                    {**shared, **door} if isinstance(door, dict) else door
+                    for door in entry
+                ]
+            elif isinstance(entry, dict):
+                data["entry"] = {**shared, **entry}
+        return data
+
+    @property
+    def entries(self) -> List[WorkflowEntryAt]:
+        """The doors, in document order, one per topic. A single `entry`
+        is one door starting on nodes[0]."""
+        if isinstance(self.entry, list):
+            return list(self.entry)
+        return [WorkflowEntryAt(**self.entry.model_dump(), start=self.nodes[0].id)]
 
     @model_validator(mode="before")
     @classmethod

@@ -399,3 +399,40 @@ def test_the_cache_is_bounded_and_evicts_the_least_recently_used(
 
     asyncio.run(read_in_order())
     assert [version for _, _, version in writes.definition_reads] == [1, 2, 3, 2]
+
+
+# --- rollout phase 15: a reply is cleared when the token leaves the square ---
+
+_ASK_TWICE = {
+    "entry": {"topic": "orders/create"},
+    "nodes": [
+        {
+            "id": "ask",
+            "type": "wait_event",
+            "topics": ["button.reply"],
+            "key": "button_id",
+            "minutes": 60,
+        },
+        {"id": "wait-1d", "type": "wait", "minutes": 1440},
+    ],
+    "edges": [["ask", "wait-1d", "YES"], ["ask", "wait-1d", "timeout"]],
+    "goal": {"topics": ["order.confirmed"]},
+}
+
+
+def test_advancing_off_a_listening_square_clears_its_reply(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """Once a door may start a run anywhere, a square can be revisited;
+    a stale reply_<node> left in context would resolve the revisit at
+    once on an old answer (§14.1 prerequisite 4)."""
+    writes = _Writes(matched=True, definition=_ASK_TWICE)
+    _install(monkeypatch, writes)
+    run = _run()
+    run.current_node = "ask"
+    run.context = {"phone": "+919876543210", "reply_ask": "YES", "order_id": "O-1"}
+    _advance(writes, run)
+    ((verb, args),) = writes.calls
+    assert verb == "advance" and args[1] == "wait-1d"
+    written = args[3]
+    assert "reply_ask" not in written and written["order_id"] == "O-1"

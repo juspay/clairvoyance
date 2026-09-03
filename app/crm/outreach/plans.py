@@ -18,6 +18,7 @@ from app.crm.outreach.schemas import (
     Workflow,
     WorkflowDefinition,
     WorkflowEntry,
+    WorkflowEntryAt,
     WorkflowSummary,
 )
 
@@ -53,19 +54,33 @@ def validate_definition(
     for node in definition.nodes:
         problems.extend(NODE_TYPES[node.type].validate(node, definition))
 
-    # Repeat-entry words (repeat.py owns the vocabulary). debounce slides
-    # "the entry wait's alarm" — a plan whose first square is an action has
+    # The doors (phase 15): one per topic, each starting on a real square.
+    # Repeat-entry words per door (repeat.py owns the vocabulary); debounce
+    # slides "the entry wait's alarm" — a door whose start is an action has
     # no alarm to slide.
-    if parse_repeat_policy(definition.entry.on_repeat) is None:
-        problems.append(
-            f"entry.on_repeat {definition.entry.on_repeat!r} is not a policy "
-            "(ignore · refresh_latest · refresh_max(<field>) · accumulate)"
-        )
-    if definition.entry.debounce_minutes > 0 and not is_wait(definition.nodes[0]):
-        problems.append(
-            "entry.debounce_minutes needs a wait as the first node — there is "
-            "no entry alarm to slide otherwise"
-        )
+    by_id = {node.id: node for node in definition.nodes}
+    if not definition.entries:
+        problems.append("entry: a plan needs at least one door (a topic and a start)")
+    topics_seen = set()
+    for door in definition.entries:
+        if door.topic in topics_seen:
+            problems.append(
+                f"entry topic {door.topic!r} appears twice — one door per topic"
+            )
+        topics_seen.add(door.topic)
+        start = by_id.get(door.start)
+        if start is None:
+            problems.append(f"entry {door.topic!r}: start {door.start!r} is not a node")
+        if parse_repeat_policy(door.on_repeat) is None:
+            problems.append(
+                f"entry {door.topic!r}: on_repeat {door.on_repeat!r} is not a policy "
+                "(ignore · refresh_latest · refresh_max(<field>) · accumulate)"
+            )
+        if door.debounce_minutes > 0 and (start is None or not is_wait(start)):
+            problems.append(
+                f"entry {door.topic!r}: debounce_minutes needs a wait as its start "
+                "node — there is no entry alarm to slide otherwise"
+            )
 
     # Goal tiers (phase 06): the reason is vocabulary, and one tier per
     # reason — two tiers claiming goal_met could never be told apart.
@@ -125,20 +140,36 @@ def validate_definition(
     return problems
 
 
-def _entry_changed(raw_entry: Any, live_entry: Dict[str, Any]) -> bool:
+def _entry_changed(raw_entry: Any, live_entry: Any) -> bool:
     """PURE: does the draft's entry MEAN something different from the live
     one? Compared as validated models, so a draft that omits the defaults
     and a live entry that spells them out read equal (B3, rollout phase
     01) — a raw-dict compare refused every re-publish that changed nothing
-    about admission. A live entry that no longer parses (a legacy row from
-    before a word was added) cannot be normalised: then the raw dicts are
+    about admission. Doors (phase 15) compare as a list, order-free; a
+    single object compares as one door with no explicit start, so the
+    object and list spellings of the same topic read as different doors
+    (conservative: under migrate that is a refusal, and pin is the way
+    out). A live entry that no longer parses (a legacy row from before a
+    word was added) cannot be normalised: then the raw values are
     compared, exactly as before."""
     try:
-        draft = WorkflowEntry.model_validate(raw_entry).model_dump()
-        live = WorkflowEntry.model_validate(live_entry).model_dump()
+        return _doors_by_meaning(raw_entry) != _doors_by_meaning(live_entry)
     except Exception:
         return raw_entry != live_entry
-    return draft != live
+
+
+def _doors_by_meaning(entry: Any) -> List[Dict[str, Any]]:
+    """PURE: an entry object or door list as sorted, fully-spelled doors."""
+    items = entry if isinstance(entry, list) else [entry]
+    doors: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict) and "start" in item:
+            doors.append(WorkflowEntryAt.model_validate(item).model_dump())
+        else:
+            doors.append(
+                {**WorkflowEntry.model_validate(item).model_dump(), "start": None}
+            )
+    return sorted(doors, key=lambda door: door["topic"])
 
 
 def validate_migration(
