@@ -69,6 +69,7 @@ from app.api.security.breeze_buddy.widget_token import (
 from app.core.config.dynamic import WIDGET_STT_MAX_AUDIO_BYTES
 from app.core.config.static import BREEZE_BUDDY_STT_SERVICE
 from app.core.logger import logger
+from app.core.logger.context import clear_log_context, set_log_context
 from app.database.accessor import create_lead_call_tracker, get_lead_by_id
 from app.database.accessor.breeze_buddy.chat_session import (
     bind_voice_lead_to_chat_session,
@@ -116,6 +117,11 @@ from app.schemas.breeze_buddy.chat import (
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
+from app.schemas.breeze_buddy.widget_events import (
+    WidgetEventBatch,
+    WidgetEventIngestResponse,
+    WidgetEventName,
+)
 from app.services.redis.locks import (
     SESSION_LOCK_TTL_SECONDS,
     LockAcquireError,
@@ -128,6 +134,74 @@ from app.services.redis.locks import (
 # The Daily room itself expires after 1h (set in start_daily_session).
 # Surface that to the client so the embed knows when to reconnect.
 _DAILY_ROOM_TTL_SECONDS = 3600
+
+
+def _log_turn_refused(
+    reason: str, *, session_id: str, ctx: WidgetSessionContext
+) -> None:
+    """One line per mid-conversation break, with the reason.
+
+    These refusals were all silent: the shopper saw the chat stop and the
+    only record was an HTTP status the merchant's page swallowed. The
+    reasons are distinguishable and each means something different —
+    "config_inactive" is the merchant disabling the widget mid-chat,
+    "session_missing" is a row that should exist and does not, "ended" is
+    a client still talking after close, "wrong_channel" is a client bug.
+    """
+    logger.bind(
+        widget_config_id=ctx.widget_config_id,
+        widget_session_id=session_id,
+    ).warning(f"widget: turn refused ({reason})")
+
+
+async def handle_widget_events(
+    body: WidgetEventBatch, request: Request
+) -> WidgetEventIngestResponse:
+    """Record what the browser observed that the server cannot see.
+
+    Auth is the ``public_widget_key`` from the embed — the same door
+    ``POST /widget/session`` uses, via the same helper, so the key
+    lookup, the per-merchant Origin allowlist and the per-IP rate limit
+    all come for free. No session is required: the stylesheet loads (or
+    404s) when the widget mounts on page load, long before a shopper
+    opens the chat.
+
+    Never raises for a bad event: the batch is validated by a closed
+    enum, so anything unrecognised was already rejected at parse time.
+    """
+    cfg = await resolve_widget_config_for_request(
+        request=request,
+        public_widget_key=body.public_widget_key,
+        rate_bucket="events",
+        # Well above one batch per page load, low enough that a broken
+        # embed retrying in a loop cannot flood the log stream.
+        rate_limit=60,
+    )
+    set_log_context(
+        component="widget.events",
+        widget_config_id=cfg.id,
+        merchant_id=cfg.merchant_id,
+        widget_session_id=body.session_id,
+        widget_version=body.widget_version,
+    )
+    try:
+        for event in body.events:
+            bound = logger.bind(
+                event_count=event.count,
+                event_reason=event.reason,
+                event_ms=event.ms,
+            )
+            line = f"widget: client event ({event.name.value})"
+            # "boot" fires on every mount, so it is the highest-volume line
+            # in this system. At WARNING it would swamp the level and break
+            # any alert keyed on warning volume. Only failures warn.
+            if event.name is WidgetEventName.boot:
+                bound.info(line)
+            else:
+                bound.warning(line)
+        return WidgetEventIngestResponse(accepted=len(body.events))
+    finally:
+        clear_log_context()
 
 
 def _session_lock(session_id: str) -> RedisLock:
@@ -262,6 +336,10 @@ async def create_widget_session_handler(
     body: CreateWidgetSessionRequest, request: Request
 ) -> CreateWidgetSessionResponse:
     """Create a widget session backed by a chat_session row."""
+    # set_log_context at the entrypoint (CLAUDE.md convention): every line
+    # emitted while serving this request carries the widget identity, so a
+    # failed open can be traced without threading ids through each call.
+    set_log_context(component="widget.session.create")
     cfg = await resolve_widget_config_for_request(
         request=request,
         public_widget_key=body.public_widget_key,
@@ -327,6 +405,18 @@ async def create_widget_session_handler(
 
     surface = _extract_widget_config(template)
 
+    # The "did the chatbot open?" signal. Failures on this path are already
+    # logged (unknown/inactive key, blocked origin, per-IP rate limit in
+    # widget_common; missing template above), but nothing recorded a
+    # SUCCESSFUL open — so session volume per merchant, and the ratio of
+    # opens to refusals, were invisible.
+    logger.bind(
+        widget_config_id=cfg.id,
+        merchant_id=cfg.merchant_id,
+        widget_session_id=create_resp.session_id,
+        template_id=cfg.template_id,
+    ).info("widget: session opened")
+
     return CreateWidgetSessionResponse(
         session_id=create_resp.session_id,
         status=create_resp.status,
@@ -363,10 +453,16 @@ async def send_widget_message_handler(
     ctx: WidgetSessionContext,
 ):
     """Drive one chat turn. 409 if voice is currently active."""
+    set_log_context(
+        component="widget.session.message",
+        widget_config_id=ctx.widget_config_id,
+        widget_session_id=session_id,
+    )
     cfg = await get_widget_config_by_id(ctx.widget_config_id)
     if cfg is None or not cfg.active:
         # Token's widget_config_id is stale — probably deleted via the
         # admin CRUD. 401 so the client knows to abandon the token.
+        _log_turn_refused("config_inactive", session_id=session_id, ctx=ctx)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Widget configuration not found or inactive",
@@ -385,17 +481,20 @@ async def send_widget_message_handler(
     # "voice is live" before the SSE stream opens.
     session = await get_chat_session_by_id(session_id)
     if session is None:
+        _log_turn_refused("session_missing", session_id=session_id, ctx=ctx)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Widget session '{session_id}' not found",
         )
     assert_widget_session_ownership(session, ctx)
     if session.status == ChatSessionStatus.ENDED:
+        _log_turn_refused("ended", session_id=session_id, ctx=ctx)
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail=f"Widget session '{session_id}' has ended",
         )
     if session.current_channel != WidgetChannel.CHAT:
+        _log_turn_refused("wrong_channel", session_id=session_id, ctx=ctx)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -434,8 +533,14 @@ async def send_widget_intent_handler(
     validate + policy-route path. Rides the same "message" rate bucket —
     an intent is a turn, not a side channel.
     """
+    set_log_context(
+        component="widget.session.intent",
+        widget_config_id=ctx.widget_config_id,
+        widget_session_id=session_id,
+    )
     cfg = await get_widget_config_by_id(ctx.widget_config_id)
     if cfg is None or not cfg.active:
+        _log_turn_refused("config_inactive", session_id=session_id, ctx=ctx)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Widget configuration not found or inactive",
@@ -451,12 +556,14 @@ async def send_widget_intent_handler(
 
     session = await get_chat_session_by_id(session_id)
     if session is None:
+        _log_turn_refused("session_missing", session_id=session_id, ctx=ctx)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Widget session '{session_id}' not found",
         )
     assert_widget_session_ownership(session, ctx)
     if session.status == ChatSessionStatus.ENDED:
+        _log_turn_refused("ended", session_id=session_id, ctx=ctx)
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail=f"Widget session '{session_id}' has ended",
@@ -1156,7 +1263,14 @@ async def end_widget_session_handler(session_id: str, ctx: WidgetSessionContext)
 
     session = await load_chat_session_or_404(session_id)
     assert_widget_session_ownership(session, ctx)
-    return await end_chat_session_handler(session_id, session)
+    result = await end_chat_session_handler(session_id, session)
+    # Closes the lifecycle pair with "session opened": an open with no end
+    # is an abandoned or crashed conversation.
+    logger.bind(
+        widget_config_id=ctx.widget_config_id,
+        widget_session_id=session_id,
+    ).info("widget: session ended")
+    return result
 
 
 # ---------------------------------------------------------------------------
