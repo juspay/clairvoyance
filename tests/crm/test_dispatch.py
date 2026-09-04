@@ -27,7 +27,11 @@ from app.crm.connectivity.dispatch import (
     sample_ids,
 )
 from app.crm.connectivity.providers import ADAPTERS
-from app.crm.connectivity.reasons import REASON_RECLAIMED_STALE_CLAIM
+from app.crm.connectivity.reasons import (
+    PROVIDER_CODE_REASONS,
+    REASON_RECLAIMED_STALE_CLAIM,
+    readable_reason,
+)
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
 from app.crm.connectivity.status import (
     MESSAGE_ACCEPTED,
@@ -813,3 +817,83 @@ def test_the_accepted_outcome_stamps_the_pipe_it_left_on_once() -> None:
         "m-1", "blocked", "no_binding", None, False, 1, None
     )
     assert values[8] is None
+
+
+# --- the row says what happened, not which code said it ----------------------
+
+
+async def test_a_provider_code_is_written_as_its_meaning(monkeypatch) -> None:
+    """A provider code is written as its meaning."""
+    # The adapter classifies on Meta's code and hands it up untouched. What
+    # lands on the row is the meaning, because the people who read the
+    # manifest do not have Meta's error catalogue open.
+    written = {}
+
+    async def refuses_credentials(send_token, message):
+        """Test double: the provider refuses with an expired token."""
+        return SendOutcome(status="failed", reason="190")
+
+    async def record_outcome(
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
+    ):
+        """Test double: records what the dispatcher tried to write."""
+        written.update(status=status, reason=reason)
+        return True
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", refuses_credentials)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+    await dispatch._dispatch_one(_message(), 3)
+    assert written["reason"] == "token_expired"
+
+
+async def test_an_unnamed_code_is_written_exactly_as_reported(monkeypatch) -> None:
+    """An unnamed code is written exactly as reported."""
+    # Lossless: a code we have not named yet must stay greppable and must
+    # still match the provider's documentation. Inventing a word for it, or
+    # dropping it for a generic one, would cost the only clue there is.
+    written = {}
+
+    async def refuses_unknown(send_token, message):
+        """Test double: the provider refuses with a code we do not name."""
+        return SendOutcome(status="failed", reason="999999")
+
+    async def record_outcome(
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
+    ):
+        """Test double: records what the dispatcher tried to write."""
+        written.update(reason=reason)
+        return True
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", refuses_unknown)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+    await dispatch._dispatch_one(_message(), 3)
+    assert written["reason"] == "999999"
+
+
+def test_every_classified_provider_code_has_a_word() -> None:
+    """Every classified provider code has a word."""
+    # The pairing that keeps the row readable: a code the adapter classifies
+    # but the table does not name would reach the manifest as digits, which
+    # is the whole thing this translation exists to prevent. 131005 arrived
+    # exactly that way — classified as nothing, written as provider_rejected.
+    from app.crm.connectivity.providers.whatsapp.classify import (
+        CREDENTIAL_CODES,
+        RETRYABLE_CODES,
+        TERMINAL_CODES,
+    )
+
+    for code in CREDENTIAL_CODES | TERMINAL_CODES | RETRYABLE_CODES:
+        assert code in PROVIDER_CODE_REASONS, f"code {code} has no word"
+
+
+def test_our_own_words_pass_through_untranslated() -> None:
+    """Our own words pass through untranslated."""
+    # The table translates PROVIDER codes; a word this module already chose
+    # (gate_refused, send_timeout) is the answer and must not be rewritten.
+    assert readable_reason(REASON_SEND_ERROR) == REASON_SEND_ERROR
+    assert readable_reason(None) is None
+    # And no entry may map to a digit string, which would defeat the point.
+    for code, word in PROVIDER_CODE_REASONS.items():
+        assert not word.isdigit(), code

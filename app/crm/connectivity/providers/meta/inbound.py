@@ -112,7 +112,12 @@ def verify_signature(raw_body: bytes, headers: Mapping[str, str]) -> bool:
     if not header or not header.startswith(_SIGNATURE_PREFIX):
         return False
     expected = hmac.new(META_APP_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header[len(_SIGNATURE_PREFIX) :])
+    # Compared as BYTES: compare_digest over str raises TypeError the moment
+    # either side is non-ASCII, and the header is attacker-controlled — one
+    # crafted byte would turn "refused" into an unhandled 500.
+    return hmac.compare_digest(
+        expected.encode(), header[len(_SIGNATURE_PREFIX) :].encode()
+    )
 
 
 def handshake_challenge(params: Mapping[str, str]) -> Optional[str]:
@@ -133,7 +138,9 @@ def handshake_challenge(params: Mapping[str, str]) -> Optional[str]:
     challenge = params.get("hub.challenge")
     if params.get("hub.mode") != "subscribe" or not token or challenge is None:
         return None
-    if not hmac.compare_digest(token, META_WEBHOOK_VERIFY_TOKEN):
+    # BYTES for the same reason as the signature compare: a non-ASCII guess
+    # must be a wrong token, not a TypeError.
+    if not hmac.compare_digest(token.encode(), META_WEBHOOK_VERIFY_TOKEN.encode()):
         logger.warning("meta: webhook handshake presented a wrong token")
         return None
     return challenge
