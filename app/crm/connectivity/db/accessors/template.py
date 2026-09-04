@@ -7,6 +7,7 @@ one commit, or two callers both believe they hold it.
 """
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.crm.connectivity.db.decoders.template import (
@@ -14,6 +15,9 @@ from app.crm.connectivity.db.decoders.template import (
     decode_template,
 )
 from app.crm.connectivity.db.queries.template import (
+    apply_category_event_query,
+    apply_quality_event_query,
+    apply_status_event_query,
     approved_template_for_send_query,
     claim_for_submit_query,
     insert_template_draft_query,
@@ -22,9 +26,12 @@ from app.crm.connectivity.db.queries.template import (
     record_in_place_edit_query,
     record_submission_query,
     release_submit_claim_query,
+    resume_submitted_template_query,
     retire_template_query,
+    submitting_template_by_natural_key_query,
     template_by_id_query,
     template_by_natural_key_query,
+    template_by_provider_id_query,
     templates_by_name_query,
     update_draft_components_query,
 )
@@ -205,4 +212,122 @@ async def retire_template(
 ) -> Optional[TemplateRead]:
     query, values = retire_template_query(merchant_id, template_id)
     row = await conn.fetchrow(query, *values)
+    return decode_template(row) if row is not None else None
+
+
+# ---------------------------------------------------------------------------
+# The webhook path
+# ---------------------------------------------------------------------------
+# Every one of these self-scopes: each is a single statement, which Postgres
+# already runs atomically, and each write carries in its WHERE every
+# predicate the read before it justified. The consumer therefore needs no
+# transaction of its own — two letters about one template resolve by one of
+# them getting zero rows back, not by holding a lock across the pass.
+
+
+async def get_template_by_provider_id(
+    merchant_id: str, provider_template_id: str
+) -> Optional[TemplateRead]:
+    """The row a provider's letter is about, or None when we hold no such
+    template — which is ordinary: it is how a crashed submit announces
+    itself, and how a template registered outside this registry is ignored."""
+    query, values = template_by_provider_id_query(merchant_id, provider_template_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_template(row) if row is not None else None
+
+
+async def submitting_template_by_natural_key(
+    merchant_id: str,
+    channel: str,
+    provider_account_ref: str,
+    name: str,
+    language: str,
+) -> Optional[TemplateRead]:
+    """One row or none — the full natural key is a unique index."""
+    query, values = submitting_template_by_natural_key_query(
+        merchant_id, channel, provider_account_ref, name, language
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_template(row) if row is not None else None
+
+
+async def apply_status_event(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    status: str,
+    occurred_at: Optional[datetime],
+    rejection_reason: Optional[str],
+) -> Optional[TemplateRead]:
+    """None = the guard refused it: this letter is older than the state the
+    row already carries, or the row moved out from under it."""
+    query, values = apply_status_event_query(
+        merchant_id,
+        template_id,
+        provider_account_ref,
+        status,
+        occurred_at,
+        rejection_reason,
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_template(row) if row is not None else None
+
+
+async def apply_category_event(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    category: str,
+    occurred_at: Optional[datetime],
+) -> Optional[TemplateRead]:
+    """None = the guard refused it (see apply_status_event)."""
+    query, values = apply_category_event_query(
+        merchant_id, template_id, provider_account_ref, category, occurred_at
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_template(row) if row is not None else None
+
+
+async def apply_quality_event(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    quality: str,
+    occurred_at: Optional[datetime],
+) -> Optional[TemplateRead]:
+    """None = the guard refused it (see apply_status_event)."""
+    query, values = apply_quality_event_query(
+        merchant_id, template_id, provider_account_ref, quality, occurred_at
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_template(row) if row is not None else None
+
+
+async def resume_submitted_template(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    provider_template_id: str,
+    status: str,
+    occurred_at: Optional[datetime],
+    rejection_reason: Optional[str],
+) -> Optional[TemplateRead]:
+    """None = the claim was gone by the time this landed: another letter
+    resumed it first, or the submit that crashed actually completed."""
+    query, values = resume_submitted_template_query(
+        merchant_id,
+        template_id,
+        provider_account_ref,
+        provider_template_id,
+        status,
+        occurred_at,
+        rejection_reason,
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
     return decode_template(row) if row is not None else None

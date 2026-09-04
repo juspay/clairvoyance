@@ -1,10 +1,11 @@
 """connectivity/ingress.py: owners resolved, letters shaped for the spine.
 
 The envelope's own half, over fake accessors: which merchant owns each
-letter's owner, what a letter no merchant owns costs, and the stamps the
-corpus requires (schema_version from the app's API version, source from the
-body). Meta's wire shape itself is test_meta_inbound.py's; the record door
-that calls this spec is test_ingress_door.py's.
+letter's owner, what a letter no merchant owns costs, the door heartbeat the
+same lookup pays for, and the stamps the corpus requires (schema_version from
+the app's API version, source from the body). Meta's wire shape itself is
+test_meta_inbound.py's; the record door that calls this spec is
+test_ingress_door.py's.
 """
 
 from typing import Optional
@@ -59,6 +60,8 @@ class _Fakes:
         )
         self.binding_lookups: list = []
         self.installation_lookups: list = []
+        self.stamped: list = []
+        self.stamp_error: Optional[Exception] = None
 
     async def get_binding_for_inbound(
         self, channel, address
@@ -73,6 +76,12 @@ class _Fakes:
         """Test double."""
         self.installation_lookups.append((connector_key, external_account_id))
         return self.installations.get(external_account_id)
+
+    async def stamp_last_event_at(self, merchant_id, installation_id) -> None:
+        """Test double: the door's traffic heartbeat."""
+        if self.stamp_error is not None:
+            raise self.stamp_error
+        self.stamped.append((merchant_id, installation_id))
 
 
 @pytest.fixture
@@ -270,3 +279,72 @@ async def test_the_spec_is_assembled_from_the_meta_face() -> None:
 
     assert ingress_module.META_INGRESS.verify is inbound.verify_signature
     assert ingress_module.META_INGRESS.challenge is inbound.handshake_challenge
+
+
+# ---------------------------------------------------------------------------
+# The door's traffic heartbeat (canon T11 col 10)
+# ---------------------------------------------------------------------------
+
+
+async def test_an_owned_letter_stamps_the_door_it_arrived_through(fakes) -> None:
+    """The column exists to catch a subscription that silently dropped, and
+    that failure is only visible as this stamp ceasing to advance — so every
+    kind of letter has to move it, not just the ones a consumer reads."""
+    await ingress_module.META_INGRESS.envelope(
+        {}, _body(("messages", _value(statuses=[_status()])))
+    )
+    assert fakes.stamped == [("shop", "i-1")]
+
+
+async def test_a_template_letter_stamps_the_same_door(fakes) -> None:
+    """A WABA-owned letter resolves through the installation directly."""
+    await ingress_module.META_INGRESS.envelope(
+        {},
+        _body(("message_template_status_update", {"message_template_id": "T-1"})),
+    )
+    assert fakes.stamped == [("shop", "i-1")]
+
+
+async def test_one_stamp_per_door_however_many_letters(fakes) -> None:
+    """Grouped by owner, like the lookup it rides on: a callback carrying
+    four receipts for one number is one heartbeat, not four writes."""
+    await ingress_module.META_INGRESS.envelope(
+        {},
+        _body(
+            (
+                "messages",
+                _value(
+                    statuses=[
+                        _status(wamid="wamid.A", state="sent"),
+                        _status(wamid="wamid.A", state="delivered"),
+                        _status(wamid="wamid.B", state="read"),
+                    ]
+                ),
+            )
+        ),
+    )
+    assert fakes.stamped == [("shop", "i-1")]
+
+
+async def test_a_letter_nobody_owns_stamps_nothing(monkeypatch) -> None:
+    """No owner, no door: there is nothing to say traffic arrived on."""
+    doubles = _Fakes(bindings={}, installations={})
+    monkeypatch.setattr(ingress_module, "binding_accessor", doubles)
+    monkeypatch.setattr(ingress_module, "installation_accessor", doubles)
+    letters = await ingress_module.META_INGRESS.envelope(
+        {}, _body(("messages", _value(statuses=[_status()])))
+    )
+    assert letters == []
+    assert doubles.stamped == []
+
+
+async def test_a_failed_stamp_never_costs_the_letter(fakes) -> None:
+    """Bookkeeping, not the point of the request. Failing the callback over a
+    heartbeat would make Meta retry a letter we already understood — and the
+    retry would fail exactly the same way."""
+    fakes.stamp_error = RuntimeError("pool is gone")
+    letters = await ingress_module.META_INGRESS.envelope(
+        {}, _body(("messages", _value(statuses=[_status()])))
+    )
+    assert len(letters) == 1
+    assert letters[0].topic == TOPIC_STATUS

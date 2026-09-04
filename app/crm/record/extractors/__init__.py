@@ -19,7 +19,7 @@ anatomy on both sides of the house.
 
 from typing import Any, Callable, Dict, Tuple
 
-from app.crm.record.extractors import flat, shopify
+from app.crm.record.extractors import flat, shopify, whatsapp
 from app.crm.record.schemas import Extracted
 
 Extractor = Callable[[Dict[str, Any]], Extracted]
@@ -31,6 +31,7 @@ SPEC_MODULES: Tuple[Any, ...] = (shopify,)
 EXTRACTORS: Dict[str, Extractor] = {
     "lead-api": flat.extract,
     "telephony": flat.extract,
+    "whatsapp": whatsapp.extract,
 }
 DEFAULT_EXTRACTOR: Extractor = flat.extract
 

@@ -344,10 +344,276 @@ def retire_template_query(merchant_id: str, template_id: str) -> Tuple[str, List
     return query, [merchant_id, template_id, TEMPLATE_DELETED]
 
 
-# The webhook path — apply_status_event / apply_category_event /
-# apply_quality_event and the crashed-submit resume — is deliberately NOT
-# here. Those builders have exactly one caller, the spine consumer that
-# turns a provider's template webhook into a status change, and that
-# consumer is the next PR. Shipping the SQL ahead of it would leave four
-# statements nothing calls, which is the thing a reader cannot tell from a
-# statement that is merely unused today.
+# ---------------------------------------------------------------------------
+# The webhook path — what a provider DECIDED about a template
+# ---------------------------------------------------------------------------
+#
+# One caller: the spine consumer (connectivity/template_events.py). These
+# are the only statements that write provider-decided state, and every one
+# of them is a guarded CAS rather than a read followed by a write: two
+# letters about one template can be in the pass at the same moment, and the
+# WHERE is what decides between them.
+
+
+def template_by_provider_id_query(
+    merchant_id: str, provider_template_id: str
+) -> Tuple[str, List[Any]]:
+    """The webhook's row, found by the id the PROVIDER assigned.
+
+    ``crm_channel_template_provider_id_uq`` is unique on that column ALONE
+    (061 choice 2 — the provider's identifier is globally unique by
+    construction), so this matches at most one row anywhere. ``merchant_id``
+    still leads the WHERE: the letter's merchant was decided by the ingress
+    root's owner lookup, and re-stating it here means a payload naming
+    another tenant's template finds nothing rather than something.
+    """
+    query = f"""
+        SELECT {TEMPLATE_COLUMNS}
+          FROM {TEMPLATE_TABLE}
+         WHERE merchant_id = $1
+           AND provider_template_id = $2
+    """
+    return query, [merchant_id, provider_template_id]
+
+
+def submitting_template_by_natural_key_query(
+    merchant_id: str,
+    channel: str,
+    provider_account_ref: str,
+    name: str,
+    language: str,
+) -> Tuple[str, List[Any]]:
+    """The crashed-submit resume candidate: the row still holding a claim
+    that the provider never confirmed to us.
+
+    The situation this repairs: submit() claimed the row, POSTed, and the
+    process died before the answer was recorded. The provider DID register
+    the template, so the claim can never be released (release requires
+    ``provider_template_id IS NULL``, which is true, but the row would then
+    be re-submitted under a name the provider already holds) and the
+    exclusive claim refuses to re-take it. The template is dead until the
+    provider's own status webhook arrives naming an id we have never seen —
+    which it does, because Meta sends one for every decision.
+
+    The FULL natural key, account included. A template letter's payload
+    carries no WABA — Meta puts the account in the envelope and the bay
+    stores their value verbatim (canon T13 col 7) — so the caller resolves
+    the account another way and passes it in. Without it this lookup can
+    return the right template name on the WRONG account: one merchant, two
+    WABAs, a crashed submit on the first and a letter about an unknown id
+    from the second, and the provider's globally unique id gets stamped
+    onto a row it does not belong to. Nothing downstream can detect that.
+
+    Matching the full natural key means the unique index answers this
+    (crm_channel_template_natural_uq is those five columns), so it is one
+    row or none — the ambiguity moves up to "which account did this letter
+    arrive through", which is where it can actually be resolved.
+    """
+    query = f"""
+        SELECT {TEMPLATE_COLUMNS}
+          FROM {TEMPLATE_TABLE}
+         WHERE merchant_id = $1
+           AND channel = $2
+           AND provider_account_ref = $3
+           AND name = $4
+           AND language = $5
+           AND status = $6
+           AND provider_template_id IS NULL
+    """
+    return query, [
+        merchant_id,
+        channel,
+        provider_account_ref,
+        name,
+        language,
+        TEMPLATE_SUBMITTING,
+    ]
+
+
+def _not_older_than(column: str, param: int) -> str:
+    """The out-of-order guard for one stamped column (061 choice 6).
+
+    A provider promises no ordering, so a letter must not overwrite a state
+    a LATER letter already wrote. A status ladder would be the wrong test —
+    approved -> pending is a legitimate move backwards when a merchant edits
+    an approved template — so time is the only honest ordering key, and each
+    topic guards on its own column.
+
+    Three things this clause is careful about, each of which silently drops
+    a real approval if it is missing:
+
+    * **A letter with no time at all.** ``occurred_at`` is nullable: the
+      bay's timestamp read is total, so a provider sending a broken
+      ``entry.time`` still files a letter worth applying. ``column <= NULL``
+      is NULL, which is not true, which is zero rows — an approval lost to
+      a malformed clock. So a NULL parameter skips the guard.
+    * **A column with no time yet.** ``category_updated_at`` is NULL until
+      a submission records a category, and ``quality_updated_at`` has NO
+      writer anywhere before this one — so the FIRST quality letter on
+      every row in the table meets a NULL. Without this branch quality
+      webhooks would never apply, ever, and nothing would fail loudly.
+    * **Second resolution.** Meta stamps ``entry.time`` in whole unix
+      seconds while our own transitions stamp ``now()``. A submit at
+      10:00:00.7 followed by an approval Meta timestamps 10:00:00 would
+      compare as older and be refused — so ours is compared at the
+      provider's resolution, not at one they cannot express.
+
+    ``<=`` rather than ``<`` on purpose: the consumer's write commits
+    independently of the event row's stamp, so a batch that fails after it
+    replays the letter. Re-applying identical values must be a no-op that
+    still reports success, not a refusal.
+
+    One clause for all three columns rather than a per-column variant: they
+    differ only in nullability, and the NULL branch is what a second
+    definition would eventually be missing.
+    """
+    return (
+        f"AND (${param}::timestamptz IS NULL\n"
+        f"                OR {column} IS NULL\n"
+        f"                OR date_trunc('second', {column}) <= ${param})"
+    )
+
+
+def apply_status_event_query(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    status: str,
+    occurred_at: Optional[Any],
+    rejection_reason: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """The provider decided: approved, rejected, paused, deleted, or a word
+    we have not seen (061 choice 3 — the vocabulary is theirs and open).
+
+    ``rejection_reason`` is written on every status letter, including as
+    NULL: the reason describes the components a provider refused, and
+    leaving a stale one attached to a template they have since approved
+    tells the merchant to fix something nobody is objecting to.
+    """
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+           SET status = $4,
+               status_updated_at = COALESCE($5::timestamptz, now()),
+               rejection_reason = $6
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND provider_account_ref = $3
+           {_not_older_than("status_updated_at", 5)}
+        RETURNING {TEMPLATE_COLUMNS}
+    """
+    return query, [
+        merchant_id,
+        template_id,
+        provider_account_ref,
+        status,
+        occurred_at,
+        rejection_reason,
+    ]
+
+
+def apply_category_event_query(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    category: str,
+    occurred_at: Optional[Any],
+) -> Tuple[str, List[Any]]:
+    """The money one: a provider re-categorised a template on its own, and
+    the category is the billing class the merchant pays at.
+
+    ``submitted_category`` is deliberately untouched — it records what WE
+    asked for, and 061 choice 4 keeps both columns precisely so the
+    difference stays visible instead of one erasing the other.
+    """
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+           SET category = $4,
+               category_updated_at = COALESCE($5::timestamptz, now())
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND provider_account_ref = $3
+           {_not_older_than("category_updated_at", 5)}
+        RETURNING {TEMPLATE_COLUMNS}
+    """
+    return query, [
+        merchant_id,
+        template_id,
+        provider_account_ref,
+        category,
+        occurred_at,
+    ]
+
+
+def apply_quality_event_query(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    quality: str,
+    occurred_at: Optional[Any],
+) -> Tuple[str, List[Any]]:
+    """The provider's quality read — the early warning before it pauses a
+    template itself. Their word, stored as theirs (GREEN · YELLOW · RED),
+    because a merchant comparing our console against the provider's is
+    entitled to see the same word twice."""
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+           SET quality = $4,
+               quality_updated_at = COALESCE($5::timestamptz, now())
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND provider_account_ref = $3
+           {_not_older_than("quality_updated_at", 5)}
+        RETURNING {TEMPLATE_COLUMNS}
+    """
+    return query, [
+        merchant_id,
+        template_id,
+        provider_account_ref,
+        quality,
+        occurred_at,
+    ]
+
+
+def resume_submitted_template_query(
+    merchant_id: str,
+    template_id: str,
+    provider_account_ref: str,
+    provider_template_id: str,
+    status: str,
+    occurred_at: Optional[Any],
+    rejection_reason: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """Stamp the id a crashed submit never got to record, and the status the
+    provider is telling us about it, in one statement.
+
+    No time guard here, and that is not an omission: the row has never been
+    touched by a provider letter, so there is no later state to regress —
+    its ``status_updated_at`` is our own claim's clock. The guard is the
+    claim itself. ``status = 'submitting' AND provider_template_id IS NULL``
+    is exactly the state this repair is for, so a second letter arriving
+    behind the first finds nothing to do, and a submit that completed
+    normally in between is not overwritten.
+    """
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+           SET provider_template_id = $4,
+               status = $5,
+               status_updated_at = COALESCE($6::timestamptz, now()),
+               rejection_reason = $7
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND provider_account_ref = $3
+           AND status = $8
+           AND provider_template_id IS NULL
+        RETURNING {TEMPLATE_COLUMNS}
+    """
+    return query, [
+        merchant_id,
+        template_id,
+        provider_account_ref,
+        provider_template_id,
+        status,
+        occurred_at,
+        rejection_reason,
+        TEMPLATE_SUBMITTING,
+    ]

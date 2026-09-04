@@ -12,7 +12,9 @@ Why the resolution lives here and not in the face: provider files talk to
 the provider and never to our tables (the base.py port contract — a face
 "returns FACTS; it writes nothing"). Deciding WHOSE letter something is
 means reading crm_channel_binding / crm_connector_installation, and that
-one permission-adjacent lookup belongs in one auditable place.
+one permission-adjacent lookup belongs in one auditable place. The same
+lookup answers the door's traffic heartbeat, which is the one write this
+path makes beside the letter itself (_stamp_traffic says why it earns it).
 
 Why record does not do it instead: record may import no other module
 (boundary rule 12), so app/crm/api.py registers each spec into record's
@@ -21,7 +23,16 @@ dispatches knowing no provider by name. Rule 11 makes this file the one
 reader of every ``providers/<x>/inbound.py`` face.
 """
 
-from typing import Awaitable, Callable, Dict, List, Mapping, Optional
+from typing import (
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+)
 
 import app.crm.connectivity.providers.meta.inbound as meta
 from app.core.logger import logger
@@ -33,8 +44,21 @@ from app.crm.connectivity.schemas.ingress import OWNER_ENDPOINT, ProviderLetter
 from app.crm.record.contracts import EventIn, IngressSpec
 
 
-async def _merchant_for(letter: ProviderLetter) -> Optional[str]:
-    """Whose letter this is — the one permission-adjacent lookup, one place.
+class _Owner(NamedTuple):
+    """Whose letter this is, and which DOOR it came through.
+
+    Two facts from one lookup because both callers of that lookup need a
+    different half: filing needs the merchant, and the door's traffic
+    heartbeat needs the installation. Resolving twice would double the
+    cost of the one permission-adjacent read on the inbound path.
+    """
+
+    merchant_id: str
+    installation_id: str
+
+
+async def _owner_for(letter: ProviderLetter) -> Optional[_Owner]:
+    """The one permission-adjacent lookup, one place.
 
     A receiving endpoint resolves through its binding, keyed by the
     letter's CHANNEL; a provider account resolves through its
@@ -47,11 +71,15 @@ async def _merchant_for(letter: ProviderLetter) -> Optional[str]:
         binding = await binding_accessor.get_binding_for_inbound(
             letter.channel, letter.owner_id
         )
-        return binding.merchant_id if binding else None
+        if binding is None:
+            return None
+        return _Owner(binding.merchant_id, binding.installation_id)
     installation = await installation_accessor.get_installation_for_inbound(
         letter.connector_key, letter.owner_id
     )
-    return installation.merchant_id if installation else None
+    if installation is None:
+        return None
+    return _Owner(installation.merchant_id, installation.id)
 
 
 def _owner_key(letter: ProviderLetter) -> tuple:
@@ -70,16 +98,17 @@ async def resolve_letters(letters: List[ProviderLetter]) -> List[EventIn]:
     holds must not cost the letters beside it, which belong to someone else
     entirely.
     """
-    merchants: Dict[tuple, Optional[str]] = {}
+    owners: Dict[tuple, Optional[_Owner]] = {}
     for letter in letters:
         key = _owner_key(letter)
-        if key not in merchants:
-            merchants[key] = await _merchant_for(letter)
+        if key not in owners:
+            owners[key] = await _owner_for(letter)
+    await _stamp_traffic(owners.values())
 
     out: List[EventIn] = []
     for letter in letters:
-        merchant_id = merchants[_owner_key(letter)]
-        if merchant_id is None:
+        owner = owners[_owner_key(letter)]
+        if owner is None:
             logger.warning(
                 f"ingress: {letter.source} webhook for a "
                 f"{letter.owner_kind} no merchant owns"
@@ -87,7 +116,7 @@ async def resolve_letters(letters: List[ProviderLetter]) -> List[EventIn]:
             continue
         out.append(
             EventIn(
-                merchant_id=merchant_id,
+                merchant_id=owner.merchant_id,
                 source=letter.source,
                 topic=letter.topic,
                 external_id=letter.external_id,
@@ -97,6 +126,35 @@ async def resolve_letters(letters: List[ProviderLetter]) -> List[EventIn]:
             )
         )
     return out
+
+
+async def _stamp_traffic(owners: Iterable[Optional[_Owner]]) -> None:
+    """The doors these letters arrived through heard from their provider —
+    canon T11 col 10's heartbeat, once per door per callback.
+
+    This is the ONLY thing the bay writes that is not the letter itself, and
+    it earns the exception: the column's whole job is to catch the failure
+    no probe can fake — a token still valid, the connection still green, and
+    the webhook subscription silently gone — which is only visible as this
+    stamp ceasing to advance. Stamping it from the template consumer instead
+    would make the column lie: a busy account can go months between template
+    events while message traffic pours in.
+
+    Deliberately NOT fatal. A letter must be filed whether or not its door's
+    bookkeeping lands; failing the callback over a heartbeat would make Meta
+    retry a letter we already understood, and the retry would fail the same
+    way.
+    """
+    for owner in {o.installation_id: o for o in owners if o is not None}.values():
+        try:
+            await installation_accessor.stamp_last_event_at(
+                owner.merchant_id, owner.installation_id
+            )
+        except Exception as e:
+            logger.opt(exception=e).warning(
+                f"ingress: could not stamp last_event_at on installation "
+                f"{owner.installation_id}"
+            )
 
 
 def envelope_over(
