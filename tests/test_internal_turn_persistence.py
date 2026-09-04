@@ -54,7 +54,11 @@ from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent, _PreparedTool
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     VISIBILITY_INTERNAL,
 )
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.guardrails.types import GuardrailsConfig
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    TemplateModel,
+)
 
 _NODE: Dict[str, Any] = {"name": "start", "functions": []}
 
@@ -318,6 +322,9 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
     async def _get_llm(_config, pooled=True):
         return object()
 
+    async def _load_guardrails(_template_id, _configurations, **_kwargs):
+        return GuardrailsConfig()
+
     async def _run_turn(self, *, user_content, history, current_node, internal=False):
         calls["agent_internal"] = internal
         return
@@ -331,6 +338,7 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
     monkeypatch.setattr(turn_core, "get_agent_session_state", _get_state)
     monkeypatch.setattr(turn_core, "build_render_template_vars", _render_vars)
     monkeypatch.setattr(turn_core, "get_llm_service", _get_llm)
+    monkeypatch.setattr(turn_core, "load_guardrail_config", _load_guardrails)
     monkeypatch.setattr(ChatAgent, "run_turn", _run_turn)
 
     [

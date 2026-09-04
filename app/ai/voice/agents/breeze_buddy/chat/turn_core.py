@@ -31,12 +31,34 @@ from app.ai.voice.agents.breeze_buddy.chat.approvals import (
 )
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     blocks_to_llm_context_messages,
+    display_only_text_block,
+    internal_text_block,
+    plain_text_blocks,
     repair_dangling_tool_uses,
 )
 from app.ai.voice.agents.breeze_buddy.chat.llm.gemini.adapter_patch import (
     ensure_chat_gemini_adapter,
 )
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
+from app.ai.voice.agents.breeze_buddy.guardrails.config import (
+    load_guardrail_config,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.evaluator import (
+    GuardrailCoordinator,
+    GuardrailDecision,
+    GuardrailInitializationError,
+    GuardrailVerdict,
+    build_guardrail_coordinator,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.focus import is_focus_enabled
+from app.ai.voice.agents.breeze_buddy.guardrails.metrics import (
+    GuardrailMetricsDirection,
+    GuardrailSessionMetrics,
+    resolve_session_metrics,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.results import (
+    persist_guardrail_metrics,
+)
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
@@ -52,7 +74,9 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
     get_agent_session_state,
     get_chat_session_by_id,
+    insert_chat_message,
     list_chat_messages_for_session,
+    update_chat_session_after_turn,
 )
 from app.database.accessor.breeze_buddy.credentials import (
     get_credentials_as_template_vars,
@@ -62,6 +86,102 @@ from app.schemas.breeze_buddy.chat import (
     ChatSessionStatus,
     ToolApprovalStatus,
 )
+
+
+def _recent_guardrail_context(history: list) -> str:
+    """Return a small user/assistant transcript for semantic Guardrail checks."""
+    recent: list[str] = []
+    for message in history:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        content = message.get("content")
+        if role in ("user", "assistant") and isinstance(content, str):
+            if content.strip():
+                recent.append(f"{role}: {content.strip()}")
+    return "\n".join(recent[-4:])
+
+
+async def _persist_chat_guardrail_metrics(
+    session: Any, metrics: Optional[GuardrailSessionMetrics]
+) -> None:
+    if metrics is None:
+        return
+    started_at = getattr(session, "created_at", None)
+    if started_at is None:
+        return
+    await persist_guardrail_metrics(
+        metrics,
+        source_id=str(session.id),
+        reseller_id=session.reseller_id,
+        merchant_id=getattr(session, "merchant_id", None),
+        started_at=started_at,
+        status="PROCESSING",
+    )
+
+
+def _decode_history_rows(history_rows: list[Any]) -> list:
+    return blocks_to_llm_context_messages(
+        [
+            {
+                "role": row.role.value,
+                "content": row.content,
+                "content_blocks": row.content_blocks,
+            }
+            for row in history_rows
+            if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
+        ]
+    )
+
+
+async def _persist_guardrail_redirect(
+    *,
+    session_id: str,
+    redirect_message: str,
+    user_content: Optional[str] = None,
+    hide_input_from_llm: bool = False,
+) -> AsyncIterator[SSEEvent]:
+    """Commit a blocked turn, optionally including its user message."""
+    if user_content is not None:
+        if hide_input_from_llm:
+            user_blocks = [
+                display_only_text_block(user_content),
+                internal_text_block("[Input blocked by guardrail]"),
+            ]
+        else:
+            user_blocks = plain_text_blocks(user_content)
+        user_row = await insert_chat_message(
+            session_id=session_id,
+            role=ChatMessageRole.USER,
+            content=user_content,
+            content_blocks=user_blocks,
+        )
+        yield SSEEvent(
+            event="user_committed",
+            data={"idx": user_row.idx if user_row else None, "content": user_content},
+        )
+
+    redirect = redirect_message.strip()
+    if redirect:
+        yield SSEEvent(event="assistant_token", data={"delta": redirect})
+        assistant_row = await insert_chat_message(
+            session_id=session_id,
+            role=ChatMessageRole.ASSISTANT,
+            content=redirect,
+            content_blocks=plain_text_blocks(redirect),
+        )
+        assistant_idx = assistant_row.idx if assistant_row else None
+        yield SSEEvent(
+            event="assistant_message",
+            data={"idx": assistant_idx, "content": redirect},
+        )
+    else:
+        assistant_idx = None
+    await update_chat_session_after_turn(session_id=session_id)
+    yield SSEEvent(
+        event="turn_end",
+        data={"session_status": "ACTIVE", "assistant_idx": assistant_idx},
+    )
 
 
 def resolve_llm_configuration(template: TemplateModel) -> Any:
@@ -212,6 +332,100 @@ async def run_chat_turn(
         yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
         return
 
+    guardrails = await load_guardrail_config(
+        str(template.id),
+        template.configurations,
+        supported_channels=list(template.supported_channels),
+    )
+
+    history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
+    history_rows = await list_chat_messages_for_session(session_id, limit=history_limit)
+    history = _decode_history_rows(history_rows)
+    recent_guardrail_context = _recent_guardrail_context(history)
+    metrics = resolve_session_metrics(
+        guardrails,
+        template_id=str(template.id),
+        channel="CHAT",
+    )
+    last_message_index = history_rows[-1].idx if history_rows else -1
+
+    guardrail_coordinator: Optional[GuardrailCoordinator]
+    try:
+        guardrail_coordinator = await build_guardrail_coordinator(
+            guardrails,
+            pooled=True,
+            include_input=not internal,
+            metrics=metrics,
+            initial_turn_number=last_message_index,
+        )
+    except GuardrailInitializationError:
+        input_config = guardrails.input if guardrails else None
+        output_config = guardrails.output if guardrails else None
+        failed_direction = cast(
+            GuardrailMetricsDirection,
+            (
+                "input"
+                if not internal and input_config is not None and input_config.enabled
+                else "output"
+            ),
+        )
+        if metrics is not None:
+            metrics.record(
+                failed_direction,
+                GuardrailVerdict(
+                    GuardrailDecision.BLOCK,
+                    reason="guardrail evaluation unavailable",
+                    evaluation_failed=True,
+                ),
+                last_message_index + 1,
+            )
+        redirect = (
+            input_config.redirect_message
+            if input_config is not None and input_config.enabled
+            else output_config.redirect_message if output_config is not None else ""
+        )
+        async for event in _persist_guardrail_redirect(
+            session_id=session_id,
+            user_content=user_content,
+            redirect_message=redirect,
+            hide_input_from_llm=bool(input_config and input_config.enabled),
+        ):
+            yield event
+        await _persist_chat_guardrail_metrics(session, metrics)
+        return
+
+    if guardrail_coordinator is not None:
+        if internal:
+            guardrail_coordinator.begin_turn(
+                recent_context=recent_guardrail_context,
+                input_candidate=user_content,
+            )
+        elif guardrail_coordinator.input_enabled:
+            input_verdict = await guardrail_coordinator.evaluate_input_candidate(
+                user_content,
+                recent_guardrail_context,
+            )
+            if input_verdict.blocked:
+                input_config = guardrail_coordinator.input_config
+                async for event in _persist_guardrail_redirect(
+                    session_id=session_id,
+                    user_content=user_content,
+                    redirect_message=(
+                        input_config.redirect_message
+                        if input_config is not None
+                        else ""
+                    ),
+                    hide_input_from_llm=True,
+                ):
+                    yield event
+                await _persist_chat_guardrail_metrics(session, metrics)
+                return
+        else:
+            guardrail_coordinator.begin_turn(
+                recent_context=recent_guardrail_context,
+                input_candidate=user_content,
+            )
+
     # HITL: a new user message supersedes every pending approval (the user
     # moved on without deciding). Persists the synthetic tool_result rows
     # that keep replayed history fully answered; the resolved events ride at
@@ -232,24 +446,21 @@ async def run_chat_turn(
                     "reason": row.reason,
                 },
             )
+        # Superseding approvals persists synthetic tool results. Reload only
+        # when rows changed so the current LLM context contains those results.
+        if superseded:
+            history_rows = await list_chat_messages_for_session(
+                session_id, limit=history_limit
+            )
+            history = _decode_history_rows(history_rows)
+            if guardrail_coordinator is not None:
+                final_preceding_index = history_rows[-1].idx if history_rows else -1
+                guardrail_coordinator.rebase_current_turn(final_preceding_index + 1)
 
-    history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
-    history_rows = await list_chat_messages_for_session(session_id, limit=history_limit)
     # Replay the canonical Anthropic-shape blocks (post-migration 030),
     # falling back to denormalised prose for legacy rows. tool_use /
     # tool_result blocks survive so the LLM sees its own prior identifiers
     # (cart_id, etc.) verbatim — this is what makes voice resume "just work".
-    history: list = blocks_to_llm_context_messages(
-        [
-            {
-                "role": row.role.value,
-                "content": row.content,
-                "content_blocks": row.content_blocks,
-            }
-            for row in history_rows
-            if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
-        ]
-    )
     # Heal any unmatched tool_use (decided-but-lost rows) → synthetic error
     # result; drop orphan tool_results from window truncation.
     history = cast(list, repair_dangling_tool_uses(history))
@@ -279,15 +490,20 @@ async def run_chat_turn(
         agent_state=agent_state,
         context_placement=context_placement,
         catalog_version=resolve_session_catalog_version(session.metadata),
-        merchant_id=session.merchant_id,
+        merchant_id=getattr(session, "merchant_id", None),
+        guardrail_coordinator=guardrail_coordinator,
+        focus_enabled=is_focus_enabled(guardrails),
     )
-    async for event in agent.run_turn(
-        user_content=user_content,
-        history=history,
-        current_node=session.current_node,
-        internal=internal,
-    ):
-        yield event
+    try:
+        async for event in agent.run_turn(
+            user_content=user_content,
+            history=history,
+            current_node=session.current_node,
+            internal=internal,
+        ):
+            yield event
+    finally:
+        await _persist_chat_guardrail_metrics(session, metrics)
 
 
 async def run_chat_approval_continuation(
@@ -327,19 +543,15 @@ async def run_chat_approval_continuation(
         yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
         return
 
+    guardrails = await load_guardrail_config(
+        str(template.id),
+        template.configurations,
+        supported_channels=list(template.supported_channels),
+    )
+
     history_limit = await CHAT_HISTORY_REPLAY_LIMIT()
     history_rows = await list_chat_messages_for_session(session_id, limit=history_limit)
-    history: list = blocks_to_llm_context_messages(
-        [
-            {
-                "role": row.role.value,
-                "content": row.content,
-                "content_blocks": row.content_blocks,
-            }
-            for row in history_rows
-            if row.role in (ChatMessageRole.USER, ChatMessageRole.ASSISTANT)
-        ]
-    )
+    history = _decode_history_rows(history_rows)
     # The claimed call (answered in-turn by run_approval_turn) and the
     # still-pending siblings must STAY unanswered; everything else unmatched is
     # decided-but-lost and gets a synthetic error result.
@@ -348,6 +560,47 @@ async def run_chat_approval_continuation(
     if claimed_id:
         exclude.add(claimed_id)
     history = cast(list, repair_dangling_tool_uses(history, exclude_ids=exclude))
+
+    metrics = resolve_session_metrics(
+        guardrails,
+        template_id=str(template.id),
+        channel="CHAT",
+    )
+    last_message_index = history_rows[-1].idx if history_rows else -1
+
+    try:
+        guardrail_coordinator = await build_guardrail_coordinator(
+            guardrails,
+            pooled=True,
+            include_input=False,
+            metrics=metrics,
+            initial_turn_number=last_message_index,
+        )
+    except GuardrailInitializationError:
+        output_config = guardrails.output
+        if metrics is not None:
+            metrics.record(
+                "output",
+                GuardrailVerdict(
+                    GuardrailDecision.BLOCK,
+                    reason="guardrail evaluation unavailable",
+                    evaluation_failed=True,
+                ),
+                last_message_index + 1,
+            )
+        async for event in _persist_guardrail_redirect(
+            session_id=session_id,
+            redirect_message=(
+                output_config.redirect_message if output_config is not None else ""
+            ),
+        ):
+            yield event
+        await _persist_chat_guardrail_metrics(session, metrics)
+        return
+    if guardrail_coordinator is not None:
+        guardrail_coordinator.begin_turn(
+            recent_context=_recent_guardrail_context(history)
+        )
 
     state_row = await get_agent_session_state(session_id)
     agent_state: Dict[str, Any] = state_row.data if state_row else {}
@@ -372,18 +625,23 @@ async def run_chat_approval_continuation(
         agent_state=agent_state,
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
+        guardrail_coordinator=guardrail_coordinator,
+        focus_enabled=is_focus_enabled(guardrails),
     )
-    async for event in agent.run_approval_turn(
-        approval=claimed,
-        approved=effective_approved,
-        wire_status=wire_status or "",
-        decision_reason=decision_reason,
-        synthetic_result=synthetic_result,
-        history=history,
-        current_node=session.current_node,
-        pending_sibling_ids=pending_sibling_ids,
-    ):
-        yield event
+    try:
+        async for event in agent.run_approval_turn(
+            approval=claimed,
+            approved=effective_approved,
+            wire_status=wire_status or "",
+            decision_reason=decision_reason,
+            synthetic_result=synthetic_result,
+            history=history,
+            current_node=session.current_node,
+            pending_sibling_ids=pending_sibling_ids,
+        ):
+            yield event
+    finally:
+        await _persist_chat_guardrail_metrics(session, metrics)
 
 
 async def run_chat_approval_turn(

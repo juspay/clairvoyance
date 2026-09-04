@@ -7,6 +7,9 @@ from pipecat.frames.frames import EndFrame
 from app.ai.voice.agents.breeze_buddy.callbacks import (
     service_callback,
 )
+from app.ai.voice.agents.breeze_buddy.guardrails.results import (
+    persist_guardrail_metrics,
+)
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     update_span_with_evaluation_data,
 )
@@ -28,6 +31,12 @@ from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
 callback_map = {
     "service_callback": service_callback,
 }
+
+
+def _restore_guardrail_content(bot: Any, content: str) -> str:
+    """Restore audit text that was hidden from the live main-LLM context."""
+    redactions = getattr(bot, "guardrail_transcript_redactions", {})
+    return redactions.get(content, content)
 
 
 async def end_conversation(context: TemplateContext, args, transition_to=None):
@@ -89,7 +98,16 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         # Collect transcription. Seed with completed generations' messages
         # (agent-to-agent transfer merge); the loop below appends the final
         # generation's messages on top.
-        transcription = list(getattr(context.bot, "prior_generation_messages", []))
+        transcription = []
+        for message in getattr(context.bot, "prior_generation_messages", []):
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                restored = dict(message)
+                restored["content"] = _restore_guardrail_content(
+                    context.bot, message["content"]
+                )
+                transcription.append(restored)
+            else:
+                transcription.append(message)
         filtered_transcript = []
         # Ephemeral knowledge-base context blocks (auto_retrieve injections /
         # full_injection role message) start with the configured header —
@@ -128,12 +146,11 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-                    transcription.append(
-                        {"role": msg["role"], "content": msg["content"]}
-                    )
+                    content = _restore_guardrail_content(context.bot, msg["content"])
+                    transcription.append({"role": msg["role"], "content": content})
                     if msg["role"] in ("user", "assistant"):
                         filtered_transcript.append(
-                            {"role": msg["role"], "content": msg["content"]}
+                            {"role": msg["role"], "content": content}
                         )
 
             context.lead.metaData["transcription"] = transcription
@@ -307,6 +324,20 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.warning("No call_sid or lead found, skipping database update")
 
         if updated_lead and updated_lead.template_id:
+            started_at = getattr(updated_lead, "call_initiated_time", None) or getattr(
+                updated_lead, "created_at", None
+            )
+            if started_at is not None:
+                for guardrail_metrics in getattr(
+                    context.bot, "guardrail_session_metrics", {}
+                ).values():
+                    await persist_guardrail_metrics(
+                        guardrail_metrics,
+                        source_id=str(updated_lead.id),
+                        reseller_id=updated_lead.reseller_id,
+                        merchant_id=updated_lead.merchant_id,
+                        started_at=started_at,
+                    )
             await enqueue_conversation_evaluation(
                 str(updated_lead.id),
                 ConversationChannel.VOICE,

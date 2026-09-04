@@ -26,6 +26,9 @@ from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     render_client_context,
 )
+from app.ai.voice.agents.breeze_buddy.guardrails.focus import (
+    inject_focus_guardrail,
+)
 from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
     build_kb_system_message,
     build_retrieval_query,
@@ -129,6 +132,10 @@ class ContextSeedMixin:
             role_messages,
             self.template_vars.get("language_name", "English"),
             payload_selection,
+        )
+        role_messages = inject_focus_guardrail(
+            role_messages,
+            enabled=self.focus_enabled,
         )
         task_messages = render_messages_with_vars(
             list(node.get("task_messages", [])), self.template_vars

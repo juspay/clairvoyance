@@ -406,6 +406,8 @@ async def test_completion_enqueues_source_identity(
         chat_cleanup, "end_chat_session", AsyncMock(return_value=chat_result)
     )
     monkeypatch.setattr(chat_cleanup, "terminate_pending_approvals", AsyncMock())
+    chat_finalize = AsyncMock()
+    monkeypatch.setattr(chat_cleanup, "finalize_guardrail_metrics", chat_finalize)
     lock = SimpleNamespace(acquire=AsyncMock(), release=AsyncMock())
     monkeypatch.setattr(chat_cleanup, "RedisLock", lambda *_args, **_kwargs: lock)
     chat_enqueue = AsyncMock()
@@ -418,6 +420,7 @@ async def test_completion_enqueues_source_identity(
         ConversationChannel.CHAT,
         TEMPLATE_ID,
     )
+    chat_finalize.assert_awaited_once_with("session-id")
 
 
 def test_topic_evaluation_requires_explicit_template_flag() -> None:

@@ -14,6 +14,9 @@ from fastapi import WebSocket
 from pipecat.runner.utils import _create_telephony_transport, create_transport
 
 from app.ai.voice.agents.breeze_buddy.agent.transport import get_transport_params
+from app.ai.voice.agents.breeze_buddy.guardrails.config import (
+    load_guardrail_config,
+)
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import (
     TemplateContext,
@@ -93,6 +96,15 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
     # 3. Swap the template trio — everything downstream reads these.
     bot.template = transfer.template
     bot.configurations = transfer.template.configurations
+    # The outgoing coordinator is bound to the previous template's rules and
+    # model services. Clear it before loading the replacement configuration so
+    # future reordering cannot expose the old policy during the swap.
+    bot.guardrail_coordinator = None
+    bot.guardrails = await load_guardrail_config(
+        str(transfer.template.id),
+        bot.configurations,
+        supported_channels=list(transfer.template.supported_channels),
+    )
     bot.template_vars = transfer.template_vars
     bot._handoff_messages = transfer.handoff_messages
 
