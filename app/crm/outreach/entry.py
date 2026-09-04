@@ -246,7 +246,11 @@ def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
     nobody, so it is not hers either."""
     if node.match is None:
         return True
-    claimed = event.payload.get(node.match.payload)
+    claimed = field_value(
+        event.payload,
+        canonical_path(node.match.payload),
+        derive_for(event.source, event.topic),
+    )
     if claimed is None:
         return False
     mine = str(run.id) if node.match.run == "id" else run.context.get(node.match.run)
@@ -256,13 +260,23 @@ def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
 def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
     """PURE: what this letter answers on this square — the topic itself
     for a $topic square (phase 15: the branch is the letter's NAME), else
-    the payload field the square branches on; None when the square is not
-    listening for the topic, or the field is missing (B1). The ONE
-    definition of "this letter is this square's answer": the wake and
-    the repeat refusal below both ask it."""
+    the payload field the square branches on — resolved through the
+    catalog like entry.where and entry.key, so a derived field (whatsapp's
+    reply, read from messages[0].button) answers too, not only top-level
+    keys; None when the square is not listening for the topic, or the
+    field is missing (B1). The ONE definition of "this letter is this
+    square's answer": the wake and the repeat refusal below both ask it."""
     if node.type != "wait_event" or event.topic not in node.topics:
         return None
-    answer = event.topic if node.key == TOPIC_KEY else event.payload.get(node.key or "")
+    answer = (
+        event.topic
+        if node.key == TOPIC_KEY
+        else field_value(
+            event.payload,
+            canonical_path(node.key or ""),
+            derive_for(event.source, event.topic),
+        )
+    )
     return None if answer is None else str(answer)
 
 

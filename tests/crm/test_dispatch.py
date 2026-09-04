@@ -27,7 +27,10 @@ from app.crm.connectivity.dispatch import (
     sample_ids,
 )
 from app.crm.connectivity.providers import ADAPTERS
-from app.crm.connectivity.reasons import REASON_RECLAIMED_STALE_CLAIM
+from app.crm.connectivity.reasons import (
+    PROVIDER_CODE_REASONS,
+    REASON_RECLAIMED_STALE_CLAIM,
+)
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
 from app.crm.connectivity.status import (
     MESSAGE_ACCEPTED,
@@ -813,3 +816,96 @@ def test_the_accepted_outcome_stamps_the_pipe_it_left_on_once() -> None:
         "m-1", "blocked", "no_binding", None, False, 1, None
     )
     assert values[8] is None
+
+
+# --- the row keeps the code; the word lives at read (canon T16 col 13) -------
+
+
+async def test_a_provider_code_lands_on_the_row_verbatim(monkeypatch) -> None:
+    """A provider code lands on the row verbatim."""
+    # The adapter classifies on Meta's code and hands it up untouched, and
+    # the row KEEPS it (canon T16 col 13: "failed | dead — the provider's
+    # code"): one vocabulary in the column, greppable by the code the
+    # provider's own documentation uses. The human word is a read-side
+    # concern (reason_label, on the contracts surface).
+    written = {}
+
+    async def refuses_credentials(send_token, message):
+        """Test double: the provider refuses with an expired token."""
+        return SendOutcome(status="failed", reason="190")
+
+    async def record_outcome(
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
+    ):
+        """Test double: records what the dispatcher tried to write."""
+        written.update(status=status, reason=reason)
+        return True
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", refuses_credentials)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+    await dispatch._dispatch_one(_message(), 3)
+    assert written["reason"] == "190"
+
+
+async def test_an_unnamed_code_is_written_exactly_as_reported(monkeypatch) -> None:
+    """An unnamed code is written exactly as reported."""
+    # Lossless: a code we have not named yet must stay greppable and must
+    # still match the provider's documentation. Inventing a word for it, or
+    # dropping it for a generic one, would cost the only clue there is.
+    written = {}
+
+    async def refuses_unknown(send_token, message):
+        """Test double: the provider refuses with a code we do not name."""
+        return SendOutcome(status="failed", reason="999999")
+
+    async def record_outcome(
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
+    ):
+        """Test double: records what the dispatcher tried to write."""
+        written.update(reason=reason)
+        return True
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", refuses_unknown)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+    await dispatch._dispatch_one(_message(), 3)
+    assert written["reason"] == "999999"
+
+
+def test_every_classified_provider_code_has_a_word() -> None:
+    """Every classified provider code has a word."""
+    # The pairing that keeps the read side readable: a code the adapter
+    # classifies but the table does not name would be SHOWN as digits on
+    # the "why didn't it send" view, which is the whole thing the label
+    # exists to prevent. 131005 arrived exactly that way — classified as
+    # nothing, surfaced as provider_rejected.
+    from app.crm.connectivity.providers.whatsapp.classify import (
+        CREDENTIAL_CODES,
+        RETRYABLE_CODES,
+        TERMINAL_CODES,
+    )
+
+    for code in CREDENTIAL_CODES | TERMINAL_CODES | RETRYABLE_CODES:
+        assert code in PROVIDER_CODE_REASONS, f"code {code} has no word"
+
+
+def test_the_read_side_turns_a_stored_code_into_its_meaning() -> None:
+    """The read side turns a stored code into its meaning."""
+    # The merchant on the "why didn't it send" view gets the word; the row
+    # keeps the code. Imported off the contracts surface, because that is
+    # where a message-read view gets it.
+    from app.crm.connectivity.contracts import reason_label
+
+    assert reason_label("190") == "token_expired"
+    assert reason_label("131030") == "recipient_not_in_allowed_list"
+    # Lossless and total: an unnamed code stays exactly as stored — still
+    # greppable, still matching the provider's docs — and a word this
+    # module already chose (gate_refused, send_timeout) is the answer and
+    # must not be rewritten.
+    assert reason_label("999999") == "999999"
+    assert reason_label(REASON_SEND_ERROR) == REASON_SEND_ERROR
+    assert reason_label(None) is None
+    # And no entry may map to a digit string, which would defeat the point.
+    for code, word in PROVIDER_CODE_REASONS.items():
+        assert not word.isdigit(), code

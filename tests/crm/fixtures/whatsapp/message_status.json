@@ -1,0 +1,24 @@
+{
+  "messaging_product": "whatsapp",
+  "metadata": {
+    "display_phone_number": "918067451234",
+    "phone_number_id": "812345678901234"
+  },
+  "statuses": [
+    {
+      "id": "wamid.HBgMOTE5ODc2NTQzMjEwFQIAERgSRjMwMEQ3QjA5NEE1NkQ2QUYx",
+      "status": "delivered",
+      "timestamp": "1788177700",
+      "recipient_id": "919876543210",
+      "conversation": {
+        "id": "f2b8a1c9d0e34567",
+        "origin": { "type": "utility" }
+      },
+      "pricing": {
+        "billable": true,
+        "pricing_model": "PMP",
+        "category": "utility"
+      }
+    }
+  ]
+}

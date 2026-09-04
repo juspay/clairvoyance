@@ -335,6 +335,10 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         applied = await message_accessor.apply_outcome(
             message.id,
             plan.status,
+            # Verbatim: on a provider refusal the row keeps the provider's
+            # CODE (canon T16 col 13) — what support greps and what matches
+            # the provider's documentation. The human word is a read-side
+            # concern (reasons.reason_label, on the contracts surface).
             plan.reason,
             plan.provider_message_id,
             plan.mark_sent,

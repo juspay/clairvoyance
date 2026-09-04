@@ -19,14 +19,14 @@ anatomy on both sides of the house.
 
 from typing import Any, Callable, Dict, Tuple
 
-from app.crm.record.extractors import flat, shopify
+from app.crm.record.extractors import flat, shopify, whatsapp
 from app.crm.record.schemas import Extracted
 
 Extractor = Callable[[Dict[str, Any]], Extracted]
 
 # Declared specs: modules exporting ENTRIES (List[CatalogEntry]) and
 # DERIVERS (derived field name -> derive(payload)).
-SPEC_MODULES: Tuple[Any, ...] = (shopify,)
+SPEC_MODULES: Tuple[Any, ...] = (shopify, whatsapp)
 
 EXTRACTORS: Dict[str, Extractor] = {
     "lead-api": flat.extract,

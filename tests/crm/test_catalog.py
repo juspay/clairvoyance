@@ -72,13 +72,24 @@ def test_every_code_entry_has_fixtures_and_every_field_appears_in_one() -> None:
 
 def test_the_engine_finds_the_person_in_every_recorded_letter() -> None:
     """The extractor half of the square: a code entry whose spec cannot
-    attribute its own fixtures would quarantine every real letter."""
+    attribute its own fixtures would quarantine every real letter. A
+    merchant-level entry is the ruled opposite (canon T13 col 14): its
+    letters name no person, so they decode about="merchant" with no
+    handles — processed with customer NULL, never quarantined."""
     for (source, topic), entry in catalog.CATALOG.items():
         spec = catalog.code_spec(source, topic)
         assert spec is not None
         for payload in _fixtures_for(source, topic):
             extracted = engine.extract(payload, spec)
-            assert extracted.handles, f"{source}/{topic}: a fixture yields no handle"
+            if entry.about == "merchant":
+                assert extracted.about == "merchant"
+                assert (
+                    not extracted.handles
+                ), f"{source}/{topic}: a merchant letter grew a handle"
+            else:
+                assert (
+                    extracted.handles
+                ), f"{source}/{topic}: a fixture yields no handle"
 
 
 def test_variable_names_are_unique_within_an_entry() -> None:
