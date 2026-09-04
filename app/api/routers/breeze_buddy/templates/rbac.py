@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException, status
 
 from app.core.logger import logger
+from app.core.security.authorization import merchant_scope_permitted
 from app.schemas import UserInfo
 
 
@@ -45,20 +46,24 @@ def validate_template_access(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied to reseller {reseller_id}",
         )
-    # Check merchant access (if merchant_id is specified)
-    if merchant_id:
-        if (
-            merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            logger.warning(
-                f"User {current_user.username} attempted to {operation} template "
-                f"for unauthorized merchant: {merchant_id}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {merchant_id}",
-            )
+    # Check merchant access. A null merchant_id marks a reseller-scoped
+    # template: only reseller-role accounts (or admin, above) may act on it. A
+    # merchant/user role targeting either a foreign merchant_id OR a null
+    # merchant_id is denied — this is the linchpin authz check for template
+    # create/update (PT-09) and reads (PT-15).
+    if not merchant_scope_permitted(current_user, merchant_id):
+        logger.warning(
+            f"User {current_user.username} attempted to {operation} template "
+            f"for unauthorized merchant: {merchant_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Access denied to merchant {merchant_id}"
+                if merchant_id
+                else "Access denied to reseller-scoped template"
+            ),
+        )
 
 
 def filter_templates_by_rbac(templates: List, current_user: UserInfo) -> List:
@@ -88,54 +93,17 @@ def filter_templates_by_rbac(templates: List, current_user: UserInfo) -> List:
             or template.reseller_id in current_user.reseller_ids
         )
 
-        # Check merchant access (templates might not have merchant_id)
-        if template.merchant_id:
-            has_merchant_access = (
-                "*" in current_user.merchant_ids
-                or template.merchant_id in current_user.merchant_ids
-            )
-        else:
-            # Templates without merchant_id are accessible if reseller access granted
-            has_merchant_access = True
+        # Merchant scope: a null merchant_id (reseller-scoped template) is
+        # visible only to reseller-role accounts, not every merchant sharing the
+        # reseller (PT-15).
+        has_merchant_access = merchant_scope_permitted(
+            current_user, template.merchant_id
+        )
 
         if has_reseller_access and has_merchant_access:
             filtered.append(template)
 
     return filtered
-
-
-def require_admin_or_reseller_owner(
-    current_user: UserInfo, reseller_id: str, operation: str = "perform this operation"
-) -> None:
-    """
-    Require user to be admin or reseller owner.
-
-    Used for create/update operations on templates.
-
-    Args:
-        current_user: Current authenticated user
-        reseller_id: Reseller ID being modified
-        operation: Operation being performed (for error message)
-
-    Raises:
-        HTTPException: 403 if user lacks permission
-    """
-    # Admin has full access
-    if current_user.role == "admin":
-        return
-
-    # Reseller owners can manage their own templates
-    if reseller_id in current_user.reseller_ids or "*" in current_user.reseller_ids:
-        return
-
-    logger.warning(
-        f"User {current_user.username} (role: {current_user.role}) "
-        f"attempted to {operation} for unauthorized reseller: {reseller_id}"
-    )
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"Access denied to {operation} for reseller {reseller_id}",
-    )
 
 
 def apply_hierarchical_template_filters(
