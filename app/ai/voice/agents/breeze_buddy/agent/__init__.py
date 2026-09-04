@@ -124,6 +124,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
 from app.ai.voice.llm.realtime.gemini.realtime import has_realtime_llm
+from app.ai.voice.stt.turn_capability import stt_proposes_turn_boundaries
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
@@ -195,6 +196,9 @@ class Agent:
         )
         self.default_vad_params: Optional[VADParams] = None
         self.default_interruption_config: Optional[InterruptionConfig] = None
+        # Set from the built STT service in _setup_pipeline; read by node
+        # transitions so they rebuild the same stop strategy.
+        self.stt_proposes_turns: bool = False
 
         # User idle handling
         self._user_idle_callback_handler: Any = None
@@ -1421,6 +1425,10 @@ class Agent:
             kb_processor=self._kb_processor,
         )
         self._context_aggregator = context_aggregator
+
+        # Node transitions rebuild the turn strategies (template/interruption.py)
+        # and must reach the same stop-strategy decision build_pipeline did.
+        self.stt_proposes_turns = stt_proposes_turn_boundaries(stt)
 
         # Stream mode deliberately leaves self.context=None so end_conversation
         # falls back to the transcript collector (captures both user turns AND

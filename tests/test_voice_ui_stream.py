@@ -22,13 +22,21 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     LLMTextFrame,
 )
-from pipecat.tests.utils import run_test
+from pipecat.tests.utils import run_test as _pipecat_run_test
 
 from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
     VoiceUiStreamProcessor,
     coerce_ui_action_text,
 )
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import resolve_allowlist
+
+
+# pipecat 1.8's run_test defaults to start_timeout=1.0s, which the first test in
+# a module loses to cold start (imports + event loop warm-up) — whichever test
+# ran first failed with a TimeoutError. Give the pipeline room to start.
+async def run_test(*args, **kwargs):
+    kwargs.setdefault("start_timeout", 15.0)
+    return await _pipecat_run_test(*args, **kwargs)
 
 
 def _make(emit: AsyncMock, allowlist=None) -> VoiceUiStreamProcessor:

@@ -37,6 +37,7 @@ from pipecat.turns.user_start import (
 )
 from pipecat.turns.user_stop import (
     BaseUserTurnStopStrategy,
+    ExternalUserTurnStopStrategy,
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
@@ -64,6 +65,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.tts import get_tts_service, resolve_voice_config
 from app.ai.voice.llm.realtime import get_realtime_llm_service
+from app.ai.voice.stt.turn_capability import stt_proposes_turn_boundaries
 from app.core.config.static import (
     ENABLE_BREEZE_BUDDY_DAILY_EVENTS,
     ENABLE_BREEZE_BUDDY_TRACING,
@@ -441,13 +443,24 @@ async def build_pipeline(
             st.max_duration_secs,
             st.cpu_count,
         )
+    elif (
+        turn_detection_mode == TurnDetectionMode.STT_NATIVE
+        and stt_proposes_turn_boundaries(stt)
+    ):
+        # The STT decides turn ends itself and broadcasts a proposal for each
+        # one; this strategy waits for that proposal. Firing on transcript
+        # arrival instead would end the turn on the FIRST confirmed segment —
+        # "So" / "can you" / "am I audible" become three turns of one sentence.
+        stop_strategies = [ExternalUserTurnStopStrategy()]
+        logger.info(
+            f"Turn detection: {turn_detection_mode.value} "
+            "(external — STT proposes turn boundaries)"
+        )
     else:
-        # TIMEOUT and STT_NATIVE are the same strategy — only the timeout differs.
-        # STT_NATIVE uses 0.0 (fires immediately on finalized transcript, e.g. Soniox <end> token).
+        # TIMEOUT, and STT_NATIVE on a service that proposes no turns.
         # TIMEOUT uses user_speech_timeout (waits after last transcript, resets on each new one).
-        # pipecat 1.1.0's SpeechTimeoutUserTurnStopStrategy handles the no-VAD
-        # multi-turn case natively (per-turn reset + independent wait flags), so
-        # no subclass/sentinel is needed.
+        # STT_NATIVE falls back to 0.0 — fires on a finalized transcript, which is
+        # correct only while that service finalizes once per turn.
         stop_strategies = [
             SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=user_speech_timeout)
         ]
