@@ -87,12 +87,14 @@ from app.database.accessor import (
     get_lead_by_id,
     get_template_by_id,
     is_number_blacklisted,
+    mask_phone,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
 )
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.services.redis import get_redis_service
+from app.utils.common import normalize_e164
 
 # ---------------------------------------------------------------------------
 # Greeting pre-warm
@@ -393,7 +395,17 @@ class Worker:
                 lock_released = await self._release(locked.id)
                 return
 
-            customer_phone = (locked.payload or {}).get("customer_mobile_number")
+            raw_customer_phone = (locked.payload or {}).get("customer_mobile_number")
+            customer_phone = normalize_e164(raw_customer_phone)
+            if not customer_phone:
+                logger.warning(
+                    f"Worker {self._uuid}: undialable customer_mobile_number "
+                    f"{mask_phone(str(raw_customer_phone or ''))} for lead "
+                    f"{locked.id}; marking INVALID_PHONE"
+                )
+                lock_released = await self._fail_and_release(locked.id, "INVALID_PHONE")
+                return
+
             if customer_phone and await is_number_blacklisted(
                 customer_phone, locked.reseller_id
             ):
@@ -461,7 +473,7 @@ class Worker:
             )
             if rate_limited_phone:
                 rate_ok, defer_seconds = await peek_outbound_rate_limit_and_alert(
-                    customer_phone=cast(str, customer_phone),
+                    customer_phone=customer_phone,
                     lead_id=str(locked.id),
                     reseller_id=locked.reseller_id,
                 )
@@ -527,8 +539,10 @@ class Worker:
                 number.provider, session, config.telephony_config
             )
 
-            customer_mobile = (locked.payload or {}).get("customer_mobile_number")
-            if not customer_mobile or not isinstance(customer_mobile, str):
+            customer_mobile = normalize_e164(
+                (locked.payload or {}).get("customer_mobile_number")
+            )
+            if not customer_mobile:
                 logger.error(
                     f"Worker {self._uuid}: invalid customer_mobile_number "
                     f"for lead {locked.id}"
@@ -551,7 +565,7 @@ class Worker:
             # re-pick this lead and burn through the next window of attempts.
             if rate_limited_phone:
                 rl_ok, rl_defer = await record_outbound_call_attempt(
-                    customer_phone=cast(str, customer_phone),
+                    customer_phone=customer_phone,
                     lead_id=str(locked.id),
                     reseller_id=locked.reseller_id,
                 )

@@ -106,7 +106,9 @@ def campaign_stats_query(campaign_ids: List[str]) -> Tuple[str, List[Any]]:
     honesty rule: a finished lead counts as picked unless its outcome is
     NO_ANSWER (BUSY etc. count as answered) — and never when it was ABORTed
     (a stopped campaign's leads finish with ABORT and zero attempts; counting
-    them as picked showed "Answered 1 / Dialed 0").
+    them as picked showed "Answered 1 / Dialed 0") or
+    INVALID_PHONE (the dispatcher refused to dial an undialable number, so
+    there was no call to answer).
 
     `dialed` = at least one call initiated. attempt_count alone is the WRONG
     predicate for this: the stored column is 0-based (it counts scheduled
@@ -130,7 +132,7 @@ def campaign_stats_query(campaign_ids: List[str]) -> Tuple[str, List[Any]]:
             COUNT(*) FILTER (
                 WHERE status = 'FINISHED'
                   AND outcome IS NOT NULL
-                  AND outcome NOT IN ('NO_ANSWER', 'ABORT')
+                  AND outcome NOT IN ('NO_ANSWER', 'ABORT', 'INVALID_PHONE')
             ) AS picked
         FROM lead_call_tracker
         WHERE campaign_id = ANY($1::UUID[])
