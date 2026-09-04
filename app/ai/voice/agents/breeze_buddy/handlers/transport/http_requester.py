@@ -196,11 +196,23 @@ class HttpRequestExecutor:
                             except ValueError:
                                 pass  # Invalid Content-Length, will check actual size below
 
-                        # Read response with size limit
-                        response_bytes = await response.content.read(
-                            HTTP_REQUEST_MAX_RESPONSE_BYTES + 1
-                        )
-                        if len(response_bytes) > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                        # Read response to EOF with a size limit. NB: a single
+                        # StreamReader.read(n) can return a PARTIAL body on
+                        # slow/chunked upstreams (observed: 3KB of a 20KB
+                        # long-poll response, truncating the JSON) — so
+                        # accumulate chunks until EOF.
+                        body_chunks = []
+                        bytes_read = 0
+                        while True:
+                            chunk = await response.content.read(65536)
+                            if not chunk:
+                                break
+                            bytes_read += len(chunk)
+                            if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                                break
+                            body_chunks.append(chunk)
+                        response_bytes = b"".join(body_chunks)
+                        if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
                             error_msg = (
                                 f"Response exceeded max size of "
                                 f"{HTTP_REQUEST_MAX_RESPONSE_BYTES} bytes"
@@ -482,11 +494,22 @@ class HttpRequestExecutor:
         except Exception as e:
             raise ValueError(f"Invalid URL format: {e}")
 
-        # Check 1: HTTPS only
+        # Check 1: HTTPS only. One dev-only carve-out: plain http to
+        # LOOPBACK hosts outside production, so local mock services
+        # (e.g. a stubbed payment endpoint on 127.0.0.1) are reachable
+        # without a TLS proxy. Production keeps the unconditional rule.
         if parsed.scheme != "https":
-            raise ValueError(
-                f"Only HTTPS URLs are allowed for security. Got scheme: {parsed.scheme}"
+            is_production = ENVIRONMENT.lower() in ("production", "prod")
+            loopback_hosts = ("localhost", "127.0.0.1", "::1")
+            is_local_http = (
+                parsed.scheme == "http"
+                and (parsed.hostname or "").lower() in loopback_hosts
             )
+            if is_production or not is_local_http:
+                raise ValueError(
+                    f"Only HTTPS URLs are allowed for security. "
+                    f"Got scheme: {parsed.scheme}"
+                )
 
         # Check 2: Must have hostname
         if not parsed.hostname:
@@ -508,11 +531,16 @@ class HttpRequestExecutor:
         try:
             ip = ipaddress.ip_address(hostname)
 
-            # Block loopback (127.0.0.0/8, ::1)
+            # Block loopback (127.0.0.0/8, ::1) — outside production a
+            # loopback target is allowed (mirrors Check 1's dev-only
+            # carve-out for local mock services; Check 3 already scopes
+            # the localhost-name form the same way).
             if ip.is_loopback:
-                raise ValueError(
-                    f"Requests to loopback addresses are not allowed: {ip}"
-                )
+                if is_production:
+                    raise ValueError(
+                        f"Requests to loopback addresses are not allowed: {ip}"
+                    )
+                return
 
             # Block private IPs (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
             if ip.is_private:

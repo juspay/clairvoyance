@@ -71,6 +71,7 @@ from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
 )
 from app.ai.voice.agents.breeze_buddy.chat.ui.binding import resolve_show_op
 from app.ai.voice.agents.breeze_buddy.chat.ui.stream import (
+    OpResult,
     summarize_ui_ops,
     ui_op_dropped_event,
     ui_op_event,
@@ -330,7 +331,10 @@ def _structural_errors(exc: ValidationError) -> List[Dict[str, Any]]:
 
 
 def parse_ui_intent(
-    raw: Dict[str, Any], *, enabled_flavors: Optional[Set[str]] = None
+    raw: Dict[str, Any],
+    *,
+    enabled_flavors: Optional[Set[str]] = None,
+    extra_policies: Optional[Dict[str, IntentPolicy]] = None,
 ) -> ParsedIntent:
     """Validate one raw ``ui_intent`` body against the wire model + the
     per-intent payload schema. Raises :class:`IntentValidationError` (422
@@ -342,6 +346,11 @@ def parse_ui_intent(
     :func:`ensure_flavor_intents` on it first so an enabled flavor's
     intents are actually registered. ``None`` skips the flavor gate
     (trusted/internal callers only).
+
+    ``extra_policies`` — template-defined policies (see
+    ``template_intents.template_intent_policies``). Checked FIRST and
+    exempt from the flavor gate: they exist only for the one template that
+    configured them, which is a stricter scope than any flavor's.
     """
     try:
         wire = UiIntent.model_validate(raw)
@@ -349,6 +358,18 @@ def parse_ui_intent(
         raise IntentValidationError(
             "invalid_intent", "Malformed ui_intent body", _structural_errors(exc)
         ) from exc
+
+    template_policy = (extra_policies or {}).get(wire.intent)
+    if template_policy is not None:
+        try:
+            payload = template_policy.payload_model.model_validate(wire.payload)
+        except ValidationError as exc:
+            raise IntentValidationError(
+                "invalid_intent_payload",
+                f"Invalid payload for intent {wire.intent!r}",
+                _structural_errors(exc),
+            ) from exc
+        return ParsedIntent(intent=wire, policy=template_policy, payload=payload)
 
     policy = INTENT_POLICY.get(wire.intent)
     if policy is None:
@@ -665,12 +686,37 @@ async def run_direct_intent(
         ui_events: List[SSEEvent] = []
         if parsed.policy.show_op is not None:
             show_op = parsed.policy.show_op(final_tool, final_result, agent)
-            resolved = resolve_show_op(
-                show_op,
-                agent.binding_store,
-                agent.ui_allowlist,
-                agent.ui_flavor_groups,
+            # CHAMELEON: a template intent may target a REGISTRY custom
+            # component. Gated on the template's own opt-in list, so no DB
+            # fetch (and no behaviour change) for every flavor intent.
+            component = show_op.get("component")
+            ui_cat = (
+                template.configurations.ui_catalog if template.configurations else None
             )
+            custom_names = set(getattr(ui_cat, "custom_components", None) or [])
+            if isinstance(component, str) and component in custom_names:
+                from app.ai.voice.agents.breeze_buddy.chat.custom_components import (
+                    resolve_custom_components,
+                )
+                from app.ai.voice.agents.breeze_buddy.chat.ui.custom_defs import (
+                    resolve_custom_show_op,
+                )
+
+                custom_defs = await resolve_custom_components(template)
+                def_ = custom_defs.get(component)
+                if def_ is not None:
+                    resolved = resolve_custom_show_op(
+                        show_op, agent.binding_store, def_
+                    )
+                else:
+                    resolved = OpResult(error=f"custom_def_missing:{component}")
+            else:
+                resolved = resolve_show_op(
+                    show_op,
+                    agent.binding_store,
+                    agent.ui_allowlist,
+                    agent.ui_flavor_groups,
+                )
             if resolved.op is not None:
                 hydrated_ops.append(resolved.op)
                 ui_events.append(ui_op_event(resolved.op))

@@ -1247,6 +1247,64 @@ class McpConfig(BaseModel):
     )
 
 
+class CustomComponentFlags(BaseModel):
+    """Engine-read behavior flags of one registry component (the ``flags``
+    JSONB of a ``ui_component`` row, migration 057).
+
+    v1 keeps the surface deliberately small: custom components are
+    data-bound render_ui components only — no literal fields (the engine's
+    fail-closed gate would drop them anyway), no DIRECT intents.
+    """
+
+    data_bound: bool = Field(
+        True,
+        description="Must be true in v1 — custom components hydrate from "
+        "this turn's tool results, never from model-authored values.",
+    )
+    selection_field: Optional[str] = Field(
+        None,
+        description="Prop name that carries the model's items[] selection "
+        "(id-matching over bound list entries), e.g. 'journeys'.",
+    )
+    list_props: List[str] = Field(
+        default_factory=list,
+        description="Props that hydrate as lists (selection + caps apply; "
+        "a single bound object lifts to a one-element list).",
+    )
+    max_items_default: Optional[int] = Field(
+        None,
+        description="Default cap on bound list length when the op "
+        "carries no max_items.",
+    )
+    max_items_limit: Optional[int] = Field(
+        None,
+        description="Hard ceiling on bound list length regardless of "
+        "the op's max_items.",
+    )
+    overlay_only: bool = Field(
+        False,
+        description=(
+            "True = the component is a CLIENT-side render target only "
+            "(opened by another component's open_detail action in the "
+            "widget's detail overlay). It ships to the widget with the "
+            "session surface but is EXCLUDED from the model's render_ui "
+            "vocabulary — the model can never paint it in-thread."
+        ),
+    )
+
+
+class CustomComponentDef(BaseModel):
+    """One resolved registry component as the session overlay carries it
+    (decoded off a ``ui_component`` row; immutable per version)."""
+
+    name: str
+    version: int = 1
+    props_schema: Dict[str, Any]
+    flags: CustomComponentFlags = Field(default_factory=CustomComponentFlags)
+    render_def: Optional[Dict[str, Any]] = None
+    prompt_hint: Optional[str] = None
+
+
 class UiCatalogConfig(BaseModel):
     """Per-template selection of which generative-UI primitives the LLM
     may emit and the widget will render.
@@ -1302,6 +1360,17 @@ class UiCatalogConfig(BaseModel):
             "Explicit overrides to remove from the resolved set, e.g. "
             "disable 'Table' on a voice-first template even though it's "
             "in the 'core' group."
+        ),
+    )
+    custom_components: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Registry (ui_component, migration 057) component names this "
+            "template opts into, e.g. ['JourneyOptions']. Resolved at turn "
+            "start into a session-scoped overlay: the names join the "
+            "render_ui enum and hydrate via their JSON-Schema defs. "
+            "catalog-v2 render_ui sessions only — pruned everywhere else. "
+            "Unknown/inactive names are skipped with a warning."
         ),
     )
 
@@ -1410,6 +1479,106 @@ class UiIntentsConfig(BaseModel):
         "storefront /cart page) instead of the cart tool's checkout-bound "
         "continue_url; unset keeps continue_url.",
     )
+    custom: List["CustomUiIntent"] = Field(
+        default_factory=list,
+        description=(
+            "Template-DEFINED direct intents (CHAMELEON): each entry runs "
+            "the named template tools with NO LLM call and hydrates a "
+            "registry custom component bound to their results — the "
+            "config-authored counterpart of a flavor's compiled-in "
+            "IntentPolicy. Names share the global intent namespace on the "
+            "wire; a name that collides with a flavor intent shadows it "
+            "for this template only."
+        ),
+    )
+
+
+class CustomUiIntentStep(BaseModel):
+    """One tool dispatch inside a :class:`CustomUiIntent` — the tool must
+    exist on this template's function surface; args flow through the same
+    ``inject_tool_args`` pipeline an LLM call would use."""
+
+    tool: str = Field(..., min_length=1, max_length=128)
+    args: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Literal args merged under any payload-sourced ones.",
+    )
+    args_from_payload: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Tool arg name → dot-path into the intent payload. A missing "
+            "payload key fails the intent closed (typed intent_failed) — "
+            "never a tool call with a hole in its args."
+        ),
+    )
+
+
+class UiIntentEnrichRule(BaseModel):
+    """Cross-tool list marking, applied after a custom intent's steps
+    succeed: find the element of ``list_ref`` whose ``match_field`` equals
+    the scalar at ``equals_ref`` and merge ``set`` onto it (``else_set``
+    onto every other element). The generic answer to "mark the SELECTED
+    option" when one tool returns the options and another names the
+    current choice — per-tool response transforms can't see across tools.
+    Fail-open: unresolvable refs / non-list targets leave data untouched.
+    """
+
+    list_ref: str = Field(
+        ..., description="'$tool:<tool>#/<ptr>' bind ref to a LIST result."
+    )
+    match_field: str = Field(..., min_length=1)
+    equals_ref: str = Field(
+        ..., description="'$tool:<tool>#/<ptr>' bind ref to the scalar to match."
+    )
+    set: Dict[str, Any] = Field(
+        default_factory=dict, description="Merged onto the matching element(s)."
+    )
+    else_set: Dict[str, Any] = Field(
+        default_factory=dict, description="Merged onto non-matching elements."
+    )
+
+
+class CustomUiIntent(BaseModel):
+    """One template-defined DIRECT ui_intent (see ``UiIntentsConfig.custom``).
+
+    ``steps`` run in order through the persisted-tool pipeline; the LAST
+    step's success gates the show op. ``bind`` refs may point at ANY step's
+    result (``"<tool>#/<pointer>"`` — same grammar as render_ui binds).
+    """
+
+    name: str = Field(..., min_length=1, max_length=64)
+    steps: List[CustomUiIntentStep] = Field(..., min_length=1, max_length=4)
+    enrich: List[UiIntentEnrichRule] = Field(
+        default_factory=list,
+        description=(
+            "Cross-tool list-marking rules applied after the steps succeed "
+            "and before the component hydrates (e.g. stamp selected=true on "
+            "the tier whose quote_id the journey currently uses)."
+        ),
+    )
+    component: Optional[str] = Field(
+        None,
+        description=(
+            "Registry custom-component name to hydrate and stream after "
+            "the steps succeed (must be opted into via "
+            "ui_catalog.custom_components). None = tools only, no render."
+        ),
+    )
+    bind: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Component prop → '<tool>#/<pointer>' bind ref.",
+    )
+    props: Dict[str, Any] = Field(
+        default_factory=dict, description="Literal component props."
+    )
+    silent: bool = Field(
+        True,
+        description=(
+            "Silent intents leave no visible thread trace (detail-overlay "
+            "hydration); non-silent ones post the display bubble."
+        ),
+    )
+    display: Optional[str] = Field(None, max_length=200)
 
 
 class RenderUiConfig(BaseModel):
@@ -1999,6 +2168,16 @@ class ConfigurationModel(BaseModel):
             "agent-driven input is possible."
         ),
     )
+    response_reveal: Literal["stream", "complete"] = Field(
+        "stream",
+        description=(
+            "How the widget reveals assistant prose. 'stream' (default) = "
+            "paced typewriter as tokens arrive. 'complete' = a typing "
+            "indicator while the reply is in flight, then the full message "
+            "at once (Messenger style). Presentation-only: the SSE "
+            "transport streams either way."
+        ),
+    )
     ivr_configuration: Optional[IvrConfig] = None  # IVR-specific configuration
     # DEPRECATED: Use ivr_configuration.greeting / ivr_configuration.goodbye / ivr_configuration.priority
     ivr_greeting: Optional[str] = None
@@ -2207,11 +2386,17 @@ class FieldSource(str, Enum):
     - STATIC: Value is a literal or contains {template_var} placeholders
     - LLM: Value comes from LLM function arguments
     - COMPUTED: Value is dynamically computed at invocation time (e.g., timestamps)
+    - TOOL_RESULT: Value binds to a field of a PRIOR tool result from the
+      same turn ("<tool_name>#/<json-pointer>") — databinding for tool
+      args: identifiers hop server-side instead of being retyped by the
+      LLM (which mistranscribes UUIDs). Chat sessions only (needs the
+      turn's binding store); resolves to None elsewhere.
     """
 
     STATIC = "static"
     LLM = "llm"
     COMPUTED = "computed"
+    TOOL_RESULT = "tool_result"
 
 
 class HttpMethod(str, Enum):
@@ -2306,6 +2491,30 @@ class HttpAuthConfig(BaseModel):
         return "**********"
 
 
+class RetryUntilConfig(BaseModel):
+    """Content-conditional re-request for poll-until-ready endpoints.
+
+    Some APIs answer 2xx immediately with "not finished yet" (async
+    planners, order-status, report generation). This re-issues the SAME
+    request until a field in the parsed JSON body reaches the ready
+    value — bounded, config-driven, and invisible to the LLM, which only
+    ever sees the final response. Applies to non-SSE 2xx JSON responses;
+    transport errors keep the executor's own retry logic.
+    """
+
+    field: str = Field(
+        ...,
+        description="Dotted path into the parsed JSON body, e.g. 'allJourneysLoaded'.",
+    )
+    equals: Any = Field(
+        True, description="Value at `field` that means ready (default true)."
+    )
+    max_attempts: int = Field(
+        3, ge=2, le=5, description="TOTAL attempts including the first."
+    )
+    delay_ms: int = Field(1200, ge=100, le=10000, description="Pause between attempts.")
+
+
 class HttpRequestConfig(BaseModel):
     """Complete HTTP request configuration for hooks and global functions.
 
@@ -2328,6 +2537,7 @@ class HttpRequestConfig(BaseModel):
     auth: Optional[HttpAuthConfig] = None
     timeout: int = 10
     max_retries: int = 3
+    retry_until: Optional[RetryUntilConfig] = None
 
 
 class FieldConfig(BaseModel):

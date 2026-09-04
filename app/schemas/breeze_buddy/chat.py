@@ -542,6 +542,14 @@ class WidgetSurfaceWire(BaseModel):
     enable_text_input: bool = Field(
         True, description="False hides the composer (pills/tiles only)."
     )
+    response_reveal: str = Field(
+        "stream",
+        description=(
+            "'stream' (default) = typewriter reveal as tokens arrive; "
+            "'complete' = typing indicator until the reply finalizes, then "
+            "the full message at once. Presentation-only — SSE still streams."
+        ),
+    )
     voice_enabled: bool = Field(
         False,
         description=(
@@ -561,6 +569,15 @@ class WidgetSurfaceWire(BaseModel):
         description=(
             "Lazy UI flavor groups the template enables — preload these "
             "code-split chunks. Empty when catalog_active is 'v1'."
+        ),
+    )
+    custom_components: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "CHAMELEON registry components this session may render: "
+            "[{name, version, render_def}] — render_def-bearing defs only "
+            "(backend-only defs never ship). The widget's declarative "
+            "interpreter renders these; empty when catalog_active is 'v1'."
         ),
     )
 
