@@ -27,6 +27,13 @@ Where each action lands:
          (gate-mechanics §1: the dispatcher gate-checks at the last
          responsible moment). dedupe_key = run:node, so a lease retry is
          absorbed by the manifest's unique (canon T16 col 23).
+  action — synchronous, no dispatch machine: signs and POSTs the run's
+         Shopify order action(s) — a tag, a note, or both — straight to
+         the merchant's own webhook (send_webhook_with_retry, the same
+         signer a call's outcome report uses), so nautilus can apply them
+         to the order. Unlike call, there is no
+         deferred reporter — a failed POST parks the node and the lease
+         retry re-sends it; nautilus's tag-insert is idempotent.
 """
 
 from dataclasses import dataclass
@@ -34,7 +41,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from uuid import NAMESPACE_URL, uuid5
 
+from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.logger import logger
+from app.core.transport.http_client import create_aiohttp_session
 from app.crm.connectivity.contracts import queue_message
 from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
@@ -98,7 +107,10 @@ def without_reply(context: Dict[str, Any], node_id: str) -> Dict[str, Any]:
 
 
 # Facts the lead machine consumes itself, not the template: kept in the
-# call payload, dropped from send variables.
+# call payload, dropped from send variables. The one naming convention
+# for "a webhook URL passed at runtime" in this codebase — action_webhook_url
+# below reads the same key for an action node's webhook target, never a
+# second name for the same idea.
 _LEAD_ONLY_KEYS = ("reporting_webhook_url",)
 
 # The merchant's own id for the thing this call is about. Buddy's reporter
@@ -106,6 +118,21 @@ _LEAD_ONLY_KEYS = ("reporting_webhook_url",)
 # webhook — nautilus matches it to the Shopify order, so it must be THEIR
 # id, not ours. The run id is the fallback for a plan with no order.
 _REQUEST_ID_KEYS = ("order_id", "request_id")
+
+# The merchant's Shopify order id, as the producer's entry payload names
+# it. Kept separate from _REQUEST_ID_KEYS/lead_request_id, which already
+# backs the call node's own outcome-webhook orderId in production and
+# must not change behaviour for it.
+#
+# "id" is last and is the SHOPIFY-SHAPED fallback: an orders/create body
+# relayed unopened carries the order id at the top level as `id` and
+# names no `order_id` at all, so a run entered from that door would park
+# at its action node with "no Shopify order id in run context" despite
+# the id sitting right there in its context. Ordered, so a producer that
+# does send an explicit order_id still wins — `id` is the most generic
+# word a payload can use, and it is only trusted once nothing better is
+# present.
+_SHOPIFY_ORDER_ID_KEYS = ("order_id", "id")
 
 Validate = Callable[[WorkflowNode, WorkflowDefinition], List[str]]
 Execute = Callable[
@@ -182,6 +209,12 @@ def _validate_wait_event(
             f"{TOPIC_KEY} (branch on the event's topic)"
         )
     return problems
+
+
+def _validate_action(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
+    if not node.add_shopify_tag and not node.add_shopify_note:
+        return [f"action node {node.id} needs add_shopify_tag or add_shopify_note"]
+    return []
 
 
 # --- execute: what the walker does when the token lands ---
@@ -296,6 +329,47 @@ async def execute_send(
     return {f"message_{node.id}": message_id}
 
 
+async def execute_action(
+    run: EnrollmentRun, node: WorkflowNode, definition: WorkflowDefinition
+) -> Dict[str, Any]:
+    """Synchronous, no dispatch machine: sign and POST the run's Shopify
+    order action(s) — a tag, a note, or both — straight to the webhook
+    this run/node resolves to, so nautilus can apply them to the order.
+    A failed POST parks the node — the honest outcome, same as a call's
+    missing phone/template — and the lease retry re-sends it; nautilus's
+    order-action apply is idempotent."""
+    order_id = shopify_order_id(run.context)
+    if not order_id:
+        raise NodeParked(f"action node {node.id}: no Shopify order id in run context")
+
+    webhook_url = action_webhook_url(run.context, node)
+    if not webhook_url:
+        raise NodeParked(
+            f"action node {node.id}: no webhook_url in context or on the node"
+        )
+
+    # run_facts first, the action's own keys after: a context fact must
+    # never shadow what this node itself is asserting (execute_call's own
+    # precedent — payload = run_facts(...) then payload["..."] = ...).
+    payload: Dict[str, Any] = {
+        **run_facts(run.context, node),
+        "type": "order_action",
+        "merchant_id": run.merchant_id,
+        "shopify_order_id": order_id,
+        "add_shopify_tag": node.add_shopify_tag,
+        "add_shopify_note": node.add_shopify_note,
+        "run_id": str(run.id),
+        "node_id": node.id,
+    }
+    async with create_aiohttp_session() as session:
+        ok = await send_webhook_with_retry(session, webhook_url, payload)
+    if not ok:
+        raise NodeParked(
+            f"action node {node.id}: webhook to nautilus failed after retries"
+        )
+    return {}
+
+
 # --- the small pure helpers the actions share ---
 
 
@@ -307,6 +381,26 @@ def lead_request_id(context: Dict[str, Any], run_id: str) -> str:
         if value not in (None, ""):
             return str(value)
     return f"wf-{run_id}"
+
+
+def shopify_order_id(context: Dict[str, Any]) -> Optional[str]:
+    """PURE: the Shopify numeric order id from the run's facts, or None
+    when this run's plan never captured one."""
+    for key in _SHOPIFY_ORDER_ID_KEYS:
+        value = context.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def action_webhook_url(context: Dict[str, Any], node: WorkflowNode) -> Optional[str]:
+    """PURE: where an action node POSTs — the run's context first (an
+    entry payload's own reporting_webhook_url overriding this run), else
+    the node's own configured value from the editor."""
+    value = context.get(_LEAD_ONLY_KEYS[0])
+    if value:
+        return str(value)
+    return node.webhook_url
 
 
 def run_facts(
@@ -375,4 +469,7 @@ NODE_TYPES: Dict[str, NodeSpec] = {
     "send": NodeSpec(validate=_validate_send, execute=execute_send, is_wait=False),
     "call": NodeSpec(validate=_validate_call, execute=execute_call, is_wait=False),
     "wait_event": NodeSpec(validate=_validate_wait_event, execute=None, is_wait=True),
+    "action": NodeSpec(
+        validate=_validate_action, execute=execute_action, is_wait=False
+    ),
 }

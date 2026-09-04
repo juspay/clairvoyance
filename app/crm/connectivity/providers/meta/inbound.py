@@ -208,6 +208,39 @@ def _narrowed(value: Dict[str, Any], key: str, item: Dict[str, Any]) -> Dict[str
     return narrowed
 
 
+def _button_reply(message: Dict[str, Any]) -> Optional[str]:
+    """A button tap's payload -- flattened onto the letter as `reply` so a
+    workflow's wait_event node can branch on it via its own `key` (a flat
+    `.get()`, entry.py::_answer_for) without ever hardcoding a merchant's
+    button string here. Covers a template quick-reply (`button.payload`)
+    and a genuine Interactive tap (`button_reply`/`list_reply` `.id`).
+    Free-text replies are out of scope for now -- these templates ship
+    buttons only -- so a text message yields no `reply`."""
+    kind = message.get("type")
+    if kind == "button":
+        button = message.get("button")
+        return button.get("payload") if isinstance(button, dict) else None
+    if kind == "interactive":
+        interactive = message.get("interactive")
+        if not isinstance(interactive, dict):
+            return None
+        chosen = interactive.get("button_reply") or interactive.get("list_reply")
+        return chosen.get("id") if isinstance(chosen, dict) else None
+    return None
+
+
+def _reply_flattened(
+    narrowed: Dict[str, Any], message: Dict[str, Any]
+) -> Dict[str, Any]:
+    """`narrowed` plus a flat top-level `reply`, when this message names
+    one -- the nested shape (`messages[0].button.payload` etc.) stays
+    exactly as `_narrowed` produced it."""
+    reply = _button_reply(message)
+    if reply is not None:
+        narrowed["reply"] = reply
+    return narrowed
+
+
 def _message_letters(words: _Words, value: Dict[str, Any]) -> List[ProviderLetter]:
     """One "messages" value -> a letter per status and per inbound message.
 
@@ -266,7 +299,9 @@ def _message_letters(words: _Words, value: Dict[str, Any]) -> List[ProviderLette
                     connector_key=words.connector_key,
                     topic=TOPIC_INBOUND,
                     external_id=str(message_id),
-                    payload=_narrowed(value, "messages", message),
+                    payload=_reply_flattened(
+                        _narrowed(value, "messages", message), message
+                    ),
                     occurred_at=_provider_timestamp(message.get("timestamp")),
                     schema_version=META_WHATSAPP_GRAPH_VERSION,
                 )

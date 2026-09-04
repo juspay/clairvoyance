@@ -29,4 +29,10 @@ def test_is_wait_answers_for_every_word() -> None:
         word: is_wait(WorkflowNode(id="n", type=word))  # type: ignore[arg-type]
         for word in NODE_TYPES
     }
-    assert answers == {"wait": True, "wait_event": True, "send": False, "call": False}
+    assert answers == {
+        "wait": True,
+        "wait_event": True,
+        "send": False,
+        "call": False,
+        "action": False,
+    }

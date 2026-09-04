@@ -333,9 +333,9 @@ def test_an_unusable_timestamp_never_raises() -> None:
 
 
 def test_a_button_tap_survives_the_narrowing_intact() -> None:
-    # The workflow's Yes/No branching (#1047's derived `reply` field) reads
-    # messages[0].button.payload and messages[0].context.id — pin that the
-    # narrowed letter still carries both exactly as Meta sent them.
+    # A workflow's Yes/No branching reads the derived `reply` field
+    # (below) — pin that the nested shape underneath it still carries
+    # both exactly as Meta sent them.
     """A button tap survives the narrowing intact."""
     tap = _message(
         type="button",
@@ -346,3 +346,46 @@ def test_a_button_tap_survives_the_narrowing_intact() -> None:
     message = out[0].payload["messages"][0]
     assert message["button"] == {"payload": "YES", "text": "Yes"}
     assert message["context"]["id"] == "wamid.OUT1"
+
+
+def test_a_button_tap_flattens_onto_reply() -> None:
+    """A template quick-reply's payload rides as a flat top-level `reply`,
+    so a wait_event node's `key` can branch on it directly."""
+    tap = _message(
+        type="button", button={"payload": "CONFIRM_ORDER", "text": "Confirm"}
+    )
+    out = inbound.letters(_body(("messages", _value(messages=[tap]))))
+    assert out[0].payload["reply"] == "CONFIRM_ORDER"
+
+
+def test_an_interactive_button_reply_flattens_onto_reply() -> None:
+    """A genuine Interactive button tap flattens the same way."""
+    tap = _message(
+        type="interactive",
+        interactive={
+            "type": "button_reply",
+            "button_reply": {"id": "CANCEL_ORDER", "title": "Cancel"},
+        },
+    )
+    out = inbound.letters(_body(("messages", _value(messages=[tap]))))
+    assert out[0].payload["reply"] == "CANCEL_ORDER"
+
+
+def test_an_interactive_list_reply_flattens_onto_reply() -> None:
+    """A list-message reply flattens the same way, via list_reply.id."""
+    tap = _message(
+        type="interactive",
+        interactive={
+            "type": "list_reply",
+            "list_reply": {"id": "OPTION_B", "title": "Option B"},
+        },
+    )
+    out = inbound.letters(_body(("messages", _value(messages=[tap]))))
+    assert out[0].payload["reply"] == "OPTION_B"
+
+
+def test_a_text_message_carries_no_reply() -> None:
+    """Free-text replies are out of scope for now — a plain text message
+    yields no `reply` at all, same as before this field existed."""
+    out = inbound.letters(_body(("messages", _value(messages=[_message()]))))
+    assert "reply" not in out[0].payload

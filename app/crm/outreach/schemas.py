@@ -124,21 +124,36 @@ class WorkflowNode(BaseModel):
     call (template_id, via buddy's lead machine — ADR 0010) ·
     wait_event (topics + key + minutes: waits for an event OR the timer,
     whichever first; the branch taken is the edge whose `on` equals the
-    event's payload[key], or "timeout"). key: "$topic" (rollout phase 15)
+    event's payload[key], or "timeout") · action (add_shopify_tag and/or
+    add_shopify_note — at least one — applied to the order this run is
+    about by nautilus, via a webhook fired the same way a call's outcome
+    is reported — see webhook_url below). key: "$topic" (rollout phase 15)
     branches on the event's TOPIC instead — the edge's `on` is the topic
     string — so a stage board reads "she went to KYC" from the letter's
-    name; $topic is the only $-word. An edge labelled "else" (phase 18)
-    takes any answer the square did not name — the alarm too, when there
-    is no "timeout" edge."""
+    name; $topic is
+    the only $-word. An edge labelled "else" (phase 18) takes any answer
+    the square did not name — the alarm too, when there is no "timeout"
+    edge."""
 
     id: str = Field(min_length=1)
-    type: Literal["wait", "send", "call", "wait_event"]
+    type: Literal["wait", "send", "call", "wait_event", "action"]
     minutes: Optional[float] = None
     channel: Optional[str] = None
     template: Optional[str] = None
     template_id: Optional[str] = None
     topics: List[str] = Field(default_factory=list)
     key: Optional[str] = None
+    # action: at least one of these two, both optional so a node can set
+    # just the tag, just the note, or both in one visit.
+    add_shopify_tag: List[str] = Field(default_factory=list)
+    add_shopify_note: Optional[str] = None
+    # action: where to POST the tag update. execute_action prefers the run's
+    # own context — reporting_webhook_url, the same key a call's lead
+    # payload already uses for this — and falls back to this node's own
+    # value when the context has none — never an env var, since the target
+    # is per-workflow, author-configured in the editor, not one fixed
+    # deployment-wide address.
+    webhook_url: Optional[str] = None
     # Phase 16: an optional stage label the square belongs to. It rides to
     # templates as current_stage ("you stopped at {current_stage}") — one
     # call template for a whole board. The stages ladder (phase 17) sets it
