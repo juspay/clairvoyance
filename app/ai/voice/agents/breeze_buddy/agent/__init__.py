@@ -43,6 +43,7 @@ from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     create_services,
     generate_conversation_id,
 )
+from app.ai.voice.agents.breeze_buddy.agent.prompt_prefill import spawn_prefill
 from app.ai.voice.agents.breeze_buddy.agent.transfer import apply_transfer
 from app.ai.voice.agents.breeze_buddy.agent.transport import (
     TRANSPORT_TYPE_DAILY,
@@ -1168,6 +1169,21 @@ class Agent:
                 initial_node_config.get("task_messages", [])
             )
             self._handoff_messages = []
+
+        # Turn-1 prompt-cache prefill (opt-in via llm_configurations).
+        # Fire-and-forget: the prefix is byte-final here (post greeting/KB/
+        # handoff injection) and the first inference hasn't happened yet, so
+        # for greeting-played calls the request rides the greeting playback.
+        # Reads flow_manager._global_functions (not a re-derivation) because
+        # the MCP merge only exists there — a dropped tool would mismatch the
+        # serialized prefix and guarantee a cache miss.
+        spawn_prefill(
+            llm_service=self.llm_service,
+            llm_config=getattr(self.configurations, "llm_configurations", None),
+            initial_node_config=initial_node_config,
+            global_functions=self.flow_manager._global_functions,
+            errors=self.errors,
+        )
 
         # Initialize node traversal tracking. Only reset on the first generation;
         # a transfer rebuild (generation >= 2) must PRESERVE prior generations'

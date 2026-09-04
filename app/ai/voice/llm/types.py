@@ -266,6 +266,21 @@ class LLMConfiguration(BaseModel):
         "(how long Pipecat waits for a function handler to return). "
         "Defaults to 10s if not set.",
     )
+    prefill_system_prompt: bool = Field(
+        False,
+        description="At voice call start, fire one cheap chat.completions "
+        "request (max_completion_tokens=16, non-streaming) carrying the exact "
+        "rendered system prefix + tools, to warm the provider's automatic "
+        "prompt cache before the first real inference. Only meaningful for "
+        "Azure/OpenAI text LLMs (those cache by exact token prefix, >=1024 "
+        "tokens) — silently inert elsewhere: ignored on realtime and on "
+        "providers without a chat.completions prefix cache (the runtime gate "
+        "logs a per-call skip). The win is turn-1 TTFT: turns 2+ already hit "
+        "the cache. Costs one extra full-price input billing per call — and "
+        "on newer Azure model families (GPT-5.6+) cache writes can be billed "
+        "separately from discounted reads. Most valuable when a greeting is "
+        "played (the prefill runs during greeting playback).",
+    )
 
     realtime: Optional[RealtimeConfig] = Field(
         None,
