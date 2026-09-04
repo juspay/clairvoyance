@@ -46,6 +46,7 @@ __all__ = [
     "TemplateProviderError",
     "connector_for",
     "connector_for_channel",
+    "connector_for_source",
     "sending_connectors",
 ]
 
@@ -56,6 +57,19 @@ class ConnectorSpec:
 
     #: The registry key this spec is filed under.
     key: str
+
+    #: The SPINE word for the letters this connector's provider files (T13
+    #: col 3, the extractor's key). Third of the three words ProviderLetter
+    #: already names, and here for the same reason it is named there: they
+    #: coincide for Meta ("whatsapp" three times) and diverge for the next
+    #: provider, whose face would say source "msg91", channel "sms".
+    #:
+    #: A filed letter keeps only its source — EventIn has no room for the
+    #: other two — so the spine consumer has nothing else to dispatch on.
+    #: Without this field it would have to ASSUME source == key, which is
+    #: the "two parallel answers" scar channels.py opens with; with it, the
+    #: day the two diverge is one line in this dict.
+    source: str
 
     #: The channel its bindings carry, or None for a connector that does not
     #: SEND. Canon T11's vocabulary is shopify · whatsapp · instagram ·
@@ -79,6 +93,7 @@ class ConnectorSpec:
 CONNECTORS: Dict[str, ConnectorSpec] = {
     "whatsapp": ConnectorSpec(
         key="whatsapp",
+        source="whatsapp",
         channel="whatsapp",
         onboarder=WhatsappOnboarder(),
         templates=WhatsappTemplates(),
@@ -124,5 +139,25 @@ def connector_for_channel(channel: str) -> Optional[ConnectorSpec]:
         return None
     for spec in CONNECTORS.values():
         if spec.channel == channel:
+            return spec
+    return None
+
+
+def connector_for_source(source: str) -> Optional[ConnectorSpec]:
+    """The spec whose provider files letters under ``source``, or None.
+
+    The spine consumer's lookup. A filed letter carries the source word and
+    nothing else of the three — record's letters have no room for a channel
+    or a connector key — so this is how a consumer finds the face that can
+    read the payload it is holding.
+
+    None rather than a raise, and the caller returns: a letter from a source
+    no connector claims is not this module's business, and the same bay
+    delivers products we do not serve yet.
+    """
+    if not source:
+        return None
+    for spec in CONNECTORS.values():
+        if spec.source == source:
             return spec
     return None

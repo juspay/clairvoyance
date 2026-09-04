@@ -25,7 +25,7 @@ from app.database.queries.breeze_buddy.credentials import (
     update_credential_query,
 )
 from app.schemas import Credential, CredentialType
-from app.services.encryption import encrypt_credential
+from app.services.encryption import CredentialEncryptionError, encrypt_credential
 
 
 class CredentialInUseError(Exception):
@@ -135,6 +135,15 @@ async def create_credential(
         logger.error(f"Failed to create credential '{name}'")
         return None
 
+    except CredentialEncryptionError as e:
+        # Its own branch so the failure is attributable: the caller reports
+        # "could not store the credential", and without this line the reason
+        # would be indistinguishable from a dead pool or a bad payload.
+        logger.error(
+            f"Refusing to create credential '{name}' — it would be stored "
+            f"unencrypted: {e}"
+        )
+        return None
     except Exception as e:
         logger.error(f"Error creating credential '{name}': {e}", exc_info=True)
         return None
@@ -288,6 +297,14 @@ async def update_credential(
         logger.error(f"Failed to update credential {credential_id}")
         return None
 
+    except CredentialEncryptionError as e:
+        # Same reason as create_credential: a rotation that cannot encrypt
+        # must be readable in the logs as exactly that.
+        logger.error(
+            f"Refusing to update credential {credential_id} — the new value "
+            f"would be stored unencrypted: {e}"
+        )
+        return None
     except ValueError:
         # Re-raise validation errors
         raise

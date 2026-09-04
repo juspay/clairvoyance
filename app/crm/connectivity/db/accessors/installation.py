@@ -8,12 +8,14 @@ from app.crm.connectivity.db.decoders.installation import (
     decode_installation_read,
 )
 from app.crm.connectivity.db.queries.installation import (
+    accounts_for_inbound_query,
     installation_by_account_query,
     installation_by_id_query,
     installation_for_inbound_query,
     installation_read_by_id_query,
     list_installations_query,
     revoke_installation_query,
+    stamp_last_event_at_query,
     update_installation_health_query,
     upsert_installation_query,
 )
@@ -111,6 +113,27 @@ async def get_installation_for_inbound(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_installation(row) if row is not None else None
+
+
+async def accounts_for_inbound(
+    merchant_id: str, connector_key: str
+) -> List[ConnectorInstallation]:
+    """Every account this merchant could have received a letter through on
+    ``connector_key`` — exactly one means a filed letter's account is known
+    rather than guessed."""
+    query, values = accounts_for_inbound_query(merchant_id, connector_key)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_installation(row) for row in rows]
+
+
+async def stamp_last_event_at(merchant_id: str, installation_id: str) -> None:
+    """The door's traffic heartbeat. Self-scoped: one statement, on the
+    inbound path, sharing a fate with nothing — a letter is filed whether or
+    not the bookkeeping beside it lands."""
+    query, values = stamp_last_event_at_query(merchant_id, installation_id)
+    async with crm_connection() as conn:
+        await conn.execute(query, *values)
 
 
 async def update_installation_health(

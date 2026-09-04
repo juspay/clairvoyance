@@ -14,7 +14,8 @@ From `context/reading-notes.md` §16.3 and `context/nits.md`.
 | N1 | Type-string matching in `entry.py`/`pick_next` → NodeSpec flags | Cosmetic |
 | N2 | Global (merchant NULL) templates allowed on call nodes — confirm intent | Needs a ruling |
 | N3 | Two definitions of "goal after entry" — phase 06 unifies on `entered_event_at`; verify | Verify after 06 |
-| N5/N6/N7 | Onboarding credential-before-atom; degraded doors cannot send; template webhook consumer (#1040 lands it) | Connectivity, other owners |
+| N5/N6 | Onboarding credential-before-atom; degraded doors cannot send | Connectivity, other owners |
+| ~~N7~~ | ~~Template webhook consumer~~ — **landed 4 Sep 2026.** #1040 landed the Meta ingress BAY only; the consumer that applies a filed `template.status` / `.category` / `.quality` letter to the registry is `connectivity/template_events.py`, registered in `worker_main`. It arrived with the `whatsapp` extractor it needs (record's pass quarantined every Meta letter as `no_handle` without one) and with `last_event_at` stamped by arriving traffic. | — |
 | N8–N17 | See `context/nits.md` | Hygiene |
 | P3 | Identity staple: loser's handles not present in the payload stay unreachable — check ADR 0021 intent | Identity module, needs a ruling |
 | P4 | `crm_workflow_enrollment.customer_id` has no composite FK to `crm_customer` | Migration; check canon T20 |

@@ -1,8 +1,13 @@
 """
 AES-256-GCM encryption for credential values at rest.
 
-Uses a symmetric key from the CREDENTIAL_ENCRYPTION_KEY env var.
-When the key is not set, credentials are stored as plain JSON (dev/local).
+Uses a symmetric key from the CREDENTIAL_ENCRYPTION_KEY env var. Without
+one, storing a credential RAISES — no fallback, no opt-out flag. A missing
+key is a misconfiguration, and the value being written is a live provider
+secret (a WhatsApp system-user token is full API access to a merchant's
+WABA), so a local database that needs one generates one. Reading is
+unchanged and stays tolerant: rows already stored with is_encrypted=false
+keep decoding.
 
 Key generation (run once, store in env):
     python -c "import os, base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
@@ -20,6 +25,15 @@ from app.core.logger import logger
 
 # AES-256-GCM nonce size (96 bits recommended by NIST)
 _NONCE_SIZE = 12
+
+
+class CredentialEncryptionError(RuntimeError):
+    """A secret was about to be written to the database in the clear.
+
+    Raised, never folded into a return value, because the two outcomes are
+    not comparable: one stores a token safely and the other publishes it to
+    everyone who can read the table. Callers translate it into their own
+    refusal — what they must not do is carry on."""
 
 
 def _get_key_bytes() -> Optional[bytes]:
@@ -97,19 +111,38 @@ def encrypt_credential(value_dict: dict) -> tuple[str, bool]:
     """
     Encrypt a credential value dictionary for storage.
 
-    Returns:
-        (stored_value, is_encrypted) tuple.
-        - If key is configured: (base64_ciphertext, True)
-        - If key is not configured: (json_string, False)
+    Returns (ciphertext, True), or raises CredentialEncryptionError when
+    there is no usable key.
+
+    The raise is the whole point of this function, and there is deliberately
+    no flag beside it. What arrives here is a provider's live secret — an
+    OAuth token, a system-user token, an API key — and the previous
+    behaviour was to write it as readable JSON whenever the key happened to
+    be unset, which is a state a deployment reaches by doing nothing at all.
+    Nothing downstream noticed: the row recorded is_encrypted=false, the API
+    masked the value on read, and the plaintext sat in the column
+    indefinitely.
+
+    A flag whose only job is to restore that is a flag someone sets in
+    production to unblock a deploy. Generating a key is one command, and the
+    refusal below prints it.
+
+    The bool is always True and stays in the return type because it is what
+    the row's ``is_encrypted`` column records — rows written before this
+    refusal existed carry False, and the read path still honours them.
     """
     json_str = json.dumps(value_dict)
     encrypted = encrypt_value(json_str)
 
-    if encrypted is not None:
-        return encrypted, True
-
-    # Fallback: store as plain JSON string
-    return json_str, False
+    if encrypted is None:
+        raise CredentialEncryptionError(
+            "CREDENTIAL_ENCRYPTION_KEY is not set, or is not a valid "
+            "base64-encoded 32-byte key, so this credential could only be "
+            "stored as readable JSON. Refusing. Generate one with: "
+            'python -c "import os,base64; '
+            'print(base64.urlsafe_b64encode(os.urandom(32)).decode())"'
+        )
+    return encrypted, True
 
 
 def decrypt_credential(stored_value: str, is_encrypted: bool) -> Optional[dict]:

@@ -181,6 +181,59 @@ def installation_for_inbound_query(
     return query, [connector_key, external_account_id, INSTALLATION_REVOKED]
 
 
+def accounts_for_inbound_query(
+    merchant_id: str, connector_key: str
+) -> Tuple[str, List[Any]]:
+    """Every provider account this merchant could have received a letter
+    through, on one connector.
+
+    The twin of installation_for_inbound_query above, asked from the other
+    end, and its ``status <> 'revoked'`` predicate is repeated here on
+    purpose rather than widened: that query is what turned an arriving
+    WABA into this merchant, so a filed letter provably came through one of
+    the rows this one returns. A different predicate would break that
+    correspondence, which is the whole reason the caller can trust a single
+    row to BE the letter's account.
+    """
+    query = f"""
+        SELECT {INSTALLATION_COLUMNS}
+          FROM {INSTALLATION_TABLE}
+         WHERE merchant_id = $1
+           AND connector_key = $2
+           AND status <> $3
+    """
+    return query, [merchant_id, connector_key, INSTALLATION_REVOKED]
+
+
+def stamp_last_event_at_query(
+    merchant_id: str, installation_id: str
+) -> Tuple[str, List[Any]]:
+    """The door's traffic heartbeat (canon T11 col 10): a letter arrived on
+    this account, just now.
+
+    OUR clock, not the provider's, and that is the point. The column exists
+    to catch the failure no probe can fake — the token is still valid, the
+    connection still looks healthy, and the webhook subscription silently
+    dropped — which is detected by the stamp CEASING to advance. A
+    provider's own timestamp would make the detector non-monotonic (their
+    letters arrive out of order and some carry a broken clock), and a
+    heartbeat that can move backwards is not a heartbeat.
+
+    Not filtered on status, deliberately. A REVOKED door still receiving
+    traffic is exactly the thing worth seeing: disconnect tells the provider
+    to stop as a best effort, so a revoked row whose heartbeat keeps
+    advancing means the provider was never told, or did not listen, and is
+    still delivering a departed merchant's events to us.
+    """
+    query = f"""
+        UPDATE {INSTALLATION_TABLE}
+           SET last_event_at = now()
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+    """
+    return query, [merchant_id, installation_id]
+
+
 def update_installation_health_query(
     merchant_id: str, installation_id: str, status: str, health_detail: str
 ) -> Tuple[str, List[Any]]:
