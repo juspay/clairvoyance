@@ -32,6 +32,11 @@ from app.schemas.breeze_buddy.assist_onboarding import (
 
 router = APIRouter()
 
+# A merchant may onboard themselves — that is the product. The two scope checks
+# on the route below already bind any caller to their own reseller and merchant,
+# so the role list is the whole gate: it keeps out `user`, and nothing else.
+_ONBOARDING_ROLES = [UserRole.ADMIN, UserRole.RESELLER, UserRole.MERCHANT]
+
 
 async def _sse_body(body: AssistOnboardingStreamRequest) -> AsyncIterator[str]:
     async for event in stream_assist_onboarding(body):
@@ -44,7 +49,7 @@ async def onboard_assist_stream(
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ) -> StreamingResponse:
     """Create or refresh one merchant's Assist template and widget."""
-    require_role(current_user, [UserRole.ADMIN, UserRole.RESELLER])
+    require_role(current_user, _ONBOARDING_ROLES)
     validate_reseller_access(current_user, reseller_id=body.reseller_id)
     validate_merchant_access(current_user, merchant_id=body.merchant_id)
 
