@@ -1,11 +1,13 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Optional
 
 import requests
 from fastapi import Response, WebSocket
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    OutboundCallContext,
+    OutboundCallPlacement,
     VoiceCallProvider,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.conference import (
@@ -63,7 +65,8 @@ class ExotelProvider(VoiceCallProvider):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        context: Optional[OutboundCallContext] = None,
+    ) -> Optional[OutboundCallPlacement]:
         """
         Initiate an outbound call via Exotel.
 
@@ -117,51 +120,53 @@ class ExotelProvider(VoiceCallProvider):
 
             if not resp.ok:
                 logger.error(f"Exotel API error: {resp.status_code} - {resp.text}")
-                return None
+                return OutboundCallPlacement.rejected(
+                    f"Exotel API error: {resp.status_code}",
+                    error_type="HttpError",
+                )
 
             # Check if response has content
             if not resp.text.strip():
                 logger.warning("Exotel API returned empty response")
-                return {
-                    "status": "success",
-                    "message": "Call initiated successfully",
-                    "response": "",
-                }
+                return OutboundCallPlacement.rejected(
+                    "Exotel API returned empty response"
+                )
 
             # Parse JSON response
             try:
                 response_json = resp.json()
                 sid = response_json.get("Call", {}).get("Sid")
                 if sid:
-                    return {"status": "call_initiated", "sid": sid}
+                    return OutboundCallPlacement.started(sid)
                 else:
                     logger.error("Could not find 'Sid' in Exotel API response")
-                    return {
-                        "status": "error",
-                        "message": "Could not find 'Sid' in response",
-                        "response": resp.text,
-                    }
+                    return OutboundCallPlacement.rejected(
+                        "Could not find 'Sid' in Exotel API response"
+                    )
             except json.JSONDecodeError as json_err:
                 logger.error(f"Failed to parse JSON response: {json_err}")
                 logger.error(f"Response content: {resp.text}")
-                return {
-                    "status": "error",
-                    "message": "Failed to parse JSON response",
-                    "response": resp.text,
-                }
+                return OutboundCallPlacement.rejected(
+                    "Failed to parse Exotel JSON response",
+                    error_type=type(json_err).__name__,
+                )
 
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection error when calling Exotel API: {e}")
-            return None
+            logger.opt(exception=e).error("Connection error when calling Exotel API")
+            return OutboundCallPlacement.rejected(
+                str(e), error_type=type(e).__name__, retryable=True
+            )
         except requests.exceptions.Timeout as e:
-            logger.error(f"Timeout error when calling Exotel API: {e}")
-            return None
+            logger.opt(exception=e).error("Timeout error when calling Exotel API")
+            return OutboundCallPlacement.unknown(str(e), error_type=type(e).__name__)
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request error when calling Exotel API: {e}")
-            return None
+            logger.opt(exception=e).error("Request error when calling Exotel API")
+            return OutboundCallPlacement.rejected(
+                str(e), error_type=type(e).__name__, retryable=True
+            )
         except Exception as e:
-            logger.error(f"Unexpected error when calling Exotel API: {e}")
-            return None
+            logger.opt(exception=e).error("Unexpected error when calling Exotel API")
+            return OutboundCallPlacement.rejected(str(e), error_type=type(e).__name__)
 
 
 async def exotel_dial_text(transfer_data: dict) -> Response:

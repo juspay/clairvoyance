@@ -95,7 +95,26 @@ async def clear_transfer_flag(call_sid: str) -> bool:
     """
     key = f"transfer:{call_sid}"
     redis_service = await get_redis_service()
-    return await redis_service.delete(key)
+    deleted = await redis_service.delete(key)
+    if deleted:
+        logger.info(f"[TRANSFER REDIS] Cleared flag for call {call_sid}")
+    return bool(deleted)
+
+
+async def clear_transfer_flag_safely(call_sid: str, reason: str) -> bool:
+    """Best-effort transfer-flag cleanup for failure/callback paths."""
+    try:
+        cleared = await clear_transfer_flag(call_sid)
+        if not cleared:
+            logger.info(
+                f"[TRANSFER REDIS] No flag to clear for call {call_sid} ({reason})"
+            )
+        return cleared
+    except Exception as exc:  # noqa: BLE001
+        logger.opt(exception=exc).warning(
+            f"[TRANSFER REDIS] Failed to clear flag for call {call_sid} " f"({reason})"
+        )
+        return False
 
 
 async def acquire_cleanup_lock(call_sid: str, ttl_seconds: int = 300) -> bool:

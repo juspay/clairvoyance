@@ -53,6 +53,7 @@ from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector impo
 )
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
+from app.core.logger.context import update_log_context
 from app.database.accessor import (
     append_metadata_field,
     create_lead_call_tracker,
@@ -70,6 +71,7 @@ from app.database.accessor.breeze_buddy.dispatch import (
 )
 from app.schemas import ExecutionMode, LeadCallStatus, UserInfo
 from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.utils.phone_number import normalize_phone_number
 
 from .rbac import validate_lead_read_access, validate_recording_access
 
@@ -280,11 +282,34 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 "template instead.",
             )
 
-        # Check if customer phone number is blacklisted
-        customer_mobile = req.payload.get("customer_mobile_number")
-        if customer_mobile and await is_number_blacklisted(
-            customer_mobile, req.reseller_id
-        ):
+        # The generic lead API has no country context, so outbound numbers must
+        # be internationally qualified. Canonicalize once before every
+        # downstream consumer (blacklist, schema validation, persistence,
+        # language selection and CRM mirroring).
+        phone_result = normalize_phone_number(req.payload.get("customer_mobile_number"))
+        if not phone_result.is_dialable:
+            update_log_context(
+                request_id=req.request_id,
+                phone_rejection_reason=phone_result.reason,
+            )
+            logger.warning("Rejected lead push: invalid customer_mobile_number")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid customer_mobile_number: {phone_result.reason}",
+            )
+
+        customer_mobile = str(phone_result.e164)
+        req = req.model_copy(
+            update={
+                "payload": {
+                    **req.payload,
+                    "customer_mobile_number": customer_mobile,
+                }
+            }
+        )
+
+        # Check if customer phone number is blacklisted.
+        if await is_number_blacklisted(customer_mobile, req.reseller_id):
             logger.warning(
                 f"Blacklisted number {customer_mobile} rejected for reseller {req.reseller_id}"
             )

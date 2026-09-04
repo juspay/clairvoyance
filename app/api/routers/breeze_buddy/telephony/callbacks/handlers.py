@@ -22,6 +22,9 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.callback_correlation import (
+    bind_outbound_call_identity,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.exotel import (
     exotel_dial_text,
 )
@@ -33,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
+    clear_transfer_flag_safely,
     get_transfer_flag,
 )
 from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
@@ -94,6 +98,14 @@ async def handle_call_transfer(
     elif action == "mpc-transfer":
         return await _handle_mpc_transfer_status(request)
     elif action in ("conclude", "conference-end"):
+        params = {**dict(request.query_params), **dict(await request.form())}
+        call_sid = (
+            params.get("CallSid")
+            or params.get("call_sid")
+            or params.get("customer_call_sid")
+        )
+        if call_sid:
+            await clear_transfer_flag_safely(str(call_sid), "transfer callback")
         return HTMLResponse(
             content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
             media_type="application/xml",
@@ -280,6 +292,21 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     elif provider.lower() == "plivo":
         call_sid = form.get("CallUUID")
         call_status = form.get("CallStatus")
+        correlation_params = {**dict(request.query_params), **dict(form)}
+        has_outbound_context = bool(
+            correlation_params.get("lead_id")
+            and correlation_params.get("telephony_number_id")
+        )
+        bound = await bind_outbound_call_identity(
+            provider=provider,
+            params=correlation_params,
+            call_id=str(call_sid) if call_sid else None,
+        )
+        if has_outbound_context and not bound:
+            logger.error(
+                f"Failed to bind outbound Plivo call identity for call_id={call_sid}"
+            )
+            return Response(status_code=409)
 
     # Post-connect half of the trace: the hangup/terminal webhook. Direction is
     # included because inbound orphan webhooks and outbound duplicate-call

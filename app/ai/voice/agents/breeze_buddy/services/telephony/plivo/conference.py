@@ -296,9 +296,9 @@ class PlivoConferenceService:
 
         except Exception as e:
             error_message = str(e)
-            logger.error(
-                f"[Transfer] Failed to transfer call "
-                f"{customer_call_sid}: {error_message}"
+            logger.opt(exception=e).warning(
+                f"[Transfer] Customer-leg transfer API failed "
+                f"for call {customer_call_sid}"
             )
 
             if (
@@ -360,10 +360,6 @@ class PlivoConferenceService:
             )
 
             if not transfer_result["success"]:
-                logger.error(
-                    f"[Transfer] Failed to transfer customer call: "
-                    f"{transfer_result['reason']}"
-                )
                 return {
                     **transfer_result,
                     "conference_id": conference_name,

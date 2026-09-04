@@ -37,11 +37,40 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
-from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
+    clear_transfer_flag_safely,
+    set_transfer_flag,
+)
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 from app.database.accessor import get_telephony_number_by_id
 from app.schemas import CallProvider
+
+
+async def _fail_transfer(
+    context: TemplateContext,
+    *,
+    reason: str,
+    message: str,
+    unmute: bool,
+    error: str | None = None,
+) -> Dict[str, Any]:
+    """Cleanup and return a standard failed transfer response."""
+    await clear_transfer_flag_safely(context.call_sid, f"transfer failed: {reason}")
+    if unmute:
+        try:
+            await unmute_stt(context, None)
+        except Exception as unmute_err:  # noqa: BLE001
+            logger.warning(f"Failed to unmute STT after transfer failure: {unmute_err}")
+
+    response = {
+        "status": "failed",
+        "reason": reason,
+        "message": message,
+    }
+    if error:
+        response["error"] = error
+    return response
 
 
 async def connect_to_live_agent(
@@ -255,12 +284,12 @@ async def _transfer_via_mpc(
             logger.warning(
                 f"[Transfer] MPC setup failed: {failure_reason}. AI continues."
             )
-            await unmute_stt(context, None)
-            return {
-                "status": "failed",
-                "reason": failure_reason,
-                "message": f"Transfer failed: {failure_reason}. Continuing with AI assistant.",
-            }
+            return await _fail_transfer(
+                context,
+                reason=failure_reason,
+                message=f"Transfer failed: {failure_reason}. Continuing with AI assistant.",
+                unmute=True,
+            )
 
         logger.info(
             f"[Transfer] MPC transfer initiated: conference={conference_result.get('conference_id')}"
@@ -276,12 +305,12 @@ async def _transfer_via_mpc(
                 await timeout_task
             except asyncio.CancelledError:
                 pass
-            await unmute_stt(context, None)
-            return {
-                "status": "failed",
-                "reason": "cancelled",
-                "message": "Transfer was cancelled. Continuing with AI assistant.",
-            }
+            return await _fail_transfer(
+                context,
+                reason="cancelled",
+                message="Transfer was cancelled. Continuing with AI assistant.",
+                unmute=True,
+            )
 
         # Cancel the timeout task if the webhook arrived first
         timeout_task.cancel()
@@ -353,25 +382,22 @@ async def _transfer_via_mpc(
         logger.warning(
             f"[Transfer] Agent unavailable for call {context.call_sid}. AI continues."
         )
-        await unmute_stt(context, None)
-        return {
-            "status": "failed",
-            "reason": "unavailable",
-            "message": "Transfer failed: agent did not answer. Continuing with AI assistant.",
-        }
+        return await _fail_transfer(
+            context,
+            reason="unavailable",
+            message="Transfer failed: agent did not answer. Continuing with AI assistant.",
+            unmute=True,
+        )
 
     except Exception as e:
-        logger.error(f"Transfer exception: {str(e)}", exc_info=True)
-        try:
-            await unmute_stt(context, None)
-        except Exception as unmute_err:
-            logger.warning(f"Failed to unmute STT after exception: {unmute_err}")
-        return {
-            "status": "failed",
-            "reason": "exception",
-            "message": "Transfer failed due to error. Continuing with AI assistant.",
-            "error": str(e),
-        }
+        logger.opt(exception=e).error("Transfer exception")
+        return await _fail_transfer(
+            context,
+            reason="exception",
+            message="Transfer failed due to error. Continuing with AI assistant.",
+            unmute=True,
+            error=str(e),
+        )
 
 
 async def _transfer_legacy(
@@ -483,17 +509,19 @@ async def _transfer_legacy(
 
         failure_reason = conference_result.get("reason", "unknown_error")
         logger.warning(f"Transfer failed: {failure_reason}. AI continues.")
-        return {
-            "status": "failed",
-            "reason": failure_reason,
-            "message": f"Transfer failed: {failure_reason}. Continuing with AI assistant.",
-        }
+        return await _fail_transfer(
+            context,
+            reason=failure_reason,
+            message=f"Transfer failed: {failure_reason}. Continuing with AI assistant.",
+            unmute=False,
+        )
 
     except Exception as e:
-        logger.error(f"Transfer exception: {str(e)}", exc_info=True)
-        return {
-            "status": "failed",
-            "reason": "exception",
-            "message": "Transfer failed due to error. Continuing with AI assistant.",
-            "error": str(e),
-        }
+        logger.opt(exception=e).error("Transfer exception")
+        return await _fail_transfer(
+            context,
+            reason="exception",
+            message="Transfer failed due to error. Continuing with AI assistant.",
+            unmute=False,
+            error=str(e),
+        )
