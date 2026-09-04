@@ -38,6 +38,11 @@ What is here, and why each thing is on the surface:
   spending a fresh signup code; onboarding subscribes on the happy path,
   this is the recovery door (disconnect's opposite verb, health re-stamped
   by its atom).
+- ``reason_label`` — the human word for a message row's stored reason,
+  pure. The row keeps the provider's code (canon T16 col 13); any surface
+  that SHOWS a row — the coming message read / "why didn't it send" view —
+  translates through this at read, so the stored evidence is never
+  rewritten.
 
 Provider-decided template state (approved, rejected, a re-categorisation)
 arrives as webhooks, and the consumer that applies them joins this surface
@@ -59,6 +64,7 @@ from app.crm.connectivity.onboarding import (
     resubscribe,
 )
 from app.crm.connectivity.queue import queue_message
+from app.crm.connectivity.reasons import reason_label
 from app.crm.connectivity.retire_guard import register_retire_guard
 from app.crm.connectivity.template_reads import (
     get as get_template,
@@ -97,6 +103,8 @@ __all__ = [
     "register_retire_guard",
     # webhook subscription recovery
     "resubscribe",
+    # the read-side word for a stored reason (the row keeps the code)
+    "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
 ]
