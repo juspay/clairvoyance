@@ -541,6 +541,34 @@ CRM_DISPATCH_RETRY_BASE_SECONDS = _positive_int("CRM_DISPATCH_RETRY_BASE_SECONDS
 # twice.
 CRM_MESSAGE_SEND_TIMEOUT_SECONDS = _positive_int("CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 20)
 
+# SKEW: how far AHEAD of a provider letter's own timestamp our stored clock
+# may sit and still let the letter apply. Two of OUR transitions stamp
+# status_updated_at with now() (recording a submission, recording an
+# in-place edit) while the provider stamps whole seconds at the moment it
+# DECIDED — and our commit lands a round trip later. A template Meta
+# approves inside that same second therefore produces a letter whose
+# timestamp is BEHIND our own stamp, and a bare comparison refuses it. The
+# edit face reports 'pending' unconditionally, so that refused letter was
+# the only source of truth: the row would sit pending forever, with the
+# letter marked processed and no sync left to heal it.
+#
+# Wider than any Graph round trip, far narrower than a redelivery — so a
+# letter seconds late still applies and one minutes late is still refused.
+# The cost is honest: two PROVIDER letters less than this apart can also
+# reorder, which the guard's docstring records.
+CRM_TEMPLATE_EVENT_SKEW_SECONDS = _positive_int("CRM_TEMPLATE_EVENT_SKEW_SECONDS", 10)
+
+# CLAIM: how long a submit claim must stand before the webhook consumer
+# treats it as CRASHED rather than in flight. 'submitting' with no provider
+# id is also every healthy submit for the width of one Graph call, and
+# resuming one of those stamps the id first, leaves record_submission's CAS
+# matching nothing, and reports a failure for a submission the provider
+# accepted. An order of magnitude past the Graph timeout, and far below the
+# point a human notices a stuck template.
+CRM_TEMPLATE_CLAIM_CRASHED_AFTER_SECONDS = _positive_int(
+    "CRM_TEMPLATE_CLAIM_CRASHED_AFTER_SECONDS", 300
+)
+
 # Meta WhatsApp Cloud API. Only the endpoint lives here — the access token and
 # the phone number id are per-merchant connector data, read from the vault at
 # send time. Pointing the base URL at a local stub is how the dispatcher is

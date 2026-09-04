@@ -106,7 +106,9 @@ def test_worker_main_registers_the_template_retire_guard() -> None:
     # contracts; the reverse arrow would close a cycle), so worker_main
     # hands outreach's count into connectivity's slot.
     import app.crm.worker_main  # noqa: F401  (registration is an import effect)
-    from app.crm.connectivity import retire_guard as connectivity_retire_guard
+    from app.crm.connectivity.templates import (
+        retire_guard as connectivity_retire_guard,
+    )
     from app.crm.outreach.contracts import template_references
 
     assert connectivity_retire_guard._retire_guard is template_references
@@ -142,9 +144,17 @@ def test_connectivity_imports_no_outreach() -> None:
     import ast
     import pathlib
 
-    import app.crm.connectivity.templates as connectivity_templates
+    # Anchored on the PACKAGE, never on a module inside it: this walk is a
+    # structural guard over all of connectivity, and anchoring it on a file
+    # makes its reach an accident of where that file happens to sit. It was
+    # `connectivity/templates.py` — parent, all of connectivity — until that
+    # file became `templates/__init__.py`, at which point the walk silently
+    # covered four files instead of fifty-two and an outreach import in
+    # send.py passed. Checker rule 4 permits `.contracts` imports, so
+    # nothing else catches that cycle.
+    import app.crm.connectivity as connectivity_package
 
-    package_dir = pathlib.Path(connectivity_templates.__file__).parent
+    package_dir = pathlib.Path(connectivity_package.__file__).parent
     offenders: List[str] = []
     for py in package_dir.rglob("*.py"):
         package = "app.crm.connectivity" + (

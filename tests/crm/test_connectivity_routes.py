@@ -20,7 +20,7 @@ from app.crm.connectivity.onboarding import (
     ResubscribeRefused,
     UnknownConnectorError,
 )
-from app.crm.connectivity.templates import (
+from app.crm.connectivity.templates.lifecycle import (
     TemplateError,
     TemplateInUseError,
     TemplateNotFoundError,

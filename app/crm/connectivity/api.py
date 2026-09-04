@@ -54,7 +54,7 @@ from app.crm.connectivity.schemas.template import (
     SubmitTemplateRequest,
     TemplateRead,
 )
-from app.crm.connectivity.templates import (
+from app.crm.connectivity.templates.lifecycle import (
     TemplateError,
     TemplateInUseError,
     TemplateNotFoundError,
