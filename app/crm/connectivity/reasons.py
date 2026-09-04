@@ -60,3 +60,63 @@ REASON_RECLAIMED_STALE_CLAIM = "reclaimed_stale_claim"
 REASON_PROVIDER_REJECTED = "provider_rejected"
 REASON_SUPPRESSED = "suppressed"
 REASON_GATE_UNAVAILABLE = "gate_unavailable"
+
+
+# --- what a provider's error code MEANS, for the row -------------------------
+#
+# Adapters classify on the provider's code and hand it up untouched — that is
+# their contract, and the code is what an engineer matches against the
+# provider's documentation, so it stays in the log line. But the row is read
+# by people who do not have that documentation open: a merchant on the
+# manifest, support grepping, an operator at 2am. "190" is a lookup task;
+# "token_expired" is the answer.
+#
+# So the code is translated once, at the moment it is written
+# (dispatch._dispatch_one), and only for codes we have named. Everything else
+# — every word above, and any code not in this table — passes through
+# unchanged, so nothing is ever lost or invented.
+PROVIDER_CODE_REASONS = {
+    # The connection is broken: every queued message for this merchant is
+    # about to fail the same way.
+    "10": "permission_denied",
+    "190": "token_expired",
+    "200": "permission_denied",
+    "131005": "access_denied",
+    "133010": "number_not_registered",
+    # This message was wrong; the connection is fine.
+    "100": "invalid_parameter",
+    "131008": "required_parameter_missing",
+    "131009": "parameter_value_invalid",
+    "131026": "recipient_cannot_receive_whatsapp",
+    "131030": "recipient_not_in_allowed_list",
+    "131047": "outside_24h_window",
+    "132000": "template_variable_count_mismatch",
+    "132001": "template_not_found",
+    "132005": "template_too_long",
+    "132007": "template_policy_violation",
+    "132012": "template_variable_format_invalid",
+    "132015": "template_paused",
+    "132016": "template_disabled",
+    # Pacing, not a verdict: these ride status=failed with a retry.
+    "4": "provider_rate_limited",
+    "613": "provider_rate_limited",
+    "80007": "account_rate_limited",
+    "131056": "pair_rate_limited",
+    "130429": "throughput_limit_reached",
+    "131048": "spam_rate_limit_reached",
+    "131049": "engagement_limit_reached",
+    "429": "provider_rate_limited",
+}
+
+
+def readable_reason(reason):
+    """The word a row should carry for this reason.
+
+    Total and lossless: a provider code we have named becomes its meaning, a
+    code we have not stays exactly as the adapter reported it (so a new code
+    is still greppable and still matches the provider's docs), and one of
+    this file's own words is already the answer and passes through.
+    """
+    if reason is None:
+        return None
+    return PROVIDER_CODE_REASONS.get(reason, reason)

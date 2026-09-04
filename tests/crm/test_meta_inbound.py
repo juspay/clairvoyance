@@ -121,6 +121,14 @@ def test_a_missing_or_misshapen_signature_is_refused(secrets, header) -> None:
     assert not inbound.verify_signature(b"{}", header)
 
 
+def test_a_non_ascii_signature_is_refused_not_a_crash(secrets) -> None:
+    """A non-ascii signature is refused, not a crash."""
+    # compare_digest over str raises TypeError on non-ASCII, and the header
+    # is attacker-controlled: one crafted byte was a remote 500 where the
+    # route owes a 403. Bytes make it just another wrong signature.
+    assert not inbound.verify_signature(b"{}", {"X-Hub-Signature-256": "sha256=café"})
+
+
 def test_without_a_configured_secret_everything_is_refused(monkeypatch) -> None:
     """Without a configured secret everything is refused."""
     monkeypatch.setattr(inbound, "META_APP_SECRET", "")
@@ -148,6 +156,19 @@ def test_the_handshake_echoes_the_challenge_for_our_token(secrets) -> None:
 )
 def test_the_handshake_refuses_anything_else(secrets, params) -> None:
     """The handshake refuses anything else."""
+    assert inbound.handshake_challenge(params) is None
+
+
+def test_a_non_ascii_token_is_a_wrong_token_not_a_crash(secrets) -> None:
+    """A non-ascii token is a wrong token, not a crash."""
+    # Same scar as the signature: the token arrives in a query string
+    # anyone can send, and a str compare_digest turned it into a 500
+    # where the route owes a 404.
+    params = {
+        "hub.mode": "subscribe",
+        "hub.verify_token": "tökén",
+        "hub.challenge": "9",
+    }
     assert inbound.handshake_challenge(params) is None
 
 

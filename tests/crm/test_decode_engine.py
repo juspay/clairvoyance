@@ -9,7 +9,7 @@ same letters, same answers, now read by declared paths.
 from typing import Any, Dict
 
 from app.crm.record import catalog
-from app.crm.record.extractors import EXTRACTORS, engine, shopify
+from app.crm.record.extractors import EXTRACTORS, SPEC_MODULES, engine, shopify
 from app.crm.record.extractors.engine import EMPTY_SPEC, DecodeSpec, spec_for_entry
 from app.crm.record.schemas import CatalogEntry, CatalogField
 
@@ -252,11 +252,12 @@ def test_shopify_is_a_spec_not_an_imperative_extractor() -> None:
 
 
 def test_every_catalog_derived_field_is_provided_by_its_spec_module() -> None:
+    modules = {module.SOURCE: module for module in SPEC_MODULES}
     for key, entry in catalog.CATALOG.items():
         declared = {f.path for f in entry.fields if f.derived}
         assert declared == set(catalog.DERIVE[key]), key
         for name in declared:
-            assert catalog.DERIVE[key][name] is shopify.DERIVERS[name]
+            assert catalog.DERIVE[key][name] is modules[key[0]].DERIVERS[name]
 
 
 def _spec_dict(spec: DecodeSpec) -> Dict[str, Any]:
