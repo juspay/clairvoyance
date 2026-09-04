@@ -77,6 +77,13 @@ class SonioxSTTConfig(BaseModel):
         None,
         description="Enable automatic language identification. Defaults to None.",
     )
+    max_endpoint_delay_ms: Optional[int] = Field(
+        None,
+        ge=500,
+        le=3000,
+        description="Soniox native endpoint detection delay (500-3000ms). "
+        "Overrides env default if set.",
+    )
 
 
 class DeepgramSTTConfig(BaseModel):
