@@ -34,7 +34,7 @@ would catch arrives as a webhook anyway.
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
-from app.crm.connectivity import accounts, retire_guard
+from app.crm.connectivity import accounts
 from app.crm.connectivity.connectors import (
     ConnectorSpec,
     ProviderError,
@@ -54,6 +54,7 @@ from app.crm.connectivity.status import (
     TEMPLATE_PENDING,
     TEMPLATE_REJECTED,
 )
+from app.crm.connectivity.templates import retire_guard
 
 
 class TemplateError(Exception):

@@ -14,6 +14,7 @@ from app.core.config.static import (
 )
 from app.crm.connectivity.contracts import (
     claim_sends,
+    consume_template_event,
     dispatch_send,
     register_retire_guard,
 )
@@ -32,6 +33,12 @@ from app.crm.shared.worker import run_drain_loop
 # import always runs subscriber -> record, never back (checker rule 12).
 # Segments and the transactional-send consumer (A13) each add one line here.
 register_consumer(consume_attributed_event)
+# The second subscriber, and the reason record's letters carry no filter:
+# connectivity's template consumer is only ever interested in MERCHANT-level
+# letters (a template review names no person), which the entry-rules
+# consumer above returns from at once. Registration order is execution
+# order; these two never look at the same letter.
+register_consumer(consume_template_event)
 # The same inversion for connectivity's template retire guard (phase 14):
 # connectivity may not import outreach, so this root hands outreach's
 # "who would still send this template" into connectivity's slot.

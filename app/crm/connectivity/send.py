@@ -35,7 +35,7 @@ from typing import Optional, Union
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
-from app.crm.connectivity import accounts, template_reads
+from app.crm.connectivity import accounts
 from app.crm.connectivity.channels import registers_templates_for
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
@@ -61,6 +61,7 @@ from app.crm.connectivity.schemas.message import (
     SendRoute,
     SendToken,
 )
+from app.crm.connectivity.templates import reads as template_reads
 from app.crm.shared.redact import mask_address
 
 # All REASON_* words live in reasons.py — one file, one name per failure

@@ -44,9 +44,13 @@ What is here, and why each thing is on the surface:
   translates through this at read, so the stored evidence is never
   rewritten.
 
-Provider-decided template state (approved, rejected, a re-categorisation)
-arrives as webhooks, and the consumer that applies them joins this surface
-with the ingress bay that receives them. There is deliberately no timer.
+- ``consume_template_event`` — the spine consumer that turns a provider's
+  template webhook into a registry row change (approved, rejected, paused,
+  deleted, a re-categorisation, a quality read). worker_main registers it
+  through record's consumer slot, the same inversion the retire guard and
+  the ingress bay use. It is the ONLY writer of provider-decided template
+  state, and there is deliberately no timer beside it: the periodic sync
+  was removed before it ever ran.
 
 ``send()`` stays OFF this surface so that nothing outside the module can
 reach a provider without passing the checks in front of it. So does the
@@ -65,18 +69,19 @@ from app.crm.connectivity.onboarding import (
 )
 from app.crm.connectivity.queue import queue_message
 from app.crm.connectivity.reasons import reason_label
-from app.crm.connectivity.retire_guard import register_retire_guard
-from app.crm.connectivity.template_reads import (
-    get as get_template,
-    list_templates,
-    template_status,
-)
-from app.crm.connectivity.templates import (
+from app.crm.connectivity.templates.events import consume_template_event
+from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
     edit as edit_template,
     retire as retire_template,
     submit as submit_template,
 )
+from app.crm.connectivity.templates.reads import (
+    get as get_template,
+    list_templates,
+    template_status,
+)
+from app.crm.connectivity.templates.retire_guard import register_retire_guard
 
 __all__ = [
     # the dispatcher role
@@ -101,6 +106,8 @@ __all__ = [
     "registers_templates_for",
     # the retire guard slot (worker_main fills)
     "register_retire_guard",
+    # the template webhook consumer (worker_main registers)
+    "consume_template_event",
     # webhook subscription recovery
     "resubscribe",
     # the read-side word for a stored reason (the row keeps the code)

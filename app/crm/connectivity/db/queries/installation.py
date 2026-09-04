@@ -181,6 +181,45 @@ def installation_for_inbound_query(
     return query, [connector_key, external_account_id, INSTALLATION_REVOKED]
 
 
+def connector_accounts_query(
+    merchant_id: str, connector_key: str
+) -> Tuple[str, List[Any]]:
+    """EVERY provider account this merchant has ever held on one connector,
+    whatever state it is in.
+
+    Deliberately unfiltered, and that is the whole correctness argument. The
+    caller uses this to answer "which account did a filed letter arrive
+    through", for letters that name no account (a template review — Meta
+    puts the WABA in the envelope and the bay stores their value verbatim).
+    It can only answer that when the count is ONE.
+
+    Filtering to non-revoked reads as the tighter predicate and is the
+    looser one, because the letter was owned at ARRIVAL and this runs at
+    CONSUME. A merchant who revokes WABA-A and connects WABA-B then has
+    exactly one non-revoked account, so a delayed letter about A's template
+    would resolve to B — and stamp A's globally unique provider id onto B's
+    row. That is precisely the undetectable cross-account corruption the
+    account scoping exists to prevent, reintroduced by the filter meant to
+    be careful. Counting every row this merchant has ever held cannot drift
+    with time: two accounts ever means unknowable, forever.
+
+    Re-onboarding does not inflate the count — the upsert is keyed on
+    (merchant, connector, external_account_id), so reconnecting the same
+    WABA updates one row. What does inflate it is a second real account, or
+    a half-finished onboarding that never reached a subscription. The second
+    costs such a merchant the automatic crashed-submit repair (they can
+    still resubmit), which is the correct trade against stamping a
+    provider's id onto the wrong tenant's template.
+    """
+    query = f"""
+        SELECT {INSTALLATION_COLUMNS}
+          FROM {INSTALLATION_TABLE}
+         WHERE merchant_id = $1
+           AND connector_key = $2
+    """
+    return query, [merchant_id, connector_key]
+
+
 def update_installation_health_query(
     merchant_id: str, installation_id: str, status: str, health_detail: str
 ) -> Tuple[str, List[Any]]:

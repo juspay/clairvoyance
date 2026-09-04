@@ -14,12 +14,7 @@ from typing import List, Optional
 import httpx
 import pytest
 
-from app.crm.connectivity import (
-    accounts as accounts_module,
-    retire_guard as retire_guard_module,
-    template_reads as template_reads_module,
-    templates as templates_module,
-)
+from app.crm.connectivity import accounts as accounts_module
 from app.crm.connectivity.providers.whatsapp.templates import (
     WhatsappTemplateError,
     WhatsappTemplates,
@@ -28,8 +23,12 @@ from app.crm.connectivity.providers.whatsapp.templates import (
 from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
 from app.crm.connectivity.schemas.message import CredentialBundle
 from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
-from app.crm.connectivity.template_reads import template_status
 from app.crm.connectivity.templates import (
+    lifecycle as templates_module,
+    reads as template_reads_module,
+    retire_guard as retire_guard_module,
+)
+from app.crm.connectivity.templates.lifecycle import (
     TemplateError,
     TemplateInUseError,
     TemplateNotFoundError,
@@ -38,6 +37,7 @@ from app.crm.connectivity.templates import (
     retire,
     submit,
 )
+from app.crm.connectivity.templates.reads import template_status
 from scripts.check_crm_boundaries import TABLE_OWNERS
 from tests.crm.doubles import FakeInstallationAccessor, stub_graph
 
@@ -763,8 +763,14 @@ def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
     from app.crm.connectivity.db.queries.template import record_in_place_edit_query
 
     sql, values = record_in_place_edit_query("shop", "t-1", "[]", "pending", "approved")
-    assert "AND status = $5" in sql
+    # The status the edit was AUTHORISED against, plus the one it is moving
+    # to: the webhook consumer is a second writer on this row and can apply
+    # the provider's 'pending' before this statement runs, which on a bare
+    # equality would lose the components the provider is already reviewing.
+    # A retire is still refused — 'deleted' is neither.
+    assert "AND status IN ($4, $5)" in sql
     assert values[-1] == "approved"
+    assert "deleted" not in values
 
 
 # --- rollout phase 08: the registry's publish-time read ----------------------
@@ -772,7 +778,9 @@ def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
 from app.crm.connectivity import channels as channels_module, contracts
 from app.crm.connectivity.db.queries.template import templates_by_name_query
 from app.crm.connectivity.schemas.template import TemplateVerdict
-from app.crm.connectivity.templates import TemplateInUseError as _InUse  # noqa: F401
+from app.crm.connectivity.templates.lifecycle import (  # noqa: F401
+    TemplateInUseError as _InUse,
+)
 
 
 def test_templates_by_name_read_is_merchant_first_and_parameterised() -> None:

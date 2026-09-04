@@ -12,11 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.crm.connectivity import (
-    accounts as accounts_module,
-    send as send_module,
-    template_reads as template_reads_module,
-)
+from app.crm.connectivity import accounts as accounts_module, send as send_module
 from app.crm.connectivity.db.queries.binding import (
     binding_by_id_query,
     primary_binding_query,
@@ -47,6 +43,7 @@ from app.crm.connectivity.send import (
     token_grants,
 )
 from app.crm.connectivity.status import BINDING_ACTIVE, TEMPLATE_APPROVED
+from app.crm.connectivity.templates import reads as template_reads_module
 from app.crm.shared.redact import mask_address, mask_digit_runs
 from app.schemas import Credential, CredentialType
 from scripts.check_crm_boundaries import TABLE_OWNERS
@@ -677,11 +674,11 @@ def test_one_home_for_the_account_policy() -> None:
     Two definitions of one policy is a policy that changes in one place and
     not the other — the day a degraded door may register templates but not
     send, the miss would be silent. Same reason the registry read belongs to
-    templates.py: send.py owning a second read on crm_channel_template would
-    be a second answer to "is this approved".
+    the templates package: send.py owning a second read on
+    crm_channel_template would be a second answer to "is this approved".
     """
     send_src = Path("app/crm/connectivity/send.py").read_text()
-    templates_src = Path("app/crm/connectivity/templates.py").read_text()
+    templates_src = Path("app/crm/connectivity/templates/lifecycle.py").read_text()
     for src in (send_src, templates_src):
         assert "get_credential_by_id" not in src
         assert '!= "healthy"' not in src and 'frozenset({"healthy"})' not in src

@@ -347,6 +347,7 @@ def _patch_onboarding(
     onboarder = onboarder or _StubOnboarder(result or _result())
     spec = ConnectorSpec(
         key="whatsapp",
+        source="whatsapp",
         channel=channel,
         onboarder=onboarder,
         templates=CONNECTORS["whatsapp"].templates,
@@ -931,6 +932,7 @@ def _patch_resubscribe(
     if spec == "default":
         built = ConnectorSpec(
             key="whatsapp",
+            source="whatsapp",
             channel="whatsapp",
             onboarder=onboarder or _ResubOnboarder(),
             templates=CONNECTORS["whatsapp"].templates,
