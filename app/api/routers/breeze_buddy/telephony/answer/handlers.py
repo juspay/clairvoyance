@@ -54,6 +54,9 @@ from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     log_blocked_call,
     set_block_redirect,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.callback_correlation import (
+    bind_outbound_call_identity,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     start_call_recording,
 )
@@ -356,7 +359,11 @@ def _error_response(provider: str, message: str, status_code: int) -> Response:
     <Speak>{html_escape(message)}</Speak>
     <Hangup/>
 </Response>"""
-    return HTMLResponse(content=xml, media_type="application/xml")
+    return HTMLResponse(
+        content=xml,
+        media_type="application/xml",
+        status_code=status_code,
+    )
 
 
 def _build_json_response(ws_url: str) -> Response:
@@ -691,8 +698,24 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
         logger.error(f"[{tag}] Missing call ID")
         return _error_response(provider, "Missing call identifier", 400)
 
+    if provider.lower() == "plivo":
+        has_outbound_context = bool(
+            params.get("lead_id") and params.get("telephony_number_id")
+        )
+        bound = await bind_outbound_call_identity(
+            provider=provider,
+            params=params,
+            call_id=call_id,
+        )
+        if has_outbound_context and not bound:
+            logger.error(
+                f"[{tag}] Failed to bind outbound Plivo call identity "
+                f"for call_id={call_id}"
+            )
+            return _error_response(provider, "Failed to bind outbound call", 409)
+
     # Plivo-specific: start recording — fire-and-forget, off the critical path.
-    if provider == "plivo":
+    if provider.lower() == "plivo":
         _kickoff_plivo_recording(call_id, tag)
 
     # Resolve templates

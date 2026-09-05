@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import WebSocket
@@ -8,6 +8,8 @@ from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    OutboundCallContext,
+    OutboundCallPlacement,
     VoiceCallProvider,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.conference import (
@@ -80,7 +82,8 @@ class TwilioProvider(VoiceCallProvider):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        context: Optional[OutboundCallContext] = None,
+    ) -> Optional[OutboundCallPlacement]:
         """
         Initiate an outbound call via Twilio.
 
@@ -99,6 +102,7 @@ class TwilioProvider(VoiceCallProvider):
             telephony_number: Caller ID / telephony number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            context: Optional callback context, unused by Twilio
         """
         try:
             if ENABLE_VOICE_AGENT_POD_ISOLATION:
@@ -171,7 +175,11 @@ class TwilioProvider(VoiceCallProvider):
                     f"Twilio call initiated with inline TwiML, ws_url: {ws_url}"
                 )
 
-            return {"status": "call_initiated", "sid": call.sid}
+            if not call.sid:
+                return OutboundCallPlacement.rejected(
+                    "Twilio response missing call SID"
+                )
+            return OutboundCallPlacement.started(call.sid)
         except Exception as e:
-            logger.error(f"Error when making call via Twilio: {e}")
-            return None
+            logger.opt(exception=e).error("Error when making call via Twilio")
+            return OutboundCallPlacement.rejected(str(e), error_type=type(e).__name__)

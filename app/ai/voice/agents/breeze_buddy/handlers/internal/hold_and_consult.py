@@ -19,6 +19,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import (
     mute_stt,
     unmute_stt,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    OutboundCallContext,
+    OutboundCallPlacementKind,
+)
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     HoldTransferConfig,
@@ -33,6 +37,7 @@ from app.database.accessor.breeze_buddy.hold_transfer import (
     get_template_summary_by_telephony_number_id,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    append_metadata_field,
     create_lead_call_tracker,
     update_lead_call_id_by_id,
     update_lead_request_id,
@@ -253,8 +258,15 @@ async def hold_and_consult(
             telephony_number=telephony_number,
             reseller_id=outbound_template["reseller_id"],
             template_name=outbound_template["name"],
+            context=OutboundCallContext(
+                lead_id=outbound_lead_id,
+                telephony_number_id=hold_number_id,
+            ),
         )
-        if not call_result or not call_result.get("sid"):
+        if not call_result or call_result.kind in (
+            OutboundCallPlacementKind.REJECTED,
+            OutboundCallPlacementKind.UNKNOWN,
+        ):
             subscribe_task.cancel()
             logger.error(
                 f"[hold_and_consult] make_call failed for call {call_sid}: "
@@ -265,7 +277,46 @@ async def hold_and_consult(
                 "message": "Failed to initiate outbound call.",
             }
 
-        outbound_call_sid = str(call_result["sid"])
+        if call_result.kind is OutboundCallPlacementKind.STARTED and call_result.sid:
+            outbound_call_sid = call_result.sid
+        elif (
+            call_result.kind is OutboundCallPlacementKind.SUBMITTED
+            and call_result.submission_id
+        ):
+            outbound_call_sid = call_result.submission_id
+            metadata_updated = await append_metadata_field(
+                outbound_lead_id,
+                {
+                    "provider_call_submission": {
+                        "provider": "plivo",
+                        "telephony_number_id": hold_number_id,
+                        "request_uuid": call_result.submission_id,
+                        "api_id": call_result.api_id,
+                        "status": "accepted_waiting_for_call_uuid",
+                    }
+                },
+            )
+            if not metadata_updated:
+                subscribe_task.cancel()
+                logger.error(
+                    f"[hold_and_consult] Failed to persist submitted placement "
+                    f"for lead {outbound_lead_id}"
+                )
+                return {
+                    "status": "error",
+                    "message": "Failed to track outbound call. The transfer has been aborted.",
+                }
+        else:
+            subscribe_task.cancel()
+            logger.error(
+                f"[hold_and_consult] make_call returned incomplete placement "
+                f"for call {call_sid}: {call_result}"
+            )
+            return {
+                "status": "error",
+                "message": "Failed to initiate outbound call.",
+            }
+
         logger.info(
             f"[hold_and_consult] Outbound call initiated: "
             f"{outbound_call_sid} from inbound {call_sid}"
@@ -275,7 +326,19 @@ async def hold_and_consult(
         # Treat failure as terminal: without the call_id persisted, telephony
         # callbacks can't correlate back to this lead tracker.
         try:
-            await update_lead_call_id_by_id(outbound_lead_id, outbound_call_sid)
+            call_id_updated = await update_lead_call_id_by_id(
+                outbound_lead_id, outbound_call_sid
+            )
+            if not call_id_updated:
+                subscribe_task.cancel()
+                logger.error(
+                    f"[hold_and_consult] Failed to update call_id for "
+                    f"lead {outbound_lead_id}"
+                )
+                return {
+                    "status": "error",
+                    "message": "Failed to track outbound call. The transfer has been aborted.",
+                }
             logger.info(
                 f"[hold_and_consult] Updated lead {outbound_lead_id} "
                 f"with call_id {outbound_call_sid}"

@@ -30,6 +30,9 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
     worker as worker_mod,
 )
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    OutboundCallPlacement,
+)
 from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.core import (
     CallExecutionConfig,
@@ -326,7 +329,7 @@ def fake_redis(monkeypatch) -> FakeRedisService:
 def make_lead(
     lead_id: str = "lead-1",
     status: LeadCallStatus = LeadCallStatus.BACKLOG,
-    phone: str = "+15551234567",
+    phone: str = "+14155552671",
     reseller_id: str = "res-1",
 ) -> LeadCallTracker:
     """Factory for a minimal BACKLOG lead suitable for dispatcher tests."""
@@ -381,20 +384,26 @@ class CallRecorder:
         self,
         sid: Optional[str] = "CA-test-sid",
         raise_exc: Optional[Exception] = None,
+        response: Optional[OutboundCallPlacement] = None,
     ):
         self.calls: List[Dict[str, Any]] = []
         self._sid = sid
         self._raise_exc = raise_exc
+        self._response = response
 
-    def make_call(self, to: str, from_number: str, **kwargs: Any) -> Dict[str, Any]:
+    def make_call(
+        self, to: str, from_number: str, **kwargs: Any
+    ) -> Optional[OutboundCallPlacement]:
         if self._raise_exc is not None:
             raise self._raise_exc
         self.calls.append({"to": to, "from": from_number, **kwargs})
-        return {"sid": self._sid} if self._sid else {}
+        if self._response is not None:
+            return self._response
+        return OutboundCallPlacement.started(self._sid) if self._sid else None
 
     async def make_call_async(
         self, to: str, from_number: str, **kwargs: Any
-    ) -> Dict[str, Any]:
+    ) -> Optional[OutboundCallPlacement]:
         return await asyncio.to_thread(self.make_call, to, from_number, **kwargs)
 
 
@@ -419,6 +428,7 @@ class DispatchHarness:
         self.released_numbers: List[str] = []
         self.released_locks: List[str] = []
         self.completions: List[Dict[str, Any]] = []
+        self.metadata_updates: List[tuple[str, Dict[str, Any]]] = []
         # Toggle behaviours.
         # ``pre_check_result`` is a convenience bool: True -> PROCEED,
         # False -> ABORT. For DEFER, set ``pre_check_decision`` directly
@@ -446,6 +456,8 @@ class DispatchHarness:
         # generate_realtime_opening_line flag (see the greeting mock below).
         self.opening_line_calls: List[Any] = []
         self.cas_succeeds: bool = True
+        self.mark_provider_submission_succeeds: bool = True
+        self.finish_and_release_succeeds: bool = True
         self.get_available_returns_none: bool = False
         # Captured alerts so tests can assert no-telephony-number throttled
         # alerts fired without needing a real Slack/Redis round-trip.
@@ -486,7 +498,7 @@ class DispatchHarness:
 
     async def defer_lead_next_attempt_and_release_lock(
         self, lead_id: str, defer_seconds: int
-    ) -> None:
+    ) -> Optional[LeadCallTracker]:
         self.deferred.append((lead_id, defer_seconds))
         self.locked_lead_ids.discard(lead_id)
         lead = self.leads.get(lead_id)
@@ -494,6 +506,7 @@ class DispatchHarness:
             lead.next_attempt_at = datetime.now(timezone.utc) + timedelta(
                 seconds=defer_seconds
             )
+        return lead
 
     async def update_lead_call_details(
         self,
@@ -512,6 +525,29 @@ class DispatchHarness:
         lead.call_id = call_id
         lead.call_initiated_time = call_initiated_time
         lead.telephony_number_id = telephony_number_id
+        return lead
+
+    async def mark_provider_submission_processing(
+        self,
+        lead_id: str,
+        submission_id: str,
+        call_initiated_time: datetime,
+        telephony_number_id: str,
+        meta_data: Dict[str, Any],
+    ) -> Optional[LeadCallTracker]:
+        self.metadata_updates.append((lead_id, meta_data))
+        if not self.mark_provider_submission_succeeds:
+            return None
+        lead = self.leads.get(lead_id)
+        if not lead:
+            return None
+        if lead.status != LeadCallStatus.BACKLOG:
+            return None
+        lead.status = LeadCallStatus.PROCESSING
+        lead.call_id = submission_id
+        lead.call_initiated_time = call_initiated_time
+        lead.telephony_number_id = telephony_number_id
+        lead.metaData = {**(lead.metaData or {}), **meta_data}
         return lead
 
     async def update_lead_call_completion_details(
@@ -534,6 +570,40 @@ class DispatchHarness:
         if lead:
             lead.status = status
             lead.outcome = outcome
+        return lead
+
+    async def finish_lead_call_and_release_lock(
+        self,
+        id: str,
+        outcome: str,
+        meta_data: Dict[str, Any],
+        call_end_time: datetime,
+    ) -> Optional[LeadCallTracker]:
+        if not self.finish_and_release_succeeds:
+            return None
+        self.completions.append(
+            {
+                "id": id,
+                "status": LeadCallStatus.FINISHED,
+                "outcome": outcome,
+                "meta_data": meta_data,
+            }
+        )
+        lead = self.leads.get(id)
+        if lead:
+            lead.status = LeadCallStatus.FINISHED
+            lead.outcome = outcome
+        self.locked_lead_ids.discard(id)
+        self.released_locks.append(id)
+        return lead
+
+    async def append_metadata_field(
+        self, lead_id: str, field_updates: Dict[str, Any]
+    ) -> Optional[LeadCallTracker]:
+        self.metadata_updates.append((lead_id, field_updates))
+        lead = self.leads.get(lead_id)
+        if lead is not None:
+            lead.metaData = {**(lead.metaData or {}), **field_updates}
         return lead
 
     async def get_template_by_id(self, template_id: str) -> Optional[Any]:
@@ -649,9 +719,15 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
     )
     monkeypatch.setattr(
         worker_mod,
-        "update_lead_call_completion_details",
-        h.update_lead_call_completion_details,
+        "mark_provider_submission_processing",
+        h.mark_provider_submission_processing,
     )
+    monkeypatch.setattr(
+        worker_mod,
+        "finish_lead_call_and_release_lock",
+        h.finish_lead_call_and_release_lock,
+    )
+    monkeypatch.setattr(worker_mod, "append_metadata_field", h.append_metadata_field)
     monkeypatch.setattr(
         worker_mod,
         "get_template_by_id",

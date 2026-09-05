@@ -1,10 +1,97 @@
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Optional
 
 from fastapi import WebSocket
 
 from app.schemas import CallProvider, TelephonyConfig
+
+
+@dataclass(frozen=True, slots=True)
+class OutboundCallContext:
+    """Provider callback context for a single outbound lead placement."""
+
+    reseller_id: Optional[str] = None
+    template_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    telephony_number_id: Optional[str] = None
+
+
+class OutboundCallPlacementKind(str, Enum):
+    """Provider-neutral result of submitting an outbound call."""
+
+    STARTED = "started"
+    SUBMITTED = "submitted"
+    REJECTED = "rejected"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class OutboundCallPlacement:
+    """Provider-neutral call placement result."""
+
+    kind: OutboundCallPlacementKind
+    sid: Optional[str] = None
+    submission_id: Optional[str] = None
+    api_id: Optional[str] = None
+    error_type: Optional[str] = None
+    message: Optional[str] = None
+    retryable: bool = False
+
+    @classmethod
+    def started(
+        cls,
+        sid: str,
+        *,
+        submission_id: Optional[str] = None,
+        api_id: Optional[str] = None,
+    ) -> "OutboundCallPlacement":
+        return cls(
+            kind=OutboundCallPlacementKind.STARTED,
+            sid=sid,
+            submission_id=submission_id,
+            api_id=api_id,
+        )
+
+    @classmethod
+    def submitted(
+        cls, submission_id: str, *, api_id: Optional[str] = None
+    ) -> "OutboundCallPlacement":
+        return cls(
+            kind=OutboundCallPlacementKind.SUBMITTED,
+            submission_id=submission_id,
+            api_id=api_id,
+        )
+
+    @classmethod
+    def rejected(
+        cls,
+        message: str,
+        *,
+        error_type: Optional[str] = None,
+        api_id: Optional[str] = None,
+        retryable: bool = False,
+    ) -> "OutboundCallPlacement":
+        return cls(
+            kind=OutboundCallPlacementKind.REJECTED,
+            error_type=error_type,
+            message=message,
+            api_id=api_id,
+            retryable=retryable,
+        )
+
+    @classmethod
+    def unknown(
+        cls, message: str, *, error_type: Optional[str] = None
+    ) -> "OutboundCallPlacement":
+        return cls(
+            kind=OutboundCallPlacementKind.UNKNOWN,
+            error_type=error_type,
+            message=message,
+            retryable=False,
+        )
 
 
 class VoiceCallProvider(ABC):
@@ -37,7 +124,8 @@ class VoiceCallProvider(ABC):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        context: Optional[OutboundCallContext] = None,
+    ) -> Optional[OutboundCallPlacement]:
         """
         Initiate a call.
 
@@ -50,6 +138,7 @@ class VoiceCallProvider(ABC):
             telephony_number: Caller ID / telephony number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            context: Optional callback context for providers that need it
         """
 
     async def make_call_async(
@@ -58,7 +147,8 @@ class VoiceCallProvider(ABC):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        context: Optional[OutboundCallContext] = None,
+    ) -> Optional[OutboundCallPlacement]:
         """
         Await-able wrapper around ``make_call`` that keeps it off the event loop.
 
@@ -77,6 +167,7 @@ class VoiceCallProvider(ABC):
             telephony_number,
             reseller_id,
             template_name,
+            context,
         )
 
     def set_completion_callback(self, callback):

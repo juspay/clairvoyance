@@ -40,8 +40,12 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    OutboundCallContext,
+    OutboundCallPlacement,
+)
 from app.core.config.static import BB_CHANNEL_WAIT_BACKOFF_MAX_S
-from app.schemas import LeadCallStatus
+from app.schemas import CallProvider, LeadCallStatus
 from tests.breeze_buddy.dispatch.conftest import (
     AlwaysLeader,
     CallRecorder,
@@ -80,7 +84,7 @@ async def test_full_round_trip_happy_path(harness, fake_redis):
 
     # Lead was dialled exactly once.
     assert len(harness.call_recorder.calls) == 1
-    assert harness.call_recorder.calls[0]["to"] == "+15551234567"
+    assert harness.call_recorder.calls[0]["to"] == "+14155552671"
     assert harness.call_recorder.calls[0]["from"] == "+15559999999"
 
     # Status was advanced.
@@ -210,6 +214,45 @@ async def test_channel_exhaustion_does_not_record_rate_limit_attempt(
 # ---------------------------------------------------------------------------
 
 
+async def test_invalid_legacy_phone_is_terminal_without_provider_call(
+    harness, fake_redis
+):
+    lead = make_lead("lead-invalid-phone", phone="not-a-phone")
+    harness.add_lead(lead)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-invalid-phone")
+    await worker._iteration(session=None)
+
+    assert lead.status == LeadCallStatus.FINISHED
+    assert lead.outcome == "INVALID_PHONE"
+    assert harness.call_recorder.calls == []
+    assert harness.rate_limit_peeks == []
+    assert harness.rate_limit_records == []
+    assert harness.released_numbers == []
+    assert harness.deferred == []
+    assert harness.released_locks == [lead.id]
+
+
+async def test_invalid_legacy_phone_terminal_update_failure_keeps_lock_held(
+    harness, fake_redis
+):
+    lead = make_lead("lead-invalid-terminal-failure", phone="not-a-phone")
+    harness.add_lead(lead)
+    harness.finish_and_release_succeeds = False
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-invalid-terminal-failure")
+    await worker._iteration(session=None)
+
+    assert lead.status == LeadCallStatus.BACKLOG
+    assert lead.outcome is None
+    assert lead.id in harness.locked_lead_ids
+    assert harness.released_locks == []
+    assert harness.deferred == []
+    assert harness.call_recorder.calls == []
+
+
 async def test_make_call_exception_releases_token_and_defers(harness, fake_redis):
     """provider.make_call raising → channel token returned, number released, defer scheduled."""
     lead = make_lead("lead-exc")
@@ -257,6 +300,115 @@ async def test_make_call_returns_no_sid_defers(harness, fake_redis):
     assert harness.released_numbers == [harness.number.id]
     assert harness.deferred == [(lead.id, 10)]
     assert lead.status == LeadCallStatus.BACKLOG
+
+
+async def test_plivo_submission_ack_waits_for_callback_without_no_sid_retry(
+    harness, fake_redis
+):
+    lead = make_lead("lead-plivo-ack")
+    harness.add_lead(lead)
+    harness.number.provider = CallProvider.PLIVO
+    harness.config.calling_provider = CallProvider.PLIVO
+    harness.call_recorder = CallRecorder(
+        response=OutboundCallPlacement.submitted("rq-test", api_id="api-test")
+    )
+    w.get_voice_provider = harness.get_voice_provider
+
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-plivo-ack")
+    await worker._iteration(session=None)
+
+    assert harness.call_recorder.calls == [
+        {
+            "to": "+14155552671",
+            "from": "+15559999999",
+            "reseller_id": "res-1",
+            "template_name": "tmpl-1",
+            "context": OutboundCallContext(
+                reseller_id="res-1",
+                template_id="tmpl-1",
+                lead_id=lead.id,
+                telephony_number_id=harness.number.id,
+            ),
+        }
+    ]
+    assert lead.status == LeadCallStatus.PROCESSING
+    assert lead.call_id == "rq-test"
+    assert lead.telephony_number_id == harness.number.id
+    assert lead.id in harness.locked_lead_ids
+    assert harness.deferred == []
+    assert harness.released_numbers == []
+    assert await channel_tokens_available(harness.number.id) == 0
+    assert harness.metadata_updates == [
+        (
+            lead.id,
+            {
+                "provider_call_submission": {
+                    "provider": CallProvider.PLIVO.value,
+                    "telephony_number_id": harness.number.id,
+                    "request_uuid": "rq-test",
+                    "api_id": "api-test",
+                    "status": "accepted_waiting_for_call_uuid",
+                }
+            },
+        )
+    ]
+
+
+async def test_plivo_submission_mark_failure_defers_without_redial_window(
+    harness, fake_redis
+):
+    lead = make_lead("lead-plivo-mark-fail")
+    harness.add_lead(lead)
+    harness.number.provider = CallProvider.PLIVO
+    harness.config.calling_provider = CallProvider.PLIVO
+    harness.call_recorder = CallRecorder(
+        response=OutboundCallPlacement.submitted("rq-test", api_id="api-test")
+    )
+    harness.mark_provider_submission_succeeds = False
+    w.get_voice_provider = harness.get_voice_provider
+
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-plivo-mark-fail")
+    await worker._iteration(session=None)
+
+    assert await channel_tokens_available(harness.number.id) == 1
+    assert harness.released_numbers == [harness.number.id]
+    assert harness.released_locks == []
+    assert harness.deferred == [(lead.id, 60)]
+    assert lead.status == LeadCallStatus.BACKLOG
+    assert lead.id not in harness.locked_lead_ids
+
+
+async def test_plivo_ambiguous_timeout_is_terminal_without_blind_retry(
+    harness, fake_redis
+):
+    lead = make_lead("lead-plivo-timeout")
+    harness.add_lead(lead)
+    harness.number.provider = CallProvider.PLIVO
+    harness.config.calling_provider = CallProvider.PLIVO
+    harness.call_recorder = CallRecorder(
+        response=OutboundCallPlacement.unknown(
+            "read timed out", error_type="ReadTimeout"
+        )
+    )
+    w.get_voice_provider = harness.get_voice_provider
+
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-plivo-timeout")
+    await worker._iteration(session=None)
+
+    assert lead.status == LeadCallStatus.FINISHED
+    assert lead.outcome == "PLACEMENT_UNKNOWN"
+    assert harness.deferred == []
+    assert harness.released_numbers == [harness.number.id]
+    assert await channel_tokens_available(harness.number.id) == 1
 
 
 async def test_post_cas_lost_releases_all_resources(harness, fake_redis):

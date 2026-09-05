@@ -23,6 +23,7 @@ import asyncio
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import Any, Dict, List, Optional, cast
 
 import aiohttp
@@ -64,6 +65,11 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     peek_outbound_rate_limit_and_alert,
     record_outbound_call_attempt,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    OutboundCallContext,
+    OutboundCallPlacement,
+    OutboundCallPlacementKind,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import _gemini_realtime_config
@@ -83,16 +89,19 @@ from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
+    append_metadata_field,
     defer_lead_next_attempt_and_release_lock,
+    finish_lead_call_and_release_lock,
     get_lead_by_id,
     get_template_by_id,
     is_number_blacklisted,
+    mark_provider_submission_processing,
     release_lock_on_lead_by_id,
-    update_lead_call_completion_details,
     update_lead_call_details,
 )
-from app.schemas import ExecutionMode, LeadCallStatus
+from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
 from app.services.redis import get_redis_service
+from app.utils.phone_number import normalize_phone_number
 
 # ---------------------------------------------------------------------------
 # Greeting pre-warm
@@ -181,6 +190,14 @@ async def _prewarm_initial_greeting_with_retry(
 # ---------------------------------------------------------------------------
 
 
+class DispatchExit(str, Enum):
+    """Final lock action for one dispatch iteration."""
+
+    NEEDS_UNLOCK = "needs_unlock"
+    CLEANED_UP = "cleaned_up"
+    HOLD_LOCK = "hold_lock"
+
+
 class Worker:
     """
     Long-lived asyncio task that consumes from ``bb:ready:leads`` and
@@ -251,14 +268,18 @@ class Worker:
         """
         try:
             return not await dyn_cfg.BB_DISPATCH_ENABLED()
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"BB_DISPATCH_ENABLED lookup failed; failing open: {e}")
             return False
 
     async def _reseller_paused(self, reseller_id: str) -> bool:
         try:
             redis = await get_redis_service()
             return await redis.exists(reseller_paused_key(reseller_id))
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"reseller pause lookup failed for reseller {reseller_id}: {e}"
+            )
             return False
 
     # -- main loop ----------------------------------------------------------
@@ -334,7 +355,8 @@ class Worker:
     ) -> None:
         """
         Run the full dispatch flow for one lead. All exit paths leave the
-        lead row in a consistent state (lock released, status correct).
+        lead row in an explicit exit state: released/deferred, terminal, or
+        intentionally held for the call-end/callback lifecycle.
         """
         logger.info(f"Worker {self._uuid}: picked lead {lead_id}")
 
@@ -381,37 +403,50 @@ class Worker:
             )
             return
 
-        lock_released = False
+        exit_state = DispatchExit.NEEDS_UNLOCK
         try:
             config = await _get_lead_config(locked)
             if not config:
-                lock_released = await self._fail_and_release(locked.id, "NO_CONFIG")
+                exit_state = await self._fail_and_release(locked.id, "NO_CONFIG")
                 return
 
             if not config.enable_calling:
                 logger.info(f"Worker {self._uuid}: calling disabled for lead {lead_id}")
-                lock_released = await self._release(locked.id)
+                exit_state = await self._release(locked.id)
                 return
 
-            customer_phone = (locked.payload or {}).get("customer_mobile_number")
-            if customer_phone and await is_number_blacklisted(
-                customer_phone, locked.reseller_id
-            ):
-                await update_lead_call_completion_details(
-                    id=locked.id,
-                    status=LeadCallStatus.FINISHED,
-                    outcome="BLACKLISTED",
-                    meta_data={"reason": "Phone number is blacklisted"},
-                    call_end_time=datetime.now(timezone.utc),
+            phone_result = normalize_phone_number(
+                (locked.payload or {}).get("customer_mobile_number")
+            )
+            if not phone_result.is_dialable:
+                logger.warning(
+                    f"Worker {self._uuid}: terminal INVALID_PHONE for lead "
+                    f"{locked.id}: {phone_result.reason}"
                 )
-                lock_released = await self._release(locked.id)
+                exit_state = await self._fail_and_release(
+                    locked.id, "INVALID_PHONE", reason=phone_result.reason
+                )
+                return
+            customer_phone = str(phone_result.e164)
+
+            # Make legacy-but-valid formatted values canonical for all work in
+            # this dispatch. The API persists canonical E.164 for new rows.
+            if locked.payload is not None:
+                locked.payload["customer_mobile_number"] = customer_phone
+
+            if await is_number_blacklisted(customer_phone, locked.reseller_id):
+                exit_state = await self._fail_and_release(
+                    locked.id,
+                    "BLACKLISTED",
+                    reason="Phone number is blacklisted",
+                )
                 return
 
             if not _is_within_calling_hours(config):
                 # Defer until window opens — we approximate by deferring 5 min
                 # and letting the reconciler/promoter re-pick. Cheaper than
                 # computing the exact next window here.
-                lock_released = await self._defer_and_release(locked.id, 300)
+                exit_state = await self._defer_and_release(locked.id, 300)
                 return
 
             # id-only resolution: leads always carry the template_id they
@@ -435,14 +470,12 @@ class Worker:
             if pre_check_decision is PreCheckDecision.ABORT:
                 # _run_pre_checks_for_lead already set status to FINISHED on
                 # failure; we just need to release the lock.
-                lock_released = await self._release(locked.id)
+                exit_state = await self._release(locked.id)
                 return
             if pre_check_decision is PreCheckDecision.DEFER:
                 # Transient block (cooldown, quota). Lead stays BACKLOG and
                 # comes back after pre_check_defer seconds.
-                lock_released = await self._defer_and_release(
-                    locked.id, pre_check_defer
-                )
+                exit_state = await self._defer_and_release(locked.id, pre_check_defer)
                 return
 
             if template:
@@ -461,14 +494,12 @@ class Worker:
             )
             if rate_limited_phone:
                 rate_ok, defer_seconds = await peek_outbound_rate_limit_and_alert(
-                    customer_phone=cast(str, customer_phone),
+                    customer_phone=customer_phone,
                     lead_id=str(locked.id),
                     reseller_id=locked.reseller_id,
                 )
                 if not rate_ok:
-                    lock_released = await self._defer_and_release(
-                        locked.id, defer_seconds
-                    )
+                    exit_state = await self._defer_and_release(locked.id, defer_seconds)
                     return
 
             number = await _get_available_number(config, template)
@@ -494,7 +525,7 @@ class Worker:
                         f"Worker {self._uuid}: raise_no_telephony_number "
                         f"failed for lead {locked.id}: {alert_exc}"
                     )
-                lock_released = await self._fail_and_release(
+                exit_state = await self._fail_and_release(
                     locked.id, "NUMBER_UNAVAILABLE"
                 )
                 return
@@ -503,7 +534,7 @@ class Worker:
             token = await acquire_channel_token(number.id)
             if token is None:
                 # No capacity right now — re-schedule with small jitter.
-                lock_released = await self._defer_and_release(
+                exit_state = await self._defer_and_release(
                     locked.id, random.randint(1, BB_CHANNEL_WAIT_BACKOFF_MAX_S)
                 )
                 return
@@ -520,23 +551,14 @@ class Worker:
                     f"{number.id} despite Redis token. Releasing token, deferring."
                 )
                 await release_channel_token(number.id, token)
-                lock_released = await self._defer_and_release(locked.id, 5)
+                exit_state = await self._defer_and_release(locked.id, 5)
                 return
 
             call_provider = get_voice_provider(
                 number.provider, session, config.telephony_config
             )
 
-            customer_mobile = (locked.payload or {}).get("customer_mobile_number")
-            if not customer_mobile or not isinstance(customer_mobile, str):
-                logger.error(
-                    f"Worker {self._uuid}: invalid customer_mobile_number "
-                    f"for lead {locked.id}"
-                )
-                await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
-                lock_released = await self._fail_and_release(locked.id, "INVALID_PHONE")
-                return
+            customer_mobile = customer_phone
 
             # Atomic check-and-record — the authoritative cap. Placement
             # constraints (see record_outbound_call_attempt docstring):
@@ -551,7 +573,7 @@ class Worker:
             # re-pick this lead and burn through the next window of attempts.
             if rate_limited_phone:
                 rl_ok, rl_defer = await record_outbound_call_attempt(
-                    customer_phone=cast(str, customer_phone),
+                    customer_phone=customer_phone,
                     lead_id=str(locked.id),
                     reseller_id=locked.reseller_id,
                 )
@@ -565,7 +587,7 @@ class Worker:
                     )
                     await release_channel_token(number.id, token)
                     await _release_number(number.id, number.provider)
-                    lock_released = await self._defer_and_release(locked.id, rl_defer)
+                    exit_state = await self._defer_and_release(locked.id, rl_defer)
                     return
 
             # Greeting pre-warm as late as possible — after every gate,
@@ -603,9 +625,15 @@ class Worker:
                     customer_mobile,
                     number.number,
                     reseller_id=locked.reseller_id,
-                    # answer-url observability tag only (never parsed back);
-                    # id-only convention — no template names in routing.
+                    # Callback identity context for providers whose final call
+                    # id is delivered asynchronously by webhook.
                     template_name=locked.template_id or "",
+                    context=OutboundCallContext(
+                        reseller_id=locked.reseller_id,
+                        template_id=locked.template_id,
+                        lead_id=str(locked.id),
+                        telephony_number_id=str(number.id),
+                    ),
                 )
             except Exception as e:  # noqa: BLE001
                 logger.error(
@@ -616,20 +644,83 @@ class Worker:
                 await _release_number(number.id, number.provider)
                 # Backoff retry. Use defer_seconds derived from attempt_count.
                 backoff = min(60, 5 * (locked.attempt_count + 1))
-                lock_released = await self._defer_and_release(locked.id, backoff)
+                exit_state = await self._defer_and_release(locked.id, backoff)
                 return
 
-            if not call or not call.get("sid"):
+            if call and call.kind == OutboundCallPlacementKind.SUBMITTED:
+                exit_state = await self._hold_for_provider_submission(
+                    locked.id, number.id, number.provider, token, call
+                )
+                return
+
+            if call and call.kind == OutboundCallPlacementKind.UNKNOWN:
+                await release_channel_token(number.id, token)
+                await _release_number(number.id, number.provider)
+                metadata_updated = await append_metadata_field(
+                    locked.id,
+                    {
+                        "provider_call_submission": {
+                            "provider": number.provider.value,
+                            "status": "unknown_after_timeout",
+                            "error_type": call.error_type,
+                            "message": call.message,
+                        }
+                    },
+                )
+                if metadata_updated is None:
+                    logger.error(
+                        f"Worker {self._uuid}: failed to persist ambiguous "
+                        f"Plivo submission metadata for lead {locked.id}"
+                    )
+                exit_state = await self._fail_and_release(
+                    locked.id,
+                    "PLACEMENT_UNKNOWN",
+                    reason=(
+                        call.message
+                        or "Provider submission timed out; outcome unknown and not retried"
+                    ),
+                )
+                return
+
+            if call and call.kind == OutboundCallPlacementKind.REJECTED:
+                await release_channel_token(number.id, token)
+                await _release_number(number.id, number.provider)
+                if call.retryable:
+                    backoff = min(60, 5 * (locked.attempt_count + 1))
+                    logger.warning(
+                        f"Worker {self._uuid}: retryable provider call submission "
+                        f"failure for lead {locked.id} "
+                        f"(error_type={call.error_type}). Deferring {backoff}s."
+                    )
+                    exit_state = await self._defer_and_release(locked.id, backoff)
+                    return
+
                 logger.error(
-                    f"Worker {self._uuid}: provider.make_call returned no SID "
+                    f"Worker {self._uuid}: provider call submission rejected "
+                    f"for lead {locked.id} (error_type={call.error_type})"
+                )
+                exit_state = await self._fail_and_release(
+                    locked.id,
+                    "PLACEMENT_REJECTED",
+                    reason=str(call.message or call.error_type or call),
+                )
+                return
+
+            if (
+                not call
+                or call.kind != OutboundCallPlacementKind.STARTED
+                or not call.sid
+            ):
+                logger.error(
+                    f"Worker {self._uuid}: provider call placement returned no started call id "
                     f"for lead {locked.id}: {call}"
                 )
                 await release_channel_token(number.id, token)
                 await _release_number(number.id, number.provider)
-                lock_released = await self._defer_and_release(locked.id, 10)
+                exit_state = await self._defer_and_release(locked.id, 10)
                 return
 
-            call_sid = str(call.get("sid"))
+            call_sid = call.sid
 
             # Keyed on the SID, so a retried lead records a second attempt
             # rather than colliding with the first. Test/playground traffic
@@ -670,20 +761,20 @@ class Worker:
                 )
                 await release_channel_token(number.id, token)
                 await _release_number(number.id, number.provider)
-                lock_released = await self._release(locked.id)
+                exit_state = await self._release(locked.id)
                 return
 
             # Success — token stays held until call-end webhook fires.
             # Lock stays held too; the call-end webhook releases it. Setting
-            # lock_released so the defensive finally below doesn't unlock the
-            # row out from under the webhook handler.
-            lock_released = True
+            # HOLD_LOCK so the defensive finally below doesn't unlock the row
+            # out from under the webhook handler.
+            exit_state = DispatchExit.HOLD_LOCK
             logger.info(
                 f"Worker {self._uuid}: dialled lead {locked.id} via "
                 f"{number.provider.value} number {number.id} (call_sid={call_sid})"
             )
         finally:
-            if not lock_released:
+            if exit_state == DispatchExit.NEEDS_UNLOCK:
                 # Defensive: any path that didn't already release the lock
                 # must release here.
                 try:
@@ -696,14 +787,16 @@ class Worker:
 
     # -- exit helpers -------------------------------------------------------
 
-    async def _release(self, lead_id: str) -> bool:
+    async def _release(self, lead_id: str) -> DispatchExit:
         try:
             await release_lock_on_lead_by_id(lead_id)
         except Exception as e:  # noqa: BLE001
             logger.error(f"release_lock failed for {lead_id}: {e}")
-        return True
+        return DispatchExit.CLEANED_UP
 
-    async def _defer_and_release(self, lead_id: str, defer_seconds: int) -> bool:
+    async def _defer_and_release(
+        self, lead_id: str, defer_seconds: int
+    ) -> DispatchExit:
         """Defer next_attempt_at in DB, ZADD onto the schedule, release lock.
 
         DB write is authoritative — we only mirror the deferral in Redis when
@@ -728,9 +821,11 @@ class Worker:
             # re-schedule on its next tick.
             try:
                 await release_lock_on_lead_by_id(lead_id)
-            except Exception:  # noqa: BLE001
-                pass
-            return True
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    f"release_lock failed after defer failure for {lead_id}: {e}"
+                )
+            return DispatchExit.CLEANED_UP
 
         # DB defer succeeded — mirror the DB-authoritative timestamp in Redis.
         # Fall back to now+defer_seconds only if the DB column was somehow
@@ -739,21 +834,73 @@ class Worker:
             datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
         )
         await schedule_lead(lead_id, next_at)
-        return True
+        return DispatchExit.CLEANED_UP
 
-    async def _fail_and_release(self, lead_id: str, outcome: str) -> bool:
-        """Mark FINISHED with a terminal outcome and release the lock."""
-        try:
-            await update_lead_call_completion_details(
-                id=lead_id,
-                status=LeadCallStatus.FINISHED,
-                outcome=outcome,
-                meta_data={"reason": f"Dispatcher: {outcome}"},
-                call_end_time=datetime.now(timezone.utc),
+    async def _fail_and_release(
+        self, lead_id: str, outcome: str, *, reason: str | None = None
+    ) -> DispatchExit:
+        """Mark FINISHED with a terminal outcome and release the lock atomically."""
+        finished = await finish_lead_call_and_release_lock(
+            id=lead_id,
+            outcome=outcome,
+            meta_data={"reason": reason or f"Dispatcher: {outcome}"},
+            call_end_time=datetime.now(timezone.utc),
+        )
+        if finished is None:
+            logger.error(
+                f"fail_and_release terminal update failed for {lead_id} "
+                f"(outcome={outcome}); keeping lock held for investigation"
             )
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"fail_and_release update_completion failed: {e}")
-        return await self._release(lead_id)
+            return DispatchExit.HOLD_LOCK
+        return DispatchExit.CLEANED_UP
+
+    async def _hold_for_provider_submission(
+        self,
+        lead_id: str,
+        telephony_number_id: str,
+        provider: CallProvider,
+        token: str,
+        placement: OutboundCallPlacement,
+    ) -> DispatchExit:
+        """Persist an accepted provider submission and keep resources held."""
+        if not placement.submission_id:
+            logger.error(
+                f"provider submitted call for lead {lead_id} without a submission id"
+            )
+            await release_channel_token(telephony_number_id, token)
+            await _release_number(telephony_number_id, provider)
+            return await self._fail_and_release(
+                lead_id,
+                "PLACEMENT_REJECTED",
+                reason="Provider submission missing request id",
+            )
+
+        submission_metadata = {
+            "provider_call_submission": {
+                "provider": provider.value,
+                "telephony_number_id": telephony_number_id,
+                "request_uuid": placement.submission_id,
+                "api_id": placement.api_id,
+                "status": "accepted_waiting_for_call_uuid",
+            }
+        }
+        updated = await mark_provider_submission_processing(
+            lead_id,
+            placement.submission_id,
+            datetime.now(timezone.utc),
+            telephony_number_id,
+            submission_metadata,
+        )
+        if updated is None:
+            logger.error(
+                f"failed to mark submitted provider call PROCESSING for lead {lead_id}; "
+                "releasing local resources because callback reconciliation is not safe"
+            )
+            await release_channel_token(telephony_number_id, token)
+            await _release_number(telephony_number_id, provider)
+            return await self._defer_and_release(lead_id, 60)
+
+        return DispatchExit.HOLD_LOCK
 
 
 # ---------------------------------------------------------------------------

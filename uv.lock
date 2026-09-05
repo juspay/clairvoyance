@@ -703,6 +703,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "phonenumbers" },
     { name = "pipecat-ai", extra = ["aic", "anthropic", "assemblyai", "azure", "cartesia", "daily", "deepgram", "elevenlabs", "google", "mcp", "openai", "sarvam", "soniox"] },
     { name = "pipecat-ai-flows" },
     { name = "plivo" },
@@ -760,6 +761,7 @@ requires-dist = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "phonenumbers", specifier = ">=9.0.15,<10" },
     { name = "pipecat-ai", extras = ["daily", "google", "assemblyai", "silero", "openai", "azure", "elevenlabs", "aic", "anthropic", "deepgram", "soniox", "mcp", "sarvam", "cartesia"], specifier = "==1.1.0" },
     { name = "pipecat-ai-flows", specifier = "==1.0.0" },
     { name = "plivo" },
@@ -2356,6 +2358,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fa/36/e27608899f9b8d4dff0617b2d9ab17ca5608956ca44461ac14ac48b44015/pathspec-1.0.4.tar.gz", hash = "sha256:0210e2ae8a21a9137c0d470578cb0e595af87edaa6ebf12ff176f14a02e0e645", size = 131200 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/3c/2c197d226f9ea224a9ab8d197933f9da0ae0aac5b6e0f884e2b8d9c8e9f7/pathspec-1.0.4-py3-none-any.whl", hash = "sha256:fb6ae2fd4e7c921a165808a552060e722767cfa526f99ca5156ed2ce45a5c723", size = 55206 },
+]
+
+[[package]]
+name = "phonenumbers"
+version = "9.0.37"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/36/ee5b6d7ccc28cb7848e8dfefce94df9178b6318ed56adab97550b6ba99ec/phonenumbers-9.0.37.tar.gz", hash = "sha256:8923ab413c575b27da2815c9bef48290181aab565398b5e7e23cc7ace212a293", size = 2312364 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/99/68/544cb901964e8bfc3c8d215d5620e63a009b32437efaec905fdefdf59e26/phonenumbers-9.0.37-py2.py3-none-any.whl", hash = "sha256:55ae8243c1e2fe8ae2548d979e57155d9ae0f6084f8a1d6884050b143aff0a7c", size = 2595712 },
 ]
 
 [[package]]

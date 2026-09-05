@@ -14,8 +14,10 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
+    bind_submitted_call_uuid_query,
     count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
+    finish_lead_call_and_release_lock_query,
     get_all_lead_call_trackers_query,
     get_lead_based_analytics_query,
     get_lead_by_call_id_query,
@@ -24,6 +26,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_leads_by_request_id_query,
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
+    mark_provider_submission_processing_query,
     release_lock_on_lead_by_id_query,
     reset_widget_voice_lead_query,
     update_langfuse_scores_query,
@@ -324,6 +327,67 @@ async def update_lead_call_details(
         return None
 
 
+async def bind_submitted_call_uuid(
+    lead_id: str,
+    call_uuid: str,
+    call_initiated_time: datetime,
+    telephony_number_id: str,
+) -> Optional[LeadCallTracker]:
+    """Replace a submitted provider request id with the live callback call id."""
+    logger.info(f"Binding submitted lead {lead_id} to callback call ID {call_uuid}")
+
+    try:
+        query_text, values = bind_submitted_call_uuid_query(
+            lead_id, call_uuid, call_initiated_time, telephony_number_id
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Submitted lead bound successfully: {decoded_result}")
+            return decoded_result
+
+        logger.warning(
+            f"Submitted lead {lead_id} not bound to callback call ID {call_uuid}"
+        )
+        return None
+
+    except Exception as e:
+        logger.error(f"Error binding submitted lead call id: {e}")
+        return None
+
+
+async def mark_provider_submission_processing(
+    lead_id: str,
+    submission_id: str,
+    call_initiated_time: datetime,
+    telephony_number_id: str,
+    meta_data: Dict[str, Any],
+) -> Optional[LeadCallTracker]:
+    """Record an accepted provider submission as a PROCESSING call."""
+    logger.info(
+        f"Marking submitted lead {lead_id} PROCESSING with request ID {submission_id}"
+    )
+
+    try:
+        query_text, values = mark_provider_submission_processing_query(
+            lead_id, submission_id, call_initiated_time, telephony_number_id, meta_data
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Submitted lead marked PROCESSING: {decoded_result}")
+            return decoded_result
+
+        logger.warning(
+            f"Submitted lead {lead_id} not marked PROCESSING — status may have changed"
+        )
+        return None
+
+    except Exception as e:
+        logger.error(f"Error marking submitted lead PROCESSING: {e}")
+        return None
+
+
 async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:
     """
     Get lead by call ID.
@@ -563,6 +627,41 @@ async def update_lead_call_completion_details(
 
     except Exception as e:
         logger.error(f"Error updating lead call completion details: {e}")
+        return None
+
+
+async def finish_lead_call_and_release_lock(
+    id: str,
+    outcome: str,
+    meta_data: Dict[str, Any],
+    call_end_time: datetime,
+) -> Optional[LeadCallTracker]:
+    """
+    Mark a locked lead FINISHED and unlock it in one DB write.
+    """
+    logger.info(f"Finishing lead and releasing lock for ID: {id}")
+
+    try:
+        query_text, values = finish_lead_call_and_release_lock_query(
+            id, outcome, meta_data, call_end_time
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            if decoded_result is not None:
+                logger.info(
+                    f"Lead finished and lock released successfully: {decoded_result.id}"
+                )
+                _fire_hooks(_finished_hooks, decoded_result, "finished-lead")
+            else:
+                logger.error("Lead decoding failed after finish + release")
+            return decoded_result
+
+        logger.error("Failed to finish lead and release lock")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error finishing lead and releasing lock: {e}")
         return None
 
 
