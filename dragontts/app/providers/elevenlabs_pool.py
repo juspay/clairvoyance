@@ -82,6 +82,12 @@ _ELEVENLABS_TTD_WS_PATH = "/v1/text-to-dialogue/multi-stream-input"
 _KEEPALIVE_CONTEXT_ID = "dragontts-keepalive"
 _KEEPALIVE_INTERVAL = 10.0
 
+# A connection that lives at least this long counts as healthy and resets the
+# reconnect backoff; anything shorter (server policy-closes it right after the
+# keepalive voice registration) grows the backoff instead, so a rejected voice
+# or key retries slowly rather than spinning at ~1.5s forever.
+_HEALTHY_CONNECTION_SECS = 15.0
+
 # A connector returns an async context manager whose value is a websocket-like
 # object (``await ws.send(str)``, ``async for msg in ws`` -> str, ``await ws.close()``).
 ConnectFn = Callable[[str, dict], Any]
@@ -157,10 +163,18 @@ class _ElevenLabsConnection:
         self._closed = False
 
     async def run(self) -> None:
-        """Connect, receive, and reconnect on drop until ``stop()``."""
+        """Connect, receive, and reconnect on drop until ``stop()``.
+
+        The backoff only resets for a connection that stayed healthy for a
+        while: a socket the server kills ~immediately (e.g. TTD rejecting the
+        keepalive voice with a 1008 policy close) must grow the backoff —
+        otherwise a permanently-rejected pool reconnects every ~1.5s forever,
+        hammering ElevenLabs and flooding the logs.
+        """
         backoff = 0.5
         while not self._closed:
             keepalive_task: asyncio.Task | None = None
+            ready_at: float | None = None
             try:
                 async with self._connect_fn(self._uri, self._headers) as ws:
                     self.ws = ws
@@ -177,7 +191,7 @@ class _ElevenLabsConnection:
                         )
                         keepalive_task = asyncio.create_task(self._keepalive_loop(ws))
                     self.ready.set()
-                    backoff = 0.5
+                    ready_at = time.monotonic()
                     logger.info("ElevenLabs stream socket ready")
                     async for message in ws:
                         self._dispatch(message)
@@ -190,12 +204,18 @@ class _ElevenLabsConnection:
                     keepalive_task.cancel()
                 self.ready.clear()
                 self.ws = None
+                if (
+                    ready_at is not None
+                    and time.monotonic() - ready_at >= _HEALTHY_CONNECTION_SECS
+                ):
+                    backoff = 0.5  # lived long enough — treat as healthy
+                else:
+                    backoff = min(max(backoff * 2, 1.0), 30.0)
 
             if self._closed:
                 break
             logger.debug(f"ElevenLabs socket dropped; reconnecting in {backoff}s")
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 5.0)
 
     async def _keepalive_loop(self, ws: Any) -> None:
         """Ping the registered keepalive context to reset the server's

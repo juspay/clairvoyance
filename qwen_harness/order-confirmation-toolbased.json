@@ -1,0 +1,1351 @@
+{
+  "id": "7c1f9a2e-4b3d-4e8a-9f60-1d2e3f4a5b60",
+  "reseller_id": "rnr",
+  "merchant_id": "test-shopify",
+  "name": "order-confirmation-toolbased",
+  "is_active": true,
+  "supported_channels": [
+    "voice"
+  ],
+  "secrets": null,
+  "telephony_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863",
+  "outbound_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863",
+  "description": "tool_based conversion of the Shopify COD order-confirmation flow, tuned for qwen3.8-27b-4bit: every spoken script (order read, cancel ladder, address-update ladder, FAQs, closings) ships as a per-language function (say_x_hi / say_x_en — no language arg, the name alone determines speech); outcomes (CONFIRM / CANCEL / ADDRESS_UPDATED / BUSY) speak their own closings and end the call. The model only routes and passes verbatim value args.",
+  "expected_payload_schema": {
+    "items": {
+      "type": "any"
+    },
+    "shop_name": {
+      "type": "string",
+      "function": "string_to_lowercase"
+    },
+    "total_price": {
+      "type": "number",
+      "function": "indian_number_to_speech"
+    },
+    "customer_name": {
+      "type": "string"
+    },
+    "customer_address": {
+      "type": "string"
+    },
+    "customer_mobile_number": {
+      "type": "string",
+      "function": [
+        "extract_10_digit_mobile",
+        "digits_to_speech"
+      ]
+    }
+  },
+  "expected_callback_response_schema": {
+    "updated_address": {
+      "type": "string",
+      "optional": true
+    },
+    "cancellation_reason": {
+      "type": "string",
+      "optional": true
+    },
+    "unsupported_language_code": {
+      "type": "string",
+      "optional": true
+    }
+  },
+  "configurations": {
+    "llm_configurations": {
+      "provider": "openai",
+      "sdk": null,
+      "model": "qwen3.8-27b-4bit",
+      "region": null,
+      "endpoint": "http://34.126.104.99:8000/v1",
+      "api_key_name": "BREEZE_LLM_API_KEY",
+      "temperature": 0.2,
+      "max_tokens": 500,
+      "thinking": null,
+      "function_call_timeout_secs": null,
+      "realtime": null,
+      "tool_choice": "required",
+      "prefill_system_prompt": true
+    },
+    "tts_configuration": {
+      "provider": "elevenlabs",
+      "voice_id": "iB2rIwm9cQCRGWoKDRtX",
+      "model": "eleven_v3_conversational",
+      "language": null,
+      "speed": 1,
+      "stability": null,
+      "similarity_boost": null,
+      "volume": null,
+      "emotion": null,
+      "pitch": null,
+      "style_prompt": null,
+      "enable_ssml_parsing": null,
+      "enable_tts_caching": true
+    },
+    "initial_greeting": "Hi {customer_name}. I'm Ram from {shop_name}. I'm calling to confirm your order. Is this a good time to talk?",
+    "user_idle_configuration": {
+      "enabled": true,
+      "timeout": 10,
+      "idle_message": "The user has been quiet for a while. Call say_idle_reengage (or say_resume_confirm if the pending question was the order-confirmation question).",
+      "max_retries": 2
+    },
+    "dial_tone": true,
+    "enable_background_sound": false,
+    "background_sound_volume": 2,
+    "enable_text_input": true,
+    "interruption": {
+      "mode": "enabled",
+      "min_words": 1
+    },
+    "keyword_filter": {
+      "enabled": true,
+      "keywords": [
+        "hello",
+        "hi",
+        "yes",
+        "ok",
+        "okay",
+        "hmm",
+        "hm",
+        "yeah",
+        "haan",
+        "han",
+        "ha",
+        "ji",
+        "jee",
+        "acha",
+        "accha",
+        "theek",
+        "thik",
+        "right",
+        "sahi",
+        "बोलिए",
+        "बताइए",
+        "ओके",
+        "हैलो",
+        "हेलो",
+        "हलो",
+        "हाँ",
+        "हां",
+        "हा",
+        "जी",
+        "हाँजी",
+        "हांजी",
+        "हम्म",
+        "हूँ",
+        "अच्छा",
+        "ठीक",
+        "ठीक है",
+        "सही",
+        "यस",
+        "राइट",
+        "अरे",
+        "क्या"
+      ],
+      "match_type": "exact"
+    },
+    "observers": null
+  },
+  "flow": {
+    "mode": "tool_based",
+    "initial_node": "initial",
+    "nodes": [
+      {
+        "node_name": "initial",
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt",
+            "args": {
+              "duration": 4
+            }
+          }
+        ],
+        "post_actions": [],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "## COD ORDER CONFIRMATION CALL — TOOL-BASED\n\nYou are Ram, a male customer-support agent from {shop_name}, calling to confirm the customer's Cash on Delivery order. The greeting already introduced you — never introduce yourself again. You never write speech — your tools ARE your lines. Exactly one tool call per turn.\n\nLANGUAGE PICK: every tool comes in exactly two variants — _hi and _en. Pick the variant for the language the customer is speaking RIGHT NOW: Hindi/Hinglish replies → _hi, English replies → _en. The greeting was ENGLISH, so a first reply in English words (\"yes, tell me\") → _en, Hindi words (\"haan boliye\") → _hi. Once the customer settles on a language, keep using that variant; switch only when they explicitly switch. Never mix variants in one turn.\n\nCALL SHAPE:\n1. The greeting asked \"is this a good time to talk?\". A small yes/हाँ/जी/बोलिए means they can talk — that is availability, NEVER an order confirmation. Next turn: say_order_details. If they only greeted back (hello/नमस्ते), call say_availability_check first.\n2. THE WORD \"CONFIRM\": if the customer explicitly says confirm / \"confirm kar do\" / \"order confirm kar do\" at ANY point, call confirm_order IMMEDIATELY — no re-reading, no re-asking. This is the only shortcut in the call.\n3. say_order_details reads items, price and address and asks the confirmation question. AFTER that full read, a हाँ/जी/yes/ok IS the final confirmation → confirm_order. (A yes BEFORE the read is only availability.)\n4. Cancel: if their cancel request already contains a reason (\"cancel it, colour pasand nahi aaya\") → cancel_order immediately with that reason. If NO reason was given, say_cancel_confirm_once is MANDATORY before cancel_order — never cancel a bare \"cancel kar do\" directly. Then still want it? → say_cancel_reason_ask → their reply (or refusal) → cancel_order.\n5. Address update: field named AND new value given in one breath (\"pincode galat hai, sahi hai 560095\") → go straight to say_address_read_back with the merged full address. Field named, no value → the matching say_address_update_ask_* tool. Only \"address galat hai\" → say_address_update_ask_generic. After say_address_read_back, their हाँ/सही/confirm → update_address_and_confirm. ONCE IN THE UPDATE FLOW NEVER call confirm_order — the outcome is always update_address_and_confirm.\n6. Busy / driving / meeting / \"call later\" → say_busy_two_minutes once; if they still refuse → user_busy. Angry or abusive → user_busy immediately.\n7. Questions get their FAQ tool: price → say_faq_price, items → say_faq_items, address → say_faq_address, delivery time → say_faq_delivery_time, tracking → say_faq_track, \"how to cancel\" → say_faq_cancel_how, someone else receiving → say_faq_someone_else, damaged/wrong product → say_faq_return, who/why calling → say_faq_why_calling. Off-topic (politics, cricket, 'are you a robot?') → say_off_topic. Unknown question → say_kb_unknown. Every FAQ line already steers back to the order — a small yes after an FAQ is NOT a confirmation; only the word \"confirm\" or a yes AFTER say_order_details confirms. And before the order read has happened, a yes to a redirect line is ONLY availability — say_order_details comes first, never confirm_order.\n8. Didn't hear / asked to repeat → re-call the tool you called last (it repeats the exact line). A trailing fragment (\"तो मतलब वो...\", a sentence that stops midway) means they were still speaking — also re-call the last tool. Customer totally silent (no reply at all) → say_idle_reengage; if the pending question was the confirmation question → say_resume_confirm instead.\n9. A reply in a script you cannot read (Tamil, Telugu, Kannada, Malayalam, Bengali) is NOT agreement and NOT refusal: keep speaking Hindi (say_availability_check, or re-call the last tool), remember the code, and continue the call. Never pick an outcome tool on such a reply.\n\nYou cannot change items, size, colour or price — only confirm, cancel, or update the address. Never invent fees, delivery dates or policies."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "Order: {items}, price {total_price}, address {customer_address}, customer {customer_name}, shop {shop_name}. Stage machine: availability -> order read -> (confirm | cancel ladder | address ladder | FAQ detours) -> one outcome. One tool per turn."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "say_availability_check_hi",
+            "description": "Right after the greeting they only said hello/नमस्ते back, with no clear availability. Asks if now is a good time. Busy/refusal is NOT this — that is say_busy_two_minutes.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "Hello. क्या अभी बात कर सकते हैं?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_availability_check_en",
+            "description": "Right after the greeting they only said hello/नमस्ते back, with no clear availability. Asks if now is a good time. Busy/refusal is NOT this — that is say_busy_two_minutes.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Hello. Is this a good time to talk?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_order_details_hi",
+            "description": "They confirmed availability (or you just answered their who/why question). THE MAIN LINE — reads items, price and address and asks the confirmation question. Also the repeat when they ask you to say the details again.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "Okay. आपने {items} order किया है. {total_price} का. Address है, {customer_address}. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_order_details_en",
+            "description": "They confirmed availability (or you just answered their who/why question). THE MAIN LINE — reads items, price and address and asks the confirmation question. Also the repeat when they ask you to say the details again.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. You ordered {items}, for {total_price}. Delivery address is {customer_address}. Is that all correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_busy_two_minutes_hi",
+            "description": "They said they are busy / driving / in a meeting / call later. The one gentle two-minute ask. If they refuse again after this → user_busy.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "अच्छा, बस दो मिनट का काम है — details बता दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_busy_two_minutes_en",
+            "description": "They said they are busy / driving / in a meeting / call later. The one gentle two-minute ask. If they refuse again after this → user_busy.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Oh, it's just a two-minute thing — can I quickly share the details?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_cancel_confirm_once_hi",
+            "description": "They said cancel WITHOUT any reason. The gentle one-time check.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "हम्म, पक्का cancel कर दूँ? फिर order नहीं जाएगा."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_cancel_confirm_once_en",
+            "description": "They said cancel WITHOUT any reason. The gentle one-time check.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Hmm, sure you want to cancel? Then the order won't go."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_cancel_reason_ask_hi",
+            "description": "They confirmed they want to cancel but gave no reason. Asks why. Their reply becomes cancel_order's cancellation_reason.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. एक छोटा सा reason बता देंगे, cancel क्यों कर रहे हैं?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_cancel_reason_ask_en",
+            "description": "They confirmed they want to cancel but gave no reason. Asks why. Their reply becomes cancel_order's cancellation_reason.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. Could you share a quick reason — why are you cancelling?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_generic_hi",
+            "description": "They said the address is wrong / needs a change WITHOUT naming a field. Asks what to update.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. Address में क्या update करना है?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_generic_en",
+            "description": "They said the address is wrong / needs a change WITHOUT naming a field. Asks what to update.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. What would you like to update in the address?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_pincode_hi",
+            "description": "They said the pincode is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. नया pincode क्या है?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_pincode_en",
+            "description": "They said the pincode is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. What is the new pincode?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_house_hi",
+            "description": "They said the house/door/flat number is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. नया घर नंबर क्या है?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_house_en",
+            "description": "They said the house/door/flat number is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. What is the new house number?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_street_hi",
+            "description": "They said the street/gali is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. नई गली/सड़क का नाम क्या है?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_street_en",
+            "description": "They said the street/gali is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. What is the new street name?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_landmark_hi",
+            "description": "They said the landmark is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. नया landmark क्या है?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_address_update_ask_landmark_en",
+            "description": "They said the landmark is wrong but did NOT give the new one.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. What is the new landmark?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_address_read_back_hi",
+            "description": "You have the complete updated address (they gave the new value with the complaint, or just answered an ask_* question). Reads it back and asks if it is correct. Their next हाँ/सही → update_address_and_confirm.",
+            "properties": {
+              "updated_address": {
+                "type": "string",
+                "description": "The COMPLETE updated address: the original address ({customer_address}) with ONLY their stated changes applied. Copy the unchanged parts exactly as the payload has them; never invent, translate or drop anything."
+              }
+            },
+            "required": [
+              "updated_address"
+            ],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. मैंने updated address note कर लिया है. {updated_address}. यही सही है ना? Order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_address_read_back_en",
+            "description": "You have the complete updated address (they gave the new value with the complaint, or just answered an ask_* question). Reads it back and asks if it is correct. Their next हाँ/सही → update_address_and_confirm.",
+            "properties": {
+              "updated_address": {
+                "type": "string",
+                "description": "The COMPLETE updated address: the original address ({customer_address}) with ONLY their stated changes applied. Copy the unchanged parts exactly as the payload has them; never invent, translate or drop anything."
+              }
+            },
+            "required": [
+              "updated_address"
+            ],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Okay. I have noted the updated address as {updated_address}. Is that correct? Should I confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_idle_reengage_hi",
+            "description": "The customer has gone silent and no confirmation question was pending.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "Hello, आप call पे हैं?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_idle_reengage_en",
+            "description": "The customer has gone silent and no confirmation question was pending.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Hello, are you there?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_resume_confirm_hi",
+            "description": "The customer went SILENT — no reply at all — while the order-confirmation question was the pending question. Re-asks just that question. Any reply of any kind is NEVER this tool: a हाँ/जी/ok to the pending confirmation question is confirm_order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_resume_confirm_en",
+            "description": "The customer went SILENT — no reply at all — while the order-confirmation question was the pending question. Re-asks just that question. Any reply of any kind is NEVER this tool: a हाँ/जी/ok to the pending confirmation question is confirm_order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Is everything correct? Shall I confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_price_hi",
+            "description": "They asked the price / total / kitna paisa.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. आपके order का price {total_price} है. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_price_en",
+            "description": "They asked the price / total / kitna paisa.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. The price of the order is {total_price}. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_items_hi",
+            "description": "They asked what items / what they ordered / kya order kiya.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. आपने {items} order किया है. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_items_en",
+            "description": "They asked what items / what they ordered / kya order kiya.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. You have ordered {items}. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_address_hi",
+            "description": "They asked what the delivery address is.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. आपका delivery address है: {customer_address}. यही सही है ना?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_address_en",
+            "description": "They asked what the delivery address is.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. The delivery address is {customer_address}. Is that correct?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_delivery_time_hi",
+            "description": "They asked when the order will arrive / delivery time.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. Delivery details के लिए कृपया {shop_name} support से संपर्क करें. Delivery location के अनुसार समय लगता है. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_delivery_time_en",
+            "description": "They asked when the order will arrive / delivery time.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. Please contact {shop_name} support for delivery details. The duration depends on the location. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_track_hi",
+            "description": "They asked how to track the order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. Order ship होने के बाद आपको SMS या WhatsApp पर tracking details मिल जाएँगी. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_track_en",
+            "description": "They asked how to track the order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. Once shipped, an SMS or WhatsApp message with tracking details will be sent. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_cancel_how_hi",
+            "description": "They asked how they can cancel the order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. आप इसी call पर अपना order cancel कर सकते हैं. Dispatch से पहले cancel करने पर order नहीं भेजा जाएगा. बताइए, cancel करना है?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_cancel_how_en",
+            "description": "They asked how they can cancel the order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. Cancellation can be done during this call. If cancelled before dispatch, it will not be shipped. So — do you want to cancel?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_someone_else_hi",
+            "description": "They asked if someone else can receive the order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी हाँ. Address पर मौजूद कोई भी व्यक्ति order ले सकता है और payment कर सकता है. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_someone_else_en",
+            "description": "They asked if someone else can receive the order.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Yes. Any trusted person present at the address may receive the package and make the payment. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_return_hi",
+            "description": "They asked what happens if the product is damaged / wrong, or about returns.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. Damaged या गलत item के लिए {shop_name} support team से return या replacement का request किया जा सकता है. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_return_en",
+            "description": "They asked what happens if the product is damaged / wrong, or about returns.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. A return or replacement request can be raised with the {shop_name} support team for damaged or incorrect items. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_faq_why_calling_hi",
+            "description": "They asked who is calling or why you are calling.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी. मैं {shop_name} के customer support से बोल रहा हूँ. Cash on delivery order को verify करने के लिए ही call किया है. बताइए, अभी बात कर सकते हैं?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_faq_why_calling_en",
+            "description": "They asked who is calling or why you are calling.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Sure. I'm calling from {shop_name} customer support, to verify your cash on delivery order. So — is now a good time to talk?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_off_topic_hi",
+            "description": "They asked something not related to the order, items, address or price at all.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "हम्म, मैं तो बस order confirm, cancel या address update में मदद कर सकता हूँ. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_off_topic_en",
+            "description": "They asked something not related to the order, items, address or price at all.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Hmm, I can really only help with confirming, cancelling, or updating the address. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "say_kb_unknown_hi",
+            "description": "An order-related question none of the FAQ tools answer and the knowledge base does not cover.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "उम्म. इसकी मुझे जानकारी नहीं है. मैं तो बस आपका order confirm करने के लिए call कर रहा हूँ. सब ठीक है ना, मैं order confirm कर दूँ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "say_kb_unknown_en",
+            "description": "An order-related question none of the FAQ tools answer and the knowledge base does not cover.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Hmm. I don't have that information. I'm just calling to confirm your order. Is everything correct so I can confirm your order?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en"
+            }
+          },
+          {
+            "function_name": "confirm_order_hi",
+            "description": "The customer confirmed the order: either an explicit 'confirm' at ANY point, or a हाँ/जी/yes/ok/ठीक है said AFTER say_order_details finished — including right after an FAQ line, because every FAQ line ends with the confirmation question (or after say_address_read_back → use update_address_and_confirm instead). BEFORE say_order_details has run this call, a yes is ONLY availability — never this tool; say_order_details comes first. Speaks the thank-you closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              }
+            },
+            "required": [
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "CONFIRM",
+                    "source": "static"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "Thank you. आपका order confirm हो गया है. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "confirm_order_en",
+            "description": "The customer confirmed the order: either an explicit 'confirm' at ANY point, or a हाँ/जी/yes/ok/ठीक है said AFTER say_order_details finished — including right after an FAQ line, because every FAQ line ends with the confirmation question (or after say_address_read_back → use update_address_and_confirm instead). BEFORE say_order_details has run this call, a yes is ONLY availability — never this tool; say_order_details comes first. Speaks the thank-you closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              }
+            },
+            "required": [
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "CONFIRM",
+                    "source": "static"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Thank you. Your order is confirmed. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "cancel_order_hi",
+            "description": "The customer wants to cancel AND (the reason was already given with the request, OR they confirmed say_cancel_confirm_once and answered say_cancel_reason_ask, OR they refused to give a reason after being asked). Speaks the cancellation closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              },
+              "cancellation_reason": {
+                "type": "string",
+                "description": "Why they are cancelling, in their own words (keep Hindi words Hindi, English words English — do not translate). 'No specific reason provided' if they refused to give one."
+              }
+            },
+            "required": [
+              "cancellation_reason",
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "CANCEL",
+                    "source": "static"
+                  },
+                  "cancellation_reason": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है. आपका order cancel हो गया है. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "cancel_order_en",
+            "description": "The customer wants to cancel AND (the reason was already given with the request, OR they confirmed say_cancel_confirm_once and answered say_cancel_reason_ask, OR they refused to give a reason after being asked). Speaks the cancellation closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              },
+              "cancellation_reason": {
+                "type": "string",
+                "description": "Why they are cancelling, in their own words (keep Hindi words Hindi, English words English — do not translate). 'No specific reason provided' if they refused to give one."
+              }
+            },
+            "required": [
+              "cancellation_reason",
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "CANCEL",
+                    "source": "static"
+                  },
+                  "cancellation_reason": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Alright. Your order has been cancelled. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "update_address_and_confirm_hi",
+            "description": "The customer confirmed the read-back of the updated address (हाँ/सही after say_address_read_back). The ONLY outcome allowed once the update flow started — never confirm_order there. Speaks the updated-and-confirmed closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              },
+              "updated_address": {
+                "type": "string",
+                "description": "The COMPLETE updated address you read back and they confirmed — exactly the one from the last say_address_read_back call. Copy it unchanged."
+              }
+            },
+            "required": [
+              "updated_address",
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "ADDRESS_UPDATED",
+                    "source": "static"
+                  },
+                  "updated_address": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "Thank you. आपका delivery address update हो गया है और आपका order confirm हो गया है. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "update_address_and_confirm_en",
+            "description": "The customer confirmed the read-back of the updated address (हाँ/सही after say_address_read_back). The ONLY outcome allowed once the update flow started — never confirm_order there. Speaks the updated-and-confirmed closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              },
+              "updated_address": {
+                "type": "string",
+                "description": "The COMPLETE updated address you read back and they confirmed — exactly the one from the last say_address_read_back call. Copy it unchanged."
+              }
+            },
+            "required": [
+              "updated_address",
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "ADDRESS_UPDATED",
+                    "source": "static"
+                  },
+                  "updated_address": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Thank you. Your delivery details have been updated and your order is confirmed. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "user_busy_hi",
+            "description": "The customer stayed busy after say_busy_two_minutes, or is angry / abusive, or asked to call later a second time, or this is the WRONG PERSON — they are not the customer / wrong number / the customer is not there. A 'नहीं' alone is never a cancel: 'नहीं, मैं Rahul नहीं हूँ' is wrong-person (this tool), 'नहीं, order नहीं चाहिए' is the cancel ladder. Speaks the polite closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              }
+            },
+            "required": [
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "BUSY",
+                    "source": "static"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "Thank you. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "user_busy_en",
+            "description": "The customer stayed busy after say_busy_two_minutes, or is angry / abusive, or asked to call later a second time, or this is the WRONG PERSON — they are not the customer / wrong number / the customer is not there. A 'नहीं' alone is never a cancel: 'नहीं, मैं Rahul नहीं हूँ' is wrong-person (this tool), 'नहीं, order नहीं चाहिए' is the cancel ladder. Speaks the polite closing and ends the call.",
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "'none' unless the customer spoke an unsupported language (Telugu, Kannada, Tamil, Malayalam, Bengali) at any point — then the 2-letter code (te/kn/ta/ml/bn). Remember the code from the moment you hear it and keep running the call in Hindi; when the call ends for a real reason (confirm/cancel/busy), pass the remembered code here, not 'none'. NEVER end or classify the call just to report the code, and an unreadable reply is not agreement and not refusal."
+              }
+            },
+            "required": [
+              "unsupported_language_code"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "BUSY",
+                    "source": "static"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "en": [
+                  "Thank you. Have a nice day."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "en",
+              "end_call": true
+            }
+          }
+        ]
+      }
+    ],
+    "end_conversation_callbacks": [
+      "service_callback"
+    ]
+  }
+}

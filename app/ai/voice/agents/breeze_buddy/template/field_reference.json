@@ -686,6 +686,48 @@
           }
         }
       ]
+    },
+    "say": {
+      "description": "tool_based mode only. Template-authored speech side effect: when the LLM calls this function, the handler renders one utterance from this block (language picked from the 'language' argument, falling back to default_language / first key) and pushes it to TTS via TTSSpeakFrame(append_to_context=True). The model never generates spoken prose. {placeholder} tokens substitute from the function arguments first, then payload variables.",
+      "example": {
+        "utterances": {
+          "hi": [
+            "आपकी उम्र क्या है?"
+          ],
+          "en": [
+            "May I know your age?"
+          ]
+        },
+        "phrasing": "random",
+        "default_language": "hi",
+        "end_call": false
+      }
+    }
+  },
+  "SayConfig": {
+    "_description": "Speech side effect for tool_based functions. The function talks; the model only picks it.",
+    "utterances": {
+      "description": "language code -> list of utterance variants. At least one language required.",
+      "example": {
+        "hi": [
+          "धन्यवाद!"
+        ],
+        "en": [
+          "Thank you!"
+        ]
+      }
+    },
+    "phrasing": {
+      "description": "Variant selection: 'random' (fresh pick per call, default) or 'first' (always the first variant, deterministic).",
+      "example": "random"
+    },
+    "default_language": {
+      "description": "Language used when the call passes no 'language' argument. Falls back to the first utterances key when unset.",
+      "example": "hi"
+    },
+    "end_call": {
+      "description": "Speak the utterance, then run the full end_conversation finalization (DB update, callbacks, hangup). For goodbye tools; any transition_to is ignored.",
+      "example": false
     }
   },
   "RequestFlowFunction": {

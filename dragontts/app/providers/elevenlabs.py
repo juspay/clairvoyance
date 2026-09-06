@@ -10,6 +10,13 @@ and the streaming path live-forwards 16 kHz chunks to a 16 kHz caller. A
 separate conversion layer (app/audio/format.py) maps this to the caller's
 requested ``output_format`` (e.g. μ-law 8 kHz for telephony) before caching.
 
+EXCEPTION — eleven_v3 models: the Text-to-Dialogue socket synthesizes NATIVELY
+at 8 kHz (``output_format=pcm_8000``; probe-confirmed supported), so v3 audio is
+generated directly at the telephony rate instead of being synthesized at 16 kHz
+and resampled after generation. Cache entries for v3 phrases therefore store
+``pcm_s16le@8000`` and a μ-law 8 kHz request is a same-rate encode (no
+resample), keeping the served audio untouched by the conversion layer.
+
 Two paths:
 - :meth:`synth` — one-shot HTTP ``/v1/text-to-speech/{voice}`` (used by
   ``/tts/bytes`` misses, stitch, and the warmer).
@@ -48,9 +55,16 @@ class ElevenLabsProvider(BaseTTSProvider):
     name = "elevenlabs"
     # Native PCM @ 16 kHz so the conversation path streams live and the cache
     # entry serves every requested format on read (μ-law/telephony is produced
-    # by convert-on-serve, as for the other 16 kHz-native providers).
+    # by convert-on-serve, as for the other 16 kHz-native providers). v3 models
+    # are the exception — see synth_native_format below.
     native_encoding = "pcm_s16le"
     native_sample_rate = 16000
+
+    def synth_native_format(self, model: str | None = None) -> tuple[str, int]:
+        """v3 (Text-to-Dialogue) synthesizes natively at 8 kHz; classic at 16 kHz."""
+        if is_elevenlabs_v3_model(model):
+            return "pcm_s16le", 8000
+        return self.native_encoding, self.native_sample_rate
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
         """Initialize the provider.
@@ -136,7 +150,17 @@ class ElevenLabsProvider(BaseTTSProvider):
         <break/> tags for ALL its utterances, and language_code pins the socket's
         language, so differing values can't share one socket.
         """
-        if not self.api_key or settings.elevenlabs_stream_pool_size < 1:
+        if not self.api_key:
+            return None
+        # v3 (Text-to-Dialogue) pools are sized by their own knob: TTD sockets
+        # hold a permanent keepalive context and eleven_v3 has NO HTTP
+        # fallback, so they warm independently of the classic pool size.
+        pool_size = (
+            settings.elevenlabs_dialogue_pool_size
+            if is_elevenlabs_v3_model(model_id)
+            else settings.elevenlabs_stream_pool_size
+        )
+        if pool_size < 1:
             return None
         # Non-multilingual models ignore language on the socket (the pool only
         # sends language_code for multilingual models), so normalize it out of
@@ -157,13 +181,17 @@ class ElevenLabsProvider(BaseTTSProvider):
                 model_id=model_id,
                 base_url=self.base_url,
                 idle_timeout=settings.elevenlabs_stream_idle_timeout,
-                min_size=settings.elevenlabs_stream_pool_size,
-                max_size=max(
-                    settings.elevenlabs_stream_pool_size * 2,
-                    settings.elevenlabs_stream_pool_size + 4,
-                ),
+                min_size=pool_size,
+                max_size=max(pool_size * 2, pool_size + 4),
                 enable_ssml_parsing=enable_ssml_parsing,
                 language=language,
+                # v3 sockets synthesize at the telephony rate (no post-generation
+                # resample); classic sockets keep the 16 kHz cache-native rate.
+                output_format=(
+                    "pcm_8000"
+                    if is_elevenlabs_v3_model(model_id)
+                    else "pcm_16000"
+                ),
             )
             self._pools[key] = pool
         return pool
@@ -233,6 +261,17 @@ class ElevenLabsProvider(BaseTTSProvider):
         final_model_id = model if model else defaults["model"]
         final_language = language if language else defaults["language"]
 
+        if is_elevenlabs_v3_model(final_model_id):
+            # Eleven v3 exists ONLY on the Text-to-Dialogue socket — the
+            # classic /v1/text-to-speech endpoint below returns 404 for it.
+            return await self._synth_v3(
+                text=text,
+                voice_id=final_voice_id,
+                model=final_model_id,
+                language=final_language,
+                params=params,
+            )
+
         url = f"{self.base_url}/v1/text-to-speech/{final_voice_id}?output_format=pcm_16000"
         headers = {
             "xi-api-key": self.api_key,
@@ -282,6 +321,51 @@ class ElevenLabsProvider(BaseTTSProvider):
             sample_rate=16000,
         )
 
+    async def _synth_v3(
+        self,
+        *,
+        text: str,
+        voice_id: str,
+        model: str,
+        language: str | None,
+        params: dict,
+    ) -> AudioResult:
+        """One-shot eleven_v3 synth: one Text-to-Dialogue utterance, joined.
+
+        The bytes path (/tts/bytes, warmer) previously fell through to the
+        classic HTTP endpoint, which 404s for v3 — v3 is TTD-only. Speak the
+        utterance over the warm TTD pool (the same socket stream_synth uses)
+        and accumulate the clip. There is no HTTP fallback, so a pool failure
+        propagates (the API layer maps it to 502/503).
+        """
+        if params.get("enable_ssml_parsing"):
+            logger.warning(
+                "enable_ssml_parsing requested with an eleven_v3 model — "
+                "not supported on v3; ignoring"
+            )
+        lang_code = language.split("-")[0] if language else None
+        pool = self._get_pool(voice_id, model, False, lang_code)
+        if pool is None:
+            raise ProviderError(
+                "ElevenLabs v3 requires the stream pool "
+                "(ELEVENLABS_DIALOGUE_POOL_SIZE >= 1) — Text-to-Dialogue has "
+                "no HTTP endpoint"
+            )
+        logger.info(
+            f"Synthesizing with ElevenLabs Text-to-Dialogue (pcm_8000): "
+            f"{text[:50]}... [voice_id={voice_id}, model_id={model}]"
+        )
+        msg = {"text": text, "voice_settings": self._voice_settings(params, model)}
+        chunks = []
+        async for chunk in pool.stream(msg):
+            chunks.append(chunk)
+        return AudioResult(
+            audio=b"".join(chunks),
+            container="raw",
+            encoding="pcm_s16le",
+            sample_rate=8000,
+        )
+
     async def stream_synth(
         self,
         *,
@@ -316,8 +400,13 @@ class ElevenLabsProvider(BaseTTSProvider):
             "voice_settings": self._voice_settings(params, final_model_id),
         }
         # SSML is a connect-time socket setting (see _get_pool / pool URI), so it
-        # selects which warm pool to use — not a per-message field.
-        ssml = bool(params.get("enable_ssml_parsing"))
+        # selects which warm pool to use — not a per-message field. v3 never
+        # takes it (Text-to-Dialogue has no SSML support), so it's normalized
+        # out of the key — keeping it would split the v3 pool in two for no
+        # effect, and the bytes path (_synth_v3) always passes False.
+        ssml = bool(params.get("enable_ssml_parsing")) and not is_elevenlabs_v3_model(
+            final_model_id
+        )
         logger.info(
             f"Streaming via ElevenLabs multi-context WS: {text[:50]}... "
             f"[voice_id={final_voice_id}, model_id={final_model_id}, ssml={ssml}]"

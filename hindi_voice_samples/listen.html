@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hindi Voice Comparison — Breeze Buddy</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 16px; background: #fafafa; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  .note { color: #555; font-size: 0.9rem; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: middle; font-size: 0.92rem; }
+  th { background: #f0f0f0; }
+  audio { width: 320px; height: 36px; }
+  .tag { display: inline-block; background: #e8f0fe; color: #1a56db; border-radius: 4px; padding: 1px 6px; font-size: 0.78rem; margin-right: 4px; }
+  .win { background: #e6f4ea; }
+  code { background: #f4f4f4; padding: 1px 5px; border-radius: 4px; font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<h1>Hindi voice comparison — realistic telephony agent</h1>
+<p class="note">
+  Same line spoken by every voice: <em>“नमस्ते राहुल जी, मैं ब्रीज़ फाइनेंस से बोल रहा/रही हूँ। आपके कार लोन की अगली किस्त पाँच तारीख़ को निकलनी है…”</em><br>
+  Generated 2026-09-05 via the ElevenLabs <b>Indian residency</b> key (production) and Sarvam production key. Recommended picks are highlighted green.
+</p>
+<table>
+  <tr><th>#</th><th>Provider / model</th><th>Voice</th><th>Gender</th><th>Listen</th></tr>
+  <tr class="win"><td>1</td><td>ElevenLabs <code>eleven_v3</code></td><td><b>Krishna – Human-Like Sales Agent</b> <code>iB2rIwm9cQCRGWoKDRtX</code></td><td>Male</td><td><audio controls src="01_el_v3_krishna_male.mp3"></audio></td></tr>
+  <tr class="win"><td>2</td><td>ElevenLabs <code>eleven_v3</code></td><td><b>Saavi – Warm Customer Care</b> <code>81xnrLNObbKDEs179emP</code></td><td>Female</td><td><audio controls src="02_el_v3_saavi_female.mp3"></audio></td></tr>
+  <tr><td>3</td><td>ElevenLabs <code>eleven_v3</code></td><td>Zara – Sweet &amp; Gentle <code>k2intd1ORm0YUH8etnXg</code></td><td>Female</td><td><audio controls src="03_el_v3_zara_female.mp3"></audio></td></tr>
+  <tr><td>4</td><td>ElevenLabs <code>eleven_v3</code></td><td>Ayesha <span class="tag">current default</span> <code>fG9s0SXJb213f4UxVHyG</code></td><td>Female</td><td><audio controls src="04_el_v3_ayesha_current_default_female.mp3"></audio></td></tr>
+  <tr><td>5</td><td>ElevenLabs <code>eleven_v3</code></td><td>Krishna + <code>[warmly]</code> audio tag, stability 0.4 <span class="tag">expressiveness demo</span></td><td>Male</td><td><audio controls src="05_el_v3_krishna_male_warm_tag.mp3"></audio></td></tr>
+  <tr><td>6</td><td>ElevenLabs <code>eleven_multilingual_v2</code></td><td>Krishna <code>iB2rIwm9cQCRGWoKDRtX</code></td><td>Male</td><td><audio controls src="06_el_ml2_krishna_male.mp3"></audio></td></tr>
+  <tr><td>7</td><td>ElevenLabs <code>eleven_multilingual_v2</code></td><td>Saavi <code>81xnrLNObbKDEs179emP</code></td><td>Female</td><td><audio controls src="07_el_ml2_saavi_female.mp3"></audio></td></tr>
+  <tr><td>8</td><td>Sarvam <code>bulbul:v3</code></td><td>aditya</td><td>Male</td><td><audio controls src="08_sarvam_v3_aditya_male.wav"></audio></td></tr>
+  <tr><td>9</td><td>Sarvam <code>bulbul:v3</code></td><td>shreya</td><td>Female</td><td><audio controls src="09_sarvam_v3_shreya_female.wav"></audio></td></tr>
+  <tr><td>10</td><td>Sarvam <code>bulbul:v3</code></td><td>priya</td><td>Female</td><td><audio controls src="10_sarvam_v3_priya_female.wav"></audio></td></tr>
+</table>
+<p class="note">
+  <b>Cartesia is not represented:</b> the workspace has no Hindi voices, and every <code>language=hi</code> (even <code>fr</code>) synthesis attempt from this account fails with “Voice not found” — not a viable Hindi option today.
+</p>
+
+<h1 style="margin-top:32px">Newly cloned from the ElevenLabs Voice Library (2026-09-05)</h1>
+<p class="note">
+  Voices below were shared in the official library <b>with cloning allowed</b> (owner opted in), picked for telephony/customer-care fit and popularity, then added to your workspace via the Indian-residency key.
+  All speak the same line on <code>eleven_v3</code>. Recommended picks highlighted green.
+</p>
+<table>
+  <tr><th>#</th><th>Voice</th><th>Gender</th><th>Popularity (clones / 1y usage)</th><th>Listen (eleven_v3)</th><th>Library preview</th></tr>
+  <tr class="win"><td>11</td><td><b>Rahul S – Professional Hindi Conversational</b> <code>2cdvnKJ5TZi631y5PN1s</code></td><td>Male</td><td>38,111 clones / 49.5M chars</td><td><audio controls src="11_cloned_v3_rahul_s_male.mp3"></audio></td><td><audio controls src="preview_2cdvnKJ5TZi631y5PN1s.mp3"></audio></td></tr>
+  <tr><td>12</td><td>Ram – Inviting, Calm and Smooth <code>tCFpS0oe1uFHQwE0P2QX</code></td><td>Male</td><td>8,576 / 10M</td><td><audio controls src="12_cloned_v3_ram_male.mp3"></audio></td><td><audio controls src="preview_tCFpS0oe1uFHQwE0P2QX.mp3"></audio></td></tr>
+  <tr><td>13</td><td>Vikram S – Clear &amp; Respectful <code>SLa3GDQHUGaRpH5GNvFL</code></td><td>Male</td><td>7,543 / 11.9M</td><td><audio controls src="13_cloned_v3_vikram_s_male.mp3"></audio></td><td><audio controls src="preview_SLa3GDQHUGaRpH5GNvFL.mp3"></audio></td></tr>
+  <tr><td>14</td><td>Sia – Warm &amp; Real Companion <code>obCt3PJwDboXIUqNye4e</code></td><td>Female</td><td>382 / 0.2M</td><td><audio controls src="14_cloned_v3_sia_female.mp3"></audio></td><td><audio controls src="preview_obCt3PJwDboXIUqNye4e.mp3"></audio></td></tr>
+  <tr class="win"><td>15</td><td><b>Devi – Warm E-Comm Customer Care</b> <code>HBlqQDCBvQxsEK8OFtEZ</code></td><td>Female</td><td>5,740 / 30M</td><td><audio controls src="15_cloned_v3_devi_female.mp3"></audio></td><td><audio controls src="preview_HBlqQDCBvQxsEK8OFtEZ.mp3"></audio></td></tr>
+  <tr class="win"><td>16</td><td><b>Kanika – Warm, Expressive and Natural</b> <code>C2S5J6WvmHnrQWjUu6Rg</code></td><td>Female</td><td>71,715 / 91.6M chars</td><td><audio controls src="16_cloned_v3_kanika_female.mp3"></audio></td><td><audio controls src="preview_C2S5J6WvmHnrQWjUu6Rg.mp3"></audio></td></tr>
+</table>
+<p class="note">
+  Also worth hearing from the library (not added): Tia Mirza – Rich Premium Ad, Tripti – Clear Insurance SDR Agent, Anjali – Warm Cheerful and Clear, Rivan – Deep Caring and Relatable.
+</p>
+</body>
+</html>

@@ -1,5 +1,6 @@
 """Pipeline creation and service initialization for voice agents."""
 
+import os
 from datetime import datetime
 from typing import Any, Callable, Literal, Optional
 from zoneinfo import ZoneInfo
@@ -46,12 +47,19 @@ from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
     KnowledgeRetrievalProcessor,
+    ToolModeProseGuardProcessor,
     TranscriptCollectorProcessor,
     TranscriptionGateProcessor,
     UserIdleCallbackHandler,
 )
+from app.ai.voice.agents.breeze_buddy.processors.interruption_audio_guard import (
+    InterruptionAudioGuardProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.processors.metrics_collector_processor import (
     MetricsCollectorProcessor,
+)
+from app.ai.voice.agents.breeze_buddy.processors.stt_timing_tap import (
+    STTTimingTapProcessor,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -70,6 +78,24 @@ from app.core.config.static import (
     ENVIRONMENT,
 )
 from app.core.logger import logger
+
+
+def interruption_audio_guard_enabled() -> bool:
+    """Kill-switch for the InterruptionAudioGuardProcessor (default OFF).
+
+    The guard drops TTS audio between an interruption and the next
+    utterance so stale chunks can't replay as an echo on the carrier. Its
+    first live wiring (2026-09-06 16:16) silenced the call — the processor
+    overrode process_frame without calling super(), so pipecat never
+    created its frame-processing task and no audio frame was ever
+    forwarded. That bug is fixed and regression-tested; the flag keeps the
+    guard off until a live call re-verifies it. Set to true/1 to enable.
+    """
+    return os.environ.get("BREEZE_BUDDY_INTERRUPTION_AUDIO_GUARD", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def get_observers() -> list[Any]:
@@ -111,12 +137,16 @@ def generate_conversation_id(payload: Optional[dict]) -> str:
 async def create_services(
     configurations: Optional[ConfigurationModel],
     include_llm: bool = True,
+    tts_out_sample_rate: Optional[int] = None,
 ) -> tuple[Optional[Any], Optional[Any], Optional[Any]]:
     """Create STT, LLM, and TTS services.
 
     Args:
         configurations: Template configuration model
         include_llm: When False, skip LLM creation (stream mode). LLM will be None.
+        tts_out_sample_rate: Transport audio output rate when known (telephony
+            = 8000). Passed through to TTS services that can request audio at
+            the transport's native rate instead of resampling client-side.
 
     Returns:
         Tuple of (stt_service, llm_service_or_None, tts_service). For realtime
@@ -174,7 +204,7 @@ async def create_services(
         template_voice_config, voice_config_overrides
     )
     logger.info(f"Resolved voice config: provider={voice_config.provider.value}")
-    tts = await get_tts_service(voice_config)
+    tts = await get_tts_service(voice_config, tts_out_sample_rate=tts_out_sample_rate)
 
     return stt, llm, tts
 
@@ -207,6 +237,7 @@ async def build_pipeline(
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
     mode: Literal["agent", "stream"] = "agent",
     kb_processor: Optional[KnowledgeRetrievalProcessor] = None,
+    tool_based_mode: bool = False,
 ) -> tuple[
     Pipeline,
     LLMContext,
@@ -248,6 +279,10 @@ async def build_pipeline(
         kb_processor: KnowledgeRetrievalProcessor for per-turn KB retrieval
             (auto_retrieve mode). Agent mode only — inserted between the user
             aggregator and the LLM; ignored in stream/realtime modes
+        tool_based_mode: When True (template flow.mode == "tool_based"),
+            insert ToolModeProseGuardProcessor between the LLM and TTS so
+            any model-authored prose is dropped — all speech comes from
+            the called tool's template-authored say block. Agent mode only.
 
     Returns:
         7-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, transcript_collector, metrics_collector)
@@ -261,7 +296,9 @@ async def build_pipeline(
     """
     is_stream = mode == "stream"
 
-    # Create the metrics collector processor
+    # Create the metrics collector processor. Purely additive: it records the
+    # new turn-level ttfc and lets every existing metric (including the raw
+    # LLM ttfb and all realtime metrics) through unchanged.
     metrics_collector = MetricsCollectorProcessor()
 
     # Realtime / speech-to-speech: when create_services returns no STT and no
@@ -508,9 +545,23 @@ async def build_pipeline(
     if is_stream:
         transcript_collector = TranscriptCollectorProcessor()
 
+    # Turn-level TTFT: the TTS service fires on_tts_request after sentence
+    # aggregation, right before synthesis — exactly the "first sentence handed
+    # to TTS" boundary. Realtime has no TTS service, so nothing to wire.
+    if tts is not None:
+
+        @tts.event_handler("on_tts_request")
+        async def _note_first_sentence_to_tts(
+            service: Any, context_id: str, text: str
+        ) -> None:
+            metrics_collector.note_tts_request()
+
     # Pipeline order:
-    #   agent mode:  input → stt → gate → user_aggregator → llm → tts → output → assistant_aggregator
+    #   agent mode:  input → stt → gate → user_aggregator → llm → [prose_guard] → tts → output → assistant_aggregator
     #   stream mode: input → stt → gate → transcript_collector → user_aggregator → tts → output
+    #
+    # [prose_guard] = ToolModeProseGuardProcessor, present only in
+    # tool_based mode (model prose is dropped; tool say-blocks speak).
     #
     # Collector sits BEFORE user_aggregator because the aggregator swallows
     # TranscriptionFrame (handled internally, not pushed downstream). TTSSpeakFrames
@@ -520,13 +571,34 @@ async def build_pipeline(
     # UserTurnStrategies — no custom response gate needed.
     # Note: RTVIProcessor is added automatically by PipelineTask (pipecat v0.0.102+)
     # when enable_rtvi=True (default). No need to add it to the pipeline manually.
-    pipeline_parts: list[Any] = [transport.input(), stt, transcription_gate]
+    pipeline_parts: list[Any] = [
+        transport.input(),
+        stt,
+        transcription_gate,
+        # Last spot where interim/final transcripts still flow — the user
+        # aggregator downstream swallows them, so the collector's STT
+        # finalize measurement is fed from here.
+        STTTimingTapProcessor(metrics_collector),
+    ]
     if is_stream:
         assert transcript_collector is not None
         pipeline_parts.append(transcript_collector)
     pipeline_parts.append(user_aggregator)
     if is_stream:
-        pipeline_parts.extend([tts, metrics_collector, transport.output()])
+        pipeline_parts.extend(
+            [
+                tts,
+                # Echo guard is flag-gated OFF (see the comment in the
+                # non-stream branch below for why).
+                *(
+                    [InterruptionAudioGuardProcessor()]
+                    if interruption_audio_guard_enabled()
+                    else []
+                ),
+                metrics_collector,
+                transport.output(),
+            ]
+        )
     else:
         # Generative voice UI (a VoiceUiStreamProcessor tapping LLM text between
         # the LLM and TTS to emit `ui-op` RTVI events) is DEFERRED — the
@@ -536,10 +608,28 @@ async def build_pipeline(
         # retrieval finishes (or fails open) before this turn's inference.
         if kb_processor is not None:
             pipeline_parts.append(kb_processor)
+        pipeline_parts.append(llm)
+        if tool_based_mode:
+            # tool_based: model prose never reaches TTS (or the assistant
+            # aggregator downstream of it) — only TTSSpeakFrames from the
+            # called tool's say block speak.
+            pipeline_parts.append(ToolModeProseGuardProcessor())
         pipeline_parts.extend(
             [
-                llm,
                 tts,
+                # Stale TTS chunks racing past the interruption flush would be
+                # written to the carrier AFTER its clear event and replay as
+                # an "echo" of the interrupted line. The first wiring
+                # (2026-09-06 16:16) silenced the call — the processor
+                # overrode process_frame without calling super(), so pipecat
+                # never created its frame-processing task and no audio frame
+                # was ever forwarded. Fixed + regression-tested; OFF by
+                # default until re-verified on a live call.
+                *(
+                    [InterruptionAudioGuardProcessor()]
+                    if interruption_audio_guard_enabled()
+                    else []
+                ),
                 metrics_collector,
                 transport.output(),
                 context_aggregator.assistant(),

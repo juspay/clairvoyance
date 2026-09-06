@@ -306,7 +306,7 @@ class CacheService:
         if instance is None:
             raise ProviderNotConfigured(provider)
         gate = get_gate(provider)
-        text = prepend_leading_dot(req.transcript, provider)
+        text = prepend_leading_dot(req.transcript, provider, model)
         async with gate:
             t0 = time.perf_counter()
             if req.params.get("enable_ssml_parsing"):
@@ -324,11 +324,12 @@ class CacheService:
                     params=req.params,
                 ):
                     chunks.append(chunk)
+                ssml_enc, ssml_rate = instance.synth_native_format(model)
                 result = AudioResult(
                     audio=b"".join(chunks),
                     container="raw",
-                    encoding=instance.native_encoding,
-                    sample_rate=instance.native_sample_rate,
+                    encoding=ssml_enc,
+                    sample_rate=ssml_rate,
                 )
             else:
                 result = await instance.synth(
@@ -857,12 +858,11 @@ class CacheService:
         if instance is None:
             raise ProviderNotConfigured(provider)
 
-        if _same_format(
-            of.encoding,
-            of.sample_rate,
-            instance.native_encoding,
-            instance.native_sample_rate,
-        ):
+        # Model-aware native format (e.g. ElevenLabs v3 synthesizes at 8 kHz
+        # while classic models run at 16 kHz) — never the static class attrs,
+        # or a v3 clip would stream/store mislabeled as 16 kHz.
+        nenc, nrate = instance.synth_native_format(model)
+        if _same_format(of.encoding, of.sample_rate, nenc, nrate):
             # Single-flight: if a synth is already in-flight for this key (bytes
             # or stream path), coalesce onto it — await the result and stream the
             # completed clip — instead of opening a 2nd provider stream. Else
@@ -886,8 +886,8 @@ class CacheService:
                         model,
                         params_canon,
                         record,
-                        instance.native_encoding,
-                        instance.native_sample_rate,
+                        nenc,
+                        nrate,
                         fut,
                     ),
                     t0,
@@ -954,7 +954,7 @@ class CacheService:
         completed = False
         gate = get_gate(provider)
         gen = instance.stream_synth(
-            text=prepend_leading_dot(req.transcript, provider),
+            text=prepend_leading_dot(req.transcript, provider, model),
             voice_id=req.voice.id,
             model=model,
             language=req.language,
@@ -1063,6 +1063,7 @@ class CacheService:
                     record,
                 )
             fut = self._new_inflight(key)
+            fb_enc, fb_rate = instance.synth_native_format(model)
             return (
                 {"X-Cache": "MISS", "X-Cache-Key": key},
                 self._stream_and_store(
@@ -1073,8 +1074,8 @@ class CacheService:
                     model,
                     params_canon,
                     record,
-                    instance.native_encoding,
-                    instance.native_sample_rate,
+                    fb_enc,
+                    fb_rate,
                     fut,
                 ),
             )

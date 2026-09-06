@@ -88,11 +88,11 @@ def _parse_soniox_context(
         )
 
         logger.info(
-            "Successfully parsed %s Soniox context with %d general items, %d terms, %d translation terms",
-            log_context,
-            len(general_objects or []),
-            len(terms) if terms else 0,
-            len(translation_terms_objects or []),
+            f"Successfully parsed {log_context} Soniox context with "
+            f"{len(general_objects or [])} general items, "
+            f"{len(terms) if terms else 0} terms, "
+            f"{len(translation_terms_objects) if translation_terms_objects else 0} "
+            f"translation terms"
         )
         return context_object
 
@@ -159,13 +159,10 @@ def build_soniox_stt(config: SonioxConfig):
             hints_display = ",".join(config.language_hints)
 
     logger.info(
-        "Using %s Soniox STT service with model: %s, language_hints: %s, "
-        "VAD force endpoint: %s, max_endpoint_delay_ms: %s",
-        config.log_context,
-        config.model,
-        hints_display,
-        config.vad_force_turn_endpoint,
-        config.max_endpoint_delay_ms,
+        f"Using {config.log_context} Soniox STT service with model: "
+        f"{config.model}, language_hints: {hints_display or None}, "
+        f"VAD force endpoint: {config.vad_force_turn_endpoint}, "
+        f"max_endpoint_delay_ms: {config.max_endpoint_delay_ms}"
     )
 
     return SonioxSTTServiceWithEndpointDelay(

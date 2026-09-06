@@ -55,6 +55,7 @@ class AzureConfig:
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     reasoning_effort: Optional[str] = None
+    tool_choice: Optional[str] = None
     function_call_timeout_secs: float = 10.0
 
 
@@ -70,12 +71,15 @@ def build_azure_llm(config: AzureConfig, *, pooled: bool = False) -> AzureLLMSer
     """
     logger.info(
         f"Building Azure LLM service with model={config.model}, "
-        f"reasoning_effort={config.reasoning_effort}, pooled={pooled}"
+        f"reasoning_effort={config.reasoning_effort}, "
+        f"tool_choice={config.tool_choice}, pooled={pooled}"
     )
 
     extra: dict = {}
     if config.reasoning_effort:
         extra["reasoning_effort"] = config.reasoning_effort
+    if config.tool_choice:
+        extra["tool_choice"] = config.tool_choice
 
     settings_kwargs: dict[str, Any] = {
         "temperature": config.temperature,

@@ -44,6 +44,15 @@ class ElevenLabsConfig:
     text_filters: Optional[Sequence] = None
     aggregate_sentences: bool = True
     enable_ssml_parsing: bool = False
+    #: Output sample rate for the v3 dialogue service. On 8 kHz telephony
+    #: transports this must be 8000: Text-to-Dialogue delivers audio in
+    #: batches separated by 200-600ms gaps, and pipecat's soxr stream
+    #: resampler clears its delay line after every 0.2s gap — discarding
+    #: mid-phrase audio on each batch (measured 3-18% per batch). pcm_8000
+    #: is delivered natively by the endpoint (verified byte-exact), so no
+    #: client-side resampling happens at all. None keeps the pipeline
+    #: default (e.g. Daily's 24 kHz, which needs no conversion).
+    sample_rate: Optional[int] = None
 
 
 def build_elevenlabs_tts(config: ElevenLabsConfig):
@@ -68,6 +77,11 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
         return ElevenLabsDialogueTTSService(
             api_key=config.api_key,
             url=config.url,
+            # Telephony pins 8000 so the endpoint sends pcm_8000 directly —
+            # see ElevenLabsConfig.sample_rate. The resampler that a 24 kHz
+            # feed would require destroys batched TTD audio (soxr clear()
+            # discards its delay line after every >0.2s batch gap).
+            sample_rate=config.sample_rate,
             settings=ElevenLabsDialogueTTSSettings(
                 model=config.model,
                 voice=config.voice_id,

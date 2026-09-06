@@ -377,9 +377,12 @@ def test_get_pool_language_keying():
     ]
 
 
+# v3 is deliberately absent here: synth() routes eleven_v3 to the
+# Text-to-Dialogue pool (the HTTP endpoint 404s for it) — see
+# tests/test_elevenlabs_v3_synth.py for the v3 routing/SSML-drop coverage.
 @pytest.mark.parametrize(
     "model,expect_ssml",
-    [("eleven_flash_v2_5", True), (V3_MODEL, False)],
+    [("eleven_flash_v2_5", True)],
 )
 async def test_synth_http_shaping(model, expect_ssml):
     import respx

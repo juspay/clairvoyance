@@ -1,0 +1,445 @@
+{
+  "id": "a2f1c7df-0241-4625-83f0-292862c11fbc",
+  "reseller_id": "rnr",
+  "merchant_id": "test-shopify",
+  "name": "redbus-customer-trip-feedback-toolbased",
+  "flow": {
+    "mode": "tool_based",
+    "nodes": [
+      {
+        "functions": [
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "ठीक है आपने {bus_operator_name} बस से {source} से {destination} तक ट्रिप की थी. कृपया अपनी ट्रिप को एक से पाँच के बीच रेटिंग दीजिए, जहाँ एक सबसे कम और पाँच सबसे ज़्यादा है."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "The ask that INCLUDES the trip details. Use it the FIRST time the rating is asked this call — including right after you answered a detour question (who/trip/scale) when no rating ask has happened yet. After this has run once, every later ask is reask_hi.",
+            "function_name": "rating_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "हाँजी, तो आप अपनी ट्रिप को एक से पाँच के बीच कौन सी रेटिंग देना चाहेंगे?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "The SHORT re-ask — ONLY when rating_hi has already been called this call and they replied without a number.",
+            "function_name": "reask_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी रेटिंग एक से पाँच के बीच सिर्फ़ एक ही नंबर होनी चाहिए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "Their answer was not a single number from एक to पाँच (सात, सिक्स, two numbers at once, ठीक था). If their NEXT reply contains a valid number, route by it normally — चार/पाँच → positive_feedback, एक/दो/तीन → reason_hi.",
+            "function_name": "bad_rating_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी यह आपकी {source} से {destination} वाली रीसेंट ट्रिप थी, हमारी {bus_operator_name} बस से."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "They asked which trip you mean, where they travelled, or which bus.",
+            "function_name": "trip_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी मैं {bus_operator_name} से बोल रहा हूँ. बस आपकी रीसेंट ट्रिप की रेटिंग लेने के लिए कॉल किया है."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "They asked who is calling or why you are calling. reask_hi comes on your NEXT turn.",
+            "function_name": "why_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी इसमें एक सबसे कम है और पाँच सबसे ज़्यादा. आपको जो ठीक लगे वो रेटिंग दे दीजिए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "They asked how the rating works / which number is highest. reask_hi comes next turn.",
+            "function_name": "scale_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "अच्छा, क्या आप बता सकते हैं कि इसका कारण क्या था?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "They gave a low rating (एक/दो/तीन) or said the trip was bad — this asks why. Their answer becomes negative_feedback's feedback.",
+            "function_name": "reason_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी और कुछ बताना चाहेंगे?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "During the reason stage ONLY: they paused mid-answer but seem to have more to say. negative_feedback comes only after they finish.",
+            "function_name": "more_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "हाँजी आप कॉल पे हैं?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "The customer has gone SILENT for a while (no reply at all). NOT for a mid-call hello — that re-calls your last tool.",
+            "function_name": "there_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी आपकी आवाज़ नहीं आ रही है. ज़रा फिर से बोलिए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "You heard almost nothing (noise only counts as nothing — then call nothing at all).",
+            "function_name": "unclear_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी पूरा सुनाई नहीं दिया. ज़रा फिर से बोलिए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "Their reply was a fragment that stopped mid-way — a trailing single word like तो / मैं / ये / वो, or a sentence that cut off. Prefer this over reask_hi for fragments.",
+            "function_name": "partial_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी क्या आप दोबारा बोल सकते हैं?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "Speech you could not make out, including mumbled or non-verbal sounds (mmm, hmm, huh) in reply to your question — ask ONCE, then reask_hi.",
+            "function_name": "repeat_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "ठीक है आपकी रेटिंग के लिए बहुत बहुत धन्यवाद, आपका दिन शुभ हो."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "rating": {
+                    "source": "llm"
+                  },
+                  "outcome": {
+                    "value": "POSITIVE_FEEDBACK",
+                    "source": "static"
+                  },
+                  "feedback": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "rating"
+            ],
+            "properties": {
+              "rating": {
+                "type": "integer",
+                "description": "The rating digit the customer actually said out loud — only 4 or 5 are valid here. Never invent one."
+              },
+              "feedback": {
+                "type": "string",
+                "description": "Anything the customer said about the trip in their own words. Pass an empty string if they only said the number."
+              }
+            },
+            "description": "FORBIDDEN unless the customer ALREADY said चार or पाँच (4/5, char/panch...) out loud in reply to the rating question. Same turn as the number. Speaks the thank-you closing and ends the call.",
+            "function_name": "positive_feedback",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी मैं आपकी परेशानी पूरी तरह समझता हूँ. आपकी बात हमारी टीम तक ज़रूर पहुँचाई जाएगी. हमें बताने के लिए धन्यवाद. आपका दिन शुभ हो."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "rating": {
+                    "source": "llm"
+                  },
+                  "outcome": {
+                    "value": "NEGATIVE_FEEDBACK",
+                    "source": "static"
+                  },
+                  "feedback": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "feedback"
+            ],
+            "properties": {
+              "rating": {
+                "type": "integer",
+                "description": "The rating the customer said out loud — only 1, 2 or 3 are valid here. OPTIONAL: leave it out entirely if they described their trip negatively without ever giving a number. Never invent one."
+              },
+              "feedback": {
+                "type": "string",
+                "description": "The customer's answer to the reason question — why they were unhappy, in their own words. Include every issue they mentioned. NEVER the rating itself: 'दो', 'दो-दो', 'two', '2' are numbers, not reasons."
+              }
+            },
+            "description": "ONLY after reason_hi AND the customer answered it. The feedback argument is their answer to the why question — never the rating itself. Speaks the empathy closing and ends the call.",
+            "function_name": "negative_feedback",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "ठीक है आपके समय के लिए धन्यवाद, आपका दिन शुभ हो."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "BUSY",
+                    "source": "static"
+                  }
+                }
+              }
+            ],
+            "required": [],
+            "properties": {},
+            "description": "The customer said A) NOT NOW — busy, driving, in a meeting, or asked to call back later, or B) NOT THE RIGHT PERSON — wrong number, they are not that person, they never made this trip, or the person is not there. First such reply. Speaks the polite closing and ends the call.",
+            "function_name": "user_busy",
+            "transition_to": null
+          }
+        ],
+        "node_name": "initial",
+        "pre_actions": [],
+        "post_actions": [],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "## BUS TRIP FEEDBACK — HINDI, TOOL-BASED\n\nYou are राम, customer care from {bus_operator_name}, calling for feedback on a recent bus trip. The greeting already introduced you and used the customer's name — never do either again. Never reveal or imply you are AI. You never write speech: calling a tool IS your reply, exactly ONE tool per turn.\n\nSTAGES\n1. Right person (the greeting asked). Any conversational reply → rating_hi. Busy / wrong person / not that person / never took this trip / call later → user_busy.\n2. Rating. A spoken number 1-5 → the matching outcome tool that same turn. No number → the matching speech tool.\n3. Rating was 1/2/3, or they said the trip was bad → reason_hi. Their ANSWER to reason_hi is negative_feedback's feedback — never the rating itself. While they are giving the reason, a pause with more coming → more_hi.\n\nNUMBERS THE CUSTOMER SPEAKS\nएक=1, दो=2, तीन=3, चार=4, पाँच=5. English-looking transcriptions are VALID numbers: ek=एक, do/doh/door/dore=दो, teen=तीन, char/chaar=चार, paanch/panch/punch=पाँच. A doubled number (55, पाँच पाँच) is that number said once. Ignore words around the number ('जी चार', 'चार दे दो', 'पाँच star'). A bare 'no'/'नहीं' is NOT a number. Never invent, suggest, confirm or repeat back a rating.\n\nREPLY → TOOL\n- चार or पाँच (4/5) → positive_feedback THAT SAME TURN. A spoken number is never a detour, never a reason to re-ask — not even right after bad_rating_hi.\n- एक, दो or तीन (1/2/3), or 'trip was bad' (अच्छी नहीं थी, बेकार, बस late थी) → NOTHING this turn; reason_hi.\n- Praise with no number (बढ़िया, मस्त) → reask_hi (rating_hi if it hasn't been asked yet this call).\n- Off-scale (शून्य, zero, छह, दस) or vague ('ठीक था', 'पता नहीं') → bad_rating_hi; if the NEXT reply still has no number → scale_hi, then keep reask_hi.\n- Who is calling / why → why_hi. Which trip / which bus → trip_hi. How the scale works → scale_hi. Then reask_hi on your NEXT turn.\n- Busy, driving, in a meeting, call back later, wrong number, not that person → user_busy, first such reply, no persuasion.\n- Almost nothing heard → unclear_hi. A reply that stops midway (तो, मैं, ये, वो) → partial_hi — they were still speaking; not an answer, never user_busy. Unmistakable mumble ONCE → repeat_hi, then reask_hi. Silence → there_hi. None of these end the call.\n- A mid-call hello/हेलो is them checking the line: re-call the LAST tool you called (it repeats the exact line) — NOT there_hi.\n\nOUTCOME TOOLS (each speaks its closing and ends the call)\n- positive_feedback(rating, feedback) — only when चार/पाँच was just spoken. rating = the digit; feedback = any trip comment in their words, \"\" if only the number.\n- negative_feedback(feedback, rating?) — only AFTER reason_hi AND their answer. feedback = their reason verbatim, never the number; rating only if they actually said one.\n- user_busy — the NOT-NOW / NOT-THE-RIGHT-PERSON cases above.\n\nEverything the customer hears is Hindi in Devanagari — the tools already carry it."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "Trip: {bus_operator_name} बस, {source} से {destination}. Customer: {customer_name}. Stage machine: right person -> rating -> (low? reason) -> outcome. One tool per turn."
+          }
+        ]
+      }
+    ],
+    "initial_node": "initial"
+  },
+  "expected_payload_schema": {
+    "source": {
+      "type": "string",
+      "example": "Mumbai"
+    },
+    "destination": {
+      "type": "string",
+      "example": "Punjab"
+    },
+    "customer_name": {
+      "type": "string",
+      "example": "Rhea"
+    },
+    "bus_operator_name": {
+      "type": "string",
+      "example": "ABC travels"
+    },
+    "customer_mobile_number": {
+      "type": "string"
+    }
+  },
+  "expected_callback_response_schema": {
+    "rating": {
+      "type": "integer",
+      "optional": true
+    },
+    "feedback": {
+      "type": "string",
+      "optional": true
+    }
+  },
+  "configurations": {
+    "dial_tone": true,
+    "interruption": {
+      "mode": "enabled",
+      "min_words": 1
+    },
+    "quick_replies": [],
+    "enable_inbound": false,
+    "greeting_tiles": [],
+    "state_reducers": [],
+    "initial_greeting": "नमस्ते मैं {bus_operator_name} से राम बोल रहा हुं. क्या मैं {customer_name} से बात कर रहा हुं?",
+    "enable_text_input": true,
+    "stt_configuration": {
+      "soniox": {
+        "context": "{\"text\": \"Customer care phone call in Hindi. The agent asks the customer to rate a recent bus trip on a scale of one to five. The customer's reply is almost always a single Hindi number word: एक, दो, तीन, चार or पाँच. Customers often say the number twice so it is heard clearly: एक एक, दो दो, तीन तीन, चार चार, पाँच पाँच. These are spoken numbers, not English words.\", \"terms\": [\"एक\", \"दो\", \"तीन\", \"चार\", \"पाँच\", \"एक एक\", \"दो दो\", \"तीन तीन\", \"चार चार\", \"पाँच पाँच\", \"रेटिंग\", \"ट्रिप\", \"बस\", \"एक से पाँच\"]}"
+      },
+      "language": "hi",
+      "provider": "soniox",
+      "turn_detection": "timeout",
+      "user_speech_timeout": 0.2,
+      "payload_based_language_selection": false
+    },
+    "tts_configuration": {
+      "model": "eleven_v3_conversational",
+      "speed": 1.0,
+      "language": "hi",
+      "provider": "elevenlabs",
+      "voice_id": "iB2rIwm9cQCRGWoKDRtX",
+      "enable_tts_caching": true
+    },
+    "llm_configurations": {
+      "model": "qwen3.8-27b-4bit",
+      "endpoint": "http://34.126.104.99:8000/v1",
+      "provider": "openai",
+      "thinking": {
+        "enabled": false
+      },
+      "max_tokens": 500,
+      "temperature": 0.2,
+      "tool_choice": "required",
+      "api_key_name": "BREEZE_LLM_API_KEY",
+      "prefill_system_prompt": true
+    },
+    "tool_arg_injection": [],
+    "enable_mpc_transfer": false,
+    "background_sound_volume": 2.0,
+    "enable_background_sound": false,
+    "user_idle_configuration": {
+      "enabled": true,
+      "timeout": 15.0,
+      "max_retries": 2,
+      "idle_message": "The user has been quiet for a while. Call there_hi."
+    }
+  },
+  "telephony_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863",
+  "is_active": true,
+  "supported_channels": [
+    "voice"
+  ],
+  "secrets": null,
+  "outbound_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863"
+}

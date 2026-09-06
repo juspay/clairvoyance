@@ -77,6 +77,13 @@ class SonioxSTTConfig(BaseModel):
         None,
         description="Enable automatic language identification. Defaults to None.",
     )
+    max_endpoint_delay_ms: Optional[int] = Field(
+        None,
+        ge=500,
+        le=3000,
+        description="Soniox native endpoint detection delay (500-3000ms). "
+        "Overrides env default if set.",
+    )
 
 
 class DeepgramSTTConfig(BaseModel):
@@ -2353,6 +2360,43 @@ class HookConfig(BaseModel):
     awaited: bool = False
 
 
+class SayPhrasing(str, Enum):
+    """How to pick an utterance variant when a ``say`` block has several."""
+
+    RANDOM = "random"  # fresh pick every call — avoids robotic repetition
+    FIRST = "first"  # always the first variant — deterministic phrasing
+
+
+class SayConfig(BaseModel):
+    """Template-owned speech attached to a function (tool_based mode).
+
+    The LLM never generates spoken prose: it calls the function, and the
+    handler renders one utterance from this block and pushes it to TTS via
+    ``TTSSpeakFrame(append_to_context=True)``. Keys in ``utterances`` are
+    language codes ("hi", "en", ...); the spoken language is selected from
+    the function arguments (convention: the model passes ``language``),
+    falling back to ``default_language`` and then the first key.
+
+    ``{placeholder}`` tokens inside an utterance are substituted from the
+    function arguments first, then the template's payload variables.
+    """
+
+    utterances: Dict[str, List[str]] = Field(
+        ..., min_length=1, description="language code -> list of variants"
+    )
+    phrasing: SayPhrasing = Field(
+        SayPhrasing.RANDOM, description="variant selection strategy"
+    )
+    default_language: Optional[str] = Field(
+        None, description="language used when the call passes no 'language' arg"
+    )
+    end_call: bool = Field(
+        False,
+        description="speak the utterance, then run the full end_conversation "
+        "finalization (DB update, callbacks, hangup). For goodbye tools.",
+    )
+
+
 class FlowFunction(BaseModel):
     name: str
     description: str
@@ -2360,6 +2404,7 @@ class FlowFunction(BaseModel):
     required: List[str] = []
     transition_to: Optional[str] = None
     hooks: List[HookConfig] = []
+    say: Optional[SayConfig] = None
 
 
 class GlobalFunctionType(str, Enum):
@@ -2693,6 +2738,20 @@ class FlowMode(str, Enum):
                      internally implemented as a synthetic single node so
                      the rest of the pipeline (filler audio, hooks, OTEL,
                      evaluators, greeting, idle handling) is unchanged.
+    TOOL_BASED:      Multi-node template where the LLM NEVER speaks prose.
+                     Every assistant utterance is template-authored: each
+                     function carries a ``say`` block (per-language utterance
+                     variants) and the handler pushes the rendered text to
+                     TTS via ``TTSSpeakFrame``. The LLM's whole job is to
+                     pick one tool per user turn and fill small args
+                     (e.g. ``language``: "hi"|"en", extracted values) —
+                     deterministic phrasing, no language hallucination.
+                     Nodes are built with ``respond_immediately=False``
+                     (speech comes from the tool, not from re-inference)
+                     and a prose guard between LLM and TTS drops any stray
+                     model text. Pair with
+                     ``llm_configurations.tool_choice="required"`` for a
+                     hard API-level guarantee of tool-only responses.
     IVR:             Pure DTMF state machine — no STT, no LLM, no Pipecat
                      pipeline. Each node plays a TTS prompt and maps pressed
                      digits to actions (transition to another node, or end the
@@ -2702,6 +2761,7 @@ class FlowMode(str, Enum):
 
     FLOW = "flow"
     DIRECT = "direct"
+    TOOL_BASED = "tool_based"
     IVR = "ivr"
 
 

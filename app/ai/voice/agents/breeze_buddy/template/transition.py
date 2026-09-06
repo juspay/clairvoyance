@@ -19,12 +19,72 @@ from app.ai.voice.agents.breeze_buddy.template.interruption import (
     apply_node_interruption_config,
     reset_interruption_to_default,
 )
-from app.ai.voice.agents.breeze_buddy.template.types import HookConfig
+from app.ai.voice.agents.breeze_buddy.template.tool_speech import (
+    SENTENCE_QUEUE_GAP_SECS,
+    queue_say_sentences,
+    render_say,
+)
+from app.ai.voice.agents.breeze_buddy.template.types import HookConfig, SayConfig
 from app.ai.voice.agents.breeze_buddy.template.vad import (
     apply_node_vad_config,
     reset_vad_to_default,
 )
 from app.core.logger import logger
+
+
+async def _speak_say_block(
+    context: TemplateContext,
+    say: Dict[str, Any],
+    args: Dict[str, Any],
+    function_name: str,
+) -> None:
+    """Render and queue the speech side effect for a tool_based function.
+
+    The TTSSpeakFrame enters the pipeline at the top (via task.queue_frame),
+    flows through TTS, and — with ``append_to_context=True`` — is committed
+    to the LLM context as the assistant's message for this turn, so the
+    model knows what was said without ever having written it.
+    """
+    from app.ai.voice.agents.breeze_buddy.handlers.internal import end_conversation
+
+    say_config = SayConfig.model_validate(say)
+    template_vars = getattr(context.bot, "template_vars", None) or {}
+    text, language = render_say(say_config, args, template_vars)
+
+    if context.task is None:
+        logger.error(
+            f"[{function_name}] say: no pipeline task; dropping speech {text[:80]!r}"
+        )
+        return
+
+    # Early-speech dedup: the utterance may already be queued — the
+    # early-speech router fires TTS on the function-name decode, ahead of
+    # argument completion. Consuming the one-shot marker keeps hooks,
+    # end_call and node transitions running exactly as before.
+    router = getattr(context.bot, "early_speech_router", None)
+    spoken_early = (
+        router.consume_pending(function_name) if router is not None else False
+    )
+
+    logger.info(
+        f"[{function_name}] say ({language}){' [early]' if spoken_early else ''}: "
+        f"{text[:120]!r}"
+        + (f" [+ {len(text) - 120} more chars]" if len(text) > 120 else "")
+    )
+    if not spoken_early:
+        parts = await queue_say_sentences(context.task, text)
+        if parts > 1:
+            logger.info(
+                f"[{function_name}] say split into {parts} sentences for TTS "
+                f"(gap {SENTENCE_QUEUE_GAP_SECS * 1000:.0f}ms)"
+            )
+
+    if say_config.end_call:
+        logger.info(
+            f"[{function_name}] say.end_call set: running end_conversation "
+            f"after goodbye speech"
+        )
+        await end_conversation(context, args)
 
 
 @auto_trace("transition_handler")
@@ -34,14 +94,17 @@ async def transition_handler(
     transition_to: Optional[str] = None,
     hooks: Optional[List[Dict[str, Any]]] = None,
     function_name: Optional[str] = None,
+    say: Optional[Dict[str, Any]] = None,
 ):
     """
     Unified handler for all workflow transitions.
 
     This handler:
-    1. Immediately transitions to the next node (if specified)
-    2. Executes hooks asynchronously without blocking
-    3. Handles VAD parameter reset and node-specific VAD configuration
+    1. Renders + queues the ``say`` speech block (tool_based mode) BEFORE any
+       node churn so the utterance is ordered ahead of context updates
+    2. Immediately transitions to the next node (if specified)
+    3. Executes hooks asynchronously without blocking
+    4. Handles VAD parameter reset and node-specific VAD configuration
 
     Args:
         context: Handler context with bot state access
@@ -49,16 +112,30 @@ async def transition_handler(
         transition_to: Target node to transition to
         hooks: List of hook configuration dictionaries (serialized HookConfig objects)
         function_name: Name of the function that was called
+        say: Serialized SayConfig (tool_based mode speech side effect). When
+            its ``end_call`` flag is set, the goodbye is spoken and the call
+            finalizes — no transition is needed or performed.
 
     Returns:
         Tuple of (result_dict, next_node_config) for immediate transition
     """
     logger.info(
         f"Transition handler called - function: '{function_name}', "
-        f"transition_to: '{transition_to}', hooks: {hooks}, args: {args}"
+        f"transition_to: '{transition_to}', hooks: {hooks}, "
+        f"say: {'yes' if say else 'no'}, args: {args}"
     )
 
-    # Execute hooks synchronously (awaited) or asynchronously (fire and forget)
+    # tool_based speech side effect: the tool talks, not the model. Runs
+    # first so the TTSSpeakFrame is queued before any node transition
+    # rewrites the LLM context.
+    if say:
+        await _speak_say_block(context, say, args, function_name or "unknown")
+
+    # Execute hooks synchronously (awaited) or asynchronously (fire and forget).
+    # This MUST run before the end_call early-return below: outcome tools pair
+    # a goodbye (say.end_call) with an update_outcome_in_database hook, and
+    # returning on end_call alone dropped the outcome write — the lead finished
+    # with outcome=None.
     if hooks:
         awaited = hooks[0].get("awaited", False)
         if awaited:
@@ -75,6 +152,11 @@ async def transition_handler(
             )
     else:
         logger.debug(f"No hooks to execute for function '{function_name}'")
+
+    if say and SayConfig.model_validate(say).end_call:
+        # end_conversation already ran inside _speak_say_block (goodbye +
+        # full finalization + EndFrame). There is no "next" for this call.
+        return {}, None
 
     # Handle immediate node transition
     if transition_to:
@@ -123,6 +205,15 @@ async def transition_handler(
         logger.info(
             f"No transition specified for function '{function_name}', staying in current node"
         )
+
+        if say:
+            # tool_based: the say block already spoke this turn and its text is
+            # committed to the LLM context. A truthy result would make pipecat
+            # re-run inference immediately (response aggregator's
+            # "result requires run_llm" path); with tool_choice=required that
+            # forces another tool call — the bot repeating itself forever.
+            # Empty result = speak once, then wait for the user.
+            return {}, None
 
         result_message = {
             "result": f"Successfully executed {function_name}",

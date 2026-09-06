@@ -133,8 +133,21 @@ def _parse_language(code: str | None, fallback: Language = Language.EN) -> Langu
         return fallback
 
 
-async def get_tts_service(voice_config: TTSConfig):
-    """Build a TTS service from a resolved TTSConfig."""
+async def get_tts_service(
+    voice_config: TTSConfig,
+    tts_out_sample_rate: int | None = None,
+):
+    """Build a TTS service from a resolved TTSConfig.
+
+    Args:
+        voice_config: Resolved voice configuration.
+        tts_out_sample_rate: The transport's audio output rate when it is
+            known at build time (telephony = 8000). ElevenLabs v3 uses it to
+            request pcm_8000 natively and the DragonTTS proxy path uses it to
+            request 8 kHz output — both avoid pipecat's soxr stream resampler,
+            whose 0.2s idle clear destroys batched/bursty TTS audio. None keeps
+            the pipeline default.
+    """
     provider = voice_config.provider.value
 
     # Emoji stripping applies to EVERY provider/flow, DragonTTS included.
@@ -195,6 +208,12 @@ async def get_tts_service(voice_config: TTSConfig):
                 params=_collect_params(voice_config),
                 aggregate_sentences=aggregate,
                 text_filters=text_filters,
+                # Telephony pins 8000: DragonTTS serves 8 kHz audio (and for
+                # nested eleven_v3 generates pcm_8000 natively), so pipecat's
+                # soxr stream resampler never runs — its 0.2s idle clear()
+                # destroys audio across the gaps between DragonTTS sentence
+                # bursts. None keeps 16000 (Daily/WebRTC).
+                sample_rate=tts_out_sample_rate,
             )
         )
 
@@ -237,6 +256,7 @@ async def get_tts_service(voice_config: TTSConfig):
                 aggregate_sentences=aggregate,
                 enable_ssml_parsing=bool(voice_config.enable_ssml_parsing),
                 text_filters=text_filters,
+                sample_rate=tts_out_sample_rate,
             )
         )
 

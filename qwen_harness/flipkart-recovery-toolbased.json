@@ -1,0 +1,1468 @@
+{
+  "id": "8dc6fd9a-4b32-47ee-af35-a7aec4ca776c",
+  "reseller_id": "rnr",
+  "merchant_id": "test-shopify",
+  "created_at": "2026-09-06T12:40:36.017017Z",
+  "updated_at": "2026-09-06T13:11:37.023200Z",
+  "name": "flipkart-recovery-toolbased",
+  "flow": {
+    "mode": "tool_based",
+    "nodes": [
+      {
+        "functions": [
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "नमस्ते. मैं प्रियंका बोल रही हूँ, Flipkart EMI की तरफ से — आपकी {product_name} की purchase के बारे में. क्या मेरी बात {customer_name} से हो रही है?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "FIRST TURN only, when their first words are a bare hello / हाँ? / कौन? with nothing else: repeat the greeting once. Also after a call screener, when a human first comes on the line. Say nothing else.",
+            "function_name": "say_repeat_greeting_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "नमस्ते. मैं प्रियंका बोल रही हूँ, Flipkart EMI की तरफ से."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "FIRST TURN only, when the first voice is an automated call screener (iPhone/assistant asking you to state name and reason). English by design — pass language=en. After it, WAIT; when a human comes on, call say_repeat_greeting.",
+            "function_name": "say_screening_intro_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है, और इस पर ({no_cost_emi_tenures} in English words) तक no-cost EMI है — मतलब कोई extra interest नहीं. बस lender page पर selfie और Aadhaar KYC बाकी है — दो मिनट का काम, और order place हो जाएगा. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=OFFERED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call the _hi variant only when {no_cost_emi_applicable} is yes; when it is no, call _hi_std (the standard-EMI wording) instead.",
+            "function_name": "say_hook_offered_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi_std": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है — approval का कोई इंतज़ार नहीं. बस lender page पर selfie और Aadhaar KYC बाकी है — दो मिनट का काम, और order place हो जाएगा. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi_std"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=OFFERED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_offered_hi_std",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Yes — you started checkout on Flipkart EMI for your {product_name}. Your EMI offer from {lender} is already approved. Only the selfie and Aadhaar KYC are left on the lender page — two minutes, and the order places. Shall I guide you in the app right now?"
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=OFFERED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_offered_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी. आपके पास Flipkart EMI की {credit_limit} की credit line already active है, और आपने {product_name} के लिए check भी किया था. {lender} की तरफ से आपका EMI offer already approved है, और इस पर ({no_cost_emi_tenures} in English words) तक no-cost EMI है — मतलब कोई extra interest नहीं. बस cart से payment में Flipkart EMI select करके plan चुनना और sign करना बाकी है — KYC कुछ नहीं. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=ELIGIBILITY_CHECKED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call the _hi variant only when {no_cost_emi_applicable} is yes; when it is no, call _hi_std (the standard-EMI wording) instead.",
+            "function_name": "say_hook_eligibility_checked_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi_std": [
+                  "जी. आपके पास Flipkart EMI की {credit_limit} की credit line already active है, और आपने {product_name} के लिए check भी किया था. {lender} की तरफ से आपका EMI offer already approved है — approval का कोई इंतज़ार नहीं. बस cart से payment में Flipkart EMI select करके plan चुनना और sign करना बाकी है — KYC कुछ नहीं. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi_std"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=ELIGIBILITY_CHECKED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_eligibility_checked_hi_std",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Yes — you already have an active {credit_limit} Flipkart EMI credit line, and you checked eligibility for your {product_name}. Only choosing the plan and signing are left — no KYC at all. Shall I guide you in the app right now?"
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=ELIGIBILITY_CHECKED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_eligibility_checked_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है, और इस पर ({no_cost_emi_tenures} in English words) तक no-cost EMI है — मतलब कोई extra interest नहीं. आपका KYC भी complete हो चुका है — सबसे बड़ा step हो गया. बस auto-pay set up करना बाकी है, एक-दो मिनट का काम. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=KYC_COMPLETED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call the _hi variant only when {no_cost_emi_applicable} is yes; when it is no, call _hi_std (the standard-EMI wording) instead.",
+            "function_name": "say_hook_kyc_completed_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi_std": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है — approval का कोई इंतज़ार नहीं. आपका KYC भी complete हो चुका है — सबसे बड़ा step हो गया. बस auto-pay set up करना बाकी है, एक-दो मिनट का काम. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi_std"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=KYC_COMPLETED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_kyc_completed_hi_std",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Yes — you started checkout on Flipkart EMI for your {product_name}, and your KYC is already complete — the biggest step is done. Only the auto-pay setup is left, one or two minutes. Shall I guide you in the app right now?"
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=KYC_COMPLETED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_kyc_completed_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है, और इस पर ({no_cost_emi_tenures} in English words) तक no-cost EMI है — मतलब कोई extra interest नहीं. KYC और auto-pay दोनों हो चुके हैं. बस agreement पर Agree and Sign करके OTP डालना बाकी है — उसके बाद order place. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=MANDATE_COMPLETED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call the _hi variant only when {no_cost_emi_applicable} is yes; when it is no, call _hi_std (the standard-EMI wording) instead.",
+            "function_name": "say_hook_mandate_completed_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi_std": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है — approval का कोई इंतज़ार नहीं. KYC और auto-pay दोनों हो चुके हैं. बस agreement पर Agree and Sign करके OTP डालना बाकी है — उसके बाद order place. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi_std"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=MANDATE_COMPLETED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_mandate_completed_hi_std",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Yes — your KYC and auto-pay are both done for the {product_name} checkout. Only Agree and Sign plus the OTP are left, and the order places. Shall I guide you in the app right now?"
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=MANDATE_COMPLETED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_mandate_completed_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है, और इस पर ({no_cost_emi_tenures} in English words) तक no-cost EMI है — मतलब कोई extra interest नहीं. आपकी पूरी application complete है — KYC, auto-pay, agreement सब. बस downpayment बाकी है, जिसके बाद order confirm हो जाता है. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=AGREEMENT_SIGNED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call the _hi variant only when {no_cost_emi_applicable} is yes; when it is no, call _hi_std (the standard-EMI wording) instead.",
+            "function_name": "say_hook_agreement_signed_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi_std": [
+                  "जी. आपने {product_name} के लिए Flipkart EMI पर checkout शुरू किया था. {lender} की तरफ से आपका EMI offer already approved है — approval का कोई इंतज़ार नहीं. आपकी पूरी application complete है — KYC, auto-pay, agreement सब. बस downpayment बाकी है, जिसके बाद order confirm हो जाता है. क्या मैं आपको अभी app में guide कर दूँ?"
+                ]
+              },
+              "default_language": "hi_std"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=AGREEMENT_SIGNED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_agreement_signed_hi_std",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Yes — your whole application is complete — KYC, auto-pay, agreement. Only the downpayment is left, and the order confirms. Shall I guide you in the app right now?"
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE OPENING HOOK for customer_current_state=AGREEMENT_SIGNED. Call once, as your first substantive turn after identity is settled (or after the greeting repeat). Never again. Call ONCE only — never replay it: a hesitation or no in reply (सोचता हूँ, मंगा लूँगा बाद में, nahi) goes to the matching card, not this hook again.",
+            "function_name": "say_hook_agreement_signed_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "आपको card की ज़रूरत भी नहीं — Flipkart EMI पर ({no_cost_emi_tenures} in English words) तक no-cost EMI already है. मतलब सिर्फ product का price, कोई extra interest नहीं."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 1 — no-cost reminder. Trigger: hesitation, 'sochta hoon', 'mehnga', 'interest lagega', 'kya offer hai'. Only when {no_cost_emi_applicable} is yes (else use hi_std/en which stay neutral). Call the _hi variant only when {no_cost_emi_applicable} is yes; when it is no, call _hi_std (the standard-EMI wording) instead.",
+            "function_name": "say_card_no_cost_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi_std": [
+                  "Flipkart EMI पर ये already approved है — सिर्फ product का price, कोई extra charge नहीं."
+                ]
+              },
+              "default_language": "hi_std"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 1 — no-cost reminder. Trigger: hesitation, 'sochta hoon', 'mehnga', 'interest lagega', 'kya offer hai'. Only when {no_cost_emi_applicable} is yes (else use hi_std/en which stay neutral).",
+            "function_name": "say_card_no_cost_hi_std",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "You don't even need a card — Flipkart EMI already gives you no-cost EMI on this purchase. Only the product price, no extra interest."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 1 — no-cost reminder. Trigger: hesitation, 'sochta hoon', 'mehnga', 'interest lagega', 'kya offer hai'. Only when {no_cost_emi_applicable} is yes (else use hi_std/en which stay neutral).",
+            "function_name": "say_card_no_cost_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "आपके लिए {approved_loan_amount} का loan already approve है इस purchase के लिए — और आपकी total credit limit {credit_limit} है. Approval का कोई इंतज़ार नहीं, बस complete करना है."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 2 — approved amount. Trigger: 'paise nahi hain', 'budget', 'kitna milega', 'loan kitna', affordability worries.",
+            "function_name": "say_card_amount_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "{emi_plan_summary}. Exact figure app में plan select करते ही confirm हो जाएगी."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 3 — monthly EMI / tenures. Trigger: 'kitne mahine', 'EMI kitni banegi', 'monthly kitna' when they mean the instalment. hi = speak the plan summary; hi_std = when {emi_plan_summary} is empty. Call the _hi variant only when {no_cost_emi_applicable} is yes; when it is no, call _hi_std (the standard-EMI wording) instead.",
+            "function_name": "say_card_monthly_emi_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi_std": [
+                  "आपके पास ({applicable_tenures} in English words) की tenure के options हैं. Exact monthly EMI आपको app में plan select करते ही दिख जाएगी."
+                ]
+              },
+              "default_language": "hi_std"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 3 — monthly EMI / tenures. Trigger: 'kitne mahine', 'EMI kitni banegi', 'monthly kitna' when they mean the instalment. hi = speak the plan summary; hi_std = when {emi_plan_summary} is empty.",
+            "function_name": "say_card_monthly_emi_hi_std",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "You have tenure options of ({applicable_tenures} in English words). The exact monthly EMI shows in the app the moment you select a plan."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 3 — monthly EMI / tenures. Trigger: 'kitne mahine', 'EMI kitni banegi', 'monthly kitna' when they mean the instalment. hi = speak the plan summary; hi_std = when {emi_plan_summary} is empty.",
+            "function_name": "say_card_monthly_emi_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "आपका मतलब loan amount से है या monthly EMI से?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "When it is unclear whether they mean the loan amount or the monthly EMI, clarify first — one line, then wait.",
+            "function_name": "say_clarify_emi_question_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "Downpayment सिर्फ {downpayment_amount} का है. वो होते ही order confirm हो जाता है."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 4 — downpayment. Trigger: asked about downpayment, 'pehle kitna dena hoga'.",
+            "function_name": "say_card_downpayment_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "ये loan {lender} की तरफ से है, और पूरा process Flipkart app के अंदर ही होता है. मैं आपसे कोई OTP, PIN या payment details कभी नहीं माँगूँगी — जो भी OTP आएगा वो आप app में ही डालेंगे. आप चाहें तो call रख कर सीधे app खोल कर भी देख सकते हैं."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 5 — safety / lender. Trigger: suspicion, 'fraud', 'kaun ho aap', 'kaunsa bank', 'safe hai kya'.",
+            "function_name": "say_card_safety_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "जो हो चुका है वो save है, दोबारा कुछ नहीं करना. जो बचा है वो सिर्फ दो मिनट का है — cart से payment में Flipkart EMI select करते ही आप वहीं से continue कर पाएंगे."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "CARD 6 — effort / time. Trigger: 'time nahi hai', 'baad mein', 'lamba process hoga'.",
+            "function_name": "say_card_effort_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "तो क्या मैं आपको अभी app में guide कर दूँ? दो मिनट में हो जाएगा."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE RETURN LINE after any card, when NOT yet in guidance: bring them back to the app question.",
+            "function_name": "say_return_to_app_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "तो बताइए, हो गया?"
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "THE RETURN LINE when ALREADY mid-guidance: ask about the current step, never about opening the app again.",
+            "function_name": "say_check_step_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "सबसे पहले Flipkart app खोलिए. बताइए जब खुल जाए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "GUIDANCE STEP A — always the first guidance step. Guidance starts ONLY after the customer commits to doing it now or asks how — after a card followed by a mere 'ok/ठीक है', the move is say_return_to_app, never this.",
+            "function_name": "say_step_open_app_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "अब cart में जाइए — आपका {product_name} वहीं होगा. Place order पर tap कीजिए, और बताइए जब payment page आ जाए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "GUIDANCE STEP B — after the app is open.",
+            "function_name": "say_step_cart_order_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "Payment page पर EMI section में Flipkart EMI select कीजिए — वहाँ {lender} का नाम दिखेगा. बताइए जब select हो जाए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "GUIDANCE STEP C — on the payment page.",
+            "function_name": "say_step_select_emi_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "अब EMI plan चुनिए — no-cost वाला plan, जैसे ({no_cost_emi_tenures} in English words) का — और Select plan and continue दबाइए. बताइए जब हो जाए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "GUIDANCE STEP D — after selecting Flipkart EMI.",
+            "function_name": "say_step_select_plan_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "अब आप {lender} के page पर redirect होंगे — वहाँ जो step बचा है वही खुलेगा."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "ALWAYS between say_step_select_plan and the state step — EXCEPT for ELIGIBILITY_CHECKED, where the plan leads straight to say_step_agreement (no redirect, no lender page). Never call this for ELIGIBILITY_CHECKED.",
+            "function_name": "say_step_redirect_lender_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "पहले selfie लीजिए और Accept कीजिए. फिर Aadhaar number डालिए — Aadhaar पर जो OTP आएगा वो वहीं app में डालिए, मुझे नहीं बताना है. बताइए जब KYC done दिखे."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "STATE STEP for KYC. Comes ONLY after say_step_select_plan and say_step_redirect_lender — never before the ladder is done.",
+            "function_name": "say_step_kyc_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "अब auto-pay setup आएगा — UPI, debit card या net banking में से एक चुनिए और अपना bank select करके authorize कर दीजिए. इससे EMI हर महीने अपने आप time पर जाएगी. बताइए जब हो जाए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "STATE STEP for auto-pay. Comes ONLY after say_step_select_plan and say_step_redirect_lender — never before the ladder is done.",
+            "function_name": "say_step_autopay_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "अब Key Fact Statement और loan agreement दिखेगा — नीचे Agree and Sign दबाइए. फिर आपके number पर OTP आएगा, वो app में डाल कर Verify कीजिए. बताइए जब Order placed दिखे."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "STATE STEP for the agreement. ELIGIBILITY_CHECKED: plan → this step directly. Every other state: plan → say_step_redirect_lender → this step. Never before the ladder is done.",
+            "function_name": "say_step_agreement_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "अब {downpayment_amount} का downpayment page आएगा — UPI या card से pay कीजिए. Payment होते ही Order placed दिखेगा."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "STATE STEP for the downpayment. Comes ONLY after say_step_select_plan and say_step_redirect_lender — never before the ladder is done.",
+            "function_name": "say_step_downpayment_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "एक बार app बंद करके दोबारा खोल कर देखिए."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [],
+            "required": [],
+            "properties": {},
+            "description": "They hit an error, the app is not installed, login fails, or a page will not load: suggest ONE retry. If it still fails after this → customer_stuck.",
+            "function_name": "say_suggest_retry_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "बहुत बढ़िया. Flipkart app में cart से payment पर Flipkart EMI select करते ही आप वहीं से continue कर पाएंगे. धन्यवाद, आपका दिन शुभ हो."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "APP_NUDGE_ACCEPTED",
+                    "source": "static"
+                  },
+                  "committed_step": {
+                    "source": "llm"
+                  },
+                  "completion_timeline": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "committed_step",
+              "completion_timeline",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "committed_step": {
+                "type": "string",
+                "description": "The pending step(s) the customer agreed to complete, in natural words — for example 'complete KYC', 'set up auto-pay', 'sign agreement', 'pay downpayment', 'complete the order'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "completion_timeline": {
+                "type": "string",
+                "description": "When they said they will do it, in their own words — for example 'right after the call', 'tonight', 'tomorrow morning'. If they finished while on the call, pass 'completed during call'. If they gave no time, pass 'no time given'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this when the customer agrees to open the Flipkart app and complete the pending steps — whether they say they will do it later, or they completed the steps DURING this call while you guided them. This is the success outcome. Call it with ZERO spoken text in the same turn — the system speaks the closing line. NEVER while guiding: mid-ladder confirmations (app open, payment page, EMI selected, plan selected) keep the ladder going — this tool fires only when the customer reports the journey DONE (Order placed / final step complete) or promises to complete it LATER without guidance.",
+            "function_name": "app_return_committed_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Great. In the Flipkart app, go to cart, then payment, select Flipkart EMI and you will continue right where you left off. Thank you, have a nice day."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "APP_NUDGE_ACCEPTED",
+                    "source": "static"
+                  },
+                  "committed_step": {
+                    "source": "llm"
+                  },
+                  "completion_timeline": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "committed_step",
+              "completion_timeline",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "committed_step": {
+                "type": "string",
+                "description": "The pending step(s) the customer agreed to complete, in natural words — for example 'complete KYC', 'set up auto-pay', 'sign agreement', 'pay downpayment', 'complete the order'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "completion_timeline": {
+                "type": "string",
+                "description": "When they said they will do it, in their own words — for example 'right after the call', 'tonight', 'tomorrow morning'. If they finished while on the call, pass 'completed during call'. If they gave no time, pass 'no time given'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this when the customer agrees to open the Flipkart app and complete the pending steps — whether they say they will do it later, or they completed the steps DURING this call while you guided them. This is the success outcome. Call it with ZERO spoken text in the same turn — the system speaks the closing line. NEVER while guiding: mid-ladder confirmations (app open, payment page, EMI selected, plan selected) keep the ladder going — this tool fires only when the customer reports the journey DONE (Order placed / final step complete) or promises to complete it LATER without guidance.",
+            "function_name": "app_return_committed_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "ठीक है, कोई बात नहीं. आपके feedback के लिए धन्यवाद. Have a nice day."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "NOT_INTERESTED",
+                    "source": "static"
+                  },
+                  "drop_off_reason": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "drop_off_reason",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "drop_off_reason": {
+                "type": "string",
+                "description": "Why the customer does not want to proceed, in THEIR OWN words — for example 'interest lagta hoga', 'bought it offline already', 'EMI pasand nahi', 'paise ki dikkat hai'. If they gave no reason, pass 'no reason given'. Never invent or summarize away their words. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this ONLY on the customer's SECOND no — after you asked the reason for their first no, they answered (or refused), and you played one matching hold-back card. NEVER call it on the first no. Call it with ZERO spoken text in the same turn — the system speaks the goodbye. A refusal to give any reason, or 'कोई खास वजह नहीं / nothing specific', completes the reason step with no matching card — come straight here instead of re-asking or looping on cards.",
+            "function_name": "not_interested_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Alright, no problem. Thank you for your feedback. Have a nice day."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "NOT_INTERESTED",
+                    "source": "static"
+                  },
+                  "drop_off_reason": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "drop_off_reason",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "drop_off_reason": {
+                "type": "string",
+                "description": "Why the customer does not want to proceed, in THEIR OWN words — for example 'interest lagta hoga', 'bought it offline already', 'EMI pasand nahi', 'paise ki dikkat hai'. If they gave no reason, pass 'no reason given'. Never invent or summarize away their words. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this ONLY on the customer's SECOND no — after you asked the reason for their first no, they answered (or refused), and you played one matching hold-back card. NEVER call it on the first no. Call it with ZERO spoken text in the same turn — the system speaks the goodbye. A refusal to give any reason, or 'कोई खास वजह नहीं / nothing specific', completes the reason step with no matching card — come straight here instead of re-asking or looping on cards.",
+            "function_name": "not_interested_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "मैंने आपकी problem note कर ली है, team इसे जल्दी ठीक करेगी. धन्यवाद. Have a nice day."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "ISSUE_REPORTED",
+                    "source": "static"
+                  },
+                  "issue_description": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "issue_description",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "issue_description": {
+                "type": "string",
+                "description": "The problem in the customer's own words, as specifically as they described it — for example 'KYC selfie fails every time', 'auto-pay approve karte hi error aata hai', 'app login OTP hi nahi aata'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system speaks the closing line. Call it when the customer tried (now on the call, or earlier) and hit a problem they cannot get past — app error, KYC failing, mandate not going through, login issues, page not loading. Capture exactly what they describe first.",
+            "function_name": "customer_stuck_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "I have noted the issue and the team will fix it soon. Thank you. Have a nice day."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "ISSUE_REPORTED",
+                    "source": "static"
+                  },
+                  "issue_description": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "issue_description",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "issue_description": {
+                "type": "string",
+                "description": "The problem in the customer's own words, as specifically as they described it — for example 'KYC selfie fails every time', 'auto-pay approve karte hi error aata hai', 'app login OTP hi nahi aata'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system speaks the closing line. Call it when the customer tried (now on the call, or earlier) and hit a problem they cannot get past — app error, KYC failing, mandate not going through, login issues, page not loading. Capture exactly what they describe first.",
+            "function_name": "customer_stuck_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "बहुत बढ़िया, फिर आपका order app में confirm दिखेगा. धन्यवाद. Have a nice day."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "ALREADY_DONE",
+                    "source": "static"
+                  },
+                  "claimed_step": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "claimed_step",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "claimed_step": {
+                "type": "string",
+                "description": "What the customer claims is already done, in their words — for example 'KYC done yesterday', 'payment ho gaya', 'sab complete kar diya'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system speaks the closing line. Call it when the customer says they have ALREADY completed the pending steps (or the whole purchase). Do not argue with them or re-verify — acknowledge and end.",
+            "function_name": "already_completed_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Perfect, your order will show as confirmed in the app. Thank you. Have a nice day."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "ALREADY_DONE",
+                    "source": "static"
+                  },
+                  "claimed_step": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "claimed_step",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "claimed_step": {
+                "type": "string",
+                "description": "What the customer claims is already done, in their words — for example 'KYC done yesterday', 'payment ho gaya', 'sab complete kar diya'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system speaks the closing line. Call it when the customer says they have ALREADY completed the pending steps (or the whole purchase). Do not argue with them or re-verify — acknowledge and end.",
+            "function_name": "already_completed_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "ठीक है, मैं बाद में call करूँगी. धन्यवाद. Have a nice day."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "BUSY",
+                    "source": "static"
+                  },
+                  "callback_note": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "callback_note",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "callback_note": {
+                "type": "string",
+                "description": "When they asked to be called back, in their own words — for example 'call after 7 pm', 'kal subah karna'. If they gave no time, pass 'call back later - no time given'. If they said nothing about a callback, pass 'no callback requested'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system speaks the closing line. Call it when the customer is busy, unavailable, driving, or asks to call later. Accept the FIRST busy signal — do not push. Also use this if the customer is angry or abusive: stay polite and end. NOT for a commitment to do it later ('बाद में कर लूँगा शाम को', 'कल कर दूँगा') — that is app_return_committed with completion_timeline; this tool is only for cannot-talk-now / angry / stop-calling.",
+            "function_name": "user_busy_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Alright, I will call you later. Thank you. Have a nice day."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "BUSY",
+                    "source": "static"
+                  },
+                  "callback_note": {
+                    "source": "llm"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "callback_note",
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "callback_note": {
+                "type": "string",
+                "description": "When they asked to be called back, in their own words — for example 'call after 7 pm', 'kal subah karna'. If they gave no time, pass 'call back later - no time given'. If they said nothing about a callback, pass 'no callback requested'. Exactly as the customer said it — keep English words English and Hindi words Hindi; never translate or summarize."
+              },
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system speaks the closing line. Call it when the customer is busy, unavailable, driving, or asks to call later. Accept the FIRST busy signal — do not push. Also use this if the customer is angry or abusive: stay polite and end. NOT for a commitment to do it later ('बाद में कर लूँगा शाम को', 'कल कर दूँगा') — that is app_return_committed with completion_timeline; this tool is only for cannot-talk-now / angry / stop-calling.",
+            "function_name": "user_busy_en",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "hi": [
+                  "माफ़ कीजिएगा, गलत नंबर लग गया. Have a nice day."
+                ]
+              },
+              "default_language": "hi"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "WRONG_PERSON",
+                    "source": "static"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system's closing line apologizes for you. Call it when the person says this is the wrong number, they are not {customer_name}, or they never applied for anything on Flipkart. Do not collect any details from them.",
+            "function_name": "wrong_person_hi",
+            "transition_to": null
+          },
+          {
+            "say": {
+              "end_call": true,
+              "phrasing": "first",
+              "utterances": {
+                "en": [
+                  "Sorry for the trouble, wrong number. Have a nice day."
+                ]
+              },
+              "default_language": "en"
+            },
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "WRONG_PERSON",
+                    "source": "static"
+                  },
+                  "unsupported_language_code": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "required": [
+              "unsupported_language_code"
+            ],
+            "properties": {
+              "unsupported_language_code": {
+                "type": "string",
+                "description": "Set to 'none' by default. If the customer asked to speak in an unsupported language (e.g., Telugu, Kannada, Tamil, Malayalam, Bengali) at any point, set this to the 2-letter ISO language code (e.g., 'te', 'ta', 'kn', 'ml', 'bn'). Only set it when naturally concluding the call."
+              }
+            },
+            "description": "Call this with ZERO spoken words in the same turn — the system's closing line apologizes for you. Call it when the person says this is the wrong number, they are not {customer_name}, or they never applied for anything on Flipkart. Do not collect any details from them.",
+            "function_name": "wrong_person_en",
+            "transition_to": null
+          }
+        ],
+        "node_name": "initial",
+        "pre_actions": [],
+        "post_actions": [],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "## FLIPKART EMI RECOVERY — TOOL-BASED\n\nLANGUAGE PICK: every tool name ends in its language — _hi and _hi_std are Hindi, _en is English. Call the variant matching the language the customer is speaking right now; English replies → _en, Hindi → _hi (or _hi_std where that variant exists). Never mix variants in one turn.\n\nYou are प्रियंका, a female Flipkart EMI recovery agent. The greeting has played. Your ONLY job each turn: pick exactly ONE tool whose line answers the customer's latest message. You never write speech — the tool speaks.\n\nCUSTOMER STATE: {customer_current_state} tells you where they stopped. The hook tool matching it (say_hook_*) is your opening move after identity settles. Pick the _hi vs _hi_std VARIANT of the hook/card tool by {no_cost_emi_applicable} (both are Hindi; hi_std is the standard-EMI wording).\n\nFIRST TURN (their first words decide):\n- Bare hello / हाँ? / कौन? with nothing else → say_repeat_greeting. Nothing else that turn.\n- Automated call screener (state name/reason) → say_screening_intro_en, WAIT; when a human comes on → say_repeat_greeting.\n- Wrong number / never applied → wrong_person immediately.\n- Identity confirmed / invitation to speak → the say_hook_* for {customer_current_state}.\n\nTHE YES JOURNEY — the ladder is the SAME for every state and ALWAYS starts at the top:\nsay_step_open_app → say_step_cart_order → say_step_select_emi → say_step_select_plan → say_step_redirect_lender (skip ONLY for ELIGIBILITY_CHECKED) → the pending state step(s): say_step_kyc / say_step_autopay / say_step_agreement / say_step_downpayment → they report Order placed → app_return_committed (completion_timeline=completed during call).\nNEVER JUMP: however much is already done, the customer still re-enters the app through cart — give the ladder steps in strict order, one per turn, advancing only when their reply confirms the current one. A state step is NEVER the first guidance step. If their message reports the FINAL step already done, the app_return_committed call IS the turn — no step announcement.\n\nHOLD-BACK CARDS: one card per turn, only when triggered (each card's description lists its triggers), and never a card the customer did not earn. After a card: say_return_to_app (if not yet guiding) or say_check_step (if mid-guidance).\n\nNO's: first no → a triggered card. Second no after the reason → not_interested with drop_off_reason.\nBUSY → user_busy with callback_note (first busy signal, no pushing).\nSTUCK (error twice, app missing, cannot proceed) → customer_stuck with issue_description.\nCLAIMS ALREADY DONE (final step) → already_completed with claimed_step.\nUNKNOWN LANGUAGE (not Hindi/English) → any outcome tool with unsupported_language_code set.\n\nMID-CALL hello (हेलो / सुनाई दे रहा है): they are checking the line — re-call the tool you called last; it repeats the exact line.\n\nSAFETY: you never ask for OTP, PIN or payment details (the say lines already promise this). Never claim to be human. Never mention internal systems.\n"
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "STATE={customer_current_state} pending={pending_steps} no_cost={no_cost_emi_applicable} product={product_name} lender={lender}. One tool per turn; the tool speaks."
+          }
+        ]
+      }
+    ],
+    "initial_node": "initial"
+  },
+  "expected_payload_schema": {
+    "lender": {
+      "type": "string",
+      "example": "Fibe"
+    },
+    "credit_limit": {
+      "type": "number",
+      "example": 100000,
+      "function": "indian_number_to_speech"
+    },
+    "product_name": {
+      "type": "string",
+      "example": "Samsung Galaxy S24, 8GB RAM"
+    },
+    "customer_name": {
+      "type": "string",
+      "example": "Rohit Kumar"
+    },
+    "pending_steps": {
+      "type": "string",
+      "example": "auto-pay setup, agreement signing"
+    },
+    "product_price": {
+      "type": "number",
+      "example": 79999,
+      "function": "indian_number_to_speech"
+    },
+    "emi_plan_summary": {
+      "type": "string",
+      "example": "six months at no cost: twelve thousand five hundred rupees per month; three months at no cost: twenty five thousand rupees per month; twelve months: six thousand eight hundred rupees per month",
+      "description": "Optional. Per-tenure monthly EMI written in speakable words (amounts as words, not digits). Empty string if not available — the agent then defers the monthly EMI to the app."
+    },
+    "applicable_tenures": {
+      "type": "string",
+      "example": "3, 6, 9, 12 months"
+    },
+    "downpayment_amount": {
+      "type": "number",
+      "example": 4999,
+      "function": "indian_number_to_speech"
+    },
+    "no_cost_emi_tenures": {
+      "type": "string",
+      "example": "3, 6 months"
+    },
+    "approved_loan_amount": {
+      "type": "number",
+      "example": 75000,
+      "function": "indian_number_to_speech"
+    },
+    "customer_current_state": {
+      "type": "string",
+      "example": "KYC_COMPLETED",
+      "description": "One of: OFFERED, ELIGIBILITY_CHECKED, KYC_COMPLETED, MANDATE_COMPLETED, AGREEMENT_SIGNED"
+    },
+    "customer_mobile_number": {
+      "type": "string",
+      "function": [
+        "extract_10_digit_mobile",
+        "digits_to_speech"
+      ]
+    },
+    "no_cost_emi_applicable": {
+      "type": "string",
+      "example": "yes"
+    }
+  },
+  "expected_callback_response_schema": {
+    "claimed_step": {
+      "type": "string",
+      "optional": true
+    },
+    "callback_note": {
+      "type": "string",
+      "optional": true
+    },
+    "committed_step": {
+      "type": "string",
+      "optional": true
+    },
+    "drop_off_reason": {
+      "type": "string",
+      "optional": true
+    },
+    "issue_description": {
+      "type": "string",
+      "optional": true
+    },
+    "completion_timeline": {
+      "type": "string",
+      "optional": true
+    },
+    "unsupported_language_code": {
+      "type": "string",
+      "optional": true
+    }
+  },
+  "configurations": {
+    "state_reducers": [],
+    "tool_arg_injection": [],
+    "client_context": null,
+    "ui_catalog": null,
+    "render_ui": null,
+    "ui_intents": null,
+    "flavor": null,
+    "tool_execution": null,
+    "plan_enforcement": null,
+    "stt_configuration": {
+      "provider": "soniox",
+      "language": "hi,en",
+      "payload_based_language_selection": false,
+      "turn_detection": "timeout",
+      "user_speech_timeout": 0.3,
+      "soniox": null,
+      "deepgram": null,
+      "sarvam": null,
+      "smart_turn": null
+    },
+    "stt_language": null,
+    "soniox_context": null,
+    "payload_based_language_selection": null,
+    "tts_configuration": {
+      "provider": "elevenlabs",
+      "voice_id": "81xnrLNObbKDEs179emP",
+      "model": "eleven_v3_conversational",
+      "language": "hi",
+      "speed": 1,
+      "stability": null,
+      "similarity_boost": null,
+      "volume": null,
+      "emotion": null,
+      "pitch": null,
+      "style_prompt": null,
+      "enable_ssml_parsing": null,
+      "enable_tts_caching": true
+    },
+    "tts_configuration_overrides": null,
+    "tts_selection_config": null,
+    "enable_background_sound": false,
+    "background_sound_file": null,
+    "background_sound_volume": 2,
+    "initial_greeting": "नमस्ते, मैं प्रियंका बोल रही हूँ, Flipkart से। आपके EMI के बारे में कॉल किया है। क्या मेरी बात {customer_name} से हो रही है?",
+    "quick_replies": [],
+    "greeting_tiles": [],
+    "enable_text_input": true,
+    "ivr_configuration": null,
+    "ivr_greeting": null,
+    "ivr_goodbye": null,
+    "ivr_priority": null,
+    "transfer_number": null,
+    "enable_mpc_transfer": false,
+    "vad_config": null,
+    "enable_inbound": false,
+    "enable_topic_evaluation": null,
+    "user_idle_configuration": {
+      "enabled": true,
+      "timeout": 15,
+      "idle_message": "The user has been quiet for a while. Re-call the tool for the current step.",
+      "max_retries": 2
+    },
+    "noise_filter": null,
+    "client_noise_cancellation": null,
+    "dial_tone": true,
+    "keyword_filter": null,
+    "wake_phrase": null,
+    "mcp": null,
+    "knowledge_base": null,
+    "interruption": {
+      "mode": "enabled",
+      "min_words": 1
+    },
+    "llm_configurations": {
+      "provider": "openai",
+      "sdk": null,
+      "model": "qwen3.8-27b-4bit",
+      "region": null,
+      "endpoint": "http://34.126.104.99:8000/v1",
+      "api_key_name": "BREEZE_LLM_API_KEY",
+      "temperature": 0.2,
+      "max_tokens": 500,
+      "tool_choice": "required",
+      "thinking": {
+        "enabled": false,
+        "reasoning_effort": null,
+        "budget_tokens": null,
+        "thinking_budget": null,
+        "thinking_level": null
+      },
+      "function_call_timeout_secs": null,
+      "prefill_system_prompt": true,
+      "realtime": null
+    },
+    "evaluator_config": null,
+    "hold_transfer": null,
+    "observers": null
+  },
+  "secrets": null,
+  "telephony_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863",
+  "outbound_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863",
+  "is_active": true,
+  "supported_channels": [
+    "voice"
+  ]
+}

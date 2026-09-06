@@ -230,6 +230,15 @@ def prepare_initial_node(
         realtime is not None and realtime.provider == RealtimeLLMProvider.GEMINI
     )
 
+    # tool_based mode: nodes never auto-respond — the called tool's say
+    # block does the talking (the builder set respond_immediately=False on
+    # every node; this re-derives it for the initial node, which this
+    # function rebuilds). Without a greeting a normal template would respond
+    # immediately; a tool_based one must stay quiet until the first user
+    # turn, or the model's opening prose would double-speak over / around
+    # the tool lines (the prose guard would mute it into dead air).
+    is_tool_based = flow_config.get("mode") == "tool_based"
+
     return NodeConfig(
         name=node_config["name"],
         task_messages=task_messages,
@@ -237,5 +246,9 @@ def prepare_initial_node(
         functions=node_config.get("functions", []),
         pre_actions=node_config.get("pre_actions", []),
         post_actions=node_config.get("post_actions", []),
-        respond_immediately=(not has_greeting_source) or is_gemini_realtime,
+        respond_immediately=(
+            is_gemini_realtime
+            if is_tool_based
+            else (not has_greeting_source) or is_gemini_realtime
+        ),
     )

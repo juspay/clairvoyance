@@ -43,10 +43,12 @@ from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     create_services,
     generate_conversation_id,
 )
+from app.ai.voice.agents.breeze_buddy.agent.prompt_prefill import spawn_prefill
 from app.ai.voice.agents.breeze_buddy.agent.transfer import apply_transfer
 from app.ai.voice.agents.breeze_buddy.agent.transport import (
     TRANSPORT_TYPE_DAILY,
     get_transport_params,
+    get_tts_out_sample_rate,
 )
 from app.ai.voice.agents.breeze_buddy.agent.utils import (
     end_call_with_errors,
@@ -95,6 +97,7 @@ from app.ai.voice.agents.breeze_buddy.template.context import (
     TemplateContext,
     with_context,
 )
+from app.ai.voice.agents.breeze_buddy.template.early_speech import attach_early_speech
 from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
     ConfigurationModel,
@@ -187,6 +190,12 @@ class Agent:
         self.template: Optional[TemplateModel] = None
         self.configurations: Optional[ConfigurationModel] = None
         self.flow_config: Optional[Dict[str, Any]] = None
+        # tool_based: fires a say tool's utterance on the function-name decode
+        # (None until connect attaches it — see template/early_speech.py).
+        self.early_speech_router: Any = None
+        # TTS service of the current generation — the early-fire router
+        # queues speech directly into it (None until _run_generation).
+        self.tts_service: Any = None
         self.end_conversation_callbacks: List = []
         self.expected_callback_response_schema: Any = None
         self.greeting_source: Optional[str] = None
@@ -972,6 +981,13 @@ class Agent:
             @user_agg.event_handler("on_user_turn_started")
             async def on_user_turn_started(aggregator, strategy):
                 """Reset idle retry counter."""
+                # A user turn starting this close to an early-fire is a
+                # barge-in: pipecat will cancel the LLM stream (and with it
+                # any not-yet-run tool call), so the early-fire's remaining
+                # sentence tail and one-shot marker must go too.
+                router = getattr(self, "early_speech_router", None)
+                if router is not None:
+                    router.cancel_pending_tails()
                 if self._user_idle_callback_handler:
                     if not self._user_spoke:
                         self._user_spoke = True
@@ -1169,6 +1185,41 @@ class Agent:
             )
             self._handoff_messages = []
 
+        # Turn-1 prompt-cache prefill (opt-in via llm_configurations).
+        # Fire-and-forget: the prefix is byte-final here (post greeting/KB/
+        # handoff injection) and the first inference hasn't happened yet, so
+        # for greeting-played calls the request rides the greeting playback.
+        # Reads flow_manager._global_functions (not a re-derivation) because
+        # the MCP merge only exists there — a dropped tool would mismatch the
+        # serialized prefix and guarantee a cache miss.
+        spawn_prefill(
+            llm_service=self.llm_service,
+            llm_config=getattr(self.configurations, "llm_configurations", None),
+            initial_node_config=initial_node_config,
+            global_functions=self.flow_manager._global_functions,
+            errors=self.errors,
+        )
+
+        # tool_based early speech: queue a say tool's utterance for TTS the
+        # moment the streamed function NAME matches — ahead of argument decode
+        # (see template/early_speech.py). The transition handler consumes the
+        # one-shot marker so nothing is spoken twice. The name-decode moment
+        # also feeds the metrics collector (early_say_ms) when it is up.
+        self.early_speech_router = (
+            attach_early_speech(
+                llm_service=self.llm_service,
+                bot=self,
+                flow=self.template.flow,
+                early_say_note=lambda: (
+                    self.metrics_collector.note_early_say()
+                    if getattr(self, "metrics_collector", None)
+                    else None
+                ),
+            )
+            if self.template is not None
+            else None
+        )
+
         # Initialize node traversal tracking. Only reset on the first generation;
         # a transfer rebuild (generation >= 2) must PRESERVE prior generations'
         # nodes (the first template's node + its connect_to_agent call).
@@ -1364,7 +1415,9 @@ class Agent:
         # collector inserted, no user idle). All other wiring is identical.
         is_stream = self.is_stream_mode
         stt, llm, tts = await create_services(
-            self.configurations, include_llm=not is_stream
+            self.configurations,
+            include_llm=not is_stream,
+            tts_out_sample_rate=get_tts_out_sample_rate(self.transport),
         )
         if not is_stream:
             assert llm is not None, "LLM is required in agent mode"
@@ -1373,6 +1426,9 @@ class Agent:
         # greeting one now — the telephony greeting was already sent during
         # transport setup, before this generation was built.
         self.llm_service = llm
+        # Early-fire speech queues directly into the TTS service to bypass
+        # the LLM processor's in-flight stream (see early_speech.py).
+        self.tts_service = tts
         self._suppress_realtime_initial_inference()
 
         # Knowledge base runtime resolution (fail-open). Stream mode goes
@@ -1419,6 +1475,10 @@ class Agent:
             ),
             mode="stream" if is_stream else "agent",
             kb_processor=self._kb_processor,
+            tool_based_mode=(
+                (getattr(self.template, "flow", None) or {}).get("mode")
+                == FlowMode.TOOL_BASED.value
+            ),
         )
         self._context_aggregator = context_aggregator
 
