@@ -92,6 +92,32 @@ def test_buddy_deep_import_fails(tmp_path: Path) -> None:
     assert any("only app.crm.<module>.contracts" in e for e in check(root))
 
 
+def test_preview_module_is_the_inner_module(tmp_path: Path) -> None:
+    """app/crm/preview/<module>/ is <module>: contracts imports pass both
+    ways, anything deeper fails both ways."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/preview/uap/store.py": "from app.crm.identity.contracts import get_customer\n",
+            "app/crm/identity/resolve.py": "from app.crm.preview.uap.contracts import x\n",
+            "app/api/routes.py": "from app.crm.preview.uap.contracts import y\n",
+        },
+    )
+    assert check(root) == []
+
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/preview/uap/store.py": "from app.crm.identity.resolve import resolve\n",
+            "app/crm/identity/resolve.py": "from app.crm.preview.uap.store import x\n",
+            "app/api/routes.py": "from app.crm.preview.uap.store import y\n",
+        },
+    )
+    errors = check(root)
+    assert sum("bypasses contracts.py" in e for e in errors) == 2
+    assert any("only app.crm.<module>.contracts" in e for e in errors)
+
+
 def test_data_layer_importing_crm_fails(tmp_path: Path) -> None:
     """Data layer importing crm fails."""
     root = _tree(
