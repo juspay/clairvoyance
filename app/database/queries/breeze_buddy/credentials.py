@@ -16,18 +16,20 @@ def insert_credential_query(
     value: str,
     is_encrypted: bool,
     description: Optional[str],
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Generate query to insert a credential record."""
     text = f"""
         INSERT INTO "{CREDENTIALS_TABLE}"
-        ("id", "reseller_id", "name", "credential_type", "value",
+        ("id", "reseller_id", "merchant_id", "name", "credential_type", "value",
          "is_encrypted", "description", "is_active", "created_at", "updated_at")
-        VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10)
         RETURNING *;
     """
     values = [
         id,
         reseller_id,
+        merchant_id,
         name,
         credential_type,
         value,
@@ -47,16 +49,33 @@ def get_credential_by_id_query(credential_id: str) -> Tuple[str, List[Any]]:
 
 def get_credentials_by_merchant_query(
     reseller_id: Optional[str],
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get credentials for a merchant.
-    If reseller is provided, returns reseller-specific + global credentials.
-    If reseller is None, returns only global credentials.
+    Generate query to get the credentials a tenant can see.
+
+    reseller given            -> global + that reseller's reseller-wide rows
+    reseller + merchant given -> the above + that merchant's rows
+    neither                   -> only global rows
+
+    Ordered least-specific first (global, reseller, merchant) so a caller
+    that merges by name ends up with the most specific row winning.
     """
+    if reseller_id and merchant_id:
+        text = f"""
+            SELECT * FROM "{CREDENTIALS_TABLE}"
+            WHERE ("reseller_id" IS NULL
+                   OR ("reseller_id" = $1
+                       AND ("merchant_id" IS NULL OR "merchant_id" = $2)))
+            AND "is_active" = TRUE
+            ORDER BY "reseller_id" NULLS FIRST, "merchant_id" NULLS FIRST, "name" ASC;
+        """
+        return text, [reseller_id, merchant_id]
     if reseller_id:
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
             WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
+            AND "merchant_id" IS NULL
             AND "is_active" = TRUE
             ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
         """
@@ -104,7 +123,7 @@ def get_credential_by_name_query(
 
 def get_all_credentials_query() -> Tuple[str, List[Any]]:
     """Generate query to get all credentials."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "name" ASC;'
+    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" where "is_active" = TRUE ORDER BY "reseller_id" NULLS FIRST, "merchant_id" NULLS FIRST, "name" ASC;'
     return text, []
 
 
