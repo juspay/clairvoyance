@@ -152,7 +152,11 @@ class ToolDispatchMixin:
         # approval-gated; neither is read_only (so they never fan out —
         # ordering with sibling calls is meaningful).
         if self._render_ui_enabled:
-            rui_components = render_ui_components(self._ui_allowlist, self._catalog_v2)
+            rui_components = render_ui_components(
+                self._ui_allowlist,
+                self._catalog_v2,
+                custom_components=set(self._custom_defs),
+            )
             if self._quick_replies_mode == "off":
                 # quick_replies='off': the component vanishes from the
                 # schema enum and docs; execute rejects it as unknown.
@@ -165,6 +169,11 @@ class ToolDispatchMixin:
                         trusted_urls=sorted(self._trusted_link_urls),
                         quick_replies_mode=self._quick_replies_mode,
                         flavor_groups=self._ui_flavor_groups,
+                        custom_coaching={
+                            name: d.prompt_hint
+                            for name, d in self._custom_defs.items()
+                            if d.prompt_hint
+                        },
                     )
                 )
         if self._plan_enforcement:

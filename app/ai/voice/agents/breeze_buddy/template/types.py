@@ -1362,6 +1362,17 @@ class UiCatalogConfig(BaseModel):
             "in the 'core' group."
         ),
     )
+    custom_components: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Registry (ui_component, migration 070) component names this "
+            "template opts into, e.g. ['JourneyOptions']. Resolved at turn "
+            "start into a session-scoped overlay: the names join the "
+            "render_ui enum and hydrate via their JSON-Schema defs. "
+            "catalog-v2 render_ui sessions only — pruned everywhere else. "
+            "Unknown/inactive names are skipped with a warning."
+        ),
+    )
 
 
 class FlavorProtocolConfig(BaseModel):

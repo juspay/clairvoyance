@@ -516,6 +516,18 @@ class GreetingTileWire(BaseModel):
     image_url: str = Field(..., description="Tile image URL (merchant CDN).")
 
 
+class CustomComponentWire(BaseModel):
+    """One CHAMELEON registry component in wire form: the declarative
+    ``render_def`` the widget's interpreter paints, keyed by (name, version)
+    so a client may cache it — a def never changes under a version."""
+
+    name: str = Field(..., description="PascalCase component type.")
+    version: int = Field(..., ge=1, description="Bumped on every registry update.")
+    render_def: Dict[str, Any] = Field(
+        ..., description="Declarative render tree (grammar v1)."
+    )
+
+
 class WidgetSurfaceWire(BaseModel):
     """Everything the embed needs to paint its chrome for one session.
 
@@ -569,6 +581,15 @@ class WidgetSurfaceWire(BaseModel):
         description=(
             "Lazy UI flavor groups the template enables — preload these "
             "code-split chunks. Empty when catalog_active is 'v1'."
+        ),
+    )
+    custom_components: List[CustomComponentWire] = Field(
+        default_factory=list,
+        description=(
+            "CHAMELEON registry components this session may render — "
+            "render_def-bearing defs only (backend-only defs never ship). "
+            "The widget's declarative interpreter renders these; empty when "
+            "catalog_active is 'v1'."
         ),
     )
 

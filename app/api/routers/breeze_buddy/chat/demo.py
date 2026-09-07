@@ -260,7 +260,7 @@ async def create_demo_session(
         # ui_flavors, so a demo page structurally could not render quick
         # replies or greeting tiles its template defined — the asymmetry
         # the one-block shape exists to prevent.
-        widget=_surface_wire(
+        widget=await _surface_wire(
             _extract_widget_config(template),
             template,
             catalog_active=catalog_active,
