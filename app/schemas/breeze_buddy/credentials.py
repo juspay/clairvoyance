@@ -23,6 +23,12 @@ class CreateCredentialRequest(BaseModel):
         default=None,
         description="Reseller ID. NULL for global credentials available to all resellers.",
     )
+    merchant_id: Optional[str] = Field(
+        default=None,
+        description="Merchant ID for a merchant-scoped credential (requires "
+        "reseller_id). NULL = reseller-wide. Resolution: merchant row, else "
+        "reseller row, else global.",
+    )
     name: str = Field(
         description="Unique name used as the placeholder key (e.g., 'shopify_api_key')"
     )
@@ -51,6 +57,7 @@ class Credential(BaseModel):
 
     id: str
     reseller_id: Optional[str] = None
+    merchant_id: Optional[str] = None
     name: str
     credential_type: CredentialType
     value: Optional[Dict[str, Any]] = Field(
