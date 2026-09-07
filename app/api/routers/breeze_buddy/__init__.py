@@ -30,6 +30,7 @@ from app.api.routers.breeze_buddy.leads import router as leads_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.playground import router as playground_router
+from app.api.routers.breeze_buddy.preview.uap.handlers import router as uap_router
 
 # Reseller (umbrella) entities — first-class since migration 036
 from app.api.routers.breeze_buddy.resellers import router as resellers_router
@@ -84,6 +85,7 @@ router.include_router(configurations_router, prefix="", tags=["configurations"])
 
 # Credentials (API keys, tokens - centralized secret management)
 router.include_router(credentials_router, prefix="", tags=["credentials"])
+router.include_router(uap_router, prefix="/uap", tags=["UAP"])
 
 # Telephony numbers (caller IDs + inbound DIDs)
 router.include_router(numbers_router, prefix="", tags=["numbers"])
