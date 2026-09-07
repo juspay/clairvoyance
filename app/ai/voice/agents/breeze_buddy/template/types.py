@@ -2485,6 +2485,32 @@ class HttpAuthConfig(BaseModel):
         return "**********"
 
 
+class RetryUntilConfig(BaseModel):
+    """Re-request a poll-until-ready endpoint until a body field is ready.
+
+    Some APIs answer 2xx immediately with "not finished yet" (async planners,
+    order status, report generation). The SAME request is re-issued until
+    ``field`` in the parsed JSON body equals ``equals`` - bounded, and
+    invisible to the LLM, which only sees the final body. GET only (the
+    request is re-issued verbatim); polls run with no transport retries, so
+    the added latency is at most ``(max_attempts - 1) * (timeout + delay_ms /
+    1000)`` seconds. Non-SSE 2xx JSON only; a failed poll keeps the last
+    successful body.
+    """
+
+    field: str = Field(
+        ...,
+        description="Dotted path into the parsed JSON body, e.g. 'allJourneysLoaded'.",
+    )
+    equals: Union[bool, int, float, str, None] = Field(
+        True, description="JSON scalar at `field` that means ready (default true)."
+    )
+    max_attempts: int = Field(
+        3, ge=2, le=5, description="TOTAL attempts including the first."
+    )
+    delay_ms: int = Field(1200, ge=100, le=10000, description="Pause between attempts.")
+
+
 class HttpRequestConfig(BaseModel):
     """Complete HTTP request configuration for hooks and global functions.
 
@@ -2507,6 +2533,18 @@ class HttpRequestConfig(BaseModel):
     auth: Optional[HttpAuthConfig] = None
     timeout: int = 10
     max_retries: int = 3
+    retry_until: Optional[RetryUntilConfig] = None
+
+    @model_validator(mode="after")
+    def _retry_until_only_on_get(self) -> "HttpRequestConfig":
+        # retry_until re-issues the request verbatim; on a mutating method
+        # that repeats the mutation, so it is refused when the config loads.
+        if self.retry_until is not None and self.method != HttpMethod.GET:
+            raise ValueError(
+                "retry_until is only allowed with method GET (the request is "
+                f"re-issued verbatim); got {self.method.value}"
+            )
+        return self
 
 
 class FieldConfig(BaseModel):
