@@ -23,7 +23,7 @@ import pytest
 
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.walker as walker
-from app.crm.outreach.nodes import NodeParked
+from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
 from tests.crm.doubles import patch_accessors
 

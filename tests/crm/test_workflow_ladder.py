@@ -14,7 +14,7 @@ import pytest
 import app.crm.outreach.plans as plans
 from app.crm.outreach.db import DbTxn
 from app.crm.outreach.ladder import LadderProblem, expand_stages
-from app.crm.outreach.nodes import run_facts
+from app.crm.outreach.nodes.context import run_facts
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition
 from tests.crm.doubles import patch_accessors

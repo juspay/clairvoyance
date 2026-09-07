@@ -72,11 +72,15 @@ cannot proceed?" needed a search rather than a filename.
 
 This is the one sanctioned non-empty `__init__` (the `record/extractors/`
 SPEC_MODULES precedent): the registry is the module's public surface, so it
-is assembled where the package is imported, and every name the old flat
-module exported is re-exported beside it so the split is a move rather than
-a migration. `spec.py` is separate from `__init__` so a word can import the
-type it implements without importing the registry that lists it. Outreach
-took the shape 7 Sep 2026, in the PR that added the fifth word.
+is assembled where the package is imported — and that is ALL the `__init__`
+exports (`NODE_TYPES`, `NodeSpec`, `is_wait`; a test pins `__all__`). Every
+other name is imported by full path — `nodes.context` for the run-context
+filters, `nodes.spec` for `NodeParked`, `nodes.wait_event` for the listening
+square's words — because an `__init__` that re-exports its siblings is the
+re-export-hub scar (L192) in a new coat. `spec.py` is separate from
+`__init__` so a word can import the type it implements without importing the
+registry that lists it. Outreach took the shape 7 Sep 2026, in the PR that
+added the fifth word; the hub it shipped with was trimmed the same day.
 
 **Vocabulary files, one word each, one home each**: `reasons.py` (why a send
 was refused — T16 col 13), `topics.py` (what a letter is CALLED on the spine —

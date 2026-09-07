@@ -32,13 +32,12 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
-from app.crm.outreach.nodes import (
-    _BOOKKEEPING_KEYS,
-    _BOOKKEEPING_PREFIXES,
+from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
-    TOPIC_KEY,
+    is_bookkeeping,
     reply_key,
 )
+from app.crm.outreach.nodes.wait_event import TOPIC_KEY
 from app.crm.outreach.repeat import _as_number, apply_repeat
 from app.crm.outreach.schemas import (
     EnrollmentRun,
@@ -356,7 +355,7 @@ def _context_from_payload(payload: dict) -> dict:
     re-added below, normalized, from what identity resolved on."""
     context = {}
     for key, value in payload.items():
-        if key in _BOOKKEEPING_KEYS or key.startswith(_BOOKKEEPING_PREFIXES):
+        if is_bookkeeping(key):
             continue  # ours to write, never a producer's
         if not isinstance(value, (str, int, float, bool)):
             continue  # nested objects/lists stay on the event row

@@ -22,7 +22,7 @@ import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.ladder import expand_stages
-from app.crm.outreach.nodes import TIMEOUT
+from app.crm.outreach.nodes.wait_event import TIMEOUT
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     Workflow,

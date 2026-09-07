@@ -26,7 +26,7 @@ from app.crm.outreach.db.queries.enrollment import (
     customer_runs_query,
     workflow_summary_query,
 )
-from app.crm.outreach.nodes import run_facts
+from app.crm.outreach.nodes.context import run_facts
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 SINCE, UNTIL = NOW - timedelta(days=7), NOW

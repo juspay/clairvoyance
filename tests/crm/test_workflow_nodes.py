@@ -36,3 +36,29 @@ def test_is_wait_answers_for_every_word() -> None:
         "call": False,
         "action": False,
     }
+
+
+def test_the_package_init_exports_the_registry_and_nothing_else() -> None:
+    """The one sanctioned non-empty __init__ (record/extractors precedent)
+    assembles the registry; it does not re-export its siblings. The split
+    of 7 Sep 2026 shipped a 21-name hub (three of them private) so twelve
+    importers could stay unchanged — the accessor/__init__ scar in a new
+    coat. Importers name the file they mean: nodes.context, nodes.spec,
+    nodes.wait_event, nodes.<word>."""
+    import app.crm.outreach.nodes as package
+
+    assert set(package.__all__) == {"NODE_TYPES", "NodeSpec", "is_wait"}
+    exported = {
+        name
+        for name in dir(package)
+        if not name.startswith("__")
+        and not name.startswith("_")
+        and name not in package.__all__
+        # the word modules and the siblings are attributes of any package
+        # once imported; only NAMES the init defines or re-exports count
+        and name
+        not in {"action", "call", "send", "wait", "wait_event", "context", "spec"}
+        and name not in {"Dict", "WorkflowNode"}
+    }
+    assert exported == set(), f"__init__ grew a re-export: {sorted(exported)}"
+    assert not [n for n in dir(package) if n.startswith("_") and not n.startswith("__")]

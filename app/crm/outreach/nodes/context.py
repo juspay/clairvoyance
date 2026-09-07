@@ -48,6 +48,16 @@ _BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_", "action_")
 _REQUEST_ID_KEYS = ("order_id", "request_id")
 
 
+def is_bookkeeping(key: str) -> bool:
+    """PURE: whether a context key is the walker's own — never a template
+    variable, never a producer's fact. The ONE definition: run_facts drops
+    these, and entry.py refuses a producer who spells one (a payload key
+    named `repeat_items` or `source_event_id` would corrupt the accumulate
+    branch or the founding-event dedupe). Two lists would let a walker key
+    reach a customer's message the day they diverged."""
+    return key in _BOOKKEEPING_KEYS or key.startswith(_BOOKKEEPING_PREFIXES)
+
+
 def reply_key(node_id: str) -> str:
     """Where a wait_event square's answer lives in the run's context."""
     return f"reply_{node_id}"
@@ -93,11 +103,7 @@ def run_facts(
     given, current_node (and current_stage when the square is labelled)
     ride along, so one call template can say "you stopped at
     {current_stage}"."""
-    facts = {
-        key: value
-        for key, value in context.items()
-        if key not in _BOOKKEEPING_KEYS and not key.startswith(_BOOKKEEPING_PREFIXES)
-    }
+    facts = {key: value for key, value in context.items() if not is_bookkeeping(key)}
     by_square = context.get("facts")
     by_square = by_square if isinstance(by_square, dict) else {}
     for square, letter in by_square.items():

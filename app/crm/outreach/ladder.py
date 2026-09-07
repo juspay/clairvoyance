@@ -41,7 +41,7 @@ for one would otherwise move both.
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.crm.outreach.nodes import TIMEOUT, TOPIC_KEY
+from app.crm.outreach.nodes.wait_event import TIMEOUT, TOPIC_KEY
 from app.crm.outreach.schemas import StageAction, Stages
 
 # What the ladder produces. A document carrying a ladder may not draw
