@@ -8,12 +8,14 @@ from typing import Optional
 import asyncpg
 
 from app.core.config.static import (
+    POSTGRES_ACQUIRE_TIMEOUT_SECONDS,
     POSTGRES_DB,
     POSTGRES_HOST,
     POSTGRES_MAX_OVERFLOW,
     POSTGRES_PASSWORD,
     POSTGRES_POOL_SIZE,
     POSTGRES_PORT,
+    POSTGRES_STATEMENT_CACHE_SIZE,
     POSTGRES_USER,
 )
 from app.core.logger import logger
@@ -69,8 +71,28 @@ async def init_db_pool(min_size: Optional[int] = None, max_size: Optional[int] =
                 port=POSTGRES_PORT,
                 min_size=min_size,
                 max_size=max_size,
+                statement_cache_size=POSTGRES_STATEMENT_CACHE_SIZE,
             )
-            logger.info("Database pool initialized successfully.")
+            if POSTGRES_STATEMENT_CACHE_SIZE != 0:
+                # Behind a transaction pooler this is the config that breaks
+                # production with InvalidSQLStatementNameError once a second
+                # client shares a server connection. Only safe against direct
+                # Postgres, or a pooler that tracks prepared statements
+                # (PgBouncer max_prepared_statements > 0). See docs/PGBOUNCER.md.
+                logger.error(
+                    "POSTGRES_STATEMENT_CACHE_SIZE=%s (not 0): UNSAFE behind "
+                    "PgBouncer/Cloud SQL transaction pooling unless the pooler "
+                    "tracks prepared statements. See docs/PGBOUNCER.md.",
+                    POSTGRES_STATEMENT_CACHE_SIZE,
+                )
+            logger.info(
+                "Database pool initialized successfully "
+                "(min=%s max=%s statement_cache_size=%s acquire_timeout=%s).",
+                min_size,
+                max_size,
+                POSTGRES_STATEMENT_CACHE_SIZE,
+                POSTGRES_ACQUIRE_TIMEOUT_SECONDS or "none",
+            )
         except Exception as e:
             logger.error(f"Database pool initialization failed: {e}")
             raise
@@ -87,7 +109,10 @@ async def get_db_connection():
     if pool is None:
         raise RuntimeError("Database pool is not initialized")
 
-    async with pool.acquire() as connection:
+    # timeout=None restores asyncpg's unbounded wait; the configured default
+    # converts a pool-slot deadlock into an error instead of a silent hang.
+    timeout = POSTGRES_ACQUIRE_TIMEOUT_SECONDS or None
+    async with pool.acquire(timeout=timeout) as connection:
         yield connection
 
 
@@ -95,6 +120,7 @@ async def close_db_pool():
     """
     Close the database connection pool.
     """
+    global pool
     if pool:
         try:
             await pool.close()
@@ -102,6 +128,10 @@ async def close_db_pool():
         except Exception as e:
             logger.error(f"Failed to close database pool: {e}")
             raise
+        finally:
+            # Clear the handle so a later get_db_connection() re-initializes
+            # instead of calling acquire() on a closed pool (InterfaceError).
+            pool = None
 
 
 __all__ = [
