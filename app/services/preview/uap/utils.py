@@ -92,7 +92,9 @@ class IntentConstraints(BaseModel):
     Amounts are decimal rupee strings ("2500.00"), not paise; times are
     10-digit epoch-SECOND strings ("1755330900"). Getting any of these wrong
     is silently accepted for the agent and rejected for the action. Field
-    set = Juspay's agenticCheckout doc (2026-09-05): nothing extra is sent.
+    set = Juspay's agenticCheckout doc (2026-09-05) plus ``quoted_amount`` /
+    ``tolerance``: left out, Juspay stores both as 0.00 and every real draw
+    falls outside a 0 ± 0 window (error 79, order stuck PENDING).
     """
 
     binding_type: Literal["VPA_LIST", "VERIFIED_NAMES", "MCC_CAPS"]
@@ -105,6 +107,12 @@ class IntentConstraints(BaseModel):
     max_per_draw: str
     max_total: str
     max_draws: Optional[int] = None
+
+    # The charge Juspay expects per draw and how far a real one may deviate:
+    # a draw is accepted when quoted_amount - tolerance <= amount <=
+    # quoted_amount + tolerance. Decimal rupee strings.
+    quoted_amount: str
+    tolerance: str
 
     # 10-digit epoch-second strings, not ints — see the class docstring.
     valid_from: str
@@ -151,6 +159,12 @@ def build_transit_intent(
     start = valid_from or datetime.now(timezone.utc)
     end = start + timedelta(days=validity_days)
 
+    # Transit tickets cost different amounts, so the accepted window is the
+    # whole range 0.00 .. max_per_draw: quoted at the midpoint, tolerance of
+    # the same size. The per-draw cap is still enforced by max_per_draw and
+    # by our own ledger before the draw is attempted.
+    half = _money(Decimal(max_per_draw) / 2)
+
     return IntentConstraints(
         binding_type="VERIFIED_NAMES",
         bound_verified_names=verified_names,
@@ -161,6 +175,8 @@ def build_transit_intent(
         max_per_draw=max_per_draw,
         max_total=max_total,
         max_draws=max_draws,
+        quoted_amount=half,
+        tolerance=half,
         # 10-digit epoch-SECOND strings ("1755330900") — the same format the
         # known-good /txns curl uses for proposed_expiry. The 13-digit
         # millisecond strings we sent first are rejected on the action create
