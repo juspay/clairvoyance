@@ -265,3 +265,268 @@ def _install_direct_intent_stubs(monkeypatch, capture_merge):
     monkeypatch.setattr(router, "create_aiohttp_session", lambda: None)
     monkeypatch.setattr(router, "upsert_agent_session_state_merge", capture_merge)
     monkeypatch.setattr(router, "ChatAgent", _Agent)
+
+
+# ---------------------------------------------------------------------------
+# Template-intent enrich rules — cross-tool selected-marking
+# ---------------------------------------------------------------------------
+
+
+def test_template_intent_enrich_marks_selected_tier():
+    from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+        _apply_enrich,
+    )
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        CustomUiIntent,
+        CustomUiIntentStep,
+        UiIntentEnrichRule,
+    )
+
+    store = BindingStore()
+    store.record(
+        "get_journey_details",
+        None,
+        {"status": "success", "selected_quote_id": "q2"},
+    )
+    store.record(
+        "get_tier_options",
+        None,
+        {
+            "status": "success",
+            "tiers": [
+                {"quote_id": "q1", "name": "First Class"},
+                {"quote_id": "q2", "name": "Second Class"},
+            ],
+        },
+    )
+
+    class _Agent:
+        binding_store = store
+
+    cfg = CustomUiIntent(
+        name="journey_detail",
+        steps=[CustomUiIntentStep(tool="get_journey_details")],
+        enrich=[
+            UiIntentEnrichRule(
+                list_ref="$tool:get_tier_options#/tiers",
+                match_field="quote_id",
+                equals_ref="$tool:get_journey_details#/selected_quote_id",
+                set={"selected": True, "state_label": "Selected"},
+                else_set={"unselected": True},
+            )
+        ],
+    )
+    _apply_enrich(_Agent(), cfg)
+    tiers = store.resolve("get_tier_options")["tiers"]
+    assert tiers[1]["selected"] is True and tiers[1]["state_label"] == "Selected"
+    assert "selected" not in tiers[0] and tiers[0]["unselected"] is True
+
+
+def test_template_intent_enrich_null_target_marks_nothing():
+    """A null match target (the API omitted the selected value) must leave
+    the list untouched — the earlier str() compare marked every item that
+    lacked the match field as selected (str(None) == str(None))."""
+    from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+        _apply_enrich,
+    )
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        CustomUiIntent,
+        CustomUiIntentStep,
+        UiIntentEnrichRule,
+    )
+
+    store = BindingStore()
+    store.record("gjd", None, {"status": "success", "selected_quote_id": None})
+    store.record(
+        "tiers",
+        None,
+        {"status": "success", "tiers": [{"name": "no quote id"}, {"quote_id": "q1"}]},
+    )
+
+    class _Agent:
+        binding_store = store
+
+    rule = UiIntentEnrichRule(
+        list_ref="$tool:tiers#/tiers",
+        match_field="quote_id",
+        equals_ref="$tool:gjd#/selected_quote_id",
+        set={"selected": True},
+        else_set={"unselected": True},
+    )
+    cfg = CustomUiIntent(
+        name="n", steps=[CustomUiIntentStep(tool="gjd")], enrich=[rule]
+    )
+    _apply_enrich(_Agent(), cfg)
+    assert store.resolve("tiers")["tiers"] == [
+        {"name": "no quote id"},
+        {"quote_id": "q1"},
+    ]
+
+    # a real target still never matches an item that lacks the field
+    store.record("gjd", None, {"status": "success", "selected_quote_id": "q1"})
+    _apply_enrich(_Agent(), cfg)
+    tiers = store.resolve("tiers")["tiers"]
+    assert tiers[0] == {"name": "no quote id", "unselected": True}
+    assert tiers[1]["selected"] is True
+
+
+def test_template_intent_enrich_fail_open():
+
+    from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+        _apply_enrich,
+    )
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        CustomUiIntent,
+        CustomUiIntentStep,
+        UiIntentEnrichRule,
+    )
+
+    store = BindingStore()
+    store.record("t", None, {"status": "success", "xs": [{"id": "a"}]})
+
+    class _Agent:
+        binding_store = store
+
+    # bad ref + missing tool + non-list target: all silently skipped
+    cfg = CustomUiIntent(
+        name="n",
+        steps=[CustomUiIntentStep(tool="t")],
+        enrich=[
+            UiIntentEnrichRule(
+                list_ref="no-prefix#/xs",
+                match_field="id",
+                equals_ref="$tool:t#/missing",
+                set={"s": 1},
+            ),
+            UiIntentEnrichRule(
+                list_ref="$tool:absent#/xs",
+                match_field="id",
+                equals_ref="$tool:t#/xs",
+                set={"s": 1},
+            ),
+        ],
+    )
+    _apply_enrich(_Agent(), cfg)
+    assert store.resolve("t")["xs"] == [{"id": "a"}]
+
+
+@pytest.mark.asyncio
+async def test_template_intent_drive_runs_steps_in_order_and_fails_closed(monkeypatch):
+    """The config-authored drive: steps dispatch IN ORDER through the shared
+    persisted-tool path (static args merged with payload dot-paths), a
+    missing payload key fails CLOSED before any dispatch, and a failing
+    step ends the run as the final (tool, result) pair the engine shell
+    reports. The show op it hands back anchors on id 'root'."""
+    from types import SimpleNamespace
+
+    from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+        TemplateIntentPayload,
+        template_intent_policies,
+    )
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        CustomUiIntent,
+        CustomUiIntentStep,
+    )
+
+    async def _noop_persist(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(router, "_persist_tool_step", _noop_persist)
+
+    cfg = CustomUiIntent(
+        name="journey_detail",
+        steps=[
+            CustomUiIntentStep(
+                tool="get_journey_details",
+                args_from_payload={"journey_id": "journey.id"},
+            ),
+            CustomUiIntentStep(
+                tool="get_tier_options",
+                args={"leg_order": 0},
+                args_from_payload={"journey_id": "journey.id"},
+            ),
+        ],
+        component="JourneyDetail",
+        bind={"legs": "$tool:get_journey_details#/legs"},
+    )
+    template = SimpleNamespace(
+        configurations=SimpleNamespace(ui_intents=SimpleNamespace(custom=[cfg]))
+    )
+    policy = template_intent_policies(template)["journey_detail"]
+    assert policy.route is IntentRoute.DIRECT and policy.silent is True
+    assert template_intent_policies(SimpleNamespace(configurations=None)) == {}
+
+    def _parsed(payload):
+        return ParsedIntent(
+            intent=UiIntent(
+                intent="journey_detail", component_id="card-1", payload=payload
+            ),
+            policy=policy,
+            payload=TemplateIntentPayload(),
+        )
+
+    drive = policy.drive
+    assert drive is not None
+
+    async def _run(agent, payload):
+        return [
+            item
+            async for item in drive(  # pyrefly: ignore[not-callable] (narrowed above)
+                agent,  # pyrefly: ignore[bad-argument-type]
+                None,
+                {},
+                _parsed(payload),
+                "t1",
+            )
+        ]
+
+    # happy path: both steps, in order, static args merged with payload paths
+    agent = _StubAgent()
+    out = await _run(agent, {"journey": {"id": "J1"}})
+    assert agent.dispatched == [
+        ("get_journey_details", {"journey_id": "J1"}),
+        ("get_tier_options", {"leg_order": 0, "journey_id": "J1"}),
+    ]
+    assert out[-1] == (None, "get_tier_options", {"ok": True})
+    show_op = policy.show_op
+    assert show_op is not None
+    rendered = show_op(
+        "get_tier_options",
+        {"ok": True},
+        agent,  # pyrefly: ignore[bad-argument-type]
+    )
+    assert rendered == {
+        "op": "show",
+        "id": "root",
+        "component": "JourneyDetail",
+        "bind": {"legs": "$tool:get_journey_details#/legs"},
+    }
+
+    # missing payload key: fails closed BEFORE any dispatch, typed notice
+    agent = _StubAgent()
+    out = await _run(agent, {"journey": {}})
+    assert agent.dispatched == []
+    assert [ev.event for ev, _, _ in out if ev is not None] == [
+        "intent_failed",
+        "turn_end",
+    ]
+
+    # a failing step stops the run and is reported as the final pair
+    class _FailsFirst(_StubAgent):
+        async def run_direct_tool(  # pyrefly: ignore[bad-override]
+            self, *, tool_name, args, node, prep, turn_id
+        ):
+            self.dispatched.append((tool_name, dict(args)))
+            return _Call("call-1", dict(args)), {"status": "error", "error": "boom"}
+
+    agent = _FailsFirst()
+    out = await _run(agent, {"journey": {"id": "J1"}})
+    assert [t for t, _ in agent.dispatched] == ["get_journey_details"]
+    assert out[-1] == (
+        None,
+        "get_journey_details",
+        {"status": "error", "error": "boom"},
+    )
