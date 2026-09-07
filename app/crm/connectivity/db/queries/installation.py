@@ -8,7 +8,11 @@ every API response that ever renders a connection.
 
 from typing import Any, List, Optional, Tuple
 
-from app.crm.connectivity.status import INSTALLATION_DISABLED, INSTALLATION_REVOKED
+from app.crm.connectivity.status import (
+    INSTALLATION_DISABLED,
+    INSTALLATION_REVOKED,
+    INSTALLATION_USABLE,
+)
 
 INSTALLATION_TABLE = "crm_connector_installation"
 
@@ -84,6 +88,36 @@ def installation_by_account_query(
            AND external_account_id = $3
     """
     return query, [merchant_id, connector_key, external_account_id]
+
+
+def installation_for_connector_query(
+    merchant_id: str, connector_key: str
+) -> Tuple[str, List[Any]]:
+    """The route shape, found by the CONNECTOR alone — the door an action
+    acts through.
+
+    Neither of the lookups above fits: an action node names a connector
+    ("shopify"), not our installation id and not the provider's account id,
+    because a plan document must not have to know either. One merchant CAN
+    hold two accounts on one connector (two shops, two WABAs — that is what
+    the account unique index allows), so this takes the newest usable one and
+    is deliberately not the way a multi-shop merchant will address a specific
+    shop; that day the node names the account and this gains a parameter.
+
+    Usable only, bound as a parameter: fail closed on 'connecting',
+    'degraded', 'revoked' and 'disabled' alike — an action performed through
+    an unproven or withdrawn door is a write we cannot stand behind.
+    """
+    query = f"""
+        SELECT {INSTALLATION_COLUMNS}
+          FROM {INSTALLATION_TABLE}
+         WHERE merchant_id = $1
+           AND connector_key = $2
+           AND status = ANY($3::text[])
+         ORDER BY installed_at DESC
+         LIMIT 1
+    """
+    return query, [merchant_id, connector_key, sorted(INSTALLATION_USABLE)]
 
 
 def upsert_installation_query(

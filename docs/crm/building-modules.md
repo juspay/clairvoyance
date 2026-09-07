@@ -53,6 +53,31 @@ file where a seam needs a neutral shape (`ingress.py`) and `tenancy.py` for
 the `TenantScoped` request base. `__init__` exports nothing; import the
 family you mean.
 
+**A REGISTRY file becomes a package the same way, one word per file.** When
+a `<concern>.py` that dispatches on a vocabulary crosses ~500 lines, the
+split is by WORD, not by layer: outreach's `nodes.py` reached 596 carrying
+five validators, three executors, the placeholder helpers, the run-context
+filters and the registry — at which point "where does a call decide it
+cannot proceed?" needed a search rather than a filename.
+
+```text
+  nodes/
+    __init__.py    NODE_TYPES, ASSEMBLED from the word modules
+    wait.py · wait_event.py · call.py · send.py · action.py
+                   one word each: its validate AND its execute, together
+    context.py     what in a run's context is OURS — the one filter the
+                   call payload and the send variables both derive from
+    spec.py        NodeSpec / NodeParked: what a word must answer
+```
+
+This is the one sanctioned non-empty `__init__` (the `record/extractors/`
+SPEC_MODULES precedent): the registry is the module's public surface, so it
+is assembled where the package is imported, and every name the old flat
+module exported is re-exported beside it so the split is a move rather than
+a migration. `spec.py` is separate from `__init__` so a word can import the
+type it implements without importing the registry that lists it. Outreach
+took the shape 7 Sep 2026, in the PR that added the fifth word.
+
 **Vocabulary files, one word each, one home each**: `reasons.py` (why a send
 was refused — T16 col 13), `topics.py` (what a letter is CALLED on the spine —
 T13 col 4), `status.py` (every status word this module BRANCHES on, one
@@ -166,10 +191,14 @@ No service classes, no repository interfaces; pure core + thin shell.
 - Router→router imports — routers call accessors/contracts only.
 - Re-export hub `__init__.py` — import by full path.
 - Parking a provider's code at the module root to dodge the adapter rule.
-  A connector has several FACES — send, onboard, templates — and CI rule 11
-  gives each ONE composition root outside `providers/`: adapters answer to
-  `send.py`, the non-send faces to `connectors.py`, vendor transport
-  (`providers/meta/graph.py`) to neither. The scar: when the rule was
+  A connector has several FACES — send, onboard, templates, inbound, and
+  actions (what a run may ask it to DO) — and CI rule 11 gives each ONE
+  composition root outside `providers/`: adapters answer to `send.py`,
+  onboard/templates/actions to `connectors.py`, inbound to `ingress.py`,
+  vendor transport (`providers/meta/graph.py`,
+  `providers/shopify/via_nautilus.py`) to none of them. A transport with no
+  door is what lets it be deleted without touching anything above it. The
+  scar: when the rule was
   folder-shaped, onboarding's Graph calls were moved to a root
   `meta_graph.py` to get around it, and the confined adapter then imported
   that unconfined file.

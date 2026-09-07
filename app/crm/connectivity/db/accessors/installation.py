@@ -11,6 +11,7 @@ from app.crm.connectivity.db.queries.installation import (
     connector_accounts_query,
     installation_by_account_query,
     installation_by_id_query,
+    installation_for_connector_query,
     installation_for_inbound_query,
     installation_read_by_id_query,
     list_installations_query,
@@ -100,6 +101,21 @@ async def revoke_installation(
     query, values = revoke_installation_query(merchant_id, installation_id)
     row = await conn.fetchrow(query, *values)
     return decode_installation_read(row) if row is not None else None
+
+
+async def get_installation_for_connector(
+    merchant_id: str, connector_key: str
+) -> Optional[ConnectorInstallation]:
+    """The usable door this merchant acts through on one connector, or None.
+
+    None is the fail-closed answer the action root turns into a refusal: no
+    connection, an unproven one, or a withdrawn one all read the same here,
+    because acting through any of them is the same mistake.
+    """
+    query, values = installation_for_connector_query(merchant_id, connector_key)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_installation(row) if row is not None else None
 
 
 async def get_installation_for_inbound(

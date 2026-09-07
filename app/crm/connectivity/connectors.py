@@ -17,17 +17,24 @@ Adding a connector is: a package under providers/, one entry here. No branch
 anywhere else — onboarding.py and templates.py never name a provider.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Type
 
 from pydantic import BaseModel
 
 from app.crm.connectivity.providers.base import (
+    ActionError,
+    ConnectorAction,
     ConnectorHandshakeError,
     ConnectorOnboarder,
     ProviderError,
     TemplateProvider,
     TemplateProviderError,
+)
+from app.crm.connectivity.providers.shopify.actions import SHOPIFY_ACTIONS
+from app.crm.connectivity.providers.shopify.onboard import (
+    OnboardShopifyRequest,
+    ShopifyOnboarder,
 )
 from app.crm.connectivity.providers.whatsapp.onboard import (
     OnboardWhatsappRequest,
@@ -35,14 +42,21 @@ from app.crm.connectivity.providers.whatsapp.onboard import (
 )
 from app.crm.connectivity.providers.whatsapp.templates import WhatsappTemplates
 
-#: Re-exported so onboarding.py can name the error every onboarder raises.
-#: It cannot import providers/base itself — boundary rule 11 gives that file
-#: two doors, and this is one of them.
+#: Re-exported so onboarding.py can name the error every onboarder raises,
+#: and actions.py the one every action face raises. Neither can import
+#: providers/base itself — boundary rule 11 gives that file its doors, and
+#: this is one of them.
 __all__ = [
+    "ActionError",
     "CONNECTORS",
     "ConnectorHandshakeError",
     "ConnectorSpec",
     "ProviderError",
+    # The face TYPE, not a face: templates.py needs it to narrow the
+    # Optional on ConnectorSpec, and the door is where a module reaches a
+    # provider thing (boundary rule 11) — the same reason the error types
+    # above are re-exported here rather than imported from providers/base.
+    "TemplateProvider",
     "TemplateProviderError",
     "connector_for",
     "connector_for_channel",
@@ -82,10 +96,23 @@ class ConnectorSpec:
     #: Instagram and Messenger are two connectors on one Meta app.
     channel: Optional[str]
     onboarder: ConnectorOnboarder
-    templates: TemplateProvider
+    #: The template-registry face, or None for a connector that registers no
+    #: message shapes. Optional for the same reason `channel` is (#1038): a
+    #: door with no pipe sends nothing, so it has nothing to register, and a
+    #: stub whose every method raises is a file that exists to satisfy a type
+    #: — it reads as a face, it is reachable in a stack trace, and it has to
+    #: be kept in step with a Protocol it never implements. The two readers
+    #: guard instead, which is one `if` each against a whole module.
+    templates: Optional[TemplateProvider]
     #: The request model the onboard route validates its body against, so the
     #: route itself stays connector-agnostic.
     request_model: Type[BaseModel]
+    #: What a run may ask this connector to DO, keyed by the word a plan
+    #: document says. Empty for a connector that only sends and receives —
+    #: which is why actions.py can answer "this connector declares no
+    #: actions" without a branch, and why adding the fourth verb to an
+    #: existing connector is one line here.
+    actions: Dict[str, ConnectorAction] = field(default_factory=dict)
 
 
 # Instantiated once: the faces are stateless request builders, exactly like
@@ -98,6 +125,22 @@ CONNECTORS: Dict[str, ConnectorSpec] = {
         onboarder=WhatsappOnboarder(),
         templates=WhatsappTemplates(),
         request_model=OnboardWhatsappRequest,
+    ),
+    # A door with no pipe, and the first connector that ACTS. channel=None
+    # keeps it out of the send-side pins and out of the binding write; the
+    # template face refuses, because a connector that sends nothing
+    # registers no message shapes.
+    "shopify": ConnectorSpec(
+        key="shopify",
+        # The spine word for Shopify's letters — orders/* arrive from the
+        # nautilus relay under source="shopify", which is the same word the
+        # record catalog's shopify spec is registered against.
+        source="shopify",
+        channel=None,
+        onboarder=ShopifyOnboarder(),
+        templates=None,
+        request_model=OnboardShopifyRequest,
+        actions=SHOPIFY_ACTIONS,
     ),
 }
 

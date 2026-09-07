@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.crm.outreach.ladder import expand_stages
+from app.crm.outreach.nodes.action import placeholder_names
 from app.crm.outreach.schemas import WorkflowDefinition
 from app.crm.record.contracts import (
     AmbiguousTopic,
@@ -54,12 +55,24 @@ def entry_against_catalog(
         if node.type == "send"
         for blank, fact in node.variables.items()
     ]
+    # An action square's args ask the run for facts by the same names a send
+    # node's variables do — `{id}` on an args value and `{id}` on the right of
+    # a variables map are the same lookup against the same run_facts. So they
+    # answer to the same allow-list: without this, `{order_id}` on a door
+    # whose topic declares only `id` publishes cleanly and parks on the first
+    # run, which is the failure the send-side check exists to prevent.
+    asked = [
+        (node.id, name)
+        for node in definition.nodes
+        if node.type == "action"
+        for name in placeholder_names(node.args)
+    ]
     listened = listened_facts(definition, catalogs)
     for entry in definition.entries:
         topic = entry.topic
         fields = catalogs.get(topic)
         if fields is None:
-            if entry.where or entry.key or mapped:
+            if entry.where or entry.key or mapped or asked:
                 problems.append(
                     f"topic {topic!r} is not in the catalog — register its "
                     "schema (or declare it in code) before filtering, keying "
@@ -72,6 +85,13 @@ def entry_against_catalog(
             if fact not in allowed:
                 problems.append(
                     f"send node {node_id}: variable {blank!r} <- {fact!r} is not "
+                    f"a declared variable field (topic {topic!r}; declared: "
+                    f"{', '.join(sorted(declared)) or 'none'})"
+                )
+        for node_id, name in asked:
+            if name not in allowed:
+                problems.append(
+                    f"action node {node_id}: args ask for {{{name}}}, which is not "
                     f"a declared variable field (topic {topic!r}; declared: "
                     f"{', '.join(sorted(declared)) or 'none'})"
                 )

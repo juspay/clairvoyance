@@ -541,6 +541,51 @@ CRM_DISPATCH_RETRY_BASE_SECONDS = _positive_int("CRM_DISPATCH_RETRY_BASE_SECONDS
 # twice.
 CRM_MESSAGE_SEND_TIMEOUT_SECONDS = _positive_int("CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 20)
 
+# The ceiling on ONE connector action (a workflow `action` square asking a
+# connector to do something). Separate from the send timeout above because it
+# is a different pool and a different worker.
+#
+# It MUST stay below CRM_WALKER_LEASE_SECONDS, and that is why it is a dial
+# rather than a constant. The walker claims a run under a lease (canon T20)
+# and performs the square inside it; a request that outran the lease would
+# let a second worker claim the same run while the first is still mid-write,
+# and the action would be performed twice by two workers that each believe
+# they hold it. Idempotency makes that survivable, not correct.
+# tests/crm/test_config_bounds.py asserts the inequality against this module,
+# so raising one dial without the other fails CI.
+CRM_ACTION_TIMEOUT_SECONDS = _positive_int("CRM_ACTION_TIMEOUT_SECONDS", 20)
+
+# Nautilus's inbound route for anything WE ask it to do — today a Shopify
+# order action relayed while nautilus still holds the shops' Shopify tokens
+# (providers/shopify/via_nautilus.py), and the same route once abandonment,
+# notes and tags are unified behind it. Named for the ROUTE and not one
+# payload: the envelope's own `type` discriminates the verb, so a second
+# action needs no second variable.
+#
+# ONE deployment address, shared by every merchant. Deliberately not a
+# per-merchant connector row: the plan document names a connector and an
+# action, never a URL, so nothing an author or a producer sends can choose a
+# destination — and a row repeated identically per tenant is a deployment
+# address with extra places to drift.
+#
+# The default is PROD, and it is the same address a lead payload already
+# carries as reporting_webhook_url — one nautilus route serves both
+# directions, so a prod deployment needs no extra variable set.
+#
+# The cost falls on every OTHER environment, and it is real: a staging or
+# local deployment that does not override this tags orders in the LIVE
+# Shopify stores. No check here can catch it — the host is the only thing
+# that differs, and a default cannot know it is running in the wrong place —
+# so overriding it is a deployment checklist item, not something the code
+# enforces.
+#
+# Set it EMPTY to switch Shopify actions off: the square then refuses
+# locally, with a legible sentence, instead of posting somewhere.
+NAUTILUS_WEBHOOK_URL = os.environ.get(
+    "NAUTILUS_WEBHOOK_URL",
+    "https://nautilus.breezelabs.app/apps/breeze-buddy/webhooks/clairvoyance",
+)
+
 # SKEW: how far AHEAD of a provider letter's own timestamp our stored clock
 # may sit and still let the letter apply. Two of OUR transitions stamp
 # status_updated_at with now() (recording a submission, recording an

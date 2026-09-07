@@ -140,7 +140,9 @@ class WorkflowNode(BaseModel):
     call (template_id, via buddy's lead machine — ADR 0010) ·
     wait_event (topics + key + minutes: waits for an event OR the timer,
     whichever first; the branch taken is the edge whose `on` equals the
-    event's payload[key], or "timeout"). key: "$topic" (rollout phase 15)
+    event's payload[key], or "timeout") · action (connector + action +
+    args: a connector DOES something for the run — see the three fields
+    below). key: "$topic" (rollout phase 15)
     branches on the event's TOPIC instead — the edge's `on` is the topic
     string — so a stage board reads "she went to KYC" from the letter's
     name; $topic is the only $-word. An edge labelled "else" (phase 18)
@@ -148,13 +150,23 @@ class WorkflowNode(BaseModel):
     is no "timeout" edge."""
 
     id: str = Field(min_length=1)
-    type: Literal["wait", "send", "call", "wait_event"]
+    type: Literal["wait", "send", "call", "wait_event", "action"]
     minutes: Optional[float] = None
     channel: Optional[str] = None
     template: Optional[str] = None
     template_id: Optional[str] = None
     topics: List[str] = Field(default_factory=list)
     key: Optional[str] = None
+    # action: WHO acts and WHAT they do — the two words a plan may say, and
+    # the only two. No URL, no credential, no transport: connectivity holds
+    # the merchant's connection and decides how the write travels, so the
+    # day a relay becomes a direct provider call, this document is unchanged.
+    connector: Optional[str] = None
+    action: Optional[str] = None
+    # action: the action's OWN arguments, validated at publish against the
+    # model the connector declares for it. Values may be "{placeholder}" and
+    # are resolved from the run's facts at fire time.
+    args: Dict[str, Any] = Field(default_factory=dict)
     # Phase 16: an optional stage label the square belongs to. It rides to
     # templates as current_stage ("you stopped at {current_stage}") — one
     # call template for a whole board. The stages ladder (phase 17) sets it

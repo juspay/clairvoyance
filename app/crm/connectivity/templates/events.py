@@ -88,6 +88,17 @@ async def consume_template_event(
         )
         return
 
+    if spec.templates is None:
+        # A connector that registers no message shapes. Unreachable through
+        # the consumer, which filters on TEMPLATE_TOPICS before it asks any
+        # face — but this function is the one that would have to notice, and
+        # a guard is cheaper than the assumption it rests on.
+        logger.debug(
+            f"template events: connector '{spec.key}' registers no templates "
+            f"(event {event.id})"
+        )
+        return
+
     state = spec.templates.normalize_event(event.topic, event.payload)
     if state is None:
         # The face read the letter and found nothing this registry stores.
