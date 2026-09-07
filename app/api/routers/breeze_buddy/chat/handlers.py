@@ -795,6 +795,14 @@ async def _turn_sse_stream(
                 yield format_sse(pre)
             async for event in events:
                 turn_metrics.observe(event)
+                if event.event == "turn_end":
+                    # Release before the terminal frame: every DB write is
+                    # done, and the widget POSTs its next turn the instant
+                    # it reads turn_end. Releasing only in the ``finally``
+                    # left that request racing the lock for a spurious 409.
+                    # Idempotent, so the finally's call is a no-op; shielded
+                    # so a client disconnect can't skip the Redis DEL.
+                    await asyncio.shield(lock.release())
                 yield format_sse(event)
         except asyncio.CancelledError:
             # User clicked Stop. Emit a clean turn_end so the client
@@ -823,6 +831,10 @@ async def _turn_sse_stream(
                     pass
             logger.info(f"chat turn stream for session {session_id} cancelled by user")
             turn_metrics.status = "CANCELED"
+            # Same contract as the ACTIVE path above: the lock is free by
+            # the time the client reads turn_end, so a client that drains
+            # the stream to EOS can start its next turn without racing.
+            await asyncio.shield(lock.release())
             yield format_sse(
                 SSEEvent(event="turn_end", data={"session_status": "CANCELED"})
             )
