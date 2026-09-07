@@ -196,11 +196,23 @@ class HttpRequestExecutor:
                             except ValueError:
                                 pass  # Invalid Content-Length, will check actual size below
 
-                        # Read response with size limit
-                        response_bytes = await response.content.read(
-                            HTTP_REQUEST_MAX_RESPONSE_BYTES + 1
-                        )
-                        if len(response_bytes) > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                        # Read response to EOF with a size limit. NB: a single
+                        # StreamReader.read(n) can return a PARTIAL body on
+                        # slow/chunked upstreams (observed: 3KB of a 20KB
+                        # long-poll response, truncating the JSON) — so
+                        # accumulate chunks until EOF.
+                        body_chunks = []
+                        bytes_read = 0
+                        while True:
+                            chunk = await response.content.read(65536)
+                            if not chunk:
+                                break
+                            bytes_read += len(chunk)
+                            if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                                break
+                            body_chunks.append(chunk)
+                        response_bytes = b"".join(body_chunks)
+                        if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
                             error_msg = (
                                 f"Response exceeded max size of "
                                 f"{HTTP_REQUEST_MAX_RESPONSE_BYTES} bytes"
