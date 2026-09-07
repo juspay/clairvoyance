@@ -689,6 +689,10 @@
         "enabled": true,
         "user_speech_timeout": 3.0
       }
+    },
+    "respond_immediately": {
+      "description": "Whether the LLM runs as soon as the node is entered (the default when unset). A closing node that only drains the goodbye and hangs up sets false — its post_actions then run after the bot stops speaking, and under tool_choice=required no forced LLM run happens.",
+      "example": false
     }
   },
   "FlowFunction": {

@@ -6,7 +6,7 @@ Defines provider enums and configuration models used across all voice agents.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -258,6 +258,11 @@ class LLMConfiguration(BaseModel):
     )
     thinking: Optional[ThinkingConfiguration] = Field(
         None, description="Thinking/reasoning configuration"
+    )
+    tool_choice: Optional[Literal["auto", "none", "required"]] = Field(
+        None,
+        description="OpenAI tool_choice override (e.g. 'required' for tool-based "
+        "say-tool templates). Azure/OpenAI text LLMs only; inert elsewhere.",
     )
     function_call_timeout_secs: Optional[float] = Field(
         None,

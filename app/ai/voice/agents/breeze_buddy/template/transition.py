@@ -58,6 +58,12 @@ async def transition_handler(
         f"transition_to: '{transition_to}', hooks: {hooks}, args: {args}"
     )
 
+    # Say tools: speak what the name-decode early fire couldn't (dynamic LLM
+    # argument, or the whole line when the early fire was skipped).
+    say_router = getattr(context.bot, "early_speech_router", None)
+    if say_router is not None and function_name:
+        await say_router.speak_from_handler(function_name, args)
+
     # Execute hooks synchronously (awaited) or asynchronously (fire and forget)
     if hooks:
         awaited = hooks[0].get("awaited", False)
@@ -123,6 +129,15 @@ async def transition_handler(
         logger.info(
             f"No transition specified for function '{function_name}', staying in current node"
         )
+
+        if say_router is not None and function_name in say_router.says:
+            # tool_based: the say line already spoke this turn and its text is
+            # committed to the LLM context. A truthy result would make pipecat
+            # re-run inference immediately (response aggregator's
+            # "result requires run_llm" path); with tool_choice=required that
+            # forces another tool call — the bot repeating itself forever.
+            # Empty result = speak once, then wait for the user.
+            return {}, None
 
         result_message = {
             "result": f"Successfully executed {function_name}",

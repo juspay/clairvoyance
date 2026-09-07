@@ -110,6 +110,7 @@ async def _resolve_azure(
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
+            tool_choice=(llm_config.tool_choice if llm_config else None),
             function_call_timeout_secs=(
                 llm_config.function_call_timeout_secs
                 if llm_config and llm_config.function_call_timeout_secs
@@ -169,6 +170,7 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
+            tool_choice=(llm_config.tool_choice if llm_config else None),
             function_call_timeout_secs=(
                 llm_config.function_call_timeout_secs
                 if llm_config and llm_config.function_call_timeout_secs

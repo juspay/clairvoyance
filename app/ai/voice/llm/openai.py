@@ -28,6 +28,7 @@ class OpenAIConfig:
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     reasoning_effort: Optional[str] = None
+    tool_choice: Optional[str] = None
     function_call_timeout_secs: float = 10.0
 
 
@@ -46,6 +47,10 @@ def build_openai_llm(config: OpenAIConfig) -> OpenAILLMService:
     extra: dict = {}
     if config.reasoning_effort:
         extra["reasoning_effort"] = config.reasoning_effort
+    if config.tool_choice:
+        extra["tool_choice"] = (
+            config.tool_choice
+        )  # e.g. "required" for say-tool templates
 
     settings_kwargs: dict[str, Any] = {
         "temperature": config.temperature,

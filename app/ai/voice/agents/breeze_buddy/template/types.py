@@ -2897,6 +2897,13 @@ class FlowNodeModel(BaseModel):
         "input (e.g., phone numbers, addresses). Increases user_speech_timeout "
         "so natural pauses don't prematurely end the user's turn.",
     )
+    respond_immediately: Optional[bool] = Field(
+        None,
+        description="Run the LLM as soon as the node is entered (flows' default "
+        "when unset). A closing node that only drains speech and hangs up "
+        "opts out with false — under tool_choice=required the forced run "
+        "would have no tool to call and nothing left to say.",
+    )
 
 
 class FlowMode(str, Enum):
