@@ -80,6 +80,7 @@ app/
 ├── crm/                            # Buddy CPaaS (docs/crm/building-modules.md)
 │   ├── api.py, auth.py             # /crm surface plumbing (root holds nothing else)
 │   ├── identity/                   # crm_customer · resolve(), assert_facts()
+│   ├── agentic/                    # crm_customer_agent · UPI standing mandates (draws: chat_session.metadata)
 │   ├── platform/                   # platform_identity · suppression contracts
 │   ├── record/                     # crm_event_raw · record_event() (the spine)
 │   └── shared/                     # db.py (atomically/crm_connection), normalize.py

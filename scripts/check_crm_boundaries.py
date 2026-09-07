@@ -50,6 +50,7 @@ TABLE_OWNERS = {
     "crm_event_raw": "record",
     "crm_journey_event": "record",
     "crm_message": "connectivity",
+    "crm_customer_agent": "agentic",
 }
 
 # Pre-existing legacy inversions, allowlisted and CLOSED to additions

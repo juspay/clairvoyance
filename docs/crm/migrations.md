@@ -64,7 +64,8 @@ Rules the template encodes:
   the writes (identity → crm_customer; platform → platform_identity, Permission
   squad owns it; permission →
   crm_consent_*, crm_decision_log; connectivity → installations, bindings,
-  templates, crm_message; record → crm_event_raw; outreach →
+  templates, crm_message; record → crm_event_raw; agentic → crm_customer_agent
+  (draws live on chat_session.metadata, buddy-side); outreach →
   segments/workflows/broadcasts — note the P2 outreach table must be
   `crm_campaign` to avoid colliding with buddy's existing `campaign`).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,

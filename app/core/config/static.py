@@ -742,3 +742,14 @@ HTTP_REQUEST_BLOCKED_CONTENT_TYPES = [
 
 # Maximum number of redirects to follow (0 to disable redirects)
 HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3"))
+
+EULER_BASE_URL = os.environ.get("EULER_BASE_URL", "https://sandbox.juspay.in")
+# Per-request timeout for every Euler call (customers, AOP, /txns): a fixed
+# 30 s, not configuration.
+EULER_TIMEOUT_SECONDS = 30
+# Euler gateway for agentic /txns — 514 is the agentic UPI gateway in every
+# environment, so it is a constant, not configuration.
+EULER_GATEWAY_ID = "514"
+# Public base of THIS service as Juspay must reach it for agentic webhooks
+# (https, no trailing slash). Empty = no callback_url is sent.
+UAP_WEBHOOK_BASE_URL = os.environ.get("UAP_WEBHOOK_BASE_URL", "").rstrip("/")
