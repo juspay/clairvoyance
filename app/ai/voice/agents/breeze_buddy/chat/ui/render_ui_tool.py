@@ -41,6 +41,7 @@ from app.ai.voice.agents.breeze_buddy.chat.ui.binding import (
     resolve_show_op,
     selector_extension_keys,
 )
+from app.ai.voice.agents.breeze_buddy.chat.ui.chips import carries_identifier
 from app.ai.voice.agents.breeze_buddy.chat.ui.custom_defs import (
     resolve_custom_show_op,
     summarize_custom_render,
@@ -655,7 +656,26 @@ def execute_render_ui(
                 chip_items.append(
                     {k: v for k, v in entry.items() if k in ("label", "value") and v}
                 )
-        props["items"] = chip_items
+        # Chips are user-facing copy: drop any carrying a raw identifier —
+        # the same guard the rider-harvest path applies (chat/ui/chips.py).
+        kept = [
+            item for item in chip_items if not carries_identifier(item.get("label", ""))
+        ]
+        if chip_items and not kept:
+            # Every chip was an id: say WHY, so the model re-emits real
+            # labels instead of reading a generic schema error.
+            return RenderUiOutcome(
+                fn_result={
+                    "status": "error",
+                    "error": (
+                        "QuickReplies chips are user-facing copy: every chip "
+                        "carried a raw identifier. Re-emit short labels and "
+                        "keep ids in the action msg."
+                    ),
+                },
+                component=component,
+            )
+        props["items"] = kept
     if component == "LinkButton":
         link = args.get("link")
         if not (isinstance(link, dict) and isinstance(link.get("url"), str)):
