@@ -32,10 +32,11 @@ PR time — earlier than a grant would fail:
      logic file touches a handle ONLY as an _in_txn body's txn param.
   11. PROVIDER FACE CONFINEMENT — each provider face has exactly ONE
      composition root outside providers/: the send door (the ADAPTERS
-     assembly and <x>/adapter.py) answers to send.py; <x>/onboard.py and
-     <x>/templates.py to connectors.py; <x>/inbound.py to ingress.py
-     (record's webhook bays, built here); and vendor transport
-     (providers/meta/graph.py) never leaves providers/ at all.
+     assembly and <x>/adapter.py) answers to send.py; <x>/onboard.py,
+     <x>/templates.py and <x>/actions.py to connectors.py; <x>/inbound.py
+     to ingress.py (record's webhook bays, built here); and vendor
+     transport (providers/meta/graph.py, providers/shopify/via_nautilus.py)
+     never leaves providers/ at all.
   12. RECORD HEARS, NEVER CALLS — app/crm/record imports no subscriber
      module (identity + shared only): consumers register through
      record/consumers.py from worker_main, so subscriber -> record is the
@@ -99,6 +100,16 @@ PROVIDER_FACES = (
     ),
     (
         re.compile(r"^app\.crm\.connectivity\.providers\.\w+\.templates\b"),
+        ("connectors",),
+    ),
+    # the action face: what a run may ask a connector to DO. Same root as
+    # the other non-send faces — actions.py drives them THROUGH the registry
+    # connectors.py assembles, so it never imports a provider and needs no
+    # door of its own. Its transport (shopify/via_nautilus.py) matches
+    # nothing here on purpose: like meta/graph.py it never leaves
+    # providers/, which is what makes deleting it a local change.
+    (
+        re.compile(r"^app\.crm\.connectivity\.providers\.\w+\.actions\b"),
         ("connectors",),
     ),
     # the inbound face: signature, handshake, envelope -> letters

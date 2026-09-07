@@ -221,12 +221,26 @@ async def onboard(
         f"for merchant {merchant_id}"
     )
 
-    credential_id = await _store_credential(
-        reseller_id,
-        credential_name(connector_key, merchant_id, result.external_account_id),
-        result.bundle,
-        f"{connector_key} credentials — merchant {merchant_id}, "
-        f"account {result.external_account_id}",
+    # A connector with nothing to authenticate stores nothing, and the empty
+    # bundle is the SIGNAL rather than an omission. Shopify's relay-era
+    # handshake is exactly that case: nautilus holds the shop's token, so
+    # there is no secret of ours to vault, and the NULL pointer this leaves
+    # on the installation is what ``actions._transport()`` reads to send the
+    # write by the relay.
+    #
+    # Writing one anyway is not merely a wasted row: the vault refuses an
+    # empty custom credential ("requires at least one key-value pair"), so a
+    # handshake that SUCCEEDED came back a 400.
+    credential_id = (
+        await _store_credential(
+            reseller_id,
+            credential_name(connector_key, merchant_id, result.external_account_id),
+            result.bundle,
+            f"{connector_key} credentials — merchant {merchant_id}, "
+            f"account {result.external_account_id}",
+        )
+        if result.bundle
+        else None
     )
 
     try:
@@ -266,7 +280,7 @@ async def _onboard_in_txn(
     spec: ConnectorSpec,
     connector_key: str,
     result: OnboardResult,
-    credential_id: str,
+    credential_id: Optional[str],
 ) -> InstallationRead:
     """ATOMIC: the door and its first pipe — a half-onboarded merchant (an
     installation nothing can send from, or a binding hanging off no

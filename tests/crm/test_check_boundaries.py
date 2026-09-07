@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Dict
 
+import pytest
+
 from scripts.check_crm_boundaries import check
 
 
@@ -186,6 +188,49 @@ def test_adapter_import_outside_the_doors_fails(tmp_path: Path) -> None:
     assert any("provider face imported outside its door" in e for e in check(root))
 
 
+def test_the_action_face_answers_to_the_registry_and_nowhere_else(
+    tmp_path: Path,
+) -> None:
+    # actions.py drives the action faces THROUGH the registry connectors.py
+    # assembles — it never imports a provider, which is why it is not a door.
+    # Reaching one directly would skip the installation the registry resolves
+    # against, and with it the tenancy the whole verb rests on.
+    """The action face answers to the registry and nowhere else."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/connectivity/actions.py": (
+                "from app.crm.connectivity.providers.shopify.actions import S\n"
+            )
+        },
+    )
+    assert any("provider face imported outside its door" in e for e in check(root))
+
+
+# Every vendor TRANSPORT in the tree. A transport matches no face on
+# purpose: one reachable from outside is one somebody depends on, and both
+# of these have to stay deletable — meta/graph.py because it is Meta's wire
+# and not a contract, via_nautilus.py because it dies the day we hold the
+# Shopify token. Parametrized rather than written twice: the law is one law,
+# and a third transport should cost a line here, not a copied test.
+TRANSPORTS = (
+    "app.crm.connectivity.providers.shopify.via_nautilus",
+    "app.crm.connectivity.providers.meta.graph",
+)
+
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
+def test_a_vendor_transport_never_leaves_providers(
+    tmp_path: Path, transport: str
+) -> None:
+    """A vendor transport never leaves providers/."""
+    root = _tree(
+        tmp_path,
+        {"app/crm/connectivity/connectors.py": (f"from {transport} import thing\n")},
+    )
+    assert any("reachable only from providers/ itself" in e for e in check(root))
+
+
 def test_a_new_root_file_is_not_a_door_by_being_next_to_them(tmp_path: Path) -> None:
     # The map is closed, not "anything at the module root". A file added
     # beside the doors has to be registered in PROVIDER_ROOTS/PROVIDER_FACES
@@ -220,6 +265,11 @@ def test_each_direction_has_its_door(tmp_path: Path) -> None:
             "app/crm/connectivity/connectors.py": (
                 "from app.crm.connectivity.providers.base import Err\n"
                 "from app.crm.connectivity.providers.whatsapp.onboard import W\n"
+                "from app.crm.connectivity.providers.shopify.actions import S\n"
+            ),
+            "app/crm/connectivity/providers/shopify/actions.py": (
+                "from app.crm.connectivity.providers.base import ConnectorAction\n"
+                "from app.crm.connectivity.providers.shopify.via_nautilus import V\n"
             ),
             "app/crm/connectivity/providers/whatsapp/adapter.py": (
                 "from app.crm.connectivity.providers.base import ChannelAdapter\n"
@@ -314,20 +364,6 @@ def test_connectors_may_import_the_non_send_faces(tmp_path: Path) -> None:
         },
     )
     assert check(root) == []
-
-
-def test_vendor_transport_never_leaves_providers(tmp_path: Path) -> None:
-    """meta/graph.py is the file the old rule pushed to the module root.
-    Neither root may import it — it is transport, not a face."""
-    root = _tree(
-        tmp_path,
-        {
-            "app/crm/connectivity/connectors.py": (
-                "from app.crm.connectivity.providers.meta.graph import call\n"
-            )
-        },
-    )
-    assert any("providers/ itself" in e for e in check(root))
 
 
 # ---- rule 2 admits the per-table split of a module's db/ ------------------

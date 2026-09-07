@@ -15,6 +15,14 @@ What is here, and why each thing is on the surface:
   dispatcher sends, and only sends: no other work rides its loop.
 - ``queue_message`` — how a producer (the walker's send node first) proposes
   a send: one queued row, no verdict.
+- ``perform_action`` / ``action_names`` / ``ActionError`` — the fourth verb:
+  a run asks a connector to DO something (a Shopify tag, an order note).
+  ``action_names`` and ``validate_action_args`` are what outreach's
+  publish reads, so a plan naming an unknown action or a misspelled
+  argument is refused while the author is still editing; ``ActionError``
+  is the DEFECT half of the two failures, and the walker parks on it while
+  anything else retries. The connector's own ``args_model`` is the contract,
+  so no transport, URL or credential is ever authored in a plan.
 - ``onboard`` / ``get_installation`` / ``list_installations`` / ``disconnect``
   — connector accounts and the pipes under them. Connector-agnostic:
   ``onboard`` takes a connector_key and a payload, and the CONNECTORS
@@ -57,7 +65,13 @@ reach a provider without passing the checks in front of it. So does the
 route resolver, and so do the provider packages.
 """
 
+from app.crm.connectivity.actions import (
+    action_names,
+    perform_action,
+    validate_action_args,
+)
 from app.crm.connectivity.channels import registers_templates_for
+from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.ingress import META_INGRESS
 from app.crm.connectivity.onboarding import (
@@ -89,6 +103,11 @@ __all__ = [
     "dispatch_send",
     # producing a send
     "queue_message",
+    # asking a connector to act (the walker's action square)
+    "perform_action",
+    "action_names",
+    "validate_action_args",
+    "ActionError",
     # connections
     "onboard",
     "get_installation",

@@ -38,6 +38,7 @@ from app.crm.connectivity import accounts
 from app.crm.connectivity.connectors import (
     ConnectorSpec,
     ProviderError,
+    TemplateProvider,
     connector_for_channel,
 )
 from app.crm.connectivity.db import DbTxn, atomically
@@ -110,6 +111,27 @@ def _spec_for(channel: str) -> ConnectorSpec:
     if spec is None:
         raise TemplateError(f"no connector serves channel '{channel}'")
     return spec
+
+
+def _face(spec: ConnectorSpec) -> TemplateProvider:
+    """The spec's template face, or this module's refusal.
+
+    `ConnectorSpec.templates` is Optional because a door with no pipe
+    registers no message shapes (#1038 made `channel` Optional for the same
+    connector shape, and Shopify is both). Every lifecycle path reaches the
+    face through here, so the refusal is written once and the four call
+    sites below read the same way.
+
+    It cannot fire today: `connector_for_channel` only answers for a
+    connector that HAS a channel, and every such connector registers
+    templates. But that is a property of the registry, not of this module,
+    and the alternative was a 59-line stub whose every method raised —
+    which reads as a face, appears in a stack trace, and has to be kept in
+    step with a Protocol it never implements.
+    """
+    if spec.templates is None:
+        raise TemplateError(f"connector '{spec.key}' registers no templates")
+    return spec.templates
 
 
 async def _healthy_installation(
@@ -258,7 +280,7 @@ async def submit(merchant_id: str, template_id: str, category: str) -> TemplateR
             claimed.provider_account_ref,
         )
         bundle = await _bundle_for(installation)
-        state = await spec.templates.submit(
+        state = await _face(spec).submit(
             bundle,
             claimed.provider_account_ref,
             TemplateDraft(
@@ -359,7 +381,7 @@ async def edit(
             f"this template is '{template.status}' — it cannot be edited from "
             f"that state"
         )
-    if not spec.templates.edits_in_place:
+    if not _face(spec).edits_in_place:
         # Honest rather than a 400 carrying another provider's rule: this
         # provider genuinely cannot re-review a registered template.
         raise TemplateError(
@@ -377,7 +399,7 @@ async def edit(
     )
     bundle = await _bundle_for(installation)
     try:
-        state = await spec.templates.edit(
+        state = await _face(spec).edit(
             bundle,
             template.provider_account_ref,
             template.provider_template_id,
@@ -478,7 +500,7 @@ async def retire(merchant_id: str, template_id: str) -> TemplateRead:
                 template.provider_account_ref,
             )
             bundle = await _bundle_for(installation)
-            await spec.templates.retire(
+            await _face(spec).retire(
                 bundle,
                 template.provider_account_ref,
                 template.provider_template_id,

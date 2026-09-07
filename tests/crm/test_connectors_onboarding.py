@@ -77,6 +77,24 @@ def test_every_spec_knows_the_key_it_is_filed_under() -> None:
     assert all(key == spec.key for key, spec in CONNECTORS.items())
 
 
+def test_a_door_with_no_pipe_declares_no_template_face() -> None:
+    """channel and templates are Optional for the SAME connector shape.
+
+    A Shopify install is a complete onboarding with nothing to bind — no
+    address, no send path — so there are no message shapes to register
+    either. It carried a 59-line stub whose every method raised, purely to
+    satisfy a non-Optional field: a file that reads as a face, appears in a
+    stack trace, and has to be kept in step with a Protocol it never
+    implements. The two readers guard instead, which is one `if` each.
+    """
+    shopify = CONNECTORS["shopify"]
+    assert shopify.channel is None and shopify.templates is None
+    # And the pairing is not a coincidence of one connector: anything that
+    # sends registers shapes, anything that does not, does not.
+    for spec in CONNECTORS.values():
+        assert (spec.channel is None) == (spec.templates is None), spec.key
+
+
 def test_the_registry_is_the_vocabulary() -> None:
     """An unknown key resolves to nothing — the dict IS the list of
     connectors, so asking for one that is not in it is asking for something
@@ -743,6 +761,32 @@ async def test_a_door_with_no_channel_onboards_without_a_binding(
     installation = await onboard("shop", "shopify", _request().model_dump())
     assert installation is not None
     assert bindings.upserts == [], "a door with no channel writes no pipe"
+
+
+async def test_a_door_with_no_credential_vaults_nothing(monkeypatch) -> None:
+    """An empty bundle is the SIGNAL, not an omission.
+
+    Nautilus holds the shop's Shopify token, so there is no secret of ours to
+    vault and the NULL pointer this leaves is what actions._transport() reads
+    to send the write by the relay. Vaulting one anyway is not a wasted row:
+    the credential store refuses an empty custom credential outright, so a
+    handshake that SUCCEEDED came back a 400 — which is how this was found.
+    """
+    bindings = _FakeBindingAccessor()
+    stored: list = []
+
+    async def _never(*args, **kwargs):
+        stored.append(args)
+        raise AssertionError("an empty bundle must not reach the vault")
+
+    _patch_onboarding(
+        monkeypatch, result=_result(bundle={}), bindings=bindings, channel=None
+    )
+    monkeypatch.setattr(onboarding_module, "_store_credential", _never)
+
+    installation = await onboard("shop", "shopify", _request().model_dump())
+    assert installation is not None
+    assert stored == []
 
 
 async def test_a_door_with_no_channel_needs_no_address_at_all(monkeypatch) -> None:

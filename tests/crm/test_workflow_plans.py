@@ -877,6 +877,70 @@ def test_send_variables_must_be_declared_variable_fields_on_the_entry_topic() ->
     assert any("before filtering, keying or templating" in p for p in problems)
 
 
+def test_action_args_must_name_declared_facts_too() -> None:
+    """The same allow-list, applied to the fourth verb.
+
+    An action's args ask the run for facts by `{name}` exactly as a send
+    node's variables do — the same lookup against the same run_facts — so
+    they answer to the same law. Without it, `{order_id}` on a door whose
+    topic declares only `id` publishes cleanly, validates cleanly, and
+    parks on the first run that reaches the square: the failure the
+    send-side check exists to prevent, reachable through the other verb.
+    """
+    catalogs: plans.Catalogs = {"orders/create": _orders_create_catalog()}
+
+    def _tag(args: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **_COD,
+            "nodes": [
+                {
+                    "id": "tag-vip",
+                    "type": "action",
+                    "connector": "shopify",
+                    "action": "add_tag",
+                    "args": args,
+                }
+            ],
+            "edges": [],
+        }
+
+    # `id` is declared on orders/create; a literal asks the run for nothing.
+    assert (
+        validate_definition(
+            _tag({"order_id": "{id}", "tags": ["vip"]}), catalogs=catalogs
+        )
+        == []
+    )
+    assert (
+        validate_definition(
+            _tag({"order_id": "7071", "tags": ["vip"]}), catalogs=catalogs
+        )
+        == []
+    )
+
+    # The typo that used to publish and park.
+    problems = validate_definition(
+        _tag({"order_id": "{order_idd}", "tags": ["vip"]}), catalogs=catalogs
+    )
+    assert any("args ask for {order_idd}" in p for p in problems), problems
+
+    # Placeholders nested in a list are asked for too — tags are a list of them.
+    problems = validate_definition(
+        _tag({"order_id": "{id}", "tags": ["{nonesuch}"]}), catalogs=catalogs
+    )
+    assert any("args ask for {nonesuch}" in p for p in problems), problems
+
+    # And a topic no layer knows cannot supply a placeholder either.
+    unknown = {
+        **_tag({"order_id": "{id}", "tags": ["vip"]}),
+        "entry": {"topic": "ride.done"},
+    }
+    problems = validate_definition(unknown, catalogs={"ride.done": None})
+    assert any(
+        "before filtering, keying or templating" in p for p in problems
+    ), problems
+
+
 def test_send_variables_may_name_a_stage_letters_fact_and_the_square() -> None:
     """Phase 16 x the map: a wait_event square's letter is reachable as
     facts_<square>_<key> for the variable fields its topics declare, and

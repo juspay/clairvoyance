@@ -10,6 +10,7 @@ on `if connector == "whatsapp"`.
     ChannelAdapter       build the request, read the answer      -> send.py
     ConnectorOnboarder   turn a signup payload into a door       -> connectors.py
     TemplateProvider     register and track a message shape      -> connectors.py
+    ConnectorAction      do one thing for a run                  -> connectors.py
 
 The split that matters for all three: a provider CLASSIFIES or NORMALISES,
 it never DECIDES. An adapter reports what the provider did and
@@ -22,13 +23,17 @@ private answer to "why", and there would stop being one.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Dict, List, Mapping, Optional, Protocol
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Protocol, Type
 
 import httpx
+from pydantic import BaseModel
 
 from app.core.logger import logger
 from app.crm.connectivity.reasons import REASON_TRANSPORT
-from app.crm.connectivity.schemas.connector import OnboardResult
+from app.crm.connectivity.schemas.connector import (
+    ConnectorInstallation,
+    OnboardResult,
+)
 from app.crm.connectivity.schemas.message import (
     CredentialBundle,
     QueuedMessage,
@@ -238,6 +243,76 @@ class TemplateProvider(Protocol):
     ) -> Optional[ProviderTemplateState]:
         """One webhook payload -> the registry's vocabulary, or None if this
         letter says nothing about a template."""
+
+
+class ActionError(ProviderError):
+    """An action could not be performed, and no retry would change that.
+
+    The twin of ConnectorHandshakeError for the fourth verb: a 4xx from the
+    destination, an order that does not exist, an argument the provider
+    rejects. The caller turns it into a parked node — a defect an operator
+    must see, never an attempt to spend again.
+
+    A BAD MOMENT is the opposite and must NOT use this: a timeout, a 5xx, a
+    429. Those raise anything else, and the walker's retry ladder re-sends.
+    """
+
+
+class ConnectorAction(Protocol):
+    """One thing a connector can DO for a run — the fourth provider verb,
+    beside onboarding a door, registering a template and sending.
+
+    Two rules make this Protocol worth having, and both exist so the
+    TRANSPORT behind an action can change without any plan document
+    changing (the outer wrap):
+
+    1. ``args_model`` is the contract, not the wire body. ``add_tag`` takes
+       {order_id, tags} because that is what the ACTION means. Whatever a
+       transport must send — a relay's ``order_action`` envelope, a
+       provider's GraphQL mutation — is that transport's business and is
+       never authored in a plan.
+    2. ``perform`` returns the ACTION's own facts, normalised. A caller's
+       response paths are written against these, so passing a transport's
+       raw body through would break every plan the day the transport
+       changes.
+    """
+
+    #: The pydantic model a plan's ``args`` must satisfy. Read at PUBLISH by
+    #: the validator and again at run time by actions.py, so an author hears
+    #: about a misspelled argument while they are still editing.
+    #:
+    #: ClassVar, so an implementation may name its own leaf model without the
+    #: invariance a read-write attribute would impose.
+    args_model: ClassVar[Type[BaseModel]]
+
+    async def perform(
+        self,
+        merchant_id: str,
+        installation: Optional[ConnectorInstallation],
+        args: BaseModel,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Do it, and report what happened as flat, transport-free facts.
+
+        ``installation`` is the merchant's account on this connector: it
+        carries the tenancy and says where the credential lives — which is
+        also how an implementation chooses its transport. The root resolves
+        it before calling and fails closed without one, so it is never None
+        in practice; the Optional is the type of what the accessor returns,
+        not an invitation to act without a door.
+
+        ``merchant_id`` is the tenant the run belongs to, for logging and for
+        a face that needs to name it. It is deliberately NOT a second way to
+        address an account: the installation is the only account identifier
+        established independently of the caller, so it is the one an
+        implementation addresses.
+
+        ``context`` is BOOKKEEPING, never data: the run and node ids behind
+        the idempotency key. It must not reach a provider as content.
+
+        Raises ActionError for a defect; anything else for a transient
+        failure.
+        """
 
 
 class AdapterRegistryError(LookupError):
