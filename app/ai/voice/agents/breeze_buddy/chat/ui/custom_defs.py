@@ -68,7 +68,7 @@ RENDER_DEF_MAX_NODES = 400
 
 _NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9]{1,63}$")
 _BINDING_RE = re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$")
-_ACTION_TYPES = frozenset({"to_assistant", "open_url", "open_detail"})
+_ACTION_TYPES = frozenset({"to_assistant", "open_url", "open_detail", "intent"})
 
 
 def _lint_action(action: Any, path: str, errors: List[str]) -> None:
@@ -109,6 +109,28 @@ def _lint_action(action: Any, path: str, errors: List[str]) -> None:
         title = action.get("title")
         if title is not None and not isinstance(title, str):
             errors.append(f"{path}: open_detail action title must be a string")
+    if a_type == "intent":
+        # Fires a template-defined DIRECT ui_intent (see
+        # UiIntentsConfig.custom) and — when `component` is present —
+        # opens the detail overlay armed to hydrate with that component.
+        # Same static-PascalCase rule as open_detail: data must never
+        # choose which def paints full-page.
+        name = action.get("name")
+        if not isinstance(name, str) or not name.strip():
+            errors.append(f"{path}: intent action needs a non-empty name")
+        component = action.get("component")
+        if component is not None and (
+            not isinstance(component, str) or not _NAME_RE.match(component)
+        ):
+            errors.append(
+                f"{path}: intent action component must be a static " "PascalCase name"
+            )
+        payload = action.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            errors.append(f"{path}: intent action payload must be an object")
+        title = action.get("title")
+        if title is not None and not isinstance(title, str):
+            errors.append(f"{path}: intent action title must be a string")
 
 
 def _lint_node(
@@ -172,8 +194,8 @@ def lint_render_def(render_def: Any) -> List[str]:
 
     Grammar v1: whitelisted node types, ``repeat``/``if`` binding syntax,
     depth ≤ {depth}, ≤ {nodes} nodes, actions restricted to
-    ``to_assistant``/``open_url``/``open_detail`` (static
-    open_url URLs https-only; open_detail components static
+    ``to_assistant``/``open_url``/``open_detail``/``intent`` (static
+    open_url URLs https-only; open_detail/intent components static
     PascalCase). No
     merchant JavaScript, no arbitrary expressions — ever.
     """.format(depth=RENDER_DEF_MAX_DEPTH, nodes=RENDER_DEF_MAX_NODES)

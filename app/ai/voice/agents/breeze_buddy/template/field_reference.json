@@ -561,6 +561,48 @@
       "example": {
         "checkout_page": "https://www.thebeyondbound.com/cart"
       }
+    },
+    "custom": {
+      "description": "Template-DEFINED direct intents (CHAMELEON): each entry runs the named template tools with NO LLM call and hydrates a registry custom component bound to their results — the config-authored counterpart of a flavor's compiled-in IntentPolicy. steps[] run in order (args = static `args` + `args_from_payload` dot-paths into the widget's intent payload, fail-closed on a missing key); `bind` maps component props to `$tool:<tool>#/<json-pointer>` refs over this turn's results; `enrich` rules mark list items across tools (e.g. the selected fare class); `silent` intents leave no visible thread trace. Names share the global intent namespace on the wire; a name that collides with a flavor intent shadows it for this template only.",
+      "example": [
+        {
+          "name": "journey_detail",
+          "steps": [
+            {
+              "tool": "get_journey_details",
+              "args_from_payload": {
+                "journey_id": "journey_id"
+              }
+            },
+            {
+              "tool": "get_tier_options",
+              "args_from_payload": {
+                "journey_id": "journey_id",
+                "leg_order": "leg_order"
+              }
+            }
+          ],
+          "component": "JourneyDetail",
+          "bind": {
+            "journey": "$tool:get_journey_details#/journey",
+            "tiers": "$tool:get_tier_options#/tiers"
+          },
+          "enrich": [
+            {
+              "list_ref": "$tool:get_tier_options#/tiers",
+              "match_field": "quote_id",
+              "equals_ref": "$tool:get_journey_details#/selected_quote_id",
+              "set": {
+                "selected": true
+              },
+              "else_set": {
+                "unselected": true
+              }
+            }
+          ],
+          "silent": true
+        }
+      ]
     }
   },
   "FlowNodeModel": {

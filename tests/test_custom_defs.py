@@ -436,3 +436,62 @@ class TestRenderUiSurface:
         )
         assert outcome.fn_result["status"] == "error"
         assert "unknown component" in outcome.fn_result["error"]
+
+
+# ---------------------------------------------------------------------------
+# `intent` action — fires a template-defined DIRECT ui_intent
+# ---------------------------------------------------------------------------
+
+
+class TestIntentActionLint:
+    """The ``intent`` action fires a template-defined DIRECT ui_intent
+    (``UiIntentsConfig.custom``). Its name and overlay component are STATIC:
+    data never chooses which intent fires or which def paints full-page."""
+
+    @staticmethod
+    def _button(action: Dict[str, Any]) -> Dict[str, Any]:
+        return {"type": "button", "props": {"label": "Select", "action": action}}
+
+    def test_name_required_component_static_payload_object(self):
+        assert any(
+            "non-empty name" in e
+            for e in lint_render_def(self._button({"type": "intent", "name": " "}))
+        )
+        assert any(
+            "PascalCase" in e
+            for e in lint_render_def(
+                self._button(
+                    {
+                        "type": "intent",
+                        "name": "select_tier",
+                        "component": "journeyDetail",
+                    }
+                )
+            )
+        )
+        assert any(
+            "payload must be an object" in e
+            for e in lint_render_def(
+                self._button(
+                    {"type": "intent", "name": "select_tier", "payload": ["x"]}
+                )
+            )
+        )
+        assert any(
+            "title must be a string" in e
+            for e in lint_render_def(
+                self._button({"type": "intent", "name": "select_tier", "title": 3})
+            )
+        )
+
+    def test_clean_intent_action_passes(self):
+        good = self._button(
+            {
+                "type": "intent",
+                "name": "select_tier",
+                "component": "JourneyDetail",
+                "title": "Your journey",
+                "payload": {"journey_id": "$j.id", "quote_id": "{$t.quote_id}"},
+            }
+        )
+        assert lint_render_def(good) == []
