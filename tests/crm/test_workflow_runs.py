@@ -10,7 +10,11 @@ from app.crm.outreach.db.queries.enrollment import (
     resume_run_query,
     sweep_exited_runs_query,
 )
-from app.crm.outreach.nodes import lead_request_id, run_facts, send_variables
+from app.crm.outreach.nodes.context import (
+    lead_request_id,
+    run_facts,
+    send_variables,
+)
 from app.crm.outreach.runs import list_runs
 from app.crm.outreach.schemas import WorkflowNode
 from app.crm.outreach.walker import retry_delay_seconds

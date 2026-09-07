@@ -13,11 +13,14 @@ from uuid import uuid4
 
 import pytest
 
-import app.crm.outreach.nodes as nodes
 import app.crm.outreach.nodes.action as action_node
 from app.crm.connectivity.contracts import ActionError
-from app.crm.outreach.nodes import NodeParked, execute_action
-from app.crm.outreach.nodes.action import validate as _validate_action
+from app.crm.outreach.nodes.action import (
+    execute as execute_action,
+    validate as _validate_action,
+)
+from app.crm.outreach.nodes.context import run_facts
+from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
@@ -188,8 +191,8 @@ async def test_the_marker_is_bookkeeping_and_never_a_template_variable(
     patch = await execute_action(run, _node(), _DEFINITION)
 
     merged = {**run.context, **patch}
-    assert "action_tag-vip" not in nodes.run_facts(merged)
-    assert nodes.run_facts(merged)["cart_value"] == 900
+    assert "action_tag-vip" not in run_facts(merged)
+    assert run_facts(merged)["cart_value"] == 900
 
 
 async def test_a_missing_fact_for_a_placeholder_parks(

@@ -14,7 +14,7 @@ import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.workers as outreach_workers
 from app.crm.outreach.db.accessors import version as version_accessor
-from app.crm.outreach.nodes import send_variables
+from app.crm.outreach.nodes.context import send_variables
 from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
 from app.crm.outreach.walker import pick_next
 from app.crm.record.contracts import RawEvent

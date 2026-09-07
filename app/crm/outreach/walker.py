@@ -36,15 +36,10 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.nodes import (
-    ELSE,
-    NODE_TYPES,
-    TIMEOUT,
-    NodeParked,
-    is_wait,
-    reply_key,
-    without_reply,
-)
+from app.crm.outreach.nodes import NODE_TYPES, is_wait
+from app.crm.outreach.nodes.context import reply_key, without_reply
+from app.crm.outreach.nodes.spec import NodeParked
+from app.crm.outreach.nodes.wait_event import ELSE, TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import customer_has_event
 

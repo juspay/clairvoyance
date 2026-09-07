@@ -11,12 +11,14 @@ accepted.
 
 ONE WORD PER FILE, and the registry ASSEMBLED here from them — the
 record/extractors/__init__.py (SPEC_MODULES) precedent, which is the
-sanctioned shape for a non-empty __init__. It replaced a single module
-that reached 596 lines carrying five validators, three executors, the
-placeholder helpers, the run-context filters and the registry, at which
-point "where does a call decide it cannot proceed?" needed a search rather
-than a filename (modules/00 §1: the split lands in the PR that crosses
-the line, and the fifth word is what crossed it).
+sanctioned shape for a non-empty __init__: the registry and its type are
+the package's public surface, so they are built where the package is
+imported. That is ALL this file exports. Every other name is imported by
+full path — the run-context filters from ``nodes.context``, ``NodeParked``
+from ``nodes.spec``, the listening square's words from ``nodes.wait_event``
+— because an ``__init__`` that re-exports its siblings is the 132-line
+accessor hub scar (modules/00 §1), and a test pins ``__all__`` to the
+registry so it cannot grow back into one.
 
   wait.py        time passes; the alarm was set on arrival.
   wait_event.py  the alarm OR an event, whichever first (W5).
@@ -27,30 +29,12 @@ the line, and the fifth word is what crossed it).
                  payload and the send variables both derive from.
   spec.py        NodeSpec and NodeParked: what a word must answer, and how
                  it says it cannot.
-
-Every name the twelve importers used from the old module is re-exported
-below, so the split is a move and not a migration.
 """
 
 from typing import Dict
 
 from app.crm.outreach.nodes import action, call, send, wait, wait_event
-from app.crm.outreach.nodes.action import execute as execute_action
-from app.crm.outreach.nodes.call import execute as execute_call
-from app.crm.outreach.nodes.context import (
-    _BOOKKEEPING_KEYS,
-    _BOOKKEEPING_PREFIXES,
-    _REQUEST_ID_KEYS,
-    LATEST_LETTER_KEY,
-    lead_request_id,
-    reply_key,
-    run_facts,
-    send_variables,
-    without_reply,
-)
-from app.crm.outreach.nodes.send import execute as execute_send
-from app.crm.outreach.nodes.spec import Execute, NodeParked, NodeSpec, Validate
-from app.crm.outreach.nodes.wait_event import ELSE, TIMEOUT, TOPIC_KEY
+from app.crm.outreach.nodes.spec import NodeSpec
 from app.crm.outreach.schemas import WorkflowNode
 
 NODE_TYPES: Dict[str, NodeSpec] = {
@@ -69,26 +53,4 @@ def is_wait(node: WorkflowNode) -> bool:
     return NODE_TYPES[node.type].is_wait
 
 
-__all__ = [
-    "ELSE",
-    "Execute",
-    "LATEST_LETTER_KEY",
-    "NODE_TYPES",
-    "NodeParked",
-    "NodeSpec",
-    "TIMEOUT",
-    "TOPIC_KEY",
-    "Validate",
-    "_BOOKKEEPING_KEYS",
-    "_BOOKKEEPING_PREFIXES",
-    "_REQUEST_ID_KEYS",
-    "execute_action",
-    "execute_call",
-    "execute_send",
-    "is_wait",
-    "lead_request_id",
-    "reply_key",
-    "run_facts",
-    "send_variables",
-    "without_reply",
-]
+__all__ = ["NODE_TYPES", "NodeSpec", "is_wait"]
