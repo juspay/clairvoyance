@@ -1247,6 +1247,64 @@ class McpConfig(BaseModel):
     )
 
 
+class CustomComponentFlags(BaseModel):
+    """Engine-read behavior flags of one registry component (the ``flags``
+    JSONB of a ``ui_component`` row, migration 070).
+
+    v1 keeps the surface deliberately small: custom components are
+    data-bound render_ui components only — no literal fields (the engine's
+    fail-closed gate would drop them anyway), no DIRECT intents.
+    """
+
+    data_bound: bool = Field(
+        True,
+        description="Must be true in v1 — custom components hydrate from "
+        "this turn's tool results, never from model-authored values.",
+    )
+    selection_field: Optional[str] = Field(
+        None,
+        description="Prop name that carries the model's items[] selection "
+        "(id-matching over bound list entries), e.g. 'journeys'.",
+    )
+    list_props: List[str] = Field(
+        default_factory=list,
+        description="Props that hydrate as lists (selection + caps apply; "
+        "a single bound object lifts to a one-element list).",
+    )
+    max_items_default: Optional[int] = Field(
+        None,
+        description="Default cap on bound list length when the op "
+        "carries no max_items.",
+    )
+    max_items_limit: Optional[int] = Field(
+        None,
+        description="Hard ceiling on bound list length regardless of "
+        "the op's max_items.",
+    )
+    overlay_only: bool = Field(
+        False,
+        description=(
+            "True = the component is a CLIENT-side render target only "
+            "(opened by another component's open_detail action in the "
+            "widget's detail overlay). It ships to the widget with the "
+            "session surface but is EXCLUDED from the model's render_ui "
+            "vocabulary — the model can never paint it in-thread."
+        ),
+    )
+
+
+class CustomComponentDef(BaseModel):
+    """One resolved registry component as the session overlay carries it
+    (decoded off a ``ui_component`` row; immutable per version)."""
+
+    name: str
+    version: int = 1
+    props_schema: Dict[str, Any]
+    flags: CustomComponentFlags = Field(default_factory=CustomComponentFlags)
+    render_def: Optional[Dict[str, Any]] = None
+    prompt_hint: Optional[str] = None
+
+
 class UiCatalogConfig(BaseModel):
     """Per-template selection of which generative-UI primitives the LLM
     may emit and the widget will render.
