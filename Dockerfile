@@ -42,46 +42,72 @@ COPY pyproject.toml uv.lock ./
 # Install Python dependencies using uv
 # Use --no-install-project to avoid installing the app/ package at this stage
 # This allows optimal Docker layer caching - dependencies layer is cached separately
+# The uv cache (~861MB) is deleted in the SAME layer that creates it. Removing
+# it in a later layer would not help: layers are additive, so the bytes would
+# still ship inside this layer with only a whiteout on top.
 RUN uv sync --frozen --no-dev --no-install-project && \
-    uv pip show pipecat-ai
+    uv pip show pipecat-ai && \
+    rm -rf /app/.uv-cache
 
 # Download AIC assets from GCP Storage using authenticated context
 ARG AIC_BUCKET_PATH=gs://breeze-clairvoyance-models/aic
 
-# Install Google Cloud CLI and download AIC files (only for GCP deployments)
-# Use BuildKit secret mount to avoid leaking token in image layers
+# Download AIC files using plain curl + Bearer token against GCS JSON API.
+# Replaces installing google-cloud-sdk (~845MB unpacked, ~170MB compressed).
+# Uses the same BuildKit secret (gcp_token) as before — same auth contract.
+# curl is already installed at the apt step above, so NOTHING extra is added.
 RUN --mount=type=secret,id=gcp_token \
     if [ -f /run/secrets/gcp_token ]; then \
-        echo "=== Installing Google Cloud CLI for model assets ===" && \
-        curl -sSL https://sdk.cloud.google.com | bash && \
-        export PATH=$PATH:/root/google-cloud-sdk/bin && \
         echo "=== Downloading AIC assets ===" && \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_8khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_8khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_16khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_16khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_vf_2_1_l_16khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_vf_2_1_l_16khz.aicmodel"; \
+        TOKEN=$(cat /run/secrets/gcp_token) && \
+        GCS_PATH="${AIC_BUCKET_PATH#gs://}" && \
+        for m in quail_l_8khz.aicmodel quail_l_16khz.aicmodel quail_vf_2_1_l_16khz.aicmodel; do \
+            echo "Fetching ${m}"; \
+            curl -fsSL \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -o "/app/models/voice/aic/${m}" \
+                "https://storage.googleapis.com/${GCS_PATH}/${m}" \
+            || echo "Warning: Failed to download ${m}"; \
+        done; \
     else \
         echo "Warning: GCP token secret not provided, skipping AIC installation (AWS deployment)"; \
     fi
 
-# Create NLTK data directory and download required data
-RUN mkdir -p /usr/local/nltk_data && \
-    uv run python -m nltk.downloader punkt punkt_tab -d /usr/local/nltk_data
+# Create non-root user BEFORE big COPY so --chown can set ownership inline.
+# Avoids a `chown -R /app` layer that duplicates every file (~1.8GB unpacked,
+# ~500MB compressed). Venv (.venv) stays root-owned but world-readable —
+# appuser only needs read+execute on it.
+# Create user + writable dirs before big COPY. .uv-cache already has content from
+# the earlier `uv sync` (sdists/wheels/, few MB) — recursive chown on this TINY
+# dir only, NOT on all of /app (which would duplicate every file in image).
+RUN groupadd -r appuser && useradd -r -g appuser appuser && \
+    mkdir -p /app/.uv-cache /usr/local/nltk_data && \
+    chown -R appuser:appuser /app/.uv-cache /usr/local/nltk_data
 
-# Copy application code
-COPY . .
+# Download NLTK data (as root; chown after — NLTK data is small ~6MB so the
+# chown layer is a one-time few-KB cost).
+# This is the last build-time uv invocation, so drop the cache it recreates —
+# again in the same layer, for the reason noted above.
+RUN uv run --no-sync python -m nltk.downloader punkt punkt_tab -d /usr/local/nltk_data && \
+    chown -R appuser:appuser /usr/local/nltk_data && \
+    rm -rf /app/.uv-cache
 
-# Set proper permissions
-RUN chmod +x run.py
+# Copy application code with ownership set inline (no chown -R layer)
+COPY --chown=appuser:appuser . .
 
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-RUN mkdir -p /app/.uv-cache && \
-    chown -R appuser:appuser /app && \
-    chown -R appuser:appuser /usr/local/nltk_data
+# An empty, appuser-owned cache dir. `uv run` initialises a cache even with
+# --no-sync, and it cannot create this itself because /app is root-owned.
+RUN mkdir -p /app/.uv-cache && chown appuser:appuser /app/.uv-cache
 USER appuser
 
 # Expose port
 EXPOSE ${PORT}
 
-# Run the application
-CMD ["uv", "run", "python", "run.py"]
+# --no-sync is load-bearing. Plain `uv run` re-resolves the project on every
+# container start: it rebuilds the clairvoyance wheel and re-adds the dev
+# dependency group that `uv sync --no-dev` deliberately left out, then fails
+# writing into the root-owned /app/.venv:
+#   Failed to create directory `/app/.venv/.../iniconfig`: Permission denied
+# --no-sync runs the already-built environment as-is, which is what makes the
+# image immutable and lets the venv stay root-owned (no chown -R needed).
+CMD ["uv", "run", "--no-sync", "python", "run.py"]
