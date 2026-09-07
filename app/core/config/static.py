@@ -743,13 +743,28 @@ HTTP_REQUEST_BLOCKED_CONTENT_TYPES = [
 # Maximum number of redirects to follow (0 to disable redirects)
 HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3"))
 
-EULER_BASE_URL = os.environ.get("EULER_BASE_URL", "https://sandbox.juspay.in")
+
+UAP_ENVIRONMENT = os.environ.get("UAP_ENVIRONMENT", "sandbox").strip().lower()
+_UAP_HOSTS = {
+    "sandbox": "https://sandbox.juspay.in",
+    "prod": "https://api.juspay.in",
+}
+if UAP_ENVIRONMENT not in _UAP_HOSTS:
+    raise RuntimeError(
+        f"UAP_ENVIRONMENT={UAP_ENVIRONMENT!r} is not one of "
+        f"{sorted(_UAP_HOSTS)}; set it to 'sandbox' or 'prod'"
+    )
+EULER_BASE_URL = _UAP_HOSTS[UAP_ENVIRONMENT]
 # Per-request timeout for every Euler call (customers, AOP, /txns): a fixed
 # 30 s, not configuration.
 EULER_TIMEOUT_SECONDS = 30
-# Euler gateway for agentic /txns — 514 is the agentic UPI gateway in every
-# environment, so it is a constant, not configuration.
 EULER_GATEWAY_ID = "514"
-# Public base of THIS service as Juspay must reach it for agentic webhooks
-# (https, no trailing slash). Empty = no callback_url is sent.
+UAP_VERIFIED_NAMES = os.environ.get("UAP_VERIFIED_NAMES", "")  # comma-separated
+UAP_MAX_PER_DRAW = os.environ.get("UAP_MAX_PER_DRAW", "")  # "200.00"
+UAP_MAX_TOTAL = os.environ.get("UAP_MAX_TOTAL", "")  # "1000.00"
+UAP_MAX_DRAWS = os.environ.get("UAP_MAX_DRAWS", "")  # "60"
+UAP_VALIDITY_DAYS = os.environ.get("UAP_VALIDITY_DAYS", "")  # "90"
+UAP_LIMIT_CHOICES = os.environ.get("UAP_LIMIT_CHOICES", "")  # "200.00,500.00,1000.00"
+UAP_SELLER_NAME = os.environ.get("UAP_SELLER_NAME", "")
+UAP_SELLER_MIC = os.environ.get("UAP_SELLER_MIC", "")
 UAP_WEBHOOK_BASE_URL = os.environ.get("UAP_WEBHOOK_BASE_URL", "").rstrip("/")

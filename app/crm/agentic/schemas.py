@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field
 
 
 class CrmCustomerAgent(BaseModel):
-    """One row of ``crm_customer_agent`` — one onboarding attempt for one
-    customer. Everything Juspay mints is Optional: the row exists before
+    """One onboarding attempt for one customer — one element of
+    ``crm_customer.attributes["agents"]`` (several per rider). Everything
+    Juspay mints is Optional: the entry exists before
     the consent screen opens and is filled in by result / poll / webhook
     in whatever order they land."""
 

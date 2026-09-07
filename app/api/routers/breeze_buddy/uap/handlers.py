@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from app.ai.voice.agents.breeze_buddy.template.types import AgenticPaymentsConfig
 from app.core.config.static import UAP_WEBHOOK_BASE_URL
 from app.core.logger import logger
 from app.crm.agentic.contracts import (
@@ -24,7 +23,6 @@ from app.crm.agentic.contracts import (
 from app.crm.identity.contracts import get_customer, resolve
 from app.database.accessor.breeze_buddy.chat_session import get_chat_session_by_id
 from app.database.accessor.breeze_buddy.credentials import get_all_credentials
-from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.database.accessor.breeze_buddy.uap_session import bind_session_customer
 from app.schemas.breeze_buddy.chat import ChatSession, ChatSessionStatus
 from app.services.redis import get_redis_service, is_redis_configured
@@ -44,11 +42,45 @@ from app.services.uap.api import (
     refresh_agent,
     start_agent_poll,
 )
+from app.services.uap.policy import AgenticPaymentsConfig, load_agentic_policy
 from app.services.uap.utils import (
     IntentConstraints,
     build_ticket_cart,
     build_transit_intent,
 )
+
+# ---- module constants ----
+
+# Juspay's agent onboarding stays open for ~30 minutes. A rider's live
+# attempt younger than this is resumed (same agent ref handed to the SDK),
+# not duplicated; older, a fresh ref is minted so the SDK never resumes an
+# onboarding Juspay is about to expire.
+ONBOARDING_RESUME_WINDOW = timedelta(minutes=25)
+
+# Juspay redelivers a webhook on any non-200. Each event key is remembered
+# in Redis for this long and a replay is acknowledged without being applied.
+WEBHOOK_EVENT_DEDUPE_TTL_SECONDS = 7 * 24 * 3600
+
+# This router's own webhook path; joined with UAP_WEBHOOK_BASE_URL to build
+# the callback_url registered with Juspay on every onboarding.
+WEBHOOK_PATH = "/agent/voice/breeze-buddy/uap/webhook"
+
+# Ledger refusals the rider fixes by going through the SDK again — the rule
+# ran out or lapsed, or the agent itself is gone. /onboarding decides which
+# SDK path that is (resume the live agent's action step, or a fresh agent);
+# the draw route only says "needs onboarding". Every other refusal (amount
+# over the per-ticket cap, etc.) is final for this draw.
+NEEDS_ONBOARDING_REASONS = frozenset(
+    {
+        "total_exhausted",
+        "draws_exhausted",
+        "expired",
+        "action_inactive",
+        "agent_inactive",
+        "action_missing",
+    }
+)
+
 
 # ---- request / response models (formerly app/schemas/breeze_buddy/uap.py) ----
 
@@ -129,8 +161,11 @@ class DrawRequest(BaseModel):
     journey_id: str
     # NammaYatri access so the draw can confirm the journey itself: NY's
     # /confirm mints the Juspay order (``orderSdkPayload.order_id``) the
-    # draw must attach to — we never mint our own order id.
-    ny_base: str = Field(..., min_length=1)
+    # draw must attach to — we never mint our own order id. The NY HOST is
+    # not the caller's to choose: it comes from the reseller's ``uap``
+    # credential (``ny_base_url``). ``ny_base`` is accepted and ignored so
+    # templates still sending it keep working; drop it on the next re-push.
+    ny_base: Optional[str] = None
     rider_token: str = Field(..., min_length=1)
     # Decimal rupee string — "24.00". Never a number, never paise.
     amount: str
@@ -157,10 +192,6 @@ class AttachRiderRequest(BaseModel):
     rider_token: Optional[str] = Field(default=None, min_length=8, max_length=512)
 
 
-_DEDUPE_TTL_SECONDS = 7 * 24 * 3600
-_MAX_BODY_BYTES = 1024 * 1024
-
-
 class WebhookAck(BaseModel):
     status: Literal["ignored", "success"]
 
@@ -172,7 +203,10 @@ async def _is_duplicate(event_key: str) -> bool:
         redis = await get_redis_service()
         client = await redis.get_client()
         was_set = await client.set(
-            f"uap:webhook:{event_key}", "1", nx=True, ex=_DEDUPE_TTL_SECONDS
+            f"uap:webhook:{event_key}",
+            "1",
+            nx=True,
+            ex=WEBHOOK_EVENT_DEDUPE_TTL_SECONDS,
         )
     except Exception as e:
         logger.error(f"uap webhook: dedupe unavailable, processing anyway: {e}")
@@ -180,16 +214,16 @@ async def _is_duplicate(event_key: str) -> bool:
     return not was_set
 
 
-async def _token_reseller(token: str) -> Optional[str]:
-    """The reseller whose ``uap`` webhook token this is, or None. The URL
-    carries no reseller, so every active ``uap`` credential row is compared;
-    webhooks are rare enough that the scan is free."""
+async def _token_tenant(token: str) -> Optional[Tuple[str, Optional[str]]]:
+    """(reseller_id, merchant_id) of the ``uap`` credential row whose webhook
+    token this is, or None. The URL carries no tenant, so every active
+    ``uap`` row is compared; webhooks are rare enough that the scan is free."""
     for row in await get_all_credentials(mask=False):
         if row.name != CREDENTIAL_NAME or not row.is_active:
             continue
         expected = (row.value or {}).get("webhook_token")
         if expected and hmac.compare_digest(str(expected), token):
-            return row.reseller_id
+            return row.reseller_id or "", row.merchant_id
     return None
 
 
@@ -201,19 +235,13 @@ async def handle_webhook(request: Request) -> WebhookAck:
     # Gate BEFORE parsing: a caller without the shared secret gets nothing,
     # not even a parse error to learn from.
     token = request.query_params.get("token") or ""
-    reseller_id = await _token_reseller(token) if token else None
-    if not reseller_id:
+    tenant = await _token_tenant(token) if token else None
+    if not tenant or not tenant[0]:
         logger.warning("uap webhook: rejected, bad or missing token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized"
         )
-    raw = b""
-    async for chunk in request.stream():
-        raw += chunk
-        if len(raw) > _MAX_BODY_BYTES:
-            logger.error(f"uap webhook: body exceeds {_MAX_BODY_BYTES} bytes")
-            return WebhookAck(status="ignored")
-
+    raw = await request.body()
     try:
         event = json.loads(raw)
     except ValueError:
@@ -247,13 +275,13 @@ async def handle_webhook(request: Request) -> WebhookAck:
     # so a dropped one is an agent that can never be charged.
     agent = content.get("agent") if isinstance(content, dict) else None
     if isinstance(agent, dict) and agent:
-        await _apply_agent_event(reseller_id, event_name, agent)
+        await _apply_agent_event(tenant[0], tenant[1], event_name, agent)
 
     return WebhookAck(status="success")
 
 
 async def _apply_agent_event(
-    reseller_id: str, event_name: str, agent: Dict[str, Any]
+    reseller_id: str, merchant_id: Optional[str], event_name: str, agent: Dict[str, Any]
 ) -> None:
     """Fold an AGENT_* webhook into the attempt it belongs to.
 
@@ -275,7 +303,7 @@ async def _apply_agent_event(
         )
         return
     try:
-        creds = await load_uap_credentials(reseller_id)
+        creds = await load_uap_credentials(reseller_id, merchant_id)
     except JuspayError as exc:
         # Without credentials there is no way to re-read from Juspay, and
         # the payload alone is never applied: the poll will settle the row.
@@ -288,17 +316,6 @@ async def _apply_agent_event(
 
 
 onboarding_router = APIRouter()
-
-# A live attempt younger than this is resumed, not duplicated (Juspay's
-# onboarding window is ~30 minutes).
-RESUME_WINDOW = timedelta(minutes=25)
-
-WEBHOOK_PATH = "/agent/voice/breeze-buddy/uap/webhook"
-
-# Refusals a NEW action on the same agent can fix (the rule ran out) versus
-# ones that need the rider to consent again (the agent itself is gone).
-_RENEWABLE = {"total_exhausted", "draws_exhausted", "expired", "action_inactive"}
-_REONBOARD = {"agent_inactive", "action_missing"}
 
 
 class Scope:
@@ -333,13 +350,27 @@ async def _scope(session_id: str, *, need_customer: bool = True) -> Scope:
     return Scope(session, str(customer_id) if customer_id else None)
 
 
-async def _credentials(reseller_id: str) -> JuspayCredentials:
+def _ny_base(creds: JuspayCredentials) -> str:
+    """The merchant's NammaYatri host, from the credential row only. A
+    row without it cannot confirm journeys or read tickets — fail closed,
+    never fall back to anything the request carried."""
+    if not creds.ny_base_url:
+        logger.error("uap: 'uap' credential has no ny_base_url; cannot reach NY")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Ticketing backend not configured",
+        )
+    return creds.ny_base_url
+
+
+async def _credentials(scope: Scope) -> JuspayCredentials:
     """Fail closed with the honest reason: a tenant with no usable ``uap``
-    credential cannot onboard or draw, and must not surface as a 500."""
+    credential cannot onboard or draw, and must not surface as a 500. The
+    merchant's own row wins over the reseller's (load_uap_credentials)."""
     try:
-        return await load_uap_credentials(reseller_id)
+        return await load_uap_credentials(scope.reseller_id, scope.merchant_id)
     except JuspayError as exc:
-        logger.error(f"uap: credentials unavailable for {reseller_id}: {exc}")
+        logger.error(f"uap: credentials unavailable for {scope.merchant_id}: {exc}")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail="Agentic payments are not configured for this tenant",
@@ -406,44 +437,25 @@ async def attach_rider(payload: AttachRiderRequest) -> Dict[str, Any]:
 
 
 async def _agentic_config(scope: Scope) -> AgenticPaymentsConfig:
-    """The merchant's agentic-payments policy from its template
-    (``configurations.agentic_payments``). Fail closed: there is no default
-    operator to bind a mandate to or to name on a cart — a template without
-    the three merchant facts cannot onboard or draw."""
-    template = await get_template_by_id(scope.session.template_id)
-    cfg = (
-        template.configurations.agentic_payments
-        if template and template.configurations
-        else None
-    )
-    limits = cfg.limits if cfg else None
-    missing = [
-        name
-        for name, value in (
-            ("verified_names", cfg.verified_names if cfg else None),
-            ("seller_name", cfg.seller_name if cfg else None),
-            ("seller_mic", cfg.seller_mic if cfg else None),
-            ("limits.max_per_draw", limits.max_per_draw if limits else None),
-            ("limits.max_total", limits.max_total if limits else None),
-            ("limits.max_draws", limits.max_draws if limits else None),
-            ("limits.validity_days", limits.validity_days if limits else None),
-        )
-        if not value
-    ]
-    if cfg is None or missing:
+    """The agentic-payments policy for this tenant. TEMPORARY: read from the
+    service environment (UAP_*), see app/services/uap/policy.py — one
+    agentic merchant today. ``scope`` is kept so the move to per-merchant
+    policy changes this function only. Fail closed: there is no default
+    operator to bind a mandate to or to name on a cart."""
+    cfg, missing = load_agentic_policy()
+    if cfg is None:
         logger.error(
-            f"uap: template {scope.session.template_id} agentic_payments config "
-            f"missing {missing or 'entirely'}"
+            f"uap: agentic policy env incomplete for {scope.merchant_id}: {missing}"
         )
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            detail="Agentic payments are not configured for this template",
+            detail="Agentic payments are not configured",
         )
     return cfg
 
 
 def _constraints(limits: Optional[LimitChoice], cfg: AgenticPaymentsConfig):
-    """Rule = the merchant's limits (template config, all four required by
+    """Rule = the merchant's limits (policy, all four required by
     _agentic_config) overlaid with whatever the rider chose."""
     base = cfg.limits
     assert base is not None  # _agentic_config refused the template otherwise
@@ -515,7 +527,7 @@ async def start_onboarding(payload: OnboardingRequest) -> OnboardingResponse:
     """
     scope = await _scope(payload.session_id)
     assert scope.customer_id
-    creds = await _credentials(scope.reseller_id)
+    creds = await _credentials(scope)
 
     customer = await get_customer(scope.merchant_id, scope.customer_id)
     if customer is None:
@@ -526,9 +538,15 @@ async def start_onboarding(payload: OnboardingRequest) -> OnboardingResponse:
             status.HTTP_409_CONFLICT,
             detail="Customer has no phone; Juspay needs one to mint the token",
         )
-    # Juspay customer key = the app's own rider id (CRM ``external_ref``), so
-    # the agent attaches to the customer Cumta's payments already created for
-    # this rider, not a second one under our CRM id. CRM id only as fallback.
+    # Juspay customer key = the app's own rider id (CRM ``external_ref``).
+    # Cumta's ticketing payments already create the rider's Juspay customer
+    # under this id (the app passes customerId=personId to HyperSDK; e.g.
+    # rider 7338598013's customer existed at Juspay on 28 Aug, before our
+    # CRM ever saw the rider), so the agent attaches to THAT customer, not
+    # a second one under our CRM id. CRM id only as fallback. The 1-3 Sep
+    # sandbox mandates were minted under CRM-id customers by earlier code;
+    # draws against them still work (AOP key, server side), they just do
+    # not appear in the SDK's agent list for the rider-id customer.
     juspay_object_ref = customer.external_ref or scope.customer_id
     # ONE form of the number everywhere: country code + national digits
     # ("917338598013"). Juspay wants it inside mobile_number on the customer
@@ -613,7 +631,7 @@ async def start_onboarding(payload: OnboardingRequest) -> OnboardingResponse:
         and latest is not None
         and latest.status in live
         and latest.created_at is not None
-        and datetime.now(timezone.utc) - latest.created_at < RESUME_WINDOW
+        and datetime.now(timezone.utc) - latest.created_at < ONBOARDING_RESUME_WINDOW
     ):
         row = latest
     else:
@@ -663,7 +681,7 @@ async def agent_status(session_id: str = Query(..., min_length=8)) -> Dict[str, 
             # Its watcher is gone (a restart mid-window) and the onboarding
             # window has closed: settle the row from Juspay now, lazily.
             try:
-                creds = await load_uap_credentials(scope.reseller_id)
+                creds = await load_uap_credentials(scope.reseller_id, scope.merchant_id)
                 latest = await refresh_agent(creds, latest) or latest
             except JuspayError as exc:
                 logger.warning(
@@ -822,7 +840,7 @@ async def record_sdk_result(payload: SdkResultRequest) -> Dict[str, Any]:
         )
         or row
     )
-    creds = await _credentials(scope.reseller_id)
+    creds = await _credentials(scope)
     row = await refresh_agent(creds, row) or row
 
     if payload.error_code or payload.agent_status != "ACTIVE":
@@ -845,43 +863,6 @@ async def record_sdk_result(payload: SdkResultRequest) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def _renew_action(
-    creds: JuspayCredentials, row: CrmCustomerAgent, cfg: AgenticPaymentsConfig
-) -> Optional[CrmCustomerAgent]:
-    """The rule ran out but the agent is alive: register a new action on
-    the same agent (API path, no SDK). Returns the refreshed row; None when
-    Juspay refused or the new action still needs the rider's approval."""
-    if not row.agent_id:
-        return None
-    stamp = int(time.time())
-    ref = f"intent_{row.customer_id}_{stamp}"
-    proposal = row.intent_constraints or _constraints(None, cfg).model_dump()
-    try:
-        action = await uap_api.create_action(
-            creds,
-            object_reference_id=ref,
-            agent_id=row.agent_id,
-            intent_constraints=proposal,
-        )
-    except JuspayError as exc:
-        logger.warning(f"uap: action renewal refused for {row.agent_obj_ref}: {exc}")
-        return None
-    row = (
-        await patch_attempt(
-            row.agent_obj_ref,
-            {
-                "action_obj_ref": ref,
-                "action_id": action.get("action_id"),
-                "action_ref_id": action.get("action_ref_id"),
-                "action_status": str(action.get("status") or "").upper() or None,
-            },
-        )
-        or row
-    )
-    refreshed = await refresh_agent(creds, row) or row
-    return refreshed if refreshed.is_drawable else None
-
-
 @onboarding_router.post("/draw")
 async def draw_against_agent(payload: DrawRequest) -> Dict[str, Any]:
     """Charge one ticket against the rider's standing rule.
@@ -897,35 +878,28 @@ async def draw_against_agent(payload: DrawRequest) -> Dict[str, Any]:
     if agent is None:
         return {"paid": False, "reason": "no_active_agent", "needs_onboarding": True}
 
-    creds = await _credentials(scope.reseller_id)
+    creds = await _credentials(scope)
     cfg = await _agentic_config(scope)
     agent = await refresh_agent(creds, agent) or agent
 
     reason = await ledger.admit_draw(
         scope.merchant_id, scope.customer_id, agent, payload.amount
     )
-    if reason in _RENEWABLE:
-        renewed = await _renew_action(creds, agent, cfg)
-        if renewed is not None:
-            agent = renewed
-            reason = await ledger.admit_draw(
-                scope.merchant_id, scope.customer_id, agent, payload.amount
-            )
     if reason:
         return {
             "paid": False,
             "reason": reason,
-            "needs_onboarding": reason in _REONBOARD or reason in _RENEWABLE,
+            "needs_onboarding": reason in NEEDS_ONBOARDING_REASONS,
         }
 
     # NY books the tickets and mints the Juspay order; the draw attaches to
     # THAT order id, and NY's confirmed fare is authoritative over the LLM's.
     try:
         journey = await initiate_journey(
-            payload.ny_base, payload.rider_token, payload.journey_id
+            _ny_base(creds), payload.rider_token, payload.journey_id
         )
         confirm = await confirm_journey(
-            payload.ny_base,
+            _ny_base(creds),
             payload.rider_token,
             payload.journey_id,
             journey,
@@ -1114,10 +1088,12 @@ def _leg_view(leg: Dict[str, Any]) -> Dict[str, Any]:
 @ticket_router.get("/ticket")
 async def uap_ticket(
     journey_id: str,
-    ny_base: str,
     rider_token: str,
     session_id: str = Query(..., min_length=8),
     wait: float = Query(0, ge=0, le=25),
+    # Accepted and ignored (see DrawRequest.ny_base): the NY host comes
+    # from the reseller's credential, never from the caller.
+    ny_base: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Booking info for one journey with the QR payload per ticket.
 
@@ -1132,6 +1108,7 @@ async def uap_ticket(
     never keeps a PENDING reservation for money that moved or failed.
     """
     scope = await _scope(session_id)
+    ny_base = _ny_base(await _credentials(scope))
     if wait > 0:
         pay = await uap_api.wait_for_payment(
             ny_base, rider_token, journey_id, max_wait_seconds=wait

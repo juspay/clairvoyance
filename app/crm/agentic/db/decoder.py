@@ -1,26 +1,23 @@
-"""Row -> schema translation for the agentic tables. DB-side only."""
+"""JSON entry <-> schema translation for the agentic store. DB-side only.
 
-import json
-from typing import Any
+An attempt is one element of ``crm_customer.attributes["agents"]``. The
+element carries every CrmCustomerAgent field; datetimes travel as ISO
+strings, and merchant/customer ids are re-stamped from the owning row on
+the way out so an entry can never claim another tenant.
+"""
 
-import asyncpg
+from typing import Any, Dict
 
 from app.crm.agentic.schemas import CrmCustomerAgent
 
 
-def _json(value: Any) -> Any:
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            return None
-    return value
-
-
-def decode_customer_agent(row: asyncpg.Record) -> CrmCustomerAgent:
-    data = dict(row)
-    data["id"] = str(data["id"])
-    data["customer_id"] = str(data["customer_id"])
-    data["intent_constraints"] = _json(data.get("intent_constraints"))
-    data["meta"] = _json(data.get("meta")) or {}
+def decode_agent_entry(
+    entry: Dict[str, Any], merchant_id: str, customer_id: str
+) -> CrmCustomerAgent:
+    data = dict(entry)
+    data["merchant_id"] = merchant_id
+    data["customer_id"] = customer_id
+    data.setdefault("meta", {})
+    if not isinstance(data.get("meta"), dict):
+        data["meta"] = {}
     return CrmCustomerAgent(**data)

@@ -35,6 +35,7 @@ async def create_credential_handler(
     try:
         credential = await create_credential(
             reseller_id=req.reseller_id,
+            merchant_id=req.merchant_id,
             name=req.name,
             credential_type=req.credential_type,
             value=req.value,
@@ -63,16 +64,19 @@ async def create_credential_handler(
 async def list_credentials_handler(
     reseller_id: Optional[str],
     current_user: UserInfo,
+    merchant_id: Optional[str] = None,
 ) -> List[Credential]:
-    """List credentials with optional merchant filter."""
+    """List credentials with optional reseller / merchant filter."""
     logger.info(
         f"User {current_user.username} listing credentials "
-        f"(reseller={reseller_id or 'all'})"
+        f"(reseller={reseller_id or 'all'} merchant={merchant_id or '-'})"
     )
 
     try:
         if reseller_id:
-            return await get_credentials_by_merchant(reseller_id, mask=True)
+            return await get_credentials_by_merchant(
+                reseller_id, mask=True, merchant_id=merchant_id
+            )
         else:
             return await get_all_credentials(mask=True)
 

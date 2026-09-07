@@ -1,4 +1,4 @@
--- 072: the ticket-payment ledger lives on chat sessions
+-- 070: the ticket-payment ledger lives on chat sessions
 -- (metadata.uap_draws, one element per Juspay order). A rider's usage
 -- against one agent is summed over every session of that rider, found by
 -- the rider_ref template var (the CRM customer id; chat_session.customer_id

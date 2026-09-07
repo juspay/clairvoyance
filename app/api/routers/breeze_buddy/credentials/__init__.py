@@ -48,7 +48,9 @@ async def create_credential_endpoint(
     Create a new credential.
 
     - Global credentials (reseller_id=null): available to all merchants as {name} placeholder
-    - Merchant credentials (reseller_id set): available only to that merchant's templates
+    - Reseller credentials (reseller_id set): available to every merchant of that reseller
+    - Merchant credentials (reseller_id + merchant_id): only that merchant; wins over the
+      reseller row of the same name
 
     Values are encrypted at rest when CREDENTIAL_ENCRYPTION_KEY is configured.
     """
@@ -67,7 +69,23 @@ async def create_credential_endpoint(
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {req.reseller_id}",
+                detail=f"Access denied to reseller {req.reseller_id}",
+            )
+
+    if req.merchant_id:
+        # A merchant row always sits under its reseller (DB CHECK says the same).
+        if not req.reseller_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="merchant_id requires reseller_id",
+            )
+        if current_user.role != "admin" and (
+            req.merchant_id not in current_user.merchant_ids
+            and "*" not in current_user.merchant_ids
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied to merchant {req.merchant_id}",
             )
 
     return await create_credential_handler(req, current_user)
@@ -78,10 +96,14 @@ async def list_credentials_endpoint(
     reseller_id: Optional[str] = Query(
         None, description="Filter by reseller ID. Omit to list all (admin only)."
     ),
+    merchant_id: Optional[str] = Query(
+        None,
+        description="With reseller_id: also include that merchant's own rows.",
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
-    List credentials with optional merchant filter.
+    List credentials with optional reseller / merchant filter.
 
     - Admin: sees all credentials or filtered by merchant
     - Merchant: must provide reseller_id, sees merchant + global credentials
@@ -105,7 +127,20 @@ async def list_credentials_endpoint(
                 detail=f"Access denied to reseller {reseller_id}",
             )
 
-    return await list_credentials_handler(reseller_id, current_user)
+    if (
+        merchant_id
+        and current_user.role != "admin"
+        and (
+            merchant_id not in current_user.merchant_ids
+            and "*" not in current_user.merchant_ids
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied to merchant {merchant_id}",
+        )
+
+    return await list_credentials_handler(reseller_id, current_user, merchant_id)
 
 
 @router.get("/credentials/{credential_id}", response_model=Credential)

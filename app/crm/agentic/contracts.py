@@ -12,7 +12,7 @@ from app.crm.agentic.db.accessor import (
     list_drawable_for_customer,
     set_preferred_agent,
 )
-from app.crm.agentic.mandate import (
+from app.crm.agentic.payment_agent import (
     TERMINAL_STATUSES,
     apply_juspay_records,
     check_draw,

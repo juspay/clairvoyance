@@ -497,28 +497,6 @@
         }
       }
     },
-    "agentic_payments": {
-      "description": "Merchant policy for agentic (UAP) payments, read by the /uap routes. Required in full when the template offers automatic ticket payment: the AE-verified operator names the mandate may pay, the seller on the ticket cart (legal name + MIC), the standing-rule limits (decimal rupee strings, a ticket count, validity in days) and the per-ticket amounts the page's limit chooser offers. The code holds no defaults; a template missing any of these cannot onboard or draw.",
-      "example": {
-        "verified_names": [
-          "Chennai Metro Rail Limited",
-          "Metropolitan Transport Corporation"
-        ],
-        "seller_name": "Chennai Metro Rail Limited",
-        "seller_mic": "CMRL",
-        "limits": {
-          "max_per_draw": "200.00",
-          "max_total": "1000.00",
-          "max_draws": 60,
-          "validity_days": 90
-        },
-        "limit_choices": [
-          "200.00",
-          "500.00",
-          "1000.00"
-        ]
-      }
-    },
     "response_reveal": {
       "description": "How the widget reveals assistant prose. 'stream' (default) = paced typewriter as tokens arrive; 'complete' = a typing indicator while the reply is in flight, then the full message at once. Presentation only: the SSE transport streams either way.",
       "example": "stream"

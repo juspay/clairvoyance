@@ -1,4 +1,4 @@
-"""agentic mandate — the rider's standing UPI rule: Juspay's agent + action
+"""agentic payment agent — the rider's standing UPI rule: Juspay's agent + action
 records -> our row, and what may be drawn against it.
 
 PURE decisions first (translate Juspay vocabulary to ours; draw admission),

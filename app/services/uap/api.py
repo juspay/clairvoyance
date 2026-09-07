@@ -172,9 +172,12 @@ CREDENTIAL_NAME = "uap"
 
 @dataclass(frozen=True)
 class JuspayCredentials:
+    """The reseller's ``uap`` credential row. The Juspay HOST is not in it:
+    one service talks to one Juspay environment (``UAP_ENVIRONMENT``), so a
+    per-row ``base_url`` could only ever disagree with it."""
+
     api_key: str
     merchant_id: str
-    base_url: str
     # AOP (agentic) APIs — /v1/aop/* — are keyed by the partner's key, not
     # the merchant's; a merchant key answers them with HTTP 500. Falls back
     # to api_key so a single-key setup still works.
@@ -182,37 +185,61 @@ class JuspayCredentials:
     # Shared secret Juspay must echo on webhook calls (?token=…). Generated
     # per reseller; a webhook without it is dropped before it is parsed.
     webhook_token: Optional[str] = None
-    # Where the agentic draw (/txns) goes. Unset = base_url.
-    txns_base_url: Optional[str] = None
     # Euler gateway for agentic /txns; unset = EULER_GATEWAY_ID.
     gateway_id: Optional[str] = None
+    # The merchant's own NammaYatri backend (journey confirm, payment
+    # status, booking info). Per reseller like the rest of this row — it is
+    # THE place the backend learns which NY host to call; never the request.
+    ny_base_url: Optional[str] = None
 
     @property
     def aop_key(self) -> str:
         return self.aop_api_key or self.api_key
 
     @property
+    def base_url(self) -> str:
+        return EULER_BASE_URL
+
+    @property
     def txns_base(self) -> str:
-        return self.txns_base_url or self.base_url
+        return EULER_BASE_URL
+
+
+def pick_uap_row(rows: List[Any], name: str, merchant_id: Optional[str]) -> Any:
+    """Most specific active row named ``name``: the merchant's own, else the
+    reseller-wide one, else the global one. Pure — unit-tested."""
+    best, best_rank = None, -1
+    for row in rows:
+        if row.name != name or not row.is_active:
+            continue
+        row_merchant = getattr(row, "merchant_id", None)
+        if row_merchant and row_merchant != merchant_id:
+            continue
+        rank = 2 if row_merchant else (1 if row.reseller_id else 0)
+        if rank > best_rank:
+            best, best_rank = row, rank
+    return best
 
 
 async def load_uap_credentials(
-    reseller_id: str, name: str = CREDENTIAL_NAME
+    reseller_id: str, merchant_id: Optional[str] = None, name: str = CREDENTIAL_NAME
 ) -> JuspayCredentials:
-    """Load a reseller's UAP credential, falling back to the global row.
+    """Load the tenant's UAP credential: the merchant's own row when it has
+    one, else the reseller's, else the global row.
 
-    The lookup returns every credential this reseller can see (its own plus
-    all global ones), so ``name`` is what selects ours out of the set.
+    The lookup returns every credential this tenant can see, so ``name``
+    selects ours and ``pick_uap_row`` applies most-specific-wins.
     """
-    rows = await get_credentials_by_merchant(reseller_id, mask=False)
-
-    match = None
-    for row in rows:
-        if row.name == name and row.is_active:
-            match = row
+    rows = await get_credentials_by_merchant(
+        reseller_id, mask=False, merchant_id=merchant_id
+    )
+    match = pick_uap_row(rows, name, merchant_id)
     if match is None:
         raise JuspayError(
-            f"No active '{name}' credential for {reseller_id}", None, None
+            f"No active '{name}' credential for {reseller_id}"
+            + (f"/{merchant_id}" if merchant_id else ""),
+            None,
+            None,
         )
 
     value = match.value or {}
@@ -229,11 +256,10 @@ async def load_uap_credentials(
     return JuspayCredentials(
         api_key=api_key,
         merchant_id=merchant_id,
-        base_url=value.get("base_url") or EULER_BASE_URL,
         aop_api_key=value.get("aop_api_key"),
         webhook_token=value.get("webhook_token"),
-        txns_base_url=value.get("txns_base_url") or None,
         gateway_id=value.get("gateway_id") or None,
+        ny_base_url=(value.get("ny_base_url") or "").rstrip("/") or None,
     )
 
 
@@ -342,37 +368,6 @@ async def list_agents(
 
 async def get_action(creds: JuspayCredentials, action_id: str) -> Dict[str, Any]:
     return await _get(creds, f"/v1/aop/action/{quote(action_id, safe='')}")
-
-
-async def create_action(
-    creds: JuspayCredentials,
-    *,
-    object_reference_id: str,
-    agent_id: str,
-    intent_constraints: Dict[str, Any],
-    mode: str = "INTENT",
-) -> Dict[str, Any]:
-    """Register a standing rule on an existing agent WITHOUT the SDK.
-
-    Returns Juspay's action record; with ``mode=INTENT`` it carries a UPI
-    deep link the rider approves in their UPI app. Not used by the SDK path
-    (the SDK creates the action itself); kept for the API-only flow.
-    """
-    return await request(
-        "POST",
-        "/v1/aop/action",
-        api_key=creds.aop_key,
-        merchant_id=creds.merchant_id,
-        base_url=creds.base_url,
-        form_body={
-            "object_reference_id": object_reference_id,
-            "agent_id": agent_id,
-            "action_type": "INTENT",
-            "modality": "AUTONOMOUS",
-            "intent_constraints": json.dumps(intent_constraints),
-            "mode": mode,
-        },
-    )
 
 
 # ---- refresh: agent + action -> row ----

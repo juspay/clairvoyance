@@ -1969,35 +1969,7 @@ class AgentTransferConfig(BaseModel):
     )
 
 
-class AgenticPaymentLimits(BaseModel):
-    """Defaults for the standing rule a rider approves. Decimal rupee strings."""
-
-    max_per_draw: Optional[str] = Field(default=None, pattern=r"^\d+\.\d{2}$")
-    max_total: Optional[str] = Field(default=None, pattern=r"^\d+\.\d{2}$")
-    max_draws: Optional[int] = Field(default=None, ge=1, le=10000)
-    validity_days: Optional[int] = Field(default=None, ge=1, le=365)
-
-
-class AgenticPaymentsConfig(BaseModel):
-    """Merchant policy for agentic (UAP) payments — read by the /uap routes.
-    Required in full (operators, seller, all four limits): the code holds
-    no defaults, a template missing any of them cannot onboard or draw."""
-
-    # AE-verified legal names of the operators the agent may pay
-    # (intent_constraints.bound_verified_names).
-    verified_names: List[str] = Field(default_factory=list)
-    limits: Optional[AgenticPaymentLimits] = None
-    # Per-ticket amounts offered in the page's limit chooser, in order.
-    limit_choices: List[str] = Field(default_factory=list)
-    # Seller on the /txns ticket cart: the operator receiving the money.
-    seller_name: Optional[str] = None
-    seller_mic: Optional[str] = None
-
-
 class ConfigurationModel(BaseModel):
-    # --- Agentic payments (UAP) — merchant policy for the /uap routes ---
-    agentic_payments: Optional[AgenticPaymentsConfig] = None
-
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
         default_factory=list,

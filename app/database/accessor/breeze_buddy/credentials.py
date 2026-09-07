@@ -95,9 +95,13 @@ async def create_credential(
     credential_type: CredentialType,
     value: Dict[str, Any],
     description: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Optional[Credential]:
     """Create a new credential with optional KMS encryption."""
-    logger.info(f"Creating credential '{name}' for merchant: {reseller_id or 'GLOBAL'}")
+    logger.info(
+        f"Creating credential '{name}' for reseller: {reseller_id or 'GLOBAL'}"
+        + (f" merchant: {merchant_id}" if merchant_id else "")
+    )
 
     try:
         # Validate value structure matches credential_type
@@ -113,6 +117,7 @@ async def create_credential(
             value=stored_value,
             is_encrypted=is_encrypted,
             description=description,
+            merchant_id=merchant_id,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -148,13 +153,15 @@ async def get_credential_by_id(
 async def get_credentials_by_merchant(
     reseller_id: Optional[str],
     mask: bool = True,
+    merchant_id: Optional[str] = None,
 ) -> List[Credential]:
     """
-    Get credentials for a merchant (includes global credentials).
-    Results ordered: global first, then merchant-specific.
+    Get the credentials a tenant can see: global, the reseller's, and —
+    when ``merchant_id`` is given — that merchant's own rows.
+    Results ordered least-specific first (global, reseller, merchant).
     """
     try:
-        query_text, values = get_credentials_by_merchant_query(reseller_id)
+        query_text, values = get_credentials_by_merchant_query(reseller_id, merchant_id)
         result = await run_parameterized_query(query_text, values)
         return decode_credential_list(result, mask=mask)
     except Exception as e:
@@ -175,13 +182,14 @@ async def get_all_credentials(mask: bool = True) -> List[Credential]:
 
 async def get_credentials_as_template_vars(
     reseller_id: str,
+    merchant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Get credentials as a flat dict for template_vars resolution.
-    Merges global + merchant-specific credentials (merchant overrides global).
+    Merges global + reseller (+ merchant when given); most specific wins.
     """
     try:
-        query_text, values = get_credentials_by_merchant_query(reseller_id)
+        query_text, values = get_credentials_by_merchant_query(reseller_id, merchant_id)
         result = await run_parameterized_query(query_text, values)
         return decode_credentials_as_dict(result)
     except Exception as e:

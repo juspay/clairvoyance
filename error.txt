@@ -1,0 +1,44 @@
+ INFO Checking project configured at `/Users/bhumika.saluja/Desktop/Developer/breeze-buddy/clairvoyance/pyproject.toml`
+ WARN Identity comparison `True is False` is always False [unnecessary-comparison]
+  --> tests/breeze_buddy/dispatch/test_leader.py:80:27
+   |
+80 |     assert L.is_leader is False
+   |                           -----
+   |
+ERROR `None` is not subscriptable [unsupported-operation]
+  --> tests/crm/test_agentic_store.py:56:12
+   |
+56 |     assert store.find_by_ref(entries, "half")["payer_avpa"] is None
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+ERROR `None` is not subscriptable [unsupported-operation]
+  --> tests/crm/test_agentic_store.py:67:12
+   |
+67 |     assert patched["status"] == "PAUSED" and patched["action_id"] is None
+   |            ^^^^^^^^^^^^^^^^^
+   |
+ERROR `None` is not subscriptable [unsupported-operation]
+  --> tests/crm/test_agentic_store.py:67:46
+   |
+67 |     assert patched["status"] == "PAUSED" and patched["action_id"] is None
+   |                                              ^^^^^^^^^^^^^^^^^^^^
+   |
+ERROR `None` is not subscriptable [unsupported-operation]
+  --> tests/crm/test_agentic_store.py:68:12
+   |
+68 |     assert patched["agent_id"] == "cont_a" and "bogus" not in patched
+   |            ^^^^^^^^^^^^^^^^^^^
+   |
+ERROR `not in` is not supported between `Literal['bogus']` and `None` [not-iterable]
+  --> tests/crm/test_agentic_store.py:68:48
+   |
+68 |     assert patched["agent_id"] == "cont_a" and "bogus" not in patched
+   |                                                ^^^^^^^^^^^^^^^^^^^^^^
+   |
+ERROR `None` is not subscriptable [unsupported-operation]
+  --> tests/crm/test_agentic_store.py:69:12
+   |
+69 |     assert store.find_by_ref(entries, "b")["action_id"] == "keep"
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+ INFO 6 errors (658 suppressed)
