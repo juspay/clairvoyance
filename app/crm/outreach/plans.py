@@ -95,7 +95,7 @@ def validate_definition(
     # walker executes from, so validator and walker cannot disagree.
     for node in definition.nodes:
         problems.extend(NODE_TYPES[node.type].validate(node, definition))
-        if node.match is not None and node.type != "wait_event":
+        if node.match is not None and not NODE_TYPES[node.type].listens:
             problems.append(
                 f"node {node.id}: match belongs to a wait_event — only a "
                 "listening square hears a letter"
@@ -158,14 +158,15 @@ def validate_definition(
             problems.append(f"edge to unknown node: {dst}")
     for src, arrows in definition.outgoing().items():
         labels = [on for _, on in arrows]
-        if node_types.get(src) == "wait_event":
+        word = node_types.get(src)
+        if word is not None and NODE_TYPES[word].branches:
             if None in labels:
-                problems.append(f"every edge out of wait_event {src} needs an on")
+                problems.append(f"every edge out of {word} {src} needs an on")
             if len(set(labels)) != len(labels):
-                problems.append(f"wait_event {src} has two edges with the same on")
+                problems.append(f"{word} {src} has two edges with the same on")
         else:
             if any(on is not None for on in labels):
-                problems.append(f"only a wait_event node may label its edges ({src})")
+                problems.append(f"only a branching node may label its edges ({src})")
             if len(arrows) > 1:
                 problems.append(f"node {src} has {len(arrows)} outgoing edges")
 

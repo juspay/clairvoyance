@@ -6,6 +6,7 @@ imported outside db/.
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from app.crm.outreach.schemas import (
+    SPLIT_PREFIX,
     CustomerRun,
     EnrollmentRun,
     WorkflowRunSummary,
@@ -49,11 +50,36 @@ def _number(value: Any) -> Optional[float]:
         return None
 
 
-def decode_run_summary(rows: Iterable[Mapping[str, Any]]) -> WorkflowRunSummary:
+def decode_split_counts(
+    rows: Iterable[Mapping[str, Any]],
+) -> Dict[str, Dict[str, int]]:
+    """Fold workflow_split_counts_query's rows into {node: {arm: count}}
+    (enh A/04). The key carries the prefix the context stores it under;
+    the report names the SQUARE, which is what an author drew. Total: a
+    row whose key is only the prefix is skipped rather than filed under
+    an empty node id."""
+    by_split: Dict[str, Dict[str, int]] = {}
+    for row in rows:
+        node_id = str(row["arm_key"] or "")[len(SPLIT_PREFIX) :]
+        arm = row["arm"]
+        if not node_id or arm is None:
+            continue
+        by_split.setdefault(node_id, {})[str(arm)] = int(row["runs"] or 0)
+    return by_split
+
+
+def decode_run_summary(
+    rows: Iterable[Mapping[str, Any]],
+    split_rows: Optional[Iterable[Mapping[str, Any]]] = None,
+) -> WorkflowRunSummary:
     """Fold workflow_summary_query's grouping-set rows into one summary.
     grouping_level 0 rows are one (status, exit_reason) each; the level-3
     row (both columns grouped away) is the whole window. Total: an empty
-    window is a zero summary, never a raise."""
+    window is a zero summary, never a raise.
+
+    ``split_rows`` is the second statement's own rows (enh A/04), optional
+    because a plan with no split square has none and a caller reading only
+    the aggregate should not have to say so."""
     runs = 0
     by_exit_reason: Dict[str, int] = {}
     open_runs = {"waiting": 0, "parked": 0}
@@ -78,4 +104,5 @@ def decode_run_summary(rows: Iterable[Mapping[str, Any]]) -> WorkflowRunSummary:
         open=open_runs,
         median_minutes_to_exit=median,
         recovered_amount=recovered,
+        by_split=decode_split_counts(split_rows or ()),
     )

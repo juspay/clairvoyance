@@ -150,7 +150,7 @@ class WorkflowNode(BaseModel):
     is no "timeout" edge."""
 
     id: str = Field(min_length=1)
-    type: Literal["wait", "send", "call", "wait_event", "action"]
+    type: Literal["wait", "send", "call", "wait_event", "action", "condition", "split"]
     minutes: Optional[float] = None
     channel: Optional[str] = None
     template: Optional[str] = None
@@ -185,12 +185,66 @@ class WorkflowNode(BaseModel):
     # posted (canon T16 col 11), and a template with two blanks handed 27
     # facts is refused by every provider.
     variables: Dict[str, str] = Field(default_factory=dict)
+    # condition only (enh A/01): the rules, judged in order; the first whose
+    # conditions all hold names the edge, none -> the mandatory `else` edge.
+    rules: List["ConditionRule"] = Field(default_factory=list)
+    # split only (enh A/04): the shares, in document order. Percents are
+    # whole and sum to 100, so every run takes exactly one arm and a split
+    # needs no `else`.
+    arms: List["SplitArm"] = Field(default_factory=list)
 
 
 # An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a
 # wait_event node ("YES", "NO", "timeout"); every other node has one plain
 # arrow.
 WorkflowEdge = Union[Tuple[str, str], Tuple[str, str, str]]
+
+
+class ConditionRule(BaseModel):
+    """One arm of a condition square (enh A/01): the edge label it names and
+    the conditions that must ALL hold for it — the door's own where-grammar
+    (shared/predicate.Condition), over the fields outreach/predicates.py
+    resolves (context.<key>, facts.<node>.<key>, customer.<column>,
+    customer.attributes.<name>). OR is two rules. `else` and `timeout` are
+    the walker's words, never a rule's."""
+
+    on: str = Field(min_length=1)
+    if_: List[Condition] = Field(alias="if", min_length=1)
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _label_is_not_a_walker_word(self) -> "ConditionRule":
+        if self.on in ("else", "timeout"):
+            raise ValueError(
+                f"a rule may not be labelled {self.on!r} — the walker owns it"
+            )
+        return self
+
+
+#: Where a split square records the arm a run took (enh A/04). Spelled on
+#: the document's own vocabulary, not inside the node, because two layers
+#: read it and neither may import the other: nodes/split.py writes the key
+#: and db/queries/enrollment.py groups the report on it.
+SPLIT_PREFIX = "split_"
+
+
+class SplitArm(BaseModel):
+    """One arm of a split square (enh A/04): the edge label it names and
+    the share of runs that take it. Whole percents only — the shares must
+    sum to 100 (nodes/split.py), which is a statement about integers, and
+    a fractional share would make it one about rounding."""
+
+    on: str = Field(min_length=1)
+    percent: int = Field(ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _label_is_not_a_walker_word(self) -> "SplitArm":
+        if self.on in ("else", "timeout"):
+            raise ValueError(
+                f"an arm may not be labelled {self.on!r} — the walker owns it"
+            )
+        return self
 
 
 class StageAction(BaseModel):
@@ -383,6 +437,10 @@ class WorkflowRunSummary(BaseModel):
     open: Dict[str, int]
     median_minutes_to_exit: Optional[float]
     recovered_amount: Optional[float]
+    # enh A/04: runs per arm of each split square, {node: {arm: count}}.
+    # Empty for every plan with no split — the experiment's own report,
+    # read from the runs themselves so there is no counter to drift.
+    by_split: Dict[str, Dict[str, int]] = Field(default_factory=dict)
 
 
 class WorkflowVersion(BaseModel):

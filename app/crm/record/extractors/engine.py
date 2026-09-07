@@ -31,13 +31,22 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 from app.crm.record.extractors import flat
 from app.crm.record.schemas import ABOUT_CUSTOMER, CatalogEntry, Extracted
 from app.crm.shared.normalize import normalize_email, normalize_phone
+from app.crm.shared.predicate import matches
 
 Deriver = Callable[[Dict[str, Any]], Any]
 
 PAYLOAD_PREFIX = "payload."
 # Small-facts cap, the same ceiling outreach applies to run context: a
 # variable is a template fill-in, never a payload photocopy.
-VARIABLE_MAX_CHARS = 256
+# Raised 256 -> 1000 on 13 Sep 2026. A formatted list may render one line
+# per element (item_numbered), and a real lending event carries three offers
+# whose lines run to ~330 characters; two credit lines with five offers
+# run to ~490. At 256 the third offer onward was cut to "+N more" and never
+# reached the call, so the customer was read fewer offers than the lender
+# made. 1000 holds ~9 full offer lines. The run-context ceiling
+# (core/config/dynamic.py, CRM_CONTEXT_VALUE_MAX_CHARS) moved with it: a
+# value that survives here must also survive the walk into the run.
+VARIABLE_MAX_CHARS = 1000
 # Roles that are handles resolve() probes on — everything but the name.
 _NORMALIZE: Dict[str, Callable[[str], Optional[str]]] = {
     "phone": normalize_phone,
@@ -72,6 +81,10 @@ class DecodeSpec:
     # type is `list` (None = the path already named one field). A name here
     # is ALSO in `variables`: one loop reads both.
     lists: Dict[str, Optional[str]] = field(default_factory=dict)
+    # placeholder -> the element filter for a `list` variable (empty = all)
+    list_filters: Dict[str, List[Any]] = field(default_factory=dict)
+    # placeholder -> render one numbered line per element (item_numbered)
+    list_numbered: Dict[str, bool] = field(default_factory=dict)
     derive: Dict[str, Deriver] = field(default_factory=dict)
     # who the letter is about — the entry's word, passed through to
     # Extracted.about so the pass knows a NULL customer is by design
@@ -85,7 +98,9 @@ def dig(node: Any, path: str) -> Any:
     """PURE: walk dots from here (a missing step -> None, never a raise).
     The ONE dot-walker: field_value walks a payload with it and the list
     reader walks each element with it, so `customer.phone` and an item's
-    `variant.title` can never mean two different things."""
+    `variant.title` can never mean two different things. It never crosses
+    a list — the where-grammar must never receive an array (sealed); only
+    a `list` field's own walk (_walk) maps over arrays."""
     for step in path.split("."):
         if not isinstance(node, dict):
             return None
@@ -93,44 +108,74 @@ def dig(node: Any, path: str) -> Any:
     return node
 
 
-def list_values(payload: Dict[str, Any], path: str) -> Optional[List[Any]]:
-    """PURE: what a declared `list` field addresses. Its path walks THROUGH
-    every array it crosses, and what it finds is flattened:
-
-        payload.tags                            the tags themselves
-        payload.line_items                      every line, whole
-        payload.line_items.title                the title of every line
-        payload.loanApplications.offers         every offer of every
-                                                application
-        payload.loanApplications.offers.rate    …and one field of each
-
-    Nesting is not a special case, it is the same step again: real letters
-    put a list inside a list (an order's applications, their offers), and a
-    path that stopped at the first array could name the application but
-    never the offer.
-
-    Flattening is the honest answer for a template blank, which is ONE
-    string: "every offer" reads as a sentence, and which application each
-    came from is a distinction a blank cannot carry anyway. A plan that
-    needs that distinction wants the application's own field beside it.
-
-    None when nothing on the path is a list — the caller then writes no
-    variable at all, rather than a half-answer."""
+def list_values(
+    payload: Dict[str, Any], path: str, item_where: Optional[List[Any]] = None
+) -> Optional[List[Any]]:
+    """PURE: what a declared `list` field addresses — its path walks THROUGH
+    every array it crosses and flattens what it finds. With ``item_where``,
+    only the elements of the FIRST array that satisfy every condition are
+    walked further: a plan that wants "the offers of the credit-line
+    applications" declares the filter on the application, and an
+    application with no offers contributes nothing. None when nothing on
+    the path is a list — the caller then writes no variable at all."""
     if not path.startswith(PAYLOAD_PREFIX):
         return None
-    found = _walk(payload, path[len(PAYLOAD_PREFIX) :].split("."))
-    return found if isinstance(found, list) else None
+    steps = path[len(PAYLOAD_PREFIX) :].split(".")
+    node: Any = payload
+    for index, step in enumerate(steps):
+        if isinstance(node, list):
+            if item_where:
+                node = [
+                    e
+                    for e in node
+                    if isinstance(e, dict) and _element_holds(e, item_where)
+                ]
+            found = _walk(node, steps[index:])
+            return found if isinstance(found, list) else None
+        if not isinstance(node, dict):
+            return None
+        node = node.get(step)
+    if isinstance(node, list) and item_where:
+        node = [
+            e for e in node if isinstance(e, dict) and _element_holds(e, item_where)
+        ]
+    return node if isinstance(node, list) else None
 
 
-def _walk(node: Any, steps: List[str]) -> Any:
+def _element_holds(element: Dict[str, Any], item_where: List[Any]) -> bool:
+    """PURE: every condition holds on this element. A field that is an empty
+    array reads as absent, so `exists` means "has at least one"."""
+
+    def lookup(field_path: str) -> Any:
+        value = dig(element, field_path)
+        return None if value == [] else value
+
+    return matches(item_where, lookup)
+
+
+def _walk(
+    node: Any, steps: List[str], inherited: Optional[Dict[str, Any]] = None
+) -> Any:
     """PURE: the value at these steps, with every array crossed on the way
     mapped over and flattened into one list. A missing step is None, never
-    a raise — a letter is not obliged to carry what a plan hopes for."""
+    a raise — a letter is not obliged to carry what a plan hopes for.
+
+    An element reached THROUGH an enclosing element inherits that parent's
+    scalar fields (its own win): an offer rendered under its application
+    can name the application's lender, so one line reads whole — "FINNABLE
+    offer LSP2f…, 6 months at 22.00 percent" — instead of two parallel
+    lists a reader has to align by position."""
     for index, step in enumerate(steps):
         if isinstance(node, list):
             found: List[Any] = []
             for element in node:
-                below = _walk(element, steps[index:])
+                scope = inherited
+                if isinstance(element, dict):
+                    scope = {
+                        **(inherited or {}),
+                        **{k: v for k, v in element.items() if isinstance(v, _SCALARS)},
+                    }
+                below = _walk(element, steps[index:], scope)
                 if isinstance(below, list):
                     found.extend(below)
                 else:
@@ -139,6 +184,8 @@ def _walk(node: Any, steps: List[str]) -> Any:
         if not isinstance(node, dict):
             return None
         node = node.get(step)
+    if isinstance(node, list) and inherited:
+        return [{**inherited, **e} if isinstance(e, dict) else e for e in node]
     return node
 
 
@@ -148,12 +195,28 @@ def render_item(element: Any, item_format: str) -> Optional[str]:
 
     Every blank must answer, or the element is SKIPPED WHOLE. A line reading
     " x2" because the title was missing is the half-formed value a provider
-    renders as corruption; better to name three items than four badly."""
+    renders as corruption; better to name three items than four badly.
+
+    A blank walks the element with the list walker, so `{offers.offer_id}`
+    on an application names that application's ids — and a blank that
+    lands on a list of plain values reads as those values, comma-joined.
+    A blank landing on an object or an empty list is missing."""
     missing = False
 
     def one(match: "re.Match[str]") -> str:
         nonlocal missing
-        found = dig(element, match.group(1))
+        found = _walk(element, match.group(1).split("."))
+        if isinstance(found, list):
+            scalars = [
+                v
+                for v in found
+                if isinstance(v, (str, int, float)) and not isinstance(v, bool)
+            ]
+            found = (
+                LIST_JOIN.join(str(v) for v in scalars)
+                if scalars and len(scalars) == len(found)
+                else None
+            )
         if isinstance(found, bool) or not isinstance(found, (str, int, float)):
             missing = True
             return ""
@@ -170,16 +233,20 @@ def join_list(
     values: Optional[List[Any]],
     item_format: Optional[str] = None,
     budget: int = VARIABLE_MAX_CHARS,
+    numbered: bool = False,
 ) -> Optional[str]:
     """PURE: the array as ONE scalar a template blank can carry.
-
     With a format each element is rendered through it; without one the
     values are already what the path named. Anything unrenderable is
     skipped, never printed as an object.
 
-    Truncated HERE, with the overflow COUNTED — a list that came out over
-    the ceiling would be dropped by the scalar gate below, and the send
-    would then park on a blank whose cause is two modules away."""
+    Comma-joined by default — a WhatsApp template parameter may carry no
+    line break. ``numbered`` (item_numbered) renders one line per element,
+    "1. …\n2. …": a call agent reads five offers as five lines and the
+    customer answers "option two", and an element's own text may contain
+    commas. Truncated HERE, with the overflow COUNTED — a list that came
+    out over the ceiling would be dropped by the scalar gate below, and
+    the send would then park on a blank whose cause is two modules away."""
     if not values:
         return None
     parts: List[str] = []
@@ -195,10 +262,16 @@ def join_list(
         )
         if text:
             parts.append(text)
-    return _joined_within(parts, budget) if parts else None
+    if not parts:
+        return None
+    if numbered:
+        return _joined_within(
+            [f"{n}. {part}" for n, part in enumerate(parts, 1)], budget, "\n"
+        )
+    return _joined_within(parts, budget, LIST_JOIN)
 
 
-def _joined_within(parts: List[str], budget: int) -> str:
+def _joined_within(parts: List[str], budget: int, separator: str = LIST_JOIN) -> str:
     """PURE: as many parts as fit, then "+N more". Every part is measured,
     the first one included — guarding that on "we kept something" let one
     long title through to a slice that cut it mid-word and took the count
@@ -207,10 +280,10 @@ def _joined_within(parts: List[str], budget: int) -> str:
     for part in parts:
         left = len(parts) - len(kept) - 1
         tail = f" +{left} more" if left else ""
-        if len(LIST_JOIN.join([*kept, part])) + len(tail) > budget:
+        if len(separator.join([*kept, part])) + len(tail) > budget:
             break
         kept.append(part)
-    text = LIST_JOIN.join(kept)
+    text = separator.join(kept)
     remaining = len(parts) - len(kept)
     if not remaining:
         return text[:budget]
@@ -270,6 +343,8 @@ def spec_for_entry(entry: CatalogEntry, derive: Dict[str, Deriver]) -> DecodeSpe
     identity: Dict[str, List[str]] = {}
     variables: Dict[str, str] = {}
     lists: Dict[str, Optional[str]] = {}
+    list_filters: Dict[str, List[Any]] = {}
+    list_numbered: Dict[str, bool] = {}
     for f in entry.fields:
         if f.deprecated:
             continue
@@ -280,12 +355,18 @@ def spec_for_entry(entry: CatalogEntry, derive: Dict[str, Deriver]) -> DecodeSpe
             variables[name] = f.path
             if f.type == LIST_TYPE:
                 lists[name] = f.item_format
+                if f.item_where:
+                    list_filters[name] = list(f.item_where)
+                if f.item_numbered:
+                    list_numbered[name] = True
             else:
                 lists.pop(name, None)
     return DecodeSpec(
         identity=identity,
         variables=variables,
         lists=lists,
+        list_filters=list_filters,
+        list_numbered=list_numbered,
         derive=dict(derive),
         about=entry.about,
     )
@@ -317,9 +398,17 @@ def extract(payload: Dict[str, Any], spec: DecodeSpec) -> Extracted:
     variables: Dict[str, Any] = {}
     for name, path in spec.variables.items():
         if name in spec.lists:
-            joined = join_list(list_values(payload, path), spec.lists[name])
-            if joined:
-                variables[name] = joined
+            joined = join_list(
+                list_values(payload, path, spec.list_filters.get(name)),
+                spec.lists[name],
+                numbered=spec.list_numbered.get(name, False),
+            )
+            # A declared list the letter cannot fill is SAID, as None: the
+            # run keeps the latest letter's word on every declared name, so
+            # an earlier letter's offers cannot outlive a letter that made
+            # none (nodes/context.run_facts drops the None before any
+            # template or payload sees it).
+            variables[name] = joined if joined else None
             continue
         value = field_value(payload, path, spec.derive)
         if isinstance(value, _SCALARS) and len(str(value)) <= VARIABLE_MAX_CHARS:

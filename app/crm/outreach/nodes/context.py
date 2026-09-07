@@ -13,7 +13,7 @@ outreach, so a word module may import it without a cycle.
 
 from typing import Any, Dict, Optional
 
-from app.crm.outreach.schemas import WorkflowNode
+from app.crm.outreach.schemas import SPLIT_PREFIX, WorkflowNode
 
 # The walker's own bookkeeping in a run's context — never a template
 # variable, never a lead payload key: pointers, the phone (re-added under
@@ -37,7 +37,11 @@ _BOOKKEEPING_KEYS = (
 # LEAVES, and the action then executes as its own square, so "the current
 # square's facts" would never be the latest stage's.
 LATEST_LETTER_KEY = "latest_letter"
-_BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_", "action_")
+# split_<node> is the arm a split square recorded (enh A/04): ours to write,
+# never a producer's — a payload key spelled `split_payment` would be counted
+# by the by_split report as an experiment, could overwrite a recorded arm,
+# and the real arm must never ride a template or a lead payload.
+_BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_", "action_", "split_")
 
 # The merchant's own id for the thing a call is about. Buddy's reporter
 # echoes lead.request_id back to the merchant as orderId on every outcome
@@ -61,6 +65,16 @@ def is_bookkeeping(key: str) -> bool:
 def reply_key(node_id: str) -> str:
     """Where a wait_event square's answer lives in the run's context."""
     return f"reply_{node_id}"
+
+
+def split_key(node_id: str) -> str:
+    """Where a split square's arm lives, for good (enh A/04).
+
+    Beside ``reply_key`` because they are written together and cleared
+    apart: the reply is spent when the token leaves the square, and this
+    one is not — a report groups runs by arm days later, and an
+    experiment that forgets which arm a run took is not an experiment."""
+    return f"{SPLIT_PREFIX}{node_id}"
 
 
 def without_reply(context: Dict[str, Any], node_id: str) -> Dict[str, Any]:
@@ -120,7 +134,10 @@ def run_facts(
         facts["current_node"] = node.id
         if node.stage:
             facts["current_stage"] = node.stage
-    return facts
+    # A None is a letter saying "nothing here now" (the extractor's word for
+    # a declared list it could not fill): it has done its job by shadowing
+    # an older value above, and no template or payload ever sees it.
+    return {key: value for key, value in facts.items() if value is not None}
 
 
 def send_variables(
@@ -147,6 +164,17 @@ def send_variables(
             raise ValueError(
                 f"mapped fact {fact!r} is {type(value).__name__}, not text — "
                 "a template blank needs text or a number"
+            )
+        if isinstance(value, str) and ("\n" in value or "\r" in value):
+            # A template parameter may carry no line break (Meta refuses the
+            # send). A numbered list (record's item_numbered) renders one
+            # line per element for a CALL to read aloud; mapped into a
+            # message it parks here, by name, rather than failing two
+            # modules away at the provider.
+            raise ValueError(
+                f"mapped fact {fact!r} carries a line break — a template "
+                "blank is one line; declare the list without item_numbered "
+                "for a message"
             )
         variables[blank] = value
     return variables

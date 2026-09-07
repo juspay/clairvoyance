@@ -33,6 +33,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
+from app.crm.outreach.nodes import NODE_TYPES
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
     is_bookkeeping,
@@ -246,7 +247,7 @@ async def _wake_on_reply(
         **_context_from_payload(variables or {}, max_chars),
     }
     for node in definition.nodes:
-        if node.type != "wait_event" or event.topic not in node.topics:
+        if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
             continue
         if not _is_about(node, event, run):
             continue  # another run's letter (phase 18): not this square's
@@ -273,6 +274,30 @@ async def _wake_on_reply(
             node.id,
             {reply_key(node.id): answer, LATEST_LETTER_KEY: node.id},
             facts,
+        )
+    # The run may be standing on a square that listens to NOTHING: the
+    # door's start square before the walker's first visit (a condition, a
+    # call), or an immediate square a walk parked on. Every resume above
+    # then matched no row, and a second event two seconds behind the first
+    # was silently lost. The letter has no square to answer, but it is
+    # still the newest word: its facts refresh the run at the top level and
+    # re-arm it, so the visit decides on THIS letter — the latest letter
+    # decides, never an earlier one. Judged through the same lens as a
+    # square's reply (a listening square of this plan would have taken it:
+    # its topic, its match, its key), so a letter the squares would ignore
+    # is ignored here too.
+    current = next((n for n in definition.nodes if n.id == run.current_node), None)
+    if current is None or NODE_TYPES[current.type].listens:
+        return
+    if any(
+        NODE_TYPES[n.type].listens
+        and event.topic in n.topics
+        and _is_about(n, event, run)
+        and _answer_for(n, event) is not None
+        for n in definition.nodes
+    ):
+        await enrollment_accessor.refresh_run_facts(
+            run.merchant_id, str(run.id), current.id, facts
         )
 
 
@@ -304,7 +329,7 @@ def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
     keys; None when the square is not listening for the topic, or the
     field is missing (B1). The ONE definition of "this letter is this
     square's answer": the wake and the repeat refusal below both ask it."""
-    if node.type != "wait_event" or event.topic not in node.topics:
+    if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
         return None
     answer = (
         event.topic
@@ -402,8 +427,10 @@ def _context_from_payload(payload: dict, max_chars: int) -> dict:
     for key, value in payload.items():
         if is_bookkeeping(key):
             continue  # ours to write, never a producer's
-        if not isinstance(value, (str, int, float, bool)):
+        if value is not None and not isinstance(value, (str, int, float, bool)):
             continue  # nested objects/lists stay on the event row
+        # None passes: it is the extractor's "declared, but this letter has
+        # nothing" — the value that lets the latest letter CLEAR a fact.
         if len(str(value)) > max_chars:
             continue
         context[key] = value

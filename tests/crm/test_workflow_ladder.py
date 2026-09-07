@@ -450,3 +450,23 @@ def test_a_keyed_ladder_listens_only_for_letters_about_its_own_key() -> None:
     unkeyed = expand_stages({k: v for k, v in _ladder().items() if k != "key"})
     assert all("match" not in node for node in unkeyed["nodes"])
     assert validate_definition(keyed) == [] and validate_definition(unkeyed) == []
+
+
+def test_the_latest_letter_clears_a_fact_it_declares_but_cannot_fill() -> None:
+    """The founding letter carried offers; the latest letter's square holds
+    `offers: None` (the extractor's word for a declared list with no
+    survivor). The run reads no offers — the older ones must not outlive
+    the letter that made none — and no None ever reaches a template."""
+    context = {
+        "offers": "1. FINNABLE offer A",
+        "loan_state": "CLA",
+        "facts": {"quiet-30m": {"offers": None, "loan_state": "KYC_COMPLETED"}},
+        "latest_letter": "quiet-30m",
+    }
+    facts = run_facts(context)
+    assert "offers" not in facts
+    assert facts["loan_state"] == "KYC_COMPLETED"
+    assert "facts_quiet-30m_offers" not in facts
+    # a run whose latest letter DID fill it still reads it
+    context["facts"]["quiet-30m"]["offers"] = "1. BUNNABLE offer B"
+    assert run_facts(context)["offers"] == "1. BUNNABLE offer B"

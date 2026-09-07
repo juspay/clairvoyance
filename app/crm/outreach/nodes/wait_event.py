@@ -16,11 +16,8 @@ TOPIC_KEY = "$topic"
 # the label of the arrow a timeout takes. The validator's edge laws, the
 # walker's pick_next and the ladder's expansion all spell it from here.
 TIMEOUT = "timeout"
-# The catch-all arrow out of a wait_event (rollout phase 18): any answer
-# the square did not name — a call's outcome after it connected is the
-# buddy template's own word, unknowable to the plan — and the alarm too
-# when there is no timeout arrow. A named arrow always wins over it.
-ELSE = "else"
+# The catch-all arrow, ELSE, is walker vocabulary shared with the condition
+# square and the walker: it lives in nodes/spec.py beside NodeParked.
 
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:

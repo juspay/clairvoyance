@@ -17,6 +17,15 @@ Execute = Callable[
 ]
 
 
+# The catch-all arrow out of a branching square (rollout phase 18): any
+# answer the square did not name — a call's outcome after it connected is
+# the buddy template's own word, unknowable to the plan — and a wait's
+# alarm when there is no timeout arrow; a condition's "no rule held". A
+# named arrow always wins over it. Shared walker vocabulary, so it lives
+# here beside NodeParked rather than inside one word's file.
+ELSE = "else"
+
+
 class NodeParked(Exception):
     """A deterministic execution failure: parking is the honest outcome
     (a missing template, a module not yet deployed). Transient failures
@@ -32,3 +41,10 @@ class NodeSpec:
     validate: Validate
     execute: Optional[Execute]
     is_wait: bool
+    # enh A/01, N1 retired: nothing outside the registry matches a type
+    # string. `branches`: the square's edges carry labels and pick_next
+    # reads its answer from reply_<node> (wait_event, condition).
+    # `listens`: the square hears a letter — the entry consumer wakes it
+    # and `match` belongs to it (wait_event only).
+    branches: bool = False
+    listens: bool = False

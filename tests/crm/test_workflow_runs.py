@@ -146,20 +146,31 @@ def test_the_current_squares_facts_win_and_every_squares_stay_reachable() -> Non
 
 
 def test_send_variables_refuse_what_a_provider_cannot_render() -> None:
-    """A bool or a None posted as a variable makes the WhatsApp face refuse
-    the message terminally — so a MAPPED one parks the run here, by name,
-    instead of posting it. The call payload is not narrowed — the lead
-    machine spells its own."""
+    """A bool posted as a variable makes the WhatsApp face refuse the
+    message terminally — so a MAPPED one parks the run here, by name,
+    instead of posting it. A None is a fact the latest letter CLEARED
+    (the extractor's word for a declared list it could not fill): run_facts
+    never shows it, so a mapping that names it parks as absent, by name.
+    The call payload is not narrowed — the lead machine spells its own."""
     context = {"name": "Priya", "amount": 1999, "vip": True, "note": None, "score": 4.5}
     assert send_variables({"1": "name", "2": "amount", "3": "score"}, context) == {
         "1": "Priya",
         "2": 1999,
         "3": 4.5,
     }
-    for fact in ("vip", "note"):
-        with pytest.raises(ValueError, match=fact):
-            send_variables({"1": fact}, context)
-    assert run_facts(context)["vip"] is True
+    with pytest.raises(ValueError, match="vip"):
+        send_variables({"1": "vip"}, context)
+    # A numbered list (item_numbered) is one line per element, for a call
+    # to read aloud; a template parameter may carry no line break, so a
+    # mapping that names it parks here rather than at the provider.
+    numbered = {**context, "offers": "1. FINNABLE offer A\n2. FINNABLE offer B"}
+    with pytest.raises(ValueError, match="line break"):
+        send_variables({"1": "offers"}, numbered)
+    assert run_facts(numbered)["offers"].count("\n") == 1  # the call still reads it
+    with pytest.raises(KeyError, match="note"):
+        send_variables({"1": "note"}, context)
+    facts = run_facts(context)
+    assert facts["vip"] is True and "note" not in facts
 
 
 def test_the_latest_letters_facts_win_when_the_square_that_heard_it_is_behind() -> None:

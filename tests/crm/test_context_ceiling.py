@@ -75,15 +75,15 @@ async def test_the_ceiling_is_read_once_per_window_not_once_per_letter(
     is a Redis GET per event on the busiest worker in the system, for a
     value that changes about once a year."""
     calls: list = []
-    _stored(monkeypatch, 512, calls)
+    _stored(monkeypatch, 1200, calls)
 
     for _ in range(50):
-        assert await dynamic.CRM_CONTEXT_VALUE_MAX_CHARS() == 512
+        assert await dynamic.CRM_CONTEXT_VALUE_MAX_CHARS() == 1200
     assert len(calls) == 1, calls
 
     # The window is what makes it live rather than static: when it lapses,
     # the next letter sees the operator's new value.
     dynamic._context_value_cache = None
-    _stored(monkeypatch, 900, calls)
-    assert await dynamic.CRM_CONTEXT_VALUE_MAX_CHARS() == 900
+    _stored(monkeypatch, 1500, calls)
+    assert await dynamic.CRM_CONTEXT_VALUE_MAX_CHARS() == 1500
     assert len(calls) == 2, calls

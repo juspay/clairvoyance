@@ -16,6 +16,19 @@ def test_registry_and_schema_literal_speak_the_same_words() -> None:
     assert set(NODE_TYPES) == _literal_words()
 
 
+def test_branches_and_listens_are_the_registrys_answers() -> None:
+    """N1 retired (enh A/01): nothing matches a type string. `branches`
+    is true for the squares whose edges carry labels (wait_event,
+    condition, split — enh A/04); `listens` only for the one that hears a
+    letter."""
+    assert {w for w, s in NODE_TYPES.items() if s.branches} == {
+        "wait_event",
+        "condition",
+        "split",
+    }
+    assert {w for w, s in NODE_TYPES.items() if s.listens} == {"wait_event"}
+
+
 def test_a_wait_has_no_action_and_an_action_is_not_a_wait() -> None:
     # is_wait and execute are two views of one fact: landing on a wait IS
     # the action (the alarm); every other type must do something.
@@ -35,6 +48,8 @@ def test_is_wait_answers_for_every_word() -> None:
         "send": False,
         "call": False,
         "action": False,
+        "condition": False,
+        "split": False,
     }
 
 
@@ -57,7 +72,17 @@ def test_the_package_init_exports_the_registry_and_nothing_else() -> None:
         # the word modules and the siblings are attributes of any package
         # once imported; only NAMES the init defines or re-exports count
         and name
-        not in {"action", "call", "send", "wait", "wait_event", "context", "spec"}
+        not in {
+            "action",
+            "call",
+            "condition",
+            "send",
+            "split",
+            "wait",
+            "wait_event",
+            "context",
+            "spec",
+        }
         and name not in {"Dict", "WorkflowNode"}
     }
     assert exported == set(), f"__init__ grew a re-export: {sorted(exported)}"

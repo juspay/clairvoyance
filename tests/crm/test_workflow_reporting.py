@@ -24,6 +24,7 @@ from app.crm.outreach.db.decoders.enrollment import (
 from app.crm.outreach.db.queries.enrollment import (
     cancel_run_query,
     customer_runs_query,
+    workflow_split_counts_query,
     workflow_summary_query,
 )
 from app.crm.outreach.nodes.context import run_facts
@@ -132,6 +133,38 @@ def test_decoder_is_total_on_an_empty_window() -> None:
     assert summary.runs == 0 and summary.open == {"waiting": 0, "parked": 0}
     assert summary.by_exit_reason == {} and summary.median_minutes_to_exit is None
     assert summary.recovered_amount is None
+    assert summary.by_split == {}
+
+
+def test_the_arm_counts_are_their_own_statement_over_the_same_window() -> None:
+    """enh A/04. Folded into the grouping sets above, a run standing on two
+    split squares would expand to two rows and count twice, so `runs` would
+    quietly inflate. The keys come from the runs' context, never from the
+    document, so no version read is owed."""
+    query, values = workflow_split_counts_query(
+        "m1", "wf-1", datetime(2026, 9, 1, tzinfo=timezone.utc), None
+    )
+    assert "jsonb_each_text" in query
+    assert "e.merchant_id = $1" in query and "e.workflow_id = $2" in query
+    assert "fact.key LIKE $5" in query
+    assert "GROUP BY fact.key, fact.value" in query
+    assert values[0] == "m1" and values[-1] == "split_%"
+
+
+def test_decoder_names_the_square_an_author_drew() -> None:
+    rows = [
+        {"arm_key": "split_experiment", "arm": "control", "runs": 71},
+        {"arm_key": "split_experiment", "arm": "discount", "runs": 29},
+        {"arm_key": "split_second-test", "arm": "A", "runs": 12},
+        # Total: neither of these is a square's arm.
+        {"arm_key": "split_", "arm": "orphan", "runs": 9},
+        {"arm_key": "split_experiment", "arm": None, "runs": 3},
+    ]
+    summary = decode_run_summary([], rows)
+    assert summary.by_split == {
+        "experiment": {"control": 71, "discount": 29},
+        "second-test": {"A": 12},
+    }
 
 
 def test_decoder_carries_the_plan_name_on_a_customer_run() -> None:
