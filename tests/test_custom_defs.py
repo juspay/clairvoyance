@@ -19,6 +19,10 @@ from app.ai.voice.agents.breeze_buddy.chat.ui.custom_defs import (
     summarize_custom_render,
     validate_registration,
 )
+from app.ai.voice.agents.breeze_buddy.chat.ui.render_ui_tool import (
+    execute_render_ui,
+    render_ui_components,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     CustomComponentDef,
     CustomComponentFlags,
@@ -106,6 +110,47 @@ class TestRegistrationGuards:
             render_def=None,
         )
         assert any("overlay_only requires a render_def" in e for e in errors)
+
+    def test_model_renderable_filters_overlay_only(self):
+        from app.ai.voice.agents.breeze_buddy.chat.custom_components import (
+            model_renderable,
+        )
+        from app.ai.voice.agents.breeze_buddy.template.types import (
+            CustomComponentDef,
+            CustomComponentFlags,
+        )
+
+        defs = {
+            "JourneyOptions": CustomComponentDef(
+                name="JourneyOptions", props_schema={}, render_def={"type": "col"}
+            ),
+            "JourneyDetail": CustomComponentDef(
+                name="JourneyDetail",
+                props_schema={},
+                render_def={"type": "col"},
+                flags=CustomComponentFlags(overlay_only=True),
+            ),
+        }
+        assert set(model_renderable(defs)) == {"JourneyOptions"}
+
+    def test_model_renderable_filters_render_def_less(self):
+        """A def without a render_def never ships on the widget wire, so it
+        must not be offered to the model either — or the model can persist
+        a ui_op the widget cannot paint."""
+        from app.ai.voice.agents.breeze_buddy.chat.custom_components import (
+            model_renderable,
+        )
+        from app.ai.voice.agents.breeze_buddy.template.types import (
+            CustomComponentDef,
+        )
+
+        defs = {
+            "Renderable": CustomComponentDef(
+                name="Renderable", props_schema={}, render_def={"type": "col"}
+            ),
+            "BackendOnly": CustomComponentDef(name="BackendOnly", props_schema={}),
+        }
+        assert set(model_renderable(defs)) == {"Renderable"}
 
     @pytest.mark.parametrize("bad", ["journeyOptions", "J", "Has Spaces", "x" * 70])
     def test_name_must_be_pascal_case(self, bad):
@@ -322,3 +367,72 @@ class TestResolveCustomShowOp:
         assert summary["rendered"] == "JourneyOptions"
         assert summary["count"] == 3
         assert summary["journeys"][0]["id"] == "j1"
+
+
+# ---------------------------------------------------------------------------
+# LLM surface: enum joining + execute routing + isolation
+# ---------------------------------------------------------------------------
+
+
+class TestRenderUiSurface:
+    def test_custom_names_join_enum_v2_only(self):
+        allow = {"QuickReplies", "JourneyOptions"}
+        assert "JourneyOptions" in render_ui_components(
+            allow, True, custom_components={"JourneyOptions"}
+        )
+        # v1 session: customs pruned along with every data-bound component
+        assert "JourneyOptions" not in render_ui_components(
+            allow, False, custom_components={"JourneyOptions"}
+        )
+
+    def test_execute_routes_custom(self):
+        store = store_with("search_journeys", {"journeys": JOURNEYS})
+        defs = {"JourneyOptions": journey_def()}
+        outcome = execute_render_ui(
+            {
+                "component": "JourneyOptions",
+                "bind": [
+                    {"prop": "journeys", "ref": "$tool:search_journeys#/journeys"}
+                ],
+            },
+            store=store,
+            allowlist={"JourneyOptions"},
+            components=["JourneyOptions"],
+            op_id="root",
+            custom_defs=defs,
+        )
+        assert outcome.decision == "rendered"
+        assert outcome.ops[0]["type"] == "JourneyOptions"
+        assert outcome.fn_result["count"] == 3
+
+    def test_execute_requires_bind_for_custom(self):
+        outcome = execute_render_ui(
+            {"component": "JourneyOptions"},
+            store=BindingStore(),
+            allowlist={"JourneyOptions"},
+            components=["JourneyOptions"],
+            op_id="root",
+            custom_defs={"JourneyOptions": journey_def()},
+        )
+        assert outcome.fn_result["status"] == "error"
+        assert "data-bound" in outcome.fn_result["error"]
+
+    def test_two_merchant_isolation(self):
+        """A session without the def treats the component as unknown even
+        when another session on the same worker carries it."""
+        store = store_with("search_journeys", {"journeys": JOURNEYS})
+        outcome = execute_render_ui(
+            {
+                "component": "JourneyOptions",
+                "bind": [
+                    {"prop": "journeys", "ref": "$tool:search_journeys#/journeys"}
+                ],
+            },
+            store=store,
+            allowlist={"QuickReplies"},
+            components=["QuickReplies"],  # other merchant's enum
+            op_id="root",
+            custom_defs={},  # no overlay on THIS session
+        )
+        assert outcome.fn_result["status"] == "error"
+        assert "unknown component" in outcome.fn_result["error"]
