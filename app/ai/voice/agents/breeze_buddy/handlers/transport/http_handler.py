@@ -19,6 +19,7 @@ Uses the same resolution pattern as hooks:
 - {placeholder} resolution in http_request config
 """
 
+import asyncio
 import json
 from typing import Any, Dict, Optional, Tuple
 
@@ -36,9 +37,69 @@ from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FieldSource,
     GlobalHttpFunction,
+    HttpRequestConfig,
+    RetryUntilConfig,
     SseResponseMode,
 )
 from app.core.logger import logger
+
+
+def _is_ready(body: str, cfg: RetryUntilConfig) -> bool:
+    """True when polling should STOP: ``cfg.field`` equals ``cfg.equals``, or
+    the body cannot be judged (unparseable, non-dict, field missing)."""
+    try:
+        current: Any = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return True
+    for key in cfg.field.split("."):
+        if not isinstance(current, dict) or key not in current:
+            return True
+        current = current[key]
+    return bool(current == cfg.equals)
+
+
+async def _poll_until_ready(
+    executor: HttpRequestExecutor,
+    http_request: HttpRequestConfig,
+    resolved_fields: Dict[str, Any],
+    sse_forwarder: Any,
+    first: Optional[Tuple[int, str]],
+    function_name: str,
+) -> Optional[Tuple[int, str]]:
+    """Re-issue a poll-until-ready request until ``retry_until`` holds.
+
+    Polls run without the executor's inner transport retries; a failed poll
+    ends the loop and the last successful body is returned. Non-SSE 2xx only.
+    """
+    cfg = http_request.retry_until
+    result = first
+    if cfg is None or sse_forwarder.chunks:
+        return result
+    poll = http_request.model_copy(update={"max_retries": 1})
+    for attempt in range(2, cfg.max_attempts + 1):
+        if not result or result == (0, "") or not 200 <= result[0] < 300:
+            break
+        if _is_ready(result[1], cfg):
+            break
+        logger.info(
+            f"[{function_name}] retry_until: {cfg.field!r} not ready - attempt "
+            f"{attempt}/{cfg.max_attempts} after {cfg.delay_ms}ms"
+        )
+        await asyncio.sleep(cfg.delay_ms / 1000)
+        polled = await executor.execute(
+            config=poll,
+            resolved_fields=resolved_fields,
+            fire_and_forget=False,
+            on_sse_event=sse_forwarder,
+        )
+        if not polled or polled == (0, "") or not 200 <= polled[0] < 300:
+            logger.warning(
+                f"[{function_name}] retry_until: poll attempt {attempt} failed; "
+                "keeping the last successful response"
+            )
+            break
+        result = polled
+    return result
 
 
 async def http_function_handler(
@@ -142,6 +203,18 @@ async def http_function_handler(
             fire_and_forget=False,
             on_sse_event=sse_forwarder,
         )
+
+        # Step 4b: poll-until-ready re-request (RetryUntilConfig) - only the
+        # final body continues down the pipeline.
+        if config.http_request.retry_until is not None:
+            result = await _poll_until_ready(
+                executor,
+                config.http_request,
+                resolved_fields,
+                sse_forwarder,
+                result,
+                function_name,
+            )
 
         # Step 5: Handle response
         if result is None or result == (0, ""):
