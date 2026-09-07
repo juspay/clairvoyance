@@ -18,11 +18,14 @@ from app.crm.identity.db.decoder import (
 )
 from app.crm.identity.db.queries import (
     apply_handles_query,
+    find_customer_by_attribute_query,
     get_customer_query,
     insert_customer_query,
     list_customers_query,
     merge_customer_query,
     probe_customer_query,
+    select_attributes_by_id_query,
+    select_attributes_for_update_by_id_query,
     select_attributes_for_update_query,
     update_attributes_query,
 )
@@ -107,3 +110,24 @@ async def update_attributes(
         merchant_id, customer_id, attributes_json, materialized
     )
     await conn.execute(query, *values)
+
+
+async def fetch_attributes_by_id(customer_id: str) -> Optional[asyncpg.Record]:
+    query, values = select_attributes_by_id_query(customer_id)
+    async with crm_connection() as conn:
+        return await conn.fetchrow(query, *values)
+
+
+async def fetch_attributes_for_update_by_id(
+    conn: asyncpg.Connection, customer_id: str
+) -> Optional[asyncpg.Record]:
+    query, values = select_attributes_for_update_by_id_query(customer_id)
+    return await conn.fetchrow(query, *values)
+
+
+async def find_customer_by_attribute(
+    key: str, fragment: str
+) -> Optional[asyncpg.Record]:
+    query, values = find_customer_by_attribute_query(key, fragment)
+    async with crm_connection() as conn:
+        return await conn.fetchrow(query, *values)

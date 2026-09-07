@@ -154,3 +154,47 @@ def update_attributes_query(
         WHERE merchant_id = $1 AND id = $2
     """
     return query, values
+
+
+# ---- attributes as a keyed store (used by other modules via contracts) ----
+# Other modules may keep per-customer state under ONE key of ``attributes``
+# (agentic keeps its onboarding attempts under "agents"). They never touch
+# crm_customer themselves: these builders + identity.attributes are the door.
+
+
+def select_attributes_by_id_query(customer_id: str) -> Tuple[str, List[Any]]:
+    """Merchant-less read: callers holding only a customer id (the poll and
+    webhook paths carry our per-attempt refs, which embed it)."""
+    query = f"""
+        SELECT id, merchant_id, attributes FROM {CRM_CUSTOMER_TABLE}
+        WHERE id = $1::uuid
+    """
+    return query, [customer_id]
+
+
+def select_attributes_for_update_by_id_query(
+    customer_id: str,
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        SELECT id, merchant_id, attributes FROM {CRM_CUSTOMER_TABLE}
+        WHERE id = $1::uuid
+        FOR UPDATE
+    """
+    return query, [customer_id]
+
+
+def find_customer_by_attribute_query(key: str, fragment: str) -> Tuple[str, List[Any]]:
+    """The customer whose ``attributes -> key`` contains ``fragment`` (jsonb
+    ``@>``; for an array key, "an element with these fields"). For the rare
+    lookups that carry no customer id (a Juspay agent_id).
+
+    Written as containment on the WHOLE document — ``attributes @>
+    {key: fragment}`` — so the jsonb_path_ops GIN index on attributes (added with the agentic module)
+    serves it; ``attributes -> key @> fragment`` would be a table scan."""
+    query = f"""
+        SELECT id, merchant_id, attributes FROM {CRM_CUSTOMER_TABLE}
+        WHERE attributes @> jsonb_build_object($1::text, $2::jsonb)
+        ORDER BY updated_at DESC
+        LIMIT 1
+    """
+    return query, [key, fragment]
