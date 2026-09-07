@@ -7,7 +7,7 @@ analytics over voice + chat use the same field semantics.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -541,6 +541,14 @@ class WidgetSurfaceWire(BaseModel):
     )
     enable_text_input: bool = Field(
         True, description="False hides the composer (pills/tiles only)."
+    )
+    response_reveal: Literal["stream", "complete"] = Field(
+        "stream",
+        description=(
+            "'stream' (default) = typewriter reveal as tokens arrive; "
+            "'complete' = typing indicator until the reply finalizes, then "
+            "the full message at once. Presentation-only — SSE still streams."
+        ),
     )
     voice_enabled: bool = Field(
         False,
