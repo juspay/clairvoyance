@@ -116,6 +116,8 @@ async def _consume_queue() -> None:
 
 
 async def _evaluate(job: ConversationEvaluationJob) -> None:
+    # Only post-conversation evaluation types belong in this worker. Real-time
+    # Guardrails use the same config table but execute inside the voice pipeline.
     evaluations = await get_enabled_evaluations(str(job.template_id))
     if not evaluations:
         return

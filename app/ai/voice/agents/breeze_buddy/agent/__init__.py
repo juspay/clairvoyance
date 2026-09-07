@@ -12,7 +12,7 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import (
@@ -54,6 +54,26 @@ from app.ai.voice.agents.breeze_buddy.agent.utils import (
     send_initial_greeting_daily,
 )
 from app.ai.voice.agents.breeze_buddy.chat.voice_bridge import WidgetVoiceBridge
+from app.ai.voice.agents.breeze_buddy.guardrails.config import (
+    load_guardrail_config,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.evaluator import (
+    GuardrailCoordinator,
+    GuardrailDecision,
+    GuardrailInitializationError,
+    GuardrailVerdict,
+    build_guardrail_coordinator,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.focus import is_focus_enabled
+from app.ai.voice.agents.breeze_buddy.guardrails.metrics import (
+    GuardrailMetricsDirection,
+    GuardrailSessionMetrics,
+    resolve_session_metrics,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.results import (
+    persist_guardrail_metrics,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.types import GuardrailsConfig
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
@@ -180,6 +200,12 @@ class Agent:
         self.lead: Optional[LeadCallTracker] = None
         self.root_span: Any = None
         self.flow_manager: Optional[FlowManager] = None
+        self.guardrail_coordinator: Optional[GuardrailCoordinator] = None
+        self.guardrails = GuardrailsConfig()
+        self.guardrail_session_metrics: Dict[str, GuardrailSessionMetrics] = {}
+        # Opaque live-context marker -> original blocked caller text. The main
+        # LLM sees only the marker; end_conversation restores the audit record.
+        self.guardrail_transcript_redactions: Dict[str, str] = {}
         self.conversation_id: Optional[str] = None
 
         # Template configuration
@@ -427,6 +453,12 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            if not self.is_stream_mode:
+                self.guardrails = await load_guardrail_config(
+                    str(self.template.id),
+                    self.configurations,
+                    supported_channels=list(self.template.supported_channels),
+                )
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
@@ -637,6 +669,11 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            self.guardrails = await load_guardrail_config(
+                str(self.template.id),
+                self.configurations,
+                supported_channels=list(self.template.supported_channels),
+            )
         except ValueError as e:
             error_msg = f"Template loading failed: {str(e)}"
             logger.error(error_msg)
@@ -1158,6 +1195,7 @@ class Agent:
             has_greeting_source=bool(self.greeting_source),
             greeting_text=self.greeting_text,
             kb_text=kb_text,
+            focus_enabled=is_focus_enabled(self.guardrails),
         )
 
         # Agent-to-agent transfer: seed the incoming generation's initial node
@@ -1185,6 +1223,29 @@ class Agent:
         initial_node_name = self.flow_config["initial_node"]
         context = TemplateContext(self)
         context.record_node_entry(initial_node_name)
+
+        # With Focus enabled, FlowManager's asynchronous context update leaves
+        # a narrow window where an early greeting interruption could overtake
+        # the policy. Seed the exact same initial messages directly first. The
+        # disabled path intentionally retains the original FlowManager-only
+        # initialization behavior.
+        focus_enabled = is_focus_enabled(self.guardrails)
+        if self.context is not None and focus_enabled:
+            initial_messages = cast(
+                list[LLMContextMessage],
+                list(initial_node_config.get("role_messages", [])),
+            )
+            initial_messages.extend(
+                cast(
+                    list[LLMContextMessage],
+                    list(initial_node_config.get("task_messages", [])),
+                )
+            )
+            self.context.set_messages(initial_messages)
+            logger.info(
+                "Installed initial LLM context directly before FlowManager "
+                f"initialization: messages={len(initial_messages)}"
+            )
 
         await self.flow_manager.initialize(initial_node_config)
         logger.info(f"FlowManager initialized at node: {initial_node_name}")
@@ -1385,6 +1446,11 @@ class Agent:
         self._kb_processor = None
         self._kb_text_task = None
         is_realtime_llm = stt is None and tts is None and llm is not None
+        if not await self._initialize_guardrails(
+            is_stream=is_stream,
+            is_realtime_llm=is_realtime_llm,
+        ):
+            return
         if not is_stream:
             self.kb_runtime = await resolve_kb_runtime(self.configurations)
         if self.kb_runtime:
@@ -1419,6 +1485,8 @@ class Agent:
             ),
             mode="stream" if is_stream else "agent",
             kb_processor=self._kb_processor,
+            guardrail_coordinator=self.guardrail_coordinator,
+            focus_enabled=is_focus_enabled(self.guardrails),
         )
         self._context_aggregator = context_aggregator
 
@@ -1557,6 +1625,87 @@ class Agent:
             if self._observer_manager:
                 await self._observer_manager.stop()
                 self._observer_manager = None
+            self.guardrail_coordinator = None
+
+    async def _initialize_guardrails(
+        self, *, is_stream: bool, is_realtime_llm: bool
+    ) -> bool:
+        """Initialize custom guardrails, ending the call safely on failure."""
+        self.guardrail_coordinator = None
+        guardrails = self.guardrails
+        if is_stream or guardrails is None:
+            return True
+
+        metrics: Optional[GuardrailSessionMetrics] = None
+        metrics_key: Optional[str] = None
+        config_id = guardrails.evaluation_config_id
+        if config_id is not None and self.template is not None:
+            revision = guardrails.configuration_revision or f"legacy:{config_id}"
+            metrics_key = f"{config_id}:{revision}"
+            metrics = resolve_session_metrics(
+                guardrails,
+                template_id=str(self.template.id),
+                channel="VOICE",
+                existing=self.guardrail_session_metrics.get(metrics_key),
+            )
+            if metrics is not None:
+                self.guardrail_session_metrics[metrics_key] = metrics
+
+        if is_realtime_llm or not guardrails.has_enabled_custom_guardrails():
+            return True
+
+        try:
+            self.guardrail_coordinator = await build_guardrail_coordinator(
+                guardrails,
+                transcript_redactions=self.guardrail_transcript_redactions,
+                metrics=metrics,
+                initial_turn_number=(metrics.last_turn_number if metrics else 0),
+            )
+            return True
+        except GuardrailInitializationError as exc:
+            error_msg = str(exc)
+            logger.error(error_msg, exc_info=True)
+            track_error(self.errors, error_msg)
+            self.conversation_ended = True
+            if metrics is not None:
+                direction = cast(
+                    GuardrailMetricsDirection,
+                    (
+                        "input"
+                        if guardrails.input is not None and guardrails.input.enabled
+                        else "output"
+                    ),
+                )
+                metrics.record(
+                    direction,
+                    GuardrailVerdict(
+                        GuardrailDecision.BLOCK,
+                        reason="guardrail evaluation unavailable",
+                        evaluation_failed=True,
+                    ),
+                    metrics.last_turn_number + 1,
+                )
+                if self.lead is not None:
+                    started_at = self.lead.call_initiated_time or self.lead.created_at
+                    if started_at is not None:
+                        await persist_guardrail_metrics(
+                            metrics,
+                            source_id=str(self.lead.id),
+                            reseller_id=self.lead.reseller_id,
+                            merchant_id=self.lead.merchant_id,
+                            started_at=started_at,
+                        )
+                        if metrics_key is not None:
+                            self.guardrail_session_metrics.pop(metrics_key, None)
+            if self.completion_function and self.lead:
+                await end_call_with_errors(
+                    lead=self.lead,
+                    errors=self.errors,
+                    completion_function=self.completion_function,
+                    transport_type=self.transport_type,
+                    call_sid=self.call_sid,
+                )
+            return False
 
     # ══════════════════════════════════════════════════════════════════════
     # Cleanup

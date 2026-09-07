@@ -6,6 +6,9 @@ from pipecat.services.azure.llm import AzureLLMService
 from pipecat_flows import FlowManager, NodeConfig
 from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
 
+from app.ai.voice.agents.breeze_buddy.guardrails.focus import (
+    inject_focus_guardrail,
+)
 from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
     build_kb_system_message,
 )
@@ -162,6 +165,7 @@ def prepare_initial_node(
     has_greeting_source: bool,
     greeting_text: Optional[str] = None,
     kb_text: Optional[str] = None,
+    focus_enabled: bool = False,
 ) -> NodeConfig:
     """Prepare the initial node configuration with language injection.
 
@@ -193,6 +197,9 @@ def prepare_initial_node(
         lead_payload.get("language_name", "English"),
         getattr(configurations, "payload_based_language_selection", False),
     )
+    if focus_enabled:
+        role_messages = inject_focus_guardrail(role_messages, enabled=True)
+        logger.info("Injected platform Focus guardrail into initial LLM context")
 
     if kb_text and configurations and configurations.knowledge_base:
         role_messages = list(role_messages or []) + [

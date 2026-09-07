@@ -66,6 +66,10 @@ from app.core.logger import logger
 # traces, refine_ui hints, eval breadcrumbs tomorrow) rides on the
 # canonical content_blocks pipe without leaking onto the user's screen.
 VISIBILITY_INTERNAL = "internal"
+# A display-only block takes the opposite path: widget transcripts retain it,
+# while LLM history replay drops it. Guarded user input uses this so the user
+# still sees what they sent without re-injecting blocked content next turn.
+VISIBILITY_DISPLAY_ONLY = "display_only"
 
 # ---------------------------------------------------------------------------
 # Encoding: write side (turn-loop → DB)
@@ -139,6 +143,11 @@ def internal_text_block(text: str) -> Dict[str, Any]:
     memory; widget-facing read paths strip it via [[filter_visible_blocks]].
     """
     return {"type": "text", "text": text, "visibility": VISIBILITY_INTERNAL}
+
+
+def display_only_text_block(text: str) -> Dict[str, Any]:
+    """A visible transcript block excluded from future LLM replay."""
+    return {"type": "text", "text": text, "visibility": VISIBILITY_DISPLAY_ONLY}
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +351,8 @@ def _assistant_row_to_openai(blocks: List[Dict[str, Any]]) -> LLMContextMessage:
     tool_calls: List[Dict[str, Any]] = []
 
     for block in blocks:
+        if block.get("visibility") == VISIBILITY_DISPLAY_ONLY:
+            continue
         btype = block.get("type")
         if btype == "text":
             t = block.get("text")
@@ -388,6 +399,8 @@ def _user_row_to_openai(
     tool_msgs: List[LLMContextMessage] = []
 
     for block in blocks:
+        if block.get("visibility") == VISIBILITY_DISPLAY_ONLY:
+            continue
         btype = block.get("type")
         if btype == "text":
             t = block.get("text")
@@ -420,10 +433,12 @@ def _user_row_to_openai(
 
 __all__ = [
     "VISIBILITY_INTERNAL",
+    "VISIBILITY_DISPLAY_ONLY",
     "assistant_turn_to_blocks",
     "tool_results_to_user_blocks",
     "plain_text_blocks",
     "internal_text_block",
+    "display_only_text_block",
     "filter_visible_blocks",
     "blocks_to_llm_context_messages",
     "repair_dangling_tool_uses",

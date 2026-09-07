@@ -12,6 +12,9 @@ from datetime import timedelta
 from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     terminate_pending_approvals,
 )
+from app.ai.voice.agents.breeze_buddy.guardrails.results import (
+    finalize_guardrail_metrics,
+)
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
     enqueue_conversation_evaluation,
 )
@@ -92,6 +95,7 @@ async def end_idle_chat_sessions() -> None:
                 ended_reason=ChatEndedReason.IDLE_TIMEOUT,
             )
             if ended_row:
+                await finalize_guardrail_metrics(session_id)
                 await enqueue_conversation_evaluation(
                     str(ended_row.id),
                     ConversationChannel.CHAT,

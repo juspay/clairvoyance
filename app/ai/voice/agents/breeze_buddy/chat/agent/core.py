@@ -46,6 +46,7 @@ from app.ai.voice.agents.breeze_buddy.chat.ui.render_ui_tool import (
 from app.ai.voice.agents.breeze_buddy.chat.ui.stream import (
     UiStreamExtractor,
 )
+from app.ai.voice.agents.breeze_buddy.guardrails.evaluator import GuardrailCoordinator
 from app.ai.voice.agents.breeze_buddy.mcp import (
     MCPPool,
     close_mcp_pool,
@@ -143,6 +144,8 @@ class ChatAgent(
         context_placement: Optional[str] = None,
         catalog_version: Optional[str] = None,
         merchant_id: Optional[str] = None,
+        guardrail_coordinator: Optional[GuardrailCoordinator] = None,
+        focus_enabled: bool = False,
     ) -> None:
         self.session_id = session_id
         self.template = template
@@ -152,6 +155,8 @@ class ChatAgent(
         # binding, e.g. reseller-only templates) — credit gate/deduction are
         # both no-ops in that case.
         self.merchant_id = merchant_id
+        self.guardrail_coordinator = guardrail_coordinator
+        self.focus_enabled = focus_enabled
         # Generic per-session state dict — the canonical store for any
         # identifiers the template's reducers care about (cart_id,
         # checkout_id, etc.). Loaded from agent_session_state on turn

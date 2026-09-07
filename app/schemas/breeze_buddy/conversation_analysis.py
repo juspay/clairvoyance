@@ -16,6 +16,7 @@ class ConversationChannel(str, Enum):
 
 class EvaluationType(str, Enum):
     TOPIC = "TOPIC"
+    GUARDRAIL = "GUARDRAIL"
 
 
 class ConversationEvaluationJob(BaseModel):

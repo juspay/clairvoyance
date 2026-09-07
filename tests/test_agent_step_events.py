@@ -49,6 +49,10 @@ def _patch_agent_attr(monkeypatch, name, value):
 from types import SimpleNamespace  # isort: skip
 
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent, _PreparedTools
+from app.ai.voice.agents.breeze_buddy.guardrails.evaluator import (
+    GuardrailDecision,
+    GuardrailVerdict,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 
 _NODE: Dict[str, Any] = {"name": "start", "functions": []}
@@ -171,6 +175,36 @@ async def test_step_events_bracket_the_tool_execution(monkeypatch):
         "status": "ok",
         "label": "Searched the records",
     }
+
+
+async def test_blocked_output_cancels_same_cycle_tool_before_start(monkeypatch):
+    class _BlockingCoordinator:
+        output_enabled = True
+        output_config = SimpleNamespace(redirect_message="Safe redirect")
+
+        async def evaluate_output(self, _candidate):
+            return GuardrailVerdict(GuardrailDecision.BLOCK)
+
+    _patch_stream(
+        monkeypatch,
+        [[("text", "Blocked response."), ("tool_call", _tool_call("mutate", "fc-1"))]],
+    )
+    _patch_db(monkeypatch)
+
+    async def _must_not_dispatch(*_args, **_kwargs):
+        raise AssertionError("blocked output must prevent tool dispatch")
+
+    monkeypatch.setattr(ChatAgent, "_dispatch_tool_call", _must_not_dispatch)
+    agent = _make_agent()
+    agent.guardrail_coordinator = _BlockingCoordinator()
+    context = LLMContext(messages=[{"role": "user", "content": "do it"}])
+
+    events = [ev async for ev in agent._cycle_loop(context, dict(_NODE), _PREP)]
+
+    assert "function_call_started" not in [event.event for event in events]
+    assert [
+        event.data["delta"] for event in events if event.event == "assistant_token"
+    ] == ["Safe redirect"]
 
 
 async def test_step_completed_error_status_and_no_summary(monkeypatch):

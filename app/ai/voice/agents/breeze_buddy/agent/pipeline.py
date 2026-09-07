@@ -1,7 +1,7 @@
 """Pipeline creation and service initialization for voice agents."""
 
 from datetime import datetime
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, cast
 from zoneinfo import ZoneInfo
 
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -18,7 +18,7 @@ from pipecat.observers.loggers.transcription_log_observer import (
 from pipecat.observers.turn_tracking_observer import TurnTrackingObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextMessage
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
@@ -42,9 +42,17 @@ from pipecat.turns.user_stop import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from app.ai.voice.agents.breeze_buddy.guardrails.evaluator import (
+    GuardrailCoordinator,
+)
+from app.ai.voice.agents.breeze_buddy.guardrails.focus import (
+    inject_focus_guardrail,
+)
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
+    GuardrailResponseGateProcessor,
+    InputGuardrailProcessor,
     KnowledgeRetrievalProcessor,
     TranscriptCollectorProcessor,
     TranscriptionGateProcessor,
@@ -207,6 +215,8 @@ async def build_pipeline(
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
     mode: Literal["agent", "stream"] = "agent",
     kb_processor: Optional[KnowledgeRetrievalProcessor] = None,
+    guardrail_coordinator: Optional[GuardrailCoordinator] = None,
+    focus_enabled: bool = False,
 ) -> tuple[
     Pipeline,
     LLMContext,
@@ -248,6 +258,9 @@ async def build_pipeline(
         kb_processor: KnowledgeRetrievalProcessor for per-turn KB retrieval
             (auto_retrieve mode). Agent mode only — inserted between the user
             aggregator and the LLM; ignored in stream/realtime modes
+        guardrail_coordinator: Per-generation custom input/output guardrail
+            coordinator. Standard agent mode only. When omitted, pipeline
+            topology and latency are unchanged.
 
     Returns:
         7-tuple of (pipeline, context, context_aggregator, user_idle_callback_handler, transcription_gate, transcript_collector, metrics_collector)
@@ -275,7 +288,23 @@ async def build_pipeline(
     # TODO: Add a breeze-buddy-specific context summarizer.
     # Pipecat does not provide built-in summarization; implement one under
     # app/ai/voice/agents/breeze_buddy/ to manage long conversation contexts.
-    context = LLMContext()
+    # DAILY_STREAM uses the separate ChatAgent path and never consumes this
+    # context, so do not install an inert Focus message there.
+    focus_enabled = not is_stream and focus_enabled
+    # Install Focus directly when the shared context is constructed. This is a
+    # local list initialization (no model/network call) and protects the narrow
+    # window before FlowManager installs the full initial-node context.
+    if focus_enabled:
+        context = LLMContext(
+            messages=cast(
+                list[LLMContextMessage],
+                inject_focus_guardrail([], enabled=True),
+            )
+        )
+    else:
+        # Keep the legacy constructor path byte-for-byte equivalent when the
+        # Focus flag is disabled.
+        context = LLMContext()
 
     # User-idle resolution is shared between realtime and standard pipelines:
     # both paths use the same aggregator-driven idle detection (timer lives
@@ -509,8 +538,11 @@ async def build_pipeline(
         transcript_collector = TranscriptCollectorProcessor()
 
     # Pipeline order:
-    #   agent mode:  input → stt → gate → user_aggregator → llm → tts → output → assistant_aggregator
-    #   stream mode: input → stt → gate → transcript_collector → user_aggregator → tts → output
+    #   agent mode:  input → stt → gate → user_aggregator → [input guard]
+    #                → llm → [response gate] → tts → metrics → output
+    #                → assistant_aggregator
+    #   stream mode: input → stt → gate → transcript_collector
+    #                → user_aggregator → tts → metrics → output
     #
     # Collector sits BEFORE user_aggregator because the aggregator swallows
     # TranscriptionFrame (handled internally, not pushed downstream). TTSSpeakFrames
@@ -534,11 +566,15 @@ async def build_pipeline(
         # docs/widget/VOICE_GENERATIVE_UI_TODO.md for the re-wiring steps.
         # KB auto-retrieve sits between the user aggregator and the LLM so
         # retrieval finishes (or fails open) before this turn's inference.
+        if guardrail_coordinator is not None:
+            pipeline_parts.append(InputGuardrailProcessor(guardrail_coordinator))
         if kb_processor is not None:
             pipeline_parts.append(kb_processor)
+        pipeline_parts.append(llm)
+        if guardrail_coordinator is not None:
+            pipeline_parts.append(GuardrailResponseGateProcessor(guardrail_coordinator))
         pipeline_parts.extend(
             [
-                llm,
                 tts,
                 metrics_collector,
                 transport.output(),

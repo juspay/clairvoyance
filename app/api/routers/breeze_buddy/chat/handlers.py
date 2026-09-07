@@ -44,6 +44,9 @@ from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     run_chat_approval_continuation,
     run_chat_turn,
 )
+from app.ai.voice.agents.breeze_buddy.guardrails.results import (
+    finalize_guardrail_metrics,
+)
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
     enqueue_conversation_evaluation,
 )
@@ -1052,6 +1055,9 @@ async def end_chat_session_handler(
     in-flight ``send_message`` on the same session.
     """
     if session.status == ChatSessionStatus.ENDED:
+        # A previous best-effort finalization may have failed after the session
+        # row was ended. Idempotent end requests are also a safe retry point.
+        await finalize_guardrail_metrics(session_id)
         return EndChatSessionResponse(
             session_id=session_id,
             status=ChatSessionStatus.ENDED,
@@ -1071,6 +1077,8 @@ async def end_chat_session_handler(
         ended_row = await end_chat_session(
             session_id=session_id, ended_reason=ChatEndedReason.USER_ENDED
         )
+        if ended_row:
+            await finalize_guardrail_metrics(session_id)
     finally:
         await lock.release()
 

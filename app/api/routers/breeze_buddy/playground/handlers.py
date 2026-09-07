@@ -2,6 +2,9 @@
 Business logic handlers for playground operations.
 """
 
+from app.ai.voice.agents.breeze_buddy.guardrails.models import (
+    get_guardrail_model_options,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     BackgroundSoundFile,
     InterruptionMode,
@@ -145,4 +148,5 @@ async def get_configuration_options_handler():
         "llm_sdks": llm_sdks,
         "llm_fields": llm_fields,
         "llm_thinking_fields": llm_thinking_fields,
+        "guardrail_models": get_guardrail_model_options(),
     }
