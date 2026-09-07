@@ -33,6 +33,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
+from app.crm.outreach.nodes import NODE_TYPES
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
     is_bookkeeping,
@@ -203,7 +204,7 @@ async def _wake_on_reply(
     and nested payload never reach the run."""
     facts = _context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
     for node in definition.nodes:
-        if node.type != "wait_event" or event.topic not in node.topics:
+        if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
             continue
         if not _is_about(node, event, run):
             continue  # another run's letter (phase 18): not this square's
@@ -261,7 +262,7 @@ def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
     keys; None when the square is not listening for the topic, or the
     field is missing (B1). The ONE definition of "this letter is this
     square's answer": the wake and the repeat refusal below both ask it."""
-    if node.type != "wait_event" or event.topic not in node.topics:
+    if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
         return None
     answer = (
         event.topic

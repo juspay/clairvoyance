@@ -10,12 +10,15 @@ from app.crm.identity.attributes import (
     read_customer_attribute,
 )
 from app.crm.identity.db.accessor import get_customer
-from app.crm.identity.facts import assert_facts
+from app.crm.identity.facts import assert_facts, customer_facts
 from app.crm.identity.resolve import resolve
+from app.crm.identity.schemas import CustomerFacts
 
 __all__ = [
     "resolve",
     "assert_facts",
+    "customer_facts",
+    "CustomerFacts",
     "get_customer",
     "read_customer_attribute",
     "find_customer_by_attribute",

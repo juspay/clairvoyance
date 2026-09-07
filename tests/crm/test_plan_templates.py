@@ -22,6 +22,8 @@ from app.crm.record.contracts import CatalogField
 PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
 CART = PLANS / "cart-recovery.json"
 CART_FALLBACK = PLANS / "cart-recovery-fallback.json"
+CART_TIERED = PLANS / "cart-recovery-tiered.json"
+CART_SPLIT = PLANS / "cart-recovery-split.json"
 LOAN = PLANS / "loan-dropoff.json"
 
 # The funnel, in order (§16.2): stage i listens for every stage after it;
@@ -79,7 +81,9 @@ def test_the_expected_documents_exist() -> None:
     assert CART.is_file(), CART
     assert LOAN.is_file(), LOAN
     assert CART_FALLBACK.is_file(), CART_FALLBACK
-    assert _every_plan() == [CART_FALLBACK, CART, LOAN]
+    assert CART_TIERED.is_file(), CART_TIERED
+    assert CART_SPLIT.is_file(), CART_SPLIT
+    assert _every_plan() == [CART_FALLBACK, CART_SPLIT, CART_TIERED, CART, LOAN]
 
 
 @pytest.mark.parametrize("path", _every_plan(), ids=lambda p: p.stem)
@@ -98,10 +102,42 @@ def test_the_catalog_laws_actually_run_over_the_boards() -> None:
     assert any("loyalty_tier" in p and "not a declared variable" in p for p in problems)
 
 
+def test_the_tiered_cart_board_calls_only_above_the_threshold() -> None:
+    """enh A/01's example: one condition square, `big` -> the rescue call,
+    `else` -> the WhatsApp nudge; both arrive at the same closing wait."""
+    doc = _load(CART_TIERED)
+    decide = next(n for n in doc["nodes"] if n["type"] == "condition")
+    assert [r["on"] for r in decide["rules"]] == ["big"]
+    assert decide["rules"][0]["if"][0]["field"] == "context.total_price"
+    labels = {(e[0], e[2]) for e in doc["edges"] if len(e) == 3}
+    assert {("decide", "big"), ("decide", "else")} <= labels
+
+
+def test_the_split_cart_board_sends_two_letters_in_a_fixed_share() -> None:
+    """enh A/04's example: one split square, 70/30 between two approved
+    WhatsApp templates, both arriving at the same closing wait. The shares
+    total 100 because a split has no `else` — every run takes an arm."""
+    doc = _load(CART_SPLIT)
+    node = next(n for n in doc["nodes"] if n["type"] == "split")
+    assert [(a["on"], a["percent"]) for a in node["arms"]] == [
+        ("control", 70),
+        ("variant", 30),
+    ]
+    assert sum(a["percent"] for a in node["arms"]) == 100
+    labels = {(e[0], e[2]) for e in doc["edges"] if len(e) == 3}
+    assert {("which-letter", "control"), ("which-letter", "variant")} <= labels
+    # the two arms differ in ONE thing — the letter — so the arm counts in
+    # the summary are about the letter and nothing else
+    letters = {n["id"]: n["template"] for n in doc["nodes"] if n["type"] == "send"}
+    assert letters == {"wa-control": "cart_recovery_1", "wa-variant": "cart_recovery_2"}
+    assert ["wa-control", "wait-1d"] in doc["edges"]
+    assert ["wa-variant", "wait-1d"] in doc["edges"]
+
+
 def test_every_cart_send_maps_its_blanks() -> None:
     """send_variables posts EXACTLY the map, nothing when it is empty — a
     shipped board with an unmapped send would refuse on every send."""
-    for path in (CART, CART_FALLBACK):
+    for path in (CART, CART_FALLBACK, CART_TIERED, CART_SPLIT):
         for node in _load(path)["nodes"]:
             if node["type"] == "send":
                 assert node.get("variables") == {"1": "customer_name"}, (path, node)
