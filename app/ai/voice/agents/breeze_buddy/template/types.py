@@ -1999,6 +1999,16 @@ class ConfigurationModel(BaseModel):
             "agent-driven input is possible."
         ),
     )
+    response_reveal: Literal["stream", "complete"] = Field(
+        "stream",
+        description=(
+            "How the widget reveals assistant prose. 'stream' (default) = "
+            "paced typewriter as tokens arrive. 'complete' = a typing "
+            "indicator while the reply is in flight, then the full message "
+            "at once (Messenger style). Presentation-only: the SSE "
+            "transport streams either way."
+        ),
+    )
     ivr_configuration: Optional[IvrConfig] = None  # IVR-specific configuration
     # DEPRECATED: Use ivr_configuration.greeting / ivr_configuration.goodbye / ivr_configuration.priority
     ivr_greeting: Optional[str] = None

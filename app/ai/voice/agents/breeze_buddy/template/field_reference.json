@@ -431,6 +431,10 @@
       "description": "Whether the free-text composer is visible to the user. Default true. Set false to restrict input to quick-reply buttons only (bot-driven or menu-style flows).",
       "example": true
     },
+    "response_reveal": {
+      "description": "How the widget reveals assistant prose. 'stream' (default) = paced typewriter as tokens arrive. 'complete' = a typing indicator while the reply is in flight, then the full message at once (Messenger style). Presentation-only: the SSE transport streams either way.",
+      "example": "complete"
+    },
     "wake_phrase": {
       "description": "Require the user to say a trigger phrase before the bot responds. Useful for IVR-style consent flows. phrases: list of accepted trigger words. single_activation: if true, phrase required only once per session.",
       "example": {

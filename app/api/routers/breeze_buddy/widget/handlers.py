@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import HTTPException, Request, UploadFile, status
 
@@ -181,6 +181,7 @@ class _WidgetSurface:
     quick_replies: List[QuickReplyWire] = field(default_factory=list)
     enable_text_input: bool = True
     greeting_tiles: List[GreetingTileWire] = field(default_factory=list)
+    response_reveal: Literal["stream", "complete"] = "stream"
 
 
 def _extract_widget_config(template: object) -> _WidgetSurface:
@@ -215,6 +216,7 @@ def _extract_widget_config(template: object) -> _WidgetSurface:
             GreetingTileWire(label=t.label, prompt=t.prompt, image_url=t.image_url)
             for t in (getattr(configurations, "greeting_tiles", None) or [])
         ],
+        response_reveal=getattr(configurations, "response_reveal", "stream"),
     )
 
 
@@ -234,6 +236,7 @@ def _surface_wire(
         quick_replies=surface.quick_replies,
         greeting_tiles=surface.greeting_tiles,
         enable_text_input=surface.enable_text_input,
+        response_reveal=surface.response_reveal,
         voice_enabled=_template_voice_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
