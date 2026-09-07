@@ -893,3 +893,28 @@ CRM_RUN_SWEEP_BATCH_SIZE = int(os.environ.get("CRM_RUN_SWEEP_BATCH_SIZE", 500))
 CRM_RUN_SWEEP_INTERVAL_SECONDS = _positive_float(
     "CRM_RUN_SWEEP_INTERVAL_SECONDS", 3600.0
 )
+
+UAP_ENVIRONMENT = os.environ.get("UAP_ENVIRONMENT", "sandbox").strip().lower()
+_UAP_HOSTS = {
+    "sandbox": "https://sandbox.juspay.in",
+    "prod": "https://api.juspay.in",
+}
+if UAP_ENVIRONMENT not in _UAP_HOSTS:
+    raise RuntimeError(
+        f"UAP_ENVIRONMENT={UAP_ENVIRONMENT!r} is not one of "
+        f"{sorted(_UAP_HOSTS)}; set it to 'sandbox' or 'prod'"
+    )
+EULER_BASE_URL = _UAP_HOSTS[UAP_ENVIRONMENT]
+# Per-request timeout for every Euler call (customers, AOP, /txns): a fixed
+# 30 s, not configuration.
+EULER_TIMEOUT_SECONDS = 30
+EULER_GATEWAY_ID = "514"
+UAP_VERIFIED_NAMES = os.environ.get("UAP_VERIFIED_NAMES", "")  # comma-separated
+UAP_MAX_PER_DRAW = os.environ.get("UAP_MAX_PER_DRAW", "")  # "200.00"
+UAP_MAX_TOTAL = os.environ.get("UAP_MAX_TOTAL", "")  # "1000.00"
+UAP_MAX_DRAWS = os.environ.get("UAP_MAX_DRAWS", "")  # "60"
+UAP_VALIDITY_DAYS = os.environ.get("UAP_VALIDITY_DAYS", "")  # "90"
+UAP_LIMIT_CHOICES = os.environ.get("UAP_LIMIT_CHOICES", "")  # "200.00,500.00,1000.00"
+UAP_SELLER_NAME = os.environ.get("UAP_SELLER_NAME", "")
+UAP_SELLER_MIC = os.environ.get("UAP_SELLER_MIC", "")
+UAP_WEBHOOK_BASE_URL = os.environ.get("UAP_WEBHOOK_BASE_URL", "").rstrip("/")

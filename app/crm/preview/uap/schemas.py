@@ -67,7 +67,7 @@ class CrmCustomerAgent(BaseModel):
 class DrawUsage(BaseModel):
     """What an agent has consumed — CHARGED draws plus PENDING ones in
     flight (they reserve their amount until they settle). Gathered by the
-    session ledger (app/services/uap/ledger.py); decided on here."""
+    session ledger (app/services/preview/uap/ledger.py); decided on here."""
 
     drawn_total: Decimal = Decimal("0.00")
     draw_count: int = 0

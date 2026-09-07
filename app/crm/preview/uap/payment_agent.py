@@ -4,7 +4,7 @@ records -> our row, and what may be drawn against it.
 PURE decisions first (translate Juspay vocabulary to ours; draw admission),
 then gather -> decide -> apply. Imported only via contracts.py. The draw
 LEDGER is not here: draws live on the chat session they happened in
-(app/services/uap/ledger.py), which gathers the usage and calls the pure
+(app/services/preview/uap/ledger.py), which gathers the usage and calls the pure
 ``check_draw`` / ``remaining`` below.
 """
 
