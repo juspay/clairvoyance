@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from app.core.config.static import UAP_WEBHOOK_BASE_URL
+from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 from app.crm.identity.contracts import get_customer, resolve
 from app.crm.preview.uap.contracts import (
@@ -73,8 +73,9 @@ RIDER_SOURCE = "uap-rider"
 # Dial code assumed for a rider phone stored without one. India only today.
 DEFAULT_COUNTRY_CODE = "91"
 
-# This router's own webhook path; joined with UAP_WEBHOOK_BASE_URL to build
-# the callback_url registered with Juspay on every onboarding.
+# This router's own webhook path; joined with APP_BASE_URL (this service's
+# public base) to build the callback_url registered with Juspay on every
+# onboarding.
 WEBHOOK_PATH = "/agent/voice/breeze-buddy/uap/webhook"
 
 # Ledger refusals the rider fixes by going through the SDK again — the rule
@@ -395,12 +396,15 @@ async def _credentials(scope: Scope) -> JuspayCredentials:
 
 
 def _callback_url(creds: JuspayCredentials) -> Optional[str]:
-    """The webhook URL Juspay should call. Token in the query string so the
-    check works whether or not Juspay supports auth headers on callbacks.
-    Unset base = no callback (the expiry watcher still closes attempts)."""
-    if not UAP_WEBHOOK_BASE_URL:
+    """The webhook URL Juspay should call: this service's public base
+    (APP_BASE_URL, the same one the telephony callbacks use) + WEBHOOK_PATH.
+    Token in the query string so the check works whether or not Juspay
+    supports auth headers on callbacks. No APP_BASE_URL = no callback (the
+    expiry watcher still closes attempts)."""
+    base = APP_BASE_URL.rstrip("/")
+    if not base:
         return None
-    url = f"{UAP_WEBHOOK_BASE_URL}{WEBHOOK_PATH}"
+    url = f"{base}{WEBHOOK_PATH}"
     return f"{url}?token={creds.webhook_token}" if creds.webhook_token else url
 
 
