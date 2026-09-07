@@ -674,6 +674,13 @@ class FlowConfigBuilder:
                 f"user_speech_timeout={node.input_collection.user_speech_timeout}s"
             )
 
+        # Attach the node's LLM-run opt-out (flows defaults to running the LLM
+        # on node entry; a closing node opts out).
+        if node.respond_immediately is not None:
+            cast(Dict[str, Any], node_config)[
+                "respond_immediately"
+            ] = node.respond_immediately
+
         return node_config
 
     def _build_function_schema(self, func: FlowFunction) -> FlowsFunctionSchema:

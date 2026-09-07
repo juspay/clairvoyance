@@ -27,6 +27,9 @@ from app.ai.voice.agents.breeze_buddy.agent.approval import (
     RTVI_APPROVAL_REQUEST,
     ApprovalManager,
 )
+from app.ai.voice.agents.breeze_buddy.agent.early_speech import (
+    attach_early_speech,
+)
 from app.ai.voice.agents.breeze_buddy.agent.flow import (
     build_flow_config,
     load_template_config,
@@ -94,6 +97,9 @@ from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
 from app.ai.voice.agents.breeze_buddy.template.context import (
     TemplateContext,
     with_context,
+)
+from app.ai.voice.agents.breeze_buddy.template.kb_tool import (
+    synthesize_kb_tool_function,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
@@ -180,6 +186,7 @@ class Agent:
         self.lead: Optional[LeadCallTracker] = None
         self.root_span: Any = None
         self.flow_manager: Optional[FlowManager] = None
+        self.early_speech_router: Any = None  # agent/early_speech.py
         self.conversation_id: Optional[str] = None
 
         # Template configuration
@@ -1500,6 +1507,23 @@ class Agent:
                 template=self.template,
                 bot_instance=self,
                 mcp_global_functions=mcp_global_functions,
+            )
+
+            # Say tools: arm the name-decode early fire. No-op for templates
+            # without say config and for realtime calls (no TTS service).
+            # Non-say tool names so a shared prefix can never mis-fire a say
+            # line: adapter globals and hook-only functions come from the
+            # flow itself; MCP tools and the config-synthesized knowledge-
+            # base tool (built outside the flow dict) are passed here.
+            kb_tool = synthesize_kb_tool_function(self, log=lambda _msg: None)
+            self.early_speech_router = attach_early_speech(
+                llm_service=llm,
+                tts_service=tts,
+                flow=self.template.flow if self.template else None,
+                task_getter=lambda: self.task,
+                template_vars_getter=lambda: self.template_vars or {},
+                extra_tool_names=[f.name for f in mcp_global_functions]
+                + ([kb_tool["name"]] if kb_tool else []),
             )
 
         # ── Real-time observers ──────────────────────────────────

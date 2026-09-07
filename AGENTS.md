@@ -2,6 +2,11 @@
 
 Multi-agent conversational AI platform for real-time voice interactions. Built on FastAPI + Pipecat-AI + PostgreSQL (asyncpg).
 
+## HARD RULES (override everything else)
+
+- **No cloud-provider access on the agent's own initiative.** Never SSH into, tunnel to, or call APIs/consoles of AWS, GCP, or any cloud resource (compute instances, buckets, clusters, cloud-hosted services), and never deploy/run anything there — only when the user explicitly asks for exactly that in the CURRENT conversation. Permissions from older conversations do not carry over.
+- **No critical or irreversible actions on the agent's own.** Never delete/overwrite/drop data, restart/reconfigure the user's running processes, write to production/shared state, or publish externally without asking first. Ask, get explicit approval, then act.
+
 ## Project Structure
 
 - `app/ai/voice/agents/` -- Voice agent implementations (Automatic for web analytics, Breeze Buddy for telephony)
