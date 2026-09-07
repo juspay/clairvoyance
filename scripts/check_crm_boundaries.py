@@ -15,7 +15,8 @@ PR time — earlier than a grant would fail:
      app/api) imports only app.crm.<module>.contracts; the data layer
      (app/database) imports neither app.ai nor app.crm (pre-existing
      legacy exceptions allowlisted, closed to additions); cross-module
-     inside app/crm goes through contracts.py (or shared/) only.
+     inside app/crm goes through contracts.py (or shared/) only. A module
+     under app/crm/preview/<module>/ IS <module> for every rule here.
   5. HANDLE DISCIPLINE — logic files pass the DbTxn handle, they never
      call query methods on it (that is db/accessor's job).
   6. MAP COMPLETENESS — every crm_*/platform_* CREATE TABLE in the
@@ -152,11 +153,36 @@ QUERIES_FILE = re.compile(r"/db/queries(?:[\w]*\.py|/[\w]+\.py)$")
 
 
 def crm_module_of(rp: str) -> str | None:
-    """'app/crm/identity/...' -> 'identity'; None for crm-root files."""
+    """'app/crm/identity/...' -> 'identity'; None for crm-root files.
+    A preview module ('app/crm/preview/uap/...') is the module inside
+    the preview folder ('uap'): same laws, same boundary."""
     parts = rp.split("/")
+    if len(parts) >= 5 and parts[:3] == ["app", "crm", "preview"]:
+        return parts[3]
     if len(parts) >= 4 and parts[:2] == ["app", "crm"]:
         return parts[2]
     return None
+
+
+def crm_module_of_import(target: str) -> str | None:
+    """'app.crm.identity.contracts' -> 'identity';
+    'app.crm.preview.uap.contracts' -> 'uap'."""
+    parts = target.split(".")
+    if len(parts) > 3 and parts[:3] == ["app", "crm", "preview"]:
+        return parts[3]
+    return parts[2] if len(parts) > 2 else None
+
+
+def is_contracts_import(target: str, module: str) -> bool:
+    """True when ``target`` is that module's contracts surface, wherever the
+    module lives (app/crm/<module>/ or app/crm/preview/<module>/)."""
+    return any(
+        target == door or target.startswith(door + ".")
+        for door in (
+            f"app.crm.{module}.contracts",
+            f"app.crm.preview.{module}.contracts",
+        )
+    )
 
 
 def check(root: Path = ROOT) -> list[str]:
@@ -179,7 +205,9 @@ def check(root: Path = ROOT) -> list[str]:
         # 1. table ownership — quoted literals only in the owner's db/
         for table, owner in TABLE_OWNERS.items():
             if re.search(rf"[\"']{table}[\"']", text):
-                allowed = rp.startswith(f"app/crm/{owner}/db/")
+                allowed = rp.startswith(
+                    (f"app/crm/{owner}/db/", f"app/crm/preview/{owner}/db/")
+                )
                 if not allowed:
                     errors.append(
                         f"{rp}: table literal '{table}' outside its owner "
@@ -219,19 +247,18 @@ def check(root: Path = ROOT) -> list[str]:
             if in_crm and (target == "app.ai" or target.startswith("app.ai.")):
                 errors.append(f"{rp}: app/crm must never import app.ai ({target})")
             if module and module != "shared" and target.startswith("app.crm."):
-                t_parts = target.split(".")
-                t_mod = t_parts[2] if len(t_parts) > 2 else None
+                t_mod = crm_module_of_import(target)
                 if (
                     t_mod
                     and t_mod not in (module, "shared", "auth", "api")
-                    and not target.startswith(f"app.crm.{t_mod}.contracts")
+                    and not is_contracts_import(target, t_mod)
                 ):
                     errors.append(
                         f"{rp}: cross-module import bypasses contracts.py "
                         f"({target}) — modules import each other's contracts only"
                     )
             if rp.startswith(("app/ai/", "app/api/")) and target.startswith("app.crm."):
-                if not re.fullmatch(r"app\.crm\.\w+\.contracts", target):
+                if not re.fullmatch(r"app\.crm\.(?:preview\.)?\w+\.contracts", target):
                     errors.append(
                         f"{rp}: buddy code may import only "
                         f"app.crm.<module>.contracts ({target})"
@@ -263,8 +290,7 @@ def check(root: Path = ROOT) -> list[str]:
             # import cycle the registry exists to kill: every subscriber
             # already reads record's contracts.
             if rp.startswith("app/crm/record/") and target.startswith("app.crm."):
-                t_parts = target.split(".")
-                t_mod = t_parts[2] if len(t_parts) > 2 else None
+                t_mod = crm_module_of_import(target)
                 # auth/api are crm-ROOT surfaces (same allowlist as the
                 # generic cross-module rule), not subscriber modules.
                 if t_mod and t_mod not in (
