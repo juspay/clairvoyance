@@ -48,10 +48,10 @@ def _template(voice: bool = False) -> SimpleNamespace:
     )
 
 
-def test_block_carries_the_same_values_as_the_flat_fields():
+async def test_block_carries_the_same_values_as_the_flat_fields():
     surface = _surface()
     template = _template(voice=True)
-    block = _surface_wire(
+    block = await _surface_wire(
         surface, template, catalog_active="v2", ui_flavors=["commerce"]
     )
     # Field-for-field against the SAME sources the flat response fields are
@@ -76,17 +76,54 @@ def test_every_session_response_exposes_the_block():
         assert "widget" in model.model_fields, model.__name__
 
 
-def test_block_defaults_are_safe_for_a_bare_template():
+async def test_block_defaults_are_safe_for_a_bare_template():
+
     # A template with no widget config at all still produces a legal block:
     # empty pills/tiles, composer ON, voice OFF, v1 catalog. A default that
     # hid the composer would lock a shopper out of a working session.
-    block = _surface_wire(
+    block = await _surface_wire(
         _WidgetSurface(quick_replies=[], greeting_tiles=[], enable_text_input=True),
         _template(),
         catalog_active="v1",
         ui_flavors=[],
     )
     assert block == WidgetSurfaceWire()
+
+
+async def test_custom_components_ride_the_block_from_one_place(monkeypatch):
+    """The registry defs are fetched INSIDE ``_surface_wire`` — every
+    response that builds the block (create, resume, demo) gets them without
+    a per-call keyword to forget. Typed entries, render_def-bearing defs
+    only, and nothing at all on a v1 catalog."""
+    from app.ai.voice.agents.breeze_buddy.template.types import CustomComponentDef
+    from app.api.routers.breeze_buddy.widget import handlers as widget_handlers
+    from app.schemas.breeze_buddy.chat import CustomComponentWire
+
+    async def fake_resolve(template):
+        return {
+            "JourneyOptions": CustomComponentDef(
+                name="JourneyOptions",
+                version=28,
+                props_schema={},
+                render_def={"type": "col"},
+            ),
+            "BackendOnly": CustomComponentDef(name="BackendOnly", props_schema={}),
+        }
+
+    monkeypatch.setattr(widget_handlers, "resolve_custom_components", fake_resolve)
+
+    v2 = await _surface_wire(
+        _surface(), _template(), catalog_active="v2", ui_flavors=[]
+    )
+    assert v2.custom_components == [
+        CustomComponentWire(
+            name="JourneyOptions", version=28, render_def={"type": "col"}
+        )
+    ]
+    v1 = await _surface_wire(
+        _surface(), _template(), catalog_active="v1", ui_flavors=[]
+    )
+    assert v1.custom_components == []
 
 
 def test_demo_response_defaults_the_block_when_unset():

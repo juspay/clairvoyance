@@ -265,3 +265,149 @@ def _install_direct_intent_stubs(monkeypatch, capture_merge):
     monkeypatch.setattr(router, "create_aiohttp_session", lambda: None)
     monkeypatch.setattr(router, "upsert_agent_session_state_merge", capture_merge)
     monkeypatch.setattr(router, "ChatAgent", _Agent)
+
+
+# ---------------------------------------------------------------------------
+# Template-intent enrich rules — cross-tool selected-marking
+# ---------------------------------------------------------------------------
+
+
+def test_template_intent_enrich_marks_selected_tier():
+    from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+        _apply_enrich,
+    )
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        CustomUiIntent,
+        CustomUiIntentStep,
+        UiIntentEnrichRule,
+    )
+
+    store = BindingStore()
+    store.record(
+        "get_journey_details",
+        None,
+        {"status": "success", "selected_quote_id": "q2"},
+    )
+    store.record(
+        "get_tier_options",
+        None,
+        {
+            "status": "success",
+            "tiers": [
+                {"quote_id": "q1", "name": "First Class"},
+                {"quote_id": "q2", "name": "Second Class"},
+            ],
+        },
+    )
+
+    class _Agent:
+        binding_store = store
+
+    cfg = CustomUiIntent(
+        name="journey_detail",
+        steps=[CustomUiIntentStep(tool="get_journey_details")],
+        enrich=[
+            UiIntentEnrichRule(
+                list_ref="$tool:get_tier_options#/tiers",
+                match_field="quote_id",
+                equals_ref="$tool:get_journey_details#/selected_quote_id",
+                set={"selected": True, "state_label": "Selected"},
+                else_set={"unselected": True},
+            )
+        ],
+    )
+    _apply_enrich(_Agent(), cfg)
+    tiers = store.resolve("get_tier_options")["tiers"]
+    assert tiers[1]["selected"] is True and tiers[1]["state_label"] == "Selected"
+    assert "selected" not in tiers[0] and tiers[0]["unselected"] is True
+
+
+def test_template_intent_enrich_null_target_marks_nothing():
+    """A null match target (the API omitted the selected value) must leave
+    the list untouched — the earlier str() compare marked every item that
+    lacked the match field as selected (str(None) == str(None))."""
+    from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+        _apply_enrich,
+    )
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        CustomUiIntent,
+        CustomUiIntentStep,
+        UiIntentEnrichRule,
+    )
+
+    store = BindingStore()
+    store.record("gjd", None, {"status": "success", "selected_quote_id": None})
+    store.record(
+        "tiers",
+        None,
+        {"status": "success", "tiers": [{"name": "no quote id"}, {"quote_id": "q1"}]},
+    )
+
+    class _Agent:
+        binding_store = store
+
+    rule = UiIntentEnrichRule(
+        list_ref="$tool:tiers#/tiers",
+        match_field="quote_id",
+        equals_ref="$tool:gjd#/selected_quote_id",
+        set={"selected": True},
+        else_set={"unselected": True},
+    )
+    cfg = CustomUiIntent(
+        name="n", steps=[CustomUiIntentStep(tool="gjd")], enrich=[rule]
+    )
+    _apply_enrich(_Agent(), cfg)
+    assert store.resolve("tiers")["tiers"] == [
+        {"name": "no quote id"},
+        {"quote_id": "q1"},
+    ]
+
+    # a real target still never matches an item that lacks the field
+    store.record("gjd", None, {"status": "success", "selected_quote_id": "q1"})
+    _apply_enrich(_Agent(), cfg)
+    tiers = store.resolve("tiers")["tiers"]
+    assert tiers[0] == {"name": "no quote id", "unselected": True}
+    assert tiers[1]["selected"] is True
+
+
+def test_template_intent_enrich_fail_open():
+
+    from app.ai.voice.agents.breeze_buddy.chat.intents.template_intents import (
+        _apply_enrich,
+    )
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+    from app.ai.voice.agents.breeze_buddy.template.types import (
+        CustomUiIntent,
+        CustomUiIntentStep,
+        UiIntentEnrichRule,
+    )
+
+    store = BindingStore()
+    store.record("t", None, {"status": "success", "xs": [{"id": "a"}]})
+
+    class _Agent:
+        binding_store = store
+
+    # bad ref + missing tool + non-list target: all silently skipped
+    cfg = CustomUiIntent(
+        name="n",
+        steps=[CustomUiIntentStep(tool="t")],
+        enrich=[
+            UiIntentEnrichRule(
+                list_ref="no-prefix#/xs",
+                match_field="id",
+                equals_ref="$tool:t#/missing",
+                set={"s": 1},
+            ),
+            UiIntentEnrichRule(
+                list_ref="$tool:absent#/xs",
+                match_field="id",
+                equals_ref="$tool:t#/xs",
+                set={"s": 1},
+            ),
+        ],
+    )
+    _apply_enrich(_Agent(), cfg)
+    assert store.resolve("t")["xs"] == [{"id": "a"}]

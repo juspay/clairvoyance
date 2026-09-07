@@ -30,6 +30,9 @@ from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     ClientContextTooLarge,
     compute_context_patch,
 )
+from app.ai.voice.agents.breeze_buddy.chat.custom_components import (
+    resolve_custom_components,
+)
 from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     negotiate_catalog,
     resolve_session_catalog_version,
@@ -103,6 +106,7 @@ from app.schemas.breeze_buddy.chat import (
     CreateChatSessionRequest,
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
+    CustomComponentWire,
     GreetingTileWire,
     QuickReplyWire,
     SendChatMessageRequest,
@@ -181,6 +185,7 @@ class _WidgetSurface:
     quick_replies: List[QuickReplyWire] = field(default_factory=list)
     enable_text_input: bool = True
     greeting_tiles: List[GreetingTileWire] = field(default_factory=list)
+    response_reveal: str = "stream"
 
 
 def _extract_widget_config(template: object) -> _WidgetSurface:
@@ -215,10 +220,11 @@ def _extract_widget_config(template: object) -> _WidgetSurface:
             GreetingTileWire(label=t.label, prompt=t.prompt, image_url=t.image_url)
             for t in (getattr(configurations, "greeting_tiles", None) or [])
         ],
+        response_reveal=getattr(configurations, "response_reveal", "stream"),
     )
 
 
-def _surface_wire(
+async def _surface_wire(
     surface: _WidgetSurface,
     template: object,
     *,
@@ -228,16 +234,39 @@ def _surface_wire(
     """The one-block form of the session's presentation surface.
 
     Built from exactly the same values the flat response fields carry, so
-    the two can never disagree while both are on the wire.
+    the two can never disagree while both are on the wire. The registry
+    defs are fetched HERE, not by the callers — the block exists so a
+    surface field is filled in one place and every response (create,
+    resume, demo) gets it; a per-call keyword is how the demo response
+    lost it once already.
     """
     return WidgetSurfaceWire(
         quick_replies=surface.quick_replies,
         greeting_tiles=surface.greeting_tiles,
         enable_text_input=surface.enable_text_input,
+        response_reveal=surface.response_reveal,
         voice_enabled=_template_voice_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
+        custom_components=await _custom_components_wire(template, catalog_active),
     )
+
+
+async def _custom_components_wire(
+    template: object, catalog_active: str
+) -> List[CustomComponentWire]:
+    """CHAMELEON: the render_def-bearing registry defs this session may
+    render, in wire form. Backend-only defs (render_def NULL) never ship —
+    the widget can't paint them and the props would leak schema detail the
+    merchant's own frontend owns. Empty on v1 sessions."""
+    if catalog_active != CATALOG_VERSION_V2:
+        return []
+    defs = await resolve_custom_components(template)  # type: ignore[arg-type]
+    return [
+        CustomComponentWire(name=d.name, version=d.version, render_def=d.render_def)
+        for d in defs.values()
+        if d.render_def
+    ]
 
 
 def _template_voice_enabled(template: object) -> bool:
@@ -345,8 +374,11 @@ async def create_widget_session_handler(
         voice_enabled=_template_voice_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
-        widget=_surface_wire(
-            surface, template, catalog_active=catalog_active, ui_flavors=ui_flavors
+        widget=await _surface_wire(
+            surface,
+            template,
+            catalog_active=catalog_active,
+            ui_flavors=ui_flavors,
         ),
     )
 
@@ -1228,8 +1260,11 @@ async def get_widget_session_state_handler(
         voice_enabled=_template_voice_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
-        widget=_surface_wire(
-            surface, template, catalog_active=catalog_active, ui_flavors=ui_flavors
+        widget=await _surface_wire(
+            surface,
+            template,
+            catalog_active=catalog_active,
+            ui_flavors=ui_flavors,
         ),
         template_vars=template_vars,
         metadata=session.metadata or {},

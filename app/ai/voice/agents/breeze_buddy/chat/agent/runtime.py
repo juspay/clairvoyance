@@ -3,6 +3,7 @@ pure helpers, and the small per-turn dataclasses. No agent state —
 everything here is importable by every sibling mixin module without
 cycles."""
 
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -52,19 +53,34 @@ _ANSWER_NUDGE = (
 )
 
 
+_IDENTIFIER_CHIP_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|\b[0-9a-f]{16,}\b",
+    re.IGNORECASE,
+)
+
+
 def _chip_labels(raw: Any) -> List[str]:
     """Lift a `quick_replies` arg (strings canonical; {'label': …} dicts
     tolerated) into clean labels — same tolerance as execute_render_ui's
-    extraction, kept tiny here for the rider-harvest path."""
+    extraction, kept tiny here for the rider-harvest path.
+
+    Labels carrying raw identifiers (UUIDs / long hex ids) are DROPPED —
+    a chip is user-facing copy, and an id in one is always a model
+    mistake (live-observed: "Select <journey uuid>" chips); ids belong in
+    UI actions' `msg`, never on a pill."""
     if not isinstance(raw, list):
         return []
     labels: List[str] = []
     for entry in raw:
+        label = None
         if isinstance(entry, str) and entry.strip():
-            labels.append(entry.strip())
+            label = entry.strip()
         elif isinstance(entry, dict) and isinstance(entry.get("label"), str):
             if entry["label"].strip():
-                labels.append(entry["label"].strip())
+                label = entry["label"].strip()
+        if label and not _IDENTIFIER_CHIP_RE.search(label):
+            labels.append(label)
     return labels[:5]
 
 
