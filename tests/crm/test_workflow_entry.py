@@ -147,6 +147,7 @@ class _Spine:
         self.cancels: List[Tuple[str, str, Optional[Tuple[str, str]], Any]] = []
         self.resumes: List[Tuple[str, str, Dict[str, Any]]] = []
         self.facts: List[Tuple[str, str, Any]] = []
+        self.refreshes: List[Tuple[str, str, Dict[str, Any]]] = []
         self.exited: set = set()
 
     async def live_workflows(self, merchant_id: str) -> List[Workflow]:
@@ -190,6 +191,12 @@ class _Spine:
         self.facts.append((run_id, node_id, facts))
         return True
 
+    async def refresh_run_facts(
+        self, merchant_id: str, run_id: str, node_id: str, facts: Dict[str, Any]
+    ) -> bool:
+        self.refreshes.append((run_id, node_id, facts))
+        return True
+
 
 def _install(monkeypatch: pytest.MonkeyPatch, spine: _Spine) -> None:
     """Seed the spine on the per-table accessor each read lives in — the
@@ -202,6 +209,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, spine: _Spine) -> None:
         (definitions.version_accessor, "get_definition"),
         (entry.enrollment_accessor, "cancel_run"),
         (entry.enrollment_accessor, "resume_run_by_id"),
+        (entry.enrollment_accessor, "refresh_run_facts"),
     ):
         monkeypatch.setattr(module, name, getattr(spine, name))
 
@@ -229,6 +237,76 @@ def test_a_reply_carrying_the_key_wakes_the_listening_run(listening: _Spine) -> 
         (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
     ]
     assert listening.cancels == []  # a button reply is not a goal event
+
+
+def test_a_letter_that_finds_the_run_on_a_deaf_square_refreshes_its_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two events two seconds apart: the second lands while the run still
+    stands on the door's start square (a condition — it listens to
+    nothing), before the walker's first visit. No square answers, so
+    every resume matched no row and the letter was lost. Now its facts
+    refresh the run on that square and re-arm it: the visit decides on
+    the latest letter. Judged through the squares' own lens — a topic no
+    square of the plan listens for is still ignored."""
+    plan = {
+        "entry": {"topic": "loan.initiated"},
+        "nodes": [
+            {
+                "id": "gate",
+                "type": "condition",
+                "rules": [
+                    {"on": "yes", "if": [{"field": "context.offers", "op": "exists"}]}
+                ],
+            },
+            {
+                "id": "quiet",
+                "type": "wait_event",
+                "topics": ["loan.offered"],
+                "key": "$topic",
+                "minutes": 30,
+            },
+            {
+                "id": "listen",
+                "type": "wait_event",
+                "topics": ["loan.offered"],
+                "key": "$topic",
+                "minutes": 60,
+            },
+        ],
+        "edges": [
+            ["gate", "quiet", "yes"],
+            ["gate", "listen", "else"],
+            ["quiet", "gate", "loan.offered"],
+            ["listen", "gate", "loan.offered"],
+        ],
+        "goal": {"topics": ["loan.active"]},
+    }
+    flow = _flow(plan)
+    run = _run(flow, 1, "gate")
+    spine = _Spine([flow], [run], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    asyncio.run(
+        consume_attributed_event(
+            _event("loan.offered", {"loan_state": "OFFERED"}),
+            "c-1",
+            {},
+            {"offers": "1. FINNABLE offer A"},
+        )
+    )
+    # (the double answers every resume; on Postgres the current_node guard
+    # refuses them all — the refresh is what actually lands)
+    assert spine.refreshes == [
+        (
+            str(run.id),
+            "gate",
+            {"loan_state": "OFFERED", "offers": "1. FINNABLE offer A"},
+        )
+    ]
+    # a topic no square listens for is ignored on a deaf square as well
+    spine.refreshes.clear()
+    _consume(_event("loan.unrelated", {"loan_state": "X"}))
+    assert spine.refreshes == []
 
 
 def test_a_reply_without_the_key_never_wakes_the_run(listening: _Spine) -> None:
@@ -763,7 +841,7 @@ def test_the_declared_half_crosses_the_same_bridge_as_the_payload(
             {
                 "flow_address": "221B",
                 "nested": {"a": 1},
-                "essay": "x" * 1000,
+                "essay": "x" * 1200,
             },
         )
     )

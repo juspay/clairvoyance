@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CrmCustomerSummary(BaseModel):
@@ -37,3 +37,17 @@ class CrmCustomer(CrmCustomerSummary):
     """Full detail row: summary + the attributes assertion history."""
 
     attributes: Dict[str, Any] = {}
+
+
+class CustomerFacts(BaseModel):
+    """What a workflow predicate may know about a customer (enh A/01): the
+    whitelisted profile columns plus each asserted attribute's WINNING
+    claim. Handle VALUES never appear here — only whether a phone or an
+    email exists — so a branch can never carry a handle into a log."""
+
+    display_name: Optional[str] = None
+    primary_locale: Optional[str] = None
+    timezone: Optional[str] = None
+    has_phone: bool = False
+    has_email: bool = False
+    attributes: Dict[str, Any] = Field(default_factory=dict)

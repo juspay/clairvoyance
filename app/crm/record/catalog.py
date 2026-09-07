@@ -69,6 +69,10 @@ MAX_REGISTERED_FIELDS = 200
 SAMPLE_WINDOW_EVENTS = 200
 SEEN_WINDOW_DAYS = 7
 
+# An element filter names a path INSIDE the element, never payload.* — the
+# element is the root; `exists` on an empty array reads as absent.
+_ITEM_WHERE_OPS = ("is", "is_not", "in", "exists")
+_ELEMENT_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _PAYLOAD_PATH = re.compile(
     r"^payload\.[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$"
 )
@@ -118,13 +122,18 @@ DERIVE: Dict[Tuple[str, str], Dict[str, Deriver]] = {
 def stored_field(field: CatalogField) -> Dict[str, Any]:
     """PURE: one field as the T24 row carries it. `ops` are computed on read
     and `fallbacks`/`derived` are code-layer words, so none is written.
-    `item_format` rides only on a field that HAS one, so every type canon
+    `item_format`, `item_where` and `item_numbered` ride only on a field
+    that HAS them, so every type canon
     already describes is stored exactly as it was before the list type
     existed — the field list is extended for the new type, not for every
     row."""
     doc = field.model_dump(exclude=_CODE_ONLY_KEYS)
     if doc.get("item_format") is None:
         doc.pop("item_format", None)
+    if not doc.get("item_where"):
+        doc.pop("item_where", None)
+    if not doc.get("item_numbered"):
+        doc.pop("item_numbered", None)
     return doc
 
 
@@ -201,6 +210,25 @@ def validate_registration(registration: SchemaRegistration) -> List[str]:
                 problems.extend(
                     f"{field.path}: {p}" for p in format_faults(field.item_format)
                 )
+        if field.item_where and field.type != LIST_TYPE:
+            problems.append(f"{field.path}: item_where belongs to type list")
+        for cond in field.item_where:
+            if cond.op not in _ITEM_WHERE_OPS:
+                problems.append(
+                    f"{field.path}: item_where op {cond.op!r} — an element filter "
+                    f"speaks {', '.join(_ITEM_WHERE_OPS)}"
+                )
+            if cond.field.startswith(PAYLOAD_PREFIX) or not _ELEMENT_PATH.match(
+                cond.field
+            ):
+                problems.append(
+                    f"{field.path}: item_where field {cond.field!r} must be a "
+                    "path inside the element (facility_type, offers, a.b)"
+                )
+        if field.item_numbered and (field.type != LIST_TYPE or not field.item_format):
+            problems.append(
+                f"{field.path}: item_numbered belongs to a type list with an item_format"
+            )
         if field.type == LIST_TYPE:
             # No ops and never a handle, so a list that is not a variable can
             # be neither filtered, keyed nor templated — a field nothing can

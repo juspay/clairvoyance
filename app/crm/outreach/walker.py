@@ -38,8 +38,8 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.nodes.context import reply_key, without_reply
-from app.crm.outreach.nodes.spec import NodeParked
-from app.crm.outreach.nodes.wait_event import ELSE, TIMEOUT
+from app.crm.outreach.nodes.spec import ELSE, NodeParked
+from app.crm.outreach.nodes.wait_event import TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.crm.record.contracts import customer_has_event
 
@@ -192,8 +192,8 @@ async def _advance(
             context.update(await execute(run, node, definition))
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
-        if node.type == "wait_event":
-            # Leaving a listening square: its answer is spent (phase 15).
+        if NODE_TYPES[node.type].branches:
+            # Leaving a branching square: its answer is spent (phase 15).
             # A door may start a run on any square, so this one can be
             # revisited — a stale reply would resolve the revisit at once.
             context = without_reply(context, node.id)
@@ -250,10 +250,11 @@ def pick_next(
     node: WorkflowNode, arrows: List[Tuple[str, Optional[str]]], context: Dict[str, Any]
 ) -> Optional[str]:
     """PURE: which arrow leaves this square. A plain node has one. A
-    wait_event node takes the arrow labelled with its answer, or
-    "timeout" when the alarm fired first, else the "else" arrow (phase
-    18) when it has one; no matching arrow = the end."""
-    if node.type != "wait_event":
+    branching node (the registry's word — wait_event, condition) takes
+    the arrow labelled with its answer, or "timeout" when the alarm fired
+    first, else the "else" arrow (phase 18) when it has one; no matching
+    arrow = the end."""
+    if not NODE_TYPES[node.type].branches:
         return arrows[0][0] if arrows else None
     answer = context.get(reply_key(node.id))
     wanted = TIMEOUT if answer is None else answer

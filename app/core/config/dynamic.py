@@ -91,7 +91,13 @@ async def BB_DISPATCH_ENABLED() -> bool:
 #: that sits on top of it. tests/crm/test_context_ceiling.py pins the two
 #: equal — the executable inequality the house rule asks for, written where
 #: both sides are visible, since neither file may see the other.
-_CONTEXT_VALUE_FLOOR = 256
+# Floor raised 256 -> 1000 on 13 Sep 2026, in step with
+# record/extractors/engine.py VARIABLE_MAX_CHARS: a rendered offer list of
+# three to five numbered lines is 330-490 characters, and at 256 the entry
+# consumer dropped the whole value on the way into the run, so the call
+# saw no offers at all. Still "small" by canon T20 col 12: one fact, one
+# kilobyte at most.
+_CONTEXT_VALUE_FLOOR = 1000
 #: How long a process trusts its own copy. The dial changes about once a
 #: year and is read once per consumed letter, so a fresh Redis GET per row
 #: buys nothing and costs thousands a second on the busiest worker in the

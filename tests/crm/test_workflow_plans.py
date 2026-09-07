@@ -199,7 +199,7 @@ def test_edges_out_of_wait_event_must_be_labelled_and_distinct() -> None:
 
 def test_only_wait_event_may_label_edges() -> None:
     bad = {**_COD, "edges": [["ask", "confirm", "YES"], ["confirm", "call", "YES"]]}
-    assert any("only a wait_event" in p for p in validate_definition(bad))
+    assert any("only a branching node" in p for p in validate_definition(bad))
 
 
 def test_send_node_needs_channel_and_a_plan_purpose() -> None:
@@ -795,7 +795,7 @@ def test_else_is_one_catch_all_arrow_out_of_a_listening_square() -> None:
     # a plain square still has one unlabelled arrow, else included
     plain = [["call", "after-call"], ["again", "done", "else"]]
     problems = validate_definition(_definition(nodes=_CALL_THEN_LISTEN, edges=plain))
-    assert any("only a wait_event" in p and "again" in p for p in problems)
+    assert any("only a branching node" in p and "again" in p for p in problems)
 
 
 def _orders_create_catalog() -> Dict[str, CatalogField]:

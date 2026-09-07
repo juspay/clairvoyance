@@ -719,3 +719,85 @@ def test_the_stored_row_keeps_item_format_only_where_it_means_something() -> Non
         )
     )
     assert listed["item_format"] == "{n}"
+
+
+# --- item_where / item_numbered: the registration law ---------------------------
+
+
+def test_an_element_filter_belongs_to_a_list_and_speaks_four_ops() -> None:
+    """A filter on a text field has no elements to judge; an ordering op on
+    an element field has no declared type to fit — the element filter
+    speaks is · is_not · in · exists and nothing else."""
+    where = [{"field": "facility_type", "op": "is", "value": "CREDIT_LINE"}]
+    problems = catalog.validate_registration(
+        _reg([{"path": "payload.a", "type": "text", "label": "A", "item_where": where}])
+    )
+    assert any("item_where belongs to type list" in p for p in problems), problems
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [{"field": "amount", "op": ">", "value": 5}],
+                }
+            ]
+        )
+    )
+    assert any("item_where op '>'" in p for p in problems), problems
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [{"field": "payload.facility_type", "op": "exists"}],
+                }
+            ]
+        )
+    )
+    assert any("inside the element" in p for p in problems), problems
+
+
+def test_numbered_lines_need_a_list_with_a_format() -> None:
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_numbered": True,
+                }
+            ]
+        )
+    )
+    assert any(
+        "item_numbered belongs to a type list with an item_format" in p
+        for p in problems
+    ), problems
+
+
+def test_the_stored_row_keeps_the_filter_only_where_it_means_something() -> None:
+    """Same rule as item_format: canon's field list is extended for the
+    field that carries the word, never for every row."""
+    plain = catalog.stored_field(CatalogField(path="payload.a", type="text", label="A"))
+    assert "item_where" not in plain and "item_numbered" not in plain
+    filtered = catalog.stored_field(
+        CatalogField(
+            path="payload.xs",
+            type="list",
+            label="X",
+            variable=True,
+            item_format="{n}",
+            item_numbered=True,
+            item_where=[{"field": "kind", "op": "is", "value": "k"}],
+        )
+    )
+    assert filtered["item_where"] == [{"field": "kind", "op": "is", "value": "k"}]
+    assert filtered["item_numbered"] is True

@@ -14,6 +14,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from app.crm.shared.predicate import Condition
+
 
 class JourneyCard(BaseModel):
     id: str
@@ -150,6 +152,15 @@ class CatalogField(BaseModel):
     fallbacks: List[str] = Field(default_factory=list)
     ops: List[str] = Field(default_factory=list)
     item_format: Optional[str] = Field(None, min_length=1, max_length=160)
+    # Type list only: which ELEMENTS of the first array on the path render.
+    # Fields are element-relative dot paths; ops are the where-grammar's
+    # text ops (is · is_not · in · exists). An empty array reads as absent
+    # to `exists`, so "has any offers" is `offers exists`.
+    item_where: List["Condition"] = Field(default_factory=list)
+    # Type list with an item_format only: one numbered line per element
+    # ("1. …\n2. …") instead of a comma list. For a call payload — a
+    # WhatsApp template parameter may carry no line break.
+    item_numbered: bool = False
 
 
 class CatalogEntry(BaseModel):

@@ -330,12 +330,15 @@ def test_a_line_missing_a_blank_is_skipped_whole() -> None:
     assert engine.extract(payload, spec).variables == {"xs": "Cap x1"}
 
 
-def test_nothing_renderable_is_no_variable_at_all() -> None:
+def test_nothing_renderable_is_the_declared_name_as_none() -> None:
     """None, not "" — a template mapping it parks by name, which is honest,
-    where an empty blank sends a message with a hole in it."""
+    where an empty blank sends a message with a hole in it. And the NAME is
+    still said: a later letter that carries nothing must shadow what an
+    earlier one carried (the run reads the latest letter, never a stale
+    one), so the extractor answers None rather than staying silent."""
     spec = spec_for_entry(_listed("payload.xs", "{title}"), {})
     for payload in ({"xs": []}, {"xs": [{}]}, {"xs": "not a list"}, {}):
-        assert engine.extract(payload, spec).variables == {}
+        assert engine.extract(payload, spec).variables == {"xs": None}
 
 
 def test_a_long_cart_is_truncated_with_the_overflow_counted() -> None:
@@ -349,7 +352,7 @@ def test_a_long_cart_is_truncated_with_the_overflow_counted() -> None:
     assert rendered.startswith("Item number 0, Item number 1, ")
     assert rendered.endswith(" more")
     # one oversized line is omitted, and still counted
-    assert engine.join_list(["a" * 300, "b"]) == "+2 more"
+    assert engine.join_list(["a" * (engine.VARIABLE_MAX_CHARS + 44), "b"]) == "+2 more"
 
 
 def test_shopify_offers_every_phrasing_of_the_cart() -> None:
@@ -549,3 +552,186 @@ def test_a_list_inside_a_list_is_just_another_step() -> None:
             "12 - STANDARD - 7000.00"
         )
     }
+
+
+# --- an element filter on a list field (item_where) ---------------------------
+#
+# A vendor's array carries every attempt; a plan wants the ones that matter.
+# Flipkart's loan_applications holds one entry per lender, and a call may
+# only name the credit lines that actually made an offer.
+
+_CREDIT_LINE = [
+    {"field": "facility_type", "op": "is", "value": "CREDIT_LINE"},
+    {"field": "offers", "op": "exists"},
+]
+_APPS = [
+    {
+        "loan_id": "LN1",
+        "lender_name": "FINNABLE",
+        "facility_type": "CREDIT_LINE",
+        "offers": [{"offer_id": "F-6", "tenure": 6}, {"offer_id": "F-9", "tenure": 9}],
+    },
+    {
+        "loan_id": "LN2",
+        "lender_name": "DMI",
+        "facility_type": "CREDIT_LINE",
+        "offers": [],
+    },
+    {
+        "loan_id": "LN3",
+        "lender_name": "HDB",
+        "facility_type": "TERM_LOAN",
+        "offers": [{"offer_id": "H-3", "tenure": 3}],
+    },
+]
+
+
+def _filtered(path: str, fmt: Any = None, numbered: bool = False) -> CatalogEntry:
+    return _entry(
+        CatalogField(
+            path=path,
+            type="list",
+            label="Credit lines",
+            variable=True,
+            item_where=_CREDIT_LINE,
+            item_format=fmt,
+            item_numbered=numbered,
+        )
+    )
+
+
+def test_an_element_filter_keeps_only_the_elements_that_satisfy_it() -> None:
+    """Judged on the FIRST array the path crosses, before the walk goes on:
+    HDB fails the facility, DMI has no offers, FINNABLE alone survives."""
+    spec = spec_for_entry(_filtered("payload.loan_applications.lender_name"), {})
+    assert engine.extract({"loan_applications": _APPS}, spec).variables == {
+        "lender_name": "FINNABLE"
+    }
+
+
+def test_an_empty_array_reads_as_absent_to_exists() -> None:
+    """`offers exists` is "made at least one offer": DMI's [] is not an offer."""
+    spec = spec_for_entry(_filtered("payload.loan_applications.lender_name"), {})
+    only_dmi = {"loan_applications": [_APPS[1]]}
+    assert engine.extract(only_dmi, spec).variables == {"lender_name": None}
+
+
+def test_a_filter_that_leaves_nothing_says_so_as_none() -> None:
+    """The condition square's `context.offers exists` is exactly "any
+    application passed": no survivor, the declared name is None — a fact
+    the run reads as absent, AND one that shadows an earlier letter's
+    offers. Silence would have let the older offers stand and the call
+    fire on them (the latest letter decides, never a previous one)."""
+    spec = spec_for_entry(
+        _filtered("payload.loan_applications.offers", "{offer_id}"), {}
+    )
+    assert engine.extract(
+        {"loan_applications": [_APPS[1], _APPS[2]]}, spec
+    ).variables == {"offers": None}
+
+
+def test_a_nested_element_inherits_its_parents_scalar_fields() -> None:
+    """An offer rendered under its application can name the application's
+    lender and loan id, so one line reads whole — two parallel lists
+    ("FINNABLE, DMI" beside "F-6, F-9, D-1") can never be paired by a reader."""
+    spec = spec_for_entry(
+        _filtered(
+            "payload.loan_applications.offers", "{lender_name} {loan_id} {offer_id}"
+        ),
+        {},
+    )
+    assert engine.extract({"loan_applications": _APPS}, spec).variables == {
+        "offers": "FINNABLE LN1 F-6, FINNABLE LN1 F-9"
+    }
+
+
+def test_a_blank_that_lands_on_a_list_of_values_reads_them_joined() -> None:
+    """One line per APPLICATION listing its own offer ids — the grouping the
+    payment link needs, kept inside one value."""
+    spec = spec_for_entry(
+        _filtered("payload.loan_applications", "{lender_name}: {offers.offer_id}"), {}
+    )
+    assert engine.extract({"loan_applications": _APPS}, spec).variables == {
+        "loan_applications": "FINNABLE: F-6, F-9"
+    }
+
+
+def test_a_blank_that_lands_on_a_list_of_objects_is_still_missing() -> None:
+    """`{offers}` on an application is objects, not a value — the line is
+    skipped whole, the same law as any other unrenderable blank."""
+    spec = spec_for_entry(
+        _filtered("payload.loan_applications", "{lender_name}: {offers}"), {}
+    )
+    assert engine.extract({"loan_applications": _APPS}, spec).variables == {
+        "loan_applications": None
+    }
+
+
+def test_numbered_lines_render_one_element_per_line() -> None:
+    """For a call: five offers as five numbered lines, and the customer
+    answers "option two". Off by default — a WhatsApp template parameter
+    may carry no line break, so the comma list stays what every other
+    list renders as."""
+    two = {
+        "loan_applications": [_APPS[0], {**_APPS[2], "facility_type": "CREDIT_LINE"}]
+    }
+    spec = spec_for_entry(
+        _filtered(
+            "payload.loan_applications.offers",
+            "{lender_name} offer {offer_id}",
+            numbered=True,
+        ),
+        {},
+    )
+    assert engine.extract(two, spec).variables == {
+        "offers": "1. FINNABLE offer F-6\n2. FINNABLE offer F-9\n3. HDB offer H-3"
+    }
+    plain = spec_for_entry(
+        _filtered("payload.loan_applications.offers", "{lender_name} offer {offer_id}"),
+        {},
+    )
+    assert engine.extract(two, plain).variables == {
+        "offers": "FINNABLE offer F-6, FINNABLE offer F-9, HDB offer H-3"
+    }
+
+
+def test_the_where_grammar_still_never_receives_an_array() -> None:
+    """The filter lives inside the list reader. field_value — what a door's
+    `where` and a square's `key` resolve through — stops at an array as
+    before (sealed): the matcher never learns array semantics."""
+    assert (
+        engine.field_value(
+            {"loan_applications": _APPS}, "payload.loan_applications.facility_type"
+        )
+        is None
+    )
+
+
+def test_the_ceiling_holds_a_real_offer_list() -> None:
+    """Raised 256 -> 1000: a Flipkart LINE_OFFERED with three offers renders
+    to ~330 characters and two credit lines with five to ~490; at 256 the
+    third offer onward was "+N more" and never reached the call."""
+    assert engine.VARIABLE_MAX_CHARS == 1000
+    fmt = "{lender_name} loan {loan_id} offer {offer_id}: {tenure} months at 22.00 percent, limit 6000.00 to 50000.00 INR"
+    five = {
+        "loan_applications": [
+            {
+                **_APPS[0],
+                "offers": [{"offer_id": f"F-{i}", "tenure": i} for i in (6, 9, 12)],
+            },
+            {
+                "loan_id": "LN4",
+                "lender_name": "BUNNABLE",
+                "facility_type": "CREDIT_LINE",
+                "offers": [
+                    {"offer_id": "B-3", "tenure": 3},
+                    {"offer_id": "B-6", "tenure": 6},
+                ],
+            },
+        ]
+    }
+    spec = spec_for_entry(
+        _filtered("payload.loan_applications.offers", fmt, numbered=True), {}
+    )
+    rendered = engine.extract(five, spec).variables["offers"]
+    assert rendered.count("\n") == 4 and " more" not in rendered

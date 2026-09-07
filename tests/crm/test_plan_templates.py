@@ -22,8 +22,24 @@ from app.crm.record.contracts import CatalogField
 PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
 CART = PLANS / "cart-recovery.json"
 CART_FALLBACK = PLANS / "cart-recovery-fallback.json"
+CART_TIERED = PLANS / "cart-recovery-tiered.json"
+CART_SPLIT = PLANS / "cart-recovery-split.json"
 LOAN = PLANS / "loan-dropoff.json"
 COD = PLANS / "cod-confirm.json"
+LINE = PLANS / "line-nudge.json"
+# The lending journey on a merchant's OWN events (line-nudge.json): eight
+# non-terminal topics the squares listen on, three terminals the goal ends on.
+LINE_OPEN = [
+    "LINE_INITIATED",
+    "LINE_ACCOUNT_AGGREGATOR_REQUIRED",
+    "LINE_ACCOUNT_AGGREGATOR_INITIATED",
+    "LINE_ACCOUNT_AGGREGATOR_COMPLETED",
+    "LINE_OFFERED",
+    "LINE_OFFER_SELECTED",
+    "LINE_KYC_COMPLETED",
+    "LINE_LENDER_ATTEMPT_FAILED",
+]
+LINE_DONE = ["LINE_ACTIVE", "LINE_HARD_OFFER_REJECTED", "LINE_KYC_REJECTED"]
 
 # The funnel, in order (§16.2): stage i listens for every stage after it;
 # disbursed ends the journey as the goal, rejected/withdrawn as withdrawn.
@@ -73,7 +89,59 @@ def _catalogs() -> Catalogs:
     }
     for topic in [*LOAN_STAGES, LOAN_DONE, *LOAN_OUT]:
         catalogs[topic] = _loan_registration()
+    for topic in [*LINE_OPEN, *LINE_DONE]:
+        catalogs[topic] = _line_registration()
     return catalogs
+
+
+def _line_registration() -> Dict[str, CatalogField]:
+    """What the lending vendor registers per LINE_* topic: the person, the
+    key, and the credit-line offers rendered from INSIDE loan_applications —
+    only the applications whose facility is a credit line with at least one
+    offer, one numbered line per offer, each naming its lender and id."""
+    credit_line = [
+        {"field": "facility_type", "op": "is", "value": "CREDIT_LINE"},
+        {"field": "offers", "op": "exists"},
+    ]
+    fields = [
+        CatalogField(
+            path="payload.customer_mobile_number",
+            type="phone",
+            label="Customer phone",
+            identity="phone",
+        ),
+        CatalogField(
+            path="payload.customer_id",
+            type="text",
+            label="Customer id",
+            keyable=True,
+            variable=True,
+        ),
+        CatalogField(
+            path="payload.event_name", type="text", label="Event", variable=True
+        ),
+        CatalogField(
+            path="payload.loan_applications",
+            type="list",
+            label="Credit lines",
+            variable=True,
+            item_where=credit_line,
+            item_format="{lender_name}: {offers.offer_id}",
+        ),
+        CatalogField(
+            path="payload.loan_applications.offers",
+            type="list",
+            label="Credit-line offers",
+            variable=True,
+            item_where=credit_line,
+            item_numbered=True,
+            item_format=(
+                "{lender_name} offer {offer_id}: {tenure} months at "
+                "{reducing_interest_rate} percent, up to {max_loan_amount} {currency}"
+            ),
+        ),
+    ]
+    return {f.path: f for f in fields}
 
 
 def test_the_expected_documents_exist() -> None:
@@ -81,7 +149,18 @@ def test_the_expected_documents_exist() -> None:
     assert LOAN.is_file(), LOAN
     assert CART_FALLBACK.is_file(), CART_FALLBACK
     assert COD.is_file(), COD
-    assert _every_plan() == [CART_FALLBACK, CART, COD, LOAN]
+    assert CART_TIERED.is_file(), CART_TIERED
+    assert CART_SPLIT.is_file(), CART_SPLIT
+    assert LINE.is_file(), LINE
+    assert _every_plan() == [
+        CART_FALLBACK,
+        CART_SPLIT,
+        CART_TIERED,
+        CART,
+        COD,
+        LINE,
+        LOAN,
+    ]
 
 
 @pytest.mark.parametrize("path", _every_plan(), ids=lambda p: p.stem)
@@ -100,10 +179,46 @@ def test_the_catalog_laws_actually_run_over_the_boards() -> None:
     assert any("loyalty_tier" in p and "not a declared variable" in p for p in problems)
 
 
+def test_the_tiered_cart_board_calls_only_above_the_threshold() -> None:
+    """enh A/01's example: one condition square, `big` -> the rescue call,
+    `else` -> the WhatsApp nudge; both arrive at the same closing wait."""
+    doc = _load(CART_TIERED)
+    decide = next(n for n in doc["nodes"] if n["type"] == "condition")
+    assert [r["on"] for r in decide["rules"]] == ["big"]
+    assert decide["rules"][0]["if"][0]["field"] == "context.total_price"
+    # the whole arrow, destination included: a swapped pair of targets would
+    # still carry both labels
+    assert sorted(tuple(e) for e in doc["edges"] if e[0] == "decide") == [
+        ("decide", "rescue-call", "big"),
+        ("decide", "wa-nudge", "else"),
+    ]
+
+
+def test_the_split_cart_board_sends_two_letters_in_a_fixed_share() -> None:
+    """enh A/04's example: one split square, 70/30 between two approved
+    WhatsApp templates, both arriving at the same closing wait. The shares
+    total 100 because a split has no `else` — every run takes an arm."""
+    doc = _load(CART_SPLIT)
+    node = next(n for n in doc["nodes"] if n["type"] == "split")
+    assert [(a["on"], a["percent"]) for a in node["arms"]] == [
+        ("control", 70),
+        ("variant", 30),
+    ]
+    assert sum(a["percent"] for a in node["arms"]) == 100
+    labels = {(e[0], e[2]) for e in doc["edges"] if len(e) == 3}
+    assert {("which-letter", "control"), ("which-letter", "variant")} <= labels
+    # the two arms differ in ONE thing — the letter — so the arm counts in
+    # the summary are about the letter and nothing else
+    letters = {n["id"]: n["template"] for n in doc["nodes"] if n["type"] == "send"}
+    assert letters == {"wa-control": "cart_recovery_1", "wa-variant": "cart_recovery_2"}
+    assert ["wa-control", "wait-1d"] in doc["edges"]
+    assert ["wa-variant", "wait-1d"] in doc["edges"]
+
+
 def test_every_cart_send_maps_its_blanks() -> None:
     """send_variables posts EXACTLY the map, nothing when it is empty — a
     shipped board with an unmapped send would refuse on every send."""
-    for path in (CART, CART_FALLBACK):
+    for path in (CART, CART_FALLBACK, CART_TIERED, CART_SPLIT):
         for node in _load(path)["nodes"]:
             if node["type"] == "send":
                 assert node.get("variables") == {"1": "customer_name"}, (path, node)
