@@ -17,11 +17,12 @@ pipeline starts, and the Gemini Live service reconnects to register them.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from google.genai.types import ThinkingConfig
+from pipecat.processors.aggregators import async_tool_messages
+from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
 from pipecat.services.google.gemini_live.llm import (
     GeminiLiveLLMService,
     GeminiVADParams,
@@ -45,119 +46,42 @@ DEFAULT_GEMINI_REALTIME_MODEL = "gemini-3.1-flash-live-preview"
 DEFAULT_GEMINI_REALTIME_VOICE = "Kore"
 
 
-def _parse_async_tool_payload(content: Any) -> Optional[dict]:
-    """Parse an async-tool JSON payload from a tool/developer message.
-
-    The assistant aggregator writes both the "running" placeholder (``role:
-    tool``) and the final result (``role: developer``, ``status=finished``)
-    as JSON strings shaped ``{"type": "async_tool", ...}``. Returns the dict
-    for those, None for anything else (sync results, plain text).
-    """
-    if not isinstance(content, str):
-        return None
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(payload, dict) and payload.get("type") == "async_tool":
-        return payload
-    return None
-
-
 class BuddyGeminiLiveLLMService(GeminiLiveLLMService):
-    """GeminiLiveLLMService that actually delivers async-tool results.
+    """GeminiLiveLLMService plus the Gemini 3.x nudge on async tool results.
 
-    pipecat 1.1.0's Gemini Live service never tells a live session that an
-    async function call FINISHED, so the model waits forever for a
-    "developer message" that never arrives (observed 2026-08-18: 19s of
-    post-closing dead air; finish_call only fired after the customer spoke):
+    pipecat 1.8 delivers async-tool results itself: its
+    ``_process_completed_function_calls`` parses the async-tool messages the
+    assistant aggregator writes (``{"type": "async_tool", ...}``) and sends
+    each final result through ``_tool_result``. What it does not send is the
+    realtime input Gemini 3.x needs before it will run inference on that tool
+    response (the nudge ``_create_single_response`` applies for the same
+    reason). Without it the model sits on the delivered result until the
+    customer speaks again (observed 2026-08-18 on pipecat 1.1: 19s of
+    post-closing dead air; finish_call only fired after the customer spoke).
 
-    - The assistant aggregator reports async results as a ``developer``
-      message (``{"type": "async_tool", "status": "finished", "result": ...}``)
-      and leaves the ``tool`` message as a "running" placeholder.
-    - The Gemini adapter maps ``developer`` to plain user text, and the
-      service's incremental ``_process_completed_function_calls`` only sends
-      ``functionResponse`` parts — its ``value != "IN_PROGRESS"`` filter was
-      written for the older placeholder format, so the RUNNING payload slips
-      through and the real result is never sent.
-    - ``_tool_result`` also lacks the Gemini 3.x realtime-input nudge that
-      ``_create_single_response`` applies ("Gemini 3.x won't run inference
-      without a realtime input").
-
-    This override (a) suppresses the running placeholders, (b) sends each
-    finished developer-message result through the service's own
-    ``_tool_result`` plus the 3.x nudge, and (c) still calls super() so
-    synchronous results keep their original path.
+    Only async results get the nudge: a synchronous tool result lands while
+    the model is mid-turn and resumes inference on its own.
     """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        # Async-tool ids whose FINAL (status=finished) result was sent (or
-        # bookkept at initial context). Distinct from _completed_tool_calls,
-        # which also accumulates ids whose running placeholder was merely
-        # suppressed — those still owe a final result later.
-        self._async_final_results_sent: set = set()
 
     async def _process_completed_function_calls(self, send_new_results: bool) -> None:
-        if self._context is None:
-            await super()._process_completed_function_calls(send_new_results)
-            return
-        messages = self._context.messages or []
-
-        # tool_call_id -> function name, from assistant tool_calls messages.
-        id_to_name: dict = {}
-        for message in messages:
-            for tool_call in message.get("tool_calls") or []:
-                name = (tool_call.get("function") or {}).get("name")
-                if name and tool_call.get("id"):
-                    id_to_name[tool_call["id"]] = name
-
-        # 1) Finished async results (developer messages) — the payload the
-        #    base class never sends.
-        for message in messages:
-            if message.get("role") != "developer":
-                continue
-            payload = _parse_async_tool_payload(message.get("content"))
-            if payload is None or payload.get("status") != "finished":
-                continue
-            tool_call_id = payload.get("tool_call_id")
-            if not tool_call_id or tool_call_id in self._async_final_results_sent:
-                continue
-            if send_new_results:
-                result = payload.get("result")
-                if isinstance(result, str):
-                    try:
-                        result = json.loads(result)
-                    except json.JSONDecodeError:
-                        result = {"value": result}
-                if not isinstance(result, dict):
-                    result = {"value": "COMPLETED"}
-                await self._tool_result(
-                    tool_call_id,
-                    id_to_name.get(tool_call_id, "tool_call_result"),
-                    result,
-                )
-                # Gemini 3.x won't run inference on a tool response without
-                # a realtime input (same nudge as _create_single_response).
-                if self._is_gemini_3 and self._session:
-                    await self._session.send_realtime_input(text=" ")
-            self._async_final_results_sent.add(tool_call_id)
-            self._completed_tool_calls.add(tool_call_id)
-
-        # 2) Running placeholders — mark completed WITHOUT sending, so the
-        #    base class doesn't ship a "task started" payload as the result.
-        for message in messages:
-            if message.get("role") != "tool":
-                continue
-            payload = _parse_async_tool_payload(message.get("content"))
-            if payload is None:
-                continue
-            tool_call_id = payload.get("tool_call_id") or message.get("tool_call_id")
-            if tool_call_id:
-                self._completed_tool_calls.add(tool_call_id)
-
-        # 3) Synchronous results keep the base-class path untouched.
+        already_delivered = set(self._completed_tool_calls)
         await super()._process_completed_function_calls(send_new_results)
+
+        if not (send_new_results and self._is_gemini_3 and self._session):
+            return
+
+        newly_delivered = self._completed_tool_calls - already_delivered
+        for message in self._context.messages if self._context else []:
+            if isinstance(message, LLMSpecificMessage):
+                continue
+            payload = async_tool_messages.parse_message(message)
+            if (
+                payload is not None
+                and payload.kind == "final"
+                and payload.tool_call_id in newly_delivered
+            ):
+                await self._session.send_realtime_input(text=" ")
+                return
 
 
 @dataclass

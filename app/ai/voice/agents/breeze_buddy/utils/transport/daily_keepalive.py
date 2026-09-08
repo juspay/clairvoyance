@@ -65,6 +65,24 @@ def hold_daily_client(client: Any) -> Callable[[], None]:
     return restore
 
 
+def _real_cleanup_coro(client: Any) -> Any:
+    """Coroutine running the client's REAL ``cleanup()`` body, or None.
+
+    Order matters. ``type(client).cleanup.__wrapped__`` is the undecorated
+    body, so it runs regardless of how many shared owners pipecat still counts
+    — the only variant that actually tears down a held client (see
+    :func:`force_teardown_daily_client`, constraint 3). The stashed pre-hold
+    bound method is the fallback for a pipecat whose ``cleanup()`` carries no
+    refcount decorator, and for that version calling it is correct.
+    """
+    class_cleanup = getattr(type(client), "cleanup", None)
+    unwrapped = getattr(class_cleanup, "__wrapped__", None)
+    if unwrapped is not None:
+        return unwrapped(client)
+    held = getattr(client, "_bb_held_cleanup", None)
+    return held() if held is not None else None
+
+
 async def force_teardown_daily_client(client: Any) -> None:
     """Really leave the room and release the CallClient at true call end.
 
@@ -82,9 +100,22 @@ async def force_teardown_daily_client(client: Any) -> None:
 
     2. pipecat's async ``DailyTransportClient.cleanup()`` is the one method
        that BOTH cancels the event/audio/video callback tasks (otherwise
-       reported as dangling by PipelineTask) AND runs ``release()`` in an
-       executor. Since :func:`hold_daily_client` no-ops ``cleanup`` on the
-       instance, we call the stashed original here.
+       reported as dangling by PipelineTask) AND runs ``release()`` off the
+       loop. Since :func:`hold_daily_client` no-ops ``cleanup`` on the
+       instance, we have to reach past it to that body here.
+
+    3. Since pipecat 1.8, ``cleanup()`` is wrapped in ``@releases("client")``
+       and ``join()``/``leave()`` in the matching ``room`` pair: the input and
+       output transports share one client, so the real body only runs for the
+       LAST owner to release. Our suppressed ``leave``/``cleanup`` never
+       decrement that count, so simply calling the stashed original would
+       decrement 2 -> 1 and run nothing — the callback tasks would leak and
+       the native ``CallClient`` would never be released. We therefore invoke
+       the UNWRAPPED body (``functools.wraps`` exposes it as ``__wrapped__``),
+       which bypasses the refcount exactly as the pre-1.8 unrefcounted
+       ``cleanup()`` did. We leave the inflated count alone rather than
+       draining it: a double release is already impossible because pipecat's
+       ``_cleanup()`` nulls ``self._client`` after releasing it.
     """
     # Leave the room via the low-level _leave (bypasses the join/leave
     # refcount, which the no-op leave() left inflated).
@@ -101,13 +132,14 @@ async def force_teardown_daily_client(client: Any) -> None:
         logger.warning(f"[daily_keepalive] force leave failed: {exc}")
 
     # Real cleanup: cancel callback tasks + release the native client
-    # off-loop, via the original (pre-hold) async cleanup().
+    # off-loop. Prefer the unwrapped body so the shared-owner refcount that
+    # pipecat >=1.8 puts on cleanup() cannot swallow it (see constraint 3).
     try:
-        cleanup = getattr(client, "_bb_held_cleanup", None)
-        if cleanup is not None:
-            await asyncio.wait_for(cleanup(), timeout=_CLEANUP_TIMEOUT_SECS)
+        cleanup_coro = _real_cleanup_coro(client)
+        if cleanup_coro is not None:
+            await asyncio.wait_for(cleanup_coro, timeout=_CLEANUP_TIMEOUT_SECS)
         else:
-            # Client was never held (shouldn't happen) — fall back to the
+            # Client was never held and exposes no cleanup — fall back to the
             # raw release, still strictly off-loop.
             raw_cleanup = getattr(client, "_cleanup", None)
             if raw_cleanup is not None:

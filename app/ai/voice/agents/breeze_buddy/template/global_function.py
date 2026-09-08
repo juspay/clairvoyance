@@ -15,7 +15,7 @@ import inspect
 import random
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
-from pipecat_flows import FlowsFunctionSchema
+from pipecat.flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.template.approval import gate_global_function
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
