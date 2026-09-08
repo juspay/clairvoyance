@@ -920,3 +920,6 @@ UAP_VALIDITY_DAYS = os.environ.get("UAP_VALIDITY_DAYS", "90")
 UAP_LIMIT_CHOICES = os.environ.get("UAP_LIMIT_CHOICES", "200.00,500.00,1000.00")
 UAP_SELLER_NAME = os.environ.get("UAP_SELLER_NAME", "Chennai Metro Rail Limited")
 UAP_SELLER_MIC = os.environ.get("UAP_SELLER_MIC", "CMRL")
+# Juspay routing label for agentic /txns (order.metadata.JUSPAY:gateway_reference_id);
+# unset = use the value NY returns on confirm, if any.
+UAP_GATEWAY_REFERENCE_ID = os.environ.get("UAP_GATEWAY_REFERENCE_ID", "").strip()
