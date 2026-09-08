@@ -14,7 +14,6 @@ from pipecat.services.soniox.stt import (
 )
 from pipecat.transcriptions.language import Language
 
-from app.ai.voice.stt.soniox.service import SonioxSTTServiceWithEndpointDelay
 from app.core.logger import logger
 
 __all__ = ["SonioxConfig", "build_soniox_stt"]
@@ -88,7 +87,7 @@ def _parse_soniox_context(
         )
 
         logger.info(
-            "Successfully parsed %s Soniox context with %d general items, %d terms, %d translation terms",
+            "Successfully parsed {} Soniox context with {} general items, {} terms, {} translation terms",
             log_context,
             len(general_objects or []),
             len(terms) if terms else 0,
@@ -98,7 +97,7 @@ def _parse_soniox_context(
 
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.warning(
-            "Failed to parse %s Soniox context: %s. Falling back to None context.",
+            "Failed to parse {} Soniox context: {}. Falling back to None context.",
             log_context,
             exc,
         )
@@ -108,8 +107,8 @@ def _parse_soniox_context(
 def build_soniox_stt(config: SonioxConfig):
     """Create a Soniox STT service with native endpoint detection support.
 
-    Uses ``SonioxSTTServiceWithEndpointDelay`` to support ``max_endpoint_delay_ms``
-    for controlling Soniox's semantic endpoint detection latency.
+    ``max_endpoint_delay_ms`` controls Soniox's semantic endpoint detection
+    latency; it only applies when ``vad_force_turn_endpoint=False``.
 
     Automatically handles language hints parsing:
     - If provided as a comma-separated string, it will be split and parsed
@@ -148,6 +147,7 @@ def build_soniox_stt(config: SonioxConfig):
         client_reference_id=config.client_reference_id,
         language_hints_strict=config.language_hints_strict,
         enable_language_identification=enable_lang_id,
+        max_endpoint_delay_ms=config.max_endpoint_delay_ms,
     )
 
     # Format language hints for logging
@@ -159,8 +159,8 @@ def build_soniox_stt(config: SonioxConfig):
             hints_display = ",".join(config.language_hints)
 
     logger.info(
-        "Using %s Soniox STT service with model: %s, language_hints: %s, "
-        "VAD force endpoint: %s, max_endpoint_delay_ms: %s",
+        "Using {} Soniox STT service with model: {}, language_hints: {}, "
+        "VAD force endpoint: {}, max_endpoint_delay_ms: {}",
         config.log_context,
         config.model,
         hints_display,
@@ -168,9 +168,8 @@ def build_soniox_stt(config: SonioxConfig):
         config.max_endpoint_delay_ms,
     )
 
-    return SonioxSTTServiceWithEndpointDelay(
+    return SonioxSTTService(
         api_key=config.api_key,
         settings=soniox_settings,
         vad_force_turn_endpoint=config.vad_force_turn_endpoint,
-        max_endpoint_delay_ms=config.max_endpoint_delay_ms,
     )

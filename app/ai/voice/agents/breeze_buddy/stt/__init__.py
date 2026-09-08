@@ -31,7 +31,6 @@ from app.core.config.dynamic import (
     BB_SARVAM_STT_HIGH_VAD_SENSITIVITY,
     BB_SARVAM_STT_LANGUAGE_CODE,
     BB_SARVAM_STT_MODEL,
-    BB_SARVAM_STT_PROMPT,
     BB_SARVAM_STT_VAD_SIGNALS,
 )
 from app.core.config.static import (
@@ -160,7 +159,6 @@ async def create_stt_from_config(config: STTConfiguration):
                 model=bb_model,
                 sample_rate=SAMPLE_RATE,
                 language_code=bb_lang,
-                prompt=await BB_SARVAM_STT_PROMPT(),
                 vad_signals=await BB_SARVAM_STT_VAD_SIGNALS(),
                 high_vad_sensitivity=await BB_SARVAM_STT_HIGH_VAD_SENSITIVITY(),
             )
