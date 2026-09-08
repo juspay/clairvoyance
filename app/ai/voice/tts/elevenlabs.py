@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 import httpx
 from pipecat.services.elevenlabs.tts import (
     ElevenLabsTTSService,
+    ElevenLabsTTSSettings,
     language_to_elevenlabs_language,
 )
 from pipecat.services.tts_service import TextAggregationMode
@@ -52,7 +53,7 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
         model=config.model,
         url=config.url,
         enable_ssml_parsing=config.enable_ssml_parsing,
-        settings=ElevenLabsTTSService.Settings(
+        settings=ElevenLabsTTSSettings(
             speed=config.speed,
             stability=config.stability,
             similarity_boost=config.similarity_boost,

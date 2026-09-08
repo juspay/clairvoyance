@@ -31,6 +31,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.utils.types import assert_given
 
 from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (
     compact_tool_results,
@@ -146,7 +147,7 @@ async def _stream_openai(
     adapter = service.get_llm_adapter()
     invocation_params = adapter.get_llm_invocation_params(
         context,
-        system_instruction=service._settings.system_instruction,
+        system_instruction=assert_given(service._settings.system_instruction),
         convert_developer_to_user=not service.supports_developer_role,
     )
 

@@ -22,33 +22,29 @@ that in.
 from __future__ import annotations
 
 import asyncio
-from typing import cast
+from typing import Any, cast
 
 from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import TranscriptionFrame
-from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
-from pipecat.utils.asyncio.task_manager import TaskManager, TaskManagerParams
+from pipecat.utils.asyncio.task_manager import TaskManager
 
 from app.ai.voice.agents.breeze_buddy.template import interruption
 
 
 def _make_setup() -> FrameProcessorSetup:
-    """Build the setup object a strategy's ``setup()`` takes.
+    """Minimal setup config for a turn strategy.
 
-    pipecat 1.8 passes a ``FrameProcessorSetup`` here; before 1.5 it was the
-    bare ``TaskManager``, which now fails with ``'TaskManager' object has no
-    attribute 'task_manager'``.
+    Since pipecat 1.8 a strategy's ``setup()`` takes the whole
+    ``FrameProcessorSetup`` rather than a bare task manager, and reads
+    ``.task_manager`` off it. Nothing on this path touches the pipeline worker,
+    so the field is filled with None rather than standing up a real pipeline.
     """
-    tm = TaskManager()
-    tm.setup(TaskManagerParams(loop=asyncio.get_running_loop()))
-    # A stop strategy's setup() reads only ``task_manager``; ``pipeline_worker``
-    # is required by the dataclass but never touched on this path.
     return FrameProcessorSetup(
         clock=SystemClock(),
-        task_manager=tm,
-        pipeline_worker=cast(PipelineWorker, None),
+        task_manager=TaskManager(loop=asyncio.get_running_loop()),
+        pipeline_worker=cast(Any, None),
     )
 
 

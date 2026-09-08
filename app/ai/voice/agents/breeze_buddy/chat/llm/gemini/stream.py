@@ -20,11 +20,12 @@ entry point; revisit on upgrade).
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.google.llm import GoogleLLMService
+from pipecat.utils.types import assert_given
 
 from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (
     compact_tool_results_universal,
@@ -78,7 +79,7 @@ async def stream_gemini(
     """
     import uuid as _uuid
 
-    from google.genai.types import GenerateContentConfig
+    from google.genai.types import ContentListUnion, GenerateContentConfig
 
     adapter = service.get_llm_adapter()
 
@@ -105,7 +106,8 @@ async def stream_gemini(
         )
 
     invocation_params = adapter.get_llm_invocation_params(
-        call_context, system_instruction=service._settings.system_instruction
+        call_context,
+        system_instruction=assert_given(service._settings.system_instruction),
     )
 
     # Per-cycle forced tool choice (RFC-002): mode=ANY constrains the model
@@ -206,7 +208,9 @@ async def stream_gemini(
     async def _open_stream(params: Dict[str, Any]):
         stream = await service._client.aio.models.generate_content_stream(
             model=model_name,
-            contents=invocation_params["messages"],
+            # list invariance: the adapter hands back list[Content], which
+            # is not assignable to the SDK's list[ContentUnion] parameter.
+            contents=cast(ContentListUnion, invocation_params["messages"]),
             config=GenerateContentConfig(**params),
         )
         iterator = stream.__aiter__()

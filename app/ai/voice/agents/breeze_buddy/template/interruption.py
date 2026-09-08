@@ -265,7 +265,11 @@ async def _apply_interruption_config(
 
     if config.mode == InterruptionMode.DISABLED_DISCARD:
         mute_strategy = AlwaysUserMuteStrategy()
-        await mute_strategy.setup(user_aggregator.task_manager)
+        # pipecat >=1.8 takes the whole FrameProcessorSetup here, not just the
+        # task manager (it reads `.task_manager` off it). The aggregator is
+        # already set up by the time interruption config is applied, so hand it
+        # the same config it was set up with.
+        await mute_strategy.setup(user_aggregator.processor_setup)
         old_mute.append(mute_strategy)
     else:
         # When switching from muted → unmuted, clear the mute flag so frames
