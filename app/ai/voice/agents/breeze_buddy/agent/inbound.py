@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
-from app.database.accessor import get_lead_by_call_id
+from app.database.accessor import get_lead_by_call_id, mask_phone
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     create_lead_call_tracker,
 )
@@ -141,13 +141,12 @@ async def create_lead_from_template_id(
         )
         return existing_lead, None
 
-    # Load template by ID
-    template = await get_template_by_id(template_id)
-    if not template:
-        logger.error(f"Template not found for template_id: {template_id}")
-        return None, "Template not found"
-
-    # Get from_number from call_data or URL query params (for Plivo)
+    # Resolve the call's own numbers BEFORE anything is looked up by
+    # template_id. The caller gets error_reason back verbatim as the WebSocket
+    # close reason, so a template fetch placed ahead of this check is an
+    # oracle: omit the dialed number and "Template not found" vs "Missing 'to'
+    # number" tells an unauthenticated caller whether a template_id is real
+    # (PT-02). Order is load-bearing here, not stylistic.
     start_data = call_data.get("start", {})
     custom_params = call_data.get("custom_parameters") or start_data.get(
         "custom_parameters", {}
@@ -159,6 +158,49 @@ async def create_lead_from_template_id(
         or custom_params.get("from_number")
         or url_params.get("from_number", "unknown")
     )
+    to_number = (
+        start_data.get("to")
+        or call_data.get("to")
+        or custom_params.get("to_number")
+        or url_params.get("to_number")
+    )
+    if not to_number:
+        logger.error(
+            f"Could not determine dialed 'to' number for template_id "
+            f"{template_id}; refusing to build flow"
+        )
+        return None, "Missing 'to' number"
+
+    # SECURITY: the template_id here is attacker-influenceable on the
+    # unauthenticated media WebSocket (Plivo reads it straight from the URL
+    # query params). Scope it to the number that was actually dialed — a call
+    # may only build the template registered to its own inbound number, never
+    # an arbitrary UUID (PT-02).
+    #
+    # "No such template" and "someone else's template" deliberately return the
+    # SAME reason. They are the same answer to the only question the caller is
+    # entitled to ask, and splitting them would rebuild the enumeration oracle
+    # one level down: a distinct "not found" would confirm which UUIDs exist.
+    # The distinction is kept in the logs, where it is useful and not reachable
+    # by the caller.
+    template = await get_template_by_id(template_id)
+    telephony_number = await get_telephony_number_by_number(to_number)
+    if (
+        not template
+        or not telephony_number
+        or template.telephony_number_id != str(telephony_number.id)
+    ):
+        # Mask the dialed number: phone numbers are PII, and this line fires on
+        # every probe attempt, so it is exactly the log an attacker's traffic
+        # fills up. The last 4 digits are enough to correlate with a call record.
+        if not template:
+            logger.error(f"Template not found for template_id: {template_id}")
+        else:
+            logger.error(
+                f"Template {template_id} is not associated with dialed number "
+                f"{mask_phone(to_number)}; refusing to build flow"
+            )
+        return None, "Template not authorized for this number"
 
     # Create lead with the selected template
     lead_id = str(uuid.uuid4())
