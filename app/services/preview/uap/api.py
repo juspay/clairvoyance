@@ -745,7 +745,7 @@ async def create_txn(
             continue
         body[f"order.{key}"] = value
     if gateway_reference_id:
-        body["gateway_reference_id"] = gateway_reference_id
+        body["order.metadata.JUSPAY:gateway_reference_id"] = gateway_reference_id
 
     logger.info(
         f"uap txns: draw order_id={order_id} amount={amount} action_id={action_id}"

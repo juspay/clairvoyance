@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from app.core.config.static import APP_BASE_URL
+from app.core.config.static import APP_BASE_URL, UAP_GATEWAY_REFERENCE_ID
 from app.core.logger import logger
 from app.crm.identity.contracts import get_customer, resolve
 from app.crm.preview.uap.contracts import (
@@ -946,7 +946,9 @@ async def draw_against_agent(payload: DrawRequest) -> Dict[str, Any]:
     # (``metadata.webhook_url``): /txns creates the order inline, so this is
     # the only way NY ever hears it was paid and issues the tickets.
     order_fields = uap_api.confirm_order_fields(confirm)
-    gateway_reference_id = uap_api.confirm_gateway_reference_id(confirm)
+    gateway_reference_id = (
+        UAP_GATEWAY_REFERENCE_ID or uap_api.confirm_gateway_reference_id(confirm)
+    )
 
     # The draw must match NY's confirmed amount exactly (the LLM's figure is
     # the card's "from ₹x"), and the cart is built from that same amount so
