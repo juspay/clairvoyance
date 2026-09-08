@@ -182,8 +182,13 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     # Paginated requests sort by name so the query can ride the
     # (reseller_id, merchant_id, name) composite index. Unpaginated requests
     # keep the original newest-first ordering for backward compatibility.
+    # ``id`` is always the tiebreaker: hundreds of per-merchant voice
+    # templates share a name (``order-confirmation``, ``abandoned-checkout``),
+    # and without a total order Postgres returns the ties in arbitrary order
+    # per statement — LIMIT/OFFSET pages then overlap and skip rows, so a page
+    # walk sees duplicates and silently misses templates.
     paginate = filters.get("limit") is not None
-    order_by = "name" if paginate else "created_at DESC"
+    order_by = "name, id" if paginate else "created_at DESC, id"
 
     # Select only metadata columns (exclude flow and schema fields for performance)
     query = f"""
