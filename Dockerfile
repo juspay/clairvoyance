@@ -10,9 +10,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     PORT=8000 \
     NLTK_DATA=/usr/local/nltk_data\
-    AIC_MODEL_PATH=/app/models/voice/aic/quail_l_8khz.aicmodel \
-    AIC_MODEL_PATH_16KHZ=/app/models/voice/aic/quail_l_16khz.aicmodel \
-    AIC_VOICE_FOCUS_MODEL_PATH=/app/models/voice/aic/quail_vf_2_1_l_16khz.aicmodel \
+    AIC_MODEL_PATH=/app/models/voice/aic/quail_l_8khz_mp51agn0_v13.aicmodel \
+    AIC_MODEL_PATH_16KHZ=/app/models/voice/aic/quail_l_16khz_dtv5nvgu_v20.aicmodel \
+    AIC_VOICE_FOCUS_MODEL_PATH=/app/models/voice/aic/quail_vf_2_2_l_16khz_horgwub0_v14.aicmodel \
     UV_CACHE_DIR=/app/.uv-cache
 
 # Install system dependencies required for audio processing and compilation + curl for GCP CLI
@@ -56,9 +56,9 @@ RUN --mount=type=secret,id=gcp_token \
         curl -sSL https://sdk.cloud.google.com | bash && \
         export PATH=$PATH:/root/google-cloud-sdk/bin && \
         echo "=== Downloading AIC assets ===" && \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_8khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_8khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_16khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_16khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_vf_2_1_l_16khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_vf_2_1_l_16khz.aicmodel"; \
+        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_8khz_mp51agn0_v13.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_8khz_mp51agn0_v13.aicmodel"; \
+        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_16khz_dtv5nvgu_v20.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_16khz_dtv5nvgu_v20.aicmodel"; \
+        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_vf_2_2_l_16khz_horgwub0_v14.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_vf_2_2_l_16khz_horgwub0_v14.aicmodel"; \
     else \
         echo "Warning: GCP token secret not provided, skipping AIC installation (AWS deployment)"; \
     fi

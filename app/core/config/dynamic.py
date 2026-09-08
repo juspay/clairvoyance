@@ -318,11 +318,6 @@ async def SARVAM_TTS_LANGUAGE_CODE() -> str:
     return await get_config("SARVAM_TTS_LANGUAGE_CODE", "en-IN", str)
 
 
-async def SARVAM_STT_PROMPT() -> str:
-    """Returns SARVAM_STT_PROMPT from Redis"""
-    return await get_config("SARVAM_STT_PROMPT", "", str)
-
-
 async def SARVAM_STT_VAD_SIGNALS() -> bool:
     """Returns SARVAM_STT_VAD_SIGNALS from Redis"""
     return await get_config("SARVAM_STT_VAD_SIGNALS", True, bool)
@@ -362,11 +357,6 @@ async def BB_SARVAM_STT_MODEL() -> str:
 async def BB_SARVAM_STT_LANGUAGE_CODE() -> str:
     """Returns BB_SARVAM_STT_LANGUAGE_CODE from Redis"""
     return await get_config("BB_SARVAM_STT_LANGUAGE_CODE", "", str)
-
-
-async def BB_SARVAM_STT_PROMPT() -> str:
-    """Returns BB_SARVAM_STT_PROMPT from Redis"""
-    return await get_config("BB_SARVAM_STT_PROMPT", "", str)
 
 
 async def BB_SARVAM_STT_VAD_SIGNALS() -> bool:
