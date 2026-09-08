@@ -159,8 +159,16 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
     )
 
     reasoning_effort = None
-    if llm_config and llm_config.thinking and llm_config.thinking.enabled:
-        reasoning_effort = llm_config.thinking.reasoning_effort
+    disable_thinking = False
+    if llm_config and llm_config.thinking:
+        if llm_config.thinking.enabled:
+            reasoning_effort = llm_config.thinking.reasoning_effort
+        # Hybrid-thinking models (Qwen on SGLang/vLLM) default to thinking ON
+        # server-side and ignore every normal-field switch; a thinking block
+        # with enabled=false on a gateway template is the template author's
+        # way to switch it off. Inert without a custom endpoint (real OpenAI
+        # reasoning uses reasoning_effort above, not chat_template_kwargs).
+        disable_thinking = bool(llm_config.endpoint and not llm_config.thinking.enabled)
 
     return build_openai_llm(
         OpenAIConfig(
@@ -171,6 +179,8 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             tool_choice=(llm_config.tool_choice if llm_config else None),
+            extra_body=llm_config.extra_body if llm_config else None,
+            disable_thinking=disable_thinking,
             function_call_timeout_secs=(
                 llm_config.function_call_timeout_secs
                 if llm_config and llm_config.function_call_timeout_secs

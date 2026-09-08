@@ -6,7 +6,7 @@ Defines provider enums and configuration models used across all voice agents.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -256,6 +256,20 @@ class LLMConfiguration(BaseModel):
     max_tokens: Optional[int] = Field(
         None, ge=1, description="Maximum completion tokens"
     )
+    extra_body: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Arbitrary top-level request-body fields for "
+        "OpenAI-compatible gateways (Juspay Grid, SGLang, vLLM), sent via "
+        "the SDK's extra_body so they merge into the JSON body top-level "
+        'without colliding with SDK kwargs — e.g. {"parallel_tool_calls": '
+        'false} or {"chat_template_kwargs": {"enable_thinking": false}}. '
+        "Only applied on the OpenAI provider path when a custom endpoint is "
+        "configured (silently dropped on Azure/Vertex); never sent to "
+        "real OpenAI. Combined with thinking.enabled=false (gateway only), "
+        "chat_template_kwargs.enable_thinking=false is injected "
+        "automatically — the only thinking-off switch hybrid-thinking models "
+        "honor server-side.",
+    )
     thinking: Optional[ThinkingConfiguration] = Field(
         None, description="Thinking/reasoning configuration"
     )
@@ -270,6 +284,21 @@ class LLMConfiguration(BaseModel):
         description="Per-template timeout in seconds for LLM function calls "
         "(how long Pipecat waits for a function handler to return). "
         "Defaults to 10s if not set.",
+    )
+    prefill_system_prompt: bool = Field(
+        False,
+        description="At voice call start, fire one cheap chat.completions "
+        "request (max_completion_tokens=16, non-streaming) carrying the exact "
+        "rendered system prefix + tools, to warm the provider's automatic "
+        "prompt cache before the first real inference. Only meaningful for "
+        "Azure/OpenAI text LLMs (those cache by exact token prefix, >=1024 "
+        "tokens) — silently inert elsewhere: ignored on realtime and on "
+        "providers without a chat.completions prefix cache (the runtime gate "
+        "logs a per-call skip). The win is turn-1 TTFT: turns 2+ already hit "
+        "the cache. Costs one extra full-price input billing per call — and "
+        "on newer Azure model families (GPT-5.6+) cache writes can be billed "
+        "separately from discounted reads. Most valuable when a greeting is "
+        "played (the prefill runs during greeting playback).",
     )
 
     realtime: Optional[RealtimeConfig] = Field(
