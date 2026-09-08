@@ -133,7 +133,7 @@ class TestRegistrationGuards:
         }
         assert set(model_renderable(defs)) == {"JourneyOptions"}
 
-    def test_model_renderable_filters_render_def_less(self):
+    def test_model_renderable_keeps_render_def_less(self):
         """A def without a render_def never ships on the widget wire, so it
         must not be offered to the model either — or the model can persist
         a ui_op the widget cannot paint."""
@@ -150,7 +150,8 @@ class TestRegistrationGuards:
             ),
             "BackendOnly": CustomComponentDef(name="BackendOnly", props_schema={}),
         }
-        assert set(model_renderable(defs)) == {"Renderable"}
+        # Backend-only defs (merchant page draws them) stay renderable.
+        assert set(model_renderable(defs)) == {"Renderable", "BackendOnly"}
 
     @pytest.mark.parametrize("bad", ["journeyOptions", "J", "Has Spaces", "x" * 70])
     def test_name_must_be_pascal_case(self, bad):

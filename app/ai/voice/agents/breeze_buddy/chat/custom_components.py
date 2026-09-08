@@ -30,18 +30,19 @@ def model_renderable(
 ) -> Dict[str, CustomComponentDef]:
     """The subset the MODEL may render in-thread via render_ui.
 
-    Two exclusions, both mirroring what the widget wire can paint:
+    One exclusion:
 
     - ``overlay_only`` defs are client-side render targets (opened by an
       ``open_detail`` / intent action in the widget's detail overlay): they
       ship on the session surface wire but never join the render_ui enum,
       coaching, or allowlist — the model cannot paint them in-thread.
     - defs with NO ``render_def`` (registered for a merchant frontend that
-      renders them itself): ``_custom_components_wire`` never ships them,
-      so offering them to the model would let it persist a ui_op our
-      widget cannot interpret.
+      renders them itself) STAY renderable: the model may paint them and
+      the op persists; ``_custom_components_wire`` still never ships them,
+      so the generic widget is unaffected — only the merchant's own page,
+      which draws them by name, ever paints the op.
     """
-    return {k: v for k, v in defs.items() if v.render_def and not v.flags.overlay_only}
+    return {k: v for k, v in defs.items() if not v.flags.overlay_only}
 
 
 async def resolve_custom_components(
