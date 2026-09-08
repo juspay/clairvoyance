@@ -144,9 +144,14 @@ async def _stream_openai(
     and flush on index advance / stream close.
     """
     adapter = service.get_llm_adapter()
+    # pipecat 1.5.0 types settings values as possibly NOT_GIVEN; the adapter
+    # wants a concrete str | None.
+    system_instruction = service._settings.system_instruction
     invocation_params = adapter.get_llm_invocation_params(
         context,
-        system_instruction=service._settings.system_instruction,
+        system_instruction=(
+            system_instruction if isinstance(system_instruction, str) else None
+        ),
         convert_developer_to_user=not service.supports_developer_role,
     )
 

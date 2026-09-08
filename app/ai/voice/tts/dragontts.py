@@ -166,6 +166,13 @@ class DragonTTSConfig:
     params: dict = field(default_factory=dict)
     aggregate_sentences: bool = True
     text_filters: Optional[list] = None
+    # Output sample rate to request from DragonTTS. Telephony pins 8000 so the
+    # server synthesizes/serves at 8 kHz and pipecat's soxr stream resampler
+    # never runs (its 0.2s idle clear() destroys audio between DragonTTS
+    # sentence bursts); for eleven_v3 nested models DragonTTS additionally
+    # generates natively at pcm_8000 instead of resampling post-generation.
+    # None keeps 16000 (the Daily/WebRTC path).
+    sample_rate: Optional[int] = None
 
 
 class DragonTTSService(TTSService):
@@ -175,12 +182,15 @@ class DragonTTSService(TTSService):
     streams audio chunks back — a cache HIT streams the cached blob, a MISS
     streams from the nested provider as it synthesizes (low TTFB) while teeing
     the full clip to the cache. Each chunk is yielded as its own audio frame so
-    pipecat can play it incrementally. Output is raw ``pcm_s16le`` @ 16 kHz
-    mono, matching the other providers' streaming output so the downstream
-    transport resamples to μ-law for telephony.
+    pipecat can play it incrementally. Output is raw ``pcm_s16le`` mono at the
+    configured rate (16 kHz default; telephony pins 8 kHz so the transport
+    receives native-rate audio and never resamples — see
+    ``DragonTTSConfig.sample_rate``).
     """
 
-    # DragonTTS returns raw pcm_s16le at 16 kHz for this service — fixed.
+    # Default output: raw pcm_s16le at 16 kHz. Telephony overrides it to 8000
+    # (see DragonTTSConfig.sample_rate) so the server serves 8 kHz audio and no
+    # resampling happens on the pipecat side.
     OUTPUT_SAMPLE_RATE = 16000
     # No read timeout: streaming responses may pause between chunks (provider is
     # still synthesizing). Connect/pool/write stay bounded.
@@ -196,10 +206,12 @@ class DragonTTSService(TTSService):
         params: Optional[dict] = None,
         aggregate_sentences: bool = True,
         text_filters: Optional[list] = None,
+        sample_rate: Optional[int] = None,
         **kwargs,
     ) -> None:
+        self._output_rate = sample_rate or self.OUTPUT_SAMPLE_RATE
         super().__init__(
-            sample_rate=self.OUTPUT_SAMPLE_RATE,
+            sample_rate=self._output_rate,
             push_start_frame=True,
             push_stop_frames=True,
             text_aggregation_mode=(
@@ -223,6 +235,17 @@ class DragonTTSService(TTSService):
     def language_to_service_language(self, language: Language) -> str | None:
         """DragonTTS accepts a plain language code — no provider mapping needed."""
         return None
+
+    def can_generate_metrics(self) -> bool:
+        """Emit TTFB/processing metrics like every built-in TTS provider.
+
+        Without this override pipecat's base returns False and DragonTTS calls
+        record no latency at all — the collector never sees a ttfb_ms for the
+        service. The base class runs the TTFB clock itself: started when the
+        first aggregated sentence arrives, stopped on the first streamed audio
+        chunk (cache hit or miss alike).
+        """
+        return True
 
     async def start(self, frame: StartFrame) -> None:
         await super().start(frame)
@@ -259,7 +282,7 @@ class DragonTTSService(TTSService):
             "output_format": {
                 "container": "raw",
                 "encoding": "pcm_s16le",
-                "sample_rate": self.OUTPUT_SAMPLE_RATE,
+                "sample_rate": self._output_rate,
             },
             "params": self._params,
         }
@@ -306,7 +329,7 @@ class DragonTTSService(TTSService):
                     carry = data[usable:]
                     yield TTSAudioRawFrame(
                         audio=data[:usable],
-                        sample_rate=self.OUTPUT_SAMPLE_RATE,
+                        sample_rate=self._output_rate,
                         num_channels=1,
                         context_id=context_id,
                     )
@@ -338,4 +361,5 @@ def build_dragontts_tts(config: DragonTTSConfig) -> DragonTTSService:
         params=config.params,
         aggregate_sentences=config.aggregate_sentences,
         text_filters=config.text_filters,
+        sample_rate=config.sample_rate,
     )

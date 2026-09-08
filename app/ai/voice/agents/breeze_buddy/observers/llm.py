@@ -6,7 +6,7 @@ Each provider makes a non-streaming API call with tools and returns
 """
 
 import json
-from typing import Any, List
+from typing import Any, List, cast
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -97,6 +97,9 @@ async def _call_anthropic(
     adapter = svc.get_llm_adapter()
     invocation_params = adapter.get_llm_invocation_params(
         context,
+        # Required since pipecat 1.5.0. One-shot observer call — no repeated
+        # prefix to cache.
+        enable_prompt_caching=False,
         system_instruction=system_prompt,
     )
 
@@ -149,7 +152,9 @@ async def _call_google(
     model_name = str(svc._settings.model)
     response = await svc._client.aio.models.generate_content(
         model=model_name,
-        contents=invocation_params["messages"],
+        # list is invariant: list[Content] doesn't satisfy the SDK's
+        # list[ContentUnion] parameter even though every element does.
+        contents=cast("list[Any]", invocation_params["messages"]),
         config=GenerateContentConfig(**generation_params),
     )
 

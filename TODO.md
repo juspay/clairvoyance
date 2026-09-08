@@ -229,3 +229,44 @@ Currently UCP requests go out **unsigned**. Curl-probed Milton on 2026-05-21: `t
 - `chat/ui_stream.py:412-426` — `__all__` is in declaration order, not alphabetical. Sort once when something else touches the file.
 - `template/types.py:935` — `tool_schemas: Optional[List[Dict[str, Any]]]` accepts any dict shape. Promote to a `ToolSchema(BaseModel)` with explicit `name: str`, `description: Optional[str]`, `properties: Dict[str, Any]`, `required: Optional[List[str]]`. A malformed template currently passes Pydantic validation and only blows up later with `KeyError` during tool-load. Defense-in-depth, not a present bug.
 - `mcp/__init__.py:_maybe_inject_ui_instructions` (line ~190) — collapses `ToolUiTrigger.ON_SUCCESS` and `ON_ANY` into the same branch. The helper only runs on success paths, so `on_any` never fires on direct-HTTP error responses. Plumb an `is_success: bool` arg through the three call sites (lines ~317, ~390, ~410) plus the early-return error branch in `_create_direct_http_tool_handler` so `on_any` fires correctly. Latent — currently no template uses `on_any`, but it's a footgun for the next one.
+
+---
+
+## 7. Pipecat 1.1.0 → 1.8.1 upgrade notes (2026-09-04, branch `pipecat-version-bump`)
+
+Jump straight from 1.1.0 to 1.8.1 (skipping the staged 1.5 hop). Reused `feat/pipecat-1.5-upgrade` (7b734c71) for the mechanical migration, then handled 1.6–1.8 breaks. Verified: pyrefly 0 errors, 2032 tests pass, all app modules import, live ElevenLabs v3 probes below.
+
+Migration changes:
+
+- `pipecat-ai-flows` removed as a dependency — flows ships inside pipecat as `pipecat.flows` (all `pipecat_flows` imports rewritten; `pipecat-ai==1.8.1`, `daily-python` 0.28→0.32, `aic-sdk` 2.2→3.1).
+- `parse_telephony_websocket` returns typed `CallData` (dict-compatible) — inbound/IVR/transfer signatures retyped.
+- `FunctionCallParams.pipeline_worker` required — MCP synthetic params pass `None`.
+- Anthropic adapter `get_llm_invocation_params` requires `enable_prompt_caching` (observers pass `False`).
+- `FlowManager(task=...)` → `worker=`; `FlowsFunctionSchema.handler` required.
+- `SarvamSTTSettings.prompt` removed (1.8.0) — `build_sarvam_stt` no longer sends it; saaras models auto-detect language. NOTE: Sarvam model strings `saarika:v2.5`/`saaras:v2.5` were removed upstream — any template still naming them must move to `saaras:v4`-era models.
+- `LLMSpecificMessage` is a dataclass now, not dict-shaped — `BuddyGeminiLiveLLMService._process_completed_function_calls` unwraps via `_context_message_as_dict`.
+- `SpeechTimeoutUserTurnStopStrategy.setup()` takes `FrameProcessorSetup` (StartFrame config moved off StartFrame in 1.8.0) — test harness updated.
+- `ElevenLabsTTSService`: deprecated `voice_id=`/`model=`/`params=` constructor kwargs replaced with canonical `settings=ElevenLabsTTSSettings(...)`.
+
+ElevenLabs v3 (the reason for this upgrade):
+
+- `build_elevenlabs_tts` routes any `eleven_v3*` model to `ElevenLabsDialogueTTSService` (Text-to-Dialogue WebSocket); everything else stays on `ElevenLabsTTSService`. Templates opt in via `tts_configuration.model = "eleven_v3_conversational"`.
+- On v3 only `stability` applies (speed/similarity_boost/SSML ignored — builder warns); sentence aggregation is forced; server buffers ~40 chars/8 words before first audio.
+- Live-verified with the India-residency key: TTD WS `multi-stream-input` produced PCM audio with `eleven_v3_conversational`; HTTP greeting path accepted `eleven_v3` + `ulaw_8000` (+ voice_settings tolerated). The GLOBAL key in dev `.env` is free-tier (payment_required on library voices) — v3 experiments must run on the India-residency key.
+
+Behavior changes inherited (intentional, from 1.5 notes + 1.6–1.8 changelogs):
+
+- `TTSSpeakFrame.append_to_context` defaults True — agent-mode greetings/fillers now land in LLM context.
+- Flows initial node follows its context strategy (APPEND default) instead of always replacing.
+- Timed-out function calls raise `asyncio.CancelledError` in handlers instead of returning empty results (1.8.0).
+- Streaming STT services no longer report `ProcessingMetricsData` (1.8.0) — check `MetricsCollectorProcessor` coverage of STT latency metrics on staging.
+- TTS pause watchdog (3s default, 1.7.0) force-resumes stuck pauses.
+- `PipelineRunner` deprecated since 1.3.0 (use `WorkerRunner` in a follow-up; removal in 2.0.0).
+
+Follow-ups for the PR:
+
+- Staging telephony smoke test (Twilio/Exotel real call) before merge — interruption behavior, audio gaps, call teardown are not covered by unit tests.
+- Verify AIC noise-filter model files against aic-sdk 3.1 (fail-open if incompatible).
+- `MetricsCollectorProcessor`: confirm which per-turn metrics survive the `ProcessingMetricsData` removal.
+- Gemini Live on staging: `GeminiLiveLLMService` switched adapters in 1.7.0 (`llm="gemini-live"` for hand-built specific messages).
+- DragonTTS (sub-service): v3 supported since this branch — `elevenlabs:eleven_v3_conversational` model ids route to the Text-to-Dialogue socket in `dragontts/app/providers/elevenlabs_pool.py` (voices-registration init, `inputs` framing, dedicated keepalive context every 10s). Live-verified against the India-residency endpoint: 0.25s first chunk, warm-socket reuse works. Unit tests: `uv run --directory dragontts --extra dev python -m pytest` (13 tests).

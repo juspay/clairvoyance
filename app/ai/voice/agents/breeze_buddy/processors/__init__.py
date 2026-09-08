@@ -6,6 +6,9 @@ from app.ai.voice.agents.breeze_buddy.processors.knowledge_retrieval import (
 from app.ai.voice.agents.breeze_buddy.processors.metrics_collector_processor import (
     MetricsCollectorProcessor,
 )
+from app.ai.voice.agents.breeze_buddy.processors.tool_mode_prose_guard import (
+    ToolModeProseGuardProcessor,
+)
 from app.ai.voice.agents.breeze_buddy.processors.transcript_collector import (
     TranscriptCollectorProcessor,
 )
@@ -22,6 +25,7 @@ from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
 __all__ = [
     "KnowledgeRetrievalProcessor",
     "MetricsCollectorProcessor",
+    "ToolModeProseGuardProcessor",
     "TranscriptCollectorProcessor",
     "TranscriptionGateProcessor",
     "UserIdleCallbackHandler",

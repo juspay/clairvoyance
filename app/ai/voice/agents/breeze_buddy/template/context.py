@@ -8,12 +8,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
+from pipecat.flows import NodeConfig
 from pipecat.frames.frames import (
     MixerEnableFrame,
     MixerUpdateSettingsFrame,
     TTSSpeakFrame,
 )
-from pipecat_flows import NodeConfig
 
 from app.core.logger import logger
 
@@ -519,8 +519,11 @@ def with_context(bot_instance):
             hooks = kwargs.pop("hooks", None)
             function_name = kwargs.pop("function_name", None)
             function_config = kwargs.pop("function_config", None)
+            say = kwargs.pop("say", None)
 
-            is_transition_handler = hooks is not None or function_name is not None
+            is_transition_handler = (
+                hooks is not None or function_name is not None or say is not None
+            )
             is_global_function_handler = function_config is not None
 
             llm_args = args[0] if len(args) > 0 else {}
@@ -529,7 +532,8 @@ def with_context(bot_instance):
                 f"with_context wrapper called - handler: {handler_func.__name__}, "
                 f"is_transition_handler: {is_transition_handler}, "
                 f"is_global_function_handler: {is_global_function_handler}, "
-                f"transition_to: {transition_to}, hooks: {hooks}, function_name: {function_name}"
+                f"transition_to: {transition_to}, function_name: {function_name}, "
+                f"say: {'yes' if say else 'no'}"
             )
 
             if is_global_function_handler:
@@ -554,6 +558,7 @@ def with_context(bot_instance):
                     transition_to=transition_to,
                     hooks=hooks,
                     function_name=function_name,
+                    say=say,
                 )
             else:
                 # Action handlers don't need hooks/function_name

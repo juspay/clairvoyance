@@ -6,8 +6,13 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import httpx
+from pipecat.services.elevenlabs.dialogue.tts import (
+    ElevenLabsDialogueTTSService,
+    ElevenLabsDialogueTTSSettings,
+)
 from pipecat.services.elevenlabs.tts import (
     ElevenLabsTTSService,
+    ElevenLabsTTSSettings,
     language_to_elevenlabs_language,
 )
 from pipecat.services.tts_service import TextAggregationMode
@@ -39,20 +44,64 @@ class ElevenLabsConfig:
     text_filters: Optional[Sequence] = None
     aggregate_sentences: bool = True
     enable_ssml_parsing: bool = False
+    #: Output sample rate for the v3 dialogue service. On 8 kHz telephony
+    #: transports this must be 8000: Text-to-Dialogue delivers audio in
+    #: batches separated by 200-600ms gaps, and pipecat's soxr stream
+    #: resampler clears its delay line after every 0.2s gap — discarding
+    #: mid-phrase audio on each batch (measured 3-18% per batch). pcm_8000
+    #: is delivered natively by the endpoint (verified byte-exact), so no
+    #: client-side resampling happens at all. None keeps the pipeline
+    #: default (e.g. Daily's 24 kHz, which needs no conversion).
+    sample_rate: Optional[int] = None
 
 
 def build_elevenlabs_tts(config: ElevenLabsConfig):
-    """Create an ElevenLabs TTS service."""
+    """Create an ElevenLabs TTS service.
+
+    ``eleven_v3*`` models are only reachable through the Text-to-Dialogue
+    WebSocket, so they route to ``ElevenLabsDialogueTTSService``; every other
+    model uses the standard text-to-speech WebSocket service.
+    """
 
     text_filters = list(config.text_filters) if config.text_filters else None
 
+    if config.model.startswith("eleven_v3"):
+        # Text-to-Dialogue reads only `stability`; speed/similarity_boost are
+        # silently ignored by the endpoint, so warn rather than pretend.
+        if config.speed not in (None, 1.0) or config.similarity_boost is not None:
+            logger.warning(
+                f"ElevenLabs v3 model {config.model!r}: speed/similarity_boost "
+                "are not supported on the Text-to-Dialogue endpoint and will "
+                "be ignored (only stability applies)"
+            )
+        return ElevenLabsDialogueTTSService(
+            api_key=config.api_key,
+            url=config.url,
+            # Telephony pins 8000 so the endpoint sends pcm_8000 directly —
+            # see ElevenLabsConfig.sample_rate. The resampler that a 24 kHz
+            # feed would require destroys batched TTD audio (soxr clear()
+            # discards its delay line after every >0.2s batch gap).
+            sample_rate=config.sample_rate,
+            settings=ElevenLabsDialogueTTSSettings(
+                model=config.model,
+                voice=config.voice_id,
+                language=config.language,
+                stability=config.stability,
+            ),
+            text_filters=text_filters,
+            # The endpoint requires sentence aggregation; anything finer
+            # concatenates mid-word. The service forces SENTENCE and warns
+            # on other values, so pass it explicitly to stay quiet.
+            text_aggregation_mode=TextAggregationMode.SENTENCE,
+        )
+
     return ElevenLabsTTSService(
         api_key=config.api_key,
-        voice_id=config.voice_id,
-        model=config.model,
         url=config.url,
         enable_ssml_parsing=config.enable_ssml_parsing,
-        settings=ElevenLabsTTSService.Settings(
+        settings=ElevenLabsTTSSettings(
+            model=config.model,
+            voice=config.voice_id,
             speed=config.speed,
             stability=config.stability,
             similarity_boost=config.similarity_boost,

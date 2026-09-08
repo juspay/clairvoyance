@@ -1,17 +1,4 @@
 {
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if echo \"$CLAUDE_TOOL_INPUT_FILE_PATH\" | grep -q '\\.py$'; then uv run black --quiet \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null; uv run isort --quiet --profile black \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null; fi"
-          }
-        ]
-      }
-    ]
-  },
   "permissions": {
     "allow": [
       "Bash(uv run black:*)",
@@ -33,8 +20,32 @@
       "WebFetch(domain:deepgram.com)",
       "WebFetch(domain:developers.deepgram.com)",
       "WebFetch(domain:www.daily.co)",
-      "WebFetch(domain:code.claude.com)"
+      "WebFetch(domain:code.claude.com)",
+      "Bash(uv --version)",
+      "Bash(python3 scripts/migrate.py --help)",
+      "Bash(./scripts/setup.sh)",
+      "Bash(uv run *)",
+      "Read(//usr/local/Homebrew/bin/**)",
+      "Bash(/usr/local/bin/brew --version)",
+      "Bash(/opt/homebrew/bin/brew info *)",
+      "Read(//usr/local/Cellar/postgresql@14/14.19/bin/**)"
     ],
-    "deny": []
+    "deny": [],
+    "additionalDirectories": [
+      "/private/tmp/pgvector-src"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT_FILE_PATH\" | grep -q '\\.py$'; then uv run black --quiet \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null; uv run isort --quiet --profile black \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null; fi"
+          }
+        ]
+      }
+    ]
   }
 }

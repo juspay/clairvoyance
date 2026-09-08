@@ -1,0 +1,357 @@
+{
+  "template_name": "Tool-Based Example",
+  "identifier": "tool-based-example",
+  "is_active": false,
+  "description": "Reference tool_based template: the LLM never speaks prose. Every utterance is authored in the function's say block (per-language variants + {placeholder} substitution); the model's only job is to pick one tool per turn and fill small args (language: hi|en, extracted values). Nodes carry respond_immediately=False (builder-enforced), a prose guard sits between LLM and TTS, and llm_configurations.tool_choice='required' makes tool-only responses an API-level guarantee. Flow: greeting -> say_thankyou (ask age) -> save_response(value) -> confirm_details -> say_goodbye (end_call). Function args are persisted on node_traversal entries, so save_response's value lands in lead metaData.",
+  "expected_payload_schema": {
+    "type": "object",
+    "properties": {
+      "customer_name": {
+        "type": "string",
+        "description": "Customer's first name, used in spoken lines via {customer_name}"
+      },
+      "language_name": {
+        "type": "string",
+        "description": "Expected conversation language (Hindi or English)"
+      }
+    }
+  },
+  "configurations": {
+    "llm_configurations": {
+      "provider": "azure",
+      "temperature": 0.1,
+      "max_tokens": 500,
+      "tool_choice": "required"
+    },
+    "initial_greeting": {
+      "hi": "नमस्ते, मैं प्रियंका बोल रही हूँ, Breeze से। आज मैं आपसे कुछ जानकारी लेना चाहती हूँ।",
+      "en": "Hello, this is Priyanka from Breeze. I'd like to collect a few details from you today."
+    }
+  },
+  "example_payload": {
+    "customer_name": "राहुल",
+    "language_name": "Hindi"
+  },
+  "flow": {
+    "mode": "tool_based",
+    "initial_node": "opening_node",
+    "nodes": [
+      {
+        "node_name": "opening_node",
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are Priyanka, a female Breeze verification agent on a phone call. The greeting has already been played. The customer replies in Hindi or English. You collect their age, confirm it, and close the call warmly. The opening node's only move after the customer's first reply is to thank them and ask their age."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "CURRENT STEP: The customer just replied to the greeting. If their reply is conversational (a greeting, their name, a yes) call say_thankyou — it thanks them and asks their age. If they refuse — busy, driving, meeting, or asking to call later — call user_busy instead, first refusal."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "say_thankyou",
+            "description": "Customer greeted you back or replied conversationally WITHOUT refusing. Busy / driving / in a meeting / 'call later' / 'not now' is a REFUSAL — that is user_busy, NEVER this tool. Speaks thanks and asks their age, then moves to age collection.",
+            "properties": {
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "language"
+            ],
+            "transition_to": "age_node",
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "धन्यवाद {customer_name} जी! बात करने का समय देने के लिए शुक्रिया। मैं आपकी उम्र जानना चाहती हूँ, आपकी उम्र क्या है?",
+                  "थैंक यू {customer_name} जी! एक छोटी सी जानकारी चाहिए — आपकी उम्र कितनी साल की है?"
+                ],
+                "en": [
+                  "Thank you {customer_name}! Just one quick question — may I know your age?",
+                  "Thanks for your time {customer_name}! Could you tell me your age please?"
+                ]
+              },
+              "phrasing": "random",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "user_busy",
+            "description": "Customer says they are busy, driving, in a meeting, or asks to call later. Speaks a no-pressure goodbye and ends the call.",
+            "properties": {
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "language"
+            ],
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "कोई बात नहीं {customer_name} जी, आपका समय समझती हूँ। बाद में फिर से संपर्क करेंगे। आपका दिन शुभ हो!"
+                ],
+                "en": [
+                  "No problem {customer_name}, I understand you're busy. We'll reach out again later. Have a great day!"
+                ]
+              },
+              "phrasing": "random",
+              "default_language": "hi",
+              "end_call": true
+            }
+          }
+        ]
+      },
+      {
+        "node_name": "age_node",
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "CURRENT STEP: You asked the customer's age. When they answer, call save_response with value exactly as they said it — digits if they said digits, their words verbatim if they said words like 'चौंतीस' (do NOT convert words to digits; you get Hindi numerals wrong). If they didn't understand or asked to repeat, call repeat_question."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "save_response",
+            "description": "Customer stated their age. Saves it and confirms it back, then moves to confirmation.",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "The age exactly as the customer said it in their latest message: digits if they said digits ('34'), the words verbatim if they said words ('चौंतीस'). Never convert number words to digits yourself and never invent a value. The number itself ONLY — never include the unit word (साल / years / साल का); the spoken line adds it."
+              },
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "value",
+              "language"
+            ],
+            "transition_to": "confirm_node",
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है, आपकी उम्र {value} साल है। एक बार पुष्टि कर दीजिए — क्या यह सही है?"
+                ],
+                "en": [
+                  "Got it, your age is {value}. Can you confirm that's correct?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "repeat_question",
+            "description": "Customer didn't understand, asked you to repeat, or gave a non-answer (joke, silence words). Repeats the age question and stays on this node.",
+            "properties": {
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "language"
+            ],
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "मैं आपकी उम्र पूछ रही थी — आपकी उम्र कितनी साल की है?"
+                ],
+                "en": [
+                  "I was asking about your age — how old are you, in years?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          }
+        ]
+      },
+      {
+        "node_name": "confirm_node",
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "CURRENT STEP: You confirmed the age ({value} years). A yes/हाँ means confirmed — call confirm_details. A no/नहीं or a corrected number means call edit_response with the corrected value."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "confirm_details",
+            "description": "Customer confirmed the age is correct. Locks it in and moves to the goodbye.",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "The age exactly as the customer said it in their latest message: digits if they said digits ('34'), the words verbatim if they said words ('चौंतीस'). Never convert number words to digits yourself and never invent a value. The confirmed age, exactly as last saved. The number itself ONLY — never include the unit word (साल / years / साल का); the spoken line adds it."
+              },
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "value",
+              "language"
+            ],
+            "transition_to": "goodbye_node",
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "बहुत बढ़िया, उम्र {value} दर्ज कर दी गया है। आपकी जानकारी के लिए धन्यवाद!"
+                ],
+                "en": [
+                  "Perfect, age {value} has been recorded. Thank you for the information!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          },
+          {
+            "function_name": "edit_response",
+            "description": "Customer said the age was wrong or gave a corrected number. Re-saves the corrected value and re-confirms it.",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "The age exactly as the customer said it in their latest message: digits if they said digits ('34'), the words verbatim if they said words ('चौंतीस'). Never convert number words to digits yourself and never invent a value. The corrected age, exactly as the customer just said it. The number itself ONLY — never include the unit word (साल / years / साल का); the spoken line adds it."
+              },
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "value",
+              "language"
+            ],
+            "transition_to": "confirm_node",
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "माफ़ कीजिए! {value} साल अपडेट कर दिया — अब क्या यह सही है?"
+                ],
+                "en": [
+                  "Sorry about that! Updated to {value} years — is that correct now?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          }
+        ]
+      },
+      {
+        "node_name": "goodbye_node",
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "CURRENT STEP: Details are complete and thanked. Wrap up — call say_goodbye, which speaks the closing line and hangs up. If the customer suddenly asks something new, call reopen_conversation."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "say_goodbye",
+            "description": "Details are complete and the customer has nothing more — an acknowledgement, thanks, a low-information grunt (हुँ, हाँ, ओके, ठीक है) or agreement. Speaks the closing line and ends the call. The default close once confirmation is done.",
+            "properties": {
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "language"
+            ],
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "ठीक है {customer_name} जी, आपका बहुत बहुत धन्यवाद। फिर कभी बात करेंगे। आपका दिन शुभ रहे!",
+                  "धन्यवाद {customer_name} जी! आपका समय देने के लिए शुक्रिया। नमस्ते!"
+                ],
+                "en": [
+                  "Alright {customer_name}, thank you so much. We'll talk again. Have a wonderful day!",
+                  "Thanks for your time {customer_name}! Goodbye!"
+                ]
+              },
+              "phrasing": "random",
+              "default_language": "hi",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "reopen_conversation",
+            "description": "On the way out the customer EXPLICITLY asks a new question or objects with new substance ('रुकिए', 'गलत है', a new request). A mere grunt or ack is NOT reopening — that is say_goodbye. Re-opens the confirmation step.",
+            "properties": {
+              "language": {
+                "type": "string",
+                "enum": [
+                  "hi",
+                  "en"
+                ],
+                "description": "Language the customer is speaking right now"
+              }
+            },
+            "required": [
+              "language"
+            ],
+            "transition_to": "confirm_node",
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "hi": [
+                  "जी बिल्कुल, बताइए — क्या बदलाव करना है? उम्र फिर से बता दीजिए।"
+                ],
+                "en": [
+                  "Of course, please tell me — what would you like to change? Say your age again."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "hi"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -110,6 +110,7 @@ async def _resolve_azure(
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
+            tool_choice=(llm_config.tool_choice if llm_config else None),
             function_call_timeout_secs=(
                 llm_config.function_call_timeout_secs
                 if llm_config and llm_config.function_call_timeout_secs
@@ -161,6 +162,17 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
     if llm_config and llm_config.thinking and llm_config.thinking.enabled:
         reasoning_effort = llm_config.thinking.reasoning_effort
 
+    # Explicit thinking opt-out, gateway only: hybrid-thinking models
+    # (sglang/Qwen3) reason by default, adding a variable 0-300ms before the
+    # tool-name token. "thinking": {"enabled": false} on the template sends
+    # the chat-template kwarg that turns it off (see build_openai_llm).
+    disable_thinking = bool(
+        llm_config
+        and llm_config.endpoint
+        and llm_config.thinking is not None
+        and not llm_config.thinking.enabled
+    )
+
     return build_openai_llm(
         OpenAIConfig(
             api_key=api_key,
@@ -169,11 +181,13 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
             temperature=temperature,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
+            tool_choice=(llm_config.tool_choice if llm_config else None),
             function_call_timeout_secs=(
                 llm_config.function_call_timeout_secs
                 if llm_config and llm_config.function_call_timeout_secs
                 else 10.0
             ),
+            disable_thinking=disable_thinking,
         )
     )
 

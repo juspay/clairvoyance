@@ -1,0 +1,1030 @@
+{
+  "id": "9e3f1c4a-6d5b-4a0c-9b82-3f4a5b6c7d82",
+  "reseller_id": "rnr",
+  "merchant_id": "test-shopify",
+  "name": "ny-driver-not-active-toolbased",
+  "is_active": true,
+  "supported_channels": [
+    "voice"
+  ],
+  "secrets": null,
+  "telephony_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863",
+  "outbound_number_id": "6f3c6720-b38f-4b76-ba65-adaf79eec863",
+  "description": "tool_based conversion of the Namma Yatri driver-not-active reactivation flow (Kannada), tuned for qwen3.8-27b-4bit: the 5-node machine collapses into one node — the fixed pitch, repeat lines and closings are say blocks, driver_says_no SPEAKS the why question instead of transitioning, and ready_to_start values that the routing already encodes are static-injected per function. Kannada-only utterances, no language arg at all.",
+  "expected_payload_schema": {
+    "driver_name": {
+      "type": "string",
+      "optional": false
+    },
+    "customer_mobile_number": {
+      "type": "string",
+      "function": "extract_10_digit_mobile",
+      "optional": false
+    }
+  },
+  "expected_callback_response_schema": {
+    "query": {
+      "type": "string",
+      "optional": true
+    },
+    "outcome": {
+      "type": "string"
+    },
+    "driver_number": {
+      "type": "string",
+      "optional": true
+    },
+    "ready_to_start": {
+      "type": "string",
+      "optional": true
+    },
+    "reason_details": {
+      "type": "string",
+      "optional": true
+    },
+    "reason_category": {
+      "type": "string",
+      "optional": true
+    },
+    "ready_response_words": {
+      "type": "string",
+      "optional": true
+    }
+  },
+  "configurations": {
+    "llm_configurations": {
+      "provider": "openai",
+      "sdk": null,
+      "model": "qwen3.8-27b-4bit",
+      "region": null,
+      "endpoint": "http://34.126.104.99:8000/v1",
+      "api_key_name": "BREEZE_LLM_API_KEY",
+      "temperature": 0.2,
+      "max_tokens": 500,
+      "thinking": null,
+      "function_call_timeout_secs": null,
+      "realtime": null,
+      "tool_choice": "required",
+      "prefill_system_prompt": true
+    },
+    "tts_configuration": {
+      "provider": "elevenlabs",
+      "voice_id": "iB2rIwm9cQCRGWoKDRtX",
+      "model": "eleven_v3_conversational",
+      "language": null,
+      "speed": 1,
+      "stability": null,
+      "similarity_boost": null,
+      "volume": null,
+      "emotion": null,
+      "pitch": null,
+      "style_prompt": null,
+      "enable_ssml_parsing": null,
+      "enable_tts_caching": true
+    },
+    "stt_configuration": {
+      "provider": "soniox",
+      "language": "kn-IN",
+      "payload_based_language_selection": false,
+      "turn_detection": "stt_native",
+      "user_speech_timeout": 0
+    },
+    "initial_greeting": "Namsakar {driver_name} ಸರ್, yen ಸರ್ ನಮ್ಮನ್ನ ಮರೆತುಬಿಟ್ರಾ? Naan ಸರ್, ನಮ್ಮ ಯಾತ್ರಿ App ನಿಮಗೋಸ್ಕರ ಮಾಡಿರೋದು App. ನಿಮ್ಮ ಹತ್ರ ಎರಡು ನಿಮಿಷ ಮಾತಾಡ್ಬೇಕಿತ್ತು. ಈಗ ಮಾತಾಡೋಕೆ ಆಗುತ್ತಾ?",
+    "user_idle_configuration": {
+      "enabled": true,
+      "timeout": 10,
+      "idle_message": "Driver has gone quiet. Call greeting_no_response if the pitch has not been spoken yet, pitch_no_response if it has.",
+      "max_retries": 3
+    },
+    "dial_tone": true,
+    "enable_background_sound": false,
+    "background_sound_volume": 2,
+    "enable_text_input": true,
+    "enable_inbound": false,
+    "noise_filter": {
+      "enable": true,
+      "provider": "aic",
+      "model": "noise_cancellation"
+    },
+    "keyword_filter": {
+      "enabled": true,
+      "keywords": [
+        "hello",
+        "hi",
+        "yes",
+        "ok",
+        "okay",
+        "hmm",
+        "hm",
+        "yeah",
+        "haan",
+        "ha",
+        "hu",
+        "hoo",
+        "heli",
+        "helri",
+        "matadi",
+        "enu",
+        "yen",
+        "yenu",
+        "acha",
+        "accha",
+        "oho",
+        "oh",
+        "howdu",
+        "haudu",
+        "houdu",
+        "howda",
+        "hauda",
+        "sari",
+        "aythu",
+        "aytu",
+        "aaythu",
+        "ayth",
+        "ಹೌದು",
+        "ಹೌದಾ",
+        "ಹೌದ್",
+        "ಸರಿ",
+        "ಆಯ್ತು",
+        "ಆಯ್ತ್",
+        "ಆಯಿತು",
+        "ಓಕೆ",
+        "ಒಕೆ",
+        "ಹ್ಮ್",
+        "ಹ್ಮ್ಮ್",
+        "ಹೂಂ",
+        "ಹಾಂ",
+        "ಹಾ",
+        "ಹೇಳಿ",
+        "ಹೇಳ್ರಿ",
+        "ಮಾತಾಡಿ",
+        "ಏನು",
+        "ಏನ್",
+        "ಅಚ್ಚಾ",
+        "ಓಹ್",
+        "ಓ",
+        "ಅದೇ",
+        "ಅದಾ"
+      ],
+      "match_type": "exact"
+    },
+    "observers": null
+  },
+  "flow": {
+    "mode": "tool_based",
+    "initial_node": "initial",
+    "nodes": [
+      {
+        "node_name": "initial",
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt",
+            "args": {
+              "duration": 4
+            }
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "# NAMMA YATRI DRIVER REACTIVATION — TOOL-BASED (KANNADA)\n\nನೀವು Namma Yatri ಇಂದ ಒಬ್ಬ driver ಗೆ call ಮಾಡ್ತಿರುವ support person. ಈ driver app ನಲ್ಲಿ active ಇಲ್ಲ; ಉದ್ದೇಶ ಅವರು rides ತಗೊಳ್ಳೋಕೆ ಮತ್ತೆ start ಮಾಡೋದು. ಸಾಮಾನ್ಯ driver-support person ರೀತಿ ಮಾತಾಡಿ — robot ಅಲ್ಲ, ನಿಮ್ಮ ಹೆಸರು ಎಂದಿಗೂ ಹೇಳಬೇಡಿ. Day-to-day Kannada + English mix ಮಾತ್ರ; Hindi ಎಂದಿಗೂ ಬೇಡ.\n\nGreeting ಆಗಲೇ ಆಗಿದೆ — ಹೆಸರು, 'ಮರೆತುಬಿಟ್ರಾ', app ಪರಿಚಯ, 'ಈಗ ಮಾತಾಡೋಕೆ ಆಗುತ್ತಾ?'. ಅದರ ಯಾವುದೇ ಸಾಲನ್ನ ಪುನಃ ಎಂದಿಗೂ ಹೇಳಬೇಡಿ.\n\nನಿಮ್ಮ tools ಗಳೇ ನಿಮ್ಮ ಮಾತು — ನೀವು ಬರೀಯುವುದಿಲ್ಲ. ಒಂದು turn ಗೆ ಒಂದೇ tool.\n\n# THE MOST IMPORTANT GATE — PERMISSION vs READY\nGreeting ನ ಕೊನೆಯ ಪ್ರಶ್ನೆ 'ಈಗ ಮಾತಾಡೋಕೆ ಆಗುತ್ತಾ?' ಗೆ ಬಂದ ಒಪ್ಪಿಗೆ ('ಹೌದು','ಸರಿ','ಆಯ್ತು','ಹೇಳಿ','ok','ಮ್ಮ್','ಹಾಂ') ಎಂದರೆ 'ಮಾತಾಡೋಕೆ ಆಗುತ್ತಾ' ಅಷ್ಟೇ — ಅದು ready ಉತ್ತರ ಅಲ್ಲ. say_pitch ಆಗುವವರೆಗೂ driver_says_yes ಮತ್ತು driver_says_no ಎಂದಿಗೂ call ಮಾಡಬೇಡಿ.\n\n# CALL SHAPE\n1. Driver ಒಪ್ಪಿದರೆ → say_pitch (ದುಡಿಮೆ range + secret offer + ready ಪ್ರಶ್ನೆ — ಒಂದೇ fixed ಸಾಲು). 'ಯಾರು ಮಾತಾಡ್ತಿದ್ದೀರಾ?' → say_reintroduce_and_pitch. 'ಏನು ವಿಷಯ?' → say_pitch (ಒಪ್ಪಿಗೆ ಎಂದು ತೆಗೆದುಕೊಳ್ಳಿ).\n2. say_pitch ನ ನಂತರ: ಒಪ್ಪಿಗೆ ('ಹೌದು','ಮಾಡ್ತೀನಿ','ಸರಿ','ok','ಮ್ಮ್','ಹಾಂ') → driver_says_yes — ಮೊದಲು ಏನೂ ಹೇಳಬೇಡಿ, ತಕ್ಷಣ call. Repeat ಕೇಳಿದರೆ ('ಏನಂದ್ರಿ?','offer ಏನು?','ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ') → say_repeat_offer; ದುಡಿಮೆ ಕೇಳಿದರೆ ('ಎಷ್ಟು ಸಂಬಳ?','ಎಷ್ಟು ಆಗುತ್ತೆ?') → say_repeat_earnings. ಅವರ ಮುಂದಿನ ಉತ್ತರದಿಂದ ಮಾತ್ರ route ಮಾಡಿ.\n3. ಇಲ್ಲ / ಆಗಲ್ಲ / ಗೊತ್ತಿಲ್ಲ / ನೋಡೋಣ → driver_says_no — ಅದೇ turn ನಲ್ಲಿ ಕಾರಣ ಕೇಳೋ ಸಾಲು ಹೊರಡುತ್ತದೆ. ಸಿಟ್ಟಾದ driver pitch ಗೆ ಮೊದಲೇ ಸಮಸ್ಯೆ ವಿವರಿಸಿದರೆ → driver_says_no, ready_to_start=NOT_ASKED.\n4. driver_says_no ನ ನಂತರ: ಕಾರಣ ಸಿಕ್ಕರೆ → driver_shares_issue (reason_category + reason_details). 'ಏನೂ ಇಲ್ಲ / ಸುಮ್ಮನೆ' → driver_no_issue. ಹೇಳಲು ನಿರಾಕರಿಸಿದರೆ ('ಬೇಡ','ಇಟ್ಟುಬಿಡಿ') → driver_declines_to_share.\n5. Busy / driving / 'ಆಮೇಲೆ call ಮಾಡಿ' → driver_busy_no_time — pitch ಹೇಳದೆ, ಒತ್ತಾಯ ಇಲ್ಲದೆ, ತಕ್ಷಣ.\n6. Driver ಬೇರೆ ವಿಷಯ ಎತ್ತಿದರೆ (dues, plan, insurance, account): argue ಮಾಡಬೇಡಿ, ಭರವಸೆ ಕೊಡಬೇಡಿ — ಅದು ready ಇಲ್ಲ ಎಂಬ ಕಾರಣವಾಗಿ driver_says_no → driver_shares_issue ದಾರಿಯಲ್ಲಿ note ಆಗುತ್ತದೆ.\n\n# FIELD RULES\n- driver_number ಗೆ ಯಾವಾಗಲೂ {customer_mobile_number} ಅನ್ನೇ ಕಳಿಸಿ — driver ಹತ್ರ ಕೇಳಬೇಡಿ.\n- ಇತರ ವಿಷಯ / 'ನೀವು robot ಆ?' / 'ನನ್ನ number ಯಾರು ಕೊಟ್ಟರು?' → say_off_topic — ಉತ್ತರಿಸಬೇಡಿ, ready ಪ್ರಶ್ನೆಗೆ ಹಿಂತಿರುಗಿಸಿ.\n- ready_response_words: ready ಪ್ರಶ್ನೆಗೆ driver ಹೇಳಿದ ಮಾತಿನ ಚಿಕ್ಕ quote, ಇದ್ದ ಹಾಗೆ; ಕೇಳಿಲ್ಲ / ಉತ್ತರ ಬರಲಿಲ್ಲ ಎಂದರೆ ಖಾಲಿ ಹಾಕಿ. ತಿದ್ದಬೇಡಿ, invent ಮಾಡಬೇಡಿ.\n- Fare / incentive / timeline ಭರವಸೆ ಎಂದಿಗೂ ಕೊಡಬೇಡಿ. ಒತ್ತಾಯ ಬೇಡ, lecture ಬೇಡ. Driver 'ಇಲ್ಲ' ಅಂದ ಮೇಲೆ ಒಂದೇ ಸಲ ಕಾರಣ ಕೇಳಿ — ಎರಡನೇ ಸಲ ಇಲ್ಲ."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "developer",
+            "content": "Driver: {driver_name}, number {customer_mobile_number} (use exactly this for driver_number). Stage machine: permission -> pitch -> ready answer -> (yes | no -> reason) -> closing. One tool per turn."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "say_pitch",
+            "description": "The driver agreed to talk (their answer to the greeting's permission question), or asked 'ಏನು ವಿಷಯ?'. THE fixed pitch — earnings range, secret offer, and the ready question, in one line. Before this, driver_says_yes / driver_says_no are FORBIDDEN.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ನಮ್ಮ partnersu ಈಗ ಒಂದು ದಿನಕ್ಕೆ ನಾಲ್ಕು ಸಾವಿರ ಇಂದ ಐದು ಸಾವಿರ ರೂಪಾಯಿ ವರೆಗೆ ದುಡಿಮೆ ಮಾಡ್ತಿದ್ದಾರೆ. ನೀವು ಕೂಡ start ಮಾಡಿ ಸರ್. ನಾನು ನಿಮಗೆ ಒಂದು secret ಹೇಳ್ತೀನಿ, ಇದು ಬೇರೆ ಯಾರಿಗೂ ಹೇಳ್ಬೇಡಿ. ಒಂದು ವಾರ free subscription, unlimited rides, ನೀವು ಯಾವುದೇ charges pay ಮಾಡಂಗಿಲ್ಲ. ನಿಮಗೆ ಏನಾದ್ರೂ issue ಇದ್ರೆ ನಮಗೆ call ಮಾಡಿ. But ಈ offer ಮಾತ್ರ ಮಿಸ್ ಮಾಡ್ಕೋಬೇಡಿ. ಯೇನ್ ಸರ್, Rides ಮಾಡೋಕೆ ready na?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "say_reintroduce_and_pitch",
+            "description": "The driver asked 'ಯಾರು ಮಾತಾಡ್ತಿದ್ದೀರಾ?' / 'ಎಲ್ಲಿಂದ call?' — they did not hear the greeting clearly. One-line reintroduction, then the full pitch in the same breath.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ನಾನು ನಮ್ಮ ಯಾತ್ರಿ ಕಡೆ ಇಂದ call ಮಾಡ್ತಿದ್ದೀನಿ ಸರ್. ನಮ್ಮ partnersu ಈಗ ಒಂದು ದಿನಕ್ಕೆ ನಾಲ್ಕು ಸಾವಿರ ಇಂದ ಐದು ಸಾವಿರ ರೂಪಾಯಿ ವರೆಗೆ ದುಡಿಮೆ ಮಾಡ್ತಿದ್ದಾರೆ. ನೀವು ಕೂಡ start ಮಾಡಿ ಸರ್. ನಾನು ನಿಮಗೆ ಒಂದು secret ಹೇಳ್ತೀನಿ, ಇದು ಬೇರೆ ಯಾರಿಗೂ ಹೇಳ್ಬೇಡಿ. ಒಂದು ವಾರ free subscription, unlimited rides, ನೀವು ಯಾವುದೇ charges pay ಮಾಡಂಗಿಲ್ಲ. ನಿಮಗೆ ಏನಾದ್ರೂ issue ಇದ್ರೆ ನಮಗೆ call ಮಾಡಿ. But ಈ offer ಮಾತ್ರ ಮಿಸ್ ಮಾಡ್ಕೋಬೇಡಿ. ಯೇನ್ ಸರ್, Rides ಮಾಡೋಕೆ ready na?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "say_repeat_offer",
+            "description": "After the pitch the driver asked to repeat the offer/secret ('ಏನಂದ್ರಿ?', 'offer ಏನು?', 'ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ', 'ಎಷ್ಟು ದಿನ free?'). Repeats the offer and re-asks the ready question once. Never say 'ಆಗಲೇ ಹೇಳಿದೆ'.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಒಂದು ವಾರ free subscription ಸರ್, unlimited rides. ನೀವು ಯಾವುದೇ charges pay ಮಾಡಂಗಿಲ್ಲ. ಯೇನ್ ಸರ್, Rides ಮಾಡೋಕೆ ready na?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "say_repeat_earnings",
+            "description": "After the pitch the driver asked about earnings ('ದುಡಿಮೆ ಎಷ್ಟು?', 'ಎಷ್ಟು ಆಗುತ್ತೆ ಅಂದ್ರಿ?'). Repeats the earnings range honestly and re-asks the ready question once.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ನಮ್ಮ partnersu ಒಂದು ದಿನಕ್ಕೆ ನಾಲ್ಕು ಸಾವಿರ ಇಂದ ಐದು ಸಾವಿರ ರೂಪಾಯಿ ವರೆಗೆ ದುಡಿಮೆ ಮಾಡ್ತಿದ್ದಾರೆ ಸರ್. ಇದು ride ಮತ್ತು area ಮೇಲೆ ಬದಲಾಗುತ್ತೆ. ಯೇನ್ ಸರ್, Rides ಮಾಡೋಕೆ ready na?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "say_off_topic",
+            "description": "The driver went to something with NO relation to this call — politics, cricket, 'ನೀವು robot ಆ?', 'ನನ್ನ number ಯಾರು ಕೊಟ್ಟರು?'. One polite redirect back to the ready question. Never play along with the new topic and never share any data.",
+            "properties": {},
+            "required": [],
+            "transition_to": null,
+            "hooks": [],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಸರ್, ಅದು ನನಗೆ ಗೊತ್ತಿಲ್ಲ ಸರ್. ನಾನು ಬಸ್ಸ್ rides start ಮಾಡೋದ್ರಲ್ಲಿ help ಮಾಡೋಕೆ call ಮಾಡ್ತಿದ್ದೀನಿ. ಯೇನ್ ಸರ್, Rides ಮಾಡೋಕೆ ready na?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "driver_says_yes",
+            "description": "HARD PRECONDITION: say_pitch (or say_reintroduce_and_pitch) was ALREADY called in this call. The driver answered the ready question with any agreement — 'ಹೌದು', 'ಮಾಡ್ತೀನಿ', 'ready ಇದ್ದೀನಿ', 'ok', or just an agreeing 'ಮ್ಮ್'/'ಹಾಂ'. Speak NOTHING extra — this speaks the closing and ends the call.",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "DRIVER_READY_TO_START",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "value": "YES",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಈಗ್ಲೇ online ಹೋಗಿ, rides start ಮಾಡಿ. ಒಳ್ಳೆ ದುಡಿಮೆ ಮಾಡ್ಕೊಳ್ಳಿ ಸರ್, Thank you, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "driver_says_no",
+            "description": "HARD PRECONDITION: the pitch was already spoken — the ONLY exception is an angry driver describing a problem BEFORE the pitch (then ready_to_start = NOT_ASKED). Any non-agreement to the ready question: 'ಇಲ್ಲ', 'ಆಗಲ್ಲ', 'time ಇಲ್ಲ', 'ಗೊತ್ತಿಲ್ಲ', 'ನೋಡೋಣ'. If the driver did not hear the why question and asks you to repeat ('ಏನು? ಇನ್ನೊಮ್ಮೆ ಕೇಳಿ'), call this AGAIN to re-speak it. Speaks the why question; their next reply routes to driver_shares_issue / driver_no_issue / driver_declines_to_share.",
+            "properties": {
+              "ready_to_start": {
+                "type": "string",
+                "enum": [
+                  "NO",
+                  "NOT_SURE",
+                  "NOT_ASKED"
+                ],
+                "description": "NO = clear refusal after the pitch. NOT_SURE = vague/conditional ('ಗೊತ್ತಿಲ್ಲ', 'ನೋಡೋಣ'). NOT_ASKED = ONLY for the angry-driver-before-pitch exception."
+              },
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "ready_to_start",
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "DRIVER_NOT_READY",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "source": "llm"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಸರ್, ಯಾಕೆ ready ಇಲ್ಲ, ಏನು issue ಇದೆ ಹೇಳಿ ಸರ್. ನಾವು note ಮಾಡ್ಕೊಂಡು help ಮಾಡೋಕೆ try ಮಾಡ್ತೀವಿ."
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "driver_busy_no_time",
+            "description": "The driver said this is not a good time — busy, driving, on a ride, 'ಆಮೇಲೆ call ಮಾಡಿ' — answering the greeting's permission question. The pitch is NEVER spoken on this path. Speaks the polite no-pressure closing and ends the call.",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "DRIVER_BUSY_NO_TIME",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "value": "NOT_ASKED",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಪರವಾಗಿಲ್ಲ ಸರ್, ನಿಮ್ಮ ಸಮಯಕ್ಕೆ ಧನ್ಯವಾದ. ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "greeting_no_response",
+            "description": "The driver stayed silent (about 3s) after the greeting's permission question, before any pitch. Speaks the line-check question. If they then reply → driver_responded; silence again → still_no_response.",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "GREETING_NO_RESPONSE",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "value": "NOT_ASKED",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಸರ್, ನೀವು line ನಲ್ಲಿ ಇದ್ದೀರಾ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "pitch_no_response",
+            "description": "The driver stayed silent (about 3s) after the ready question in say_pitch. Speaks the line-check question. If they then reply → driver_responded; silence again → still_no_response.",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "PITCH_NO_RESPONSE",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "value": "NO_ANSWER",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಸರ್, ನೀವು line ನಲ್ಲಿ ಇದ್ದೀರಾ?"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn"
+            }
+          },
+          {
+            "function_name": "driver_responded",
+            "description": "After the line-check question the driver responded in any way, however small. If they agreed to rides → driver_says_yes is the better tool; use this for anything else. Speaks the plain closing and ends the call.",
+            "properties": {
+              "ready_to_start": {
+                "type": "string",
+                "enum": [
+                  "NOT_ASKED",
+                  "NO_ANSWER"
+                ],
+                "description": "Carry forward: NOT_ASKED if the silence came before the pitch, NO_ANSWER if it came after the ready question."
+              },
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "ready_to_start",
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "DRIVER_RESPONDED_AFTER_CHECK",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "source": "llm"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಈಗ್ಲೇ online ಹೋಗಿ, rides start ಮಾಡಿ. ಒಳ್ಳೆ ದುಡಿಮೆ ಮಾಡ್ಕೊಳ್ಳಿ ಸರ್, Thank you, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "still_no_response",
+            "description": "The driver stayed silent AGAIN after the line-check question. Do not ask a third time. Speaks the plain closing and ends the call.",
+            "properties": {
+              "ready_to_start": {
+                "type": "string",
+                "enum": [
+                  "NOT_ASKED",
+                  "NO_ANSWER"
+                ],
+                "description": "Carry forward: NOT_ASKED if silence started before the pitch, NO_ANSWER if after the ready question."
+              },
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "ready_to_start",
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "DRIVER_UNRESPONSIVE",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "source": "llm"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಈಗ್ಲೇ online ಹೋಗಿ, rides start ಮಾಡಿ. ಒಳ್ಳೆ ದುಡಿಮೆ ಮಾಡ್ಕೊಳ್ಳಿ ಸರ್, Thank you, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "driver_shares_issue",
+            "description": "After driver_says_no's why question the driver gave ANY reason — pickup distance, fare, app, network, vehicle, dues, health, anything. Acknowledge is built into the closing. Categorise honestly; OTHER when unsure.",
+            "properties": {
+              "reason_category": {
+                "type": "string",
+                "enum": [
+                  "PICKUP_DISTANCE",
+                  "FARE_LOW",
+                  "CUSTOMER_LOCATION",
+                  "APP_OR_TECHNICAL",
+                  "NETWORK_ISSUE",
+                  "REQUESTS_NOT_VISIBLE",
+                  "VEHICLE_ISSUE",
+                  "DRIVER_BUSY",
+                  "PAYMENT_CONCERN",
+                  "PERSONAL_REASON",
+                  "OTHER"
+                ],
+                "description": "Why the driver is not ready: PICKUP_DISTANCE = pickup too far. FARE_LOW = fare/earnings low. CUSTOMER_LOCATION = pickup/drop location problem. APP_OR_TECHNICAL = app crash/login/hang. NETWORK_ISSUE = internet/GPS. REQUESTS_NOT_VISIBLE = ride requests never arrive. VEHICLE_ISSUE = breakdown/service/fuel/no vehicle. DRIVER_BUSY = other work/break. PAYMENT_CONCERN = dues/subscription/settlement. PERSONAL_REASON = health/family. OTHER = anything else — never guess a specific category."
+              },
+              "reason_details": {
+                "type": "string",
+                "description": "Structured detail, exactly this shape, only what the driver actually said (skip a part they did not mention): 'WHAT: <what is stopping them> | WHEN: <since when> | TRIED: <what they tried> | DRIVER_WORDS: <short direct quote>'. Never invent."
+              },
+              "ready_to_start": {
+                "type": "string",
+                "enum": [
+                  "NO",
+                  "NOT_SURE",
+                  "NOT_ASKED"
+                ],
+                "description": "Same value you passed on driver_says_no — do not recalculate."
+              },
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "reason_category",
+              "reason_details",
+              "ready_to_start",
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "REASON_GIVEN",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "source": "llm"
+                  },
+                  "reason_details": {
+                    "source": "llm"
+                  },
+                  "ready_to_start": {
+                    "source": "llm"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಸರಿ ಸರ್, ನಿಮ್ಮ issue ಅರ್ಥ ಆಯ್ತು. Thank you sir, ನಿಮ್ಮ issue note ಮಾಡ್ತಿದ್ದೀನಿ. But offer ಮಿಸ್ ಮಾಡ್ಬೇಡಿ — ಈಗ್ಲೇ online ಹೋಗಿ, rides start ಮಾಡಿ. ಒಳ್ಳೆ ದುಡಿಮೆ ಮಾಡ್ಕೊಳ್ಳಿ ಸರ್. Thank you, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "driver_no_issue",
+            "description": "After the why question the driver said there is no particular issue ('ಏನೂ ಇಲ್ಲ', 'ಸುಮ್ಮನೆ', 'ಗೊತ್ತಿಲ್ಲ'). No pushing. Speaks the plain closing and ends the call.",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "NO_ISSUE_REPORTED",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "value": "NO",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಈಗ್ಲೇ online ಹೋಗಿ, rides start ಮಾಡಿ. ಒಳ್ಳೆ ದುಡಿಮೆ ಮಾಡ್ಕೊಳ್ಳಿ ಸರ್, Thank you, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "driver_declines_to_share",
+            "description": "After the why question the driver CLEARLY refused to explain or wants to hang up ('ಬೇಡ', 'ಈಗ ಬೇಡ', 'ಇಟ್ಟುಬಿಡಿ', 'ಆಮೇಲೆ ಮಾತಾಡ್ತೀನಿ'). A repeat request — 'ಏನು? ಇನ್ನೊಮ್ಮೆ ಕೇಳಿ', 'ಮತ್ತೊಮ್ಮೆ ಹೇಳಿ' — is NOT refusal: call driver_says_no again to re-speak the question. Speaks the plain closing and ends the call.",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "NO_DETAILS_SHARED",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "value": "NO",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "OTHER",
+                    "source": "static"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಈಗ್ಲೇ online ಹೋಗಿ, rides start ಮಾಡಿ. ಒಳ್ಳೆ ದುಡಿಮೆ ಮಾಡ್ಕೊಳ್ಳಿ ಸರ್, Thank you, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          },
+          {
+            "function_name": "issue_no_response",
+            "description": "After the why question the driver stayed silent (about 3s). Do not ask again. Speaks the plain closing and ends the call.",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "One-line Kanglish summary of what the driver just said, e.g. 'Driver said houdu, willing to start rides' or 'Driver said pickup too far, not ready'."
+              },
+              "ready_response_words": {
+                "type": "string",
+                "description": "A short direct quote of the driver's own reply to the ready question, in the language they used (e.g. 'ಹೌದು ಮಾಡ್ತೀನಿ'). Empty string if it was never asked or never answered. Never paraphrase or invent."
+              },
+              "driver_number": {
+                "type": "string",
+                "description": "The driver's 10-digit number. ALWAYS pass {customer_mobile_number} exactly as it appears in your instructions — never ask the driver for it, never reformat it."
+              }
+            },
+            "required": [
+              "query",
+              "ready_response_words",
+              "driver_number"
+            ],
+            "transition_to": null,
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "value": "ISSUE_NO_RESPONSE",
+                    "source": "static"
+                  },
+                  "ready_to_start": {
+                    "value": "NO",
+                    "source": "static"
+                  },
+                  "reason_category": {
+                    "value": "NO_REASON",
+                    "source": "static"
+                  },
+                  "query": {
+                    "source": "llm"
+                  },
+                  "ready_response_words": {
+                    "source": "llm"
+                  },
+                  "driver_number": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ],
+            "say": {
+              "utterances": {
+                "kn": [
+                  "ಈಗ್ಲೇ online ಹೋಗಿ, rides start ಮಾಡಿ. ಒಳ್ಳೆ ದುಡಿಮೆ ಮಾಡ್ಕೊಳ್ಳಿ ಸರ್, Thank you, ನಿಮ್ಮ ದಿನ ಶುಭವಾಗಲಿ!"
+                ]
+              },
+              "phrasing": "first",
+              "default_language": "kn",
+              "end_call": true
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

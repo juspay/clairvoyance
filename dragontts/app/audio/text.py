@@ -148,7 +148,9 @@ def normalize_for_tts(text: str, provider: str) -> str:
     return normalize_numbers(text)
 
 
-def prepend_leading_dot(text: str, provider: str) -> str:
+def prepend_leading_dot(
+    text: str, provider: str, model: str | None = None
+) -> str:
     """ElevenLabs-only SYNTH hint: ensure ``text`` starts with "." (no space).
 
     A stray leading dot makes ElevenLabs read the first word/number cleanly (it
@@ -156,6 +158,10 @@ def prepend_leading_dot(text: str, provider: str) -> str:
     the text sent to the provider — never to the cache key — so equivalent inputs
     ("your order" and ".your order") share one entry. Other providers are
     unaffected. Idempotent (never double-dots) and a no-op for empty text.
+
+    ``eleven_v3*`` models are exempt: they speak Text-to-Dialogue, where the
+    dot is an untested input artifact rather than a hint (the verified-good
+    direct TTD path sends none), so the text goes through verbatim.
 
     Independent of number expansion: gated by ``TTS_LEADING_DOT`` alone, so the
     dot still applies when ``TTS_NORMALIZE_NUMBERS`` is off."""
@@ -165,6 +171,7 @@ def prepend_leading_dot(text: str, provider: str) -> str:
         and text.strip()  # whitespace-only -> no bare "."
         and provider
         and provider.strip().lower() == "elevenlabs"
+        and not (model and model.strip().startswith("eleven_v3"))
         and not text.startswith(".")
     ):
         return "." + text

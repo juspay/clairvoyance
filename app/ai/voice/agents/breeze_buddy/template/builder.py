@@ -6,13 +6,13 @@ This module builds Pipecat flow configurations from database models.
 
 from typing import AbstractSet, Any, Callable, Dict, List, Optional, Set, cast
 
-from pipecat_flows import (
+from pipecat.flows import (
     FlowManager,
     FlowsDirectFunction,
     FlowsFunctionSchema,
     NodeConfig,
 )
-from pipecat_flows.types import ActionConfig, FlowResult
+from pipecat.flows.types import ActionConfig, FlowResult
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal import (
     builtin_function_dispatcher,
@@ -32,6 +32,9 @@ from app.ai.voice.agents.breeze_buddy.template.global_function import (
 from app.ai.voice.agents.breeze_buddy.template.kb_tool import (
     append_kb_tool,
     synthesize_kb_tool_function,
+)
+from app.ai.voice.agents.breeze_buddy.template.tool_speech import (
+    TOOL_BASED_RULES_PROMPT,
 )
 from app.ai.voice.agents.breeze_buddy.template.transition import (
     transition_handler,
@@ -266,6 +269,8 @@ class FlowConfigBuilder:
 
         logger.debug(f"Found {len(nodes_data)} nodes in flow structure")
 
+        is_tool_based = flow.get("mode") == FlowMode.TOOL_BASED.value
+
         # Convert nodes data to FlowNodeModel objects
         flow_nodes = []
         for node_data in nodes_data:
@@ -325,6 +330,15 @@ class FlowConfigBuilder:
             logger.debug(f"Building node: {node.node_name}")
             nodes[node.node_name] = self._build_node(node, ui_allowlist=ui_allowlist)
 
+        result: Dict[str, Any] = {
+            "initial_node": initial_node_name,
+            "nodes": nodes,
+        }
+
+        if is_tool_based:
+            self._apply_tool_based_adjustments(nodes, flow_nodes, initial_node_name)
+            result["mode"] = FlowMode.TOOL_BASED.value
+
         # Extract end_conversation_callbacks if present
         end_conversation_callbacks = flow.get("end_conversation_callbacks", [])
         logger.debug(f"End conversation callbacks: {end_conversation_callbacks}")
@@ -332,14 +346,72 @@ class FlowConfigBuilder:
         self._log(
             f"Built flow config with {len(nodes)} nodes, initial: {initial_node_name}, "
             f"callbacks: {end_conversation_callbacks}"
+            + (f", mode: {FlowMode.TOOL_BASED.value}" if is_tool_based else "")
         )
 
-        return {
-            "initial_node": initial_node_name,
-            "nodes": nodes,
-            "end_conversation_callbacks": end_conversation_callbacks,
-            "expected_callback_response_schema": template.expected_callback_response_schema,
-        }
+        result["end_conversation_callbacks"] = end_conversation_callbacks
+        result["expected_callback_response_schema"] = (
+            template.expected_callback_response_schema
+        )
+        return result
+
+    def _apply_tool_based_adjustments(
+        self,
+        nodes: Dict[str, NodeConfig],
+        flow_nodes: List[FlowNodeModel],
+        initial_node_name: str,
+    ) -> None:
+        """Mutate built nodes for tool_based mode semantics.
+
+        1. ``respond_immediately=False`` on every node — after a function
+           call the tool's ``say`` block has already spoken; re-running
+           inference would only invite model prose. The next inference is
+           the next user turn (``prepare_initial_node`` re-applies this for
+           the initial node so a template without a greeting doesn't get
+           an unprompted first response).
+        2. Append :data:`TOOL_BASED_RULES_PROMPT` to the initial node's
+           role messages (tail append keeps the static prefix cache-friendly;
+           role messages persist across node transitions).
+        3. Warn on functions without a ``say`` block — legal (silent tools:
+           transfers, STT muting) but worth surfacing since it means the
+           turn speaks nothing.
+        """
+        say_count = 0
+        silent: List[str] = []
+        for flow_node in flow_nodes:
+            for func in flow_node.functions:
+                if func.say:
+                    say_count += 1
+                else:
+                    silent.append(f"{flow_node.node_name}.{func.name}")
+
+        for node_config in nodes.values():
+            cast(Dict[str, Any], node_config)["respond_immediately"] = False
+
+        initial = nodes.get(initial_node_name)
+        if initial is not None:
+            role_messages = list(initial.get("role_messages") or [])
+            if role_messages:
+                role_messages[-1] = {
+                    **role_messages[-1],
+                    "content": role_messages[-1]["content"]
+                    + "\n\n"
+                    + TOOL_BASED_RULES_PROMPT,
+                }
+            else:
+                role_messages = [{"role": "system", "content": TOOL_BASED_RULES_PROMPT}]
+            initial["role_messages"] = role_messages
+
+        if silent:
+            logger.warning(
+                f"tool_based: {len(silent)} function(s) have no say block and "
+                f"will speak nothing: {silent}"
+            )
+        self._log(
+            f"tool_based adjustments: respond_immediately=False on "
+            f"{len(nodes)} node(s), rules injected into "
+            f"'{initial_node_name}', {say_count} say-equipped function(s)"
+        )
 
     def _build_direct_flow_config(
         self,
@@ -702,6 +774,10 @@ class FlowConfigBuilder:
         hooks = [hook.model_dump() for hook in func.hooks] if func.hooks else []
         logger.debug(f"Using hooks for {func.name}: {hooks}")
 
+        # tool_based mode: the say block travels with the handler so the
+        # speech side effect runs inside transition_handler.
+        say = func.say.model_dump() if func.say else None
+
         # Create a wrapper handler matching FlowsFunctionSchema expected signature.
         # In flows 1.0, ConsolidatedFunctionResult is (FlowResult | None, NodeConfig | None);
         # the legacy str-node-name variant of next_node was removed.
@@ -715,10 +791,19 @@ class FlowConfigBuilder:
                 transition_to=func.transition_to,
                 hooks=hooks,
                 function_name=func.name,
+                say=say,
             )
             return result
 
         logger.debug(f"Successfully built function schema for: {func.name}")
+
+        # A barge-in may cancel a pure-speech function call — the
+        # interruption flush drops its audio anyway, and pipecat then treats
+        # the call as synchronous (plain tool result in context, no async
+        # "running"/"finished" wrapper). Functions with hooks or say.end_call
+        # write outcomes / end the call and must run to completion even under
+        # interruption, so they stay non-cancellable.
+        cancel_on_interruption = not (func.hooks or (func.say and func.say.end_call))
 
         return FlowsFunctionSchema(
             name=func.name,
@@ -726,6 +811,7 @@ class FlowConfigBuilder:
             handler=wrapper_handler,
             properties=func.properties,
             required=func.required,
+            cancel_on_interruption=cancel_on_interruption,
         )
 
     def _build_action(self, action: FlowAction) -> Dict[str, Any]:

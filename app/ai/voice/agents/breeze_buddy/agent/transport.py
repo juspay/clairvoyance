@@ -11,7 +11,10 @@ from typing import Optional
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
 from pipecat.transports.daily.transport import DailyParams
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
+from pipecat.transports.websocket.fastapi import (
+    FastAPIWebsocketParams,
+    FastAPIWebsocketTransport,
+)
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
@@ -142,6 +145,23 @@ def _create_audio_input_filter(
                 f"Failed to initialize AIC filter, proceeding without it: {e}"
             )
 
+    return None
+
+
+def get_tts_out_sample_rate(transport: object) -> Optional[int]:
+    """Native TTS output rate to request for this transport, if any.
+
+    Telephony transports run at TELEPHONY_SAMPLE_RATE (8 kHz), and ElevenLabs
+    v3 (Text-to-Dialogue) must be pinned to it: TTD delivers audio in batches
+    separated by 200-600 ms gaps, and pipecat's soxr stream resampler clears
+    its delay line after every 0.2 s gap — discarding mid-phrase audio on
+    each batch (3-18% per batch, measured on a live call). Pinned to 8000 the
+    endpoint delivers pcm_8000 natively (verified byte-exact) and no
+    client-side resampling happens at all. Daily returns None — the 24 kHz
+    pipeline default already matches and never resamples.
+    """
+    if isinstance(transport, FastAPIWebsocketTransport):
+        return TELEPHONY_SAMPLE_RATE
     return None
 
 

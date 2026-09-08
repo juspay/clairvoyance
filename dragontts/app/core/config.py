@@ -193,6 +193,13 @@ class Settings(BaseSettings):
     # WS utterance (ElevenLabs delays is_final ~20s). Lower = faster stream
     # close/turn-end; raise if long utterances ever truncate at a >N s pause.
     elevenlabs_stream_idle_timeout: float = 0.8
+    # Warm ElevenLabs Text-to-Dialogue sockets for eleven_v3 models (v3 exists
+    # ONLY there — the classic text-to-speech endpoint 404s for it). Sized
+    # separately from the classic pool: each TTD socket carries a permanent
+    # keepalive context (one of its 5 server-side context slots, leaving 4
+    # usable) and has no HTTP fallback, so 2 warm sockets cover a call's
+    # misses. 0 disables v3 synthesis entirely (no fallback exists).
+    elevenlabs_dialogue_pool_size: int = 2
     # Warm Sarvam WS sockets. Sarvam is NOT multiplexed (one utterance per socket
     # at a time), so this is a LIFO stack of warm, pre-configured connections. 0
     # => stream via a fresh socket per miss (no pooling).
