@@ -138,6 +138,17 @@ llm = AzureLLMService(
 
 When the system prompt or tool set changes meaningfully (template version bump), increment the key suffix (`-v4`).
 
+### Turn-1 prefill (per call, opt-in)
+
+Everything above attacks turns 2+. The **first** inference of a call always hits a cold cache — and for personalized-per-lead prompts (the common case today) it *stays* cold across calls, since even one changed character in the first 1024 tokens is a miss. The prefill feature closes that gap without restructuring any template:
+
+- Opt in per template: `"llm_configurations": {"provider": "azure", "prefill_system_prompt": true}`. On any other provider (or with `realtime`) the flag is silently inert — no error at save, and the runtime gate logs a per-call `prefill: skipped (…)` line; Gemini chat uses explicit `CachedContent`, Vertex Claude uses `enable_prompt_caching`.
+- At call start, right after the initial node's context is final, the agent fires one non-streaming `chat.completions` request with the exact rendered system prefix + tools (`max_completion_tokens=16`) — `agent/prompt_prefill.py`. For greeting-played telephony calls it rides the greeting playback (~3-6s), so turn 1 reads a warm cache; without a greeting the first inference races it and the prefill is pure cost (harmless, bounded by the 8s timeout).
+- Cost: one extra full-price input billing per call (~1.5× turn-1 input cost vs no prefill; the turn-1 re-bill is ~50% on hit). **Model-family caveat**: on GPT-5.6 and later Azure families, cache *writes* can be billed separately from discounted reads — qualify the estimate per model and monitor cache-write alongside cache-read tokens in Azure Monitor when enabling there. Templates with <1024-token prefixes get nothing — the cache never engages.
+- Verify: the `prefill: warmed` log line at call start, then `cache_read: <n>` (n>0) on the **first** `LLM TOKEN USAGE` line of the call (pipecat MetricsLogObserver, debug level) — or the first LLM span in Langfuse (`gen_ai.usage.cache_read.input_tokens`) / Azure Monitor (`Cache Read Input Tokens`) for aggregate confirmation (§5 below).
+
+`provider=openai` with a custom `endpoint` (OpenAI-compatible gateway) may not implement automatic prefix caching at all — the prefill still fires and is wasted spend, but never breaks the call.
+
 ---
 
 ## 4. Expected impact
