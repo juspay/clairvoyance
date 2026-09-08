@@ -6,13 +6,13 @@ This module builds Pipecat flow configurations from database models.
 
 from typing import AbstractSet, Any, Callable, Dict, List, Optional, Set, cast
 
-from pipecat_flows import (
+from pipecat.flows import (
     FlowManager,
     FlowsDirectFunction,
     FlowsFunctionSchema,
     NodeConfig,
 )
-from pipecat_flows.types import ActionConfig, FlowResult
+from pipecat.flows.types import ActionConfig, FlowResult
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal import (
     builtin_function_dispatcher,

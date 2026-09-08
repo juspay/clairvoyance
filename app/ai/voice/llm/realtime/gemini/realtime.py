@@ -102,7 +102,11 @@ class BuddyGeminiLiveLLMService(GeminiLiveLLMService):
         if self._context is None:
             await super()._process_completed_function_calls(send_new_results)
             return
-        messages = self._context.messages or []
+        # LLMContext.messages is a union of standard dict messages and
+        # LLMSpecificMessage objects (which carry no `.get`). Everything below
+        # reads standard message keys, so drop the LLM-specific ones rather
+        # than AttributeError-ing on whichever one lands in the context first.
+        messages = [m for m in (self._context.messages or []) if isinstance(m, dict)]
 
         # tool_call_id -> function name, from assistant tool_calls messages.
         id_to_name: dict = {}

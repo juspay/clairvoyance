@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from app.core.logger import logger
 
 if TYPE_CHECKING:
-    from pipecat.runner.types import RunnerArguments
+    from pipecat.runner.types import CallData, RunnerArguments
 
     from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 
@@ -63,7 +63,7 @@ class TransportRebuildContext:
     ws_proxy: Any = None  # NonClosingWebSocket over the raw call ws
     runner_args: Optional[RunnerArguments] = None  # daily rebuild
     telephony_transport_type: Optional[str] = None  # telephony rebuild
-    telephony_call_data: Optional[dict] = None
+    telephony_call_data: Optional[CallData] = None
 
 
 def suppress_auto_hangup(transport: Any) -> None:

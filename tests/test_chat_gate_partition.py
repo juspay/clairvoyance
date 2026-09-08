@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pipecat_flows import FlowsFunctionSchema
+from pipecat.flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.agent import _partition_gated_calls
 
@@ -25,9 +25,20 @@ def _call(name: str) -> SimpleNamespace:
     return SimpleNamespace(function_name=name)
 
 
+async def _noop_handler(args: dict) -> dict:
+    """Stand-in handler. The partition only reads schema names, never calls it."""
+    return {}
+
+
 def _schema(name: str) -> FlowsFunctionSchema:
     """A per-node function as it actually appears in a built node."""
-    return FlowsFunctionSchema(name=name, description="", properties={}, required=[])
+    return FlowsFunctionSchema(
+        name=name,
+        description="",
+        properties={},
+        required=[],
+        handler=_noop_handler,
+    )
 
 
 def test_partition_gates_global_in_non_shadow_node():

@@ -6,7 +6,7 @@ Each provider makes a non-streaming API call with tools and returns
 """
 
 import json
-from typing import Any, List
+from typing import Any, List, cast
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -14,6 +14,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.utils.types import assert_given
 
 from app.core.logger import logger
 
@@ -97,6 +98,8 @@ async def _call_anthropic(
     adapter = svc.get_llm_adapter()
     invocation_params = adapter.get_llm_invocation_params(
         context,
+        # Required since pipecat 1.8; mirror what the service itself passes.
+        enable_prompt_caching=assert_given(svc._settings.enable_prompt_caching),
         system_instruction=system_prompt,
     )
 
@@ -127,7 +130,7 @@ async def _call_google(
     observer_name: str,
 ) -> ToolCallResult:
     """Mirror GoogleLLMService._process_context minus the frame layer."""
-    from google.genai.types import GenerateContentConfig
+    from google.genai.types import ContentListUnion, GenerateContentConfig
 
     context = LLMContext()
     context.add_message({"role": "user", "content": transcript_text})
@@ -149,7 +152,9 @@ async def _call_google(
     model_name = str(svc._settings.model)
     response = await svc._client.aio.models.generate_content(
         model=model_name,
-        contents=invocation_params["messages"],
+        # list invariance: the adapter hands back list[Content], which is
+        # not assignable to the SDK's list[ContentUnion] parameter.
+        contents=cast(ContentListUnion, invocation_params["messages"]),
         config=GenerateContentConfig(**generation_params),
     )
 
