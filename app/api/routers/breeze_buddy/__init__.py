@@ -1,5 +1,7 @@
 from fastapi import APIRouter
 
+from app.api.routers.breeze_buddy.admin import router as admin_router
+
 # Pod health probes (1-pod-1-call isolation architecture)
 from app.api.routers.breeze_buddy.agent_router.health import router as pod_router
 
@@ -160,6 +162,9 @@ router.include_router(chat_router, prefix="", tags=["chat"])
 # - widget_config: per-merchant config (admin/reseller-scoped CRUD)
 # - widget: unified /widget/session/* conversation router (chat ↔ voice)
 router.include_router(widget_config_router, prefix="", tags=["widget-config"])
+# Admin-only surfaces (/admin/*): assist fleet inventory, and any future
+# platform-wide read or action — see routers/breeze_buddy/admin/__init__.py
+router.include_router(admin_router, prefix="", tags=["admin"])
 # - ui_components: CHAMELEON custom-component registry (migration 070)
 router.include_router(ui_components_router, prefix="", tags=["ui-components"])
 router.include_router(widget_router, prefix="", tags=["widget-session"])
