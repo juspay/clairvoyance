@@ -3,6 +3,7 @@ Common utilities for validation, parsing, and helper functions.
 """
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -115,3 +116,31 @@ def parse_json_field(value) -> List[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+_E164 = re.compile(r"^\+[1-9][0-9]{6,14}$")
+
+
+def normalize_e164(raw: object) -> Optional[str]:
+    """Best-effort E.164. Returns None when the value cannot be dialed."""
+    if not isinstance(raw, str):
+        return None
+    digits = re.sub(r"[^\d+]", "", raw)
+    if digits.startswith("00"):
+        digits = "+" + digits[2:]
+    if not digits.startswith("+"):
+        if len(digits) == 10:
+            # Bare numbers default to +91, matching the crm normalizer.
+            digits = "+91" + digits
+        elif len(digits) == 11 and digits.startswith("0"):
+            digits = "+91" + digits[1:]
+        elif len(digits) == 12 and digits.startswith("91"):
+            digits = "+" + digits
+        else:
+            digits = "+" + digits
+    return digits if _E164.match(digits) else None
+
+
+def is_dialable(raw: object) -> bool:
+    """True when ``raw`` normalizes to a valid E.164 number."""
+    return normalize_e164(raw) is not None
