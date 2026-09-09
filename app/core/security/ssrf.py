@@ -218,6 +218,22 @@ def host_matches_allowlist(url: str, allowed_suffixes: List[str]) -> bool:
     return False
 
 
+def is_same_origin(previous: str, target: str) -> bool:
+    """True if ``target`` is the same origin as ``previous``.
+
+    Same host, and the same scheme or the one scheme change that is not a
+    downgrade (http -> https). Used to follow a redirect that stays on the
+    destination the caller already chose, while refusing one that moves the
+    request somewhere they did not.
+    """
+    a, b = urlparse(previous), urlparse(target)
+    if (a.hostname or "").lower() != (b.hostname or "").lower():
+        return False
+    if a.scheme == b.scheme:
+        return a.port == b.port
+    return a.scheme == "http" and b.scheme == "https"
+
+
 def _without_credential_headers(kwargs: dict, target: str) -> dict:
     """Return ``kwargs`` with caller headers reduced to :data:`_SAFE_REDIRECT_HEADERS`.
 
@@ -284,6 +300,7 @@ async def ssrf_safe_request(
     allowed_host_suffixes: Optional[Sequence[str]] = None,
     allow_http: bool = False,
     max_redirects: int = 3,
+    same_origin_only: bool = False,
     **kwargs: Any,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
     """Issue an aiohttp request with SSRF validation on every hop.
@@ -299,6 +316,10 @@ async def ssrf_safe_request(
       is stripped so credentials never travel to a non-allow-listed host, but
       the (credential-free) fetch may still follow to e.g. a public CDN.
 
+    - ``same_origin_only`` restricts redirects to the same host (allowing only
+      an http -> https scheme upgrade). For a request whose BODY is the point —
+      a signed webhook — this is what makes following a redirect safe at all:
+      the payload can reach the destination the caller chose, and nowhere else.
     - Redirect method/body semantics follow the browser rule rather than
       replaying the original request: 301/302/303 rewrite a non-GET/HEAD method
       to GET and drop the body, and only 307/308 preserve both. Replaying a POST
@@ -405,7 +426,13 @@ async def ssrf_safe_request(
                     f"(limit {max_redirects})"
                 )
             response.release()
-            current = urljoin(current, location)
+            target = urljoin(current, location)
+            if same_origin_only and not is_same_origin(current, target):
+                raise SSRFError(
+                    f"Refusing to follow an off-origin redirect: "
+                    f"{redact_url(current)} -> {redact_url(target)}"
+                )
+            current = target
             if response.status in _REWRITE_TO_GET and cur_method.upper() not in (
                 "GET",
                 "HEAD",

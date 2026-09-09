@@ -193,12 +193,13 @@ async def send_webhook_with_retry(
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Webhook attempt {attempt}/{max_retries} to {redact_url(url)}")
-            # max_redirects=0: a reporting webhook is a fixed, tenant-configured
-            # destination, so there is no legitimate reason to follow a 30x —
-            # and following one replays the signed lead payload to a host the
-            # tenant never configured. Per-hop revalidation would still block an
-            # internal target, but the payload would already have left for any
-            # public one. Refuse the redirect outright instead.
+            # same_origin_only: the danger in following a redirect here is that
+            # the signed lead payload gets re-sent to a host the tenant never
+            # configured — not the redirect itself. A redirect that stays on
+            # their own host cannot do that, and refusing those instead breaks
+            # every endpoint that answers /hook with a 301 to /hook/ or upgrades
+            # http to https, which is most of them. Off-origin is still refused,
+            # and every hop is still validated.
             async with ssrf_safe_request(
                 session,
                 "POST",
@@ -206,7 +207,8 @@ async def send_webhook_with_retry(
                 json=data,
                 headers=headers,
                 allow_http=True,
-                max_redirects=0,
+                max_redirects=2,
+                same_origin_only=True,
             ) as response:
                 if response.status == 200:
                     logger.info(f"Webhook succeeded on attempt {attempt}")
