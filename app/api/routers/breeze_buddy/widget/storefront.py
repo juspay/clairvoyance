@@ -15,7 +15,12 @@ to the caller (404/403 with no detail) so the door isn't enumerable.
 
 from __future__ import annotations
 
-from fastapi import HTTPException, Request, status
+import hashlib
+import json
+from typing import Optional
+
+from fastapi import HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
     assist_tenant_candidates,
@@ -33,7 +38,12 @@ from app.database.accessor.breeze_buddy.widget_config import (
 from app.schemas.breeze_buddy.widget_config import StorefrontWidgetConfigResponse
 from app.services.redis.rate_limit import check_rate_limit
 
-_CACHE_TTL_SECONDS = 900
+# How long the storefront loader may mount from its local copy before it
+# revalidates. Short on purpose: a change made in the console has to show on
+# the storefront within a minute, not fifteen. Revalidation is cheap — the
+# loader sends ``If-None-Match`` and an unchanged config answers 304 with no
+# body, before the per-widget limiter.
+_CACHE_TTL_SECONDS = 60
 
 # Pre-lookup probe cap. The merchant-scoped limiter below can only run AFTER
 # a config resolves (it is keyed by widget_config_id), which would leave
@@ -65,9 +75,42 @@ async def _enforce_probe_ip_limit(request: Request) -> None:
     )
 
 
+def _etag_of(body: StorefrontWidgetConfigResponse) -> str:
+    """A strong validator over everything the loader acts on.
+
+    Derived from the payload rather than ``updated_at`` alone so an appearance
+    edit that lands without bumping the row timestamp still invalidates.
+    """
+    material = body.model_dump(mode="json", exclude={"cache_ttl_seconds"})
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:20]
+    return f'"{digest}"'
+
+
+def _if_none_match_hits(header: Optional[str], etag: str) -> bool:
+    if not header:
+        return False
+    candidates = [tag.strip() for tag in header.split(",")]
+    return "*" in candidates or etag in candidates or f"W/{etag}" in candidates
+
+
+_RESPONSE_HEADERS = {
+    # The loader keeps its own short-lived copy; the browser cache must not
+    # add a second, longer one on top.
+    "Cache-Control": "no-cache",
+    "Vary": "Origin",
+    # Widget paths bypass the CORS middleware and get a bare
+    # Access-Control-Allow-Origin: * at the ASGI layer; ETag is not a
+    # CORS-safelisted response header, so the loader could not read it
+    # cross-origin without this.
+    "Access-Control-Expose-Headers": "ETag",
+}
+
+
 async def storefront_widget_config_handler(
     request: Request, merchant_domain: str
-) -> StorefrontWidgetConfigResponse:
+) -> Response:
     try:
         normalized_domain = normalize_merchant_domain(merchant_domain)
     except ValueError as exc:
@@ -103,16 +146,7 @@ async def storefront_widget_config_handler(
 
     enforce_widget_origin(request=request, cfg=cfg)
 
-    # Separate bucket from "session_create": a page view must never burn a
-    # real session slot. Same per-hour cap, its own counter.
-    await enforce_widget_ip_limit(
-        request=request,
-        bucket="storefront_config",
-        limit=cfg.max_sessions_per_ip_hour,
-        widget_config_id=cfg.id,
-    )
-
-    return StorefrontWidgetConfigResponse(
+    body = StorefrontWidgetConfigResponse(
         enabled=True,
         tenant=cfg.public_widget_key,
         merchant_domain=normalized_domain,
@@ -122,6 +156,25 @@ async def storefront_widget_config_handler(
         ),
         cache_ttl_seconds=_CACHE_TTL_SECONDS,
     )
+    etag = _etag_of(body)
+    headers = {**_RESPONSE_HEADERS, "ETag": etag}
+
+    # A revalidation of an unchanged config is answered here, before the
+    # per-widget limiter: the loader revalidates on every page view, and that
+    # must never burn the budget a real session needs.
+    if _if_none_match_hits(request.headers.get("if-none-match"), etag):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
+    # Separate bucket from "session_create": a page view must never burn a
+    # real session slot. Same per-hour cap, its own counter.
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="storefront_config",
+        limit=cfg.max_sessions_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+
+    return JSONResponse(content=body.model_dump(mode="json"), headers=headers)
 
 
 __all__ = ["storefront_widget_config_handler"]
