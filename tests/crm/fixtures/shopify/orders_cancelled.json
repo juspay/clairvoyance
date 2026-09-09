@@ -27,7 +27,7 @@
   "buyer_accepts_marketing": false,
   "taxes_included": true,
   "source_name": "web",
-  "tags": "",
+  "tags": "cod, cancelled",
   "customer": {
     "id": 7011200034,
     "email": "priya.sharma@example.com",
@@ -85,5 +85,9 @@
     }
   ],
   "cancelled_at": "2026-09-02T11:02:40+05:30",
-  "cancel_reason": "customer"
+  "cancel_reason": "customer",
+  "confirmation_number": "ZAQXSWCDE",
+  "note": "Customer changed their mind",
+  "total_outstanding": "0.00",
+  "order_status_url": "https://urban-thread.myshopify.com/61234567890/orders/ord-tok-1/authenticate?key=8f2c1a"
 }

@@ -310,7 +310,8 @@ def test_a_payload_can_never_plant_bookkeeping_keys_in_context() -> None:
             "facts": "junk",  # phase 16: the per-square store is ours
             "current_node": "forged",
             "current_stage": "forged",
-        }
+        },
+        256,
     )
     assert context == {"item": "tv"}
 

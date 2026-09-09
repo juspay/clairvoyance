@@ -27,7 +27,7 @@
   "buyer_accepts_marketing": false,
   "taxes_included": true,
   "source_name": "web",
-  "tags": "",
+  "tags": "cod, guest",
   "billing_address": {
     "first_name": "Rohan",
     "last_name": "Mehta",
@@ -65,5 +65,9 @@
       "sku": "SK-3",
       "variant_title": null
     }
-  ]
+  ],
+  "confirmation_number": "KQWERTZUI",
+  "note": "Leave with the guard",
+  "total_outstanding": "3097.00",
+  "order_status_url": "https://urban-thread.myshopify.com/61234567890/orders/ord-tok-2/authenticate?key=8f2c1a"
 }

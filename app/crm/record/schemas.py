@@ -126,7 +126,7 @@ class EventReceipt(BaseModel):
 # The closed type set a registration may use — each maps one-to-one onto the
 # where-grammar's operators (record/catalog.py OPS_BY_TYPE). Unknown types
 # are rejected at registration, never discovered at flow-publish.
-FieldType = Literal["text", "number", "choice", "boolean", "datetime", "phone"]
+FieldType = Literal["text", "number", "choice", "boolean", "datetime", "phone", "list"]
 IdentityRole = Literal["phone", "name", "email", "shopify_customer_id"]
 
 
@@ -149,6 +149,7 @@ class CatalogField(BaseModel):
     # precedence chains in jsonb are the DSL the ruling forbids.
     fallbacks: List[str] = Field(default_factory=list)
     ops: List[str] = Field(default_factory=list)
+    item_format: Optional[str] = Field(None, min_length=1, max_length=160)
 
 
 class CatalogEntry(BaseModel):

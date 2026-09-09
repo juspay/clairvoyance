@@ -30,10 +30,13 @@ from app.crm.record.db import accessor
 from app.crm.record.extractors import SPEC_MODULES
 from app.crm.record.extractors.engine import (
     EMPTY_SPEC,
+    LIST_TYPE,
     PAYLOAD_PREFIX,
     DecodeSpec,
     Deriver,
+    format_faults,
     spec_for_entry,
+    variable_name,
 )
 from app.crm.record.schemas import (
     CatalogEntry,
@@ -55,6 +58,11 @@ OPS_BY_TYPE: Dict[str, List[str]] = {
     "boolean": ["is", "is_not", EXISTS_OP],
     "datetime": [*ORDER_OPS, EXISTS_OP],
     "phone": [],
+    # A list is a template variable and nothing else. No ops, so the
+    # where-grammar never receives an array and the matcher never learns
+    # array semantics (design/event-catalog.md, sealed) — a condition on a
+    # list field is refused at publish, naming the empty set.
+    "list": [],
 }
 KEYABLE_TYPES = ("text", "number")
 MAX_REGISTERED_FIELDS = 200
@@ -107,6 +115,19 @@ DERIVE: Dict[Tuple[str, str], Dict[str, Deriver]] = {
 # --- Pure helpers -----------------------------------------------------------
 
 
+def stored_field(field: CatalogField) -> Dict[str, Any]:
+    """PURE: one field as the T24 row carries it. `ops` are computed on read
+    and `fallbacks`/`derived` are code-layer words, so none is written.
+    `item_format` rides only on a field that HAS one, so every type canon
+    already describes is stored exactly as it was before the list type
+    existed — the field list is extended for the new type, not for every
+    row."""
+    doc = field.model_dump(exclude=_CODE_ONLY_KEYS)
+    if doc.get("item_format") is None:
+        doc.pop("item_format", None)
+    return doc
+
+
 def with_ops(field: CatalogField) -> CatalogField:
     """The ops a field admits are a function of its type, never authored."""
     return field.model_copy(update={"ops": list(OPS_BY_TYPE[field.type])})
@@ -155,6 +176,7 @@ def validate_registration(registration: SchemaRegistration) -> List[str]:
         problems.append(f"too many fields ({len(fields)} > {MAX_REGISTERED_FIELDS})")
     seen: Set[str] = set()
     roles: Dict[str, str] = {}
+    blanks: Dict[str, str] = {}
     for field in fields:
         if field.derived:
             problems.append(f"{field.path}: derived fields are code-layer only")
@@ -172,6 +194,42 @@ def validate_registration(registration: SchemaRegistration) -> List[str]:
         if field.path in seen:
             problems.append(f"{field.path}: declared twice")
         seen.add(field.path)
+        if field.item_format is not None:
+            if field.type != LIST_TYPE:
+                problems.append(f"{field.path}: item_format belongs to type list")
+            else:
+                problems.extend(
+                    f"{field.path}: {p}" for p in format_faults(field.item_format)
+                )
+        if field.type == LIST_TYPE:
+            # No ops and never a handle, so a list that is not a variable can
+            # be neither filtered, keyed nor templated — a field nothing can
+            # read is a mistake, not a declaration. (keyable is refused below:
+            # KEYABLE_TYPES is text | number.)
+            if not field.variable:
+                problems.append(
+                    f"{field.path}: type list is a template variable or nothing "
+                    "(set variable: true)"
+                )
+            if field.identity is not None:
+                problems.append(f"{field.path}: a list cannot be an identity field")
+        if field.variable and not field.deprecated:
+            blank = variable_name(field.path)
+            if blank in blanks:
+                problems.append(
+                    f"{field.path}: fills {{{blank}}}, already filled by "
+                    f"{blanks[blank]} — a blank is the path's last segment, so "
+                    "two variables ending in the same word collide (rename one, "
+                    "or drop variable)"
+                )
+            else:
+                blanks[blank] = field.path
+        if field.type == "boolean" and field.variable:
+            problems.append(
+                f"{field.path}: a yes/no is a filter, never a blank — "
+                '"true" in a customer\'s message is corruption that looks '
+                "delivered (drop variable, or declare it type choice)"
+            )
         if field.type == "choice" and not field.values:
             problems.append(f"{field.path}: choice needs its values")
         if field.type != "choice" and field.values:
@@ -344,9 +402,7 @@ async def register_schema(
         registration.source,
         registration.topic,
         registration.label,
-        json.dumps(
-            [f.model_dump(exclude=_CODE_ONLY_KEYS) for f in registration.fields]
-        ),
+        json.dumps([stored_field(f) for f in registration.fields]),
         registered_by,
     )
     _SPEC_CACHE.pop((merchant_id, registration.source, registration.topic), None)

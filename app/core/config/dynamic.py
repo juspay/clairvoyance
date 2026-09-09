@@ -1,4 +1,6 @@
 import json
+import time
+from typing import Optional, Tuple
 
 from app.core.logger import logger
 from app.services.live_config.store import get_config
@@ -81,6 +83,73 @@ async def BB_DISPATCH_ENABLED() -> bool:
     overriding ``BB_DISPATCH_ENABLED`` in the Redis feature-flag blob.
     """
     return await get_config("BB_DISPATCH_ENABLED", True, bool)
+
+
+#: The engine's own join budget, extractors/engine.py VARIABLE_MAX_CHARS.
+#: DUPLICATED here, not imported: app/core imports nothing from app.crm, and
+#: inverting that for one integer would put the base layer under a module
+#: that sits on top of it. tests/crm/test_context_ceiling.py pins the two
+#: equal — the executable inequality the house rule asks for, written where
+#: both sides are visible, since neither file may see the other.
+_CONTEXT_VALUE_FLOOR = 256
+#: How long a process trusts its own copy. The dial changes about once a
+#: year and is read once per consumed letter, so a fresh Redis GET per row
+#: buys nothing and costs thousands a second on the busiest worker in the
+#: system. Sixty seconds keeps the reason this is live at all — "raising it
+#: for one noisy producer should not need a deploy" — entirely intact.
+_CONTEXT_VALUE_CACHE_SECONDS = 60
+_context_value_cache: Optional[Tuple[float, int]] = None
+
+
+async def CRM_CONTEXT_VALUE_MAX_CHARS() -> int:
+    """How long one scalar fact may be to ride in a run's context.
+
+    Canon T20 col 12 keeps a run to pointers plus small facts, and this is
+    where "small" is decided. Read live rather than bound at import: the
+    right ceiling is a property of the merchants on the box, not of the
+    build, and raising it for one noisy producer should not need a deploy.
+    A value over it is DROPPED, so a send that maps it parks — raise it
+    when a real letter is being cut off, never as a matter of course.
+
+    FLOORED at the engine's join budget, and that is not defensiveness. The
+    two numbers are mutually constrained: join_list truncates a cart TO the
+    budget precisely so the scalar gate below cannot drop it whole ("the
+    send would then park on a blank whose cause is two modules away"). Set
+    this dial to 200 and every full-length joined cart is silently dropped —
+    exactly the failure the truncation exists to prevent — and set it to 0
+    and every run is born with an empty context. One side of the pair is
+    bound at import and cannot move at runtime, so the pin has to be a
+    clamp: an operator may raise this ceiling, never lower it below what the
+    build already promised.
+
+    Cached in process for _CONTEXT_VALUE_CACHE_SECONDS: this is the spine's
+    per-row path, and it was the only live-config read on it."""
+    global _context_value_cache
+    now = time.monotonic()
+    if _context_value_cache is not None and _context_value_cache[0] > now:
+        return _context_value_cache[1]
+
+    raw = await get_config("CRM_CONTEXT_VALUE_MAX_CHARS", _CONTEXT_VALUE_FLOOR, int)
+    try:
+        ceiling = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid CRM_CONTEXT_VALUE_MAX_CHARS value {raw!r}; "
+            f"using {_CONTEXT_VALUE_FLOOR}"
+        )
+        ceiling = _CONTEXT_VALUE_FLOOR
+    if ceiling < _CONTEXT_VALUE_FLOOR:
+        logger.warning(
+            f"CRM_CONTEXT_VALUE_MAX_CHARS={ceiling} is below the engine's join "
+            f"budget ({_CONTEXT_VALUE_FLOOR}); a joined list truncated TO that "
+            f"budget would be dropped from every run's context. Clamped to "
+            f"{_CONTEXT_VALUE_FLOOR} — lower the engine's budget in the build "
+            f"if this ceiling is really meant to fall."
+        )
+        ceiling = _CONTEXT_VALUE_FLOOR
+
+    _context_value_cache = (now + _CONTEXT_VALUE_CACHE_SECONDS, ceiling)
+    return ceiling
 
 
 async def BB_SCHEDULE_DEPTH_ALERT_THRESHOLD() -> int:
