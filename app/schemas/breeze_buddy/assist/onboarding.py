@@ -50,6 +50,7 @@ def _public_https_url(value: str, *, origin_only: bool) -> str:
 
 
 OnboardingPlatform = Literal["shopify", "web"]
+OnboardingVertical = Literal["commerce"]
 
 
 class AssistOnboardingStreamRequest(BaseModel):
@@ -72,6 +73,14 @@ class AssistOnboardingStreamRequest(BaseModel):
         description=(
             "Storefront platform. Optional alias of ``is_shopify`` for callers "
             "that speak the adapter vocabulary; when both are sent they must agree."
+        ),
+    )
+    vertical: Optional[OnboardingVertical] = Field(
+        None,
+        description=(
+            "What the assistant is for. Optional: a platform that serves one "
+            "vertical implies it (a Shopify store is commerce); a plain website "
+            "defaults to commerce until more verticals exist."
         ),
     )
     allow_unpersonalized: bool = Field(
@@ -216,6 +225,7 @@ class AssistOnboardingCompletion(BaseModel):
 
 __all__ = [
     "OnboardingPlatform",
+    "OnboardingVertical",
     "AssistOnboardRequest",
     "AssistOnboardResponse",
     "AssistOnboardingCompletion",

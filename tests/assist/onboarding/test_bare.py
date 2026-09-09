@@ -16,6 +16,9 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce import (
+    vertical as commerce_vertical,
+)
 from app.ai.voice.agents.breeze_buddy.assist.onboarding import service
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (
     adapter as shopify_adapter,
@@ -50,7 +53,7 @@ def _default_template() -> TemplateModel:
         id="00000000-0000-0000-0000-000000000001",
         reseller_id=RESELLER_ID,
         merchant_id=None,
-        name=service.DEFAULT_ASSIST_TEMPLATE_NAME,
+        name=commerce_vertical.DEFAULT_ASSIST_TEMPLATE_NAME,
         flow={
             "mode": "direct",
             "functions": [],
@@ -155,7 +158,7 @@ def _scope_lookup(existing_merchant_template, default):
 
     async def lookup(reseller_id, merchant_id, name):
         if merchant_id is None:
-            assert name == service.DEFAULT_ASSIST_TEMPLATE_NAME
+            assert name == commerce_vertical.DEFAULT_ASSIST_TEMPLATE_NAME
             return default
         return existing_merchant_template
 

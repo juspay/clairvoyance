@@ -19,6 +19,9 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce import (
+    vertical as commerce_vertical,
+)
 from app.ai.voice.agents.breeze_buddy.assist.commerce.skeleton import COMMERCE_V2
 from app.ai.voice.agents.breeze_buddy.assist.engine import skeleton
 from app.ai.voice.agents.breeze_buddy.assist.engine.prompt_core import (
@@ -34,6 +37,7 @@ from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (
     adapter as shopify_adapter,
 )
+from app.ai.voice.agents.breeze_buddy.assist.verticals import registry as verticals
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.api.routers.breeze_buddy.assist.onboarding import _ONBOARDING_ROLES
 from app.schemas import UserRole
@@ -102,12 +106,15 @@ def _build(is_shopify: bool = True) -> TemplateModel:
         template_id="00000000-0000-0000-0000-000000000002",
         existing_template=None,
         adapter=registry.resolve("shopify" if is_shopify else "generic"),
+        vertical=verticals.resolve("commerce"),
     )
 
 
 def test_fixture_is_the_fleet_skeleton() -> None:
     blueprint = _blueprint()
-    service._validate_default_template(blueprint, registry.resolve("shopify"))
+    service._validate_default_template(
+        blueprint, registry.resolve("shopify"), verticals.resolve("commerce")
+    )
     assert service.blueprint_shape_warnings(blueprint) == []
     prompt = blueprint.flow["system_prompt"]
     assert prompt.count(service.BRAND_IDENTITY_MARKER) == 1
@@ -215,7 +222,9 @@ def test_marker_validation_rejects_bad_shapes(prompt: str) -> None:
     blueprint = _blueprint()
     blueprint.flow["system_prompt"] = prompt
     with pytest.raises(service.OnboardingFailure) as failure:
-        service._validate_default_template(blueprint, registry.resolve("shopify"))
+        service._validate_default_template(
+            blueprint, registry.resolve("shopify"), verticals.resolve("commerce")
+        )
     assert failure.value.code == "DEFAULT_TEMPLATE_INVALID"
 
 
@@ -232,7 +241,7 @@ def test_old_shape_blueprint_only_warns() -> None:
     assert any("supported_channels" in w for w in warnings)
     assert any("gemini-2.5-flash" in w for w in warnings)
     service._validate_default_template(
-        old, registry.resolve("shopify")
+        old, registry.resolve("shopify"), verticals.resolve("commerce")
     )  # tolerated until the data rows are v2
 
 
@@ -276,7 +285,10 @@ def _wire_first_onboarding(monkeypatch, scrape) -> None:
     blueprint = _blueprint()
 
     async def template_in_scope(reseller_id, merchant_id, name):
-        if merchant_id is None and name == service.DEFAULT_ASSIST_TEMPLATE_NAME:
+        if (
+            merchant_id is None
+            and name == commerce_vertical.DEFAULT_ASSIST_TEMPLATE_NAME
+        ):
             return blueprint
         return None
 

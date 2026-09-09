@@ -2,9 +2,9 @@
 
 ASSIST-ENGINE-DESIGN.md §1: platform facts live in ``assist/platforms/<name>/``
 only; the engine, the onboarding surface and the assist HTTP surface are
-platform-blind. The engine is also vertical-blind — a booking or transit
-assistant must run on it unchanged — so commerce words belong to
-``assist/commerce/``, never to ``assist/engine/``.
+platform-blind. The same scopes are also vertical-blind — a booking or transit
+assistant must run on them unchanged — so commerce words belong to
+``assist/commerce/`` (the vertical), never to the engine or the surfaces.
 """
 
 import pathlib
@@ -39,6 +39,8 @@ def test_engine_onboarding_and_routes_name_no_platform():
     assert not offenders, "platform names outside platforms/:\n" + "\n".join(offenders)
 
 
-def test_engine_has_no_vertical_vocabulary():
-    offenders = _offenders((ENGINE,), VERTICAL_WORDS)
-    assert not offenders, "vertical vocabulary inside engine/:\n" + "\n".join(offenders)
+def test_engine_onboarding_and_routes_have_no_vertical_vocabulary():
+    offenders = _offenders(PLATFORM_BLIND, VERTICAL_WORDS)
+    assert not offenders, "vertical vocabulary outside the verticals:\n" + "\n".join(
+        offenders
+    )
