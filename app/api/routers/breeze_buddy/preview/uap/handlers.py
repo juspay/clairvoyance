@@ -13,6 +13,7 @@ from app.crm.identity.contracts import get_customer, resolve
 from app.crm.preview.uap.contracts import (
     CrmCustomerAgent,
     create_attempt,
+    deactivate_agent,
     get_by_agent_id,
     get_by_agent_obj_ref,
     get_drawable_for_customer,
@@ -502,7 +503,9 @@ async def _reuse_existing(
     our table if we did not know it — a rider who consented once (another
     device, a lost webhook) is never asked again. Only OUR refs
     (``agent_<customer>_*``) are eligible: a stranger's agent on the same
-    Juspay customer must never stand in."""
+    Juspay customer must never stand in. An agent the rider DELETED here
+    (row INACTIVE, matched by our ref or by agent_id) is skipped: neither
+    re-adopted nor refreshed."""
     try:
         agents = await uap_api.list_agents(creds, juspay_customer_id)
     except JuspayError as exc:
@@ -516,6 +519,10 @@ async def _reuse_existing(
         if str(agent.get("status") or "").upper() != "ACTIVE":
             continue
         row = await get_by_agent_obj_ref(ref)
+        if row is None and agent.get("agent_id"):
+            row = await get_by_agent_id(str(agent["agent_id"]))
+        if row is not None and row.status == "INACTIVE":
+            continue
         if row is None:
             # Adopt with the intent ref Juspay reports; the refresh below
             # reads the approved rule from the action record.
@@ -816,6 +823,26 @@ async def select_agent_for_rider(payload: SelectAgentRequest) -> Dict[str, Any]:
     ok = await set_preferred_agent(
         scope.merchant_id, scope.customer_id, payload.agent_ref
     )
+    if not ok:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail="No such payment agent for this rider"
+        )
+    agents = await list_drawable_for_customer(scope.merchant_id, scope.customer_id)
+    return {
+        "agents": [await _agent_view(scope, a, i == 0) for i, a in enumerate(agents)],
+        "count": len(agents),
+    }
+
+
+@onboarding_router.post("/agents/delete")
+async def delete_agent_for_rider(payload: SelectAgentRequest) -> Dict[str, Any]:
+    """The rider deleted a payment agent. The row goes INACTIVE (kept, so
+    the same Juspay agent is never re-adopted on the next Setup) and is
+    no longer preferred; the mandate at Juspay is left as it is. Only a
+    ref belonging to THIS rider can be deleted."""
+    scope = await _scope(payload.session_id)
+    assert scope.customer_id
+    ok = await deactivate_agent(scope.merchant_id, scope.customer_id, payload.agent_ref)
     if not ok:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, detail="No such payment agent for this rider"

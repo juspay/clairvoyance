@@ -53,6 +53,22 @@ def test_plan_patch_keeps_rider_decision_and_takes_approved_rule() -> None:
     assert plan_patch("PAUSED", None, None)["status"] == "EXPIRED"
 
 
+def test_plan_patch_inactive_is_final() -> None:
+    """Deleted by the rider here: no Juspay state can bring it back."""
+    action = {"status": "ACTIVE", "action_id": "c1"}
+    assert (
+        plan_patch("INACTIVE", _juspay_agent("ACTIVE"), action)["status"] == "INACTIVE"
+    )
+    assert plan_patch("INACTIVE", _juspay_agent("ACTIVE"), None)["status"] == "INACTIVE"
+    assert plan_patch("INACTIVE", _juspay_agent("PAUSED"), None)["status"] == "INACTIVE"
+    assert plan_patch("INACTIVE", None, None)["status"] == "INACTIVE"
+    # identifiers from Juspay still land; only the status is pinned
+    patch = plan_patch("INACTIVE", _juspay_agent("ACTIVE", payer_avpa="a@upi"), action)
+    assert patch["payer_avpa"] == "a@upi" and patch["action_id"] == "c1"
+    # and INACTIVE is never derived from Juspay's vocabulary
+    assert derive_status(_juspay_agent("ACTIVE"), action) == "ACTIVE"
+
+
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
