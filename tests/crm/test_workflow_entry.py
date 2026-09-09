@@ -697,6 +697,56 @@ def test_a_reply_carries_the_letters_scalar_facts_for_its_square(
     assert listening.facts == [(str(run.id), "ask", {"button_id": "YES", "amount": 5})]
 
 
+def test_a_reply_carries_the_declared_fields_the_engine_decoded(
+    listening: _Spine,
+) -> None:
+    """The square hears what the CATALOG declared, not only what happens to
+    sit at the payload's top level.
+
+    Enrol has always been handed the engine's variables; a woken square
+    re-read the raw payload by hand, so a derived or nested field reached a
+    starting run and never a waiting one. On WhatsApp — where the person
+    and the answer both live inside lists — that left the square holding
+    `messaging_product` and nothing a plan could name."""
+    (run,) = listening.runs
+    asyncio.run(
+        consume_attributed_event(
+            _event(
+                "button.reply", {"button_id": "YES", "messaging_product": "whatsapp"}
+            ),
+            "c-1",
+            {},
+            {"reply": "form_submitted", "flow_address": "221B Baker Street"},
+        )
+    )
+    _, _, facts = listening.facts[0]
+    assert facts["flow_address"] == "221B Baker Street"
+    # The raw scalar is kept: a plan naming a field the catalog does not
+    # declare must not lose it to this change.
+    assert facts["messaging_product"] == "whatsapp"
+
+
+def test_a_declared_field_never_overwrites_the_walkers_own(
+    listening: _Spine,
+) -> None:
+    """A catalog is a merchant's vocabulary and may legitimately declare a
+    field called `phone`. Merged unfiltered, it would replace the
+    normalized number the sends dial with whatever the provider wrote —
+    the same reason the payload copy has always been filtered."""
+    (run,) = listening.runs
+    asyncio.run(
+        consume_attributed_event(
+            _event("button.reply", {"button_id": "YES"}),
+            "c-1",
+            {},
+            {"phone": "9876543210", "reply_ask": "forged", "flow_address": "221B"},
+        )
+    )
+    _, _, facts = listening.facts[0]
+    assert "phone" not in facts and "reply_ask" not in facts
+    assert facts["flow_address"] == "221B"
+
+
 # --- rollout phase 17 sweep: a letter that moves a run is its answer, never
 # also its repeat ---
 

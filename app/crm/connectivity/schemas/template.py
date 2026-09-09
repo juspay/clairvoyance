@@ -37,6 +37,9 @@ class ApprovedTemplate(BaseModel):
     language: str
     provider_template_id: Optional[str] = None
     category: Optional[str] = None
+    #: Where this template's FLOW buttons sit — empty when it has none.
+    #: Computed from the registered components at decode, never authored.
+    flow_button_indexes: List[int] = Field(default_factory=list)
 
 
 class ProviderTemplateState(BaseModel):

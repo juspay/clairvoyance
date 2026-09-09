@@ -21,11 +21,14 @@ narrowed to one item, metadata and contacts riding along verbatim.
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
 import app.crm.record.workers as workers
+from app.crm.outreach.nodes.context import reply_key
+from app.crm.outreach.schemas import WorkflowNode
+from app.crm.outreach.walker import pick_next
 from app.crm.record import catalog
 from app.crm.record.extractors import EXTRACTORS, engine, whatsapp as whatsapp_spec
 from app.crm.record.schemas import Extracted, RawEvent
@@ -202,6 +205,193 @@ def test_a_typed_answer_falls_back_to_the_text_body() -> None:
     # same key a wait_event square branches on.
     extracted = _extract_inbound(_inbound())
     assert extracted.variables["reply"] == "yes, confirm it"
+
+
+def _submission(response: str, **overrides) -> Dict[str, Any]:
+    """A completed Flow, as Meta files it: an ordinary inbound message of
+    type 'interactive' whose interactive.type is 'nfm_reply'."""
+    return _inbound(
+        _message(
+            type="interactive",
+            interactive={
+                "type": "nfm_reply",
+                "nfm_reply": {
+                    "name": "flow",
+                    "body": "Sent",
+                    **overrides,
+                    "response_json": response,
+                },
+            },
+        )
+    )
+
+
+def test_a_submitted_form_answers_the_square_that_was_waiting() -> None:
+    """A Flow submission returns the branchable token 'form_submitted' so
+    the walker picks the labelled arrow.  Before this, reply was the raw
+    JSON blob — it matched no label, the square took the else arrow or
+    exited 'completed', and a customer who HAD answered was lost."""
+    extracted = _extract_inbound(
+        _submission('{"flow_token":"m-42","address":"221B Baker Street"}')
+    )
+    assert extracted.variables["reply"] == "form_submitted"
+
+
+def test_the_form_reads_as_lines_for_whoever_opens_the_order() -> None:
+    """It lands in a merchant's order note, so it is written out one
+    answer per line in the order her form asked — not as the JSON Meta
+    encoded it in. Her keys and values are never renamed or reworded."""
+    assert whatsapp_spec.flow_response(
+        _submission('{"address":"221B Baker Street","city":"Bengaluru"}')
+    ) == ("address: 221B Baker Street\ncity: Bengaluru")
+
+
+def test_a_multi_select_reads_as_a_list_a_person_would_write() -> None:
+    """Meta sends several answers to one question as a list; `['a', 'b']`
+    in an order note is a python repr leaking into a merchant's shop."""
+    assert (
+        whatsapp_spec.flow_response(_submission('{"slots":["morning","evening"]}'))
+        == "slots: morning, evening"
+    )
+
+
+def test_our_own_token_comes_out_of_what_a_plan_reads() -> None:
+    """The send stamps flow_token and Meta echoes it back inside her
+    answers. Left in, a merchant's order note reads a uuid of ours beside
+    her address. Her keys are untouched; only ours comes out.
+
+    Declared `variable`, so it rides out of the engine into the woken
+    square's facts and answers {facts_<square>_flow_response} in an action
+    square's args — without the flag the answers are decoded, stored and
+    unreachable, because only a declared variable field produces a name the
+    publish validator will accept."""
+    extracted = _extract_inbound(
+        _submission('{"address":"221B Baker Street","flow_token":"m-42"}')
+    )
+    assert extracted.variables["flow_response"] == "address: 221B Baker Street"
+    # The join key is still read — from the raw submission, not from the
+    # string above, which no longer carries it.
+    assert (
+        engine.field_value(
+            _submission('{"address":"221B","flow_token":"m-42"}'),
+            "flow_token",
+            catalog.derive_for("whatsapp", "message.inbound"),
+        )
+        == "m-42"
+    )
+
+
+def test_an_unparseable_submission_is_still_her_best_answer() -> None:
+    """Nothing to remove and nothing we can re-encode: hand back exactly
+    what arrived rather than dropping a customer's answer on a shape we
+    did not expect."""
+    assert whatsapp_spec.flow_response(_submission("not json")) == "not json"
+
+
+def test_a_submission_of_nothing_but_our_token_is_absent() -> None:
+    """A form that answered nothing leaves nothing — the square parks on
+    the missing fact rather than writing "{}" into a merchant's order."""
+    assert whatsapp_spec.flow_response(_submission('{"flow_token":"m-42"}')) is None
+
+
+def test_a_submission_names_the_send_that_opened_it() -> None:
+    """The send stamps the manifest row's own id as the flow_token
+    (whatsapp/adapter.py) and Meta returns it verbatim — so unlike
+    replied_to, this join needs no wamid on either side."""
+    extracted = _extract_inbound(
+        _submission('{"flow_token":"m-42","address":"221B Baker Street"}')
+    )
+    assert (
+        engine.field_value(
+            _submission('{"flow_token":"m-42"}'),
+            "flow_token",
+            catalog.derive_for("whatsapp", "message.inbound"),
+        )
+        == "m-42"
+    )
+    assert extracted.about == "customer"
+
+
+def test_metas_placeholder_token_is_not_an_id() -> None:
+    """A send that named no token gets Meta's literal 'unused' back. It
+    identifies nothing, so it is dropped rather than stored as a join key
+    that would match every other tokenless send."""
+    assert whatsapp_spec.flow_token(_submission('{"flow_token":"unused"}')) is None
+
+
+def test_a_malformed_submission_is_absent_not_a_raise() -> None:
+    """The decode step reads a whole batch; one unparseable letter must not
+    strand the rows beside it."""
+    assert whatsapp_spec.flow_token(_submission("not json at all")) is None
+    assert whatsapp_spec.flow_token(_submission("[1, 2]")) is None
+    assert whatsapp_spec.flow_response(_inbound()) is None
+    assert whatsapp_spec.flow_token(_inbound()) is None
+
+
+def test_a_button_tap_still_answers_with_its_payload() -> None:
+    """The Flow fallback sits BELOW the button branches: a tap must not
+    start answering with a form's JSON."""
+    tap = _inbound(_message(type="button", button={"payload": "CONFIRM", "text": "C"}))
+    assert whatsapp_spec.reply(tap) == "CONFIRM"
+    assert whatsapp_spec.flow_response(tap) is None
+
+
+def test_a_choice_carrying_a_stray_submission_is_not_read_as_one() -> None:
+    """BOTH discriminants decide, not the member's presence: the message
+    must be type 'interactive' AND interactive.type must be 'nfm_reply'.
+
+    Reading the member alone would let a button_reply that happens to carry
+    one populate flow_token — which is KEYABLE, so a listening square could
+    then be woken by a letter naming another run's message id."""
+    stray = _inbound(
+        _message(
+            type="interactive",
+            text=None,
+            interactive={
+                "type": "button_reply",
+                "button_reply": {"id": "CANCEL_ORDER", "title": "Cancel"},
+                "nfm_reply": {"response_json": '{"flow_token":"m-99"}'},
+            },
+        )
+    )
+    assert whatsapp_spec.flow_response(stray) is None
+    assert whatsapp_spec.flow_token(stray) is None
+    assert whatsapp_spec.reply(stray) == "CANCEL_ORDER"
+
+
+def test_a_submission_picks_the_arrow_an_author_labelled() -> None:
+    """The whole point of the token: the walker branches by comparing the
+    answer to arrow labels, so it must BE a label.
+
+    Driven through the walker's own pick_next rather than asserted at the
+    extractor, because the two are one contract — a blob here equalled no
+    label, and the square either took the else arrow or ended the run at
+    the instant she succeeded."""
+    answer = _extract_inbound(
+        _submission('{"flow_token":"m-42","address":"221B Baker Street"}')
+    ).variables["reply"]
+
+    square = WorkflowNode(
+        id="wait-reply",
+        type="wait_event",
+        topics=["message.inbound"],
+        key="reply",
+        minutes=2880,
+    )
+    arrows: List[Tuple[str, Optional[str]]] = [
+        ("tag-confirmed", "CONFIRM"),
+        ("save-address", "form_submitted"),
+        ("tag-no-response", "timeout"),
+    ]
+    assert pick_next(square, arrows, {reply_key(square.id): answer}) == "save-address"
+
+    # And the arrow it must NOT take: a board with no matching label ends
+    # the run, which is the failure this token exists to prevent.
+    unlabelled: List[Tuple[str, Optional[str]]] = [
+        ("tag-confirmed", "CONFIRM"),
+        ("tag-no-response", "timeout"),
+    ]
+    assert pick_next(square, unlabelled, {reply_key(square.id): answer}) is None
 
 
 def test_the_recorded_fixtures_pin_both_reply_shapes() -> None:

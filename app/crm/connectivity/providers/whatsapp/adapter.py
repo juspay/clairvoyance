@@ -55,6 +55,15 @@ def _language_of(route: SendRoute) -> str:
     return route.template.language if route.template else DEFAULT_LANGUAGE
 
 
+def _flow_buttons_of(route: SendRoute) -> List[int]:
+    """Where this template's FLOW buttons sit — empty when it has none.
+
+    Read from the registry row (T23), never guessed: this adapter has no
+    other way to know a template's button structure.
+    """
+    return route.template.flow_button_indexes if route.template else []
+
+
 class MetaWhatsAppAdapter(ChannelAdapter):
     """Meta Cloud API, one merchant's phone number at a time.
 
@@ -131,9 +140,7 @@ class MetaWhatsAppAdapter(ChannelAdapter):
             )
             return SendOutcome(status="blocked", reason=REASON_BAD_VARIABLES)
 
-        payload = build_send_body(
-            message.template_id, _language_of(route), recipient, parameters
-        )
+        payload = self.build_payload(message, recipient, route, parameters)
         url = self.endpoint(route.binding.address)
 
         try:
@@ -159,12 +166,22 @@ class MetaWhatsAppAdapter(ChannelAdapter):
     ) -> Dict[str, Any]:
         """The Cloud API send body for this message on this route.
 
-        Language comes from the route, which resolve_send_route() took from
-        the approved template registry row (T23) — the one place that knows
-        which locale a merchant's template was actually approved in.
+        Language and the flow buttons' positions both come from the route,
+        which resolve_send_route() took from the approved registry row (T23)
+        — the one place that knows the locale a template was approved in and
+        the structure of its buttons.
+
+        The flow_token is this message's own id, echoed back inside the
+        customer's submission, so her answer names the send that opened the
+        form without waiting for a wamid to be stamped anywhere.
         """
         return build_send_body(
-            message.template_id or "", _language_of(route), recipient, parameters
+            message.template_id or "",
+            _language_of(route),
+            recipient,
+            parameters,
+            flow_button_indexes=_flow_buttons_of(route),
+            flow_token=str(message.id),
         )
 
     def read_response(

@@ -1,6 +1,6 @@
 """crm_channel_template rows -> domain shapes."""
 
-from typing import Any, Mapping
+from typing import Any, List, Mapping
 
 from app.crm.connectivity.schemas.template import ApprovedTemplate, TemplateRead
 from app.crm.shared.decode import jsonb_list
@@ -39,11 +39,42 @@ def decode_template(row: Mapping[str, Any]) -> TemplateRead:
     )
 
 
+def flow_button_indexes(components: Any) -> List[int]:
+    """Where a template's FLOW buttons sit among its buttons, in order.
+
+    Meta names a button component by POSITION and refuses the ENTIRE send
+    (131009) when a flow button arrives unnamed — the one send-time fact
+    inside the components blob.
+
+    EVERY position, not the first: whether Meta caps a template at one flow
+    button is Meta's rule to change, and a second left unnamed loses the
+    whole message. Total like every jsonb read here — a malformed column
+    answers [], never a raise.
+    """
+    for component in jsonb_list(components):
+        if not isinstance(component, dict):
+            continue
+        if str(component.get("type", "")).upper() != "BUTTONS":
+            continue
+        buttons = component.get("buttons")
+        if not isinstance(buttons, list):
+            continue
+        return [
+            index
+            for index, button in enumerate(buttons)
+            if isinstance(button, dict)
+            and str(button.get("type", "")).upper() == "FLOW"
+        ]
+    return []
+
+
 def decode_approved_template(row: Mapping[str, Any]) -> ApprovedTemplate:
     """The send path's narrow read: the facts an adapter needs to send.
 
     Deliberately not TemplateRead — the send path runs per message and has no
-    use for a components blob it will never render.
+    use for a components blob it will never render. It is read here for the
+    one thing it alone knows, and reduced to positions at this boundary so
+    nothing downstream parses a provider's structure.
     """
     return ApprovedTemplate(
         id=str(row["id"]),
@@ -51,4 +82,5 @@ def decode_approved_template(row: Mapping[str, Any]) -> ApprovedTemplate:
         language=row["language"],
         provider_template_id=row["provider_template_id"],
         category=row["category"],
+        flow_button_indexes=flow_button_indexes(row.get("components")),
     )

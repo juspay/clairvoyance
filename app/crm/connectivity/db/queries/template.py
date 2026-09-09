@@ -135,9 +135,14 @@ def approved_template_for_send_query(
     customer should receive is not a guess anyone may make.
 
     LIMIT 2 because the caller only needs to distinguish one from many.
+
+    ``components`` rides along for the one fact the decoder takes from it:
+    where the FLOW buttons sit, which a send must name or Meta refuses it
+    (131009). The blob stops at the decoder; ApprovedTemplate carries the
+    positions.
     """
     query = f"""
-        SELECT id, name, language, provider_template_id, category
+        SELECT id, name, language, provider_template_id, category, components
           FROM {TEMPLATE_TABLE}
          WHERE merchant_id = $1
            AND channel = $2

@@ -7,6 +7,7 @@ UPPERCASE status stored beside our lowercase rules, and a delete that took
 every language variant with it.
 """
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -714,6 +715,103 @@ def test_a_malformed_components_blob_decodes_to_empty_rather_than_raising() -> N
     }
     decoded = decode_template(row)
     assert decoded.components == [{"type": "BODY"}], "non-objects must be dropped"
+
+
+_FLOW_BUTTONS = [
+    {"type": "BODY", "text": "Hello {{1}}"},
+    {
+        "type": "BUTTONS",
+        "buttons": [
+            {"type": "QUICK_REPLY", "text": "CONFIRM"},
+            {"type": "QUICK_REPLY", "text": "CANCEL"},
+            {"type": "FLOW", "text": "Update address", "flow_id": "218303"},
+        ],
+    },
+]
+
+
+def test_the_send_path_learns_where_a_flow_button_sits() -> None:
+    """Meta refuses the whole send (131009) when a template's FLOW button
+    arrives unnamed, and the component names the button by POSITION. The
+    position lives only in the registered components, so it is computed here
+    — the one send-time fact hiding in a blob the send path otherwise has no
+    use for."""
+    from app.crm.connectivity.db.decoders.template import (
+        decode_approved_template,
+        flow_button_indexes,
+    )
+
+    assert flow_button_indexes(_FLOW_BUTTONS) == [2]
+    # The column arrives as text from asyncpg on some paths and as a decoded
+    # list on others; both are the same answer.
+    assert flow_button_indexes(json.dumps(_FLOW_BUTTONS)) == [2]
+
+    row = {
+        "id": "t-1",
+        "name": "order_confirm",
+        "language": "en_US",
+        "provider_template_id": "9527",
+        "category": "UTILITY",
+        "components": _FLOW_BUTTONS,
+    }
+    assert decode_approved_template(row).flow_button_indexes == [2]
+
+
+def test_every_flow_button_is_found_not_only_the_first() -> None:
+    """Whether Meta caps a template at one flow button is Meta's rule to
+    change. Finding them all needs no such rule to hold: a second button
+    left unnamed would have its whole send refused, and nobody receives a
+    message because of a cap we assumed."""
+    from app.crm.connectivity.db.decoders.template import flow_button_indexes
+
+    two = [
+        {
+            "type": "BUTTONS",
+            "buttons": [
+                {"type": "FLOW", "text": "Address", "flow_id": "1"},
+                {"type": "QUICK_REPLY", "text": "CANCEL"},
+                {"type": "FLOW", "text": "Reschedule", "flow_id": "2"},
+            ],
+        }
+    ]
+    assert flow_button_indexes(two) == [0, 2]
+
+
+def test_a_template_with_no_flow_button_says_so_rather_than_guessing() -> None:
+    """Empty means "post no button component", which is what every template
+    on the platform needs today. A wrong position here would break sends that
+    work; an empty list cannot."""
+    from app.crm.connectivity.db.decoders.template import flow_button_indexes
+
+    quick_only = [
+        {"type": "BUTTONS", "buttons": [{"type": "QUICK_REPLY", "text": "CONFIRM"}]}
+    ]
+    assert flow_button_indexes(quick_only) == []
+    assert flow_button_indexes([{"type": "BODY", "text": "no buttons at all"}]) == []
+
+
+def test_a_malformed_components_blob_answers_empty_rather_than_raising() -> None:
+    """Same totality contract as the read above, for the same reason: this
+    decoder runs per message inside a claimed batch."""
+    from app.crm.connectivity.db.decoders.template import flow_button_indexes
+
+    for junk in (None, "", "not json", "42", [1, 2], [{"type": "BUTTONS"}]):
+        assert flow_button_indexes(junk) == [], junk
+    assert flow_button_indexes(
+        [{"type": "BUTTONS", "buttons": [{"type": "FLOW"}]}]
+    ) == [0], "index 0 is a position, not an absence"
+
+
+def test_the_send_lookup_reads_the_components_it_needs() -> None:
+    """The query and the decoder are one promise: a decoder computing the
+    flow position from a column the SELECT never fetched would answer None
+    for every template, and every flow send would be refused by Meta."""
+    from app.crm.connectivity.db.queries.template import (
+        approved_template_for_send_query,
+    )
+
+    query, _ = approved_template_for_send_query("shop", "whatsapp", "waba-1", "n")
+    assert "components" in query
 
 
 async def test_a_bug_in_the_face_does_not_reach_the_caller(monkeypatch) -> None:

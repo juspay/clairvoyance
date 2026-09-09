@@ -31,6 +31,7 @@ engine's role normalization is the whole translation and no new handle kind
 is needed.
 """
 
+import json
 from typing import Any, Dict, List, Literal, Optional
 
 from app.crm.record.extractors.engine import Deriver
@@ -38,6 +39,17 @@ from app.crm.record.schemas import CatalogEntry, CatalogField
 
 SOURCE = "whatsapp"
 GROUP = "WhatsApp"
+
+# Meta's own literal for "this send named no flow_token" — their API returns
+# this exact string when a send carried no token. Spelled here rather than
+# imported: record may import no other CRM module (rule 12), and this side
+# must know the word whoever sent the letter, not only our own sender.
+UNUSED_FLOW_TOKEN = "unused"
+
+# The one key inside a submission that WE put there rather than the
+# customer: the send stamps it, Meta echoes the whole object back, so her
+# answers arrive with it mixed in.
+FLOW_TOKEN_KEY = "flow_token"
 
 # Meta's own message.type vocabulary — what a flow may filter on.
 MESSAGE_TYPES = [
@@ -130,12 +142,119 @@ def replied_to(payload: Dict[str, Any]) -> Optional[Any]:
     return context.get("id") if isinstance(context, dict) else None
 
 
+def _nfm_reply(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The Flow submission object on this message, or {}.
+
+    Meta files a completed Flow as an ordinary inbound message of type
+    'interactive' whose interactive.type is 'nfm_reply'.  Both
+    discriminants are checked: message.type must be 'interactive' AND
+    interactive.type must be 'nfm_reply', so a button_reply that happens
+    to carry an nfm_reply member is never misclassified as a submission.
+    """
+    item = _item(payload, "messages")
+    if item.get("type") != "interactive":
+        return {}
+
+    interactive = item.get("interactive")
+    if isinstance(interactive, dict) and interactive.get("type") == "nfm_reply":
+        submission = interactive.get("nfm_reply")
+        if isinstance(submission, dict):
+            return submission
+
+    return {}
+
+
+def _submitted(payload: Dict[str, Any]) -> Optional[str]:
+    """The raw response_json string Meta sent, or None."""
+    value = _nfm_reply(payload).get("response_json")
+    return value if isinstance(value, str) and value else None
+
+
+def flow_response(payload: Dict[str, Any]) -> Optional[Any]:
+    """What she filled in, written out to be read by a person.
+
+    Meta nests the answers as encoded text, so reading them is two parses
+    deep — and the result lands somewhere a human looks: a merchant's order
+    note, a console card. So it comes out as one "key: value" per line, in
+    the order her form asked, rather than as the JSON it arrived in.
+
+    FLOW_TOKEN_KEY is dropped: the send stamps it for correlation and Meta
+    echoes it back inside her answers, so leaving it in would put a uuid of
+    ours beside her address. Her own keys and values are never renamed or
+    reworded. A submission we cannot parse is handed back exactly as it
+    came, because an unexpected shape is still her answer.
+
+    The letter itself is untouched on the event row — this is the reading,
+    and flow_token reads the raw submission for the same reason.
+    """
+    raw = _submitted(payload)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw  # an unexpected shape is still her answer
+    if not isinstance(parsed, dict):
+        return raw
+    lines = [
+        f"{key}: {_readable(value)}"
+        for key, value in parsed.items()
+        if key != FLOW_TOKEN_KEY
+    ]
+    return "\n".join(lines) if lines else None
+
+
+def _readable(value: Any) -> str:
+    """One answer as text. A scalar is itself; a multi-select (Meta sends a
+    list) reads as a comma list rather than as ['a', 'b']; anything else
+    falls back to JSON, which is at least complete."""
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, list) and all(
+        isinstance(item, (str, int, float)) and not isinstance(item, bool)
+        for item in value
+    ):
+        return ", ".join(str(item) for item in value)
+    return json.dumps(value, ensure_ascii=False)
+
+
+def flow_token(payload: Dict[str, Any]) -> Optional[Any]:
+    """Which of OUR sends opened this form.
+
+    The send stamps the message's own id (whatsapp/adapter.py), so unlike
+    replied_to this join needs no wamid. Read from the raw submission, not
+    from flow_response, which has already taken the token out. Meta returns
+    the literal 'unused' when a send named no token — not an id, so it is
+    dropped.
+    """
+    raw = _submitted(payload)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    token = parsed.get(FLOW_TOKEN_KEY)
+    if not isinstance(token, str) or not token or token == UNUSED_FLOW_TOKEN:
+        return None
+    return token
+
+
 def reply(payload: Dict[str, Any]) -> Optional[Any]:
     """What the customer answered, whatever shape Meta used: a template
-    quick-reply's payload, an interactive button's or list row's id, else
-    the text body. One field, so a wait_event square branches on the
-    answer without knowing which widget the template put in front of
-    her — a tap and a typed reply land on the same key."""
+    quick-reply's payload, an interactive button's or list row's id, the
+    literal ``'form_submitted'`` for a Flow submission, else the text body.
+    One field, so a wait_event square branches on the answer without knowing
+    which widget the template put in front of her — a tap, a form and a
+    typed reply land on the same key.
+
+    The form's actual data lives in ``flow_response`` — this token only
+    wakes the square and names the arrow, so a plan author labels one edge
+    ``form_submitted`` and it fires.  Returning the raw JSON would equal no
+    label, sending the walker down the ``else`` arrow or exiting the run.
+    """
     item = _item(payload, "messages")
     button = item.get("button")
     if isinstance(button, dict) and button.get("payload") is not None:
@@ -146,6 +265,8 @@ def reply(payload: Dict[str, Any]) -> Optional[Any]:
             chosen = interactive.get(kind)
             if isinstance(chosen, dict) and chosen.get("id") is not None:
                 return chosen["id"]
+    if flow_response(payload) is not None:
+        return "form_submitted"
     return message_text(payload)
 
 
@@ -184,6 +305,8 @@ DERIVERS: Dict[str, Deriver] = {
     "message_text": message_text,
     "replied_to": replied_to,
     "reply": reply,
+    "flow_response": flow_response,
+    "flow_token": flow_token,
     "recipient_phone": recipient_phone,
     "status": status,
     "status_message_id": status_message_id,
@@ -229,6 +352,19 @@ def _inbound_fields() -> List[CatalogField]:
         # manifest's provider_message_id. Declared now so the join key is
         # in the catalog the day that trigger lands.
         _f("replied_to", "text", "Replied-to message id", keyable=True, derived=True),
+        # A Flow submission at two grains: `reply` wakes the square,
+        # `flow_response` carries what she typed, and `flow_token` says which
+        # message opened the form — the one join here needing no wamid.
+        #
+        # `flow_response` is a variable despite being a JSON STRING: her
+        # form's field names are HERS, so nothing in this file can declare
+        # them one by one, and until a shape exists that can, the whole
+        # submission is what a plan can name. Past VARIABLE_MAX_CHARS the
+        # engine drops it and the square parks on the missing fact — a loud
+        # stop, not a silent truncation. The letter itself stays verbatim
+        # on the event row, which is where the evidence lives.
+        _f("flow_response", "text", "Form response", variable=True, derived=True),
+        _f("flow_token", "text", "Form token", keyable=True, derived=True),
     ]
 
 

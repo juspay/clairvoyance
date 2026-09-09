@@ -135,7 +135,7 @@ async def consume_attributed_event(
             continue
         if await _end_on_goal(run, definition, event, goal_patch):
             continue  # exited: there is nothing left to wake
-        await _wake_on_reply(run, definition, event)
+        await _wake_on_reply(run, definition, event, variables)
 
     flows = await workflow_accessor.live_workflows(event.merchant_id)
     for flow in flows:
@@ -191,7 +191,10 @@ async def _end_on_goal(
 
 
 async def _wake_on_reply(
-    run: EnrollmentRun, definition: WorkflowDefinition, event: RawEvent
+    run: EnrollmentRun,
+    definition: WorkflowDefinition,
+    event: RawEvent,
+    variables: Optional[Dict[str, Any]] = None,
 ) -> None:
     """A wait_event square of ITS document listening on this topic wakes
     the run with the answer — the statement decides whether the token is
@@ -200,8 +203,34 @@ async def _wake_on_reply(
     the customer moved). The letter's scalar facts ride along under the
     square (context.facts.<square>), so a later call can say what this
     stage's letter said; the same bridge enrol uses, so bookkeeping names
-    and nested payload never reach the run."""
-    facts = _context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
+    and nested payload never reach the run.
+
+    Those facts are the catalog's DECLARED variables over the top-level
+    scalar copy. Enrol has always been handed them (the same argument, one
+    call below) while a square woken by the same letter re-read the raw
+    payload by hand — so a derived or nested field reached a STARTING run
+    and never a WAITING one. On a source whose person and answer both live
+    inside lists, that left the square holding a protocol constant: a
+    WhatsApp letter offered `messaging_product` and nothing the plan could
+    name. One reader of one payload, which is the whole point of the
+    engine (extractors/engine.py: two hand-written readers already drifted
+    once).
+
+    Merged rather than substituted, so a plan relying on a raw scalar the
+    catalog does not declare keeps it; the declared name wins the tie,
+    being the one the console showed the author. Bookkeeping is filtered
+    from both sides — a catalog that declares a field called `phone` must
+    not overwrite the normalized number the sends dial.
+    """
+    declared = {
+        name: value
+        for name, value in (variables or {}).items()
+        if not is_bookkeeping(name)
+    }
+    facts = {
+        **_context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS()),
+        **declared,
+    }
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue

@@ -87,16 +87,43 @@ def build_send_body(
     language: str,
     recipient: str,
     parameters: List[Dict[str, Any]],
+    flow_button_indexes: Optional[List[int]] = None,
+    flow_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """The Cloud API send body. Assembly only — ``parameters`` arrive already
     built and judged sendable by the adapter.
 
     ``language`` comes from the template registry (T23), which is the one
     place that knows which locale a merchant's template was approved in.
+
+    A FLOW button must be named by a button component or Meta refuses the
+    whole send (131009) and nothing reaches the customer.
+    ``flow_button_indexes`` holds every such position; empty — every template
+    but the flow ones — leaves the body as it has always been.
+
+    ``flow_token`` comes back verbatim on the customer's submission, so the
+    caller passes the id of the message that opened the form and the answer
+    names its own question. One token for every button: it identifies the
+    SEND, not which button she pressed. It is the component's only optional
+    part, so a caller without one sends no parameters rather than a
+    placeholder — Meta then records its own word, 'unused', which the read
+    side discards.
     """
     components: List[Dict[str, Any]] = []
     if parameters:
         components.append({"type": "body", "parameters": parameters})
+    for index in flow_button_indexes or []:
+        button: Dict[str, Any] = {
+            "type": "button",
+            "sub_type": "flow",
+            # A string, like every other button component's index.
+            "index": str(index),
+        }
+        if flow_token:
+            button["parameters"] = [
+                {"type": "action", "action": {"flow_token": flow_token}}
+            ]
+        components.append(button)
     return {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
