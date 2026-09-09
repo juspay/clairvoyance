@@ -1,14 +1,15 @@
 """ShopifyAdapter — every build-time Shopify fact, in one place.
 
-Signals, the permanent-domain identity rule, the prompt sections that only
-make sense with the storefront MCP, the tool binding, the mirror policy
-and the install method. Research fetchers (``sources.py``) arrive with the
-engine's research stage.
+Signals, the permanent-domain identity rule, the host-app tenancy table,
+the prompt sections that only make sense with the storefront MCP, the MCP
+server names, the cart-state config entries, the customer-token payload
+key, the blueprint requirements, the mirror policy and the install method.
+Research fetchers (``sources.py``) arrive with the engine's research stage.
 """
 
 from __future__ import annotations
 
-from typing import List, Sequence
+from typing import FrozenSet, List, Mapping, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
@@ -16,11 +17,18 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
     MirrorPolicy,
     Signal,
     SiteProfile,
-    StoreResearch,
+    SiteResearch,
     TenantIdentity,
     ToolBinding,
 )
+from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import (
+    LegacyMarkers,
+    platform_sections,
+)
 from app.ai.voice.agents.breeze_buddy.assist.platforms.base import GenericAdapter
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
+    assist_tenant,
+)
 
 # (kind, pattern, weight) — verified live on hustleculture.co.in 2026-09-08.
 SIGNALS = (
@@ -34,13 +42,34 @@ SIGNALS = (
     ("meta", "shopify-digital-wallet", 3.0),
 )
 CONFIDENCE_DENOMINATOR = 10.0
+
+# The fleet's live templates name the storefront MCP server
+# ``shopify-storefront-ucp``; the first blueprint used the short form. Both
+# point at ``https://{shop_url}/api/ucp/mcp`` and are treated as the same.
 MCP_SERVER_NAME = "shopify-storefront-ucp"
+MCP_SERVER_NAMES: FrozenSet[str] = frozenset({"shopify-storefront", MCP_SERVER_NAME})
 MCP_URL = "https://{shop_url}/api/ucp/mcp"
 OPERATING_SECTION = "shopify_operating_section"
+# The marker pair the first blueprints shipped with; the engine reads it as
+# ``{{#platform_section:shopify}}…{{/platform_section}}``.
+LEGACY_SECTION_START = "{{#shopify_operating_section}}"
+LEGACY_SECTION_END = "{{/shopify_operating_section}}"
+# Cart state plumbing that only means something next to the UCP tools.
+TOOL_CONFIG_KEYS: Tuple[str, ...] = (
+    "state_reducers",
+    "tool_arg_injection",
+    "client_context",
+)
+# Payload keys the storefront session may carry beyond the generic ``shop_url``.
+PAYLOAD_KEYS: Tuple[str, ...] = ("shopify_customer_token",)
+PERMANENT_DOMAIN_SUFFIX = ".myshopify.com"
 
 
 class ShopifyAdapter(GenericAdapter):
     id = "shopify"
+    request_platform = "shopify"
+    # The two Shopify apps that install Assist (see tenancy.py for the namespaces).
+    host_apps: Tuple[str, ...] = ("breeze-buddy", "buddy-assist")
 
     def classify(self, signals: Sequence[Signal]) -> float:
         score = 0.0
@@ -63,16 +92,58 @@ class ShopifyAdapter(GenericAdapter):
             platform=self.id, canonical_host=host, permanent_host=permanent
         )
 
-    def operating_sections(self) -> List[str]:
-        return [OPERATING_SECTION]
+    def tenant(self, host_app: str, merchant_domain: str) -> Tuple[str, str]:
+        if host_app not in self.host_apps:
+            raise ValueError(f"host app {host_app!r} is not a Shopify app")
+        return assist_tenant(host_app, merchant_domain)  # type: ignore[arg-type]
+
+    def store_name(self, merchant_domain: str) -> str:
+        return merchant_domain.removesuffix(PERMANENT_DOMAIN_SUFFIX)
+
+    def legacy_section_markers(self) -> LegacyMarkers:
+        return {LEGACY_SECTION_START: (self.id, LEGACY_SECTION_END)}
+
+    def validate_blueprint(
+        self, prompt: str, configurations: Mapping[str, object]
+    ) -> List[str]:
+        problems: List[str] = []
+        try:
+            sections = platform_sections(prompt, self.legacy_section_markers())
+        except ValueError as exc:
+            return [f"invalid platform section: {exc}"]
+        if not any(section.platform == self.id for section in sections):
+            problems.append("no Shopify section in the operating block")
+        mcp = configurations.get("mcp") or {}
+        servers = list((mcp.get("servers") if isinstance(mcp, Mapping) else None) or [])
+        named = [
+            s
+            for s in servers
+            if isinstance(s, Mapping) and s.get("name") in MCP_SERVER_NAMES
+        ]
+        if len(named) != 1:
+            problems.append("must contain exactly one Shopify storefront MCP server")
+        if not configurations.get("state_reducers") or not configurations.get(
+            "tool_arg_injection"
+        ):
+            problems.append("missing Shopify cart state configuration")
+        return problems
+
+    def mcp_server_names(self) -> FrozenSet[str]:
+        return MCP_SERVER_NAMES
+
+    def tool_config_keys(self) -> Tuple[str, ...]:
+        return TOOL_CONFIG_KEYS
+
+    def payload_keys(self) -> Tuple[str, ...]:
+        return PAYLOAD_KEYS
 
     def tools(
-        self, identity: TenantIdentity, research: StoreResearch
+        self, identity: TenantIdentity, research: SiteResearch
     ) -> List[ToolBinding]:
         return [ToolBinding(kind="mcp", name=MCP_SERVER_NAME, url=MCP_URL)]
 
     def extra_origins(
-        self, identity: TenantIdentity, research: StoreResearch
+        self, identity: TenantIdentity, research: SiteResearch
     ) -> List[str]:
         origins = list(research.extra_origins)
         if identity.permanent_host:
@@ -100,7 +171,7 @@ class ShopifyAdapter(GenericAdapter):
                 "/?section_id=",
             ],
             cdn_hosts=["cdn.shopify.com", "fonts.shopifycdn.com"],
-            cart_handoff="permalink",
+            handoff="permalink",
             section_probe=True,
         )
 
@@ -111,10 +182,15 @@ class ShopifyAdapter(GenericAdapter):
 adapter = ShopifyAdapter()
 
 __all__ = [
+    "LEGACY_SECTION_END",
+    "LEGACY_SECTION_START",
     "MCP_SERVER_NAME",
+    "MCP_SERVER_NAMES",
     "MCP_URL",
     "OPERATING_SECTION",
+    "PAYLOAD_KEYS",
     "SIGNALS",
+    "TOOL_CONFIG_KEYS",
     "ShopifyAdapter",
     "adapter",
 ]

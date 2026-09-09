@@ -1,7 +1,7 @@
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
     Signal,
     SiteProfile,
-    StoreResearch,
+    SiteResearch,
 )
 from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
 
@@ -49,7 +49,7 @@ def test_shopify_identity_uses_the_permanent_domain():
     assert identity.permanent_host == "9b1086-18.myshopify.com"
     origins = registry.resolve("shopify").extra_origins(
         identity,
-        StoreResearch(
+        SiteResearch(
             platform="shopify", canonical_origin="https://hustleculture.co.in"
         ),
     )
@@ -59,15 +59,41 @@ def test_shopify_identity_uses_the_permanent_domain():
 def test_generic_adapter_is_the_zero_adapter_path():
     generic = registry.resolve("generic")
     identity = generic.identity(_profile())
-    research = StoreResearch(
+    research = SiteResearch(
         platform="generic", canonical_origin="https://hustleculture.co.in"
     )
-    assert (
-        generic.operating_sections() == [] and generic.tools(identity, research) == []
-    )
-    assert (
-        generic.install() == "snippet"
-        and generic.mirror_policy().cart_handoff == "link"
-    )
+    assert generic.tools(identity, research) == []
+    assert generic.install() == "snippet" and generic.mirror_policy().handoff == "link"
     assert registry.resolve("shopify").install() == "theme_embed"
-    assert registry.resolve("shopify").mirror_policy().cart_handoff == "permalink"
+    assert registry.resolve("shopify").mirror_policy().handoff == "permalink"
+
+
+def test_host_apps_and_request_platform_resolve_through_the_registry():
+    for host_app in ("breeze-buddy", "buddy-assist"):
+        adapter = registry.for_host_app(host_app)
+        assert adapter.id == "shopify"
+        reseller, merchant = adapter.tenant(host_app, "acme.myshopify.com")
+        assert reseller in ("BB_SHOPIFY", "BB_ASSIST") and merchant.endswith(
+            "acme.myshopify.com"
+        )
+    try:
+        registry.for_host_app("some-other-app")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("unknown host app resolved")
+    assert registry.for_request("shopify").id == "shopify"
+    assert registry.for_request("web").id == "generic"
+    assert registry.for_request(None).id == "generic"
+
+
+def test_foreign_ownership_is_symmetric():
+    shopify, generic = registry.resolve("shopify"), registry.resolve("generic")
+    assert "shopify-storefront-ucp" in registry.foreign_mcp_server_names(generic)
+    assert registry.foreign_mcp_server_names(shopify) == frozenset()
+    assert "state_reducers" in registry.foreign_tool_config_keys(generic)
+    assert registry.foreign_tool_config_keys(shopify) == ()
+    assert registry.foreign_payload_keys(generic) == ("shopify_customer_token",)
+    assert "{{#shopify_operating_section}}" in registry.legacy_section_markers()
+    assert shopify.store_name("acme.myshopify.com") == "acme"
+    assert generic.store_name("acme.example.com") == "acme.example.com"

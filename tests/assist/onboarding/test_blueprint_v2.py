@@ -19,6 +19,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce.skeleton import COMMERCE_V2
+from app.ai.voice.agents.breeze_buddy.assist.engine import skeleton
 from app.ai.voice.agents.breeze_buddy.assist.engine.prompt_core import (
     core_hash,
     shared_core,
@@ -28,6 +30,10 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingUpstreamError,
 )
 from app.ai.voice.agents.breeze_buddy.assist.onboarding import service
+from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (
+    adapter as shopify_adapter,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.api.routers.breeze_buddy.assist.onboarding import _ONBOARDING_ROLES
 from app.schemas import UserRole
@@ -95,18 +101,21 @@ def _build(is_shopify: bool = True) -> TemplateModel:
         website_context="Sells premium sneakers.",
         template_id="00000000-0000-0000-0000-000000000002",
         existing_template=None,
+        adapter=registry.resolve("shopify" if is_shopify else "generic"),
     )
 
 
 def test_fixture_is_the_fleet_skeleton() -> None:
     blueprint = _blueprint()
-    service._validate_default_template(blueprint)
+    service._validate_default_template(blueprint, registry.resolve("shopify"))
     assert service.blueprint_shape_warnings(blueprint) == []
     prompt = blueprint.flow["system_prompt"]
     assert prompt.count(service.BRAND_IDENTITY_MARKER) == 1
-    assert len(service._shopify_sections(prompt)) == 2
+    assert (
+        len(skeleton.platform_sections(prompt, registry.legacy_section_markers())) == 2
+    )
     assert blueprint.configurations is not None
-    assert service.SHOP_DOMAIN_PLACEHOLDER in json.dumps(
+    assert skeleton.SHOP_DOMAIN_PLACEHOLDER in json.dumps(
         blueprint.configurations.model_dump()
     )
 
@@ -119,29 +128,29 @@ def test_shopify_build_lands_on_the_fleet_core() -> None:
     # markers gone, brand block filled, Shopify sections kept in place
     for marker in (
         service.BRAND_IDENTITY_MARKER,
-        service.SHOPIFY_OPERATING_START_MARKER,
-        service.SHOPIFY_OPERATING_END_MARKER,
-        service.SHOP_DOMAIN_PLACEHOLDER,
+        shopify_adapter.LEGACY_SECTION_START,
+        shopify_adapter.LEGACY_SECTION_END,
+        skeleton.SHOP_DOMAIN_PLACEHOLDER,
     ):
         assert marker not in prompt
-    brand, _ = split_prompt(prompt)
+    brand, _ = split_prompt(prompt, COMMERCE_V2)
     assert "{shop_url}" in brand and "Hustle Culture" in brand
     assert "### Tools — Universal Commerce Protocol" in prompt
     assert "### Cart-cookie sync (Shopify storefront)" in prompt
 
     # the operating core is byte-for-byte the blueprint's (slots normalized)
-    skeleton = blueprint.flow["system_prompt"]
-    skeleton = skeleton.replace(service.SHOPIFY_OPERATING_START_MARKER, "").replace(
-        service.SHOPIFY_OPERATING_END_MARKER, ""
+    reference = blueprint.flow["system_prompt"]
+    reference = reference.replace(shopify_adapter.LEGACY_SECTION_START, "").replace(
+        shopify_adapter.LEGACY_SECTION_END, ""
     )
-    assert shared_core(prompt) == shared_core(skeleton)
-    assert core_hash(prompt) == core_hash(skeleton)
+    assert shared_core(prompt, COMMERCE_V2) == shared_core(reference, COMMERCE_V2)
+    assert core_hash(prompt, COMMERCE_V2) == core_hash(reference, COMMERCE_V2)
 
     # {{shop_domain}} resolved everywhere in the config
     assert built.configurations is not None
     config = built.configurations.model_dump(mode="json", exclude_none=True)
     blob = json.dumps(config)
-    assert service.SHOP_DOMAIN_PLACEHOLDER not in blob
+    assert skeleton.SHOP_DOMAIN_PLACEHOLDER not in blob
     assert (
         config["ui_intents"]["urls"]["checkout_page"]
         == "https://hustleculture.co.in/cart"
@@ -151,7 +160,7 @@ def test_shopify_build_lands_on_the_fleet_core() -> None:
         in config["render_ui"]["trusted_link_urls"]
     )
     servers = config["mcp"]["servers"]
-    assert len(servers) == 1 and servers[0]["name"] in service.SHOPIFY_MCP_SERVER_NAMES
+    assert len(servers) == 1 and servers[0]["name"] in shopify_adapter.MCP_SERVER_NAMES
     assert (
         "https://hustleculture.co.in/cart"
         in servers[0]["tool_ui_instructions"]["get_cart"]["instructions"]
@@ -175,8 +184,8 @@ def test_generic_build_drops_every_shopify_section() -> None:
         "### Cart-cookie sync (Shopify storefront)",
         "### Review-and-checkout flow",
         "### Store policy / refunds / shipping / FAQ",
-        service.SHOPIFY_OPERATING_START_MARKER,
-        service.SHOPIFY_OPERATING_END_MARKER,
+        shopify_adapter.LEGACY_SECTION_START,
+        shopify_adapter.LEGACY_SECTION_END,
     ):
         assert gone not in prompt
     for kept in (
@@ -206,7 +215,7 @@ def test_marker_validation_rejects_bad_shapes(prompt: str) -> None:
     blueprint = _blueprint()
     blueprint.flow["system_prompt"] = prompt
     with pytest.raises(service.OnboardingFailure) as failure:
-        service._validate_default_template(blueprint)
+        service._validate_default_template(blueprint, registry.resolve("shopify"))
     assert failure.value.code == "DEFAULT_TEMPLATE_INVALID"
 
 
@@ -222,7 +231,9 @@ def test_old_shape_blueprint_only_warns() -> None:
     assert any("functions" in w for w in warnings)
     assert any("supported_channels" in w for w in warnings)
     assert any("gemini-2.5-flash" in w for w in warnings)
-    service._validate_default_template(old)  # tolerated until the data rows are v2
+    service._validate_default_template(
+        old, registry.resolve("shopify")
+    )  # tolerated until the data rows are v2
 
 
 def test_template_name_is_store_assist() -> None:

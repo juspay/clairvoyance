@@ -22,10 +22,10 @@ from app.core.logger import logger
 DEFAULT_GEMINI_SCRAPER_PROMPT = (
     "You have access to internet search, URL context, and related online sources. "
     "Visit and analyze the provided website URL. Extract concise factual website "
-    "context for building an assistant. Include what the business sells or does, "
-    "key categories, important products or services, offers, shipping or delivery "
-    "information, returns or refunds, payment information, support or contact "
-    "details, trust claims, brand tone, and target audience when available. Use "
+    "context for building an assistant. Include what the business offers or does, "
+    "its main categories, notable offerings, current offers, delivery or fulfilment "
+    "information, cancellation or refund terms, payment information, support or "
+    "contact details, trust claims, brand tone, and target audience when available. Use "
     "only information found on the website or related online sources. Do not "
     "invent missing details."
 )

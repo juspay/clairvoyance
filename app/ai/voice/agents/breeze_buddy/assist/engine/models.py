@@ -1,4 +1,4 @@
-"""Versioned artefacts that flow between engine stages (ASSIST-ENGINE-DESIGN.md §2).
+"""Versioned, vertical-agnostic artefacts that flow between engine stages (ASSIST-ENGINE-DESIGN.md §2).
 
 Every artefact carries provenance (``sources`` / ``fetched_at``) so a slot,
 a tile or a policy fact can always be traced to the page it came from.
@@ -51,40 +51,20 @@ class TenantIdentity(BaseModel):
     merchant_id: Optional[str] = None
 
 
-class ResearchProduct(BaseModel):
-    title: str
-    url: Optional[str] = None
-    product_type: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
-    options: List[Dict[str, Any]] = Field(default_factory=list)
-    price_min: Optional[float] = None
-    price_max: Optional[float] = None
-    currency: Optional[str] = None
-    image_url: Optional[str] = None
-    available: Optional[bool] = None
-    source: Optional[str] = None
+class SiteResearch(BaseModel):
+    """Stage 3 output — the vertical-agnostic part; missing = null, never invented.
 
-
-class ResearchCollection(BaseModel):
-    title: str
-    url: Optional[str] = None
-    image_url: Optional[str] = None
-    product_count: Optional[int] = None
-
-
-class StoreResearch(BaseModel):
-    """Stage 3 output — the same shape for every platform; missing = null, never invented."""
+    A vertical extends this with its own inventory shapes (see the commerce
+    vertical's ``assist/commerce/models.py``).
+    """
 
     platform: str
     canonical_origin: str
     extra_origins: List[str] = Field(default_factory=list)
-    store_name: Optional[str] = None
+    name: Optional[str] = None
     brand_story: Optional[str] = None
     tone_hints: List[str] = Field(default_factory=list)
     audience: Optional[str] = None
-    categories: List[str] = Field(default_factory=list)
-    products: List[ResearchProduct] = Field(default_factory=list)
-    collections: List[ResearchCollection] = Field(default_factory=list)
     policies: Dict[str, str] = Field(default_factory=dict)
     contacts: Dict[str, str] = Field(default_factory=dict)
     offers: List[str] = Field(default_factory=list)
@@ -96,35 +76,18 @@ class StoreResearch(BaseModel):
 
 
 class ResearchDelta(BaseModel):
-    """What a platform adapter adds to the generic research; merged field by field, adapter wins."""
+    """What a platform adapter adds to the generic research; merged field by
+    field, adapter wins. Vertical-specific payloads travel in ``vertical``
+    for that vertical's merge step."""
 
-    store_name: Optional[str] = None
+    name: Optional[str] = None
     permanent_host: Optional[str] = None
-    products: Optional[List[ResearchProduct]] = None
-    collections: Optional[List[ResearchCollection]] = None
     policies: Dict[str, str] = Field(default_factory=dict)
     contacts: Dict[str, str] = Field(default_factory=dict)
     brand: Dict[str, Any] = Field(default_factory=dict)
     extra_origins: List[str] = Field(default_factory=list)
+    vertical: Dict[str, Any] = Field(default_factory=dict)
     sources: List[str] = Field(default_factory=list)
-
-
-class Slots(BaseModel):
-    """Stage 4 output: the ONLY merchant-specific content in a template."""
-
-    brand_block: str
-    sizing_section: str
-    link_label: str
-    link_url: str
-    link_noun: Optional[str] = None
-    guided: Dict[str, str] = Field(default_factory=dict)
-    greeting: str
-    quick_replies: List[Dict[str, Any]] = Field(default_factory=list)
-    tiles: List[Dict[str, Any]] = Field(default_factory=list)
-    trusted_urls: List[str] = Field(default_factory=list)
-    checkout_url: Optional[str] = None
-    example_product: Optional[str] = None
-    sources: Dict[str, str] = Field(default_factory=dict)
 
 
 class ToolBinding(BaseModel):
@@ -155,26 +118,28 @@ class WidgetBinding(BaseModel):
 
 
 class MirrorPolicy(BaseModel):
-    """What the preview mirror may proxy for this platform."""
+    """What the preview mirror may proxy for this platform.
+
+    ``handoff`` is how a blocked transactional path sends the visitor to the
+    real site: ``permalink`` rebuilds their in-progress state on the real
+    domain, ``link`` opens the real URL, ``none`` shows only the notice.
+    """
 
     blocked_paths: List[str] = Field(default_factory=list)
     allowed_xhr: List[str] = Field(default_factory=list)
     cdn_hosts: List[str] = Field(default_factory=list)
     script_policy: Literal["drop_third_party", "pass_through"] = "drop_third_party"
-    cart_handoff: Literal["permalink", "link", "none"] = "link"
+    handoff: Literal["permalink", "link", "none"] = "link"
     section_probe: bool = False
 
 
 __all__ = [
     "InstallMethod",
     "MirrorPolicy",
-    "ResearchCollection",
     "ResearchDelta",
-    "ResearchProduct",
     "Signal",
     "SiteProfile",
-    "Slots",
-    "StoreResearch",
+    "SiteResearch",
     "TemplateCandidate",
     "TenantIdentity",
     "ToolBinding",

@@ -49,6 +49,9 @@ def _public_https_url(value: str, *, origin_only: bool) -> str:
     )
 
 
+OnboardingPlatform = Literal["shopify", "web"]
+
+
 class AssistOnboardingStreamRequest(BaseModel):
     """Request body for the Buddy Assist onboarding stream."""
 
@@ -56,12 +59,15 @@ class AssistOnboardingStreamRequest(BaseModel):
     merchant_id: str = Field(..., min_length=1, max_length=255)
     merchant_name: str = Field(..., min_length=1, max_length=255)
     website_url: str = Field(..., max_length=2048)
-    is_shopify: bool
+    is_shopify: Optional[bool] = Field(
+        None,
+        description="Legacy alias of ``platform`` (true = shopify, false = web).",
+    )
     allowed_origins: List[str] = Field(..., max_length=20)
     provider: Literal["google"] = "google"
     bot_brand_name: Optional[str] = Field(None, min_length=1, max_length=255)
     is_active: bool = True
-    platform: Optional[Literal["shopify", "web"]] = Field(
+    platform: Optional[OnboardingPlatform] = Field(
         None,
         description=(
             "Storefront platform. Optional alias of ``is_shopify`` for callers "
@@ -81,10 +87,17 @@ class AssistOnboardingStreamRequest(BaseModel):
 
     @model_validator(mode="after")
     def _platform_agrees_with_is_shopify(self) -> "AssistOnboardingStreamRequest":
-        if (
-            self.platform is not None
-            and (self.platform == "shopify") != self.is_shopify
-        ):
+        """One of ``platform`` / ``is_shopify`` is required; both must agree.
+
+        After validation both are set, so callers may read either.
+        """
+        if self.platform is None and self.is_shopify is None:
+            raise ValueError("platform is required")
+        if self.platform is None:
+            self.platform = "shopify" if self.is_shopify else "web"
+        elif self.is_shopify is None:
+            self.is_shopify = self.platform == "shopify"
+        elif (self.platform == "shopify") != self.is_shopify:
             raise ValueError("platform and is_shopify disagree")
         return self
 
@@ -202,6 +215,7 @@ class AssistOnboardingCompletion(BaseModel):
 
 
 __all__ = [
+    "OnboardingPlatform",
     "AssistOnboardRequest",
     "AssistOnboardResponse",
     "AssistOnboardingCompletion",

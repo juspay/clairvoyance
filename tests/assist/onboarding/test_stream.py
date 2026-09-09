@@ -11,6 +11,10 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.research.website import (
     WebsiteScrapingResult,
 )
 from app.ai.voice.agents.breeze_buddy.assist.onboarding import service
+from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (
+    adapter as shopify_adapter,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.schemas.breeze_buddy.assist.onboarding import AssistOnboardingStreamRequest
 from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
@@ -44,10 +48,10 @@ def _default_template() -> TemplateModel:
             "system_prompt": (
                 f"{service.BRAND_IDENTITY_MARKER}\n\n"
                 "## Operating principles\n"
-                f"{service.SHOPIFY_OPERATING_START_MARKER}\n"
+                f"{shopify_adapter.LEGACY_SECTION_START}\n"
                 "### Shopify commerce tools\n"
                 "Use Shopify tools for live commerce facts.\n"
-                f"{service.SHOPIFY_OPERATING_END_MARKER}\n"
+                f"{shopify_adapter.LEGACY_SECTION_END}\n"
                 "{{ui_primitives_section}}"
             ),
         },
@@ -61,7 +65,7 @@ def _default_template() -> TemplateModel:
             "mcp": {
                 "servers": [
                     {
-                        "name": service.SHOPIFY_MCP_SERVER_NAME,
+                        "name": shopify_adapter.MCP_SERVER_NAME,
                         "url": "https://{shop_url}/api/mcp",
                         "auth": {"type": "none"},
                     }
@@ -117,18 +121,19 @@ def test_template_builder_adds_and_removes_shopify_mcp() -> None:
         website_context="Sells premium sneakers.",
         template_id="00000000-0000-0000-0000-000000000002",
         existing_template=None,
+        adapter=registry.resolve("shopify"),
     )
 
     assert shopify.name == "hustle-culture-assist"
     assert "Sells premium sneakers." in shopify.flow["system_prompt"]
     assert service.BRAND_IDENTITY_MARKER not in shopify.flow["system_prompt"]
     assert "### Shopify commerce tools" in shopify.flow["system_prompt"]
-    assert service.SHOPIFY_OPERATING_START_MARKER not in shopify.flow["system_prompt"]
-    assert service.SHOPIFY_OPERATING_END_MARKER not in shopify.flow["system_prompt"]
+    assert shopify_adapter.LEGACY_SECTION_START not in shopify.flow["system_prompt"]
+    assert shopify_adapter.LEGACY_SECTION_END not in shopify.flow["system_prompt"]
     assert shopify.configurations is not None
     assert shopify.configurations.mcp is not None
     assert [server.name for server in shopify.configurations.mcp.servers] == [
-        service.SHOPIFY_MCP_SERVER_NAME
+        shopify_adapter.MCP_SERVER_NAME
     ]
     assert len(shopify.configurations.state_reducers) == 3
     assert len(shopify.configurations.tool_arg_injection) == 3
@@ -140,6 +145,7 @@ def test_template_builder_adds_and_removes_shopify_mcp() -> None:
         website_context="Provides consulting.",
         template_id="00000000-0000-0000-0000-000000000003",
         existing_template=None,
+        adapter=registry.resolve("generic"),
     )
     assert non_shopify.configurations is not None
     assert "### Shopify commerce tools" not in non_shopify.flow["system_prompt"]
@@ -225,6 +231,7 @@ def test_existing_widget_updates_its_referenced_template(monkeypatch) -> None:
         website_context="Old context",
         template_id="00000000-0000-0000-0000-000000000010",
         existing_template=None,
+        adapter=registry.resolve("shopify"),
     )
     widget = _widget(existing.id)
 
@@ -291,6 +298,7 @@ def test_orphan_template_is_recovered_when_widget_is_missing(monkeypatch) -> Non
         website_context="Old context",
         template_id="00000000-0000-0000-0000-000000000030",
         existing_template=None,
+        adapter=registry.resolve("shopify"),
     )
 
     async def template_in_scope(reseller_id, merchant_id, name):
