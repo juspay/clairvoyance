@@ -22,18 +22,34 @@ that in.
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
+from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import TranscriptionFrame
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.utils.asyncio.task_manager import TaskManager, TaskManagerParams
 
 from app.ai.voice.agents.breeze_buddy.template import interruption
 
 
-def _make_task_manager() -> TaskManager:
+def _make_setup() -> FrameProcessorSetup:
+    """Build the setup object a strategy's ``setup()`` takes.
+
+    pipecat 1.8 passes a ``FrameProcessorSetup`` here; before 1.5 it was the
+    bare ``TaskManager``, which now fails with ``'TaskManager' object has no
+    attribute 'task_manager'``.
+    """
     tm = TaskManager()
     tm.setup(TaskManagerParams(loop=asyncio.get_running_loop()))
-    return tm
+    # A stop strategy's setup() reads only ``task_manager``; ``pipeline_worker``
+    # is required by the dataclass but never touched on this path.
+    return FrameProcessorSetup(
+        clock=SystemClock(),
+        task_manager=tm,
+        pipeline_worker=cast(PipelineWorker, None),
+    )
 
 
 def _transcription(text: str = "hello", finalized: bool = True) -> TranscriptionFrame:
@@ -64,7 +80,7 @@ async def test_setup_and_reset_do_not_raise_with_positive_timeout():
     The deleted subclass raised AttributeError here; the base class must not.
     """
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.0)
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
     await strat.reset()  # called by the turn controller on every turn start/stop
     await strat.cleanup()
 
@@ -76,7 +92,7 @@ async def test_fires_after_timeout_in_no_vad_fallback():
     fired = asyncio.Event()
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.05)
     strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
 
     await strat.process_frame(_transcription(finalized=True))
     # Not fired immediately — the policy floor must elapse first.
@@ -92,7 +108,7 @@ async def test_timer_rearms_on_each_transcript():
     fired = asyncio.Event()
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.15)
     strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
 
     # Three transcripts spaced under the timeout — each rearms the timer.
     for _ in range(3):
@@ -111,7 +127,7 @@ async def test_fires_quickly_with_zero_timeout_stt_native():
     fired = asyncio.Event()
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)
     strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
 
     await strat.process_frame(_transcription(finalized=True))
     await asyncio.wait_for(fired.wait(), timeout=1.0)

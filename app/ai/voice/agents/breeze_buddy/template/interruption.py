@@ -24,7 +24,11 @@ from pipecat.turns.user_start import (
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
-from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_stop import (
+    BaseUserTurnStopStrategy,
+    ExternalUserTurnStopStrategy,
+    SpeechTimeoutUserTurnStopStrategy,
+)
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
@@ -160,6 +164,28 @@ def _get_user_aggregator(bot):
     return aggregator_pair.user()
 
 
+def _build_stop_strategies(
+    bot, user_speech_timeout: float
+) -> list[BaseUserTurnStopStrategy]:
+    """Build the stop strategies for a node, matching what the pipeline installed.
+
+    A turn-detecting STT (Soniox in its endpointing mode) decides turn ends
+    itself and broadcasts a proposal; ``build_pipeline`` gives it
+    ``ExternalUserTurnStopStrategy`` so the turn survives the per-segment
+    finalized transcripts it emits mid-sentence. Node transitions rebuild the
+    strategies from scratch, so they must reach the SAME conclusion — otherwise
+    the first transition silently reverts the call to transcript-triggered turn
+    ends and one sentence fragments into several turns.
+
+    A node asking for a non-zero ``user_speech_timeout`` (multi-segment input
+    collection) is a deliberate override and keeps the timeout strategy: its
+    timer rearms on each new transcript, so segmented finals are harmless.
+    """
+    if user_speech_timeout == 0.0 and getattr(bot, "stt_proposes_turns", False):
+        return [ExternalUserTurnStopStrategy()]
+    return [SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=user_speech_timeout)]
+
+
 def _config_matches_active(
     bot, config: InterruptionConfig, user_speech_timeout: float
 ) -> bool:
@@ -222,15 +248,9 @@ async def _apply_interruption_config(
     else:
         start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
 
-    # pipecat 1.1.0's SpeechTimeoutUserTurnStopStrategy handles the no-VAD
-    # multi-turn case natively (per-turn reset + independent wait flags), so the
-    # turn ends after user_speech_timeout seconds of silence following the last
-    # transcript. user_speech_timeout=0 fires immediately on a finalized transcript.
     new_strategies = UserTurnStrategies(
         start=start_strategies,
-        stop=[
-            SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=user_speech_timeout)
-        ],
+        stop=_build_stop_strategies(bot, user_speech_timeout),
     )
 
     await user_aggregator._user_turn_controller.update_strategies(new_strategies)
