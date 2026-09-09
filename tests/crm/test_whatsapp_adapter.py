@@ -5,8 +5,9 @@ error matrix — including the ones that are painful to provoke for real, like
 an expired token — is exercised on every test run.
 """
 
+import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 import pytest
@@ -20,6 +21,8 @@ from app.crm.connectivity.providers.whatsapp.classify import (
 )
 from app.crm.connectivity.providers.whatsapp.payload import (
     build_parameters,
+    build_send_body,
+    flow_button_indexes,
     to_meta_recipient,
 )
 from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
@@ -93,9 +96,20 @@ def _installation(**overrides) -> ConnectorInstallation:
     return ConnectorInstallation(**fields)
 
 
-def _approved(language: str) -> ApprovedTemplate:
+def _approved(language: str, **overrides) -> ApprovedTemplate:
     """The registry row the send path resolved, in ``language``."""
-    return ApprovedTemplate(id="t-1", name="order_update_v1", language=language)
+    return ApprovedTemplate(
+        id="t-1", name="order_update_v1", language=language, **overrides
+    )
+
+
+def _buttons(*types: str) -> List[Dict[str, Any]]:
+    """A registered BUTTONS component whose buttons have these Meta types —
+    the components blob a flow template's registry row carries."""
+    return [
+        {"type": "BODY", "text": "Hello {{1}}"},
+        {"type": "BUTTONS", "buttons": [{"type": t, "text": t} for t in types]},
+    ]
 
 
 def _route(**overrides) -> SendRoute:
@@ -188,6 +202,164 @@ async def test_the_body_names_a_template_and_never_a_rendered_string(
     assert '"name":"order_update_v1"' in body
     # Values are posted as parameters; we never assemble the sentence.
     assert '"text":"Priya"' in body
+
+
+async def test_a_flow_button_template_carries_its_action_component(
+    monkeypatch,
+) -> None:
+    """A FLOW button is not decoration: Meta refuses the WHOLE send with
+    131009 ("Components sub_type invalid at index: N") when the button
+    component is missing, so nothing reaches the customer. The index is the
+    button's position among the template's buttons, taken from the registry
+    row — this adapter cannot know it any other way."""
+    route = _route(
+        template=_approved(
+            "en_US", components=_buttons("QUICK_REPLY", "QUICK_REPLY", "FLOW")
+        )
+    )
+    _, seen = await _deliver(monkeypatch, _responds(200, ACCEPTED_BODY), route=route)
+    body = json.loads(seen["body"])
+    button = body["template"]["components"][-1]
+    assert button["type"] == "button"
+    assert button["sub_type"] == "flow"
+    # Meta wants the position as a string, like every other button component.
+    assert button["index"] == "2"
+    assert button["parameters"][0]["type"] == "action"
+
+
+async def test_the_flow_token_is_the_message_that_opened_the_form(
+    monkeypatch,
+) -> None:
+    """Meta echoes flow_token back verbatim inside her submission, so the
+    send stamps the manifest row's own id: the answer then names its own
+    question, with no wamid to wait for and no second lookup."""
+    route = _route(template=_approved("en_US", components=_buttons("FLOW")))
+    _, seen = await _deliver(
+        monkeypatch,
+        _responds(200, ACCEPTED_BODY),
+        message=_message(id="m-42"),
+        route=route,
+    )
+    action = json.loads(seen["body"])["template"]["components"][-1]["parameters"][0]
+    assert action["action"] == {"flow_token": "m-42"}
+
+
+async def test_every_flow_button_is_named_not_only_the_first(monkeypatch) -> None:
+    """Meta refuses the send for ANY unnamed flow button, so naming the first
+    and stopping would lose the whole message to the second. The token is the
+    same on both: it identifies the send, not which button she pressed."""
+    route = _route(
+        template=_approved("en_US", components=_buttons("FLOW", "QUICK_REPLY", "FLOW"))
+    )
+    _, seen = await _deliver(
+        monkeypatch,
+        _responds(200, ACCEPTED_BODY),
+        message=_message(id="m-42"),
+        route=route,
+    )
+    buttons = [
+        c
+        for c in json.loads(seen["body"])["template"]["components"]
+        if c["type"] == "button"
+    ]
+    assert [b["index"] for b in buttons] == ["0", "2"]
+    assert {b["parameters"][0]["action"]["flow_token"] for b in buttons} == {"m-42"}
+
+
+async def test_a_template_without_a_flow_button_posts_what_it_always_did(
+    monkeypatch,
+) -> None:
+    """The overwhelming majority of sends name no flow. Their body must be
+    byte-identical to before this feature, or every template on the platform
+    is a new shape at once."""
+    _, seen = await _deliver(monkeypatch, _responds(200, ACCEPTED_BODY))
+    components = json.loads(seen["body"])["template"]["components"]
+    assert [c["type"] for c in components] == ["body"]
+
+
+def test_index_zero_is_a_position_not_an_absence() -> None:
+    """The first button is index 0, which is falsy — a truthiness check
+    anywhere on this path would silently drop the component for every
+    template whose flow button comes first, and Meta would refuse those
+    sends."""
+    body = build_send_body("t", "en_US", "919876543210", [], flow_button_indexes=[0])
+    assert body["template"]["components"][0]["index"] == "0"
+
+
+def test_a_send_naming_no_token_sends_no_placeholder() -> None:
+    """Naming the button is enough for Meta; the token is the one optional
+    part. A caller without one sends nothing rather than a stand-in — Meta
+    then records its own word, 'unused', which the read side discards. A
+    placeholder of ours would instead become a real-looking join key that
+    every tokenless send shares."""
+    body = build_send_body("t", "en_US", "919876543210", [], flow_button_indexes=[1])
+    button = body["template"]["components"][0]
+    assert button == {"type": "button", "sub_type": "flow", "index": "1"}
+
+
+# --- reading the flow positions off the registered components -----------------
+#
+# The walk lives in THIS face, not the registry decoder: BUTTONS and FLOW are
+# Meta's component vocabulary, and the route carries the row whole so each
+# adapter reads its own words out of it (the #1050 rule, both directions).
+
+
+def test_the_flow_positions_are_read_off_the_registered_components() -> None:
+    """Meta refuses the whole send (131009) when a FLOW button arrives
+    unnamed, and the component names it by POSITION — the one send-time
+    fact inside the registered structure."""
+    positions = flow_button_indexes(_buttons("QUICK_REPLY", "QUICK_REPLY", "FLOW"))
+    assert positions == [2]
+
+
+def test_every_flow_button_is_found_not_only_the_first() -> None:
+    """Whether Meta caps a template at one flow button is Meta's rule to
+    change. Finding them all needs no such rule to hold: a second button
+    left unnamed would have its whole send refused, and nobody receives a
+    message because of a cap we assumed."""
+    assert flow_button_indexes(_buttons("FLOW", "QUICK_REPLY", "FLOW")) == [0, 2]
+
+
+def test_a_template_with_no_flow_button_says_so_rather_than_guessing() -> None:
+    """Empty means "post no button component", which is what every template
+    on the platform needs today. A wrong position here would break sends
+    that work; an empty list cannot."""
+    assert flow_button_indexes(_buttons("QUICK_REPLY")) == []
+    assert flow_button_indexes([{"type": "BODY", "text": "no buttons"}]) == []
+
+
+def test_a_malformed_component_answers_empty_rather_than_raising() -> None:
+    """The row's junk is filtered at the decoder, but this walk runs per
+    message inside a claimed batch and keeps the same totality anyway —
+    a BUTTONS component with no buttons list must not strand the send."""
+    assert flow_button_indexes([]) == []
+    assert flow_button_indexes([{"type": "BUTTONS"}]) == []
+    assert flow_button_indexes([{"type": "BUTTONS", "buttons": "nope"}]) == []
+    assert flow_button_indexes(
+        [{"type": "BUTTONS", "buttons": [{"type": "FLOW"}]}]
+    ) == [0], "index 0 is a position, not an absence"
+
+
+def test_the_key_the_adapter_stamps_is_the_key_the_extractor_strips() -> None:
+    """The wire key is spelled in two modules (rule 12 forbids the import
+    either way); only a test may hold both. A drift means the stamped key
+    comes back unrecognised and our uuid sits beside her address in a
+    merchant's order note."""
+    from app.crm.connectivity.providers.whatsapp import payload as sender
+    from app.crm.record.extractors.whatsapp import flow as reader
+
+    assert sender.FLOW_TOKEN_KEY == reader.FLOW_TOKEN_KEY
+
+
+def test_a_second_buttons_component_never_restarts_the_count() -> None:
+    """Meta registers ONE buttons component; positions in a hypothetical
+    second would restart at 0 and name the wrong button. The first wins
+    and the walk stops."""
+    two_components = [
+        {"type": "BUTTONS", "buttons": [{"type": "FLOW", "text": "a"}]},
+        {"type": "BUTTONS", "buttons": [{"type": "FLOW", "text": "b"}]},
+    ]
+    assert flow_button_indexes(two_components) == [0]
 
 
 def test_numeric_keys_become_positional_parameters_in_numeric_order() -> None:

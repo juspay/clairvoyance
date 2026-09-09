@@ -42,8 +42,12 @@ def decode_template(row: Mapping[str, Any]) -> TemplateRead:
 def decode_approved_template(row: Mapping[str, Any]) -> ApprovedTemplate:
     """The send path's narrow read: the facts an adapter needs to send.
 
-    Deliberately not TemplateRead — the send path runs per message and has no
-    use for a components blob it will never render.
+    Deliberately not TemplateRead — the send path runs per message and has
+    no use for the console's status/quality/audit columns. ``components``
+    rides whole and UNREAD (which button is a Flow button is Meta's
+    vocabulary, walked in providers/whatsapp/payload.py): a decoder is
+    row -> model, no business decisions. Same totality filter as
+    decode_template, same batch reason.
     """
     return ApprovedTemplate(
         id=str(row["id"]),
@@ -51,4 +55,7 @@ def decode_approved_template(row: Mapping[str, Any]) -> ApprovedTemplate:
         language=row["language"],
         provider_template_id=row["provider_template_id"],
         category=row["category"],
+        components=[
+            c for c in jsonb_list(row.get("components")) if isinstance(c, dict)
+        ],
     )

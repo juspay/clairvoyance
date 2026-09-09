@@ -7,6 +7,7 @@ UPPERCASE status stored beside our lowercase rules, and a delete that took
 every language variant with it.
 """
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -714,6 +715,63 @@ def test_a_malformed_components_blob_decodes_to_empty_rather_than_raising() -> N
     }
     decoded = decode_template(row)
     assert decoded.components == [{"type": "BODY"}], "non-objects must be dropped"
+
+
+_FLOW_BUTTONS = [
+    {"type": "BODY", "text": "Hello {{1}}"},
+    {
+        "type": "BUTTONS",
+        "buttons": [
+            {"type": "QUICK_REPLY", "text": "CONFIRM"},
+            {"type": "QUICK_REPLY", "text": "CANCEL"},
+            {"type": "FLOW", "text": "Update address", "flow_id": "218303"},
+        ],
+    },
+]
+
+
+def test_the_send_read_carries_the_row_and_decides_nothing() -> None:
+    """decode_approved_template is row -> model: the registered components
+    ride WHOLE onto the shape, totalized exactly as decode_template does
+    (a malformed column filters, never raises — this decoder runs per
+    message). Which of those buttons is a Flow button is Meta's vocabulary
+    and lives in Meta's face (providers/whatsapp/payload.py), so nothing
+    here walks them — a decoder makes no business decisions."""
+    from app.crm.connectivity.db.decoders.template import decode_approved_template
+
+    row = {
+        "id": "t-1",
+        "name": "order_confirm",
+        "language": "en_US",
+        "provider_template_id": "9527",
+        "category": "UTILITY",
+        "components": _FLOW_BUTTONS,
+    }
+    assert decode_approved_template(row).components == _FLOW_BUTTONS
+    # The column arrives as text from asyncpg on some paths and as a decoded
+    # list on others; both are the same answer, and junk is filtered.
+    assert (
+        decode_approved_template(
+            {**row, "components": json.dumps(_FLOW_BUTTONS)}
+        ).components
+        == _FLOW_BUTTONS
+    )
+    assert decode_approved_template(
+        {**row, "components": '[1, 2, {"type": "BODY"}]'}
+    ).components == [{"type": "BODY"}]
+    assert decode_approved_template({**row, "components": None}).components == []
+
+
+def test_the_send_lookup_reads_the_components_it_needs() -> None:
+    """The query and the shape are one promise: an adapter walking a column
+    the SELECT never fetched would find no flow button on any template, and
+    every flow send would be refused by Meta."""
+    from app.crm.connectivity.db.queries.template import (
+        approved_template_for_send_query,
+    )
+
+    query, _ = approved_template_for_send_query("shop", "whatsapp", "waba-1", "n")
+    assert "components" in query
 
 
 async def test_a_bug_in_the_face_does_not_reach_the_caller(monkeypatch) -> None:

@@ -135,9 +135,15 @@ def approved_template_for_send_query(
     customer should receive is not a guess anyone may make.
 
     LIMIT 2 because the caller only needs to distinguish one from many.
+
+    ``components`` rides along whole — the registered structure, verbatim
+    (canon T23 col 11). A send must name where its FLOW buttons sit or Meta
+    refuses it (131009), and which button is a Flow button is Meta's
+    vocabulary: the provider face reads it off the row
+    (providers/whatsapp/payload.py), never this layer.
     """
     query = f"""
-        SELECT id, name, language, provider_template_id, category
+        SELECT id, name, language, provider_template_id, category, components
           FROM {TEMPLATE_TABLE}
          WHERE merchant_id = $1
            AND channel = $2
