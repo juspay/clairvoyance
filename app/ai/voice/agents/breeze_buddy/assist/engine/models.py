@@ -28,7 +28,11 @@ class SiteProfile(BaseModel):
     url: str
     final_url: str
     status: int
+    title: Optional[str] = None
     size_bytes: int = 0
+    # The read hit the byte ceiling: everything here is real, but the page
+    # had more. Later stages must not read absence as evidence.
+    truncated: bool = False
     headers: Dict[str, str] = Field(default_factory=dict)
     cookies: List[str] = Field(default_factory=list)
     meta: Dict[str, str] = Field(default_factory=dict)
@@ -49,6 +53,20 @@ class TenantIdentity(BaseModel):
     permanent_host: Optional[str] = None
     reseller_id: Optional[str] = None
     merchant_id: Optional[str] = None
+
+
+class Classification(BaseModel):
+    """Stage 2 output: which adapter the site is handled by, and how sure we are.
+
+    ``scores`` keeps every adapter's answer, not just the winner's, so a
+    surprising verdict can be read rather than guessed at.
+    """
+
+    adapter_id: str
+    confidence: float
+    scores: Dict[str, float] = Field(default_factory=dict)
+    identity: TenantIdentity
+    matched: List[Signal] = Field(default_factory=list)
 
 
 class SiteResearch(BaseModel):
@@ -134,6 +152,7 @@ class MirrorPolicy(BaseModel):
 
 
 __all__ = [
+    "Classification",
     "InstallMethod",
     "MirrorPolicy",
     "ResearchDelta",
