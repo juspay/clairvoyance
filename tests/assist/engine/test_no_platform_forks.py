@@ -1,19 +1,44 @@
-"""The engine never names a platform (ASSIST-ENGINE-DESIGN.md §1 rule 2)."""
+"""The engine never names a platform, and never speaks a vertical's vocabulary.
+
+ASSIST-ENGINE-DESIGN.md §1: platform facts live in ``assist/platforms/<name>/``
+only; the engine, the onboarding surface and the assist HTTP surface are
+platform-blind. The engine is also vertical-blind — a booking or transit
+assistant must run on it unchanged — so commerce words belong to
+``assist/commerce/``, never to ``assist/engine/``.
+"""
 
 import pathlib
 import re
 
-ENGINE = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "app/ai/voice/agents/breeze_buddy/assist/engine"
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+ENGINE = ROOT / "app/ai/voice/agents/breeze_buddy/assist/engine"
+PLATFORM_BLIND = (
+    ENGINE,
+    ROOT / "app/ai/voice/agents/breeze_buddy/assist/onboarding",
+    ROOT / "app/api/routers/breeze_buddy/assist",
 )
-FORBIDDEN = re.compile(r"shopify|woocommerce|magento|bigcommerce", re.IGNORECASE)
+PLATFORM_WORDS = re.compile(r"shopify|woocommerce|magento|bigcommerce", re.IGNORECASE)
+VERTICAL_WORDS = re.compile(
+    r"\b(checkout|cart|product|products|collection|collections|sizing|catalog|catalogue)\b",
+    re.IGNORECASE,
+)
 
 
-def test_engine_has_no_platform_branches():
-    offenders = []
-    for path in ENGINE.rglob("*.py"):
-        for number, line in enumerate(path.read_text().splitlines(), 1):
-            if FORBIDDEN.search(line):
-                offenders.append(f"{path.relative_to(ENGINE)}:{number}: {line.strip()}")
-    assert not offenders, "platform names inside engine/:\n" + "\n".join(offenders)
+def _offenders(scopes, pattern):
+    found = []
+    for scope in scopes:
+        for path in scope.rglob("*.py"):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if pattern.search(line):
+                    found.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
+    return found
+
+
+def test_engine_onboarding_and_routes_name_no_platform():
+    offenders = _offenders(PLATFORM_BLIND, PLATFORM_WORDS)
+    assert not offenders, "platform names outside platforms/:\n" + "\n".join(offenders)
+
+
+def test_engine_has_no_vertical_vocabulary():
+    offenders = _offenders((ENGINE,), VERTICAL_WORDS)
+    assert not offenders, "vertical vocabulary inside engine/:\n" + "\n".join(offenders)

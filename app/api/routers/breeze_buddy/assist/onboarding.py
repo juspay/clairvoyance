@@ -7,15 +7,15 @@ from typing import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
+    normalize_merchant_domain,
+)
 from app.ai.voice.agents.breeze_buddy.assist.onboarding.service import (
     OnboardingFailure,
     onboard_assist_bare,
     stream_assist_onboarding,
 )
-from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
-    assist_tenant,
-    normalize_merchant_domain,
-)
+from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
 from app.ai.voice.agents.breeze_buddy.chat.sse import format_sse
 from app.api.security.breeze_buddy.authorization import (
     validate_merchant_access,
@@ -72,11 +72,10 @@ async def onboard_assist(
 ) -> AssistOnboardResponse:
     """Bare-metal install-time onboarding (S2S, no personalization).
 
-    Same RBAC posture as the stream route; tenancy is derived
-    server-side from ``host_app`` + ``merchant_domain`` (breeze-buddy →
-    BB_SHOPIFY/plain domain; buddy-assist → BB_ASSIST/assist-prefixed),
-    so access is validated against the DERIVED ids — a caller cannot
-    smuggle a different namespace in.
+    Same RBAC posture as the stream route; tenancy is derived server-side
+    from ``host_app`` + ``merchant_domain`` by the platform adapter that
+    host app lands on, so access is validated against the DERIVED ids — a
+    caller cannot smuggle a different namespace in.
     """
     require_role(current_user, [UserRole.ADMIN, UserRole.RESELLER])
     try:
@@ -85,7 +84,13 @@ async def onboard_assist(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
-    reseller_id, merchant_id = assist_tenant(body.host_app, merchant_domain)
+    try:
+        adapter = registry.for_host_app(body.host_app)
+        reseller_id, merchant_id = adapter.tenant(body.host_app, merchant_domain)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     validate_reseller_access(current_user, reseller_id=reseller_id)
     validate_merchant_access(current_user, merchant_id=merchant_id)
 

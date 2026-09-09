@@ -8,12 +8,15 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
+    normalize_merchant_domain,
+)
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingConfigurationError,
     WebsiteScrapingUpstreamError,
@@ -21,10 +24,15 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.website import (
     scrape_website,
 )
-from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
-    assist_tenant,
-    normalize_merchant_domain,
+from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import (
+    BRAND_MARKER,
+    SHOP_DOMAIN_PLACEHOLDER,
+    fill_placeholders,
+    platform_sections,
+    resolve_platform_sections,
 )
+from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
+from app.ai.voice.agents.breeze_buddy.assist.platforms.base import PlatformAdapter
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
@@ -51,24 +59,12 @@ from app.schemas.breeze_buddy.assist.onboarding import (
     AssistOnboardingStreamRequest,
     AssistOnboardRequest,
     AssistOnboardResponse,
+    OnboardingPlatform,
 )
 from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
 
 DEFAULT_ASSIST_TEMPLATE_NAME = "buddy-assist-default"
-BRAND_IDENTITY_MARKER = "{{brand_identity_section}}"
-SHOPIFY_OPERATING_START_MARKER = "{{#shopify_operating_section}}"
-SHOPIFY_OPERATING_END_MARKER = "{{/shopify_operating_section}}"
-SHOPIFY_MCP_SERVER_NAME = "shopify-storefront"
-# The fleet's live templates name the storefront MCP server
-# ``shopify-storefront-ucp``; the first blueprint used the short form. Both
-# point at ``https://{shop_url}/api/ucp/mcp`` and are treated as the same.
-SHOPIFY_MCP_SERVER_NAMES = frozenset(
-    {SHOPIFY_MCP_SERVER_NAME, "shopify-storefront-ucp"}
-)
-# Substituted with the storefront host everywhere a blueprint string carries
-# it (checkout / cart URLs, trusted links, tool UI hints, the LinkButton
-# example in the prompt).
-SHOP_DOMAIN_PLACEHOLDER = "{{shop_domain}}"
+BRAND_IDENTITY_MARKER = BRAND_MARKER
 # The skeleton every live Assist template runs on (plan §3.1); drift from it
 # is logged, not fatal — see ``blueprint_shape_warnings``.
 EXPECTED_BLUEPRINT_MODEL = "gemini-3.6-flash"
@@ -137,7 +133,9 @@ def _configuration_dict(template: TemplateModel) -> Dict[str, Any]:
     )
 
 
-def _validate_default_template(template: TemplateModel) -> None:
+def _validate_default_template(
+    template: TemplateModel, adapter: PlatformAdapter
+) -> None:
     prompt = template.flow.get("system_prompt")
     if not isinstance(prompt, str):
         raise OnboardingFailure(
@@ -152,51 +150,22 @@ def _validate_default_template(template: TemplateModel) -> None:
             "Default Assist template has an invalid brand marker.",
         )
     try:
-        _shopify_sections(prompt)
+        platform_sections(prompt, registry.legacy_section_markers())
     except ValueError as exc:
         raise OnboardingFailure(
             "loading_default_template",
             "DEFAULT_TEMPLATE_INVALID",
-            f"Default Assist template has an invalid Shopify section ({exc}).",
+            f"Default Assist template has an invalid platform section ({exc}).",
         ) from exc
+    problems = adapter.validate_blueprint(prompt, _configuration_dict(template))
+    if problems:
+        raise OnboardingFailure(
+            "loading_default_template",
+            "DEFAULT_TEMPLATE_INVALID",
+            f"Default Assist template is not usable for {adapter.id}: {problems[0]}.",
+        )
     for warning in blueprint_shape_warnings(template):
         logger.warning(f"Assist blueprint {template.id} shape drift: {warning}")
-
-
-def _shopify_sections(prompt: str) -> List[Tuple[int, int]]:
-    """Spans of every ``{{#shopify_operating_section}}…{{/…}}`` pair, in order.
-
-    A blueprint may wrap more than one run of Shopify-only sections: the
-    fleet's operating block interleaves them with generic ones, and a
-    Shopify build has to stay byte-identical to that block, so the markers
-    sit inline around each run rather than around one reordered chunk.
-    Each start must be closed before the next one opens; at least one pair.
-    """
-    spans: List[Tuple[int, int]] = []
-    position = 0
-    while True:
-        start = prompt.find(SHOPIFY_OPERATING_START_MARKER, position)
-        if start < 0:
-            break
-        end = prompt.find(SHOPIFY_OPERATING_END_MARKER, start)
-        if end < 0:
-            raise ValueError("unterminated Shopify section")
-        if (
-            prompt.find(
-                SHOPIFY_OPERATING_START_MARKER,
-                start + len(SHOPIFY_OPERATING_START_MARKER),
-                end,
-            )
-            >= 0
-        ):
-            raise ValueError("nested Shopify section")
-        spans.append((start, end + len(SHOPIFY_OPERATING_END_MARKER)))
-        position = spans[-1][1]
-    if not spans:
-        raise ValueError("no Shopify section")
-    if prompt.count(SHOPIFY_OPERATING_END_MARKER) != len(spans):
-        raise ValueError("stray Shopify section end marker")
-    return spans
 
 
 def blueprint_shape_warnings(template: TemplateModel) -> List[str]:
@@ -227,29 +196,6 @@ def blueprint_shape_warnings(template: TemplateModel) -> List[str]:
     return warnings
 
 
-def _resolve_shopify_prompt_section(prompt: str, is_shopify: bool) -> str:
-    """Keep or remove every Shopify block authored in the DB blueprint."""
-    if is_shopify:
-        return prompt.replace(SHOPIFY_OPERATING_START_MARKER, "").replace(
-            SHOPIFY_OPERATING_END_MARKER, ""
-        )
-    resolved = prompt
-    for start, end in reversed(_shopify_sections(prompt)):
-        resolved = resolved[:start] + resolved[end:]
-    return resolved
-
-
-def _fill_placeholders(value: Any, shop_host: str) -> Any:
-    """Substitute ``{{shop_domain}}`` in every string of a blueprint value."""
-    if isinstance(value, str):
-        return value.replace(SHOP_DOMAIN_PLACEHOLDER, shop_host)
-    if isinstance(value, list):
-        return [_fill_placeholders(item, shop_host) for item in value]
-    if isinstance(value, dict):
-        return {key: _fill_placeholders(item, shop_host) for key, item in value.items()}
-    return value
-
-
 def build_merchant_template(
     *,
     default_template: TemplateModel,
@@ -257,56 +203,42 @@ def build_merchant_template(
     website_context: str,
     template_id: str,
     existing_template: Optional[TemplateModel],
+    adapter: PlatformAdapter,
 ) -> TemplateModel:
-    """Build a merchant template from the DB blueprint without mutating it."""
+    """Build a merchant template from the DB blueprint without mutating it.
+
+    Platform-blind: the adapter decides which prompt sections, MCP servers,
+    config entries and payload keys survive; everything another platform
+    owns is dropped.
+    """
     flow = copy.deepcopy(default_template.flow)
     prompt = flow.get("system_prompt")
-    _validate_default_template(default_template)
+    _validate_default_template(default_template, adapter)
     assert isinstance(prompt, str)
 
     prompt = prompt.replace(
         BRAND_IDENTITY_MARKER, _brand_identity(body, website_context), 1
     )
-    prompt = _resolve_shopify_prompt_section(prompt, body.is_shopify)
+    prompt = resolve_platform_sections(
+        prompt, {adapter.id}, registry.legacy_section_markers()
+    )
     flow["system_prompt"] = prompt
 
     configurations = _configuration_dict(default_template)
     mcp = copy.deepcopy(configurations.get("mcp") or {})
+    foreign_servers = registry.foreign_mcp_server_names(adapter)
     servers = [
         server
         for server in list(mcp.get("servers") or [])
-        if server.get("name") not in SHOPIFY_MCP_SERVER_NAMES
+        if server.get("name") not in foreign_servers
     ]
-    if body.is_shopify:
-        shopify_servers = [
-            server
-            for server in list(mcp.get("servers") or [])
-            if server.get("name") in SHOPIFY_MCP_SERVER_NAMES
-        ]
-        if len(shopify_servers) != 1:
-            raise OnboardingFailure(
-                "building_template",
-                "DEFAULT_TEMPLATE_INVALID",
-                "Default Assist template must contain one Shopify MCP server.",
-            )
-        if not configurations.get("state_reducers") or not configurations.get(
-            "tool_arg_injection"
-        ):
-            raise OnboardingFailure(
-                "building_template",
-                "DEFAULT_TEMPLATE_INVALID",
-                "Default Assist template is missing Shopify cart state configuration.",
-            )
-        servers.append(shopify_servers[0])
     if servers:
         mcp["servers"] = servers
         configurations["mcp"] = mcp
     else:
         configurations.pop("mcp", None)
-    if not body.is_shopify:
-        configurations.pop("state_reducers", None)
-        configurations.pop("tool_arg_injection", None)
-        configurations.pop("client_context", None)
+    for key in registry.foreign_tool_config_keys(adapter):
+        configurations.pop(key, None)
 
     expected_payload_schema = copy.deepcopy(
         default_template.expected_payload_schema or {}
@@ -316,8 +248,8 @@ def build_merchant_template(
         "example": _shop_host(body.website_url),
         "description": "Storefront domain used by the assistant's commerce tools.",
     }
-    if not body.is_shopify:
-        expected_payload_schema.pop("shopify_customer_token", None)
+    for key in registry.foreign_payload_keys(adapter):
+        expected_payload_schema.pop(key, None)
 
     persisted_secrets = (
         copy.deepcopy(
@@ -328,9 +260,9 @@ def build_merchant_template(
     # Provides a server-owned fallback; a widget session payload may override it.
     persisted_secrets["shop_url"] = _shop_host(body.website_url)
 
-    shop_host = _shop_host(body.website_url)
-    flow["system_prompt"] = _fill_placeholders(flow["system_prompt"], shop_host)
-    configurations = _fill_placeholders(configurations, shop_host)
+    placeholders = {SHOP_DOMAIN_PLACEHOLDER: _shop_host(body.website_url)}
+    flow["system_prompt"] = fill_placeholders(flow["system_prompt"], placeholders)
+    configurations = fill_placeholders(configurations, placeholders)
 
     candidate = TemplateModel(
         id=template_id,
@@ -537,9 +469,10 @@ async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardRespon
     results, and the merchant personalizes later from the Buddy dashboard.
     Raises ``OnboardingFailure``; the route maps it to HTTP.
     """
+    adapter = registry.for_host_app(body.host_app)
     merchant_domain = normalize_merchant_domain(body.merchant_domain)
-    reseller_id, merchant_id = assist_tenant(body.host_app, merchant_domain)
-    merchant_name = body.merchant_name or merchant_domain.removesuffix(".myshopify.com")
+    reseller_id, merchant_id = adapter.tenant(body.host_app, merchant_domain)
+    merchant_name = body.merchant_name or adapter.store_name(merchant_domain)
     origins = [f"https://{merchant_domain}"] + [
         origin
         for origin in body.allowed_origins
@@ -556,7 +489,7 @@ async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardRespon
         merchant_id=merchant_id,
         merchant_name=merchant_name,
         website_url=f"https://{merchant_domain}",
-        is_shopify=True,
+        platform=cast(OnboardingPlatform, adapter.request_platform),
         allowed_origins=origins,
         bot_brand_name=body.bot_brand_name,
         is_active=body.is_active,
@@ -613,7 +546,7 @@ async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardRespon
                 "DEFAULT_TEMPLATE_NOT_FOUND",
                 "The default Assist template is not configured for this reseller.",
             )
-        _validate_default_template(default_template)
+        _validate_default_template(default_template, adapter)
 
         candidate = build_merchant_template(
             default_template=default_template,
@@ -621,6 +554,7 @@ async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardRespon
             website_context=_BARE_WEBSITE_CONTEXT,
             template_id=str(uuid4()),
             existing_template=None,
+            adapter=adapter,
         )
         persisted_template = await _create_template(candidate)
         created_template_id = persisted_template.id
@@ -669,6 +603,7 @@ async def stream_assist_onboarding(
     body: AssistOnboardingStreamRequest,
 ) -> AsyncIterator[SSEEvent]:
     """Run onboarding and emit structured progress until complete or error."""
+    adapter = registry.for_request(body.platform)
     created_template_id: Optional[str] = None
     step = "checking_widget"
     try:
@@ -718,8 +653,8 @@ async def stream_assist_onboarding(
                 "DEFAULT_TEMPLATE_NOT_FOUND",
                 "The default Assist template is not configured for this reseller.",
             )
-        _validate_default_template(default_template)
-        yield _progress(step, "done")
+        _validate_default_template(default_template, adapter)
+        yield _progress(step, "done", platform=adapter.id)
 
         step = "scraping_website"
         yield _progress(step, "running", provider=body.provider)
@@ -774,8 +709,9 @@ async def stream_assist_onboarding(
             website_context=website_context,
             template_id=template_id,
             existing_template=existing_template,
+            adapter=adapter,
         )
-        yield _progress(step, "done", shopify_enabled=body.is_shopify)
+        yield _progress(step, "done", platform=adapter.id)
 
         step = "saving_configuration"
         yield _progress(step, "running")
@@ -878,12 +814,8 @@ async def stream_assist_onboarding(
 __all__ = [
     "BRAND_IDENTITY_MARKER",
     "DEFAULT_ASSIST_TEMPLATE_NAME",
-    "SHOPIFY_OPERATING_END_MARKER",
-    "SHOPIFY_OPERATING_START_MARKER",
     "EXPECTED_BLUEPRINT_MODEL",
     "OnboardingFailure",
-    "SHOPIFY_MCP_SERVER_NAME",
-    "SHOPIFY_MCP_SERVER_NAMES",
     "SHOP_DOMAIN_PLACEHOLDER",
     "blueprint_shape_warnings",
     "build_merchant_template",

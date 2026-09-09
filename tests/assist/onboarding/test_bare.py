@@ -17,6 +17,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.ai.voice.agents.breeze_buddy.assist.onboarding import service
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (
+    adapter as shopify_adapter,
+)
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
     assist_tenant,
     assist_tenant_candidates,
@@ -54,10 +57,10 @@ def _default_template() -> TemplateModel:
             "system_prompt": (
                 f"{service.BRAND_IDENTITY_MARKER}\n\n"
                 "## Operating principles\n"
-                f"{service.SHOPIFY_OPERATING_START_MARKER}\n"
+                f"{shopify_adapter.LEGACY_SECTION_START}\n"
                 "### Shopify commerce tools\n"
                 "Use Shopify tools for live commerce facts.\n"
-                f"{service.SHOPIFY_OPERATING_END_MARKER}\n"
+                f"{shopify_adapter.LEGACY_SECTION_END}\n"
             ),
         },
         expected_payload_schema={
@@ -69,7 +72,7 @@ def _default_template() -> TemplateModel:
             "mcp": {
                 "servers": [
                     {
-                        "name": service.SHOPIFY_MCP_SERVER_NAME,
+                        "name": shopify_adapter.MCP_SERVER_NAME,
                         "url": "https://{shop_url}/api/mcp",
                         "auth": {"type": "none"},
                     }
