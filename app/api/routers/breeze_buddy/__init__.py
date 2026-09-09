@@ -7,6 +7,9 @@ from app.api.routers.breeze_buddy.agent_router.health import router as pod_route
 
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
+from app.api.routers.breeze_buddy.assist.blueprint import (
+    router as assist_blueprint_router,
+)
 from app.api.routers.breeze_buddy.assist.onboarding import (
     router as assist_onboarding_router,
 )
@@ -110,6 +113,8 @@ router.include_router(website_scraping_router, prefix="", tags=["website-scrapin
 
 # Idempotent merchant onboarding for the Buddy Assist widget.
 router.include_router(assist_onboarding_router, prefix="", tags=["assist-onboarding"])
+# The reseller blueprint the merchant templates are built from (read-only).
+router.include_router(assist_blueprint_router, prefix="", tags=["assist-onboarding"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])
