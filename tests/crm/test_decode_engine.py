@@ -6,6 +6,8 @@ The Shopify cases carried over from the imperative extractor it replaced:
 same letters, same answers, now read by declared paths.
 """
 
+import json
+from pathlib import Path
 from typing import Any, Dict
 
 from app.crm.record import catalog
@@ -21,6 +23,15 @@ def _shopify(topic: str) -> DecodeSpec:
 
 
 ORDER = _shopify("orders/create")
+
+
+def _fixture(name: str) -> Dict[str, Any]:
+    """One recorded Shopify letter — the fixture IS the payload."""
+    return json.loads(
+        (Path(__file__).parent / "fixtures" / "shopify" / f"{name}.json").read_text()
+    )
+
+
 CHECKOUT = _shopify("checkouts/update")
 
 
@@ -262,3 +273,279 @@ def test_every_catalog_derived_field_is_provided_by_its_spec_module() -> None:
 
 def _spec_dict(spec: DecodeSpec) -> Dict[str, Any]:
     return {"identity": spec.identity, "variables": spec.variables}
+
+
+# --- a declared list becomes one sentence ------------------------------------
+
+
+def _listed(path: str, fmt: Any = None) -> CatalogEntry:
+    return _entry(
+        CatalogField(
+            path=path, type="list", label="Items", variable=True, item_format=fmt
+        )
+    )
+
+
+def test_a_declared_list_is_joined_into_one_scalar() -> None:
+    """The letter keeps every key on the event row; the run carries the
+    sentence a template can actually render."""
+    spec = spec_for_entry(_listed("payload.line_items.title"), {})
+    assert spec.lists == {"title": None}
+    payload = {"line_items": [{"title": "Kurta"}, {"title": "Dupatta"}]}
+    assert engine.extract(payload, spec).variables == {"title": "Kurta, Dupatta"}
+
+
+def test_an_item_format_pairs_the_keys_of_one_line() -> None:
+    """The thing a path alone cannot say: `line_items.title` and
+    `line_items.quantity` are two parallel lists ("Kurta, Cap" beside
+    "1, 2"), never "Kurta x1, Cap x2"."""
+    spec = spec_for_entry(
+        _listed("payload.line_items", "{title} x{quantity} -\u20b9{price}"), {}
+    )
+    payload = {
+        "line_items": [
+            {"title": "Kurta", "quantity": 1, "price": "1199.00", "sku": "K-1"},
+            {"title": "Cap", "quantity": 2, "price": "150.00", "sku": "C-2"},
+        ]
+    }
+    assert engine.extract(payload, spec).variables == {
+        "line_items": "Kurta x1 -\u20b91199.00, Cap x2 -\u20b9150.00"
+    }
+
+
+def test_a_list_of_bare_scalars_needs_no_format() -> None:
+    spec = spec_for_entry(_listed("payload.tags"), {})
+    assert engine.extract({"tags": ["vip", "new"]}, spec).variables == {
+        "tags": "vip, new"
+    }
+
+
+def test_a_line_missing_a_blank_is_skipped_whole() -> None:
+    """Not " x2". A half-formed line is corruption that looks delivered;
+    better to name three items than four badly."""
+    spec = spec_for_entry(_listed("payload.xs", "{title} x{quantity}"), {})
+    payload = {
+        "xs": [{"title": "Kurta"}, {"quantity": 3}, {"title": "Cap", "quantity": 1}]
+    }
+    assert engine.extract(payload, spec).variables == {"xs": "Cap x1"}
+
+
+def test_nothing_renderable_is_no_variable_at_all() -> None:
+    """None, not "" — a template mapping it parks by name, which is honest,
+    where an empty blank sends a message with a hole in it."""
+    spec = spec_for_entry(_listed("payload.xs", "{title}"), {})
+    for payload in ({"xs": []}, {"xs": [{}]}, {"xs": "not a list"}, {}):
+        assert engine.extract(payload, spec).variables == {}
+
+
+def test_a_long_cart_is_truncated_with_the_overflow_counted() -> None:
+    """Truncating at the join is the point: over the ceiling the value would
+    be dropped by the scalar gate and the send would park on a blank whose
+    cause is two modules away."""
+    spec = spec_for_entry(_listed("payload.xs", "{title}"), {})
+    payload = {"xs": [{"title": f"Item number {i}"} for i in range(200)]}
+    rendered = engine.extract(payload, spec).variables["xs"]
+    assert len(rendered) <= engine.VARIABLE_MAX_CHARS
+    assert rendered.startswith("Item number 0, Item number 1, ")
+    assert rendered.endswith(" more")
+    # one oversized line is omitted, and still counted
+    assert engine.join_list(["a" * 300, "b"]) == "+2 more"
+
+
+def test_shopify_offers_every_phrasing_of_the_cart() -> None:
+    """Three declared blanks over one array, so a plan picks the phrasing
+    its template needs — and they are DERIVED rather than three `list` fields
+    on payload.line_items, because a variable is named for its path\'s last
+    segment and three of those would all be called `line_items`."""
+    variables = engine.extract(_fixture("orders_create"), ORDER).variables
+    assert variables["items"] == "Air Runner Sneakers, Ankle Socks (3 pack)"
+    assert variables["items_qty"] == ("Air Runner Sneakers x1, Ankle Socks (3 pack) x2")
+    # The money carries the ORDER's currency, never a hard-coded symbol.
+    assert variables["items_priced"] == (
+        "Air Runner Sneakers = 2499.00 INR x1, Ankle Socks (3 pack) = 299.00 INR x2"
+    )
+    # every phrasing is a distinct blank — the collision this shape avoids
+    assert len({variables[k] for k in ("items", "items_qty", "items_priced")}) == 3
+    assert variables["payment_gateway_names"] == "Cash on Delivery (COD)"
+    assert variables["order_status_url"].startswith("https://")
+    assert variables["city"] == "Bengaluru"
+    # the derived pair stays beside it — live plans template on them
+    assert variables["items_count"] == 2
+    assert variables["first_item_name"] == "Air Runner Sneakers"
+
+
+def test_the_cart_is_priced_in_the_order_s_own_currency() -> None:
+    """The symbol is a fact of the LETTER, not of the format: a hard-coded ₹
+    renders a USD store's cart at the wrong price. Same cart, three stores —
+    the phrasing is identical and only the code moves."""
+    payload = _fixture("orders_create")
+    payload["line_items"] = [{"title": "Kurta", "quantity": 2, "price": "100.00"}]
+
+    payload["currency"] = "USD"
+    assert (
+        engine.extract(payload, ORDER).variables["items_priced"]
+        == "Kurta = 100.00 USD x2"
+    )
+
+    # A multi-currency store sends BOTH, and the shop's code wins: REST
+    # spells line_items[].price in the shop's currency, so labelling it
+    # "USD" would price an INR number in dollars.
+    payload["currency"] = "INR"
+    payload["presentment_currency"] = "USD"
+    assert (
+        engine.extract(payload, ORDER).variables["items_priced"]
+        == "Kurta = 100.00 INR x2"
+    )
+
+    # `presentment_currency` is read only when the shop's own is absent.
+    del payload["currency"]
+    payload["presentment_currency"] = "aed"
+    assert (
+        engine.extract(payload, ORDER).variables["items_priced"]
+        == "Kurta = 100.00 AED x2"
+    )
+
+    # Neither: the bare number. The currency rides in the derived VALUE, not
+    # in a {currency} blank of its own — render_item skips a line WHOLE when
+    # a blank is missing, so a blank would have emptied the cart instead.
+    del payload["presentment_currency"]
+    assert (
+        engine.extract(payload, ORDER).variables["items_priced"] == "Kurta = 100.00 x2"
+    )
+
+
+def test_the_shipping_address_is_one_sentence_with_no_holes_in_it() -> None:
+    """Six parts a template author would otherwise place by hand, in the
+    order a label is read, with the absent ones DROPPED — never ", , "."""
+    assert (
+        engine.extract(_fixture("orders_create"), ORDER).variables["shipping_address"]
+        == "Priya Sharma, 12 MG Road, Bengaluru, Karnataka, 560001"
+    )
+
+    # Shopify's newer shape sends a joined `name` and an explicit null
+    # address2. Both are read, and the null simply does not appear.
+    payload = _fixture("orders_create")
+    payload["shipping_address"] = {
+        "zip": "560095",
+        "city": "Bangalore",
+        "name": "Swaroop Varma",
+        "company": None,
+        "country": "India",
+        "address1": "A32",
+        "address2": None,
+        "latitude": 12.938781,
+        "province": "Karnataka",
+        "last_name": "Varma",
+        "longitude": 77.62067689999999,
+        "first_name": "Swaroop",
+        "country_code": "IN",
+        "province_code": "KA",
+    }
+    assert (
+        engine.extract(payload, ORDER).variables["shipping_address"]
+        == "Swaroop Varma, A32, Bangalore, Karnataka, 560095"
+    )
+
+    # A letter with no address at all says nothing, rather than saying ", ".
+    payload.pop("shipping_address")
+    assert "shipping_address" not in engine.extract(payload, ORDER).variables
+
+
+def test_a_yes_no_is_declared_for_filtering_and_never_as_a_blank() -> None:
+    """send_variables refuses a bool, so a boolean that were a variable
+    would park the run at fire time. No code-layer boolean is one."""
+    for module in SPEC_MODULES:
+        for entry in module.ENTRIES:
+            for f in entry.fields:
+                if f.type == "boolean":
+                    assert not f.variable, f"{entry.topic}: {f.path}"
+
+
+def test_a_line_with_no_price_is_left_out_of_the_sentence() -> None:
+    """The missing-blank law reaching the computed key too: `unit_price` is
+    assembled by the deriver, not sent by Shopify, and a line the format
+    cannot complete is skipped whole rather than rendered half."""
+    entry = _entry(
+        CatalogField(
+            path="line_items", type="text", label="x", derived=True, variable=True
+        )
+    )
+    derive = {
+        "line_items": catalog.derive_for("shopify", "orders/create")["items_priced"]
+    }
+    spec = spec_for_entry(entry, derive)
+    payload = {
+        "line_items": [
+            {"title": "Kurta", "quantity": 2, "price": "100.00"},
+            {"title": "Broken", "quantity": 1},
+        ]
+    }
+    # "Broken" carries no price, so it has no `unit_price` and drops out.
+    # This letter also names no `currency`, so the money degrades to the bare
+    # number — a cart WITHOUT a currency code, never an EMPTY cart.
+    assert engine.extract(payload, spec).variables == {
+        "line_items": "Kurta = 100.00 x2"
+    }
+
+
+def test_a_list_inside_a_list_is_just_another_step() -> None:
+    """Real letters nest: an order's applications, each with its own offers.
+    A path that stopped at the first array could name the application but
+    never the offer, so every array crossed is mapped over and flattened —
+    which is the honest answer for a blank, since a blank is ONE string and
+    cannot carry which application an offer came from anyway."""
+    payload = {
+        "loanApplications": [
+            {
+                "lenderName": "FINNABLE",
+                "offers": [
+                    {
+                        "sanctionedAmount": "9000.00",
+                        "duration": "6",
+                        "emiType": "NO_COST_EMI_WITH_DISCOUNT",
+                    },
+                    {
+                        "sanctionedAmount": "8500.00",
+                        "duration": "9",
+                        "emiType": "STANDARD",
+                    },
+                ],
+            },
+            {
+                "lenderName": "DMI",
+                "offers": [
+                    {
+                        "sanctionedAmount": "7000.00",
+                        "duration": "12",
+                        "emiType": "STANDARD",
+                    }
+                ],
+            },
+        ]
+    }
+
+    def one(path: str, fmt: Any = None) -> Any:
+        entry = _entry(
+            CatalogField(
+                path=path, type="list", label="X", variable=True, item_format=fmt
+            )
+        )
+        return engine.extract(payload, spec_for_entry(entry, {})).variables
+
+    # one level down
+    assert one("payload.loanApplications.lenderName") == {"lenderName": "FINNABLE, DMI"}
+    # two levels down, flattened across both applications
+    assert one("payload.loanApplications.offers.sanctionedAmount") == {
+        "sanctionedAmount": "9000.00, 8500.00, 7000.00"
+    }
+    # …and the nested elements are what an item_format reads
+    assert one(
+        "payload.loanApplications.offers",
+        "{duration} - {emiType} - {sanctionedAmount}",
+    ) == {
+        "offers": (
+            "6 - NO_COST_EMI_WITH_DISCOUNT - 9000.00, "
+            "9 - STANDARD - 8500.00, "
+            "12 - STANDARD - 7000.00"
+        )
+    }

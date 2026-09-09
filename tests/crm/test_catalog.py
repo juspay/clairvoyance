@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, get_args
 
 import pytest
 
+from app.crm.outreach.catalog_laws import condition_against_catalog
 from app.crm.record import catalog
 from app.crm.record.extractors import engine
 from app.crm.record.schemas import (
@@ -119,6 +120,7 @@ def test_ops_come_from_type_and_phone_is_never_filterable() -> None:
         "boolean",
         "datetime",
         "phone",
+        "list",
     }
 
 
@@ -250,6 +252,58 @@ def test_registration_accepts_the_nammayatri_shape() -> None:
             {"path": "payload.x", "type": "text", "label": "x", "identity": "email"},
             "identity role must be one of phone | name",
         ),
+        # A list is a template variable and nothing else.
+        (
+            {"path": "payload.x", "type": "list", "label": "x"},
+            "type list is a template variable or nothing",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "identity": "name",
+            },
+            "a list cannot be an identity field",
+        ),
+        # item_format is the list's own word, and every blank in it must be a
+        # key — the engine leaves an unmatched group in place, and a customer
+        # would read the literal "{na-me}".
+        (
+            {"path": "payload.x", "type": "text", "label": "x", "item_format": "{a}"},
+            "item_format belongs to type list",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "item_format": "{title} x{quantity",
+            },
+            "unmatched brace",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "item_format": "{na-me}",
+            },
+            "is not a key",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "item_format": "just words",
+            },
+            "names no key",
+        ),
     ],
 )
 def test_registration_refuses_each_law_break(
@@ -257,6 +311,108 @@ def test_registration_refuses_each_law_break(
 ) -> None:
     problems = catalog.validate_registration(_reg([field]))
     assert any(fragment in p for p in problems), problems
+
+
+def test_two_variable_fields_may_not_fill_one_blank() -> None:
+    """The registered layer's half of test_variable_names_are_unique_within
+    _an_entry. A blank is the path's LAST SEGMENT, so payload.items.name and
+    payload.customer.name are both {name}: spec_for_entry writes one key,
+    the later declaration wins, and the earlier field vanishes from every
+    template that named it — silently, and in an order the vendor never
+    sees. Refused where it is still a typo."""
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.items.name",
+                    "type": "text",
+                    "label": "Item",
+                    "variable": True,
+                },
+                {
+                    "path": "payload.customer.name",
+                    "type": "text",
+                    "label": "Customer",
+                    "variable": True,
+                },
+            ]
+        )
+    )
+    assert any("already filled by payload.items.name" in p for p in problems), problems
+
+    # Not a variable, not a blank: the same last segment is fine when only
+    # one of the two is templated on.
+    filter_only = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.items.name",
+                    "type": "text",
+                    "label": "Item",
+                    "variable": True,
+                },
+                {"path": "payload.customer.name", "type": "text", "label": "Customer"},
+            ]
+        )
+    )
+    assert filter_only == [], filter_only
+
+
+def test_a_deprecated_predecessor_may_share_its_successors_blank() -> None:
+    """The exemption the two laws need to coexist. dropped_paths FORCES a
+    renamed path to stay in the registration as deprecated (a field is
+    deprecated, never deleted), and decode already skips deprecated fields —
+    so refusing the old path its successor's blank would make
+    additive-or-deprecate and the collision law unsatisfiable together."""
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.buyer.name",
+                    "type": "text",
+                    "label": "Buyer (old)",
+                    "variable": True,
+                    "deprecated": True,
+                },
+                {
+                    "path": "payload.customer.name",
+                    "type": "text",
+                    "label": "Customer",
+                    "variable": True,
+                },
+            ]
+        )
+    )
+    assert problems == [], problems
+
+
+def test_a_registered_yes_no_may_not_be_a_variable() -> None:
+    """ "A yes/no is a filter, never a blank" is a law, not a house style.
+    A boolean extracts as a Python True and send_variables refuses a bool at
+    fire time, so the first run that maps it PARKS — hours later, naming a
+    variable rather than this row. The code layer keeps the rule by hand;
+    the vendor layer gets it enforced."""
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.cod",
+                    "type": "boolean",
+                    "label": "COD",
+                    "variable": True,
+                }
+            ]
+        )
+    )
+    assert any("a yes/no is a filter, never a blank" in p for p in problems), problems
+
+    # As a filter it is exactly what booleans are for.
+    assert (
+        catalog.validate_registration(
+            _reg([{"path": "payload.cod", "type": "boolean", "label": "COD"}])
+        )
+        == []
+    )
 
 
 def test_a_registration_may_not_shadow_a_code_entry() -> None:
@@ -503,3 +659,63 @@ def test_the_etag_is_computed_before_the_counts_query(
     assert catalog.etag_for(entries) == catalog.etag_for(filled)
     by_key = {(e.source, e.topic): e.seen_7d for e in filled}
     assert by_key[("shopify", "orders/create")] == 3
+
+
+def test_a_registration_may_declare_a_formatted_list() -> None:
+    """The registered layer's door to an array — a T24 row carries no
+    derive(), so the format IS how a vendor shapes a cart."""
+    assert (
+        catalog.validate_registration(
+            _reg(
+                [
+                    {
+                        "path": "payload.items",
+                        "type": "list",
+                        "label": "Items",
+                        "variable": True,
+                        "item_format": "{name} x{qty}",
+                    },
+                    {
+                        "path": "payload.tags",
+                        "type": "list",
+                        "label": "Tags",
+                        "variable": True,
+                    },
+                ]
+            )
+        )
+        == []
+    )
+
+
+def test_a_list_field_is_never_filterable() -> None:
+    """No ops, exactly like phone: the where-grammar never receives an array,
+    so the matcher never learns array semantics (event-catalog.md, sealed)."""
+    assert catalog.OPS_BY_TYPE["list"] == []
+    field = catalog.with_ops(
+        CatalogField(path="payload.items", type="list", label="Items", variable=True)
+    )
+    assert field.ops == []
+    # …and the refusal itself, through the function that does it
+    for op, value in (("is", "x"), ("in", ["x"]), ("exists", None), (">", 1)):
+        problems = condition_against_catalog(
+            Condition(field="payload.items", op=op, value=value),
+            {"payload.items": field},
+        )
+        assert problems and "allowed: none" in problems[0], (op, problems)
+
+
+def test_the_stored_row_keeps_item_format_only_where_it_means_something() -> None:
+    """canon's field list is extended for the new type, not for every row."""
+    plain = catalog.stored_field(CatalogField(path="payload.a", type="text", label="A"))
+    assert "item_format" not in plain
+    listed = catalog.stored_field(
+        CatalogField(
+            path="payload.b",
+            type="list",
+            label="B",
+            variable=True,
+            item_format="{n}",
+        )
+    )
+    assert listed["item_format"] == "{n}"

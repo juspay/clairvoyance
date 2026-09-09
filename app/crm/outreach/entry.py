@@ -25,6 +25,7 @@ source-event check and the open-run unique — not by that rollback.
 
 from typing import Any, Dict, Optional, Sequence, Tuple
 
+from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
@@ -64,11 +65,6 @@ _PHONE_PATHS = ("customer_mobile_number", "phone")
 # (G7): an order placed between the founding checkout and a later cart
 # update must keep counting as after.
 _FOUNDING_KEYS = ("source_event_id", "entered_event_at")
-
-# Small-facts cap (canon: context carries pointers "plus the few small
-# facts the sends will need" — never payload photocopies): scalars only,
-# short values only; the full letter already lives on the event row.
-_CONTEXT_VALUE_MAX_CHARS = 256
 
 
 def _phone_from_payload(payload: dict) -> str | None:
@@ -205,7 +201,7 @@ async def _wake_on_reply(
     square (context.facts.<square>), so a later call can say what this
     stage's letter said; the same bridge enrol uses, so bookkeeping names
     and nested payload never reach the run."""
-    facts = _context_from_payload(event.payload)
+    facts = _context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
@@ -342,7 +338,7 @@ def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
     )
 
 
-def _context_from_payload(payload: dict) -> dict:
+def _context_from_payload(payload: dict, max_chars: int) -> dict:
     """The template-variable bridge: merchants send standard identity keys
     (customer_mobile_number, customer_name) plus whatever scalar keys
     their call template references ({item}, {cart_value}); those small
@@ -359,7 +355,7 @@ def _context_from_payload(payload: dict) -> dict:
             continue  # ours to write, never a producer's
         if not isinstance(value, (str, int, float, bool)):
             continue  # nested objects/lists stay on the event row
-        if len(str(value)) > _CONTEXT_VALUE_MAX_CHARS:
+        if len(str(value)) > max_chars:
             continue
         context[key] = value
     return context
@@ -378,11 +374,12 @@ async def _try_enrol(
     admit, enrollment_key = _enrollment_key(door, event, str(flow.id))
     if not admit:
         return  # a keyed plan without its key: a refusal, not an error
-    context = _context_from_payload(event.payload)
+    max_chars = await CRM_CONTEXT_VALUE_MAX_CHARS()
+    context = _context_from_payload(event.payload, max_chars)
     # The catalog's declared variables win over the scalar copy: the engine
     # resolved them through the declared paths (customer_name from
     # customer.first_name + last_name), and a bookkeeping name is still ours.
-    context.update(_context_from_payload(variables or {}))
+    context.update(_context_from_payload(variables or {}, max_chars))
     context["source_event_id"] = str(event.id)
     # When the founding letter HAPPENED (its own claim, else the envelope's
     # receipt): goals compare against this, not the row's insert time (G7).

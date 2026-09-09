@@ -104,7 +104,8 @@ def test_context_passthrough_keeps_scalars_drops_structures() -> None:
             "gift_wrap": True,
             "line_items": [{"sku": "WM-1"}],  # nested -> dropped
             "huge": "x" * 500,  # oversized -> dropped
-        }
+        },
+        256,  # the ceiling the caller reads from live config
     )
     assert context["item"] == "washing machine"
     assert context["cart_value"] == 3499
