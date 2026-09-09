@@ -18,6 +18,7 @@ from app.schemas.breeze_buddy.copilot import (
 from app.services.breeze_buddy.copilot.scope import (
     CopilotScopeError,
     resolve_copilot_scope,
+    validate_persisted_copilot_scope_access,
 )
 
 DATA_TEMPLATE_ID = "11111111-1111-4111-8111-111111111111"
@@ -101,6 +102,7 @@ def test_scope_metadata_does_not_include_runtime_identity():
 
     assert "runtime_merchant_id" not in metadata
     assert "runtime_template_id" not in metadata
+    assert metadata["actor"] == {"user_id": "user-1"}
     assert isinstance(data_metadata, dict)
     assert "merchant_id" not in data_metadata
 
@@ -340,3 +342,91 @@ def test_template_accessor_reads_only_template_merchant(monkeypatch):
     assert "SELECT merchant_id" in str(captured["query"])
     assert "flow" not in str(captured["query"])
     assert "secrets" not in str(captured["query"])
+
+
+def test_persisted_scope_access_allows_current_data_merchant():
+    scope = asyncio.run(
+        resolve_copilot_scope(
+            CopilotScopeRequest(
+                data_merchant_id="merchant-1",
+                data_template_id=DATA_TEMPLATE_ID,
+            ),
+            _user(),
+            template_merchant_loader=_template_merchant_loader(_templates()),
+            merchant_scope_resolver=_merchant_scope(["merchant-1"]),
+        )
+    )
+
+    asyncio.run(
+        validate_persisted_copilot_scope_access(
+            scope.session_metadata(),
+            _user(merchant_ids=["merchant-1"]),
+            template_merchant_loader=_template_merchant_loader(_templates()),
+            merchant_scope_resolver=_merchant_scope(["merchant-1"]),
+        )
+    )
+
+
+def test_persisted_scope_access_noops_for_ordinary_chat_metadata():
+    asyncio.run(
+        validate_persisted_copilot_scope_access(
+            {"template_vars": {}},
+            _user(merchant_ids=[]),
+            template_merchant_loader=_template_merchant_loader({}),
+            merchant_scope_resolver=_merchant_scope([]),
+        )
+    )
+
+
+def test_persisted_scope_access_rejects_unauthorized_data_merchant():
+    with pytest.raises(CopilotScopeError) as exc:
+        asyncio.run(
+            validate_persisted_copilot_scope_access(
+                {"copilot": {"data": {"data_merchant_id": "merchant-2"}}},
+                _user(merchant_ids=["merchant-1"]),
+                template_merchant_loader=_template_merchant_loader({}),
+                merchant_scope_resolver=_merchant_scope(["merchant-1"]),
+            )
+        )
+
+    assert exc.value.code == "unauthorized_merchant"
+    assert exc.value.status_code == 404
+
+
+def test_persisted_scope_access_rejects_stale_data_template_mapping():
+    with pytest.raises(CopilotScopeError) as exc:
+        asyncio.run(
+            validate_persisted_copilot_scope_access(
+                {
+                    "copilot": {
+                        "data": {
+                            "data_merchant_id": "merchant-1",
+                            "data_template_id": DATA_TEMPLATE_ID,
+                        }
+                    }
+                },
+                _user(merchant_ids=["merchant-1"]),
+                template_merchant_loader=_template_merchant_loader(
+                    _templates(data_merchant="merchant-2")
+                ),
+                merchant_scope_resolver=_merchant_scope(["merchant-1"]),
+            )
+        )
+
+    assert exc.value.code == "unauthorized_template"
+    assert exc.value.status_code == 404
+
+
+def test_persisted_scope_access_rejects_malformed_copilot_metadata():
+    with pytest.raises(CopilotScopeError) as exc:
+        asyncio.run(
+            validate_persisted_copilot_scope_access(
+                {"copilot": {"data": {"data_template_id": DATA_TEMPLATE_ID}}},
+                _user(merchant_ids=["merchant-1"]),
+                template_merchant_loader=_template_merchant_loader({}),
+                merchant_scope_resolver=_merchant_scope(["merchant-1"]),
+            )
+        )
+
+    assert exc.value.code == "invalid_persisted_scope"
+    assert exc.value.status_code == 404
