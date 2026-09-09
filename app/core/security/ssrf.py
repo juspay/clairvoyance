@@ -239,6 +239,41 @@ def _without_credential_headers(kwargs: dict, target: str) -> dict:
     return {**kwargs, "headers": kept}
 
 
+def _total_timeout_seconds(candidate: Any) -> Optional[float]:
+    """The ``total`` budget a caller asked for, or None if they asked for none.
+
+    Accepts what aiohttp accepts in a ``timeout=`` slot: a ClientTimeout, or a
+    bare number (older callers). Anything else — including ClientTimeout with
+    total=None, which means "no overall limit" — yields None.
+    """
+    if candidate is None:
+        return None
+    total = getattr(candidate, "total", candidate)
+    if isinstance(total, (int, float)) and total > 0:
+        return float(total)
+    return None
+
+
+def _with_total(
+    base: Optional[aiohttp.ClientTimeout], total: float
+) -> aiohttp.ClientTimeout:
+    """Copy ``base`` with a new ``total``, keeping every other field.
+
+    ClientTimeout is a dataclass in some aiohttp releases and an attrs class in
+    others, so neither ``dataclasses.replace`` nor ``attr.evolve`` is portable
+    across the versions this repo may resolve. Copying the fields the installed
+    version actually declares is.
+    """
+    if base is None:
+        return aiohttp.ClientTimeout(total=total)
+    carried = {
+        name: getattr(base, name)
+        for name in ("connect", "sock_read", "sock_connect", "ceil_threshold")
+        if hasattr(base, name)
+    }
+    return aiohttp.ClientTimeout(total=total, **carried)
+
+
 @asynccontextmanager
 async def ssrf_safe_request(
     session: aiohttp.ClientSession,
@@ -283,6 +318,27 @@ async def ssrf_safe_request(
             "redirects are followed manually so every hop can be revalidated"
         )
 
+    # ONE deadline for the whole chain, not one per hop.
+    #
+    # aiohttp's own redirect following happens inside a single session.request()
+    # call, so ``ClientTimeout(total=N)`` covers the entire journey — that is
+    # what ``total`` means. Following redirects by hand turns one call into up
+    # to ``max_redirects + 1`` calls, and passing the caller's timeout into each
+    # of them hands out a fresh full budget per hop: a caller asking for 10s
+    # could wait 40s across four hops, with a retry loop on top multiplying it
+    # again. The caller cannot even predict the ceiling, because the number of
+    # hops is the remote server's choice.
+    #
+    # So: fix a deadline once, and give every hop only what is left. A caller
+    # who supplied no timeout falls back to the session's own default (aiohttp
+    # ships total=300s), which is the budget the recording downloads run under.
+    caller_timeout = kwargs.get("timeout")
+    total_budget = _total_timeout_seconds(caller_timeout)
+    if total_budget is None:
+        total_budget = _total_timeout_seconds(getattr(session, "timeout", None))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + total_budget if total_budget is not None else None
+
     current = url
     cur_method = method
     prev_host: Optional[str] = None
@@ -315,6 +371,27 @@ async def ssrf_safe_request(
         send_kwargs = kwargs
         if drop_credentials:
             send_kwargs = _without_credential_headers(kwargs, current)
+
+        if deadline is not None:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                # Budget gone. Raise the same exception a single overrunning
+                # request would, so callers keep their existing handling: a
+                # timeout is a transient failure worth retrying, unlike an
+                # SSRFError, which must abort.
+                raise asyncio.TimeoutError(
+                    f"Redirect chain exceeded the {total_budget:g}s budget "
+                    f"after {hop} hop(s) fetching {redact_url(url)}"
+                )
+            # Keep every other field the caller set (connect, sock_read, ...);
+            # only the overall budget shrinks as the chain progresses.
+            base = (
+                caller_timeout
+                if isinstance(caller_timeout, aiohttp.ClientTimeout)
+                else None
+            )
+            send_kwargs = dict(send_kwargs)
+            send_kwargs["timeout"] = _with_total(base, remaining)
 
         response = await session.request(
             cur_method, current, auth=send_auth, allow_redirects=False, **send_kwargs
