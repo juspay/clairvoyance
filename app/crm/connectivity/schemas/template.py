@@ -24,12 +24,17 @@ class ApprovedTemplate(BaseModel):
     """The send path's answer from the registry: this name is approved, and
     these are the facts about it an adapter may need to send.
 
-    Narrow on purpose — resolve_send_route runs once per message, and the row
-    carries a components blob the send path never renders (the provider does)
-    — but not narrower than the CHANNELS it serves: language is what WhatsApp
-    renders by, provider_template_id is what an SMS-DLT header carries, and
-    category is what the gate will map a purpose against. One shape, every
-    adapter reads its own field.
+    Narrow on purpose — resolve_send_route runs once per message — but not
+    narrower than the CHANNELS it serves: language is what WhatsApp renders
+    by, provider_template_id is what an SMS-DLT header carries, and category
+    is what the gate will map a purpose against. One shape, every adapter
+    reads its own field.
+
+    ``components`` is the registered structure, verbatim (canon T23 col
+    11): never RENDERED here (the provider does that), but each adapter
+    READS its own vocabulary out of it — WhatsApp its FLOW buttons, SMS-DLT
+    whatever it needs. The row rides whole so a provider quirk never
+    becomes a field on this shape (the #1050 lesson).
     """
 
     id: str
@@ -37,6 +42,7 @@ class ApprovedTemplate(BaseModel):
     language: str
     provider_template_id: Optional[str] = None
     category: Optional[str] = None
+    components: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ProviderTemplateState(BaseModel):

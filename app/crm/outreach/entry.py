@@ -135,7 +135,7 @@ async def consume_attributed_event(
             continue
         if await _end_on_goal(run, definition, event, goal_patch):
             continue  # exited: there is nothing left to wake
-        await _wake_on_reply(run, definition, event)
+        await _wake_on_reply(run, definition, event, variables)
 
     flows = await workflow_accessor.live_workflows(event.merchant_id)
     for flow in flows:
@@ -191,7 +191,10 @@ async def _end_on_goal(
 
 
 async def _wake_on_reply(
-    run: EnrollmentRun, definition: WorkflowDefinition, event: RawEvent
+    run: EnrollmentRun,
+    definition: WorkflowDefinition,
+    event: RawEvent,
+    variables: Optional[Dict[str, Any]] = None,
 ) -> None:
     """A wait_event square of ITS document listening on this topic wakes
     the run with the answer — the statement decides whether the token is
@@ -200,8 +203,27 @@ async def _wake_on_reply(
     the customer moved). The letter's scalar facts ride along under the
     square (context.facts.<square>), so a later call can say what this
     stage's letter said; the same bridge enrol uses, so bookkeeping names
-    and nested payload never reach the run."""
-    facts = _context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
+    and nested payload never reach the run.
+
+    Those facts are the catalog's DECLARED variables over the top-level
+    scalar copy — the same pair enrol receives. A woken square once
+    re-read the raw payload by hand, so a derived or nested field reached
+    a STARTING run and never a WAITING one (a WhatsApp square heard only
+    `messaging_product`); one reader of one payload is the engine's whole
+    point.
+
+    Merged, not substituted — a raw scalar the catalog does not declare
+    survives, and the declared name wins the tie. BOTH halves cross
+    _context_from_payload, so the bookkeeping filter, the scalar filter
+    and the size ceiling hold whichever door a value arrives by: a
+    declared `phone` must not overwrite the number the sends dial, and a
+    value a starting run would drop must not reach a waiting one.
+    """
+    max_chars = await CRM_CONTEXT_VALUE_MAX_CHARS()
+    facts = {
+        **_context_from_payload(event.payload, max_chars),
+        **_context_from_payload(variables or {}, max_chars),
+    }
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
