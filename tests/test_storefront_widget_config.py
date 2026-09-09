@@ -256,6 +256,30 @@ def test_stale_or_weak_if_none_match_is_a_full_200(client: TestClient) -> None:
     assert _get(client, **{"If-None-Match": "*"}).status_code == 304
 
 
+def test_a_valid_etag_from_a_foreign_origin_is_still_403(client: TestClient) -> None:
+    # The ETag is not a credential. Revalidation is answered only after the
+    # origin allowlist has run, so a tag lifted from a real storefront buys
+    # a foreign page nothing.
+    etag = _get(client).headers["ETag"]
+    response = client.get(
+        "/widget/storefront-config",
+        params={"merchant_domain": MERCHANT_DOMAIN},
+        headers={"Origin": "https://evil.example", "If-None-Match": etag},
+    )
+    assert response.status_code == 403
+
+
+def test_the_probe_cap_still_bounds_revalidation(
+    client: TestClient, monkeypatch
+) -> None:
+    # The per-IP probe cap is the only limiter a 304 passes through, so it
+    # has to run before the revalidation shortcut — otherwise conditional
+    # requests would be free and unbounded.
+    etag = _get(client).headers["ETag"]
+    monkeypatch.setattr(storefront, "check_rate_limit", AsyncMock(return_value=_deny()))
+    assert _get(client, **{"If-None-Match": etag}).status_code == 429
+
+
 def test_etag_changes_when_the_appearance_changes(
     client: TestClient, lookup: AsyncMock
 ) -> None:

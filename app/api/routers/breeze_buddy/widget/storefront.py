@@ -48,9 +48,14 @@ _CACHE_TTL_SECONDS = 60
 # Pre-lookup probe cap. The merchant-scoped limiter below can only run AFTER
 # a config resolves (it is keyed by widget_config_id), which would leave
 # unknown-domain probes as unbounded free DB lookups for an anonymous
-# caller. This fixed per-IP cap bounds them. Generous on purpose: a real
-# shopper hits this endpoint only on loader cache-miss (~4/shop/hour).
-_PROBE_LIMIT_PER_IP_HOUR = 600
+# caller. This fixed per-IP cap bounds them.
+#
+# Sized for the revalidating loader: it asks once a minute per shop, so a
+# single browser costs up to 60 calls an hour and most of them are 304s that
+# never reach the database. The cap is per IP across every store, so it has
+# to hold a whole office or a carrier NAT pool behind one address — hence
+# the headroom. It is a denial-of-service bound, not a fair-use quota.
+_PROBE_LIMIT_PER_IP_HOUR = 3000
 _PROBE_WINDOW_SECONDS = 3600
 
 
