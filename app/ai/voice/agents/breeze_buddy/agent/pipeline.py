@@ -261,7 +261,9 @@ async def build_pipeline(
     """
     is_stream = mode == "stream"
 
-    # Create the metrics collector processor
+    # Create the metrics collector processor. Purely additive: it records the
+    # new turn-level ttft and lets every existing metric (including the raw
+    # LLM ttfb and all realtime metrics) through unchanged.
     metrics_collector = MetricsCollectorProcessor()
 
     # Realtime / speech-to-speech: when create_services returns no STT and no
@@ -507,6 +509,17 @@ async def build_pipeline(
     transcript_collector: Optional[TranscriptCollectorProcessor] = None
     if is_stream:
         transcript_collector = TranscriptCollectorProcessor()
+
+    # Turn-level TTFT: the TTS service fires on_tts_request after sentence
+    # aggregation, right before synthesis — exactly the "first sentence handed
+    # to TTS" boundary. Realtime has no TTS service, so nothing to wire.
+    if tts is not None:
+
+        @tts.event_handler("on_tts_request")
+        async def _note_first_sentence_to_tts(
+            service: Any, context_id: str, text: str
+        ) -> None:
+            metrics_collector.note_tts_request()
 
     # Pipeline order:
     #   agent mode:  input → stt → gate → user_aggregator → llm → tts → output → assistant_aggregator
