@@ -1,5 +1,20 @@
 # Buddy Assist SSE Onboarding — Technical Approach
 
+> **v2 contract (2026-09-09) — supersedes the naming and marker rules below where they differ.**
+> The reseller blueprint `buddy-assist-default` IS the fleet skeleton (Beyond Bound v2:
+> `gemini-3.6-flash`, `flow.mode = direct`, `functions: []`, `supported_channels: ["chat"]`);
+> drift from that shape is logged by `blueprint_shape_warnings`, not fatal, until both resellers
+> carry the v2 row. The prompt may wrap **more than one** run of Shopify-only sections in
+> `{{#shopify_operating_section}}…{{/shopify_operating_section}}`, placed **inline** so a Shopify
+> build stays byte-identical to the fleet's operating block (`prompt_core.shared_core`). Every
+> `{{shop_domain}}` in the prompt or configuration resolves to the storefront host. Merchant
+> templates are named `<slug(shop_name)>-assist`. The storefront MCP server may be named
+> `shopify-storefront` or `shopify-storefront-ucp`. A re-onboard **merges** `allowed_origins`.
+> `POST /assist/onboard/stream` accepts `MERCHANT` tokens scoped to their own store and an
+> `allow_unpersonalized` flag (continue with the generic assistant after a failed site read,
+> reported as `personalization.status = "skipped_scrape_failed"`); `platform` is an optional alias
+> of `is_shopify`. Reference body: `tests/assist/fixtures/buddy-assist-default.v2.json`.
+
 ## 1. Goal
 
 Add one authenticated server-sent events (SSE) endpoint that provisions or
@@ -259,7 +274,7 @@ Build a fresh deep copy of the latest default template on every request. Then:
 Generate a readable, stable name:
 
 ```text
-<slug(shop_name)>-buddy-assist
+<slug(shop_name)>-assist
 ```
 
 If `shop_name` cannot form a slug, fall back to the first DNS label of
@@ -296,7 +311,7 @@ Do not infer this from template names. Do not search for suffixes such as
 
 ### Create path
 
-1. Look for an existing tenant-scoped `<slug(shop_name)>-buddy-assist` template.
+1. Look for an existing tenant-scoped `<slug(shop_name)>-assist` template.
    Reuse it if present; this recovers a template committed before a pod stopped
    between template and widget creation.
 2. Otherwise create a UUID and insert the composed merchant template.
@@ -393,7 +408,7 @@ simultaneous first-onboarding requests.
   "success": true,
   "operation": "created",
   "template_id": "uuid",
-  "template_name": "hustle-culture-buddy-assist",
+  "template_name": "hustle-culture-assist",
   "widget_config": {
     "id": "uuid",
     "public_widget_key": "opaque-key",

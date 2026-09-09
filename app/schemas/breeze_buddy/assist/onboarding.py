@@ -6,7 +6,7 @@ import ipaddress
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.breeze_buddy.widget_config import WidgetAppearance
 
@@ -61,6 +61,32 @@ class AssistOnboardingStreamRequest(BaseModel):
     provider: Literal["google"] = "google"
     bot_brand_name: Optional[str] = Field(None, min_length=1, max_length=255)
     is_active: bool = True
+    platform: Optional[Literal["shopify", "web"]] = Field(
+        None,
+        description=(
+            "Storefront platform. Optional alias of ``is_shopify`` for callers "
+            "that speak the adapter vocabulary; when both are sent they must agree."
+        ),
+    )
+    allow_unpersonalized: bool = Field(
+        False,
+        description=(
+            "Continue with the un-personalized default assistant when the site "
+            "read fails, instead of aborting. Off by default: the standing policy "
+            "is to fail without writing rather than publish a generic assistant "
+            "silently. Set only after a human has seen the failure and chosen to "
+            "proceed."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _platform_agrees_with_is_shopify(self) -> "AssistOnboardingStreamRequest":
+        if (
+            self.platform is not None
+            and (self.platform == "shopify") != self.is_shopify
+        ):
+            raise ValueError("platform and is_shopify disagree")
+        return self
 
     @field_validator("reseller_id", "merchant_id", "merchant_name", "bot_brand_name")
     @classmethod
