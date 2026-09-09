@@ -33,6 +33,10 @@ class ActionType(str, Enum):
 class VadConfig(BaseModel):
     """VAD configuration for template or node-level customization."""
 
+    enabled: Optional[bool] = Field(
+        None,
+        description="Whether VAD runs for this template. Overrides env default if set.",
+    )
     confidence: Optional[float] = Field(
         None, ge=0.0, le=1.0, description="VAD confidence threshold (0.0-1.0)"
     )

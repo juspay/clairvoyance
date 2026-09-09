@@ -48,7 +48,7 @@ User: "9 8 7"  [pause]  "6 5 4"  [pause]  "3 2 1 0"
 - **LLM-driven intelligence** — the LLM handles classification, completion detection, and conversational responses. No regex/if-else classification in custom code.
 - **Minimal framework code** — configure the pipeline environment so the LLM can work effectively.
 - **Node-level configuration** — collection mode is per-node, not template-wide.
-- **No VAD dependency** — VAD is disabled in production. Solution must work purely with transcription-based turn detection.
+- **No VAD dependency** — VAD is disabled by default (`BREEZE_BUDDY_ENABLE_VAD=false`), so the solution must work purely with transcription-based turn detection without assuming VAD is present. This is a default, not an architectural guarantee: `configurations.vad_config.enabled` lets a template opt into VAD per-call (`template/vad.py::create_vad_analyzer`) — see [VAD Compatibility](#vad-compatibility) in §4.
 
 ---
 
@@ -446,6 +446,12 @@ LLM receives aggregated: "9 8 7 6 5 4 3 2 1 0" (single user message)
 - **Works with existing pipeline** — just changing a single parameter value
 - **Runtime configurable** — strategy can be rebuilt on node transitions (already supported)
 - **Follows existing patterns** — same reset-then-apply as VAD/interruption
+
+### VAD Compatibility
+
+`configurations.vad_config.enabled` (added alongside the global `BREEZE_BUDDY_ENABLE_VAD` flag) lets a template opt into VAD independently of the fallback mode above.
+
+With VAD present, `SpeechTimeoutUserTurnStopStrategy` runs its VAD-anchored branch instead of the fallback branch: the timer starts on `VADUserStoppedSpeakingFrame` rather than on each transcript. A `VADUserStartedSpeakingFrame` — fired the instant the user resumes speaking, ahead of STT round-trip latency — cancels any pending timer outright. A resumed segment therefore reopens the turn before the prior segment's timer can expire, independent of whether Soniox has finalized a transcript yet.
 
 ---
 
