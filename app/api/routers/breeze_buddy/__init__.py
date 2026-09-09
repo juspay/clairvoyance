@@ -7,8 +7,11 @@ from app.api.routers.breeze_buddy.agent_router.health import router as pod_route
 
 # Modern RESTful routers
 from app.api.routers.breeze_buddy.analytics import router as analytics_router
-from app.api.routers.breeze_buddy.assist_onboarding import (
+from app.api.routers.breeze_buddy.assist.onboarding import (
     router as assist_onboarding_router,
+)
+from app.api.routers.breeze_buddy.assist.research import (
+    router as website_scraping_router,
 )
 from app.api.routers.breeze_buddy.auth import router as auth_router
 from app.api.routers.breeze_buddy.blacklist import router as blacklist_router
@@ -36,9 +39,6 @@ from app.api.routers.breeze_buddy.preview.uap.handlers import router as uap_rout
 
 # Reseller (umbrella) entities — first-class since migration 036
 from app.api.routers.breeze_buddy.resellers import router as resellers_router
-from app.api.routers.breeze_buddy.scraper.website import (
-    router as website_scraping_router,
-)
 
 # Self-service signup and Google SSO (public, unauthenticated)
 from app.api.routers.breeze_buddy.signup import router as signup_router

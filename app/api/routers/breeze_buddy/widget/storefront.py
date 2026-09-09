@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request, status
 
-from app.ai.voice.agents.breeze_buddy.assist.commerce.tenancy import (
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
     assist_tenant_candidates,
     normalize_merchant_domain,
 )

@@ -11,11 +11,11 @@ Two layers, tested where each one lives:
 
 import pytest
 
-from app.ai.voice.agents.breeze_buddy.assist.commerce.connectors.shopify.media import (
-    _handle_url,
-)
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.media import (
     resolve_product_media,
+)
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.media import (
+    _handle_url,
 )
 
 
@@ -115,7 +115,7 @@ class TestOutboundFetchIsGated:
     async def test_name_resolving_to_a_private_address_is_not_fetched(
         self, monkeypatch
     ):
-        from app.ai.voice.agents.breeze_buddy.assist.commerce.connectors.shopify import (  # noqa: E501
+        from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (  # noqa: E501
             media as shopify_media,
         )
 
@@ -133,7 +133,7 @@ class TestOutboundFetchIsGated:
     @pytest.mark.asyncio
     async def test_redirects_are_not_followed(self, monkeypatch):
         """A 302 to an internal host would sidestep every check above."""
-        from app.ai.voice.agents.breeze_buddy.assist.commerce.connectors.shopify import (  # noqa: E501
+        from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (  # noqa: E501
             media as shopify_media,
         )
 
