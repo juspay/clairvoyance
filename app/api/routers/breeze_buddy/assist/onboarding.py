@@ -32,7 +32,7 @@ from app.schemas.breeze_buddy.assist.onboarding import (
 
 router = APIRouter()
 
-# A merchant onboards their own store — that is the product. The two scope
+# A merchant onboards their own store — that is the point. The two scope
 # checks on the stream route bind any caller to their own reseller and
 # merchant, so the role list only keeps ``user`` out. The bare install
 # route below stays S2S (admin / reseller): it derives tenancy itself.

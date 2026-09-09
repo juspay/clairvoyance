@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce import (
+    vertical as commerce_vertical,
+)
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.website import (
     WebsiteScrapingResult,
 )
@@ -15,6 +18,7 @@ from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import (
     adapter as shopify_adapter,
 )
+from app.ai.voice.agents.breeze_buddy.assist.verticals import registry as verticals
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.schemas.breeze_buddy.assist.onboarding import AssistOnboardingStreamRequest
 from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
@@ -41,7 +45,7 @@ def _default_template() -> TemplateModel:
         id="00000000-0000-0000-0000-000000000001",
         reseller_id="BB_SHOPIFY",
         merchant_id=None,
-        name=service.DEFAULT_ASSIST_TEMPLATE_NAME,
+        name=commerce_vertical.DEFAULT_ASSIST_TEMPLATE_NAME,
         flow={
             "mode": "direct",
             "functions": [],
@@ -122,6 +126,7 @@ def test_template_builder_adds_and_removes_shopify_mcp() -> None:
         template_id="00000000-0000-0000-0000-000000000002",
         existing_template=None,
         adapter=registry.resolve("shopify"),
+        vertical=verticals.resolve("commerce"),
     )
 
     assert shopify.name == "hustle-culture-assist"
@@ -146,6 +151,7 @@ def test_template_builder_adds_and_removes_shopify_mcp() -> None:
         template_id="00000000-0000-0000-0000-000000000003",
         existing_template=None,
         adapter=registry.resolve("generic"),
+        vertical=verticals.resolve("commerce"),
     )
     assert non_shopify.configurations is not None
     assert "### Shopify commerce tools" not in non_shopify.flow["system_prompt"]
@@ -161,7 +167,10 @@ def test_first_onboarding_creates_template_and_widget(monkeypatch) -> None:
     default = _default_template()
 
     async def template_in_scope(reseller_id, merchant_id, name):
-        if merchant_id is None and name == service.DEFAULT_ASSIST_TEMPLATE_NAME:
+        if (
+            merchant_id is None
+            and name == commerce_vertical.DEFAULT_ASSIST_TEMPLATE_NAME
+        ):
             return default
         return None
 
@@ -232,6 +241,7 @@ def test_existing_widget_updates_its_referenced_template(monkeypatch) -> None:
         template_id="00000000-0000-0000-0000-000000000010",
         existing_template=None,
         adapter=registry.resolve("shopify"),
+        vertical=verticals.resolve("commerce"),
     )
     widget = _widget(existing.id)
 
@@ -299,6 +309,7 @@ def test_orphan_template_is_recovered_when_widget_is_missing(monkeypatch) -> Non
         template_id="00000000-0000-0000-0000-000000000030",
         existing_template=None,
         adapter=registry.resolve("shopify"),
+        vertical=verticals.resolve("commerce"),
     )
 
     async def template_in_scope(reseller_id, merchant_id, name):

@@ -9,7 +9,7 @@ Research fetchers (``sources.py``) arrive with the engine's research stage.
 
 from __future__ import annotations
 
-from typing import FrozenSet, List, Mapping, Sequence, Tuple
+from typing import FrozenSet, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
@@ -68,6 +68,8 @@ PERMANENT_DOMAIN_SUFFIX = ".myshopify.com"
 class ShopifyAdapter(GenericAdapter):
     id = "shopify"
     request_platform = "shopify"
+    # A Shopify store is a shop: the commerce vertical, always.
+    vertical: Optional[str] = "commerce"
     # The two Shopify apps that install Assist (see tenancy.py for the namespaces).
     host_apps: Tuple[str, ...] = ("breeze-buddy", "buddy-assist")
 

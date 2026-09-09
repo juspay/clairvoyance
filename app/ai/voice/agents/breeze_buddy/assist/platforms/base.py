@@ -10,7 +10,7 @@ needs, how a host app maps to a tenant, how a blueprint must look.
 
 from __future__ import annotations
 
-from typing import FrozenSet, List, Mapping, Protocol, Sequence, Tuple
+from typing import FrozenSet, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
@@ -30,6 +30,8 @@ class PlatformAdapter(Protocol):
     id: str
     request_platform: str
     host_apps: Tuple[str, ...]
+    # The vertical this platform serves, or None when any (a plain website).
+    vertical: Optional[str]
 
     def classify(self, signals: Sequence[Signal]) -> float: ...
 
@@ -90,6 +92,7 @@ class GenericAdapter:
     id = "generic"
     # The value the onboarding API uses for this adapter (``platform`` field).
     request_platform = "web"
+    vertical: Optional[str] = None
     # Host apps (install-time callers) that land on this adapter: none.
     host_apps: Tuple[str, ...] = ()
 
