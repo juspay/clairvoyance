@@ -33,6 +33,10 @@ class PlatformAdapter(Protocol):
     # The vertical this platform serves, or None when any (a plain website).
     vertical: Optional[str]
 
+    def probe_literals(self) -> Tuple[str, ...]: ...
+
+    def probe_markers(self) -> Tuple[str, ...]: ...
+
     def classify(self, signals: Sequence[Signal]) -> float: ...
 
     def identity(self, profile: SiteProfile) -> TenantIdentity: ...
@@ -95,6 +99,21 @@ class GenericAdapter:
     vertical: Optional[str] = None
     # Host apps (install-time callers) that land on this adapter: none.
     host_apps: Tuple[str, ...] = ()
+
+    def probe_literals(self) -> Tuple[str, ...]:
+        """Inline-script assignment names the probe should read for us.
+
+        The probe cannot guess which names matter without naming platforms,
+        so each adapter asks for its own; the values land in
+        ``SiteProfile.inline_literals`` and a ``js_literal`` signal records
+        that the assignment was there.
+        """
+        return ()
+
+    def probe_markers(self) -> Tuple[str, ...]:
+        """Substrings whose presence in inline script text is a ``js_global``
+        signal — the asset paths and hosts a platform's own scripts mention."""
+        return ()
 
     def classify(self, signals: Sequence[Signal]) -> float:
         return 0.0

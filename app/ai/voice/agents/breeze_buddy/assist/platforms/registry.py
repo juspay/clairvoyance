@@ -48,6 +48,28 @@ def for_host_app(host_app: str) -> PlatformAdapter:
     raise KeyError(f"no platform adapter for host app {host_app!r}")
 
 
+def probe_literals() -> Tuple[str, ...]:
+    """Every inline-script assignment name some platform wants read.
+
+    The probe searches a page for these without knowing whose they are —
+    that is what keeps the engine free of platform names.
+    """
+    names = [name for adapter in PLATFORMS for name in adapter.probe_literals()]
+    return tuple(dict.fromkeys(names))
+
+
+def probe_markers() -> Tuple[str, ...]:
+    """Every inline-script substring some platform treats as its fingerprint."""
+    markers = [marker for adapter in PLATFORMS for marker in adapter.probe_markers()]
+    return tuple(dict.fromkeys(markers))
+
+
+def score_all(signals: Sequence[Signal]) -> Dict[str, float]:
+    """Each adapter's confidence in the same signals — the probe report shows
+    the runners-up, so a wrong call is visible rather than mysterious."""
+    return {adapter.id: adapter.classify(signals) for adapter in PLATFORMS}
+
+
 def classify(signals: Sequence[Signal]) -> Tuple[PlatformAdapter, float]:
     """(adapter, confidence) for a probe's signals; ``generic`` below threshold."""
     best, best_score = generic, 0.0
@@ -104,5 +126,8 @@ __all__ = [
     "foreign_payload_keys",
     "foreign_tool_config_keys",
     "legacy_section_markers",
+    "probe_literals",
+    "probe_markers",
     "resolve",
+    "score_all",
 ]

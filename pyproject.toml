@@ -6,7 +6,10 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.115.12",
     "uvicorn==0.34.2",
-    "aiohttp>=3.8.4",
+    # 3.10 is the floor for aiohttp.abc.ResolveResult, which the assist
+    # engine's pinned resolver imports at module load; on an older aiohttp
+    # that import fails and takes the whole service down at startup.
+    "aiohttp>=3.10.0",
     "pytz==2025.2",
     "python-multipart>=0.0.6",
     "websockets>=11.0.3",

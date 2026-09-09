@@ -27,13 +27,26 @@ def test_registry_resolves_known_adapters_and_refuses_unknown():
 
 
 def test_hustleculture_signals_classify_as_shopify():
+    # The shapes the probe actually emits: a host for a script source, a
+    # cookie name, an assignment name.
     signals = [
-        Signal(kind="script_src", pattern="https://cdn.shopify.com/s/files/x.js"),
+        Signal(kind="script_src", pattern="cdn.shopify.com"),
         Signal(kind="cookie_key", pattern="_shopify_y"),
         Signal(kind="js_literal", pattern="Shopify.theme"),
     ]
     adapter, confidence = registry.classify(signals)
     assert adapter.id == "shopify" and confidence >= 1.0
+
+
+def test_a_lookalike_host_does_not_classify_as_shopify():
+    # A site loading a script from a host that merely starts with the real
+    # CDN must not be able to pass itself off as that platform.
+    signals = [
+        Signal(kind="script_src", pattern="cdn.shopify.com.attacker.net"),
+        Signal(kind="header", pattern="x-custom: powered-by: shopify"),
+    ]
+    adapter, confidence = registry.classify(signals)
+    assert adapter.id == "generic" and confidence == 0.0
 
 
 def test_no_signals_falls_back_to_generic():
