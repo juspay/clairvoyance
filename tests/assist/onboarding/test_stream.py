@@ -119,7 +119,7 @@ def test_template_builder_adds_and_removes_shopify_mcp() -> None:
         existing_template=None,
     )
 
-    assert shopify.name == "hustle-culture-buddy-assist"
+    assert shopify.name == "hustle-culture-assist"
     assert "Sells premium sneakers." in shopify.flow["system_prompt"]
     assert service.BRAND_IDENTITY_MARKER not in shopify.flow["system_prompt"]
     assert "### Shopify commerce tools" in shopify.flow["system_prompt"]
@@ -210,7 +210,7 @@ def test_first_onboarding_creates_template_and_widget(monkeypatch) -> None:
 
     assert events[-1].event == "complete"
     assert events[-1].data["operation"] == "created"
-    assert events[-1].data["template_name"] == "hustle-culture-buddy-assist"
+    assert events[-1].data["template_name"] == "hustle-culture-assist"
     assert (
         events[-1].data["widget_config"]["template_id"]
         == events[-1].data["template_id"]
