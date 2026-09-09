@@ -90,11 +90,40 @@ async def scrape_website_with_gemini(
         timeout=timeout_seconds,
     )
 
+    url_context_metadata = _extract_url_context_metadata(response)
+
+    # The url_context tool reports per-URL whether it actually read the page,
+    # and that verdict is the only trustworthy signal we get. When retrieval
+    # fails the model does not error — it writes an apology ("I am unable to
+    # access the provided website URL"), which is non-empty text and would sail
+    # through every check below and end up installed as the merchant's brand
+    # context. Checking the status is what separates "we read the site" from
+    # "the model wrote a sentence about not reading the site".
+    if config_model.use_url_context and url_context_metadata:
+        if not any(
+            entry["status"].endswith("SUCCESS") for entry in url_context_metadata
+        ):
+            statuses = ", ".join(
+                f"{entry['url']} -> {entry['status']}" for entry in url_context_metadata
+            )
+            raise WebsiteScrapingUpstreamError(
+                f"Gemini could not retrieve the website ({statuses}). "
+                "A storefront behind a password, a login, or a robots block "
+                "cannot be scraped."
+            )
+
     generated_text = (getattr(response, "text", "") or "").strip()
     if not generated_text:
-        raise WebsiteScrapingUpstreamError("Gemini returned an empty response")
-
-    url_context_metadata = _extract_url_context_metadata(response)
+        # Carry the diagnosis. An empty candidate with finish_reason=STOP is
+        # what a small model does when it runs the grounding tools and then
+        # declines to compose an answer; without these fields the failure is
+        # indistinguishable from a blocked prompt or an exhausted budget.
+        raise WebsiteScrapingUpstreamError(
+            "Gemini returned an empty response "
+            f"(model={model}, finish_reason={_finish_reason(response)}, "
+            f"url_context={url_context_metadata or 'none'}, "
+            f"google_search={config_model.use_google_search})"
+        )
     logger.info(
         "Gemini prompt generation completed",
         model=model,
@@ -161,13 +190,32 @@ def _build_contents(prompt: str, url: Optional[str]) -> str:
     return f"{prompt}\n\nURL: {url}"
 
 
+def _finish_reason(response: Any) -> str:
+    for candidate in getattr(response, "candidates", None) or []:
+        reason = getattr(candidate, "finish_reason", None)
+        if reason is not None:
+            return str(reason)
+    return "unknown"
+
+
 def _extract_url_context_metadata(response: Any) -> List[Dict[str, str]]:
-    metadata = getattr(response, "url_context_metadata", None) or getattr(
-        response, "urlContextMetadata", None
-    )
-    url_metadata = getattr(metadata, "url_metadata", None) or getattr(
-        metadata, "urlMetadata", None
-    )
+    """Collect the url_context tool's per-URL retrieval verdicts.
+
+    These hang off each *candidate*, not off the response — reading them from
+    the response yields nothing at all, which is why a storefront the model
+    never managed to open looked exactly like one it read successfully.
+    """
+    url_metadata: List[Any] = []
+    for candidate in getattr(response, "candidates", None) or []:
+        metadata = getattr(candidate, "url_context_metadata", None) or getattr(
+            candidate, "urlContextMetadata", None
+        )
+        entries = getattr(metadata, "url_metadata", None) or getattr(
+            metadata, "urlMetadata", None
+        )
+        if entries:
+            url_metadata.extend(entries)
+
     if not url_metadata:
         return []
 
