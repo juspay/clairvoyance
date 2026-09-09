@@ -89,7 +89,12 @@ def test_resolves_shop_to_config(client: TestClient, lookup: AsyncMock) -> None:
         "primary_color": "#111",
     }
     assert body["settings_revision"] == UPDATED_AT.isoformat()
-    assert body["cache_ttl_seconds"] == 900
+    assert body["cache_ttl_seconds"] == 60
+    assert response.headers["ETag"].startswith('"') and response.headers[
+        "ETag"
+    ].endswith('"')
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert response.headers["Access-Control-Expose-Headers"] == "ETag"
     lookup.assert_awaited_once_with(*STANDALONE)
 
 
@@ -219,3 +224,45 @@ def test_preflight_is_open(client: TestClient) -> None:
     response = client.options("/widget/storefront-config")
     assert response.status_code == 204
     assert response.headers["access-control-allow-origin"] == "*"
+    assert "if-none-match" in response.headers["access-control-allow-headers"]
+
+
+def _get(client: TestClient, **headers: str):
+    return client.get(
+        "/widget/storefront-config",
+        params={"merchant_domain": MERCHANT_DOMAIN},
+        headers={"Origin": STOREFRONT_ORIGIN, **headers},
+    )
+
+
+def test_matching_if_none_match_is_304_and_skips_the_per_widget_limit(
+    client: TestClient, monkeypatch
+) -> None:
+    etag = _get(client).headers["ETag"]
+    limiter = AsyncMock()
+    monkeypatch.setattr(storefront, "enforce_widget_ip_limit", limiter)
+    revalidated = _get(client, **{"If-None-Match": etag})
+    assert revalidated.status_code == 304
+    assert revalidated.content == b""
+    assert revalidated.headers["ETag"] == etag
+    assert revalidated.headers["Cache-Control"] == "no-cache"
+    limiter.assert_not_awaited()
+
+
+def test_stale_or_weak_if_none_match_is_a_full_200(client: TestClient) -> None:
+    etag = _get(client).headers["ETag"]
+    assert _get(client, **{"If-None-Match": '"nope"'}).status_code == 200
+    assert _get(client, **{"If-None-Match": f"W/{etag}"}).status_code == 304
+    assert _get(client, **{"If-None-Match": "*"}).status_code == 304
+
+
+def test_etag_changes_when_the_appearance_changes(
+    client: TestClient, lookup: AsyncMock
+) -> None:
+    before = _get(client).headers["ETag"]
+    lookup.return_value = _cfg(
+        appearance={"header_title": "Zodiac Assist", "primary_color": "#222"}
+    )
+    after = _get(client).headers["ETag"]
+    assert before != after
+    assert _get(client, **{"If-None-Match": before}).status_code == 200

@@ -254,7 +254,9 @@ _CORS_HEADERS = {
     # (`GET /widget/session/{id}`). Browser-side preflight blocks any
     # method not listed here when the request carries Authorization.
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "authorization, content-type",
+    # if-none-match: the storefront loader revalidates its cached config
+    # (GET /widget/storefront-config) and expects a 304 on a hit.
+    "Access-Control-Allow-Headers": "authorization, content-type, if-none-match",
     "Access-Control-Max-Age": "600",
 }
 

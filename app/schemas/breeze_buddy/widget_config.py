@@ -150,9 +150,13 @@ class StorefrontWidgetConfigResponse(BaseModel):
     settings_revision: Optional[str] = Field(
         None,
         description="Opaque change fingerprint (row updated_at). The loader "
-        "refetches when this differs from its cached copy.",
+        "re-applies the config when this differs from its cached copy.",
     )
-    cache_ttl_seconds: int = 900
+    cache_ttl_seconds: int = Field(
+        60,
+        description="How long the loader may mount from its local copy before "
+        "revalidating with If-None-Match (the response carries an ETag).",
+    )
 
 
 class WidgetConfigListResponse(BaseModel):
