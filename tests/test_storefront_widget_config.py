@@ -15,7 +15,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.ai.voice.agents.breeze_buddy.assist.commerce.tenancy import assist_tenant
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
+    assist_tenant,
+)
 from app.api.routers.breeze_buddy.widget import router, storefront
 from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
 from app.services.redis.rate_limit import RateLimitDecision

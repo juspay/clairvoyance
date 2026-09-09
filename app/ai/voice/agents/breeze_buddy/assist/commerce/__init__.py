@@ -9,10 +9,10 @@ Structure follows the protocol/platform split:
   projections and component schemas, the typed ui-intent policy table, the
   UI copy, step labels and tool annotations. No module here names a
   platform.
-- ``connectors/`` — one package per platform that serves UCP (``shopify``
-  today). A connector only ever registers into ``ucp/hooks.py`` and is
-  never imported by the protocol layer, so adding a platform means adding
-  a package, never editing UCP code. With zero connectors loaded the
+- ``assist/platforms/<name>/`` — one package per platform that serves UCP
+  (``shopify`` today): its runtime connector registers into ``ucp/hooks.py``
+  and is never imported by the protocol layer, so adding a platform means
+  adding a package, never editing UCP code. With zero connectors loaded the
   flavor still works — the hooks fall through to pure-UCP behavior.
 
 Importing THIS module is what registers the flavor: the UI catalog
@@ -31,16 +31,16 @@ difference.
 
 from __future__ import annotations
 
-# Platform connectors — register into the ucp hooks on import.
-from app.ai.voice.agents.breeze_buddy.assist.commerce.connectors import (  # noqa: F401
-    shopify,
-)
-
 # Protocol layer — schemas pulls in render_ui / ui_prompt / step_labels /
 # tool_meta; intents pulls in media / upsell.
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp import (  # noqa: F401
     intents,
     schemas,
+)
+
+# Platform connectors — register into the ucp hooks on import.
+from app.ai.voice.agents.breeze_buddy.assist.platforms import (  # noqa: F401
+    shopify,
 )
 
 __all__ = ["schemas", "intents", "shopify"]
