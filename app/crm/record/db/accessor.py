@@ -18,6 +18,7 @@ from app.crm.record.db.decoder import (
 )
 from app.crm.record.db.queries import (
     claim_pending_events_query,
+    customer_goal_events_query,
     customer_has_event_query,
     get_customer_journey_query,
     get_schema_query,
@@ -106,6 +107,24 @@ async def customer_has_event(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return bool(row["found"]) if row else False
+
+
+async def customer_goal_events(
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Optional[Tuple[str, str]] = None,
+    limit: int = 50,
+) -> List[RawEvent]:
+    """The letters behind the EXISTS, newest first and capped — for a goal
+    tier whose `where` the SQL cannot answer."""
+    query, values = customer_goal_events_query(
+        merchant_id, customer_id, topics, since, where, limit
+    )
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_raw_event(row) for row in rows]
 
 
 # --- crm_event_schema (T24) ---------------------------------------------------

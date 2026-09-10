@@ -115,6 +115,46 @@ def entry_against_catalog(
     return problems
 
 
+def goals_against_catalog(
+    definition: WorkflowDefinition, catalogs: Catalogs
+) -> List[str]:
+    """The ownership laws, applied to a GOAL tier's conditions (phase 20).
+
+    A tier WITHOUT a `where` is unchanged — it may name any topic, declared
+    or not. Only one that asks a question about a payload has to prove the
+    payload is one we can read.
+    """
+    if catalogs is None:
+        return []  # nothing gathered (pure-unit callers): shape laws only
+    problems: List[str] = []
+    for index, tier in enumerate(definition.goals):
+        if tier.key and "." in tier.key.event:
+            # The walker compares this in SQL as payload->>$5 — one key,
+            # nothing deeper. A nested path would work at the live consumer
+            # and silently match nothing at the next claim.
+            problems.append(
+                f"goal tier {index}: key.event {tier.key.event!r} must be a "
+                "top-level payload field (it is compared in SQL at fire time)"
+            )
+        if not tier.where:
+            continue
+        for topic in tier.topics:
+            fields = catalogs.get(topic)
+            if fields is None:
+                problems.append(
+                    f"goal tier {index}: topic {topic!r} is not in the catalog "
+                    "— register its schema (or declare it in code) before "
+                    "filtering on it"
+                )
+                continue
+            for condition in tier.where:
+                problems.extend(
+                    f"goal tier {index}: {p} (topic {topic!r})"
+                    for p in condition_against_catalog(condition, fields)
+                )
+    return problems
+
+
 # Facts the walker computes for a template at the square (nodes.run_facts,
 # phase 16) — never a producer's, so no catalog declares them.
 _WALKER_FACTS = frozenset({"current_node", "current_stage"})
@@ -218,6 +258,14 @@ async def gather_catalogs(merchant_id: str, raw: Dict[str, Any]) -> Catalogs:
     for node in raw.get("nodes") or [] if isinstance(raw, dict) else []:
         if isinstance(node, dict) and node.get("type") == "wait_event":
             topics.update(str(t) for t in node.get("topics") or [] if t)
+    if isinstance(raw, dict):
+        # `goal` (singular) is the pre-phase-06 spelling. The MODEL rewrites
+        # it to `goals` (_goal_becomes_one_tier), but this gather runs on the
+        # RAW document — before any model has touched it — so it has to read
+        # both. Version rows are immutable, so those documents never go away.
+        for tier in raw.get("goals") or ([raw["goal"]] if raw.get("goal") else []):
+            if isinstance(tier, dict):
+                topics.update(str(t) for t in tier.get("topics") or [] if t)
     catalogs: Dict[str, Optional[Dict[str, CatalogField]]] = {}
     problems: List[str] = []
     for topic in sorted(topics):

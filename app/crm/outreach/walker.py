@@ -31,6 +31,7 @@ from app.core.config.static import (
     CRM_WALKER_MAX_ATTEMPTS,
 )
 from app.core.logger import logger
+from app.crm.outreach.conditions import conditions_match
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -40,8 +41,15 @@ from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.nodes.context import reply_key, without_reply
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.nodes.wait_event import ELSE, TIMEOUT
-from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
-from app.crm.record.contracts import customer_has_event
+from app.crm.outreach.schemas import (
+    EnrollmentRun,
+    WorkflowDefinition,
+    WorkflowGoal,
+    WorkflowNode,
+)
+from app.crm.record.contracts import customer_goal_events, customer_has_event
+
+GOAL_LETTER_SCAN = 50
 
 # One claim executes consecutive immediate nodes (call -> next wait) in a
 # single visit; the bound is a runaway-document guard, not a feature.
@@ -166,9 +174,7 @@ async def _advance(
             if value in (None, ""):
                 continue  # this run cannot match a keyed tier
             where = (tier.key.event, str(value))
-        if await customer_has_event(
-            run.merchant_id, str(run.customer_id), tier.topics, since, where
-        ):
+        if await _tier_happened(run, tier, since, where):
             if not await enrollment_accessor.exit_run(
                 str(run.id), tier.exit_reason, lease
             ):
@@ -227,6 +233,38 @@ async def _advance(
     raise NodeParked(
         f"{_MAX_STEPS_PER_VISIT} immediate nodes in one visit — runaway document"
     )
+
+
+async def _tier_happened(
+    run: EnrollmentRun,
+    tier: WorkflowGoal,
+    since: datetime,
+    where: Optional[Tuple[str, str]],
+) -> bool:
+    """Did a letter this tier accepts arrive after the run began?
+
+    A tier with no `where` is the indexed EXISTS it has always been —
+    untouched, so every plan published before phase 20 costs exactly what
+    it did.
+
+    A tier WITH one cannot: the SQL knows the topic and the key, so it would
+    say yes to any orders/updated about this order — a fulfilment, an address
+    fix — and end the run at the next claim. So SQL narrows and the letters
+    come back to the SAME evaluator that judged them live.
+    """
+    if not tier.where:
+        return await customer_has_event(
+            run.merchant_id, str(run.customer_id), tier.topics, since, where
+        )
+    letters = await customer_goal_events(
+        run.merchant_id,
+        str(run.customer_id),
+        tier.topics,
+        since,
+        where,
+        GOAL_LETTER_SCAN,
+    )
+    return any(conditions_match(tier.where, letter) for letter in letters)
 
 
 def goal_since(run: EnrollmentRun) -> datetime:
