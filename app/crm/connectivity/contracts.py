@@ -36,6 +36,12 @@ What is here, and why each thing is on the surface:
   count of open runs naming a template, so retire can refuse to pull a
   template from under a run in flight without this module importing
   outreach (phase 14; the record/consumers.py inversion).
+- ``register_send_observer`` — the same inversion in the other direction:
+  who else hears that a provider TOOK a message. The dispatcher is the one
+  place a send's provider id (Meta's wamid) is learned, and outreach's
+  wamid stamp needs it so a listening square can match a reply to ITS run.
+  Observers hear facts after the outcome committed and can never fail a
+  send (send_observers.py).
 - ``META_INGRESS`` — the Meta bay for record's /ingest/webhooks/{provider}
   door (ingress.py builds it; app/crm/api.py registers it into record's
   INGRESS slot — the same line worker_main writes for consumers, and the
@@ -81,8 +87,9 @@ from app.crm.connectivity.onboarding import (
     onboard,
     resubscribe,
 )
-from app.crm.connectivity.queue import queue_message
+from app.crm.connectivity.queue import provider_message_id_for, queue_message
 from app.crm.connectivity.reasons import reason_label
+from app.crm.connectivity.send_observers import register_send_observer
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -103,6 +110,9 @@ __all__ = [
     "dispatch_send",
     # producing a send
     "queue_message",
+    # the durable reply join: a producer reads back the provider's id for a
+    # send it proposed, by its own dedupe_key (the stamp's reconcile path)
+    "provider_message_id_for",
     # asking a connector to act (the walker's action square)
     "perform_action",
     "action_names",
@@ -125,6 +135,9 @@ __all__ = [
     "registers_templates_for",
     # the retire guard slot (worker_main fills)
     "register_retire_guard",
+    # the send-observer slot (worker_main fills): who else hears that a
+    # provider took a message — outreach's wamid stamp first
+    "register_send_observer",
     # the template webhook consumer (worker_main registers)
     "consume_template_event",
     # webhook subscription recovery

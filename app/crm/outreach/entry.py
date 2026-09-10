@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
+from app.crm.connectivity.contracts import provider_message_id_for
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -35,8 +36,10 @@ from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
+    PROVIDER_MESSAGE_PREFIX,
     is_bookkeeping,
     reply_key,
+    send_dedupe_key,
 )
 from app.crm.outreach.nodes.wait_event import TOPIC_KEY
 from app.crm.outreach.repeat import _as_number, apply_repeat
@@ -234,6 +237,7 @@ async def _wake_on_reply(
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
+        run = await _with_provider_stamp(run, node)
         if not _is_about(node, event, run):
             continue  # another run's letter (phase 18): not this square's
         answer = _answer_for(node, event)
@@ -260,6 +264,43 @@ async def _wake_on_reply(
             {reply_key(node.id): answer, LATEST_LETTER_KEY: node.id},
             facts,
         )
+
+
+async def _with_provider_stamp(run: EnrollmentRun, node: WorkflowNode) -> EnrollmentRun:
+    """The run with its send's provider id present, reconciled from the
+    manifest when the stamp is missing.
+
+    The observer stamp (correlate.py) is a CACHE: its raise is swallowed by
+    the observer contract, and a walker visit that started before the stamp
+    landed can rewrite the context without it (advance replaces context
+    whole, CAS-guarded on wake_at alone). The durable copy is the manifest
+    row — apply_outcome wrote provider_message_id before the observer ever
+    ran (T16 col 14) — so a square about to match on the stamp and not
+    finding it reads it back by the SAME dedupe_key the send was queued
+    under, re-stamps (best effort, so the next letter finds it cached), and
+    matches on the reconciled value. A raise here rolls back only this
+    letter's savepoint; the row returns next poll — at-least-once, exactly
+    the consumer contract.
+
+    None from the manifest means no attempt was ever accepted: the run
+    honestly has no id a reply could echo, and _is_about answers "not hers"
+    — the run keeps waiting rather than taking another run's letter.
+    """
+    match = node.match
+    if match is None or not match.run.startswith(PROVIDER_MESSAGE_PREFIX):
+        return run
+    if run.context.get(match.run):
+        return run
+    node_id = match.run[len(PROVIDER_MESSAGE_PREFIX) :]
+    stamped = await provider_message_id_for(
+        run.merchant_id, send_dedupe_key(str(run.id), node_id)
+    )
+    if not stamped:
+        return run
+    await enrollment_accessor.stamp_context_key(
+        run.merchant_id, str(run.id), match.run, stamped
+    )
+    return run.model_copy(update={"context": {**run.context, match.run: stamped}})
 
 
 def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
@@ -317,7 +358,15 @@ async def _answered_by(
     would push the alarm the wake just set (now) back by the debounce, and
     the token would sit on a square it has already answered — on a stages
     ladder (phase 17), where every stage is a door AND every earlier
-    square listens for it, every stage clock would run twice."""
+    square listens for it, every stage clock would run twice.
+
+    Reconciled through the SAME lens the wake used: open_runs was read at
+    the top of the pass, so a stamp _wake_on_reply just reconciled lives on
+    the copy it resumed, not on these objects. Judging the stale context
+    here would answer "not its square's answer" for the very letter that
+    woke the run — and apply_repeat would re-arm the square it just
+    resolved. Cheap on the second ask: the wake's reconcile re-stamped the
+    row, and a present in-memory key short-circuits before any read."""
     for run in open_runs:
         if (
             str(run.workflow_id) == str(flow.id)
@@ -327,10 +376,11 @@ async def _answered_by(
             if pinned is None:
                 return False
             square = next((n for n in pinned.nodes if n.id == run.current_node), None)
+            if square is None:
+                return False
+            run = await _with_provider_stamp(run, square)
             return (
-                square is not None
-                and _is_about(square, event, run)
-                and _answer_for(square, event) is not None
+                _is_about(square, event, run) and _answer_for(square, event) is not None
             )
     return False
 

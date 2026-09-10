@@ -254,6 +254,13 @@ def reply(payload: Dict[str, Any]) -> Optional[Any]:
     wakes the square and names the arrow, so a plan author labels one edge
     ``form_submitted`` and it fires.  Returning the raw JSON would equal no
     label, sending the walker down the ``else`` arrow or exiting the run.
+
+    Classified by the DISCRIMINANT (_nfm_reply), never by whether the
+    reading has content: WHAT she submitted and THAT she submitted are two
+    questions, and an informational flow — one screen, a Done footer, an
+    empty payload — echoes only our own token, which flow_response rightly
+    strips to None. Conflating the two read that customer as silent, and
+    the timeout edge chased someone who had tapped through the form.
     """
     item = _item(payload, "messages")
     button = item.get("button")
@@ -265,7 +272,7 @@ def reply(payload: Dict[str, Any]) -> Optional[Any]:
             chosen = interactive.get(kind)
             if isinstance(chosen, dict) and chosen.get("id") is not None:
                 return chosen["id"]
-    if flow_response(payload) is not None:
+    if _nfm_reply(payload):
         return "form_submitted"
     return message_text(payload)
 

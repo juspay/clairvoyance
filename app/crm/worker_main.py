@@ -17,10 +17,12 @@ from app.crm.connectivity.contracts import (
     consume_template_event,
     dispatch_send,
     register_retire_guard,
+    register_send_observer,
 )
 from app.crm.outreach.contracts import (
     claim_due_runs,
     consume_attributed_event,
+    note_send_accepted,
     template_references,
     walk_run,
 )
@@ -45,6 +47,13 @@ register_consumer(consume_template_event)
 # app/main.py imports this module, so the API pod (where the retire route
 # lives) is wired too.
 register_retire_guard(template_references)
+# The same inversion in the other direction (the provider-id stamp,
+# outreach/correlate.py): when the dispatcher learns a send's provider id
+# — Meta's wamid, an email's Message-ID — outreach writes it onto the run
+# that sent it, so a listening square's `match` can compare a reply's echo
+# (replied_to) against provider_message_id_<node> and one customer's
+# answer can never resolve her other runs. Channel-agnostic on purpose.
+register_send_observer(note_send_accepted)
 
 ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
     "event-worker": lambda stop_event: run_drain_loop(

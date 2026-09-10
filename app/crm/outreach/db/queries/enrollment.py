@@ -319,6 +319,25 @@ def open_runs_for_customer_query(
     return query, [merchant_id, customer_id]
 
 
+def stamp_context_key_query(
+    merchant_id: str, run_id: str, key: str, value: str
+) -> Tuple[str, List[Any]]:
+    """One bookkeeping key onto an OPEN run's context (the wamid stamp,
+    correlate.py): the send's provider id, keyed by the square that sent
+    it, so a listening square's ``match`` can compare a reply's echo
+    against it. Guarded to open runs only — the stamp routes a FUTURE
+    reply, and an exited run has no square listening. Merchant-scoped
+    like every write here; RETURNING id so the caller can tell "stamped"
+    from "already exited" without a second read."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET context = context || jsonb_build_object($3::text, $4::text)
+        WHERE merchant_id = $1 AND id = $2::uuid AND status <> 'exited'
+        RETURNING id
+    """
+    return query, [merchant_id, run_id, key, value]
+
+
 def resume_run_by_id_query(
     merchant_id: str,
     run_id: str,

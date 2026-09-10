@@ -39,6 +39,7 @@ from app.crm.connectivity.reasons import (
 )
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
+from app.crm.connectivity.send_observers import notify_send_accepted
 from app.crm.connectivity.status import (
     MESSAGE_ACCEPTED,
     MESSAGE_BLOCKED,
@@ -369,3 +370,17 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         f"message {message.id} -> {plan.status}"
         + (f" ({plan.reason})" if plan.reason else "")
     )
+
+    if plan.status == MESSAGE_ACCEPTED and plan.provider_message_id:
+        # The provider's id for what it just took — the one correlate an
+        # inbound reply will carry. Observers (outreach's wamid stamp,
+        # registered at the composition root) hear it AFTER the outcome
+        # committed and CANNOT fail this send: notify swallows their raises.
+        await notify_send_accepted(
+            merchant_id=message.merchant_id,
+            source_kind=message.source_kind,
+            source_id=message.source_id,
+            dedupe_key=message.dedupe_key,
+            message_id=message.id,
+            provider_message_id=plan.provider_message_id,
+        )

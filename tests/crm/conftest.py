@@ -15,6 +15,19 @@ import pytest  # noqa: E402  (the DSN above is a plain constant, not a fixture)
 from tests.crm import doubles  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _empty_send_observer_slot(monkeypatch: pytest.MonkeyPatch):
+    """The send-observer slot is process-global and worker_main fills it at
+    IMPORT time — which any test importing worker_main does for the whole
+    session. Left in place, the first dispatch test with a workflow-shaped
+    message would run the REAL stamp against a live accessor, and the
+    observer contract's swallow would keep the test green while logging DB
+    errors. Every test starts with an empty slot and registers its own."""
+    from app.crm.connectivity import send_observers
+
+    monkeypatch.setattr(send_observers, "_OBSERVERS", [])
+
+
 @pytest.fixture
 def graph_stub(monkeypatch: pytest.MonkeyPatch):
     """The shared Meta Graph transport, canned: ``graph_stub(handler)`` returns

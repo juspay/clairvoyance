@@ -36,6 +36,7 @@ from app.crm.outreach.db.queries.enrollment import (
     resume_run_query,
     runs_referencing_template_query,
     source_event_used_query,
+    stamp_context_key_query,
     sweep_exited_runs_query,
     workflow_summary_query,
 )
@@ -219,6 +220,16 @@ async def open_runs_for_customer(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_run(row) for row in rows]
+
+
+async def stamp_context_key(
+    merchant_id: str, run_id: str, key: str, value: str
+) -> bool:
+    """True when the run was still open and took the bookkeeping key."""
+    query, values = stamp_context_key_query(merchant_id, run_id, key, value)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
 
 
 async def resume_run_by_id(

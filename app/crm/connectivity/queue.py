@@ -85,3 +85,19 @@ async def queue_message(
         variables,
         dedupe_key,
     )
+
+
+async def provider_message_id_for(merchant_id: str, dedupe_key: str) -> Optional[str]:
+    """The provider's own id for a logical send this producer once proposed
+    — None until an attempt was ACCEPTED (T16 col 14 is written by the
+    outcome, nothing earlier).
+
+    The durable half of the reply join: the observer stamp
+    (send_observers.py -> outreach) is a cache that can miss — an observer
+    raise is swallowed by contract, and a run's context can be rewritten
+    under it — while this row survives all of that. A consumer that needs
+    the id and finds no stamp reconciles from here by the same dedupe_key
+    it queued with, which is why the read is keyed by the producer's own
+    name for the send and not by our row id.
+    """
+    return await message_accessor.provider_message_id_for(merchant_id, dedupe_key)

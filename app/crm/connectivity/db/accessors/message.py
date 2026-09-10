@@ -12,6 +12,7 @@ from app.crm.connectivity.db.queries.message import (
     apply_outcome_query,
     claim_queued_messages_query,
     insert_message_query,
+    provider_message_id_for_query,
     requeue_stale_claims_query,
 )
 from app.crm.connectivity.schemas.message import QueuedMessage
@@ -70,6 +71,15 @@ async def requeue_stale_claims(
     requeued = [str(row["id"]) for row in rows if row["status"] == MESSAGE_QUEUED]
     dead = [str(row["id"]) for row in rows if row["status"] != MESSAGE_QUEUED]
     return requeued, dead
+
+
+async def provider_message_id_for(merchant_id: str, dedupe_key: str) -> Optional[str]:
+    """The provider's id for one logical send, or None (no row, or no
+    attempt accepted yet)."""
+    query, values = provider_message_id_for_query(merchant_id, dedupe_key)
+    async with crm_connection() as conn:
+        value = await conn.fetchval(query, *values)
+    return str(value) if value else None
 
 
 async def apply_outcome(

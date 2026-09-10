@@ -294,6 +294,17 @@ def test_a_submission_of_nothing_but_our_token_is_absent() -> None:
     assert whatsapp_spec.flow_response(_submission('{"flow_token":"m-42"}')) is None
 
 
+def test_a_token_only_submission_still_wakes_the_square() -> None:
+    """THAT she submitted and WHAT she submitted are two questions. An
+    informational flow — one screen, a Done footer, an empty payload —
+    echoes only our own token, which flow_response rightly strips to None;
+    the reply must still say form_submitted, or the customer who tapped
+    through the form reads as silent and the timeout edge chases her."""
+    extracted = _extract_inbound(_submission('{"flow_token":"m-42"}'))
+    assert extracted.variables["reply"] == "form_submitted"
+    assert "flow_response" not in extracted.variables
+
+
 def test_a_submission_names_the_send_that_opened_it() -> None:
     """The send stamps the manifest row's own id as the flow_token
     (whatsapp/adapter.py) and Meta returns it verbatim — so unlike

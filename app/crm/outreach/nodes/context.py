@@ -37,7 +37,26 @@ _BOOKKEEPING_KEYS = (
 # LEAVES, and the action then executes as its own square, so "the current
 # square's facts" would never be the latest stage's.
 LATEST_LETTER_KEY = "latest_letter"
-_BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_", "action_")
+# provider_message_id_<send node>: the provider's OWN id for that square's
+# accepted send (correlate.py; Meta's wamid, an email's Message-ID — the T16
+# column's name, so one spelling serves every channel) — the value a
+# listening square's `match` compares a reply's replied_to against.
+# Bookkeeping like message_<node>, and for the same reason: an internal id
+# must never resolve into a customer's message.
+# The provider-id stamp's key family (correlate.py writes, entry.py
+# reconciles, plans.py validates): ONE spelling, imported everywhere it is
+# compared — three private copies would let the validator bless names the
+# stamp never writes, and the bookkeeping filter stop recognising the key
+# the day one copy moved.
+PROVIDER_MESSAGE_PREFIX = "provider_message_id_"
+
+_BOOKKEEPING_PREFIXES = (
+    "lead_",
+    "message_",
+    "reply_",
+    "action_",
+    PROVIDER_MESSAGE_PREFIX,
+)
 
 # The merchant's own id for the thing a call is about. Buddy's reporter
 # echoes lead.request_id back to the merchant as orderId on every outcome
@@ -46,6 +65,29 @@ _BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_", "action_")
 # names the order field — Shopify's `id`, a platform-wide unique); the flat
 # keys below serve unkeyed plans, and the run id is the last fallback.
 _REQUEST_ID_KEYS = ("order_id", "request_id")
+
+
+def provider_message_key(node_id: str) -> str:
+    """Where a send square's accepted provider id lives in the context."""
+    return f"{PROVIDER_MESSAGE_PREFIX}{node_id}"
+
+
+def send_dedupe_key(run_id: str, node_id: str) -> str:
+    """The manifest name for one square's send — "<run>:<node>". Built and
+    parsed by THIS pair only: the builder (nodes/send.py) and the parser
+    (correlate.py, the reconcile read) drifting apart is a stamp that lands
+    under a key no square's match ever names."""
+    return f"{run_id}:{node_id}"
+
+
+def parse_send_dedupe_key(dedupe_key: str) -> Optional[tuple]:
+    """(run_id, node_id), or None for a key this convention did not build —
+    which must be skipped, never guessed at: a wrong guess writes a
+    correlate onto the wrong run."""
+    run_id, sep, node_id = dedupe_key.partition(":")
+    if not sep or not run_id or not node_id:
+        return None
+    return run_id, node_id
 
 
 def is_bookkeeping(key: str) -> bool:
