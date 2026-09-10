@@ -150,7 +150,7 @@ class WorkflowNode(BaseModel):
     is no "timeout" edge."""
 
     id: str = Field(min_length=1)
-    type: Literal["wait", "send", "call", "wait_event", "action"]
+    type: Literal["wait", "send", "call", "wait_event", "action", "condition", "split"]
     minutes: Optional[float] = None
     channel: Optional[str] = None
     template: Optional[str] = None
@@ -185,12 +185,76 @@ class WorkflowNode(BaseModel):
     # posted (canon T16 col 11), and a template with two blanks handed 27
     # facts is refused by every provider.
     variables: Dict[str, str] = Field(default_factory=dict)
+    # condition only (enh A/01): the rules, judged in order; the first whose
+    # conditions all hold names the edge, none -> the mandatory `else` edge.
+    rules: List["ConditionRule"] = Field(default_factory=list)
+    # split only (enh A/04): the shares, in document order. Percents are
+    # whole and sum to 100, so every run takes exactly one arm and a split
+    # needs no `else`.
+    arms: List["SplitArm"] = Field(default_factory=list)
 
 
-# An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a
-# wait_event node ("YES", "NO", "timeout"); every other node has one plain
-# arrow.
+# An arrow: [from, to] or [from, to, on]. A plain node has ONE plain arrow.
+# A BRANCHING square (the registry's word: wait_event, condition, split)
+# labels every arrow with `on`, and the label is the square's ANSWER:
+#   wait_event  the letter's payload[key] — a button id, an outcome word,
+#               or the topic itself when key is "$topic";
+#   condition   a rule's `on`, judged in document order;
+#   split       an arm's `on`, chosen by the run's stable bucket.
+# Two labels are the walker's own and no square produces them: "timeout"
+# (a listening square's alarm won) and "else" (nothing else matched —
+# the alarm too, on a listening square with no "timeout" edge). A label
+# no rule or arm can answer is legal and dead; the validator warns on it
+# (plans.definition_warnings, enh A/06) rather than refusing, because a
+# document may be saved mid-edit.
 WorkflowEdge = Union[Tuple[str, str], Tuple[str, str, str]]
+
+
+class ConditionRule(BaseModel):
+    """One arm of a condition square (enh A/01): the edge label it names and
+    the conditions that must ALL hold for it — the door's own where-grammar
+    (shared/predicate.Condition), over the fields outreach/predicates.py
+    resolves (context.<key>, facts.<node>.<key>, customer.<column>,
+    customer.attributes.<name>). OR is two rules. `else` and `timeout` are
+    the walker's words, never a rule's."""
+
+    on: str = Field(min_length=1)
+    if_: List[Condition] = Field(alias="if", min_length=1)
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _label_is_not_a_walker_word(self) -> "ConditionRule":
+        if self.on in ("else", "timeout"):
+            raise ValueError(
+                f"a rule may not be labelled {self.on!r} — the walker owns it"
+            )
+        return self
+
+
+#: Where a split square records the arm a run took (enh A/04). Spelled on
+#: the document's own vocabulary, not inside the node, because two layers
+#: read it and neither may import the other: nodes/split.py writes the key
+#: and db/queries/enrollment.py groups the report on it.
+SPLIT_PREFIX = "split_"
+
+
+class SplitArm(BaseModel):
+    """One arm of a split square (enh A/04): the edge label it names and
+    the share of runs that take it. Whole percents only — the shares must
+    sum to 100 (nodes/split.py), which is a statement about integers, and
+    a fractional share would make it one about rounding."""
+
+    on: str = Field(min_length=1)
+    percent: int = Field(ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _label_is_not_a_walker_word(self) -> "SplitArm":
+        if self.on in ("else", "timeout"):
+            raise ValueError(
+                f"an arm may not be labelled {self.on!r} — the walker owns it"
+            )
+        return self
 
 
 class StageAction(BaseModel):
@@ -366,10 +430,17 @@ class WorkflowSummary(BaseModel):
 
 
 class Workflow(WorkflowSummary):
-    """Detail shape — carries both documents."""
+    """Detail shape — carries both documents.
+
+    `warnings` (enh A/06, N16) is what the document does that is legal
+    and probably not meant — a square nothing leads to, a loop, a
+    listening square with no timeout edge, a label no rule answers. Set
+    on the create, draft and publish answers and never stored: it is a
+    reading of the document, and the document is what is stored."""
 
     definition: Optional[Dict[str, Any]]
     draft: Optional[Dict[str, Any]]
+    warnings: List[str] = Field(default_factory=list)
 
 
 class WorkflowRunSummary(BaseModel):
@@ -383,6 +454,78 @@ class WorkflowRunSummary(BaseModel):
     open: Dict[str, int]
     median_minutes_to_exit: Optional[float]
     recovered_amount: Optional[float]
+    # enh A/04 + A/06: each split square's arms, {node: {arm: report}} —
+    # how many runs took the arm, how many are still open, and how the
+    # finished ones ended. The exits are the point: "control 40%
+    # goal_met, variant 55%" is the experiment's answer, and a bare count
+    # per arm could only say the split was honest. Empty for a plan with
+    # no split; read from the runs themselves so there is no counter to
+    # drift.
+    by_split: Dict[str, Dict[str, "SplitArmReport"]] = Field(default_factory=dict)
+
+
+class SplitArmReport(BaseModel):
+    """One arm of one split square, over the summary's window."""
+
+    runs: int
+    open: int
+    by_exit_reason: Dict[str, int] = Field(default_factory=dict)
+
+
+class SimulateEvent(BaseModel):
+    """The sample letter a dry run is walked against (enh A/05). `source`
+    is optional because an author knows the topic and rarely the word we
+    file it under; simulate looks it up from the code catalog."""
+
+    topic: str = Field(min_length=1)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    source: Optional[str] = None
+
+
+class SimulateRequest(BaseModel):
+    """One dry run. `answers` says what a listening square heard, by node
+    id — a label the board draws, or the node left out to let its alarm
+    win. `facts` overrides the letter's own facts, which is how "what if
+    the cart were 6,000" is asked without editing the payload."""
+
+    event: SimulateEvent
+    answers: Dict[str, str] = Field(default_factory=dict)
+    facts: Dict[str, Any] = Field(default_factory=dict)
+    use_draft: bool = False
+
+
+class SimulateStep(BaseModel):
+    """One square the token stood on: when it arrived, what would have
+    fired there (resolved, never sent), and what the square answered."""
+
+    node: str
+    type: str
+    at: str
+    action: Optional[Dict[str, Any]] = None
+    answer: Optional[str] = None
+
+
+class SimulateExit(BaseModel):
+    """How the walk ended, and when."""
+
+    reason: str
+    at: str
+
+
+class SimulateResult(BaseModel):
+    """A dry run's whole answer: did the letter get in, what happened and
+    when, where it ended, and everything that would have parked a real
+    run on the way (`problems`) — reported rather than raised, because a
+    board with one broken send is still worth seeing walked."""
+
+    admitted: bool
+    reason: str
+    path: List[SimulateStep] = Field(default_factory=list)
+    exit: Optional[SimulateExit] = None
+    problems: List[str] = Field(default_factory=list)
+    # The document's own warnings (plans.definition_warnings), so a dry
+    # run that walked cleanly can still say "and nothing leads to X".
+    warnings: List[str] = Field(default_factory=list)
 
 
 class WorkflowVersion(BaseModel):

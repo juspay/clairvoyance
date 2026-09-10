@@ -24,6 +24,7 @@ from app.crm.outreach.db.decoders.enrollment import (
 from app.crm.outreach.db.queries.enrollment import (
     cancel_run_query,
     customer_runs_query,
+    workflow_split_counts_query,
     workflow_summary_query,
 )
 from app.crm.outreach.nodes.context import run_facts
@@ -132,6 +133,57 @@ def test_decoder_is_total_on_an_empty_window() -> None:
     assert summary.runs == 0 and summary.open == {"waiting": 0, "parked": 0}
     assert summary.by_exit_reason == {} and summary.median_minutes_to_exit is None
     assert summary.recovered_amount is None
+    assert summary.by_split == {}
+
+
+def test_the_arm_counts_are_their_own_statement_over_the_same_window() -> None:
+    """enh A/04. Folded into the grouping sets above, a run standing on two
+    split squares would expand to two rows and count twice, so `runs` would
+    quietly inflate. The keys come from the runs' context, never from the
+    document, so no version read is owed."""
+    query, values = workflow_split_counts_query(
+        "m1", "wf-1", datetime(2026, 9, 1, tzinfo=timezone.utc), None
+    )
+    assert "jsonb_each_text" in query
+    assert "e.merchant_id = $1" in query and "e.workflow_id = $2" in query
+    assert "fact.key LIKE $5" in query
+    assert "GROUP BY fact.key, fact.value, e.status, e.exit_reason" in query
+    assert values[0] == "m1" and values[-1] == "split_%"
+
+
+def _arm(key: str, arm: Any, status: str, reason: Any, runs: int) -> Dict[str, Any]:
+    return {
+        "arm_key": key,
+        "arm": arm,
+        "status": status,
+        "exit_reason": reason,
+        "runs": runs,
+    }
+
+
+def test_decoder_reports_each_arm_with_its_exits() -> None:
+    """enh A/06: the experiment's answer is the exits per arm, not the
+    count — 40 of control's 71 recovered, 20 of discount's 29."""
+    rows = [
+        _arm("split_experiment", "control", "exited", "goal_met", 40),
+        _arm("split_experiment", "control", "exited", "completed", 25),
+        _arm("split_experiment", "control", "waiting", None, 6),
+        _arm("split_experiment", "discount", "exited", "goal_met", 20),
+        _arm("split_experiment", "discount", "parked", None, 9),
+        _arm("split_second-test", "A", "exited", "timed_out", 12),
+        # Total: neither of these is a square's arm.
+        _arm("split_", "orphan", "exited", "goal_met", 9),
+        _arm("split_experiment", None, "exited", "goal_met", 3),
+    ]
+    summary = decode_run_summary([], rows)
+    control = summary.by_split["experiment"]["control"]
+    discount = summary.by_split["experiment"]["discount"]
+    assert (control.runs, control.open) == (71, 6)
+    assert control.by_exit_reason == {"goal_met": 40, "completed": 25}
+    assert (discount.runs, discount.open) == (29, 9)
+    assert discount.by_exit_reason == {"goal_met": 20}
+    assert summary.by_split["second-test"]["A"].by_exit_reason == {"timed_out": 12}
+    assert set(summary.by_split) == {"experiment", "second-test"}
 
 
 def test_decoder_carries_the_plan_name_on_a_customer_run() -> None:

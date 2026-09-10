@@ -37,6 +37,7 @@ from app.crm.outreach.db.queries.enrollment import (
     runs_referencing_template_query,
     source_event_used_query,
     sweep_exited_runs_query,
+    workflow_split_counts_query,
     workflow_summary_query,
 )
 from app.crm.outreach.schemas import (
@@ -325,9 +326,17 @@ async def workflow_summary(
     until: Optional[datetime],
 ) -> WorkflowRunSummary:
     query, values = workflow_summary_query(merchant_id, workflow_id, since, until)
+    # The arm counts are their own statement (enh A/04): a run with two
+    # split squares expands to two rows there, which folded into the
+    # aggregate above would count it twice. Both reads sit on one
+    # connection and one window — read-only, so no atom is owed.
+    split_query, split_values = workflow_split_counts_query(
+        merchant_id, workflow_id, since, until
+    )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
-    return decode_run_summary(rows)
+        split_rows = await conn.fetch(split_query, *split_values)
+    return decode_run_summary(rows, split_rows)
 
 
 async def customer_runs(

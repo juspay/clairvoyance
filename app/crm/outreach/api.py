@@ -13,10 +13,12 @@ from pydantic import BaseModel, Field
 
 from app.core.logger.context import set_log_context
 from app.crm.auth import crm_admin_user
-from app.crm.outreach import plans, runs, versions
+from app.crm.outreach import plans, runs, simulate, versions
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
+    SimulateRequest,
+    SimulateResult,
     VersionMigration,
     Workflow,
     WorkflowRunSummary,
@@ -189,6 +191,35 @@ async def workflow_summary_route(
 ) -> WorkflowRunSummary:
     set_log_context(component="crm.workflows.summary", merchant_id=merchant_id)
     return await runs.workflow_summary(merchant_id, workflow_id, since, until)
+
+
+@router.post("/{workflow_id}/simulate", response_model=SimulateResult)
+async def simulate_route(
+    workflow_id: str,
+    request: SimulateRequest,
+    merchant_id: str = Query(..., description="Tenant scope — required"),
+    current_user: UserInfo = Depends(crm_admin_user),
+) -> SimulateResult:
+    """Walk this plan against a sample letter without writing anything
+    (enh A/05): who gets admitted, what fires and when, where the run
+    ends. Nothing reaches a provider, the spine or a customer.
+
+    422 carries the publish validator's own list when the document does
+    not validate — the same words a publish would refuse with, so an
+    author fixes one thing rather than two."""
+    set_log_context(component="crm.workflows.simulate", merchant_id=merchant_id)
+    try:
+        result = await simulate.simulate(merchant_id, workflow_id, request)
+    except simulate.SimulationRefused as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        ) from e
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workflow not found or not this merchant's",
+        )
+    return result
 
 
 @router.get("/{workflow_id}/versions", response_model=List[WorkflowVersion])

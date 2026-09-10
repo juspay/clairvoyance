@@ -33,6 +33,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
+from app.crm.outreach.nodes import NODE_TYPES
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
     is_bookkeeping,
@@ -49,15 +50,7 @@ from app.crm.outreach.schemas import (
     WorkflowNode,
 )
 from app.crm.record.contracts import RawEvent, canonical_path, derive_for, field_value
-from app.crm.shared.normalize import normalize_phone
 from app.crm.shared.predicate import matches
-
-# Fallback only: where a phone hides in a payload when no extractor
-# handles were passed in (the voice mirrors, which send the flat shape).
-# An external door's letter arrives VERBATIM under the two-plane ruling,
-# so its phone is wherever that provider puts it — which is the source's
-# extractor's business, not this file's.
-_PHONE_PATHS = ("customer_mobile_number", "phone")
 
 # The founding letter's own pointers: written once at enrol, never moved
 # by a repeat (phase 00) — the id is what source_event_used dedupes on,
@@ -65,26 +58,6 @@ _PHONE_PATHS = ("customer_mobile_number", "phone")
 # (G7): an order placed between the founding checkout and a later cart
 # update must keep counting as after.
 _FOUNDING_KEYS = ("source_event_id", "entered_event_at")
-
-
-def _phone_from_payload(payload: dict) -> str | None:
-    """The number the sends will actually dial or message — normalized to
-    E.164 here, because resolve() normalizes only what it probes on and
-    context is a separate copy. Unnormalized, a bare "9876543210" would
-    resolve to +919876543210 for identity while the call node dialled the
-    bare form, and a suppression stored in E.164 would not match it."""
-    raw: str | None = None
-    for key in _PHONE_PATHS:
-        if payload.get(key):
-            raw = str(payload[key])
-            break
-    if raw is None:
-        customer = payload.get("customer")
-        if isinstance(customer, dict) and customer.get("phone"):
-            raw = str(customer["phone"])
-    if raw is None:
-        return None
-    return normalize_phone(raw) or raw
 
 
 async def consume_attributed_event(
@@ -141,7 +114,7 @@ async def consume_attributed_event(
     for flow in flows:
         definition = WorkflowDefinition.model_validate(flow.definition)
         for door in definition.entries:
-            if door.topic == event.topic and _where_matches(door, event):
+            if door.topic == event.topic and where_matches(door, event):
                 await _try_enrol(
                     flow,
                     definition,
@@ -201,9 +174,9 @@ async def _wake_on_reply(
     square (context.facts.<square>), so a later call can say what this
     stage's letter said; the same bridge enrol uses, so bookkeeping names
     and nested payload never reach the run."""
-    facts = _context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
+    facts = context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
     for node in definition.nodes:
-        if node.type != "wait_event" or event.topic not in node.topics:
+        if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
             continue
         if not _is_about(node, event, run):
             continue  # another run's letter (phase 18): not this square's
@@ -261,7 +234,7 @@ def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
     keys; None when the square is not listening for the topic, or the
     field is missing (B1). The ONE definition of "this letter is this
     square's answer": the wake and the repeat refusal below both ask it."""
-    if node.type != "wait_event" or event.topic not in node.topics:
+    if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
         return None
     answer = (
         event.topic
@@ -326,7 +299,7 @@ def _goal_patch(event: RawEvent) -> dict:
     return {"goal": goal}
 
 
-def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
+def where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
     """One door's typed where-grammar against the payload
     (shared/predicate.py); fields resolve through record's catalog paths —
     dot-walks and the code layer's derived fields. No table read: the
@@ -338,7 +311,7 @@ def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
     )
 
 
-def _context_from_payload(payload: dict, max_chars: int) -> dict:
+def context_from_payload(payload: dict, max_chars: int) -> dict:
     """The template-variable bridge: merchants send standard identity keys
     (customer_mobile_number, customer_name) plus whatever scalar keys
     their call template references ({item}, {cart_value}); those small
@@ -375,16 +348,24 @@ async def _try_enrol(
     if not admit:
         return  # a keyed plan without its key: a refusal, not an error
     max_chars = await CRM_CONTEXT_VALUE_MAX_CHARS()
-    context = _context_from_payload(event.payload, max_chars)
+    context = context_from_payload(event.payload, max_chars)
     # The catalog's declared variables win over the scalar copy: the engine
     # resolved them through the declared paths (customer_name from
     # customer.first_name + last_name), and a bookkeeping name is still ours.
-    context.update(_context_from_payload(variables or {}, max_chars))
+    context.update(context_from_payload(variables or {}, max_chars))
     context["source_event_id"] = str(event.id)
     # When the founding letter HAPPENED (its own claim, else the envelope's
     # receipt): goals compare against this, not the row's insert time (G7).
     context["entered_event_at"] = (event.occurred_at or event.received_at).isoformat()
-    phone = (handles or {}).get("phone") or _phone_from_payload(event.payload)
+    # The extractor's handles are the ONE place a phone is found (enh A/06,
+    # N14). The record pass runs every letter through the engine — the
+    # source's own spec, else the flat shape — and hands the result here,
+    # so a second hunt in this file could only disagree with the first. It
+    # did: an order with its phone only under customer.default_address
+    # resolved on the spec and then parked at the call, because the
+    # fallback did not know that path. A letter with no phone is enrolled
+    # without one; the call and send squares park with a reason.
+    phone = (handles or {}).get("phone")
     if phone:
         context["phone"] = phone
     run = await enrol(

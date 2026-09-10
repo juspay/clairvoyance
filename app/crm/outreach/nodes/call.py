@@ -33,6 +33,22 @@ def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
     return []
 
 
+def describe(
+    node: WorkflowNode, context: Dict[str, Any], definition: WorkflowDefinition
+) -> Dict[str, Any]:
+    """PURE: the lead this square WOULD push (enh A/05) — the agent it
+    names and the payload the template resolves its {placeholders} from,
+    which is run_facts plus the number. The template row itself is NOT
+    read: a dry run answers "what would go out", and whether that template
+    exists is the publish validator's question, asked already."""
+    phone = context.get("phone")
+    if not phone:
+        raise ValueError("no phone in the letter — this call would park")
+    payload = run_facts(context, node)
+    payload["customer_mobile_number"] = phone
+    return {"template_id": str(node.template_id), "payload": payload}
+
+
 async def execute(
     run: EnrollmentRun, node: WorkflowNode, definition: WorkflowDefinition
 ) -> Dict[str, Any]:

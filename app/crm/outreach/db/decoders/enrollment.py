@@ -6,8 +6,10 @@ imported outside db/.
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from app.crm.outreach.schemas import (
+    SPLIT_PREFIX,
     CustomerRun,
     EnrollmentRun,
+    SplitArmReport,
     WorkflowRunSummary,
 )
 from app.crm.shared.decode import jsonb_value as _jsonb
@@ -49,11 +51,52 @@ def _number(value: Any) -> Optional[float]:
         return None
 
 
-def decode_run_summary(rows: Iterable[Mapping[str, Any]]) -> WorkflowRunSummary:
+def decode_split_counts(
+    rows: Iterable[Mapping[str, Any]],
+) -> Dict[str, Dict[str, SplitArmReport]]:
+    """Fold workflow_split_counts_query's rows into {node: {arm: report}}
+    (enh A/04, exits per arm in A/06). One row per (square, arm, status,
+    exit reason): the runs add up, an unexited row counts as open, and an
+    exited one files under its reason. The key carries the prefix the
+    context stores it under; the report names the SQUARE, which is what
+    an author drew. Total: a row whose key is only the prefix, or whose
+    arm is null, is skipped rather than filed under an empty name."""
+    tally: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for row in rows:
+        node_id = str(row["arm_key"] or "")[len(SPLIT_PREFIX) :]
+        arm = row["arm"]
+        if not node_id or arm is None:
+            continue
+        runs = int(row["runs"] or 0)
+        cell = tally.setdefault(node_id, {}).setdefault(
+            str(arm), {"runs": 0, "open": 0, "by_exit_reason": {}}
+        )
+        cell["runs"] += runs
+        status, reason = row.get("status"), row.get("exit_reason")
+        if status != "exited":
+            cell["open"] += runs
+        elif reason:
+            cell["by_exit_reason"][reason] = (
+                cell["by_exit_reason"].get(reason, 0) + runs
+            )
+    return {
+        node_id: {arm: SplitArmReport(**cell) for arm, cell in arms.items()}
+        for node_id, arms in tally.items()
+    }
+
+
+def decode_run_summary(
+    rows: Iterable[Mapping[str, Any]],
+    split_rows: Optional[Iterable[Mapping[str, Any]]] = None,
+) -> WorkflowRunSummary:
     """Fold workflow_summary_query's grouping-set rows into one summary.
     grouping_level 0 rows are one (status, exit_reason) each; the level-3
     row (both columns grouped away) is the whole window. Total: an empty
-    window is a zero summary, never a raise."""
+    window is a zero summary, never a raise.
+
+    ``split_rows`` is the second statement's own rows (enh A/04), optional
+    because a plan with no split square has none and a caller reading only
+    the aggregate should not have to say so."""
     runs = 0
     by_exit_reason: Dict[str, int] = {}
     open_runs = {"waiting": 0, "parked": 0}
@@ -78,4 +121,5 @@ def decode_run_summary(rows: Iterable[Mapping[str, Any]]) -> WorkflowRunSummary:
         open=open_runs,
         median_minutes_to_exit=median,
         recovered_amount=recovered,
+        by_split=decode_split_counts(split_rows or ()),
     )
