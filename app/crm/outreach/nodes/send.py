@@ -9,7 +9,7 @@ absorbed by the manifest's unique (canon T16 col 23).
 from typing import Any, Dict, List
 
 from app.core.logger import logger
-from app.crm.connectivity.contracts import queue_message
+from app.crm.connectivity.contracts import message_id_for_dedupe, queue_message
 from app.crm.outreach.nodes.context import send_variables
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
@@ -112,9 +112,22 @@ async def execute(
     except ValueError as e:
         raise NodeParked(f"send node {node.id}: {e}") from e
     if message_id is None:
+        # A lease retry re-proposed a send the manifest already holds. The
+        # id still has to reach the run: the listening square after this
+        # one matches letters on message_<node> (phase 18), and a retry
+        # that wrote nothing would leave that square deaf to its own
+        # receipt (enh A/06, N12). One read on the insert's own unique.
+        message_id = await message_id_for_dedupe(run.merchant_id, dedupe_key)
+        if message_id is None:
+            logger.warning(
+                f"walker: run {run.id} send {dedupe_key} was absorbed but no row "
+                f"names it — message_{node.id} not written"
+            )
+            return {}
         logger.info(
-            f"walker: run {run.id} send {dedupe_key} already queued (lease retry)"
+            f"walker: run {run.id} send {dedupe_key} already queued as "
+            f"{message_id} (lease retry)"
         )
-        return {}
+        return {f"message_{node.id}": message_id}
     logger.info(f"walker: run {run.id} queued message {message_id} (node {node.id})")
     return {f"message_{node.id}": message_id}

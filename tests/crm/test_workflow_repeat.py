@@ -347,9 +347,15 @@ def test_the_repeat_carries_the_refreshed_phone_but_never_the_founding_id(
             "payload": {"customer_mobile_number": "9876543210", "cart_value": 900},
         },
     )()
+    # The record pass hands over the extractor's normalized handles (enh
+    # A/06, N14: the consumer no longer hunts the payload itself).
     asyncio.run(
         entry._try_enrol(
-            flow, *_with_door(_definition(on_repeat="refresh_latest")), event, "c"
+            flow,
+            *_with_door(_definition(on_repeat="refresh_latest")),
+            event,
+            "c",
+            handles={"phone": "+919876543210"},
         )
     )
     ((_, _, _, _, _, facts),) = calls
