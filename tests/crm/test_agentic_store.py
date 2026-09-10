@@ -109,6 +109,41 @@ def test_prune_keeps_live_and_newest_settled() -> None:
     assert "e0" not in refs and "e24" in refs
 
 
+def test_deactivate_marks_inactive_and_drops_preferred() -> None:
+    entries = [_entry("a", preferred=True), _entry("b")]
+    entries, ok = store.deactivate(entries, "a")
+    assert ok is True
+    a = store.find_by_ref(entries, "a")
+    assert a is not None
+    assert a["status"] == "INACTIVE" and a["preferred"] is False
+    assert a["agent_id"] == "cont_a" and a["action_status"] == "ACTIVE"
+    # the other attempt is untouched, and the deleted one no longer pays
+    b = store.find_by_ref(entries, "b")
+    assert b is not None and b["status"] == "ACTIVE"
+    assert [e["agent_obj_ref"] for e in store.drawable_entries(entries)] == ["b"]
+    # unknown ref: refused, nothing changes
+    before = [dict(e) for e in entries]
+    entries, ok = store.deactivate(entries, "zzz")
+    assert ok is False and entries == before
+    # an INACTIVE attempt cannot be made preferred again
+    assert store.choose_preferred(entries, "a")[1] is False
+
+
+def test_prune_keeps_inactive() -> None:
+    settled = [
+        _entry(
+            f"e{i}", status="EXPIRED", created_at=f"2026-08-{i + 1:02d}T00:00:00+00:00"
+        )
+        for i in range(25)
+    ]
+    deleted = [
+        _entry("gone", status="INACTIVE", created_at="2026-01-01T00:00:00+00:00")
+    ]
+    kept = store.prune(deleted + settled)
+    refs = {e["agent_obj_ref"] for e in kept}
+    assert "gone" in refs and len(kept) == 1 + store.KEEP_SETTLED
+
+
 def test_customer_id_from_ref() -> None:
     cid = "0dd139fc-3569-4c78-b686-e42f0e6f61fa"
     assert store.customer_id_from_ref(f"agent_{cid}_1788718478") == cid

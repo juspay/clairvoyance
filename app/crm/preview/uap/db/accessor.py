@@ -46,6 +46,9 @@ _PATCHABLE = (
 # are always kept; of the rest only the newest KEEP_SETTLED stay, so a
 # rider who retried onboarding fifty times does not carry fifty corpses.
 _LIVE_STATUSES = {"PENDING", "ACTIVE", "PAUSED"}
+# INACTIVE rows are kept too: they are how a Juspay agent the rider deleted
+# here is recognised (and not re-adopted) on the next onboarding.
+_KEPT_STATUSES = _LIVE_STATUSES | {"INACTIVE"}
 KEEP_SETTLED = 20
 
 Entries = List[Dict[str, Any]]
@@ -109,7 +112,7 @@ def prune(entries: Entries) -> Entries:
     settled = [
         e
         for e in entries
-        if e.get("status") not in _LIVE_STATUSES and not e.get("preferred")
+        if e.get("status") not in _KEPT_STATUSES and not e.get("preferred")
     ]
     drop = {id(e) for e in newest_first(settled)[KEEP_SETTLED:]}
     return [e for e in entries if id(e) not in drop]
@@ -193,6 +196,18 @@ def choose_preferred(entries: Entries, agent_obj_ref: str) -> Tuple[Entries, boo
         if bool(e.get("preferred")) != hit:
             e["preferred"] = hit
             e["updated_at"] = _now()
+    return entries, True
+
+
+def deactivate(entries: Entries, agent_obj_ref: str) -> Tuple[Entries, bool]:
+    """The rider deleted this agent: status INACTIVE, no longer preferred.
+    Nothing changes on an unknown ref."""
+    entry = find_by_ref(entries, agent_obj_ref)
+    if entry is None:
+        return entries, False
+    entry["status"] = "INACTIVE"
+    entry["preferred"] = False
+    entry["updated_at"] = _now()
     return entries, True
 
 
@@ -343,7 +358,21 @@ async def set_preferred_agent(
     return bool(result and result[0] == merchant_id and result[1])
 
 
+async def deactivate_agent(
+    merchant_id: str, customer_id: str, agent_obj_ref: str
+) -> bool:
+    """True when the ref belonged to this customer (and is now INACTIVE);
+    False when nothing matched."""
+
+    def mutation(current: Any) -> Tuple[Any, bool]:
+        return deactivate(_entries(current), agent_obj_ref)
+
+    result = await mutate_customer_attribute(customer_id, AGENTS_KEY, mutation)
+    return bool(result and result[0] == merchant_id and result[1])
+
+
 __all__ = [
+    "deactivate_agent",
     "insert_attempt",
     "patch_attempt",
     "get_by_agent_obj_ref",

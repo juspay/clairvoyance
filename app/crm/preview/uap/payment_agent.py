@@ -18,7 +18,9 @@ from app.crm.preview.uap.schemas import CrmCustomerAgent, DrawUsage
 from app.crm.record.contracts import record_event
 
 # ---- translation: Juspay vocabulary -> ours (pure) ----
-TERMINAL_STATUSES = frozenset({"ACTIVE", "EXPIRED", "REVOKED", "FAILED"})
+# INACTIVE = the rider deleted the agent in the merchant app. Ours alone:
+# Juspay never says it, and a refresh never overrides it (see plan_patch).
+TERMINAL_STATUSES = frozenset({"ACTIVE", "EXPIRED", "REVOKED", "FAILED", "INACTIVE"})
 
 
 def pick_action(
@@ -68,9 +70,14 @@ def plan_patch(
     """DECIDE: the column patch a refresh implies. Never demotes a rider
     decision: PAUSED/REVOKED stay unless Juspay now says ACTIVE again — or
     the agent is gone altogether (``agent=None``), which is EXPIRED whatever
-    the rider had chosen. ``verified_at`` is stamped by the caller."""
+    the rider had chosen. INACTIVE (deleted here) is final either way.
+    ``verified_at`` is stamped by the caller."""
     status = derive_status(agent, action)
-    if (
+    if current_status == "INACTIVE":
+        # Deleted by the rider here: sticky whatever Juspay reports, so a
+        # poll/webhook/SDK result can never resurrect it.
+        status = "INACTIVE"
+    elif (
         agent is not None
         and current_status in {"PAUSED", "REVOKED"}
         and status != "ACTIVE"

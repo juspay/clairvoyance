@@ -5,6 +5,7 @@ tool) may import from app/crm/preview/uap (PREVIEW: logic not final).
 """
 
 from app.crm.preview.uap.db.accessor import (
+    deactivate_agent,
     get_by_agent_id,
     get_by_agent_obj_ref,
     get_drawable_for_customer,
@@ -33,6 +34,7 @@ __all__ = [
     "apply_juspay_records",
     "check_draw",
     "create_attempt",
+    "deactivate_agent",
     "derive_status",
     "get_by_agent_id",
     "get_by_agent_obj_ref",
