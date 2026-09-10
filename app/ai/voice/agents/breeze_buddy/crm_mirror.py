@@ -41,7 +41,10 @@ from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.crm.identity.contracts import resolve as crm_resolve
 from app.crm.record.contracts import record_event
-from app.database.accessor.breeze_buddy import lead_call_tracker as lct_accessor
+from app.database.accessor.breeze_buddy import (
+    lead_call_tracker as lct_accessor,
+    template as template_accessor,
+)
 from app.schemas import CallDirection, LeadCallStatus, LeadCallTracker
 
 SOURCE_LEAD_API = "lead-api"
@@ -103,6 +106,7 @@ async def mirror_to_crm(
     phone: Optional[str] = None,
     occurred_at: Optional[datetime] = None,
     customer_id: Optional[str] = None,
+    declared: Optional[Dict[str, Any]] = None,
     **facts: Any,
 ) -> None:
     """Record one buddy-side fact into the event spine.
@@ -111,6 +115,10 @@ async def mirror_to_crm(
     SID); this function qualifies it. ``**facts`` join lead_id and phone in
     the payload, None values dropped. ``customer_id`` is passed through when
     the caller already stamped the lead.
+
+    ``declared`` is the merchant-named half (a template's call answers), one
+    dict rather than more ``**facts`` so its names cannot collide with a
+    keyword above. Ours wins on a clash.
 
     Skips silently on a missing merchant_id or external_id — both are
     truthful non-CRM states, not errors.
@@ -129,7 +137,21 @@ async def mirror_to_crm(
         "customer_mobile_number": phone,
         **facts,
     }
+    # Names this letter owns, taken BEFORE the None filter: enrollment_id is
+    # None on an unenrolled lead, and a merchant field filling that gap would
+    # match the wrong run.
+    ours = set(payload)
     payload = {k: v for k, v in payload.items() if v is not None}
+
+    for name, value in (declared or {}).items():
+        if name in ours:
+            logger.warning(
+                f"{topic}: declared field {name!r} is a name this letter "
+                f"already owns — the call's own value is kept (lead {lead_id})"
+            )
+            continue
+        if value is not None:
+            payload[name] = value
 
     try:
         await record_event(
@@ -150,6 +172,42 @@ async def mirror_to_crm(
 # --------------------------------------------------------------------------
 # Lead-lifecycle taps (registered into the accessor's hook registry below)
 # --------------------------------------------------------------------------
+
+
+async def call_facts(lead: LeadCallTracker) -> Dict[str, Any]:
+    """What the call learned, as its own template declared it.
+
+    ``expected_callback_response_schema`` is the allow-list. Read from
+    ``metaData['outcome']`` first, then the top level. Carried whole — the
+    letter is stored verbatim (T13).
+    """
+    if not lead.template_id:
+        return {}
+    try:
+        template = await template_accessor.get_template_by_id(str(lead.template_id))
+    except Exception:
+        logger.opt(exception=True).warning(
+            f"CRM mirror: template {lead.template_id} unreadable — "
+            "call facts not carried"
+        )
+        return {}
+
+    schema = getattr(template, "expected_callback_response_schema", None)
+    meta = lead.metaData if isinstance(lead.metaData, dict) else {}
+    nested = meta.get("outcome")
+    nested = nested if isinstance(nested, dict) else {}
+
+    facts: Dict[str, Any] = {}
+    for name in schema if isinstance(schema, dict) else {}:
+        value = nested[name] if name in nested else meta.get(name)
+        # A bool is not one of these facts; a nested shape stays where it is.
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        facts[name] = text
+    return facts
 
 
 async def _stamp_customer_on_lead(
@@ -229,6 +287,7 @@ def _created_lead_tap(lead: LeadCallTracker) -> None:
                     started_at=lead.call_initiated_time,
                     ended_at=lead.call_end_time,
                     customer_name=customer_name,
+                    declared=await call_facts(lead),
                 )
 
         spawn_background_task(_tap(), name=f"crm-lead-created-{lead.id}")
@@ -251,8 +310,9 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
             return
         if not lead.merchant_id:
             return
-        spawn_background_task(
-            mirror_to_crm(
+
+        async def _tap() -> None:
+            await mirror_to_crm(
                 "call.completed",
                 merchant_id=lead.merchant_id,
                 external_id=lead.call_id or str(lead.id),
@@ -272,8 +332,11 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
                 started_at=lead.call_initiated_time,
                 ended_at=lead.call_end_time,
                 customer_name=(lead.payload or {}).get("customer_name"),
-            ),
-            name=f"crm-call-completed-{lead.call_id or lead.id}",
+                declared=await call_facts(lead),
+            )
+
+        spawn_background_task(
+            _tap(), name=f"crm-call-completed-{lead.call_id or lead.id}"
         )
     except Exception:  # fail-open: CRM taps never break the update
         logger.opt(exception=True).error(f"CRM finished-lead tap failed for {lead.id}")

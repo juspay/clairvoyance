@@ -30,6 +30,30 @@ from tests.crm.doubles import patch_accessors
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 LEASE = NOW + timedelta(seconds=300)
 
+
+class _Frozen(datetime):
+    """`datetime` with `now()` pinned to NOW.
+
+    A subclass because the stdlib type is immutable, and a subclass rather
+    than a stand-in so the walker's arithmetic behaves as it really does.
+    """
+
+    @classmethod
+    def now(cls, tz: Optional[timezone] = None) -> datetime:  # type: ignore[override]
+        return NOW
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fixtures are dated; the code under test is not.
+
+    NOW is a fixed 3 September, but walk_run asks the REAL clock for
+    `now - entered_at > max_age_days` (default 7). On the 10th every fixture
+    crossed its expiry and exited `timed_out` — nine tests failed on a date.
+    """
+    monkeypatch.setattr(walker, "datetime", _Frozen)
+
+
 _TWO_WAITS = {
     "entry": {"topic": "checkout.initiated"},
     "nodes": [
@@ -149,11 +173,9 @@ def test_advance_carries_the_lease_it_was_claimed_under(
     run_id, node, wake, context, lease = args
     assert (run_id, node, lease) == (str(run.id), "wait-1d", LEASE)
     assert context == run.context
-    assert (
-        timedelta(minutes=1439)
-        < wake - datetime.now(timezone.utc)
-        < timedelta(minutes=1441)
-    )
+    # Against the frozen clock, so exactly — the old window either side only
+    # existed to absorb drift between two real now() calls.
+    assert wake == NOW + timedelta(minutes=1440)
 
 
 def test_a_missed_cas_on_advance_defers_without_raising_or_exiting(

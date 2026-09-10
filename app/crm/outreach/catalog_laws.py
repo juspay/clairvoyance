@@ -68,6 +68,7 @@ def entry_against_catalog(
         for name in placeholder_names(node.args)
     ]
     listened = listened_facts(definition, catalogs)
+    open_squares = unenumerable_squares(definition, catalogs)
     for entry in definition.entries:
         topic = entry.topic
         fields = catalogs.get(topic)
@@ -82,14 +83,14 @@ def entry_against_catalog(
         declared = {variable_name(f.path) for f in fields.values() if f.variable}
         allowed = declared | _WALKER_FACTS | listened
         for node_id, blank, fact in mapped:
-            if fact not in allowed:
+            if fact not in allowed and not _from_open_square(fact, open_squares):
                 problems.append(
                     f"send node {node_id}: variable {blank!r} <- {fact!r} is not "
                     f"a declared variable field (topic {topic!r}; declared: "
                     f"{', '.join(sorted(declared)) or 'none'})"
                 )
         for node_id, name in asked:
-            if name not in allowed:
+            if name not in allowed and not _from_open_square(name, open_squares):
                 problems.append(
                     f"action node {node_id}: args ask for {{{name}}}, which is not "
                     f"a declared variable field (topic {topic!r}; declared: "
@@ -134,6 +135,32 @@ def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
                 if field.variable:
                     names.add(f"facts_{node.id}_{variable_name(field.path)}")
     return names
+
+
+def unenumerable_squares(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
+    """PURE: the wait_event squares whose letters nobody can enumerate.
+
+    A call's answers are declared by the TEMPLATE, so no catalog lists them.
+    Per SQUARE: every other name in the document stays checked.
+    """
+    open_squares: set = set()
+    if catalogs is None:
+        return open_squares
+    for node in definition.nodes:
+        if node.type != "wait_event":
+            continue
+        if any(catalogs.get(topic) is None for topic in node.topics):
+            open_squares.add(node.id)
+    return open_squares
+
+
+def _from_open_square(name: str, open_squares: set) -> bool:
+    """PURE: is `name` a `facts_<square>_<key>` of an unenumerable square?
+
+    Matched on the square's own id, since both an id and a key may contain
+    "_". Only that prefix is exempt.
+    """
+    return any(name.startswith(f"facts_{square}_") for square in open_squares)
 
 
 def condition_against_catalog(
