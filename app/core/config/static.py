@@ -19,7 +19,9 @@ ENABLE_DRAGONTTS_KILL_SWITCH = (
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))
 HOST = os.environ.get("HOST", "0.0.0.0")
-UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "true").lower() == "true"
+# Off by default: reload re-execs the server in a subprocess that cannot
+# reach the Daily bot zygote. Set UVICORN_RELOAD=true for local dev.
+UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "false").lower() == "true"
 UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
@@ -323,6 +325,20 @@ BB_MAX_CONCURRENT_DAILY_BOTS = int(os.environ.get("BB_MAX_CONCURRENT_DAILY_BOTS"
 # daily-python native thread) and would leak its process/connections forever.
 BB_DAILY_BOT_MAX_LIFETIME_SECS = int(
     os.environ.get("BB_DAILY_BOT_MAX_LIFETIME_SECS", "4500")
+)
+# How often the API process checks whether a zygote-forked bot is still alive.
+# A forked bot is the zygote's child, not ours, so it cannot be waited on and
+# has to be polled. Cheap (one pidfd select per bot), and the only cost of a
+# longer interval is that a finished bot's capacity slot frees up that much
+# later -- BB_MAX_CONCURRENT_DAILY_BOTS is a safety rail, not an exact count.
+BB_DAILY_BOT_POLL_INTERVAL_SECS = float(
+    os.environ.get("BB_DAILY_BOT_POLL_INTERVAL_SECS", "2.0")
+)
+# Ceiling on one request/reply exchange with the zygote. Forking is local work,
+# so anything slower means the zygote is wedged and the caller should stop
+# waiting on it.
+BB_DAILY_BOT_HANDOFF_TIMEOUT_SECS = float(
+    os.environ.get("BB_DAILY_BOT_HANDOFF_TIMEOUT_SECS", "10.0")
 )
 
 # KMS Configuration
