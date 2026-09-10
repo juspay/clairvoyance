@@ -443,6 +443,59 @@ class WorkflowRunSummary(BaseModel):
     by_split: Dict[str, Dict[str, int]] = Field(default_factory=dict)
 
 
+class SimulateEvent(BaseModel):
+    """The sample letter a dry run is walked against (enh A/05). `source`
+    is optional because an author knows the topic and rarely the word we
+    file it under; simulate looks it up from the code catalog."""
+
+    topic: str = Field(min_length=1)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    source: Optional[str] = None
+
+
+class SimulateRequest(BaseModel):
+    """One dry run. `answers` says what a listening square heard, by node
+    id — a label the board draws, or the node left out to let its alarm
+    win. `facts` overrides the letter's own facts, which is how "what if
+    the cart were 6,000" is asked without editing the payload."""
+
+    event: SimulateEvent
+    answers: Dict[str, str] = Field(default_factory=dict)
+    facts: Dict[str, Any] = Field(default_factory=dict)
+    use_draft: bool = False
+
+
+class SimulateStep(BaseModel):
+    """One square the token stood on: when it arrived, what would have
+    fired there (resolved, never sent), and what the square answered."""
+
+    node: str
+    type: str
+    at: str
+    action: Optional[Dict[str, Any]] = None
+    answer: Optional[str] = None
+
+
+class SimulateExit(BaseModel):
+    """How the walk ended, and when."""
+
+    reason: str
+    at: str
+
+
+class SimulateResult(BaseModel):
+    """A dry run's whole answer: did the letter get in, what happened and
+    when, where it ended, and everything that would have parked a real
+    run on the way (`problems`) — reported rather than raised, because a
+    board with one broken send is still worth seeing walked."""
+
+    admitted: bool
+    reason: str
+    path: List[SimulateStep] = Field(default_factory=list)
+    exit: Optional[SimulateExit] = None
+    problems: List[str] = Field(default_factory=list)
+
+
 class WorkflowVersion(BaseModel):
     """One published document of a plan (ADR 0023) and how many open runs
     still execute it — the versions list (rollout phase 14)."""

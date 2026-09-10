@@ -16,7 +16,7 @@ Unlike ``condition``, there is no ``else``: the arms' percents sum to 100
 """
 
 import hashlib
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.crm.outreach.nodes.context import reply_key, split_key
 from app.crm.outreach.schemas import (
@@ -106,6 +106,15 @@ def arm_for(arms: List[SplitArm], bucket: int) -> str:
         if bucket < ceiling:
             return arm.on
     return arms[-1].on
+
+
+def decide(node: WorkflowNode, context: Dict[str, Any]) -> Optional[str]:
+    """PURE: the arm, for a run id the caller puts in the context under
+    `run_id` (enh A/05's dry run passes a fixed one so an author pressing
+    the button twice sees the same answer). Absent = the empty string,
+    which still hashes — a dry run is about the SHAPE of the board, and a
+    made-up id would suggest a real customer's arm."""
+    return arm_for(node.arms, bucket_of(str(context.get("run_id", "")), node.id))
 
 
 async def execute(

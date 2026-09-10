@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.crm.outreach.entry import _context_from_payload
+from app.crm.outreach.entry import context_from_payload
 from app.crm.outreach.nodes import NODE_TYPES
 from app.crm.outreach.nodes.context import (
     is_bookkeeping,
@@ -227,7 +227,7 @@ def test_a_producer_cannot_spell_an_arm() -> None:
     """entry.py refuses a payload key that is ours: a letter carrying
     `split_which-letter: variant` must not overwrite the arm a run was
     assigned, and `split_payment: emi` must not become an experiment."""
-    context = _context_from_payload(
+    context = context_from_payload(
         {"order_id": "A1", "split_which-letter": "variant", "split_payment": "emi"},
         256,
     )
@@ -240,4 +240,4 @@ def test_a_producer_key_cannot_invent_an_experiment_in_the_report() -> None:
     show up in by_split is by entering the context at all — and the
     bookkeeping filter (above) is what keeps it out, on entry and on wake."""
     assert is_bookkeeping("split_payment")
-    assert "split_payment" not in _context_from_payload({"split_payment": "emi"}, 256)
+    assert "split_payment" not in context_from_payload({"split_payment": "emi"}, 256)
