@@ -24,10 +24,14 @@ from pipecat.transports.daily.utils import (
 )
 
 from app.ai.voice.agents.breeze_buddy.agent import daily_bot
+from app.ai.voice.agents.breeze_buddy.services.daily import zygote
 from app.ai.voice.agents.breeze_buddy.services.daily.launch_payload import (
     BotLaunchPayload,
 )
-from app.core.config.dynamic import BB_DAILY_BOT_SUBPROCESS
+from app.core.config.dynamic import (
+    BB_DAILY_BOT_SUBPROCESS,
+    BB_DAILY_BOT_ZYGOTE,
+)
 from app.core.config.static import (
     BB_DAILY_BOT_MAX_LIFETIME_SECS,
     BB_MAX_CONCURRENT_DAILY_BOTS,
@@ -114,6 +118,33 @@ async def _reap_bot_process(proc: asyncio.subprocess.Process, lead_id: str) -> N
         )
 
 
+# A forked bot is the zygote's child, not ours, so it cannot be waited on.
+_ZYGOTE_POLL_SECS = 2.0
+
+
+async def _reap_zygote_bot(handle: "zygote.BotHandle", lead_id: str) -> None:
+    """Watch a forked bot; mirrors _reap_bot_process for the zygote path."""
+    try:
+        # Monotonic, not a sleep counter: under event-loop stalls asyncio.sleep
+        # overshoots and the deadline would drift past the watchdog.
+        started = time.monotonic()
+        while handle.is_alive():
+            if time.monotonic() - started >= BB_DAILY_BOT_MAX_LIFETIME_SECS:
+                logger.warning(
+                    f"Daily bot (zygote fork) for lead {lead_id} "
+                    f"(pid={handle.pid}) exceeded BB_DAILY_BOT_MAX_LIFETIME_SECS="
+                    f"{BB_DAILY_BOT_MAX_LIFETIME_SECS}s — killing wedged child"
+                )
+                handle.kill()
+                return
+            await asyncio.sleep(_ZYGOTE_POLL_SECS)
+        logger.info(
+            f"Daily bot (zygote fork) for lead {lead_id} (pid={handle.pid}) exited"
+        )
+    finally:
+        handle.close()
+
+
 async def _launch_daily_bot(runner_args: DailyRunnerArguments) -> None:
     """Spawn ``bot_runner`` as the call's own OS process.
 
@@ -150,6 +181,25 @@ async def _launch_daily_bot(runner_args: DailyRunnerArguments) -> None:
         token=runner_args.token or "",
         body=body,
     ).model_dump_json()
+
+    # Fork from the pre-imported zygote; falls through to spawning below when
+    # it is off, absent or unhealthy.
+    if zygote.is_available() and await BB_DAILY_BOT_ZYGOTE():
+        # AmbiguousLaunch deliberately propagates: start_daily_session's
+        # caller rolls the lead back, which is safer than a second bot in the
+        # same room.
+        handle = await zygote.spawn_via_zygote(payload)
+        if handle is not None:
+            _track_live_bot(asyncio.create_task(_reap_zygote_bot(handle, lead_id)))
+            logger.info(
+                f"Forked Daily bot from zygote (pid={handle.pid}) "
+                f"for lead_id: {lead_id}"
+            )
+            return
+        logger.warning(
+            f"Zygote fork unavailable for lead {lead_id}; spawning a fresh "
+            "interpreter instead"
+        )
     # Payload goes over stdin, never argv: the Daily bot token must not be
     # visible in `ps` output. stdout/stderr are inherited so the child's
     # loguru output lands in the same container log stream; the environment

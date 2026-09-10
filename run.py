@@ -68,7 +68,28 @@ if __name__ == "__main__":
     logger.info("Parent process: Initializing DevCycle before starting workers...")
     asyncio.run(initialize_devcycle())
 
-    # STEP 5: Start uvicorn server (will spawn worker processes)
+    # STEP 5: Fork the Daily bot zygote here — the last point before uvicorn
+    # builds its event loop, and the only safe one to fork from.
+    if UVICORN_RELOAD:
+        # Reload re-execs the server in a subprocess, which imports zygote.py
+        # fresh and so cannot see the socket. Say so instead of forking a
+        # zygote nothing can reach.
+        logger.warning(
+            "UVICORN_RELOAD is on: Daily bot zygote disabled (the reloader's "
+            "server process cannot reach it). Unset it to use "
+            "BB_DAILY_BOT_ZYGOTE; launches fall back to spawning."
+        )
+    else:
+        try:
+            from app.ai.voice.agents.breeze_buddy.services.daily.zygote import (
+                start_zygote,
+            )
+
+            start_zygote()
+        except Exception as exc:  # noqa: BLE001 - never block server startup
+            logger.warning(f"Daily bot zygote unavailable, will spawn per call: {exc}")
+
+    # STEP 6: Start uvicorn server (will spawn worker processes)
     logger.info(f"Starting Uvicorn server on {HOST}:{PORT}")
     logger.info(f"Reload enabled: {UVICORN_RELOAD}")
     logger.info(f"Log level: {UVICORN_LOG_LEVEL}")

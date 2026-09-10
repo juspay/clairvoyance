@@ -42,7 +42,10 @@ COPY pyproject.toml uv.lock ./
 # Install Python dependencies using uv
 # Use --no-install-project to avoid installing the app/ package at this stage
 # This allows optimal Docker layer caching - dependencies layer is cached separately
-RUN uv sync --frozen --no-dev --no-install-project && \
+# --compile-bytecode: write .pyc at BUILD time. Without it every bot subprocess
+# recompiles ~12k source files on each call (PYTHONDONTWRITEBYTECODE=1 means the
+# result is never cached). Measured 1.4-1.8x faster bot startup under CPU pressure.
+RUN uv sync --frozen --no-dev --no-install-project --compile-bytecode && \
     uv pip show pipecat-ai
 
 # Download AIC assets from GCP Storage using authenticated context
@@ -69,6 +72,9 @@ RUN mkdir -p /usr/local/nltk_data && \
 
 # Copy application code
 COPY . .
+
+# Precompile the app's own bytecode too (same reason as --compile-bytecode above).
+RUN /app/.venv/bin/python -m compileall -q -j 0 /app/app || true
 
 # Set proper permissions
 RUN chmod +x run.py
