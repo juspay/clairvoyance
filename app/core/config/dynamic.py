@@ -284,6 +284,52 @@ async def WIDGET_STT_MAX_AUDIO_BYTES() -> int:
     return await get_config("WIDGET_STT_MAX_AUDIO_BYTES", 10 * 1024 * 1024, int)
 
 
+async def TRY_ON_CREDIT_FLOOR() -> int:
+    """Balance below which try-on is refused while chat keeps working. One
+    wallet funds both, and a generation costs several chat turns, so
+    without a floor a burst of try-ons silences the whole widget. The
+    default leaves one turn's worth: the shopper can still be answered."""
+    return await get_config("TRY_ON_CREDIT_FLOOR", 1, int)
+
+
+async def TRY_ON_MAX_PER_IP_HOUR() -> int:
+    """Try-on generations one IP may start per hour, per widget config. Its
+    own dial, not the chat ceiling: a generation costs 5x a chat turn from
+    the same wallet, so borrowing ``max_messages_per_ip_hour`` (600) would
+    let an hour of try-ons buy five hours of silence. 60 is about one a
+    minute — past any real shopper, below a draining burst."""
+    return await get_config("TRY_ON_MAX_PER_IP_HOUR", 60, int)
+
+
+async def TRY_ON_MAX_PER_SESSION() -> int:
+    """Successful generations one chat session may spend credits on. **0
+    means no cap, and 0 is the default** — a shopper trying a sixth look is
+    engaged, not abusive, and the wallet plus the IP bucket already bound
+    spend. Kept as a dial; counted from session state, so a cap that IS
+    set survives a reload."""
+    return await get_config("TRY_ON_MAX_PER_SESSION", 0, int)
+
+
+async def WIDGET_TRY_ON_MAX_PHOTO_BYTES() -> int:
+    """Max shopper photo accepted by the try-on route. The widget resizes
+    to 1280px first (90-200 KB in practice), so this is headroom for a
+    client that skipped it, under nautilus's own 16 MB cap."""
+    return await get_config("WIDGET_TRY_ON_MAX_PHOTO_BYTES", 4 * 1024 * 1024, int)
+
+
+async def TRY_ON_RESULT_CACHE_TTL_SECONDS() -> int:
+    """How long a generated image stays keyed by ``request_id``. Covers one
+    failure: the page reloading mid-generation, after which the widget
+    re-posts the same id and gets the image it already paid for."""
+    return await get_config("TRY_ON_RESULT_CACHE_TTL_SECONDS", 600, int)
+
+
+async def TRY_ON_GENERATION_TIMEOUT_SECONDS() -> int:
+    """Hard ceiling on the nautilus generate call. Observed runs land near
+    15s; past this the shopper has given up and the worker is just held."""
+    return await get_config("TRY_ON_GENERATION_TIMEOUT_SECONDS", 120, int)
+
+
 async def STT_MAX_AUDIO_BYTES() -> int:
     """Max audio upload accepted by the standalone ``POST /stt/transcribe``
     endpoint (template-independent one-shot transcription). Same rationale as
