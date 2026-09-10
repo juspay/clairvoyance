@@ -11,7 +11,7 @@ corpus sealed (shared/predicate.Condition, the door's own ``where``); the
 FIELD grammar is outreach/predicates.py.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.crm.identity.contracts import customer_facts
 from app.crm.outreach import predicates
@@ -50,6 +50,21 @@ def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
             "the honest outcome, never a parked run"
         )
     return problems
+
+
+def decide(node: WorkflowNode, context: Dict[str, Any]) -> Optional[str]:
+    """PURE: the label this square names from facts alone — the dry run's
+    half of execute (enh A/05).
+
+    No customer, deliberately. A simulation has no customer to read, and
+    inventing one would answer a question the author did not ask; a rule
+    that names customer.* simply does not hold, which is the same thing
+    execute does for a customer it cannot read. The dry run says so beside
+    the step rather than leaving the author to wonder."""
+    facts = run_facts(context, node)
+    stage_facts = context.get("facts")
+    stage_facts = stage_facts if isinstance(stage_facts, dict) else {}
+    return predicates.choose(node.rules, facts, stage_facts, None)
 
 
 async def execute(

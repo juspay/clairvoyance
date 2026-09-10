@@ -12,6 +12,15 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
 Validate = Callable[[WorkflowNode, WorkflowDefinition], List[str]]
+#: The pure half of a branching square's execute: which label it names,
+#: from facts alone. Used by the dry run (enh A/05), which has no customer
+#: to read and no run to write — the walker still calls execute, because a
+#: condition may pay for a customer read and a simulation may not.
+Decide = Callable[[WorkflowNode, Dict[str, Any]], Optional[str]]
+#: What a square WOULD do, for a dry run: the send it would post, the call
+#: it would place, the action it would perform, with everything resolved
+#: from the facts in hand. Never performs it.
+Describe = Callable[[WorkflowNode, Dict[str, Any], WorkflowDefinition], Dict[str, Any]]
 Execute = Callable[
     [EnrollmentRun, WorkflowNode, WorkflowDefinition], Awaitable[Dict[str, Any]]
 ]
@@ -39,3 +48,8 @@ class NodeSpec:
     # and `match` belongs to it (wait_event only).
     branches: bool = False
     listens: bool = False
+    # enh A/05, both read ONLY by the dry run. `decide` is a branching
+    # square's answer without the reads execute may make; `describe` is
+    # what a firing square would send, resolved but never sent.
+    decide: Optional[Decide] = None
+    describe: Optional[Describe] = None
