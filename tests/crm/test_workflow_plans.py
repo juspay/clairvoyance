@@ -878,14 +878,9 @@ def test_send_variables_must_be_declared_variable_fields_on_the_entry_topic() ->
 
 
 def test_action_args_must_name_declared_facts_too() -> None:
-    """The same allow-list, applied to the fourth verb.
-
-    An action's args ask the run for facts by `{name}` exactly as a send
-    node's variables do — the same lookup against the same run_facts — so
-    they answer to the same law. Without it, `{order_id}` on a door whose
-    topic declares only `id` publishes cleanly, validates cleanly, and
-    parks on the first run that reaches the square: the failure the
-    send-side check exists to prevent, reachable through the other verb.
+    """An action's args ask the run for facts by the same names a send node's
+    variables do, so they answer to the same allow-list. Without it
+    `{order_idd}` published and parked on the first run.
     """
     catalogs: plans.Catalogs = {"orders/create": _orders_create_catalog()}
 
@@ -985,3 +980,129 @@ def test_send_variables_may_name_a_stage_letters_fact_and_the_square() -> None:
     assert any(
         "'facts_ask_confirmed' is not a declared variable field" in p for p in problems
     )
+
+
+def test_an_unenumerable_square_exempts_only_its_own_facts() -> None:
+    """A call's answers are declared by the TEMPLATE, so no catalog can list
+    them and a send after a call may name facts_<square>_<anything>. The
+    first cut was one flag for the whole DOCUMENT, which lost the check for
+    every other blank on the board — a typo then published.
+    """
+    orders = _orders_create_catalog()
+    doc: Dict[str, Any] = {
+        **_COD,
+        "nodes": [
+            # Listens on a topic no layer declares — a call's own outcome.
+            {
+                "id": "after-call",
+                "type": "wait_event",
+                "topics": ["call.completed"],
+                "key": "outcome",
+                "minutes": 60,
+            },
+            {
+                "id": "thanks",
+                "type": "send",
+                "channel": "whatsapp",
+                "template": "t",
+                "variables": {"1": "facts_after-call_reason"},
+            },
+        ],
+        "edges": [["after-call", "thanks", "ANSWERED"]],
+        "purpose_key": "utility.order.thanks",
+    }
+    catalogs: plans.Catalogs = {"orders/create": orders, "call.completed": None}
+
+    # The square's own facts pass: nobody can enumerate them.
+    assert validate_definition(doc, catalogs=catalogs) == []
+
+    # A BARE name is still checked — this is the regression the flag caused.
+    typo = {
+        **doc,
+        "nodes": [
+            doc["nodes"][0],
+            {**doc["nodes"][1], "variables": {"1": "totally_bogus_typo"}},
+        ],
+    }
+    problems = validate_definition(typo, catalogs=catalogs)
+    assert any(
+        "'totally_bogus_typo' is not a declared variable field" in p for p in problems
+    ), problems
+
+    # …and so is an action arg.
+    bad_arg = {
+        **doc,
+        "nodes": [
+            doc["nodes"][0],
+            {
+                "id": "tag",
+                "type": "action",
+                "connector": "shopify",
+                "action": "add_tag",
+                "args": {"order_id": "{nonesuch}", "tags": ["x"]},
+            },
+        ],
+        "edges": [["after-call", "tag", "ANSWERED"]],
+    }
+    problems = validate_definition(bad_arg, catalogs=catalogs)
+    assert any("args ask for {nonesuch}" in p for p in problems), problems
+
+
+def test_the_exemption_belongs_to_the_square_that_earned_it() -> None:
+    """Two listening squares, one open and one not: one must not vouch for
+    the other's letters.
+    """
+    orders = _orders_create_catalog()
+    doc: Dict[str, Any] = {
+        **_COD,
+        "nodes": [
+            {
+                "id": "after-call",
+                "type": "wait_event",
+                "topics": ["call.completed"],
+                "key": "outcome",
+                "minutes": 60,
+            },
+            {
+                "id": "ask",
+                "type": "wait_event",
+                "topics": ["orders/paid"],
+                "key": "$topic",
+                "minutes": 60,
+            },
+            {
+                "id": "thanks",
+                "type": "send",
+                "channel": "whatsapp",
+                "template": "t",
+                "variables": {"1": "facts_after-call_anything_at_all"},
+            },
+        ],
+        "edges": [
+            ["after-call", "ask", "ANSWERED"],
+            ["ask", "thanks", "orders/paid"],
+        ],
+        "purpose_key": "utility.order.thanks",
+    }
+    catalogs: plans.Catalogs = {
+        "orders/create": orders,
+        "orders/paid": orders,
+        "call.completed": None,
+    }
+    assert validate_definition(doc, catalogs=catalogs) == []
+
+    # The ENUMERABLE square's letters are still held to its topic's fields,
+    # even though an open square exists on the same board.
+    closed = {
+        **doc,
+        "nodes": [
+            doc["nodes"][0],
+            doc["nodes"][1],
+            {**doc["nodes"][2], "variables": {"1": "facts_ask_not_a_field"}},
+        ],
+    }
+    problems = validate_definition(closed, catalogs=catalogs)
+    assert any(
+        "'facts_ask_not_a_field' is not a declared variable field" in p
+        for p in problems
+    ), problems

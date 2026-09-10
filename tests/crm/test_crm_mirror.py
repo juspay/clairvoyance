@@ -19,7 +19,7 @@ from app.ai.voice.agents.breeze_buddy.crm_mirror import (
 from app.database.decoder.breeze_buddy.lead_call_tracker import (
     decode_lead_call_tracker,
 )
-from app.schemas import CallDirection, LeadCallTracker
+from app.schemas import CallDirection, LeadCallStatus, LeadCallTracker
 
 
 def test_event_key_qualifies_by_topic() -> None:
@@ -192,3 +192,146 @@ def test_call_completed_mirror_names_the_run_and_the_outcome(
         )
     )
     assert "enrollment_id" not in recorded[0]["payload"]
+
+
+# --------------------------------------------------------------------------
+# A template's declared answers, and the names a merchant is free to choose
+# --------------------------------------------------------------------------
+
+
+def _completed(**over: Any) -> LeadCallTracker:
+    """A finished TELEPHONY lead, the shape the completed tap fires on."""
+    fields: Dict[str, Any] = {
+        "id": "L9",
+        "reseller_id": "r1",
+        "template": "t",
+        "template_id": "tpl-1",
+        "merchant_id": "m1",
+        "call_id": "CA999",
+        "status": LeadCallStatus.FINISHED,
+        "execution_mode": "TELEPHONY",
+        "outcome": "ANSWERED",
+        "call_direction": CallDirection.OUTBOUND,
+        "payload": {"customer_mobile_number": "+919999999999"},
+    }
+    fields.update(over)
+    return LeadCallTracker(**fields)
+
+
+def _mirror_harness(
+    monkeypatch: pytest.MonkeyPatch, schema: Optional[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Everything the completed tap touches, stubbed; returns what was
+    recorded. The template read is the only cold one call_facts makes."""
+    recorded: List[Dict[str, Any]] = []
+
+    async def fake_record_event(**kw: Any) -> None:
+        recorded.append(kw)
+
+    async def fake_get_template(template_id: str) -> Any:
+        return type("T", (), {"expected_callback_response_schema": schema})()
+
+    def run_now(coro: Any, name: Optional[str] = None) -> None:
+        asyncio.run(coro)
+
+    monkeypatch.setattr(crm_mirror, "record_event", fake_record_event)
+    monkeypatch.setattr(crm_mirror, "spawn_background_task", run_now)
+    monkeypatch.setattr(
+        crm_mirror.template_accessor, "get_template_by_id", fake_get_template
+    )
+    return recorded
+
+
+def test_a_declared_answer_named_outcome_still_produces_a_letter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """call_facts returns MERCHANT-authored names. Splatted beside the
+    mirror's own `outcome=` keyword, a template declaring `outcome` raised
+    TypeError inside the spawned tap — logged, swallowed, no letter, and the
+    run sat until max_age_days. As one dict it cannot collide.
+    """
+    recorded = _mirror_harness(monkeypatch, {"outcome": {}, "reason": {}})
+    lead = _completed(
+        metaData={"outcome": {"outcome": "she cancelled", "reason": "cost"}}
+    )
+
+    _finished_lead_tap(lead)
+
+    assert len(recorded) == 1, "the letter must still be filed"
+    payload = recorded[0]["payload"]
+    # OURS wins: the walker and the console read `outcome` off this payload,
+    # so the call's own verdict is kept and the declared field is dropped.
+    assert payload["outcome"] == "ANSWERED"
+    # …and every name that does NOT collide still rides along.
+    assert payload["reason"] == "cost"
+
+
+def test_every_reserved_name_survives_being_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not just `outcome` — the same crash was one declaration away on every
+    keyword the completed tap passes.
+    """
+    reserved = [
+        "lead_id",
+        "call_id",
+        "outcome",
+        "enrollment_id",
+        "direction",
+        "started_at",
+        "ended_at",
+        "customer_name",
+        "customer_mobile_number",
+    ]
+    for name in reserved:
+        recorded = _mirror_harness(monkeypatch, {name: {}})
+        _finished_lead_tap(_completed(metaData={"outcome": {name: "declared"}}))
+        assert len(recorded) == 1, f"{name} lost the letter"
+        assert recorded[0]["payload"].get(name) != "declared", name
+
+
+def test_the_hooks_nested_claim_outranks_buddys_scratch_space(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The top level is also buddy's scratch space ("stuck_processing_timeout",
+    abort reasons). metaData['outcome'] is the hook's alone, so it wins.
+    """
+    recorded = _mirror_harness(monkeypatch, {"reason": {}})
+    _finished_lead_tap(
+        _completed(
+            metaData={
+                "reason": "stuck_processing_timeout",  # buddy's own word
+                "outcome": {"reason": "she found it cheaper"},  # the agent's
+            }
+        )
+    )
+
+    assert recorded[0]["payload"]["reason"] == "she found it cheaper"
+
+
+def test_a_declared_name_absent_from_the_nest_still_reads_the_top_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A template option merges its `metadata` onto lead.metaData with no nest
+    at all — that writer must keep working.
+    """
+    recorded = _mirror_harness(monkeypatch, {"chosen_slot": {}})
+    _finished_lead_tap(_completed(metaData={"chosen_slot": "tomorrow 4pm"}))
+
+    assert recorded[0]["payload"]["chosen_slot"] == "tomorrow 4pm"
+
+
+def test_a_long_declared_answer_reaches_the_spine_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The letter is stored verbatim (T13), so nothing is trimmed here. The
+    ceiling that used to live in call_facts belongs to run context, and
+    entry.py applies it there.
+    """
+    long_address = "x" * 300
+    recorded = _mirror_harness(monkeypatch, {"updated_address": {}})
+    _finished_lead_tap(
+        _completed(metaData={"outcome": {"updated_address": long_address}})
+    )
+
+    assert recorded[0]["payload"]["updated_address"] == long_address
