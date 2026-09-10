@@ -12,6 +12,7 @@ from app.crm.outreach.db.queries.tables import (
     VERSION_TABLE,
     WORKFLOW_TABLE,
 )
+from app.crm.outreach.schemas import SPLIT_PREFIX
 
 _RUN_COLUMNS = """
     id, merchant_id, workflow_id, workflow_version, customer_id, status,
@@ -583,6 +584,39 @@ def workflow_summary_query(
         GROUP BY GROUPING SETS ((status, exit_reason), ())
     """
     return query, [merchant_id, workflow_id, since, until]
+
+
+def workflow_split_counts_query(
+    merchant_id: str,
+    workflow_id: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> Tuple[str, List[Any]]:
+    """Runs per arm of each split square (enh A/04), over the same window
+    as the summary above.
+
+    Its OWN statement rather than another grouping set, because a run with
+    two split squares expands to two rows here — folded into the main
+    aggregate that would count it twice and quietly inflate `runs`. The
+    keys are discovered from the context (`split_<node>`), never from the
+    document, so a report needs no version read and an arm recorded by a
+    version since edited still counts.
+
+    ``jsonb_each_text`` is safe on any context: a non-object column cannot
+    occur (the column is written as an object and 058 defaults it to one),
+    and a run with no split contributes no rows at all.
+    """
+    query = f"""
+        SELECT fact.key AS arm_key, fact.value AS arm, count(*) AS runs
+        FROM {ENROLLMENT_TABLE} e
+        CROSS JOIN LATERAL jsonb_each_text(e.context) AS fact(key, value)
+        WHERE e.merchant_id = $1 AND e.workflow_id = $2
+          AND ($3::timestamptz IS NULL OR e.entered_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR e.entered_at < $4::timestamptz)
+          AND fact.key LIKE $5
+        GROUP BY fact.key, fact.value
+    """
+    return query, [merchant_id, workflow_id, since, until, f"{SPLIT_PREFIX}%"]
 
 
 _RUN_COLUMNS_OF_E = ", ".join(f"e.{c.strip()}" for c in _RUN_COLUMNS.split(","))

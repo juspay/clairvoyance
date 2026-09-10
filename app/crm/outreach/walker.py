@@ -192,8 +192,8 @@ async def _advance(
             context.update(await execute(run, node, definition))
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
-        if node.type == "wait_event":
-            # Leaving a listening square: its answer is spent (phase 15).
+        if NODE_TYPES[node.type].branches:
+            # Leaving a branching square: its answer is spent (phase 15).
             # A door may start a run on any square, so this one can be
             # revisited — a stale reply would resolve the revisit at once.
             context = without_reply(context, node.id)
@@ -250,10 +250,11 @@ def pick_next(
     node: WorkflowNode, arrows: List[Tuple[str, Optional[str]]], context: Dict[str, Any]
 ) -> Optional[str]:
     """PURE: which arrow leaves this square. A plain node has one. A
-    wait_event node takes the arrow labelled with its answer, or
-    "timeout" when the alarm fired first, else the "else" arrow (phase
-    18) when it has one; no matching arrow = the end."""
-    if node.type != "wait_event":
+    branching node (the registry's word — wait_event, condition) takes
+    the arrow labelled with its answer, or "timeout" when the alarm fired
+    first, else the "else" arrow (phase 18) when it has one; no matching
+    arrow = the end."""
+    if not NODE_TYPES[node.type].branches:
         return arrows[0][0] if arrows else None
     answer = context.get(reply_key(node.id))
     wanted = TIMEOUT if answer is None else answer

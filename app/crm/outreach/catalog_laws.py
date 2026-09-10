@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.crm.outreach.ladder import expand_stages
+from app.crm.outreach.nodes import NODE_TYPES
 from app.crm.outreach.nodes.action import placeholder_names
 from app.crm.outreach.schemas import WorkflowDefinition
 from app.crm.record.contracts import (
@@ -127,7 +128,7 @@ def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
     if catalogs is None:
         return names
     for node in definition.nodes:
-        if node.type != "wait_event":
+        if not NODE_TYPES[node.type].listens:
             continue
         for topic in node.topics:
             for field in (catalogs.get(topic) or {}).values():
@@ -186,10 +187,15 @@ async def gather_catalogs(merchant_id: str, raw: Dict[str, Any]) -> Catalogs:
         for door in doors
         if isinstance(door, dict) and door.get("topic")
     }
-    # …and every topic a wait_event square listens on: its letter's facts
-    # (phase 16) are what a send may name as facts_<square>_<key>.
+    # …and every topic a listening square hears: its letter's facts
+    # (phase 16) are what a send may name as facts_<square>_<key>. The
+    # registry says which words listen (N1 retired) — a raw dict here,
+    # before the schema has judged it, so an unknown word simply doesn't.
     for node in raw.get("nodes") or [] if isinstance(raw, dict) else []:
-        if isinstance(node, dict) and node.get("type") == "wait_event":
+        if not isinstance(node, dict):
+            continue
+        spec = NODE_TYPES.get(str(node.get("type")))
+        if spec is not None and spec.listens:
             topics.update(str(t) for t in node.get("topics") or [] if t)
     catalogs: Dict[str, Optional[Dict[str, CatalogField]]] = {}
     problems: List[str] = []

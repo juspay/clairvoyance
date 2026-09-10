@@ -11,6 +11,8 @@ the PR that makes it.
 |---|---|---|
 | `cart-recovery.json` | Cart abandonment (`context/reading-notes.md` §16.1) | one board: wait 30m → WhatsApp → wait 30m → rescue call → wait 1d |
 | `cart-recovery-fallback.json` | The cart board with a fallback after the call (rollout phase 18, G2) | after the rescue call, a listening square hears THIS run's `call.completed` (`match` on `enrollment_id`): no answer / busy / early hang-up → a second WhatsApp; `else` → the day of listening |
+| `cart-recovery-tiered.json` | The cart board with a `condition` square (enh A/01) | wait 30m → **decide**: `context.total_price >= 5000` → rescue call, `else` → WhatsApp nudge → wait 1d. One square reads a fact already in hand and picks the labelled edge without waiting |
+| `cart-recovery-split.json` | The cart board with a `split` square (enh A/04) | wait 30m → **which-letter**: 70% `control` → `cart_recovery_1`, 30% `variant` → `cart_recovery_2` → wait 1d. One square sends a fixed share of runs down each arm and remembers which arm each run took, so the plan's summary reports runs per arm (`by_split`) and the two letters can be compared. The arm is a hash of the run id and the square id, so a lease retry never moves a run between arms; the shares total 100 because a split has no `else` |
 | `loan-dropoff.json` | Loan-onboarding drop-off (§16.2; rollout phase 17) | one **pinned board** written as a `stages` ladder: five stages in order; quiet 30m on a stage (120m on the offer) → call → listen for a day → the end; expanded into the wait_event board at create/draft/publish |
 
 Placeholders: every `template_id` is the string `TEMPLATE_ID_PLACEHOLDER`

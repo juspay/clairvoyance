@@ -52,6 +52,25 @@ def _variable_map_problems(node: WorkflowNode) -> List[str]:
     return problems
 
 
+def describe(
+    node: WorkflowNode, context: Dict[str, Any], definition: WorkflowDefinition
+) -> Dict[str, Any]:
+    """PURE: the message this square WOULD post (enh A/05) — the same
+    channel, template and resolved blanks execute would hand connectivity,
+    built by the same send_variables, so a dry run cannot promise a
+    message the real send would refuse. Raises what execute parks on; the
+    simulator renders it beside the step."""
+    if not context.get("phone"):
+        raise ValueError("no phone in the letter — this send would park")
+    if not definition.purpose_key:
+        raise ValueError("the plan has no purpose — this send would park")
+    return {
+        "channel": node.channel,
+        "template": node.template,
+        "variables": send_variables(node.variables, context, node),
+    }
+
+
 async def execute(
     run: EnrollmentRun, node: WorkflowNode, definition: WorkflowDefinition
 ) -> Dict[str, Any]:

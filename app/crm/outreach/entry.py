@@ -33,6 +33,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
+from app.crm.outreach.nodes import NODE_TYPES
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
     is_bookkeeping,
@@ -67,7 +68,7 @@ _PHONE_PATHS = ("customer_mobile_number", "phone")
 _FOUNDING_KEYS = ("source_event_id", "entered_event_at")
 
 
-def _phone_from_payload(payload: dict) -> str | None:
+def phone_from_payload(payload: dict) -> str | None:
     """The number the sends will actually dial or message — normalized to
     E.164 here, because resolve() normalizes only what it probes on and
     context is a separate copy. Unnormalized, a bare "9876543210" would
@@ -141,7 +142,7 @@ async def consume_attributed_event(
     for flow in flows:
         definition = WorkflowDefinition.model_validate(flow.definition)
         for door in definition.entries:
-            if door.topic == event.topic and _where_matches(door, event):
+            if door.topic == event.topic and where_matches(door, event):
                 await _try_enrol(
                     flow,
                     definition,
@@ -201,9 +202,9 @@ async def _wake_on_reply(
     square (context.facts.<square>), so a later call can say what this
     stage's letter said; the same bridge enrol uses, so bookkeeping names
     and nested payload never reach the run."""
-    facts = _context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
+    facts = context_from_payload(event.payload, await CRM_CONTEXT_VALUE_MAX_CHARS())
     for node in definition.nodes:
-        if node.type != "wait_event" or event.topic not in node.topics:
+        if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
             continue
         if not _is_about(node, event, run):
             continue  # another run's letter (phase 18): not this square's
@@ -261,7 +262,7 @@ def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
     keys; None when the square is not listening for the topic, or the
     field is missing (B1). The ONE definition of "this letter is this
     square's answer": the wake and the repeat refusal below both ask it."""
-    if node.type != "wait_event" or event.topic not in node.topics:
+    if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
         return None
     answer = (
         event.topic
@@ -326,7 +327,7 @@ def _goal_patch(event: RawEvent) -> dict:
     return {"goal": goal}
 
 
-def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
+def where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
     """One door's typed where-grammar against the payload
     (shared/predicate.py); fields resolve through record's catalog paths —
     dot-walks and the code layer's derived fields. No table read: the
@@ -338,7 +339,7 @@ def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
     )
 
 
-def _context_from_payload(payload: dict, max_chars: int) -> dict:
+def context_from_payload(payload: dict, max_chars: int) -> dict:
     """The template-variable bridge: merchants send standard identity keys
     (customer_mobile_number, customer_name) plus whatever scalar keys
     their call template references ({item}, {cart_value}); those small
@@ -375,16 +376,16 @@ async def _try_enrol(
     if not admit:
         return  # a keyed plan without its key: a refusal, not an error
     max_chars = await CRM_CONTEXT_VALUE_MAX_CHARS()
-    context = _context_from_payload(event.payload, max_chars)
+    context = context_from_payload(event.payload, max_chars)
     # The catalog's declared variables win over the scalar copy: the engine
     # resolved them through the declared paths (customer_name from
     # customer.first_name + last_name), and a bookkeeping name is still ours.
-    context.update(_context_from_payload(variables or {}, max_chars))
+    context.update(context_from_payload(variables or {}, max_chars))
     context["source_event_id"] = str(event.id)
     # When the founding letter HAPPENED (its own claim, else the envelope's
     # receipt): goals compare against this, not the row's insert time (G7).
     context["entered_event_at"] = (event.occurred_at or event.received_at).isoformat()
-    phone = (handles or {}).get("phone") or _phone_from_payload(event.payload)
+    phone = (handles or {}).get("phone") or phone_from_payload(event.payload)
     if phone:
         context["phone"] = phone
     run = await enrol(

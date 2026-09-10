@@ -151,6 +151,40 @@ with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` → `wa-fallback`
 Publish it exactly like the board above; the second template must be
 approved on the merchant's WhatsApp account or publish refuses it.
 
+## Branching on facts (`docs/crm/plans/cart-recovery-tiered.json`)
+
+A `condition` square (enh A/01) picks an edge from what the run already
+knows — no waiting, no letter. The tiered board calls only when the cart
+is worth it and nudges on WhatsApp otherwise:
+
+```json
+{
+  "id": "decide",
+  "type": "condition",
+  "rules": [
+    { "on": "big", "if": [ { "field": "context.total_price", "op": ">=", "value": 5000 } ] }
+  ]
+}
+```
+
+with edges `["decide", "rescue-call", "big"]` and `["decide", "wa-nudge", "else"]`.
+
+- **Rules are judged in order**; the first whose conditions ALL hold names
+  the edge. OR is two rules. None holding takes the mandatory `else` edge —
+  a predicate never parks a run.
+- **The ops are the door's own where-grammar** (`is`, `is_not`, `in`, `=`,
+  `>`, `>=`, `<`, `<=`, `exists`): `is` compares text exactly, `=` and the
+  ordering ops read numbers (Shopify posts money as `"1850.00"`).
+- **Fields** say where the value comes from: `context.<key>` (the run's
+  facts, plus `current_node` / `current_stage`), `facts.<node>.<key>` (one
+  stage's letter), `customer.display_name` / `primary_locale` / `timezone`
+  / `has_phone` / `has_email`, and `customer.attributes.<name>` (the winning
+  claim of an asserted attribute — an inferred-only claim reads as absent).
+  A handle value is never readable: `customer.phone` is refused at publish.
+- **The customer is read once**, and only when a rule names `customer.`.
+- The square is not a wait: the walker evaluates it, takes the edge, runs
+  the next action and writes once, all in the same visit.
+
 ## Watch it run
 
 ```bash
