@@ -81,7 +81,7 @@ from app.crm.connectivity.onboarding import (
     onboard,
     resubscribe,
 )
-from app.crm.connectivity.queue import queue_message
+from app.crm.connectivity.queue import message_id_for_dedupe, queue_message
 from app.crm.connectivity.reasons import reason_label
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
@@ -103,6 +103,7 @@ __all__ = [
     "dispatch_send",
     # producing a send
     "queue_message",
+    "message_id_for_dedupe",
     # asking a connector to act (the walker's action square)
     "perform_action",
     "action_names",

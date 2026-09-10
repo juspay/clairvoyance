@@ -194,9 +194,19 @@ class WorkflowNode(BaseModel):
     arms: List["SplitArm"] = Field(default_factory=list)
 
 
-# An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a
-# wait_event node ("YES", "NO", "timeout"); every other node has one plain
-# arrow.
+# An arrow: [from, to] or [from, to, on]. A plain node has ONE plain arrow.
+# A BRANCHING square (the registry's word: wait_event, condition, split)
+# labels every arrow with `on`, and the label is the square's ANSWER:
+#   wait_event  the letter's payload[key] — a button id, an outcome word,
+#               or the topic itself when key is "$topic";
+#   condition   a rule's `on`, judged in document order;
+#   split       an arm's `on`, chosen by the run's stable bucket.
+# Two labels are the walker's own and no square produces them: "timeout"
+# (a listening square's alarm won) and "else" (nothing else matched —
+# the alarm too, on a listening square with no "timeout" edge). A label
+# no rule or arm can answer is legal and dead; the validator warns on it
+# (plans.definition_warnings, enh A/06) rather than refusing, because a
+# document may be saved mid-edit.
 WorkflowEdge = Union[Tuple[str, str], Tuple[str, str, str]]
 
 
@@ -420,10 +430,17 @@ class WorkflowSummary(BaseModel):
 
 
 class Workflow(WorkflowSummary):
-    """Detail shape — carries both documents."""
+    """Detail shape — carries both documents.
+
+    `warnings` (enh A/06, N16) is what the document does that is legal
+    and probably not meant — a square nothing leads to, a loop, a
+    listening square with no timeout edge, a label no rule answers. Set
+    on the create, draft and publish answers and never stored: it is a
+    reading of the document, and the document is what is stored."""
 
     definition: Optional[Dict[str, Any]]
     draft: Optional[Dict[str, Any]]
+    warnings: List[str] = Field(default_factory=list)
 
 
 class WorkflowRunSummary(BaseModel):
@@ -437,10 +454,22 @@ class WorkflowRunSummary(BaseModel):
     open: Dict[str, int]
     median_minutes_to_exit: Optional[float]
     recovered_amount: Optional[float]
-    # enh A/04: runs per arm of each split square, {node: {arm: count}}.
-    # Empty for every plan with no split — the experiment's own report,
-    # read from the runs themselves so there is no counter to drift.
-    by_split: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+    # enh A/04 + A/06: each split square's arms, {node: {arm: report}} —
+    # how many runs took the arm, how many are still open, and how the
+    # finished ones ended. The exits are the point: "control 40%
+    # goal_met, variant 55%" is the experiment's answer, and a bare count
+    # per arm could only say the split was honest. Empty for a plan with
+    # no split; read from the runs themselves so there is no counter to
+    # drift.
+    by_split: Dict[str, Dict[str, "SplitArmReport"]] = Field(default_factory=dict)
+
+
+class SplitArmReport(BaseModel):
+    """One arm of one split square, over the summary's window."""
+
+    runs: int
+    open: int
+    by_exit_reason: Dict[str, int] = Field(default_factory=dict)
 
 
 class SimulateEvent(BaseModel):
@@ -494,6 +523,9 @@ class SimulateResult(BaseModel):
     path: List[SimulateStep] = Field(default_factory=list)
     exit: Optional[SimulateExit] = None
     problems: List[str] = Field(default_factory=list)
+    # The document's own warnings (plans.definition_warnings), so a dry
+    # run that walked cleanly can still say "and nothing leads to X".
+    warnings: List[str] = Field(default_factory=list)
 
 
 class WorkflowVersion(BaseModel):

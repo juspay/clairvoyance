@@ -6,7 +6,7 @@ waiting tokens, an edge into nowhere, vocabulary the walker doesn't speak.
 gather -> decide (PURE, returns the problems) -> apply.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
@@ -24,6 +24,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
+from app.crm.outreach.nodes.wait_event import ELSE, TIMEOUT
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
     GOAL_EXIT_REASONS,
@@ -193,6 +194,122 @@ def validate_definition(
     return problems
 
 
+def definition_warnings(raw: Dict[str, Any]) -> List[str]:
+    """PURE: what a document does that is LEGAL and probably not meant
+    (enh A/06, N15 + N16). A warning never refuses — a document may be
+    saved mid-edit, and the editor is the place to finish it — but it is
+    said out loud on the create, draft and publish answers, because the
+    alternative was found the hard way: a board of five complete squares
+    and no arrows saved cleanly, published cleanly, and ran only the
+    first one.
+
+    Four readings, in the order an author meets them:
+    - a square nothing leads to (no door starts there, no arrow reaches
+      it), seeded from every door's start because a multi-door plan
+      admits people onto mid-board squares;
+    - a loop — legal and sometimes meant (a nudge that re-arms on every
+      letter), but a run in one ends only by goal, timeout or max age;
+    - a listening square with neither a "timeout" nor an "else" edge —
+      when the alarm wins, the run ends there and the author may not
+      have meant "give up";
+    - a label no rule or arm of a self-deciding square answers — the
+      edge is drawn, and it is dead.
+
+    A document that does not validate has PROBLEMS, which
+    validate_definition reports; this returns nothing for it rather than
+    a second, contradictory list."""
+    try:
+        definition = WorkflowDefinition.model_validate(expand_stages(dict(raw)))
+    except Exception:  # noqa: BLE001 — problems, not warnings
+        return []
+    nodes = {node.id: node for node in definition.nodes}
+    if any(edge[0] not in nodes or edge[1] not in nodes for edge in definition.edges):
+        return []  # an edge to nowhere is a PROBLEM; walking it would be noise
+    warnings: List[str] = []
+    outgoing = definition.outgoing()
+
+    starts = [door.start for door in definition.entries if door.start in nodes]
+    reachable: set = set()
+    frontier = list(starts)
+    while frontier:
+        current = frontier.pop()
+        if current in reachable:
+            continue
+        reachable.add(current)
+        frontier.extend(dst for dst, _ in outgoing.get(current, []))
+    for node in definition.nodes:
+        if node.id not in reachable:
+            warnings.append(
+                f"nothing leads to {node.id} — no door starts there and no arrow "
+                "reaches it, so it never runs"
+            )
+
+    if _has_cycle(outgoing, list(nodes)):
+        warnings.append(
+            "the board loops back on itself — fine when meant (a nudge that "
+            "re-arms on every letter); a run inside the loop ends only by a "
+            "goal, a timeout edge, or the plan's max age"
+        )
+
+    # One line for all of them, not one per square: a ladder (phase 17)
+    # ends every stage's listening window this way BY DESIGN, and four
+    # copies of the same sentence on every publish of the loan board
+    # would teach an author to stop reading warnings.
+    deaf = [
+        node.id
+        for node in definition.nodes
+        if NODE_TYPES[node.type].listens
+        and not {on for _, on in outgoing.get(node.id, [])} & {TIMEOUT, ELSE}
+    ]
+    if deaf:
+        warnings.append(
+            f"{', '.join(deaf)}: listens with no 'timeout' or 'else' edge — when "
+            "the alarm wins, the run ends there"
+        )
+
+    for node in definition.nodes:
+        labels = {on for _, on in outgoing.get(node.id, [])}
+        # N15: a self-deciding square's answers are its rules or its arms;
+        # a label outside them is an edge the walker can never take. Read
+        # from the fields, never from the type — a wait_event has neither.
+        answers = {rule.on for rule in node.rules} | {arm.on for arm in node.arms}
+        if answers:
+            for on in sorted(o for o in labels if o and o not in answers | {ELSE}):
+                warnings.append(
+                    f"{node.id}: edge labelled {on!r} — no rule or arm of this "
+                    "square answers that, so the edge is never taken"
+                )
+    return warnings
+
+
+def _has_cycle(outgoing: Dict[str, List[Any]], node_ids: List[str]) -> bool:
+    """PURE: does any arrow lead back to a square already on the path?
+    Iterative three-colour walk; a board is small, but a recursive one
+    would still be the wrong shape for a request handler."""
+    white, grey, black = 0, 1, 2
+    colour = {node_id: white for node_id in node_ids}
+    for root in node_ids:
+        if colour[root] != white:
+            continue
+        stack: List[Tuple[str, int]] = [(root, 0)]
+        colour[root] = grey
+        while stack:
+            current, index = stack[-1]
+            arrows = outgoing.get(current, [])
+            if index < len(arrows):
+                stack[-1] = (current, index + 1)
+                dst = arrows[index][0]
+                if colour.get(dst, black) == grey:
+                    return True
+                if colour.get(dst, black) == white:
+                    colour[dst] = grey
+                    stack.append((dst, 0))
+            else:
+                colour[current] = black
+                stack.pop()
+    return False
+
+
 def _entry_changed(raw_entry: Any, live_entry: Any) -> bool:
     """PURE: does the draft's entry MEAN something different from the live
     one? Compared as validated models, so a draft that omits the defaults
@@ -275,9 +392,10 @@ async def create_workflow(
     problems = validate_definition(definition, catalogs=catalogs)
     if problems:
         raise WorkflowValidationError(problems)
-    return await workflow_accessor.insert_workflow(
+    workflow = await workflow_accessor.insert_workflow(
         merchant_id, name, expand_stages(definition), created_by
     )
+    return workflow.model_copy(update={"warnings": definition_warnings(definition)})
 
 
 async def update_draft(
@@ -287,9 +405,12 @@ async def update_draft(
     problems = validate_definition(definition, catalogs=catalogs)
     if problems:
         raise WorkflowValidationError(problems)
-    return await workflow_accessor.update_draft(
+    workflow = await workflow_accessor.update_draft(
         merchant_id, workflow_id, expand_stages(definition)
     )
+    if workflow is None:
+        return None
+    return workflow.model_copy(update={"warnings": definition_warnings(definition)})
 
 
 async def publish_workflow(
@@ -299,8 +420,11 @@ async def publish_workflow(
     catalogs = await _gather_catalogs(
         merchant_id, (draft.draft if draft else None) or {}
     )
-    return await atomically(
+    published = await atomically(
         _publish_in_txn, merchant_id, workflow_id, published_by, catalogs
+    )
+    return published.model_copy(
+        update={"warnings": definition_warnings(published.definition or {})}
     )
 
 

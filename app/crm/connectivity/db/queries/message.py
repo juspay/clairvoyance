@@ -70,6 +70,21 @@ def insert_message_query(
     ]
 
 
+def message_id_for_dedupe_query(
+    merchant_id: str, dedupe_key: str
+) -> Tuple[str, List[Any]]:
+    """The row a dedupe key already names (enh A/06, N12). One indexed
+    probe on the same (merchant_id, dedupe_key) unique the insert
+    conflicts on — so a producer whose insert was absorbed can learn which
+    row absorbed it, without a second write."""
+    query = f"""
+        SELECT id
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1 AND dedupe_key = $2
+    """
+    return query, [merchant_id, dedupe_key]
+
+
 def claim_queued_messages_query(batch_size: int) -> Tuple[str, List[Any]]:
     """Take up to ``batch_size`` queued rows for this worker.
 

@@ -26,7 +26,13 @@ from app.crm.outreach.schemas import (
     Workflow,
     WorkflowDefinition,
 )
-from app.crm.outreach.simulate import MAX_STEPS, SimulationRefused, _pick, simulate
+from app.crm.outreach.simulate import (
+    MAX_STEPS,
+    SimulationRefused,
+    _phone_in,
+    _pick,
+    simulate,
+)
 from app.crm.outreach.walker import pick_next
 from app.crm.record.catalog import code_entries
 
@@ -332,3 +338,16 @@ def test_the_route_is_admin_only_and_mounted() -> None:
     assert any(
         getattr(d, "call", None) is crm_admin_user for d in route.dependant.dependencies
     ), "the dry run reads a plan and must stay admin-only"
+
+
+def test_the_dry_runs_phone_stand_in_normalizes_like_every_writer() -> None:
+    """enh A/06 N14 moved the payload hunt out of the entry consumer (the
+    extractor's handles are the one source there); the dry run keeps a
+    stand-in because it cannot run the engine. It must normalize the way
+    every writer does, or a simulated send would name a number the real
+    send would not."""
+    assert _phone_in({"customer_mobile_number": "9876543210"}) == "+919876543210"
+    assert _phone_in({"phone": "+91 98765 43210"}) == "+919876543210"
+    assert _phone_in({"customer": {"phone": "09876543210"}}) == "+919876543210"
+    assert _phone_in({"phone": "n/a"}) == "n/a"  # handed through, the send parks
+    assert _phone_in({}) is None

@@ -28,16 +28,12 @@ from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.crm.outreach.catalog_laws import gather_catalogs
 from app.crm.outreach.db.accessors import workflow as workflow_accessor
 from app.crm.outreach.enrol import _admission
-from app.crm.outreach.entry import (
-    context_from_payload,
-    phone_from_payload,
-    where_matches,
-)
+from app.crm.outreach.entry import context_from_payload, where_matches
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.nodes.context import reply_key
 from app.crm.outreach.nodes.wait_event import ELSE, TIMEOUT
-from app.crm.outreach.plans import validate_definition
+from app.crm.outreach.plans import definition_warnings, validate_definition
 from app.crm.outreach.schemas import (
     SimulateExit,
     SimulateRequest,
@@ -48,6 +44,7 @@ from app.crm.outreach.schemas import (
     WorkflowNode,
 )
 from app.crm.record.contracts import RawEvent
+from app.crm.shared.normalize import normalize_phone
 
 #: How far a dry run will walk. The walker's own bound is per visit; a
 #: simulation crosses many, so it needs its own. A board that has not
@@ -100,13 +97,20 @@ async def simulate(
     definition = WorkflowDefinition.model_validate(raw)
     event = _sample_event(merchant_id, request)
     now = datetime.now(timezone.utc)
+    # The document's own warnings ride every answer, admitted or not: a
+    # letter refused at the door still leaves an author with a board to
+    # finish (enh A/06, N16).
+    warnings = definition_warnings(raw)
 
     door, reason = _door_for(definition, event, now)
     if door is None:
-        return SimulateResult(admitted=False, reason=reason, path=[], exit=None)
+        return SimulateResult(
+            admitted=False, reason=reason, path=[], exit=None, warnings=warnings
+        )
 
     context = await _context_for(event, request)
-    return _walk(definition, door, context, request.answers)
+    result = _walk(definition, door, context, request.answers)
+    return result.model_copy(update={"warnings": warnings})
 
 
 # --- admission ---------------------------------------------------------------
@@ -175,13 +179,36 @@ async def _context_for(event: RawEvent, request: SimulateRequest) -> Dict[str, A
     # survives context_from_payload — entry.py re-adds it from what
     # identity resolved on, and a dry run has no identity, so it reads the
     # letter's own standard keys through the same normalizing helper.
-    phone = request.facts.get("phone") or phone_from_payload(event.payload)
+    phone = request.facts.get("phone") or _phone_in(event.payload)
     if phone:
         context["phone"] = str(phone)
     # What the split square hashes. Fixed, so two identical requests give
     # one answer; see SIMULATED_RUN_ID.
     context["run_id"] = SIMULATED_RUN_ID
     return context
+
+
+def _phone_in(payload: Dict[str, Any]) -> Optional[str]:
+    """The dry run's stand-in for the extractor engine, which it cannot
+    run: record hands the entry consumer the handles its spec found, and
+    a simulation has no record pass. Three places a sample letter puts a
+    number — the flat standard key, a bare `phone`, Shopify's
+    customer.phone — normalized to E.164 as every writer must be. A
+    number the engine would find elsewhere (a vendor's own path) is
+    missed here and shows as "no phone — this send would park", which is
+    honest and visible."""
+    raw: Optional[str] = None
+    for key in ("customer_mobile_number", "phone"):
+        if payload.get(key):
+            raw = str(payload[key])
+            break
+    if raw is None:
+        customer = payload.get("customer")
+        if isinstance(customer, dict) and customer.get("phone"):
+            raw = str(customer["phone"])
+    if raw is None:
+        return None
+    return normalize_phone(raw) or raw
 
 
 # --- the walk ----------------------------------------------------------------

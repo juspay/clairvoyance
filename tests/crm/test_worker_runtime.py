@@ -193,7 +193,13 @@ def test_entry_topic_enrols_with_phone_and_small_facts(
     calls: List[Any] = []
     _wire(monkeypatch, _flow(), calls)
     event = _event("checkout.initiated")
-    asyncio.run(entry.consume_attributed_event(event, "cust-1"))
+    # The record pass hands over what the extractor found (enh A/06, N14:
+    # the consumer no longer hunts the payload itself).
+    asyncio.run(
+        entry.consume_attributed_event(
+            event, "cust-1", handles={"phone": "+919845012345"}
+        )
+    )
     ((kind, kwargs),) = calls
     assert kind == "enrol"
     assert kwargs["customer_id"] == "cust-1"

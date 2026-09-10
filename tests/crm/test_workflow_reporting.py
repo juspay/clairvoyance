@@ -147,24 +147,43 @@ def test_the_arm_counts_are_their_own_statement_over_the_same_window() -> None:
     assert "jsonb_each_text" in query
     assert "e.merchant_id = $1" in query and "e.workflow_id = $2" in query
     assert "fact.key LIKE $5" in query
-    assert "GROUP BY fact.key, fact.value" in query
+    assert "GROUP BY fact.key, fact.value, e.status, e.exit_reason" in query
     assert values[0] == "m1" and values[-1] == "split_%"
 
 
-def test_decoder_names_the_square_an_author_drew() -> None:
+def _arm(key: str, arm: Any, status: str, reason: Any, runs: int) -> Dict[str, Any]:
+    return {
+        "arm_key": key,
+        "arm": arm,
+        "status": status,
+        "exit_reason": reason,
+        "runs": runs,
+    }
+
+
+def test_decoder_reports_each_arm_with_its_exits() -> None:
+    """enh A/06: the experiment's answer is the exits per arm, not the
+    count — 40 of control's 71 recovered, 20 of discount's 29."""
     rows = [
-        {"arm_key": "split_experiment", "arm": "control", "runs": 71},
-        {"arm_key": "split_experiment", "arm": "discount", "runs": 29},
-        {"arm_key": "split_second-test", "arm": "A", "runs": 12},
+        _arm("split_experiment", "control", "exited", "goal_met", 40),
+        _arm("split_experiment", "control", "exited", "completed", 25),
+        _arm("split_experiment", "control", "waiting", None, 6),
+        _arm("split_experiment", "discount", "exited", "goal_met", 20),
+        _arm("split_experiment", "discount", "parked", None, 9),
+        _arm("split_second-test", "A", "exited", "timed_out", 12),
         # Total: neither of these is a square's arm.
-        {"arm_key": "split_", "arm": "orphan", "runs": 9},
-        {"arm_key": "split_experiment", "arm": None, "runs": 3},
+        _arm("split_", "orphan", "exited", "goal_met", 9),
+        _arm("split_experiment", None, "exited", "goal_met", 3),
     ]
     summary = decode_run_summary([], rows)
-    assert summary.by_split == {
-        "experiment": {"control": 71, "discount": 29},
-        "second-test": {"A": 12},
-    }
+    control = summary.by_split["experiment"]["control"]
+    discount = summary.by_split["experiment"]["discount"]
+    assert (control.runs, control.open) == (71, 6)
+    assert control.by_exit_reason == {"goal_met": 40, "completed": 25}
+    assert (discount.runs, discount.open) == (29, 9)
+    assert discount.by_exit_reason == {"goal_met": 20}
+    assert summary.by_split["second-test"]["A"].by_exit_reason == {"timed_out": 12}
+    assert set(summary.by_split) == {"experiment", "second-test"}
 
 
 def test_decoder_carries_the_plan_name_on_a_customer_run() -> None:

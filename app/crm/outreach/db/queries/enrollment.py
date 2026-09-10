@@ -605,16 +605,22 @@ def workflow_split_counts_query(
     ``jsonb_each_text`` is safe on any context: a non-object column cannot
     occur (the column is written as an object and 058 defaults it to one),
     and a run with no split contributes no rows at all.
+
+    Grouped by the run's status and exit reason too (enh A/06): an arm's
+    count says the split was honest, and only the arm's EXITS say which
+    arm won — "control 40% goal_met, variant 55%" is the experiment's
+    whole answer. One more GROUP BY column, same index, same window.
     """
     query = f"""
-        SELECT fact.key AS arm_key, fact.value AS arm, count(*) AS runs
+        SELECT fact.key AS arm_key, fact.value AS arm,
+               e.status, e.exit_reason, count(*) AS runs
         FROM {ENROLLMENT_TABLE} e
         CROSS JOIN LATERAL jsonb_each_text(e.context) AS fact(key, value)
         WHERE e.merchant_id = $1 AND e.workflow_id = $2
           AND ($3::timestamptz IS NULL OR e.entered_at >= $3::timestamptz)
           AND ($4::timestamptz IS NULL OR e.entered_at < $4::timestamptz)
           AND fact.key LIKE $5
-        GROUP BY fact.key, fact.value
+        GROUP BY fact.key, fact.value, e.status, e.exit_reason
     """
     return query, [merchant_id, workflow_id, since, until, f"{SPLIT_PREFIX}%"]
 
