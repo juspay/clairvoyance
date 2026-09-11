@@ -459,3 +459,90 @@ def test_advancing_off_a_listening_square_clears_its_reply(
     assert verb == "advance" and args[1] == "wait-1d"
     written = args[3]
     assert "reply_ask" not in written and written["order_id"] == "O-1"
+
+
+# --- the condition node (enh A/01): branch, then keep walking ----------------
+
+_CONDITION_BOARD = {
+    "entry": {"topic": "checkout.initiated"},
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {
+            "id": "decide",
+            "type": "condition",
+            "rules": [
+                {
+                    "on": "big",
+                    "if": [{"field": "context.cart_value", "op": ">=", "value": 5000}],
+                }
+            ],
+        },
+        {"id": "rescue-call", "type": "call", "template_id": "tpl-1"},
+        {"id": "wa-nudge", "type": "send", "channel": "whatsapp", "template": "t"},
+        {"id": "wait-1d", "type": "wait", "minutes": 1440},
+    ],
+    "edges": [
+        ["wait-30m", "decide"],
+        ["decide", "rescue-call", "big"],
+        ["decide", "wa-nudge", "else"],
+        ["rescue-call", "wait-1d"],
+        ["wa-nudge", "wait-1d"],
+    ],
+    "goal": {"topics": ["order.placed"]},
+    "purpose_key": "utility",
+}
+
+
+def _quiet_actions(monkeypatch: pytest.MonkeyPatch, fired: List[str]) -> None:
+    """The action squares record their name instead of reaching a machine."""
+    import app.crm.outreach.nodes as nodes
+
+    async def call(run: Any, node: Any, definition: Any) -> Dict[str, Any]:
+        fired.append("call")
+        return {"lead_rescue-call": "lead-1"}
+
+    async def send(run: Any, node: Any, definition: Any) -> Dict[str, Any]:
+        fired.append("send")
+        return {"message_wa-nudge": "msg-1"}
+
+    monkeypatch.setitem(
+        nodes.NODE_TYPES,
+        "call",
+        nodes.NODE_TYPES["call"].__class__(
+            validate=nodes.NODE_TYPES["call"].validate, execute=call, is_wait=False
+        ),
+    )
+    monkeypatch.setitem(
+        nodes.NODE_TYPES,
+        "send",
+        nodes.NODE_TYPES["send"].__class__(
+            validate=nodes.NODE_TYPES["send"].validate, execute=send, is_wait=False
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "cart_value, expect",
+    [(6000, "call"), (1000, "send"), (None, "send")],
+    ids=["big->call", "small->send", "missing->else"],
+)
+def test_a_condition_branches_and_the_visit_continues_to_the_next_wait(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None, cart_value: Any, expect: str
+) -> None:
+    """decide is not a wait: the walker evaluates it, takes the labelled
+    edge, runs the action square and only THEN writes — one advance, onto
+    wait-1d, with the condition's reply cleared like a listening square's."""
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=True, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    run = _run()
+    run.current_node = "decide"
+    run.context = {"phone": "+919876543210"}
+    if cart_value is not None:
+        run.context["cart_value"] = cart_value
+    _advance(writes, run)
+    assert fired == [expect]
+    ((verb, args),) = writes.calls
+    assert verb == "advance" and args[1] == "wait-1d"
+    assert "reply_decide" not in args[3]

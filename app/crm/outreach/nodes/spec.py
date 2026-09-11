@@ -32,3 +32,10 @@ class NodeSpec:
     validate: Validate
     execute: Optional[Execute]
     is_wait: bool
+    # enh A/01, N1 retired: nothing outside the registry matches a type
+    # string. `branches`: the square's edges carry labels and pick_next
+    # reads its answer from reply_<node> (wait_event, condition).
+    # `listens`: the square hears a letter — the entry consumer wakes it
+    # and `match` belongs to it (wait_event only).
+    branches: bool = False
+    listens: bool = False

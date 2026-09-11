@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 from app.core.logger import logger
 from app.core.logger.context import update_log_context
 from app.crm.identity.db import DbTxn, accessor, atomically
+from app.crm.identity.schemas import CustomerFacts
 
 EVIDENCE_RANK = {"declared": 3, "observed": 2, "imported": 1, "inferred": 0}
 
@@ -39,6 +40,20 @@ MATERIALIZED_COLUMNS = {
     "locale": "primary_locale",
     "timezone": "timezone",
 }
+
+# Attribute names a reader outside identity may never see the value of:
+# the handle columns' names (a producer could assert them as facts) and
+# the handle-history bucket ADR 0021's trigger fills.
+HANDLE_LIKE_ATTRIBUTES = frozenset(
+    {
+        "phone",
+        "email",
+        "igsid",
+        "shopify_customer_id",
+        "external_ref",
+        "_handle_history",
+    }
+)
 
 
 def claim_confidence(evidence: str, confidence: Optional[float]) -> float:
@@ -126,4 +141,49 @@ async def _assert_facts_in_txn(
 
     await accessor.update_attributes(
         txn, merchant_id, customer_id, json.dumps(attributes), materialized
+    )
+
+
+def winning_attributes(attributes: Dict[str, Any]) -> Dict[str, Any]:
+    """PURE: each asserted attribute's winning value by the ladder — the
+    same rule that materialises columns — minus what a reader may not
+    have: an inferred-only winner (a guess may steer, never decide) and
+    the handle-like names. Total over a malformed history: a bucket that
+    is not a list of claims simply reads as absent."""
+    winners: Dict[str, Any] = {}
+    for name, claims in attributes.items():
+        if name in HANDLE_LIKE_ATTRIBUTES or name.startswith("_"):
+            continue
+        usable = (
+            [c for c in claims if isinstance(c, dict) and "at" in c]
+            if isinstance(claims, list)
+            else []
+        )
+        if not usable:
+            continue
+        winner = _winner(usable)
+        if winner.get("e") == "inferred":
+            continue
+        winners[name] = winner.get("v")
+    return winners
+
+
+async def customer_facts(merchant_id: str, customer_id: str) -> Optional[CustomerFacts]:
+    """The predicate-safe view of one customer (enh A/01), for outreach's
+    condition node: the whitelisted columns, has_phone/has_email derived,
+    and the attribute winners. None when the row is missing — the caller
+    treats that as "no rule about the customer holds", never an error."""
+    row = await accessor.get_customer(merchant_id, customer_id)
+    if row is None:
+        return None
+    history = row.attributes
+    if isinstance(history, str):
+        history = json.loads(history)
+    return CustomerFacts(
+        display_name=row.display_name,
+        primary_locale=row.primary_locale,
+        timezone=row.timezone,
+        has_phone=bool(row.phone),
+        has_email=bool(row.email),
+        attributes=winning_attributes(history if isinstance(history, dict) else {}),
     )

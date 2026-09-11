@@ -13,7 +13,7 @@ outreach, so a word module may import it without a cycle.
 
 from typing import Any, Dict, Optional
 
-from app.crm.outreach.schemas import WorkflowNode
+from app.crm.outreach.schemas import SPLIT_PREFIX, WorkflowNode
 
 # The walker's own bookkeeping in a run's context — never a template
 # variable, never a lead payload key: pointers, the phone (re-added under
@@ -61,6 +61,16 @@ def is_bookkeeping(key: str) -> bool:
 def reply_key(node_id: str) -> str:
     """Where a wait_event square's answer lives in the run's context."""
     return f"reply_{node_id}"
+
+
+def split_key(node_id: str) -> str:
+    """Where a split square's arm lives, for good (enh A/04).
+
+    Beside ``reply_key`` because they are written together and cleared
+    apart: the reply is spent when the token leaves the square, and this
+    one is not — a report groups runs by arm days later, and an
+    experiment that forgets which arm a run took is not an experiment."""
+    return f"{SPLIT_PREFIX}{node_id}"
 
 
 def without_reply(context: Dict[str, Any], node_id: str) -> Dict[str, Any]:
