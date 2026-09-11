@@ -2,7 +2,7 @@
 
 from typing import Any, Mapping
 
-from app.crm.connectivity.schemas.message import QueuedMessage
+from app.crm.connectivity.schemas.message import QueuedMessage, SendBehind
 from app.crm.shared.decode import jsonb_object, uuid_or_none
 
 
@@ -26,4 +26,14 @@ def decode_queued_message(row: Mapping[str, Any]) -> QueuedMessage:
         dedupe_key=row["dedupe_key"],
         attempt=row["attempt"],
         next_attempt_at=row["next_attempt_at"],
+    )
+
+
+def decode_send_behind(row: Mapping[str, Any]) -> SendBehind:
+    """One crm_message row -> who caused it. source_id is a uuid column and
+    the caller compares it to a run id as text, so it is rendered here."""
+    return SendBehind(
+        source_kind=row["source_kind"],
+        source_id=str(row["source_id"]) if row["source_id"] is not None else None,
+        dedupe_key=row["dedupe_key"],
     )

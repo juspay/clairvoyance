@@ -11,6 +11,7 @@ the PR that makes it.
 |---|---|---|
 | `cart-recovery.json` | Cart abandonment (`context/reading-notes.md` §16.1) | one board: wait 30m → WhatsApp → wait 30m → rescue call → wait 1d |
 | `cart-recovery-fallback.json` | The cart board with a fallback after the call (rollout phase 18, G2) | after the rescue call, a listening square hears THIS run's `call.completed` (`match` on `enrollment_id`): no answer / busy / early hang-up → a second WhatsApp; `else` → the day of listening |
+| `cod-confirm.json` | COD confirmation, and the reply that answers ONE send (`../reply-run-matching.md`) | send → a listening square → tag the order: `CONFIRM` / `form_submitted` → confirmed, `CANCEL` → cancelled, `timeout` → wait. Note what is NOT here: no `match`. Her tap carries the id of the message it answers and the manifest names the run that sent it, so one customer's several open orders keep several separate runs with nothing declared |
 | `loan-dropoff.json` | Loan-onboarding drop-off (§16.2; rollout phase 17) | one **pinned board** written as a `stages` ladder: five stages in order; quiet 30m on a stage (120m on the offer) → call → listen for a day → the end; expanded into the wait_event board at create/draft/publish |
 
 Placeholders: every `template_id` is the string `TEMPLATE_ID_PLACEHOLDER`

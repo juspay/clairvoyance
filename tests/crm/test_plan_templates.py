@@ -23,6 +23,7 @@ PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
 CART = PLANS / "cart-recovery.json"
 CART_FALLBACK = PLANS / "cart-recovery-fallback.json"
 LOAN = PLANS / "loan-dropoff.json"
+COD = PLANS / "cod-confirm.json"
 
 # The funnel, in order (§16.2): stage i listens for every stage after it;
 # disbursed ends the journey as the goal, rejected/withdrawn as withdrawn.
@@ -79,7 +80,8 @@ def test_the_expected_documents_exist() -> None:
     assert CART.is_file(), CART
     assert LOAN.is_file(), LOAN
     assert CART_FALLBACK.is_file(), CART_FALLBACK
-    assert _every_plan() == [CART_FALLBACK, CART, LOAN]
+    assert COD.is_file(), COD
+    assert _every_plan() == [CART_FALLBACK, CART, COD, LOAN]
 
 
 @pytest.mark.parametrize("path", _every_plan(), ids=lambda p: p.stem)
@@ -238,3 +240,22 @@ def test_cart_recovery_fallback_is_the_cart_board_with_the_call_outcome_branch()
         ("wait-1d", "else"),
     }
     assert ["wa-fallback", "wait-1d"] in doc["edges"]
+
+
+def test_the_cod_board_declares_no_match_and_does_not_need_one() -> None:
+    """The document exists to show what a reply-listening board looks like
+    AFTER attribution (docs/crm/reply-run-matching.md): a send, a square
+    that listens, and nothing declaring which run a reply belongs to.
+
+    Her tap carries the id of the message it answers; the manifest names the
+    run and the square that sent it. Pinning the ABSENCE here because it is
+    the whole point, and because a helpful future edit adding a `match` line
+    would quietly reintroduce something to get wrong.
+    """
+    board = _load(COD)
+    square = next(n for n in board["nodes"] if n["type"] == "wait_event")
+    assert square["topics"] == ["message.inbound"]
+    assert "match" not in square
+    assert ["confirm", square["id"]] in [e[:2] for e in board["edges"]]
+    labels = {e[2] for e in board["edges"] if len(e) > 2}
+    assert {"CONFIRM", "CANCEL", "form_submitted", "timeout"} <= labels
