@@ -121,6 +121,8 @@ def test_ops_come_from_type_and_phone_is_never_filterable() -> None:
         "datetime",
         "phone",
         "list",
+        # LIST-shaped: containment, never equality (predicate.LIST_OPS).
+        "tags",
     }
 
 

@@ -14,11 +14,24 @@ compares text exactly (no numeric coercion — that is `=`'s job).
 
 import re
 from datetime import datetime
-from typing import Any, Callable, Iterable, List, Literal, Optional
+from typing import Any, Callable, FrozenSet, Iterable, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-Op = Literal["is", "is_not", "in", ">", ">=", "<", "<=", "=", "exists"]
+Op = Literal[
+    "is",
+    "is_not",
+    "in",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "=",
+    "exists",
+    "has_all",
+    "has_any",
+    "has_none",
+]
 # The op FAMILIES, by what they compare. The catalog's OPS_BY_TYPE (record/
 # catalog.py) is built from these, so a type's allowed ops and the evaluator
 # that runs them cannot drift apart.
@@ -26,6 +39,8 @@ TEXT_OPS = ("is", "is_not", "in")  # exact text, never coerced
 ORDER_OPS = (">", ">=", "<", "<=")  # numbers or datetimes
 EQUALS_OP = "="  # numbers only
 EXISTS_OP = "exists"
+LIST_OPS = ("has_all", "has_any", "has_none")
+_LIST_VALUE_OPS = ("in", *LIST_OPS)
 _NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
 
 
@@ -39,11 +54,11 @@ class Condition(BaseModel):
 
     @model_validator(mode="after")
     def _value_matches_op(self) -> "Condition":
-        if self.op == "in":
+        if self.op in _LIST_VALUE_OPS:
             if not isinstance(self.value, list) or not self.value:
-                raise ValueError("'in' needs a non-empty list value")
+                raise ValueError(f"{self.op!r} needs a non-empty list value")
             if any(isinstance(v, (list, dict)) or v is None for v in self.value):
-                raise ValueError("'in' values must be scalars")
+                raise ValueError(f"{self.op!r} values must be scalars")
         elif self.op == "exists":
             if self.value is not None:
                 raise ValueError("'exists' takes no value")
@@ -62,6 +77,50 @@ def as_number(value: Any) -> Optional[float]:
     if isinstance(value, str) and _NUMBER.match(value.strip()):
         return float(value.strip())
     return None
+
+
+def as_tag_set(value: Any) -> Optional[FrozenSet[str]]:
+    """A list-shaped value as a set, or None when it is not list-shaped.
+
+    Reads both Shopify shapes — a REST comma string and a GraphQL array — and
+    casefolds both sides, since Shopify matches tags case-insensitively and an
+    exact compare would give a rule that silently never fires.
+    """
+    if isinstance(value, bool):
+        return None  # a boolean is not a one-item list
+    if isinstance(value, str):
+        items: Iterable[Any] = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = value
+    else:
+        return None
+    return frozenset(
+        text
+        for item in items
+        if isinstance(item, (str, int, float)) and not isinstance(item, bool)
+        for text in (str(item).strip().casefold(),)
+        if text
+    )
+
+
+def _contains(op: str, actual: Any, wanted: Any) -> bool:
+    """One list op, both sides through as_tag_set.
+
+    `has_none` means "present and holds none of these", never "not has_any":
+    an absent field is not evidence of absence, and the caller already
+    returned False for it.
+    """
+    have = as_tag_set(actual)
+    if have is None:
+        return False
+    want: FrozenSet[str] = frozenset(
+        tag for value in wanted for tag in (as_tag_set(value) or frozenset())
+    )
+    if op == "has_all":
+        return want <= have
+    if op == "has_any":
+        return bool(want & have)
+    return not (want & have)  # has_none
 
 
 def _as_datetime(value: Any) -> Optional[datetime]:
@@ -116,6 +175,8 @@ def evaluate(condition: Condition, actual: Any) -> bool:
     op = condition.op
     if op == "exists":
         return True
+    if op in LIST_OPS:
+        return _contains(op, actual, condition.value)
     if op == "is":
         return _same(actual, condition.value)
     if op == "is_not":

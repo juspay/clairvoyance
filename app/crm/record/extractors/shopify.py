@@ -329,6 +329,7 @@ def _order_fields() -> List[CatalogField]:
             "Payment status",
             values=FINANCIAL_STATUSES,
         ),
+        _f("payload.tags", "tags", "Order tags", variable=True),
         _f("payload.gateway", "text", "Payment method"),
         # ── what a message or an agent actually says ──────────────────────
         # Shopify's own hosted status page: no login, no lookup — the one
@@ -337,7 +338,6 @@ def _order_fields() -> List[CatalogField]:
         _f("payload.confirmation_number", "text", "Confirmation no.", variable=True),
         _f("payload.email", "text", "Order email", variable=True),
         _f("payload.note", "text", "Order note", variable=True),
-        _f("payload.tags", "text", "Tags", variable=True),
         _f("payload.total_outstanding", "number", "Amount due", variable=True),
         # Where it is going. The parts stay declared beside the whole: a
         # call confirms the city and never the street, while a shipped-out

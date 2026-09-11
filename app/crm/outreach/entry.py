@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
+from app.crm.outreach.conditions import conditions_match
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -50,7 +51,6 @@ from app.crm.outreach.schemas import (
 )
 from app.crm.record.contracts import RawEvent, canonical_path, derive_for, field_value
 from app.crm.shared.normalize import normalize_phone
-from app.crm.shared.predicate import matches
 
 # Fallback only: where a phone hides in a payload when no extractor
 # handles were passed in (the voice mirrors, which send the flat shape).
@@ -178,6 +178,8 @@ async def _end_on_goal(
             if str(run.context.get(tier.key.run, "")) != str(value):
                 continue  # about another run of hers
             key = (tier.key.run, str(value))
+        if not conditions_match(tier.where, event):
+            continue
         if await enrollment_accessor.cancel_run(
             run.merchant_id,
             str(run.id),
@@ -349,15 +351,8 @@ def _goal_patch(event: RawEvent) -> dict:
 
 
 def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
-    """One door's typed where-grammar against the payload
-    (shared/predicate.py); fields resolve through record's catalog paths —
-    dot-walks and the code layer's derived fields. No table read: the
-    validator guaranteed op-type fit at publish."""
-    derive = derive_for(event.source, event.topic)
-    return matches(
-        door.where,
-        lambda path: field_value(event.payload, path, derive),
-    )
+    """One door's admission conditions (conditions.py: the one evaluator)."""
+    return conditions_match(door.where, event)
 
 
 def _context_from_payload(payload: dict, max_chars: int) -> dict:

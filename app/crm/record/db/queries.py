@@ -159,6 +159,51 @@ def customer_has_event_query(
     return query, params
 
 
+def customer_goal_events_query(
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Optional[Tuple[str, str]] = None,
+    limit: int = 50,
+) -> Tuple[str, List[Any]]:
+    """The letters themselves, for a goal tier the EXISTS above cannot
+    answer — one carrying a `where` (outreach phase 20).
+
+    Same index, same narrowing, one clause more: newest first and capped,
+    so the caller can run the SAME pure evaluator over the payloads that
+    judged them live at arrival. The alternative was compiling the
+    where-grammar to SQL here, which needs each field's catalog TYPE (a
+    numeric cast over a text column raises on the first non-numeric row)
+    and would put a SECOND evaluator in the system — the drift
+    extractors/engine.py was written to end. The grammar still owes a
+    compiler to phase-2 segments; it is not owed to this read.
+
+    Deliberately NOT the whole window: a goal is judged live by the entry
+    consumer against the full payload, and this is the walker's
+    belt-and-suspenders re-check. The cap bounds what a claim may fetch;
+    the caller names it and says why."""
+    keyed = "AND payload->>$5 = $6" if where else ""
+    params: List[Any] = [merchant_id, customer_id, topics, since]
+    if where:
+        params.extend([where[0], where[1]])
+    params.append(limit)
+    query = f"""
+        SELECT id, merchant_id, source, topic, schema_version,
+               external_id, payload, received_at, occurred_at,
+               customer_id, attempts
+        FROM {EVENT_RAW_TABLE}
+        WHERE merchant_id = $1
+          AND customer_id = $2
+          AND topic = ANY($3)
+          AND COALESCE(occurred_at, received_at) > $4
+          {keyed}
+        ORDER BY COALESCE(occurred_at, received_at) DESC
+        LIMIT ${len(params)}
+    """
+    return query, params
+
+
 # --- crm_event_schema (T24) + the catalog's compute-on-read queries ---------
 
 EVENT_SCHEMA_TABLE = "crm_event_schema"

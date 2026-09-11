@@ -45,7 +45,13 @@ from app.crm.record.schemas import (
     SampledField,
     SchemaRegistration,
 )
-from app.crm.shared.predicate import EQUALS_OP, EXISTS_OP, ORDER_OPS, TEXT_OPS
+from app.crm.shared.predicate import (
+    EQUALS_OP,
+    EXISTS_OP,
+    LIST_OPS,
+    ORDER_OPS,
+    TEXT_OPS,
+)
 
 # Type -> the ops the where-grammar implements for it. Spelled from the
 # evaluator's own families (shared/predicate.py), so the UI shows exactly
@@ -63,6 +69,7 @@ OPS_BY_TYPE: Dict[str, List[str]] = {
     # array semantics (design/event-catalog.md, sealed) — a condition on a
     # list field is refused at publish, naming the empty set.
     "list": [],
+    "tags": [*LIST_OPS, EXISTS_OP],
 }
 KEYABLE_TYPES = ("text", "number")
 MAX_REGISTERED_FIELDS = 200
