@@ -34,9 +34,17 @@ def _voice_call_credits(duration_seconds: int, **_: object) -> Decimal:
 # defined for completeness/future-readiness (per the finalized
 # 1-credit-per-30-seconds billing rule) but is not yet wired into any voice
 # call site -- unused until that feature is built.
+#: Credits one generated try-on image costs. A flat price, kept here with
+#: the rule that applies it — the same place chat_turn's 1 and
+#: voice_call's 30-second block live. The wallet check reads it too, so
+#: the balance a shopper is refused on is the price they would be charged.
+TRY_ON_CREDITS = 5
+
+
 BILLING_RULES: Dict[str, Callable[..., Decimal]] = {
     "chat_turn": lambda **_: Decimal(1),
     "voice_call": _voice_call_credits,
+    "try_on": lambda **_: Decimal(TRY_ON_CREDITS),
 }
 
 

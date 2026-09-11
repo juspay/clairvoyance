@@ -269,6 +269,11 @@ class ViewProductPayload(_IntentPayload):
 
     product_id: str = Field(..., min_length=1, max_length=256)
     title: Optional[str] = Field(None, max_length=200)
+    # Set when the shopper entered from a card's try-on chip. Behaviour is
+    # entirely client-side, but the field is declared because ``extra`` is
+    # "ignore": undeclared keys are dropped WITH a drift warning, so every
+    # chip tap would log one.
+    open_try_on: bool = False
     # Storefront product URL, sent when the hydrated ProductP carried one.
     # Audit/handoff context only — the agent turn is built from
     # product_id + title.

@@ -37,6 +37,17 @@ def assist_tenant(host_app: AssistHostApp, merchant_domain: str) -> Tuple[str, s
     return "BB_ASSIST", f"{_ASSIST_MERCHANT_PREFIX}{merchant_domain}"
 
 
+def assist_merchant_domain(reseller_id: str, merchant_id: str) -> str:
+    """The storefront domain behind a tenant: the inverse of assist_tenant.
+
+    Only a BB_ASSIST id carries the prefix; a plain domain may itself start
+    with ``assist-``, so it is never stripped from other resellers.
+    """
+    if reseller_id == "BB_ASSIST":
+        return merchant_id.removeprefix(_ASSIST_MERCHANT_PREFIX)
+    return merchant_id
+
+
 def assist_tenant_candidates(merchant_domain: str) -> Tuple[Tuple[str, str], ...]:
     """Lookup order for domain-only resolution: standalone app first."""
     return (
@@ -47,6 +58,7 @@ def assist_tenant_candidates(merchant_domain: str) -> Tuple[Tuple[str, str], ...
 
 __all__ = [
     "AssistHostApp",
+    "assist_merchant_domain",
     "assist_tenant",
     "assist_tenant_candidates",
     "normalize_merchant_domain",

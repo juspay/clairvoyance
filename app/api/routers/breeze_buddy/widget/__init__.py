@@ -8,6 +8,7 @@ Routes under ``/agent/voice/breeze-buddy/widget``:
 - ``POST /widget/session/{id}/intent``                  typed UI intent (SSE)
 - ``POST /widget/session/{id}/cancel``                  cancel in-flight turn
 - ``POST /widget/session/{id}/context``                 push state/facts (no LLM turn)
+- ``POST /widget/session/{id}/try-on``                  virtual try-on (no turn)
 - ``POST /widget/session/{id}/voice/connect``           open voice attachment
 - ``POST /widget/session/{id}/voice/end``               close voice attachment
 - ``POST /widget/session/{id}/end``                     end whole conversation
@@ -23,7 +24,18 @@ Origin + per-IP rate limit. All other routes use the session-bound
 ``widget_token`` minted at create-time.
 """
 
-from fastapi import APIRouter, Depends, File, Request, Response, UploadFile, status
+from typing import Optional
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from app.api.routers.breeze_buddy.widget_common import options_cors_response
 from app.api.security.breeze_buddy.widget_token import (
@@ -44,6 +56,7 @@ from app.schemas.breeze_buddy.chat import (
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
+from app.schemas.breeze_buddy.try_on import WidgetTryOnResponse
 from app.schemas.breeze_buddy.widget_config import StorefrontWidgetConfigResponse
 
 from .handlers import (
@@ -55,6 +68,7 @@ from .handlers import (
     send_widget_intent_handler,
     send_widget_message_handler,
     transcribe_widget_audio_handler,
+    try_on_widget_handler,
     update_widget_context_handler,
     voice_connect_handler,
     voice_end_handler,
@@ -96,6 +110,11 @@ async def widget_intent_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/transcribe")
 async def widget_transcribe_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/try-on")
+async def widget_try_on_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -219,6 +238,47 @@ async def transcribe_widget_audio(
     ``stt_configuration``; streaming-only providers fall back to Whisper.
     """
     return await transcribe_widget_audio_handler(session_id, audio, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/try-on",
+    response_model=WidgetTryOnResponse,
+    summary="Fit a product image onto a shopper photo (no turn)",
+)
+async def try_on_widget(
+    session_id: str,
+    request: Request,
+    photo: UploadFile = File(..., description="The shopper's photo."),
+    garment_image_url: str = Form(
+        ..., description="Product image to fit, merchant CDN."
+    ),
+    request_id: str = Form(
+        ..., description="Caller's idempotency key for this attempt."
+    ),
+    mode: str = Form("full_body", description="full_body | upper_body | lower_body"),
+    product_id: Optional[str] = Form(None, description="Product the try-on is for."),
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+) -> WidgetTryOnResponse:
+    """Virtual try-on for the Assist product panel.
+
+    Spends no LLM turn and takes no session lock, so it runs alongside a
+    live conversation: the shopper can keep chatting, or close the panel,
+    while the image is generated.
+
+    Credits are charged on success only, at the ``try_on`` price in
+    ``BILLING_RULES``. Re-posting the same ``request_id`` within the
+    reload-recovery window returns the same image and charges nothing.
+    """
+    return await try_on_widget_handler(
+        session_id,
+        photo,
+        request,
+        ctx,
+        garment_image_url=garment_image_url,
+        mode=mode,
+        request_id=request_id,
+        product_id=product_id,
+    )
 
 
 @router.post(

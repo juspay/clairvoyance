@@ -1,5 +1,6 @@
 import math
 import os
+from urllib.parse import urljoin
 
 # --- Configuration ---
 
@@ -585,6 +586,19 @@ NAUTILUS_WEBHOOK_URL = os.environ.get(
     "NAUTILUS_WEBHOOK_URL",
     "https://nautilus.breezelabs.app/apps/breeze-buddy/webhooks/clairvoyance",
 )
+
+# Nautilus's server-to-server try-on route, derived from the webhook
+# address above rather than configured separately: it is the same
+# deployment, so a second URL is a second thing to get wrong.
+NAUTILUS_TRY_ON_URL = urljoin(
+    NAUTILUS_WEBHOOK_URL, "/api/apps/virtual-try-on/generate-internal"
+)
+
+# Nautilus authenticates BOTH clairvoyance routes — the HMAC webhook and
+# the WISMO bearer — with its CLAIRVOYANCE_WEBHOOK_SECRET, which is the
+# same value we sign webhooks with here. Reusing it means try-on adds no
+# secret to either side; unset still fails closed.
+NAUTILUS_TRY_ON_SECRET = ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 
 # SKEW: how far AHEAD of a provider letter's own timestamp our stored clock
 # may sit and still let the letter apply. Two of OUR transitions stamp

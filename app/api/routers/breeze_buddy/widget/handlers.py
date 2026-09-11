@@ -19,12 +19,17 @@ same session.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
+from asyncpg.exceptions import UniqueViolationError
 from fastapi import HTTPException, Request, UploadFile, status
 
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
+    assist_merchant_domain,
+)
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     CLIENT_CONTEXT_KEY,
     ClientContextTooLarge,
@@ -69,7 +74,13 @@ from app.api.security.breeze_buddy.widget_token import (
     assert_widget_session_ownership,
     mint_widget_token,
 )
-from app.core.config.dynamic import WIDGET_STT_MAX_AUDIO_BYTES
+from app.core.config.dynamic import (
+    TRY_ON_CREDIT_FLOOR,
+    TRY_ON_MAX_PER_IP_HOUR,
+    TRY_ON_MAX_PER_SESSION,
+    WIDGET_STT_MAX_AUDIO_BYTES,
+    WIDGET_TRY_ON_MAX_PHOTO_BYTES,
+)
 from app.core.config.static import BREEZE_BUDDY_STT_SERVICE
 from app.core.logger import logger
 from app.database.accessor import create_lead_call_tracker, get_lead_by_id
@@ -81,6 +92,7 @@ from app.database.accessor.breeze_buddy.chat_session import (
     get_chat_session_by_id,
     list_chat_messages_for_session,
     merge_client_context,
+    upsert_agent_session_state_merge,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     handle_lead_abort,
@@ -89,6 +101,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 from app.database.accessor.breeze_buddy.tool_approvals import (
     list_pending_tool_approvals,
 )
+from app.database.accessor.breeze_buddy.wallets import get_wallet
 from app.database.accessor.breeze_buddy.widget_config import (
     get_widget_config_by_id,
 )
@@ -120,11 +133,25 @@ from app.schemas.breeze_buddy.chat import (
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
+from app.schemas.breeze_buddy.try_on import WidgetTryOnResponse
+from app.services.breeze_buddy.try_on import (
+    TryOnGenerationError,
+    cache_try_on_result,
+    generate_try_on_image,
+    get_cached_try_on_result,
+)
+from app.services.breeze_buddy.wallet import deduct
+from app.services.breeze_buddy.wallet.deduction import TRY_ON_CREDITS
 from app.services.redis.locks import (
     SESSION_LOCK_TTL_SECONDS,
     LockAcquireError,
     RedisLock,
 )
+
+# Idempotency keys we will concatenate into `wallet_transactions.
+# gateway_ref_id` (VARCHAR(255)). A UUID fits with room to spare; the cap
+# is what keeps a caller from overflowing the column mid-charge.
+_VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 # Voice connect / end is fast (DB writes + a Daily REST call), well under the
 # shared session-lock TTL.
@@ -246,6 +273,7 @@ async def _surface_wire(
         enable_text_input=surface.enable_text_input,
         response_reveal=surface.response_reveal,
         voice_enabled=_template_voice_enabled(template),
+        try_on_enabled=_template_try_on_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
         custom_components=await _custom_components_wire(template, catalog_active),
@@ -280,6 +308,52 @@ def _template_voice_enabled(template: object) -> bool:
     """
     supported = list(getattr(template, "supported_channels", []) or []) or ["voice"]
     return "voice" in supported
+
+
+async def _read_upload(upload: UploadFile, max_bytes: int, label: str) -> bytes:
+    """Read an upload into memory, refusing anything past ``max_bytes``.
+
+    Chunked so an oversized body is rejected as it arrives rather than
+    after it is all buffered. ``label`` is capitalised for the 413 and
+    lowercased for the empty-upload 400.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"{label} exceeds the {max_bytes}-byte limit",
+            )
+        chunks.append(chunk)
+
+    data = b"".join(chunks)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Empty {label.lower()} upload",
+        )
+    return data
+
+
+def _template_try_on_enabled(template: object) -> bool:
+    """Whether this merchant may use virtual try-on.
+
+    Reads ``configurations.enable_try_on``, the per-merchant switch, and
+    fails CLOSED: a template that has never heard of try-on, or one the
+    route could not load, gets no generations. Try-on spends the
+    merchant's credits, so "unknown" must mean no.
+
+    Mirrors :func:`_template_voice_enabled` in shape, but not in default:
+    voice predates its own flag and so defaults ON for legacy templates.
+    A feature that bills per use cannot afford that kindness.
+    """
+    configurations = getattr(template, "configurations", None)
+    return bool(getattr(configurations, "enable_try_on", False))
 
 
 # ---------------------------------------------------------------------------
@@ -559,26 +633,7 @@ async def transcribe_widget_audio_handler(
             detail=f"Widget session '{session_id}' has ended",
         )
 
-    max_bytes = await WIDGET_STT_MAX_AUDIO_BYTES()
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = await audio.read(64 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Audio exceeds the {max_bytes}-byte limit",
-            )
-        chunks.append(chunk)
-    data = b"".join(chunks)
-    if not data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Empty audio upload",
-        )
+    data = await _read_upload(audio, await WIDGET_STT_MAX_AUDIO_BYTES(), "Audio")
 
     template = await get_template_by_id_cached(session.template_id)
     configurations = getattr(template, "configurations", None)
@@ -1270,4 +1325,241 @@ async def get_widget_session_state_handler(
         metadata=session.metadata or {},
         client_context=client_context,
         pending_approvals=pending_approvals,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Virtual try-on
+# ---------------------------------------------------------------------------
+
+
+def _try_on_count(state: Any) -> int:
+    """Successful generations this session has already been charged for."""
+    data = getattr(state, "data", None)
+    if not isinstance(data, dict):
+        return 0
+    block = data.get("try_on")
+    if not isinstance(block, dict):
+        return 0
+    count = block.get("count")
+    return count if isinstance(count, int) and count > 0 else 0
+
+
+async def try_on_widget_handler(
+    session_id: str,
+    photo: UploadFile,
+    request: Request,
+    ctx: WidgetSessionContext,
+    garment_image_url: str,
+    mode: str,
+    request_id: str,
+    product_id: Optional[str],
+) -> WidgetTryOnResponse:
+    """Fit a product image onto the shopper's photo, and charge for it.
+
+    Gates in order: config-active → entitlement → request_id → IP limit →
+    ownership → 410 ENDED → reload cache → per-session cap → wallet.
+
+    Stateless with respect to the conversation: no session lock, no LLM
+    turn, no chat_message row, so the shopper can keep talking while it
+    runs and closing the panel does not stop it.
+
+    Billing follows the outcome. Credits are deducted only after nautilus
+    returns an image, and ``ref_id`` carries the caller's ``request_id``
+    so a replay is idempotent in the ledger.
+
+    The photo is held in memory for the call only — never written to chat
+    history, ui_blocks, session state, or a log line.
+    """
+    cfg = await get_widget_config_by_id(ctx.widget_config_id)
+    if cfg is None or not cfg.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # The session response carries `try_on_enabled` so the widget can hide
+    # the affordance; THIS is the gate, because a browser is not a thing to
+    # trust with the merchant's credits.
+    template = await get_template_by_id_cached(cfg.template_id)
+    if not _template_try_on_enabled(template):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Try-on is not enabled for this store.",
+        )
+
+    # This becomes part of `gateway_ref_id` (VARCHAR(255)) with a 36-char
+    # session id. An over-long value used to blow up the INSERT *after* the
+    # image existed, and the deduction's error handling then served it free.
+    if not _VALID_REQUEST_ID.fullmatch(request_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="request_id must be 1-64 characters of A-Z a-z 0-9 _ or -",
+        )
+
+    # Its own bucket AND its own ceiling: one try-on costs TRY_ON_CREDITS
+    # (5) from the same wallet a chat turn spends 1 from, so borrowing the
+    # chat limit would let an hour of try-ons buy five hours of silence.
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="try_on",
+        limit=await TRY_ON_MAX_PER_IP_HOUR(),
+        widget_config_id=cfg.id,
+    )
+
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    if session.status == ChatSessionStatus.ENDED:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=f"Widget session '{session_id}' has ended",
+        )
+
+    if not garment_image_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="garment_image_url is required",
+        )
+
+    # A page that reloaded mid-generation re-posts the same request_id and
+    # gets the image it already paid for. Checked before the cap and the
+    # wallet, so a replay is never refused by a gate the first attempt
+    # already passed.
+    cached = await get_cached_try_on_result(session_id, request_id)
+    if cached:
+        return WidgetTryOnResponse(
+            image=cached,
+            request_id=request_id,
+            cached=True,
+            credits_charged=0,
+        )
+
+    state = await get_agent_session_state(session_id)
+    used = _try_on_count(state)
+    max_per_session = await TRY_ON_MAX_PER_SESSION()
+    if max_per_session > 0 and used >= max_per_session:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="You have reached the try-on limit for this chat.",
+        )
+
+    price = TRY_ON_CREDITS
+    floor = await TRY_ON_CREDIT_FLOOR()
+    try:
+        wallet = await get_wallet(cfg.merchant_id)
+    except Exception:
+        logger.opt(exception=True).error(
+            f"try-on wallet read failed merchant={cfg.merchant_id} session={session_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Try-on is unavailable right now. Please try again.",
+        ) from None
+
+    # A generation must leave the balance at or above the floor, so images
+    # can never take the conversation offline. A floor of 0 is parity with
+    # chat: try-on stops exactly when chat would.
+    if wallet is None or wallet.balance_credits < (price + floor):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="This store is out of try-on credits for now.",
+        )
+
+    photo_bytes = await _read_upload(
+        photo, await WIDGET_TRY_ON_MAX_PHOTO_BYTES(), "Photo"
+    )
+
+    try:
+        image = await generate_try_on_image(
+            merchant_domain=assist_merchant_domain(cfg.reseller_id, cfg.merchant_id),
+            photo_bytes=photo_bytes,
+            photo_content_type=photo.content_type,
+            garment_image_url=garment_image_url,
+            mode=mode,
+            product_id=product_id,
+            request_id=request_id,
+        )
+    except TryOnGenerationError as exc:
+        # Nothing was charged: the deduction below is the only charge, and
+        # it has not run. The widget offers a retry, which is a new request.
+        logger.warning(
+            f"try-on generation failed merchant={cfg.merchant_id} "
+            f"session={session_id} code={exc.code}"
+        )
+        raise HTTPException(
+            # A refused photo is the shopper's request to fix, not a
+            # failure of ours to retry — the widget words the two apart.
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+                if exc.code == "photo_rejected"
+                else status.HTTP_502_BAD_GATEWAY
+            ),
+            detail=exc.message,
+        ) from None
+
+    await cache_try_on_result(session_id, request_id, image)
+
+    # Billing runs after the shopper's image exists. A billing failure is
+    # logged and swallowed, exactly as a chat turn's deduction is: the
+    # customer already has what they asked for.
+    credits_charged = 0
+    try:
+        await deduct(
+            merchant_id=cfg.merchant_id,
+            event_type="try_on",
+            ref_id=f"{session_id}:{request_id}",
+        )
+        credits_charged = price
+    except UniqueViolationError:
+        # This exact (session, request_id) is already on the ledger: a
+        # replay that outlived the result cache. The shopper gets their
+        # image and the merchant is charged once, which is the whole point
+        # of the ref_id. Not an incident — do not page anyone.
+        logger.info(
+            f"try-on already charged, serving replay merchant={cfg.merchant_id} "
+            f"session={session_id} request_id={request_id}"
+        )
+    except Exception:
+        # Anything else means we produced an image we could not bill for.
+        # Log it as the revenue event it is; the counter below still runs
+        # so the session cap cannot be farmed by forcing this path.
+        logger.opt(exception=True).error(
+            f"try-on generated but NOT billed merchant={cfg.merchant_id} "
+            f"session={session_id} request_id={request_id}"
+        )
+
+    # Session state carries a counter and the last product only — never an
+    # image, never the photo. The merge is shallow at the top level, so the
+    # whole try_on block is rewritten each time.
+    try:
+        await upsert_agent_session_state_merge(
+            session_id,
+            {
+                "try_on": {
+                    "count": used + 1,
+                    "last_product_id": product_id,
+                }
+            },
+        )
+    except Exception:
+        logger.opt(exception=True).warning(
+            f"try-on counter write failed session={session_id}"
+        )
+
+    logger.info(
+        f"try-on generated merchant={cfg.merchant_id} session={session_id} "
+        f"product={product_id} mode={mode} credits={credits_charged}"
+    )
+
+    return WidgetTryOnResponse(
+        image=image,
+        request_id=request_id,
+        cached=False,
+        credits_charged=credits_charged,
     )
