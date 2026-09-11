@@ -115,7 +115,12 @@ async def _fetch_mcp_response(
     try:
         server_params = await _build_server_params(server, context)
     except ValueError as e:
-        return None, f"MCP server URL rejected: {e}"
+        # The reason is logged, not returned: this string becomes a pre-check
+        # failure reason, which rides out to the merchant's webhook as
+        # failureReason, and an SSRFError names the address the host resolved
+        # to.
+        logger.error(f"Pre-check '{pre_check.name}': MCP server URL rejected: {e}")
+        return None, "MCP server URL rejected by egress policy"
 
     handler = _create_direct_http_tool_handler(
         server_params,

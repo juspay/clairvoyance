@@ -266,9 +266,13 @@ def _create_direct_http_tool_handler(
             logger.error(
                 f"[BUDDY_MCP] direct {tool_name!r} blocked by egress guard: {e}"
             )
+            # The reason stays in the log. `data` is handed to the model, and
+            # the message names the address the host resolved to — enough for a
+            # caller to probe hostnames and read the internal network off the
+            # refusals.
             return cast(
                 FlowResult,
-                {"status": "error", "data": f"Request blocked by egress policy: {e}"},
+                {"status": "error", "data": "Request blocked by egress policy"},
             )
 
         merged_args = _deep_merge_defaults(args, default_args or {})

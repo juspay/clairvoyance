@@ -42,7 +42,12 @@ from app.core.config.static import (
     HTTP_REQUEST_MAX_RESPONSE_BYTES,
 )
 from app.core.logger import logger
-from app.core.security.ssrf import SSRFError, ssrf_safe_request, validate_egress_url
+from app.core.security.ssrf import SSRFError, ssrf_safe_request
+
+# What a caller (and therefore the LLM, and therefore the person on the call)
+# is told when egress is refused. Deliberately says nothing about why: the
+# detail is logged instead.
+EGRESS_REFUSAL = "Request blocked by egress policy"
 
 
 class HttpRequestExecutor:
@@ -121,9 +126,12 @@ class HttpRequestExecutor:
             # Build full URL with query params
             url = self._build_url_with_params(resolved_url, resolved_query_params)
 
-            # SSRF Protection: resolve + validate the URL (shared egress guard,
-            # blocks DNS names that resolve to internal/metadata addresses).
-            await validate_egress_url(url)
+            # SSRF protection lives in ssrf_safe_request below: hop 0 is the
+            # same check this used to run here, and running it here as well
+            # resolved the host twice per request AND put the raise outside the
+            # `except SSRFError` handler — so a routine policy block surfaced as
+            # an unexpected error with a stack trace, and the handler written
+            # for it was unreachable for the initial URL.
 
             # Execute with retry
             for attempt in range(1, config.max_retries + 1):
@@ -261,7 +269,13 @@ class HttpRequestExecutor:
                     )
                     if fire_and_forget:
                         return None
-                    return (0, f"Request blocked by egress policy: {e}")
+                    # The reason is in the log above and nowhere else: it names
+                    # the address the host resolved to, and this string is tool
+                    # output the model reads out. Handing it back would let a
+                    # caller probe hostnames and learn the internal network from
+                    # the refusals — the guard answering the question it exists
+                    # to refuse.
+                    return (0, EGRESS_REFUSAL)
                 except aiohttp.ClientError as e:
                     logger.warning(
                         f"HTTP {config.method.value} client error: {e} (attempt {attempt})"
