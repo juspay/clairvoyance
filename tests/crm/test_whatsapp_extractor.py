@@ -30,6 +30,11 @@ from app.crm.outreach.nodes.context import reply_key
 from app.crm.outreach.schemas import WorkflowNode
 from app.crm.outreach.walker import pick_next
 from app.crm.record import catalog
+from app.crm.record.contracts import (
+    canonical_path,
+    derive_for,
+    field_value,
+)
 from app.crm.record.extractors import EXTRACTORS, engine, whatsapp as whatsapp_spec
 from app.crm.record.schemas import Extracted, RawEvent
 
@@ -311,6 +316,73 @@ def test_a_submission_of_nothing_but_our_token_is_absent() -> None:
     assert (
         whatsapp_spec.flow.flow_response(_submission('{"flow_token":"m-42"}')) is None
     )
+
+
+def test_a_form_that_collects_NOTHING_still_wakes_the_square() -> None:
+    """The other half of the test above, and the one that matters more.
+
+    ``flow_response`` is empty for a form that collected no fields — and
+    that is not the same fact as "no form arrived". Two Flows Meta
+    documents submit exactly this: a confirm-only one (she taps accept and
+    there is nothing to collect) and an endpoint-backed one, whose answers
+    went to the merchant's own server during the conversation so the
+    closing payload is empty. response_json still carries OUR flow_token,
+    which flow_response drops.
+
+    Asking flow_response whether a form arrived therefore read both as
+    silence: reply was None, the listening square never woke, and the run
+    waited out its timeout chasing an answer she had already given. That is
+    precisely the bug `reply` exists to prevent, so the discriminant is the
+    SUBMISSION, never its contents.
+    """
+    only_our_token = _submission('{"flow_token":"m-42"}')
+
+    extracted = _extract_inbound(only_our_token)
+    assert extracted.variables["reply"] == "form_submitted"
+    # She submitted, and there is genuinely nothing of hers to render — so
+    # the answer is absent rather than empty, and a plan that maps it parks
+    # loudly instead of sending a blank line to a customer.
+    assert "flow_response" not in extracted.variables
+    # The join still resolves. flow_token is KEYABLE, not a variable — a
+    # listening square matches on it, no template ever prints it — so it is
+    # read the way `match` reads it rather than looked for among the blanks.
+    assert (
+        field_value(
+            only_our_token,
+            canonical_path("flow_token"),
+            derive_for(whatsapp_spec.SOURCE, "message.inbound"),
+        )
+        == "m-42"
+    )
+
+
+def test_a_submission_is_recognised_by_its_envelope_not_by_its_payload() -> None:
+    """Every shape Meta can put in response_json is still a completed
+    form — an empty object, and text that does not parse at all. None of
+    them may read as silence; only a message that is NOT an nfm_reply may.
+    """
+    for response in ('{"flow_token":"m-42"}', "{}", "not json at all"):
+        assert (
+            whatsapp_spec.flow.raw_submission(_submission(response)) is not None
+        ), response
+        assert (
+            whatsapp_spec.inbound.reply(_submission(response)) == "form_submitted"
+        ), response
+
+    # And the guard holds the other way: a tap that happens to carry an
+    # nfm_reply member answers with its own id, not with the form's word.
+    tap = _inbound(
+        _message(
+            type="interactive",
+            interactive={
+                "type": "button_reply",
+                "button_reply": {"id": "CONFIRM"},
+                "nfm_reply": {"response_json": '{"flow_token":"m-42"}'},
+            },
+        )
+    )
+    assert whatsapp_spec.inbound.reply(tap) == "CONFIRM"
+    assert whatsapp_spec.flow.raw_submission(tap) is None
 
 
 def test_a_submission_names_the_send_that_opened_it() -> None:

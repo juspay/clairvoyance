@@ -55,8 +55,19 @@ def _nfm_reply(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-def _submitted(payload: Dict[str, Any]) -> Optional[str]:
-    """The raw response_json string Meta sent, or None."""
+def raw_submission(payload: Dict[str, Any]) -> Optional[str]:
+    """The raw response_json string Meta sent, or None — and THE test for
+    "did she complete a form".
+
+    Public because it is that test, and the test is not "did the form
+    carry data". ``response_json`` always holds our own flow_token and may
+    hold nothing else: a confirm-only Flow (tap to accept) collects no
+    fields, and an endpoint-backed one exchanged its data with the
+    merchant's server during the conversation, so its closing payload is
+    empty. Both are completed forms. Asking ``flow_response`` instead —
+    which drops our token and answers None when nothing of hers remains —
+    read those as silence, and the square waiting for her never woke.
+    """
     value = _nfm_reply(payload).get("response_json")
     return value if isinstance(value, str) and value else None
 
@@ -75,7 +86,7 @@ def flow_response(payload: Dict[str, Any]) -> Optional[Any]:
     still her answer. The letter stays verbatim on the event row — this is
     the reading, not the evidence.
     """
-    raw = _submitted(payload)
+    raw = raw_submission(payload)
     if not raw:
         return None
     try:
@@ -115,7 +126,7 @@ def flow_token(payload: Dict[str, Any]) -> Optional[Any]:
     the literal 'unused' when a send named no token — not an id, so it is
     dropped.
     """
-    raw = _submitted(payload)
+    raw = raw_submission(payload)
     if not raw:
         return None
     try:

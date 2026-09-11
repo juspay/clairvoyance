@@ -14,7 +14,7 @@ is needed.
 
 from typing import Any, Dict, List, Optional
 
-from app.crm.record.extractors.whatsapp.flow import FORM_SUBMITTED, flow_response
+from app.crm.record.extractors.whatsapp.flow import FORM_SUBMITTED, raw_submission
 from app.crm.record.extractors.whatsapp.shared import _f, _item
 from app.crm.record.schemas import CatalogField
 
@@ -89,6 +89,15 @@ def reply(payload: Dict[str, Any]) -> Optional[Any]:
     wakes the square and names the arrow, so a plan author labels one edge
     with it and it fires.  Returning the raw JSON would equal no label,
     sending the walker down the ``else`` arrow or exiting the run.
+
+    The test is the SUBMISSION, never its contents. A form that collects
+    no fields is still a completed form: a confirm-only Flow says only
+    "she tapped accept", and an endpoint-backed one exchanged her answers
+    with the merchant's server mid-conversation and closes with an empty
+    payload. Meta's response_json still carries our flow_token in both, so
+    ``flow_response`` — which drops that token — answers None, and asking
+    IT whether a form arrived read a customer who acted as silent. That is
+    the failure this field exists to remove.
     """
     item = _item(payload, "messages")
     button = item.get("button")
@@ -100,7 +109,7 @@ def reply(payload: Dict[str, Any]) -> Optional[Any]:
             chosen = interactive.get(kind)
             if isinstance(chosen, dict) and chosen.get("id") is not None:
                 return chosen["id"]
-    if flow_response(payload) is not None:
+    if raw_submission(payload) is not None:
         return FORM_SUBMITTED
     return message_text(payload)
 
