@@ -58,6 +58,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
     start_call_recording,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
+from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
 from app.core.concurrency import spawn_background_task
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
@@ -312,9 +313,12 @@ async def _build_plivo_stream_xml(ws_url: str) -> str:
     # Using html_escape with quote=False to avoid escaping quotes in the URL
     ws_url_escaped = html_escape(ws_url, quote=False)
 
+    # Wideband: Plivo offers mu-law at 8 kHz only (G.711 is defined there), so
+    # 16 kHz has to travel as L16. Keep the rate in step with
+    # TELEPHONY_SAMPLE_RATE and PlivoL16FrameSerializer.
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
+    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate={TELEPHONY_SAMPLE_RATE}">
         {ws_url_escaped}
     </Stream>
 </Response>"""

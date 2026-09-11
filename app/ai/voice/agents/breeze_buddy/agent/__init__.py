@@ -16,7 +16,6 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import (
-    _create_telephony_transport,
     create_transport,
     parse_telephony_websocket,
 )
@@ -118,6 +117,9 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.daily_keepalive import (
 )
 from app.ai.voice.agents.breeze_buddy.utils.transport.nonclosing import (
     NonClosingWebSocket,
+)
+from app.ai.voice.agents.breeze_buddy.utils.transport.telephony import (
+    create_telephony_transport,
 )
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
@@ -758,7 +760,7 @@ class Agent:
 
         # Create transport with the call data. Cast: the proxy forwards every
         # attribute so it quacks like a WebSocket, but isn't a subclass.
-        self.transport = await _create_telephony_transport(
+        self.transport = await create_telephony_transport(
             cast(WebSocket, self._rebuild.ws_proxy), params, transport_type, call_data
         )
 
