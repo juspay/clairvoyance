@@ -19,7 +19,9 @@ ENABLE_DRAGONTTS_KILL_SWITCH = (
 # Uvicorn
 PORT = int(os.environ.get("PORT", 8000))
 HOST = os.environ.get("HOST", "0.0.0.0")
-UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "true").lower() == "true"
+# Off by default: reload re-execs the server in a subprocess that cannot
+# reach the Daily bot zygote. Set UVICORN_RELOAD=true for local dev.
+UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "false").lower() == "true"
 UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
