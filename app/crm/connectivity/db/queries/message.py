@@ -17,9 +17,13 @@ from app.crm.connectivity.reasons import (
     REASON_RECLAIMED_STALE_CLAIM,
 )
 from app.crm.connectivity.status import (
+    MESSAGE_ACCEPTED,
     MESSAGE_DEAD,
+    MESSAGE_DELIVERED,
     MESSAGE_QUEUED,
+    MESSAGE_READ,
     MESSAGE_SENDING,
+    MESSAGE_SENT,
 )
 
 MESSAGE_TABLE = "crm_message"
@@ -134,6 +138,34 @@ def requeue_stale_claims_query(
         REASON_ATTEMPTS_EXHAUSTED,
         REASON_RECLAIMED_STALE_CLAIM,
         MESSAGE_SENDING,
+    ]
+
+
+def provider_message_id_for_query(
+    merchant_id: str, dedupe_key: str
+) -> Tuple[str, List[Any]]:
+    """The reconcile read (contracts.provider_message_id_for): the provider's
+    id for one logical send, by the producer's own name for it. One indexed
+    point read — (merchant_id, dedupe_key) is the dedupe UNIQUE — and NULL
+    until an attempt was accepted.
+
+    Filtered to the POST-ACCEPT ladder in SQL, because the caller treats the
+    answer as "the message the customer received": apply_outcome copies
+    outcome.provider_message_id onto FAILED/DEAD/QUEUED plans too, and while
+    no adapter reports an id beside a refusal today, the first one that does
+    (some providers do) must not turn a message nobody received into a reply
+    correlate. The words come from status.py, never spelled here (the 027
+    scar: vocabulary in code, one home)."""
+    query = f"""
+        SELECT provider_message_id
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1 AND dedupe_key = $2
+           AND status = ANY($3::text[])
+    """
+    return query, [
+        merchant_id,
+        dedupe_key,
+        [MESSAGE_ACCEPTED, MESSAGE_SENT, MESSAGE_DELIVERED, MESSAGE_READ],
     ]
 
 

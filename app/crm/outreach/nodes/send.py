@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import queue_message
-from app.crm.outreach.nodes.context import send_variables
+from app.crm.outreach.nodes.context import send_dedupe_key, send_variables
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
@@ -76,7 +76,7 @@ async def execute(
     except ValueError as e:
         raise NodeParked(f"send node {node.id}: {e}") from e
 
-    dedupe_key = f"{run.id}:{node.id}"
+    dedupe_key = send_dedupe_key(str(run.id), node.id)
     try:
         message_id = await queue_message(
             merchant_id=run.merchant_id,

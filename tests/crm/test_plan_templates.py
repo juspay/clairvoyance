@@ -23,6 +23,7 @@ PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
 CART = PLANS / "cart-recovery.json"
 CART_FALLBACK = PLANS / "cart-recovery-fallback.json"
 LOAN = PLANS / "loan-dropoff.json"
+COD = PLANS / "cod-confirm.json"
 
 # The funnel, in order (§16.2): stage i listens for every stage after it;
 # disbursed ends the journey as the goal, rejected/withdrawn as withdrawn.
@@ -79,7 +80,8 @@ def test_the_expected_documents_exist() -> None:
     assert CART.is_file(), CART
     assert LOAN.is_file(), LOAN
     assert CART_FALLBACK.is_file(), CART_FALLBACK
-    assert _every_plan() == [CART_FALLBACK, CART, LOAN]
+    assert COD.is_file(), COD
+    assert _every_plan() == [CART_FALLBACK, CART, COD, LOAN]
 
 
 @pytest.mark.parametrize("path", _every_plan(), ids=lambda p: p.stem)
@@ -238,3 +240,28 @@ def test_cart_recovery_fallback_is_the_cart_board_with_the_call_outcome_branch()
         ("wait-1d", "else"),
     }
     assert ["wa-fallback", "wait-1d"] in doc["edges"]
+
+
+def test_the_cod_board_matches_a_reply_to_the_send_it_answers() -> None:
+    """The document exists to show the line publish now demands
+    (docs/crm/reply-run-matching.md): one customer with several open orders
+    must keep several separate runs, and the tap she makes must resolve the
+    one it answers.
+
+    Pinned here rather than left to prose: a listening square behind a send,
+    matching the letter's replied_to against the run's stamp for THAT send.
+    """
+    board = _load(COD)
+    square = next(n for n in board["nodes"] if n["type"] == "wait_event")
+    assert square["topics"] == ["message.inbound"]
+    assert square["match"] == {
+        "payload": "replied_to",
+        "run": "provider_message_id_confirm",
+    }
+    # The send it names is genuinely upstream — the validator refuses it
+    # otherwise, and a document that could not publish teaches the wrong line.
+    assert ["confirm", square["id"]] in [e[:2] for e in board["edges"]]
+    # Every answer a customer can give has an arrow: a tap, a completed form,
+    # and the silence the timeout recovers.
+    labels = {e[2] for e in board["edges"] if len(e) > 2}
+    assert {"CONFIRM", "CANCEL", "form_submitted", "timeout"} <= labels

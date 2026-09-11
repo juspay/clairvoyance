@@ -15,6 +15,7 @@ from app.crm.outreach.catalog_laws import (
     WorkflowValidationError,
     entry_against_catalog,
     gather_catalogs as _gather_catalogs,
+    match_payload_against_catalog,
 )
 from app.crm.outreach.db import DbTxn, atomically
 from app.crm.outreach.db.accessors import (
@@ -25,6 +26,7 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.repeat import parse_repeat_policy
+from app.crm.outreach.reply_match_laws import reply_match_problems
 from app.crm.outreach.schemas import (
     GOAL_EXIT_REASONS,
     Workflow,
@@ -84,6 +86,7 @@ def validate_definition(
             "equality map is retired (migration 069)"
         )
     problems.extend(entry_against_catalog(definition, catalogs))
+    problems.extend(match_payload_against_catalog(definition, catalogs))
     node_ids = [node.id for node in definition.nodes]
     seen = set()
     for node_id in node_ids:
@@ -95,11 +98,10 @@ def validate_definition(
     # walker executes from, so validator and walker cannot disagree.
     for node in definition.nodes:
         problems.extend(NODE_TYPES[node.type].validate(node, definition))
-        if node.match is not None and node.type != "wait_event":
-            problems.append(
-                f"node {node.id}: match belongs to a wait_event — only a "
-                "listening square hears a letter"
-            )
+
+    # How a listening square narrows a reply to ONE run — its own file,
+    # one subject, every law there guarding a SILENT failure.
+    problems.extend(reply_match_problems(definition))
 
     # The doors (phase 15): one per topic, each starting on a real square.
     # Repeat-entry words per door (repeat.py owns the vocabulary); debounce

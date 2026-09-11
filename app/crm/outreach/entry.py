@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
+from app.crm.connectivity.contracts import provider_message_id_for
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -35,8 +36,10 @@ from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
+    PROVIDER_MESSAGE_PREFIX,
     is_bookkeeping,
     reply_key,
+    send_dedupe_key,
 )
 from app.crm.outreach.nodes.wait_event import TOPIC_KEY
 from app.crm.outreach.repeat import _as_number, apply_repeat
@@ -227,6 +230,7 @@ async def _wake_on_reply(
     for node in definition.nodes:
         if node.type != "wait_event" or event.topic not in node.topics:
             continue
+        run = await _with_send_correlate(run, node)
         if not _is_about(node, event, run):
             continue  # another run's letter (phase 18): not this square's
         answer = _answer_for(node, event)
@@ -253,6 +257,53 @@ async def _wake_on_reply(
             {reply_key(node.id): answer, LATEST_LETTER_KEY: node.id},
             facts,
         )
+
+
+async def _with_send_correlate(run: EnrollmentRun, node: WorkflowNode) -> EnrollmentRun:
+    """The run with its send's provider id on it, resolved from the manifest
+    the first time a square needs it.
+
+    A reply carries the provider's id for the message it answers and nothing
+    of ours, so a square matching on ``provider_message_id_<send>`` needs
+    that id beside the run. It is not written when the send is queued: our
+    id exists then, the provider's does not — it is learned at ACCEPT, and
+    the manifest row is where the dispatcher put it (T16 col 14,
+    apply_outcome).
+
+    So it is read HERE, once, by the same dedupe_key the send square queued
+    under, and written onto the run so the next letter on the same square
+    costs nothing. Read at need rather than pushed at accept time
+    deliberately: a reply is a cold path, this is one indexed point read,
+    and a value pushed ahead of need is a cache someone has to keep
+    coherent — the run's context is rewritten wholesale by the walker's
+    advance, so that coherence is not free. Resolving on demand also means
+    the path runs on EVERY reply instead of only when a push was lost,
+    which is the difference between a path that is exercised and a path
+    that is discovered during an incident.
+
+    The write is best effort: losing it costs one read next time, and a
+    raise here would roll back the letter's savepoint for bookkeeping.
+
+    None from the manifest means no attempt was ever accepted — the run
+    honestly has no id a reply could echo, so `_is_about` answers "not
+    hers" and the run keeps waiting rather than taking another run's
+    letter.
+    """
+    match = node.match
+    if match is None or not match.run.startswith(PROVIDER_MESSAGE_PREFIX):
+        return run
+    if run.context.get(match.run):
+        return run
+    node_id = match.run[len(PROVIDER_MESSAGE_PREFIX) :]
+    correlate = await provider_message_id_for(
+        run.merchant_id, send_dedupe_key(str(run.id), node_id)
+    )
+    if not correlate:
+        return run
+    await enrollment_accessor.stamp_context_key(
+        run.merchant_id, str(run.id), match.run, correlate
+    )
+    return run.model_copy(update={"context": {**run.context, match.run: correlate}})
 
 
 def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
@@ -310,7 +361,15 @@ async def _answered_by(
     would push the alarm the wake just set (now) back by the debounce, and
     the token would sit on a square it has already answered — on a stages
     ladder (phase 17), where every stage is a door AND every earlier
-    square listens for it, every stage clock would run twice."""
+    square listens for it, every stage clock would run twice.
+
+    Resolved through the SAME lens the wake used: open_runs was read at the
+    top of the pass, so a correlate _wake_on_reply just resolved lives on the
+    copy it resumed, not on these objects. Judging the stale context here
+    would answer "not its square's answer" for the very letter that woke the
+    run — and apply_repeat would re-arm the square it just resolved. Cheap on
+    the second ask: the wake's resolve already wrote the row, and a present
+    in-memory key short-circuits before any read."""
     for run in open_runs:
         if (
             str(run.workflow_id) == str(flow.id)
@@ -320,10 +379,11 @@ async def _answered_by(
             if pinned is None:
                 return False
             square = next((n for n in pinned.nodes if n.id == run.current_node), None)
+            if square is None:
+                return False
+            run = await _with_send_correlate(run, square)
             return (
-                square is not None
-                and _is_about(square, event, run)
-                and _answer_for(square, event) is not None
+                _is_about(square, event, run) and _answer_for(square, event) is not None
             )
     return False
 

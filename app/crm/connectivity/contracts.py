@@ -36,6 +36,12 @@ What is here, and why each thing is on the surface:
   count of open runs naming a template, so retire can refuse to pull a
   template from under a run in flight without this module importing
   outreach (phase 14; the record/consumers.py inversion).
+- ``provider_message_id_for`` — the provider's own id for a logical send a
+  producer once proposed, by the producer's own dedupe_key. The reply join:
+  a reply carries the provider's id for the message it answers and nothing
+  else, so a listening square resolves WHOSE send it answers through this
+  read. NULL until an attempt was accepted, and only ever the post-accept
+  ladder — a message nobody received is not a correlate.
 - ``META_INGRESS`` — the Meta bay for record's /ingest/webhooks/{provider}
   door (ingress.py builds it; app/crm/api.py registers it into record's
   INGRESS slot — the same line worker_main writes for consumers, and the
@@ -81,7 +87,7 @@ from app.crm.connectivity.onboarding import (
     onboard,
     resubscribe,
 )
-from app.crm.connectivity.queue import queue_message
+from app.crm.connectivity.queue import provider_message_id_for, queue_message
 from app.crm.connectivity.reasons import reason_label
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
@@ -103,6 +109,9 @@ __all__ = [
     "dispatch_send",
     # producing a send
     "queue_message",
+    # the reply join: a producer reads back the provider's id for a send it
+    # proposed, by its own dedupe_key
+    "provider_message_id_for",
     # asking a connector to act (the walker's action square)
     "perform_action",
     "action_names",

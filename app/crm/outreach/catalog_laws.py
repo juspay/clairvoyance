@@ -115,6 +115,46 @@ def entry_against_catalog(
     return problems
 
 
+def match_payload_against_catalog(
+    definition: WorkflowDefinition, catalogs: Catalogs
+) -> List[str]:
+    """PURE: a listening square's ``match.payload`` must be a declared field
+    of EVERY topic the square listens on — the mirror of the match.run
+    checks in plans.py, guarding the other half of the same comparison.
+
+    A typo'd payload field resolves to None on every letter, every letter
+    "claims nobody", and the square is permanently deaf with publish clean —
+    the byte-for-byte silent failure the run-side check's comment says it
+    exists to prevent. EVERY topic, not any: match is judged per letter
+    (_is_about), so a field only one of two listened topics declares leaves
+    the square deaf on the other — surfaced here as a sentence instead of
+    discovered as a run that never woke.
+
+    A topic no layer declares is skipped, not refused: nothing exists to
+    check against, and the general unknown-topic law already speaks when
+    the plan filters or keys on it.
+    """
+    problems: List[str] = []
+    if catalogs is None:
+        return problems
+    for node in definition.nodes:
+        if node.type != "wait_event" or node.match is None:
+            continue
+        payload_path = canonical_path(node.match.payload)
+        for topic in node.topics:
+            fields = catalogs.get(topic)
+            if fields is None:
+                continue
+            if payload_path not in fields:
+                problems.append(
+                    f"node {node.id}: match.payload {node.match.payload!r} is "
+                    f"not a declared field of topic {topic!r} — every letter "
+                    f"there would claim nobody and the square would never "
+                    f"hear it"
+                )
+    return problems
+
+
 # Facts the walker computes for a template at the square (nodes.run_facts,
 # phase 16) — never a producer's, so no catalog declares them.
 _WALKER_FACTS = frozenset({"current_node", "current_stage"})

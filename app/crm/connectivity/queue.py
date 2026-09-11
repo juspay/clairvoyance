@@ -85,3 +85,22 @@ async def queue_message(
         variables,
         dedupe_key,
     )
+
+
+async def provider_message_id_for(merchant_id: str, dedupe_key: str) -> Optional[str]:
+    """The provider's own id for a logical send this producer once proposed
+    — None until an attempt was ACCEPTED (T16 col 14 is written by the
+    outcome, nothing earlier).
+
+    THE reply join. A reply carries the provider's id for the message it
+    answers (Meta's wamid in ``context.id``) and nothing of ours, so a
+    producer asking "which of my sends is she answering?" resolves it here
+    — keyed by the producer's OWN name for the send (its dedupe_key), never
+    by our row id, which the producer has no reason to have kept.
+
+    Read at reply time rather than pushed at accept time on purpose: a
+    reply is a cold path, the row is one indexed read, and a value pushed
+    ahead of need is a cache to keep coherent. The caller may memoise what
+    it learns; the row stays the truth.
+    """
+    return await message_accessor.provider_message_id_for(merchant_id, dedupe_key)
