@@ -33,7 +33,12 @@ from app.core.config.dynamic import (
 from app.core.logger import logger
 
 # Constants
-TELEPHONY_SAMPLE_RATE = 8000
+# Wideband telephony. A 4G/VoLTE call carries the caller at 16 kHz all the way
+# to Plivo, so 8 kHz threw away the 4-8 kHz band that separates "S" from "F"
+# and makes dictated digits ambiguous for STT. Must stay in step with the
+# <Stream> contentType in telephony/answer/handlers.py and with
+# PlivoL16FrameSerializer's plivo_sample_rate.
+TELEPHONY_SAMPLE_RATE = 16000
 DAILY_SAMPLE_RATE = 16000
 
 

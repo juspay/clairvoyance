@@ -31,7 +31,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
+from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio, resolve_voice_config
+from app.ai.voice.agents.breeze_buddy.utils.common import mulaw_8k_to_l16
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
     is_caller_disconnected_error,
@@ -701,14 +703,18 @@ async def _send_audio(
     )
 
     if provider_str == "plivo":
-        # Plivo bidirectional streaming uses playAudio event
+        # Plivo bidirectional streaming uses playAudio event. The stream runs L16
+        # wideband, so this 8 kHz mu-law audio is converted to match.
+        l16_payload = base64.b64encode(
+            mulaw_8k_to_l16(base64.b64decode(payload), TELEPHONY_SAMPLE_RATE)
+        ).decode("utf-8")
         media_message = {
             "event": "playAudio",
             "streamId": stream_sid,
             "media": {
-                "contentType": "audio/x-mulaw",
-                "sampleRate": 8000,
-                "payload": payload,
+                "contentType": "audio/x-l16",
+                "sampleRate": TELEPHONY_SAMPLE_RATE,
+                "payload": l16_payload,
             },
         }
     else:

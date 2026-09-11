@@ -95,6 +95,33 @@ def greeting_has_variables(greeting_text: str) -> bool:
     return bool(re.search(pattern, greeting_text))
 
 
+def mulaw_8k_to_l16(mulaw_data: bytes, target_rate: int) -> bytes:
+    """Convert cached 8 kHz mu-law to linear PCM at ``target_rate``.
+
+    Out-of-band audio (the greeting, IVR prompts, the dial tone) is generated and
+    cached as 8 kHz mu-law, but the Plivo ``<Stream>`` now runs L16 wideband. A
+    ``playAudio`` message carries its own contentType, yet mixing formats mid-call
+    relies on per-message negotiation we have not verified — and this is the first
+    audio the customer hears, so it is worth matching the stream exactly.
+
+    Upsampling adds no detail (the source really is 8 kHz), it only makes the
+    bytes playable at the stream's rate. That is fine here: this is our own TTS
+    output heading to a carrier that narrows it again anyway.
+
+    Args:
+        mulaw_data: 8 kHz mono mu-law bytes.
+        target_rate: Stream sample rate, e.g. ``TELEPHONY_SAMPLE_RATE``.
+
+    Returns:
+        16-bit little-endian mono PCM at ``target_rate``.
+    """
+    pcm_8k = audioop.ulaw2lin(mulaw_data, 2)
+    if target_rate == 8000:
+        return pcm_8k
+    converted, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, target_rate, None)
+    return converted
+
+
 def convert_to_mulaw(audio_data: bytes, input_format: str = "raw") -> bytes:
     """
     Convert audio data to mulaw format compatible with Twilio (8kHz, mono).
