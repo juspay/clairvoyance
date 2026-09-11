@@ -77,17 +77,19 @@ async def assert_facts(
     evidence: str,
     source: str,
     confidence: Optional[float] = None,
-) -> None:
-    """Append claims into the assertion history and materialize winners."""
+) -> bool:
+    """Append claims into the assertion history and materialize winners.
+    Returns False when the customer row does not exist (nothing was
+    asserted); True otherwise, including the no-op of an empty facts dict."""
     if evidence not in EVIDENCE_RANK:
         raise ValueError(f"unknown evidence class: {evidence}")
     facts = {k: v for k, v in (facts or {}).items() if v is not None and v != ""}
     if not facts:
-        return
+        return True
 
     now = datetime.now(timezone.utc).isoformat()
     k = claim_confidence(evidence, confidence)
-    await atomically(
+    return await atomically(
         _assert_facts_in_txn, merchant_id, customer_id, facts, evidence, source, now, k
     )
 
@@ -101,14 +103,15 @@ async def _assert_facts_in_txn(
     source: str,
     now: str,
     k: float,
-) -> None:
+) -> bool:
     """ATOMIC: history append + winner materialization — the materialized
-    columns must never drift from the assertion history (canon T05)."""
+    columns must never drift from the assertion history (canon T05).
+    Returns False (no-op, not raised) when the customer row is missing."""
     row = await accessor.fetch_attributes_for_update(txn, merchant_id, customer_id)
     if row is None:
         update_log_context(customer_id=customer_id, merchant_id=merchant_id)
         logger.error("assert_facts: customer not found for merchant")
-        return
+        return False
     attributes = row["attributes"]
     if isinstance(attributes, str):
         attributes = json.loads(attributes)
@@ -127,3 +130,4 @@ async def _assert_facts_in_txn(
     await accessor.update_attributes(
         txn, merchant_id, customer_id, json.dumps(attributes), materialized
     )
+    return True

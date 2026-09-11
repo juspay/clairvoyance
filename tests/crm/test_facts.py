@@ -190,3 +190,70 @@ def test_inferred_winner_never_materializes(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert len(fake.attributes["name"]) == 1
     assert fake.writes[-1][1] == {}
+
+
+# --- N10: a missing customer reports False, not silence -------------------
+
+
+def test_missing_customer_returns_false_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoRowAccessor:
+        async def fetch_attributes_for_update(
+            self, conn: Any, merchant_id: str, customer_id: str
+        ) -> Optional[Dict[str, Any]]:
+            return None
+
+        async def update_attributes(self, *args: Any, **kwargs: Any) -> None:
+            raise AssertionError("no customer row -> nothing to write")
+
+    monkeypatch.setattr(facts, "accessor", _NoRowAccessor())
+
+    found = asyncio.run(
+        facts._assert_facts_in_txn(
+            cast(DbTxn, object()),
+            "m1",
+            "cust-missing",
+            {"name": "Rhea"},
+            "observed",
+            "lead-api",
+            "2026-08-27T08:12:35+00:00",
+            0.9,
+        )
+    )
+
+    assert found is False
+
+
+def test_found_customer_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeAccessor()
+    monkeypatch.setattr(facts, "accessor", fake)
+
+    found = asyncio.run(
+        facts._assert_facts_in_txn(
+            cast(DbTxn, object()),
+            "m1",
+            "cust-1",
+            {"name": "Rhea"},
+            "observed",
+            "lead-api",
+            "2026-08-27T08:12:35+00:00",
+            0.9,
+        )
+    )
+
+    assert found is True
+
+
+def test_empty_facts_short_circuits_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """assert_facts (the public entry) never opens a transaction when there
+    is nothing to assert -- that no-op is not a missing-customer failure."""
+
+    async def never_atomically(*args: Any, **kwargs: Any) -> bool:
+        raise AssertionError("nothing to assert -- must not open a transaction")
+
+    monkeypatch.setattr(facts, "atomically", never_atomically)
+
+    found = asyncio.run(facts.assert_facts("m1", "cust-1", {}, "observed", "lead-api"))
+
+    assert found is True
