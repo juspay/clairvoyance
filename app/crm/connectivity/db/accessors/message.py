@@ -7,14 +7,18 @@ needed.
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.crm.connectivity.db.decoders.message import decode_queued_message
+from app.crm.connectivity.db.decoders.message import (
+    decode_queued_message,
+    decode_send_behind,
+)
 from app.crm.connectivity.db.queries.message import (
     apply_outcome_query,
     claim_queued_messages_query,
     insert_message_query,
     requeue_stale_claims_query,
+    send_behind_provider_id_query,
 )
-from app.crm.connectivity.schemas.message import QueuedMessage
+from app.crm.connectivity.schemas.message import QueuedMessage, SendBehind
 from app.crm.connectivity.status import MESSAGE_QUEUED
 from app.crm.shared.db import crm_connection
 
@@ -97,3 +101,14 @@ async def apply_outcome(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return row is not None
+
+
+async def send_behind(
+    merchant_id: str, provider_message_id: str
+) -> Optional[SendBehind]:
+    """Who caused the message this provider id names, or None when no row
+    of ours carries it — an id from a message this system never sent."""
+    query, values = send_behind_provider_id_query(merchant_id, provider_message_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_send_behind(row) if row is not None else None

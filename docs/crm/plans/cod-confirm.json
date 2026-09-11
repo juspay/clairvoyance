@@ -1,0 +1,98 @@
+{
+  "on_publish": "migrate",
+  "entry": {
+    "topic": "orders/create",
+    "key": "id"
+  },
+  "goals": [
+    {
+      "topics": [
+        "orders/cancelled"
+      ],
+      "key": {
+        "event": "id",
+        "run": "id"
+      },
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 3
+  },
+  "purpose_key": "utility.order.confirmation",
+  "nodes": [
+    {
+      "id": "confirm",
+      "type": "send",
+      "channel": "whatsapp",
+      "template": "cod_confirm_1",
+      "variables": {
+        "1": "customer_name"
+      }
+    },
+    {
+      "id": "await-reply",
+      "type": "wait_event",
+      "topics": [
+        "message.inbound"
+      ],
+      "key": "reply",
+      "minutes": 1440
+    },
+    {
+      "id": "tag-confirmed",
+      "type": "action",
+      "connector": "shopify",
+      "action": "add_tag",
+      "args": {
+        "order_id": "{id}",
+        "tags": [
+          "COD_CONFIRMED"
+        ]
+      }
+    },
+    {
+      "id": "tag-cancelled",
+      "type": "action",
+      "connector": "shopify",
+      "action": "add_tag",
+      "args": {
+        "order_id": "{id}",
+        "tags": [
+          "COD_CANCELLED"
+        ]
+      }
+    },
+    {
+      "id": "wait-1d",
+      "type": "wait",
+      "minutes": 1440
+    }
+  ],
+  "edges": [
+    [
+      "confirm",
+      "await-reply"
+    ],
+    [
+      "await-reply",
+      "tag-confirmed",
+      "CONFIRM"
+    ],
+    [
+      "await-reply",
+      "tag-confirmed",
+      "form_submitted"
+    ],
+    [
+      "await-reply",
+      "tag-cancelled",
+      "CANCEL"
+    ],
+    [
+      "await-reply",
+      "wait-1d",
+      "timeout"
+    ]
+  ]
+}

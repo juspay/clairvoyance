@@ -194,3 +194,28 @@ def apply_outcome_query(
         MESSAGE_SENDING,
         binding_id,
     ]
+
+
+def send_behind_provider_id_query(
+    merchant_id: str, provider_message_id: str
+) -> Tuple[str, List[Any]]:
+    """Who caused the message this provider id names (contracts.send_behind).
+
+    ONE point read on ``crm_message_provider_id_uq`` — migration 056's
+    partial UNIQUE on provider_message_id alone, whose own canon note reads
+    "how an inbound receipt finds this row" (T16 col 14). A reply carries
+    exactly that id for the message it answers, so the same index answers
+    "whose send is she replying to" with nothing stored anywhere else.
+
+    merchant_id leads the WHERE although the unique does not need it: the id
+    is the PROVIDER's and arrives on a letter, so a payload naming another
+    tenant's message must find nothing rather than something (the tenancy
+    law, the same posture as template_by_provider_id_query).
+    """
+    query = f"""
+        SELECT source_kind, source_id, dedupe_key
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND provider_message_id = $2
+    """
+    return query, [merchant_id, provider_message_id]

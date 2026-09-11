@@ -40,6 +40,7 @@ from app.crm.outreach.nodes.context import (
 )
 from app.crm.outreach.nodes.wait_event import TOPIC_KEY
 from app.crm.outreach.repeat import _as_number, apply_repeat
+from app.crm.outreach.reply_attribution import Addressed, addressed_run
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     Workflow,
@@ -123,6 +124,18 @@ async def consume_attributed_event(
         event.merchant_id, customer_id
     )
     goal_patch = _goal_patch(event) if open_runs else None
+    # Whose send this letter answers, resolved ONCE for the letter rather
+    # than once per run: a reply is addressed, not matched (see
+    # reply_attribution). None for anything that answers nothing of ours,
+    # and then every square below behaves as it always did.
+    addressed = await addressed_run(event) if open_runs else None
+    if addressed is not None and addressed.run_id not in {str(r.id) for r in open_runs}:
+        # She answered a run that has since ended (its goal fired, it timed
+        # out, she was ejected). Narrowing to a run nobody is holding would
+        # silence the letter completely, so it is treated as unaddressed and
+        # her other runs hear it exactly as they did before — the answer is
+        # late, not misdirected.
+        addressed = None
     for run in open_runs:
         definition = await definition_for(run)
         if definition is None:
@@ -135,7 +148,7 @@ async def consume_attributed_event(
             continue
         if await _end_on_goal(run, definition, event, goal_patch):
             continue  # exited: there is nothing left to wake
-        await _wake_on_reply(run, definition, event, variables)
+        await _wake_on_reply(run, definition, event, variables, addressed)
 
     flows = await workflow_accessor.live_workflows(event.merchant_id)
     for flow in flows:
@@ -151,6 +164,7 @@ async def consume_attributed_event(
                     handles,
                     open_runs,
                     variables,
+                    addressed,
                 )
                 break  # topics are unique across a plan's doors
 
@@ -195,6 +209,7 @@ async def _wake_on_reply(
     definition: WorkflowDefinition,
     event: RawEvent,
     variables: Optional[Dict[str, Any]] = None,
+    addressed: Optional[Addressed] = None,
 ) -> None:
     """A wait_event square of ITS document listening on this topic wakes
     the run with the answer — the statement decides whether the token is
@@ -218,7 +233,13 @@ async def _wake_on_reply(
     and the size ceiling hold whichever door a value arrives by: a
     declared `phone` must not overwrite the number the sends dial, and a
     value a starting run would drop must not reach a waiting one.
+
+    ``addressed`` is the run and square whose send this letter ANSWERS
+    (reply_attribution, which holds the why). It narrows first and it is
+    not advice; None leaves every square exactly as it was.
     """
+    if addressed is not None and addressed.run_id != str(run.id):
+        return  # she answered another run of hers
     max_chars = await CRM_CONTEXT_VALUE_MAX_CHARS()
     facts = {
         **_context_from_payload(event.payload, max_chars),
@@ -302,6 +323,7 @@ async def _answered_by(
     flow: Workflow,
     enrollment_key: str,
     event: RawEvent,
+    addressed: Optional[Addressed] = None,
 ) -> bool:
     """Is this letter the answer the open run's CURRENT square listens for
     (by ITS version)? Then _wake_on_reply moved the run above, and the
@@ -320,10 +342,15 @@ async def _answered_by(
             if pinned is None:
                 return False
             square = next((n for n in pinned.nodes if n.id == run.current_node), None)
+            if square is None:
+                return False
+            if addressed is not None and addressed.run_id != str(run.id):
+                # Judged through the SAME lens the wake used, or a letter the
+                # wake correctly ignored would be read as this run's answer
+                # and apply_repeat would skip a repeat it owes.
+                return False
             return (
-                square is not None
-                and _is_about(square, event, run)
-                and _answer_for(square, event) is not None
+                _is_about(square, event, run) and _answer_for(square, event) is not None
             )
     return False
 
@@ -392,6 +419,7 @@ async def _try_enrol(
     handles: Optional[dict] = None,
     open_runs: Sequence[EnrollmentRun] = (),
     variables: Optional[Dict[str, Any]] = None,
+    addressed: Optional[Addressed] = None,
 ) -> None:
     admit, enrollment_key = _enrollment_key(door, event, str(flow.id))
     if not admit:
@@ -428,7 +456,7 @@ async def _try_enrol(
         # (_FOUNDING_KEYS): the id is what patch_open_run_query refuses
         # the founding event by, the time is what goals are measured from.
         key = enrollment_key or customer_id
-        if await _answered_by(open_runs, flow, key, event):
+        if await _answered_by(open_runs, flow, key, event, addressed):
             logger.info(
                 f"run for {key} on {flow.id}: {event.topic} is its square's answer "
                 f"— moved, not a repeat (event {event.id})"

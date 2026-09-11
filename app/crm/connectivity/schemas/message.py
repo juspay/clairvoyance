@@ -33,6 +33,27 @@ class QueuedMessage(BaseModel):
     next_attempt_at: datetime
 
 
+class SendBehind(BaseModel):
+    """Who caused the message a provider's id names — the reply join.
+
+    A customer's reply carries the provider's id for the message she
+    answered (Meta's wamid in ``context.id``) and nothing of ours, so this
+    is how a producer learns the answer is to ITS send: canon T16 col 7/8
+    record what caused a send, and col 14's partial UNIQUE on
+    provider_message_id is the index the canon describes as "how an inbound
+    receipt finds this row". A reply is a receipt of another kind.
+
+    ``dedupe_key`` rides along because it is the producer's OWN name for the
+    send — for a workflow, ``<run>:<node>``, which names the square as well
+    as the run. Narrow on purpose: a caller learning who to wake has no
+    business with the manifest's status, address or variables.
+    """
+
+    source_kind: str
+    source_id: Optional[str] = None
+    dedupe_key: str
+
+
 class SendOutcome(BaseModel):
     """What a connector reports back: what the provider DID, never what the
     row should become — that decision stays in dispatch.py. ``reason`` is

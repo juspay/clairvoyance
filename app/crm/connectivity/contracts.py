@@ -15,6 +15,11 @@ What is here, and why each thing is on the surface:
   dispatcher sends, and only sends: no other work rides its loop.
 - ``queue_message`` — how a producer (the walker's send node first) proposes
   a send: one queued row, no verdict.
+- ``send_behind`` — the reply join, in one indexed read: whose send a
+  provider's id names (T16 col 7/8 by col 14's partial UNIQUE). A reply
+  carries the provider's id for the message it answers, so a producer
+  learns the answer is to ITS send without planting a correlate, keeping
+  one, or having its authors declare one.
 - ``perform_action`` / ``action_names`` / ``ActionError`` — the fourth verb:
   a run asks a connector to DO something (a Shopify tag, an order note).
   ``action_names`` and ``validate_action_args`` are what outreach's
@@ -81,7 +86,7 @@ from app.crm.connectivity.onboarding import (
     onboard,
     resubscribe,
 )
-from app.crm.connectivity.queue import queue_message
+from app.crm.connectivity.queue import queue_message, send_behind
 from app.crm.connectivity.reasons import reason_label
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
@@ -103,6 +108,8 @@ __all__ = [
     "dispatch_send",
     # producing a send
     "queue_message",
+    # and learning that a reply answers one of them
+    "send_behind",
     # asking a connector to act (the walker's action square)
     "perform_action",
     "action_names",
