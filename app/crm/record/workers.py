@@ -239,7 +239,7 @@ async def _run_processor(txn: DbTxn, event: RawEvent) -> _Processed:
             return _Processed(None, {}, {}, quarantined=True)
     if extracted.facts:
         try:
-            await assert_facts(
+            found = await assert_facts(
                 event.merchant_id,
                 customer_id,
                 extracted.facts,
@@ -248,6 +248,11 @@ async def _run_processor(txn: DbTxn, event: RawEvent) -> _Processed:
             )
         except Exception as e:
             logger.warning(f"event {event.id}: assert_facts failed, dropping: {e}")
+        else:
+            if not found:
+                logger.warning(
+                    f"event {event.id}: assert_facts found no customer {customer_id}"
+                )
     return _Processed(
         customer_id, extracted.handles, extracted.variables, quarantined=False
     )

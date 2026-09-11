@@ -104,8 +104,9 @@ def list_customers_query(
 ) -> Tuple[str, List[Any]]:
     """exact_term arrives NORMALIZED by the accessor (E.164 / lowercased)
     so it actually matches the stored form; pattern_term feeds the
-    display-name ILIKE (seq scan — acceptable at pilot volume, pg_trgm
-    is the follow-up when lists grow)."""
+    display-name ILIKE, which migration 073's trigram index can serve —
+    but only if the planner picks a BitmapOr across all three OR arms,
+    which is unmeasured. Assume the seq scan until an EXPLAIN says otherwise."""
     values: List[Any] = [merchant_id]
     where = "merchant_id = $1 AND status = 'active'"
     if exact_term:
