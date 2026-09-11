@@ -467,6 +467,46 @@ def test_assert_facts_failure_is_swallowed_and_stamp_still_proceeds(
     assert fake_accessor.stamped == [("evt-1", "cust-42")]
 
 
+def test_assert_facts_reporting_no_customer_warns_and_stamp_still_proceeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N10: assert_facts returning False (customer row missing) must not be
+    silent -- the worker cannot fail the row over it (nothing downstream
+    depends on a profile fact), but it must say so."""
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+
+    async def fake_assert_facts(*args: Any, **kwargs: Any) -> bool:
+        return False
+
+    # (level, message): every level is recorded so an unrelated log call on
+    # this path is a visible failure rather than an AttributeError, and the
+    # level is kept so the assertion can pin WARNING specifically.
+    lines: List[Tuple[str, str]] = []
+
+    class _Recorder:
+        def warning(self, msg: str) -> None:
+            lines.append(("warning", msg))
+
+        def error(self, msg: str) -> None:
+            lines.append(("error", msg))
+
+        def info(self, msg: str) -> None:
+            lines.append(("info", msg))
+
+        def debug(self, msg: str) -> None:
+            lines.append(("debug", msg))
+
+    monkeypatch.setattr(workers, "assert_facts", fake_assert_facts)
+    monkeypatch.setattr(workers, "logger", _Recorder())
+
+    event = _event(customer_id="cust-42", payload={"customer_name": "Asha"})
+    _run(workers._process_one(_fake_txn(), event))
+
+    assert fake_accessor.stamped == [("evt-1", "cust-42")]
+    assert [msg for level, msg in lines if level == "warning" and "cust-42" in msg]
+
+
 def test_entry_rules_run_per_row_before_that_row_is_stamped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
