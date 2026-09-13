@@ -5,9 +5,8 @@ The summary is ONE statement (grouping sets) folded by a pure decoder;
 the journey read joins the plan's name onto the customer's runs; the
 goal-cancel stashes the goal event on the run so recovered revenue can be
 summed later. Route wiring is checked by inspecting the routers, so a
-route that lost its admin dependency or its mount fails here."""
+route that lost its tenancy dependency or its mount fails here."""
 
-import inspect
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from uuid import uuid4
@@ -16,7 +15,7 @@ from fastapi.routing import APIRoute
 
 import app.crm.api as crm_api
 import app.crm.outreach.api as outreach_api
-from app.crm.auth import crm_admin_user
+from app.crm.auth import MERCHANT_SCOPE_MARK
 from app.crm.outreach.db.decoders.enrollment import (
     decode_customer_run,
     decode_run_summary,
@@ -169,13 +168,17 @@ def _route(router: Any, path: str) -> APIRoute:
     return matches[0]
 
 
-def test_summary_and_journey_routes_are_admin_only_and_mounted() -> None:
+def test_summary_and_journey_routes_are_merchant_scoped_and_mounted() -> None:
     summary = _route(outreach_api.router, "/{workflow_id}/summary")
     journey = _route(outreach_api.customer_router, "/{customer_id}/runs")
     for route in (summary, journey):
         assert route.methods == {"GET"}
-        guard = inspect.signature(route.endpoint).parameters["current_user"].default
-        assert guard.dependency is crm_admin_user
+        # The tenancy door, not the admin one: a merchant reads their own
+        # plans' numbers and their own customers' journeys.
+        assert any(
+            getattr(dep.call, MERCHANT_SCOPE_MARK, False)
+            for dep in route.dependant.dependencies
+        ), route.path
     mounted = [r.path for r in crm_api.router.routes if isinstance(r, APIRoute)]
     assert "/workflows/{workflow_id}/summary" in mounted
     assert "/customers/{customer_id}/runs" in mounted

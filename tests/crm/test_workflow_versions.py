@@ -537,10 +537,9 @@ async def test_the_migrate_route_threads_the_versions_and_answers_the_count(
         return 5
 
     monkeypatch.setattr(versions, "migrate_forward", migrate_forward)
-    user = cast(Any, type("U", (), {"email": "ops@x"})())
-    result = await outreach_api.migrate_version_route(
-        "wf-1", 3, merchant_id="m1", to=4, current_user=user
-    )
+    # No user: migrate stamps no author — the tenancy door is the only
+    # thing it needs from the caller, and the door hands it the merchant.
+    result = await outreach_api.migrate_version_route("wf-1", 3, merchant_id="m1", to=4)
     assert (result.from_version, result.to_version, result.moved) == (3, 4, 5)
     assert seen == [("m1", "wf-1", 3, 4)]
 
