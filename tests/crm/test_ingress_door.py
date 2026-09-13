@@ -15,9 +15,12 @@ from typing import List, Optional
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from app.crm.auth import MERCHANT_SCOPE_MARK
 from app.crm.connectivity import api as connectivity_api
+from app.crm.outreach import api as outreach_api
 from app.crm.record import api as record_api, ingress
 from app.crm.record.schemas import EventIn
 
@@ -227,6 +230,14 @@ def test_only_the_webhook_router_is_unauthenticated() -> None:
         assert carries(route, "get_current_user_with_rbac"), getattr(
             route, "path", route
         )
+    # Same for /workflows and the customer journey read: merchant-facing,
+    # so the tenancy door carries the auth rather than crm_admin_user.
+    for router in (outreach_api.router, outreach_api.customer_router):
+        assert router.routes, "the workflows routers have doors"
+        for route in router.routes:
+            assert carries(route, "get_current_user_with_rbac"), getattr(
+                route, "path", route
+            )
     # Every /ingest door (the envelope and the S2S schema registration)
     # declares the s2s verifier — by body or by query, one of the two
     # dependencies that call verify_s2s_caller.
@@ -240,6 +251,35 @@ def test_only_the_webhook_router_is_unauthenticated() -> None:
     assert record_api.catalog_router.routes, "the catalog router has routes"
     for route in record_api.catalog_router.routes:
         assert carries(route, "crm_admin_user"), getattr(route, "path", route)
+
+
+def test_every_workflows_route_declares_the_tenancy_door() -> None:
+    """The structural guarantee for /workflows: walk the routers, not the
+    handlers.
+
+    A merchant builds, edits, publishes and runs their OWN plans, so the
+    door is the tenancy check rather than ``crm_admin_user`` — which would
+    403 every merchant login on a tab they own. The check being a declared
+    dependency is what makes that safe: a route cannot reach a plan without
+    first proving the caller holds the merchant, and it cannot forget to by
+    omitting three lines, because this walk would fail.
+    """
+    routes = [
+        r
+        for router in (outreach_api.router, outreach_api.customer_router)
+        for r in router.routes
+        if isinstance(r, APIRoute)
+    ]
+    assert len(routes) >= 12, "the routers lost routes — the walk found too few"
+    missing = [
+        r.path
+        for r in routes
+        if not any(
+            getattr(dep.call, MERCHANT_SCOPE_MARK, False)
+            for dep in r.dependant.dependencies
+        )
+    ]
+    assert missing == [], f"workflows routes without merchant_scope: {missing}"
 
 
 def test_a_callback_carrying_no_letters_is_still_200(client, spec, spine) -> None:

@@ -15,11 +15,12 @@ for callers we authenticate:
   the lead door), else the per-merchant token above. One door, two kinds
   of caller; see its docstring for why the order is what it is.
 
-Merchant-facing routes (the connectors family) use a fourth:
-``assert_merchant_access`` — the same RBAC bearer JWT every other
+Merchant-facing routes (the connectors and workflows families) use a
+fourth: ``assert_merchant_access`` — the same RBAC bearer JWT every other
 clairvoyance call carries, plus an explicit tenancy check on the
 merchant_id in the request. It is here so there is exactly one answer to
-"who may touch this merchant" across /crm.
+"who may touch this merchant" across /crm. ``merchant_scope`` is that
+check as a route's declared dependency.
 
 Webhook ingress from external providers (Shopify relay, Meta) does NOT
 use any of these — it is signature-verified per source in record/api.py (A9).
