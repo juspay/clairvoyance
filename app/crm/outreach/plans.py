@@ -15,6 +15,7 @@ from app.crm.outreach.catalog_laws import (
     WorkflowValidationError,
     entry_against_catalog,
     gather_catalogs as _gather_catalogs,
+    goals_against_catalog,
 )
 from app.crm.outreach.db import DbTxn, atomically
 from app.crm.outreach.db.accessors import (
@@ -84,6 +85,7 @@ def validate_definition(
             "equality map is retired (migration 069)"
         )
     problems.extend(entry_against_catalog(definition, catalogs))
+    problems.extend(goals_against_catalog(definition, catalogs))
     node_ids = [node.id for node in definition.nodes]
     seen = set()
     for node_id in node_ids:

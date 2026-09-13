@@ -126,7 +126,12 @@ class EventReceipt(BaseModel):
 # The closed type set a registration may use — each maps one-to-one onto the
 # where-grammar's operators (record/catalog.py OPS_BY_TYPE). Unknown types
 # are rejected at registration, never discovered at flow-publish.
-FieldType = Literal["text", "number", "choice", "boolean", "datetime", "phone", "list"]
+# `tags` is the LIST-shaped type: a Shopify order's comma string or a
+# vendor's array, read as one set by shared/predicate.as_tag_set. It is the
+# only type whose ops ask about containment rather than equality.
+FieldType = Literal[
+    "text", "number", "choice", "boolean", "datetime", "phone", "list", "tags"
+]
 IdentityRole = Literal["phone", "name", "email", "shopify_customer_id"]
 
 

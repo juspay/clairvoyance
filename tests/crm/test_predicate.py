@@ -5,7 +5,14 @@ field satisfies nothing, the `is` family compares text exactly, and only
 
 import pytest
 
-from app.crm.shared.predicate import Condition, evaluate, from_equality_map, matches
+from app.crm.shared.predicate import (
+    Condition,
+    Op,
+    as_tag_set,
+    evaluate,
+    from_equality_map,
+    matches,
+)
 
 
 @pytest.mark.parametrize(
@@ -97,3 +104,66 @@ def test_from_equality_map_is_what_migration_069_writes() -> None:
     assert from_equality_map({"gateway": "COD"}) == [
         Condition(field="payload.gateway", op="is", value="COD")
     ]
+
+
+# --- LIST-shaped fields: has_all · has_any · has_none (phase 20) -------------
+
+
+def test_a_tag_set_reads_both_shopify_shapes_and_nothing_else() -> None:
+    # REST posts one comma string, GraphQL an array: one op reads both, or
+    # a rule would depend on which transport carried the order.
+    assert as_tag_set("Buddy Confirmed, COD") == frozenset({"buddy confirmed", "cod"})
+    assert as_tag_set(["Buddy Confirmed", "COD"]) == frozenset(
+        {"buddy confirmed", "cod"}
+    )
+    # Present and empty is a SET, not an absence.
+    assert as_tag_set("") == frozenset()
+    assert as_tag_set([]) == frozenset()
+    # Blank members and stray whitespace never become tags.
+    assert as_tag_set("  a ,, B  ") == frozenset({"a", "b"})
+    # Not list-shaped at all: no op has an opinion.
+    for value in (None, {"a": 1}, True, 7):
+        assert as_tag_set(value) is None, value
+
+
+def test_the_list_ops_are_case_and_whitespace_insensitive_on_both_sides() -> None:
+    # Shopify matches tags case-insensitively; comparing exactly would give
+    # a goal that silently never fires.
+    tagged = Condition(field="payload.tags", op="has_all", value=["Buddy Confirmed"])
+    assert evaluate(tagged, "buddy confirmed, cod")
+    assert evaluate(tagged, ["  BUDDY CONFIRMED  "])
+
+
+def test_has_all_has_any_has_none_truth_table() -> None:
+    tags = "Buddy Confirmed, COD"
+
+    def check(op: Op, value: list) -> bool:
+        return evaluate(Condition(field="payload.tags", op=op, value=value), tags)
+
+    assert check("has_all", ["cod", "buddy confirmed"])
+    assert not check("has_all", ["cod", "refunded"])
+    assert check("has_any", ["refunded", "cod"])
+    assert not check("has_any", ["refunded"])
+    assert check("has_none", ["refunded"])
+    assert not check("has_none", ["refunded", "cod"])
+
+
+def test_a_missing_field_answers_no_to_every_list_op_including_has_none() -> None:
+    """`has_none` is "present and holds none of these", never "not
+    has_any": an absent field is not evidence of absence, and this file's
+    standing rule is that a missing field satisfies no op."""
+    ops: tuple[Op, ...] = ("has_all", "has_any", "has_none")
+    for op in ops:
+        assert not evaluate(
+            Condition(field="payload.tags", op=op, value=["x"]), None
+        ), op
+    # …but present-and-empty DOES answer has_none.
+    assert evaluate(Condition(field="payload.tags", op="has_none", value=["x"]), "")
+
+
+def test_the_list_ops_need_a_non_empty_list_of_scalars() -> None:
+    ops: tuple[Op, ...] = ("has_all", "has_any", "has_none")
+    for op in ops:
+        for bad in ("a-scalar", [], [None], [["nested"]]):
+            with pytest.raises(ValueError):
+                Condition(field="payload.tags", op=op, value=bad)

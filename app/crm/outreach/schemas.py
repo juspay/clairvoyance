@@ -111,6 +111,7 @@ class WorkflowGoal(BaseModel):
 
     topics: List[str] = Field(min_length=1)
     key: Optional[WorkflowGoalKey] = None
+    where: List[Condition] = Field(default_factory=list)
     exit_reason: str = "goal_met"
 
 

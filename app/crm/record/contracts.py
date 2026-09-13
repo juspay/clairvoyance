@@ -21,7 +21,7 @@ from app.crm.record.catalog import (
     derive_for,
     topic_counts,
 )
-from app.crm.record.events import customer_has_event
+from app.crm.record.events import customer_goal_events, customer_has_event
 from app.crm.record.extractors.engine import field_value, variable_name
 from app.crm.record.ingest import record_event
 from app.crm.record.ingress import IngressSpec, register_ingress
@@ -33,6 +33,7 @@ __all__ = [
     "record_event",
     "get_customer_journey",
     "customer_has_event",
+    "customer_goal_events",
     # The provider bays' seam (ingress.py): the module that owns a
     # provider's webhook mechanics builds an IngressSpec, and app/crm/api.py
     # registers it — record never imports the registrant back (rule 12).
