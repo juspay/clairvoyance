@@ -112,3 +112,28 @@ async def test_slack_send_failure_does_not_raise(fake_redis, monkeypatch):
 
     # Must not raise.
     await alerts.raise_no_leader()
+
+
+async def test_pipeline_failure_reports_stage_and_processor(fake_redis, captured_slack):
+    await alerts.raise_pipeline_failure(
+        processor="SonioxSTTService#0", error="websocket closed", call_sid="CA-999"
+    )
+
+    _title, fields = captured_slack[0]
+    values = {f["name"]: f["value"] for f in fields}
+    assert values["Stage"] == alerts.STAGE_STT
+    assert values["Call SID"] == "CA-999"
+
+
+async def test_pipeline_failure_throttles_per_stage_and_processor(
+    fake_redis, captured_slack
+):
+    """An outage fails every concurrent call at once — must collapse to one
+    page per (stage, processor), not one per call."""
+    for _ in range(50):
+        await alerts.raise_pipeline_failure(processor="SonioxSTTService#0", error="x")
+
+    assert len(captured_slack) == 1
+
+    await alerts.raise_pipeline_failure(processor="DeepgramSTTService#0", error="x")
+    assert len(captured_slack) == 2
