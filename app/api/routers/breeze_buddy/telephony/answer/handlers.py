@@ -151,6 +151,7 @@ async def resolve_call_templates(
             "is_outbound": True,
             "template_id": str(template.id),
             "reseller_id": lead.reseller_id,
+            "merchant_id": lead.merchant_id,
         }
 
     # Inbound call - look up templates by telephony number
@@ -509,11 +510,22 @@ async def _build_provider_response(
     # Smart Router down), pod_ws_url stays empty and we fall back to the
     # standard shared URL via _build_websocket_url().
     pod_ws_url = ""
+    # merchant_id: outbound leads carry it on the lead row; inbound derives
+    # from the resolved template. direction lets router configs scope pools
+    # to a call direction (e.g. outbound-only exclusive pools).
+    alloc_merchant_id = result.get("merchant_id")
+    if not alloc_merchant_id:
+        resolved_templates = result.get("templates") or []
+        if resolved_templates:
+            alloc_merchant_id = resolved_templates[0].merchant_id
+    alloc_direction = "outbound" if result.get("is_outbound") else "inbound"
     allocation = await safe_allocate_pod(
         call_sid=call_id,
         provider=provider,
         reseller_id=result.get("reseller_id"),
         template="ws",
+        merchant_id=alloc_merchant_id,
+        direction=alloc_direction,
     )
     if allocation:
         pod_ws_url = allocation.ws_url
