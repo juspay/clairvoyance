@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import WebSocket
-from pipecat.runner.utils import _create_telephony_transport, create_transport
+from pipecat.runner.utils import create_transport
 
 from app.ai.voice.agents.breeze_buddy.agent.transport import get_transport_params
 from app.ai.voice.agents.breeze_buddy.template.builder import FlowConfigBuilder
@@ -21,6 +21,9 @@ from app.ai.voice.agents.breeze_buddy.template.context import (
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.agent_transfer import PendingAgentTransfer
+from app.ai.voice.agents.breeze_buddy.utils.transport.telephony import (
+    create_telephony_transport,
+)
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.logger.context import update_log_context
 from app.database.accessor.breeze_buddy.lead_call_tracker import update_lead_template
@@ -140,7 +143,7 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
         # Telephony doesn't use the Daily chunk knob; leave the fallback.
         transport_params = get_transport_params(bot.template, bot.configurations)
         params = transport_params[bot._rebuild.telephony_transport_type]()
-        bot.transport = await _create_telephony_transport(
+        bot.transport = await create_telephony_transport(
             cast(WebSocket, bot._rebuild.ws_proxy),
             params,
             bot._rebuild.telephony_transport_type,

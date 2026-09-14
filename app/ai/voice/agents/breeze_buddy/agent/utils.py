@@ -12,7 +12,9 @@ from pipecat.frames.frames import OutputAudioRawFrame
 from pipecat.pipeline.task import PipelineTask
 
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.utils.common import (
+    mulaw_8k_to_l16,
     prepare_initial_greeting_payload,
     track_error,
 )
@@ -86,14 +88,22 @@ async def send_initial_greeting(
         )
 
         if provider_str == "plivo":
-            # Plivo bidirectional streaming uses playAudio event
+            # Plivo bidirectional streaming uses playAudio event. The stream runs
+            # L16 wideband, so the cached 8 kHz mu-law greeting is converted to
+            # match — see mulaw_8k_to_l16.
+            l16_payload = base64.b64encode(
+                mulaw_8k_to_l16(
+                    base64.b64decode(greeting_result["payload"]),
+                    TELEPHONY_SAMPLE_RATE,
+                )
+            ).decode("utf-8")
             media_message = {
                 "event": "playAudio",
                 "streamId": stream_sid,
                 "media": {
-                    "contentType": "audio/x-mulaw",
-                    "sampleRate": 8000,
-                    "payload": greeting_result["payload"],
+                    "contentType": "audio/x-l16",
+                    "sampleRate": TELEPHONY_SAMPLE_RATE,
+                    "payload": l16_payload,
                 },
             }
         else:
