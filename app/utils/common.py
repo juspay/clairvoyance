@@ -115,3 +115,16 @@ def parse_json_field(value) -> List[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+_MAX_DIALABLE_DIGITS = 14
+
+
+def is_dialable(raw: object) -> bool:
+    """Plivo dials up to 14 digits, with or without a country code.
+    Reject only when the digit count exceeds that.
+    """
+    if not isinstance(raw, str):
+        return False
+    digit_count = sum(1 for c in raw if c.isdigit())
+    return 0 < digit_count <= _MAX_DIALABLE_DIGITS
