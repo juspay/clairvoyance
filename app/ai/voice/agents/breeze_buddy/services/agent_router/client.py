@@ -205,17 +205,22 @@ class SmartRouterClient:
         provider: str = "exotel",
         flow: str = "v2",
         template: str = "",
+        merchant_id: Optional[str] = None,
+        direction: Optional[str] = None,
     ) -> Optional[PodAllocation]:
         """
         Allocate a pod via Smart Router.
 
         Args:
             call_sid: Unique call identifier
-            reseller_id: Optional merchant ID for tiered routing
+            reseller_id: Optional reseller ID for tiered routing
             provider: Provider name (twilio, plivo, exotel)
             flow: WebSocket handler version ("v1" or "v2")
             template: Template name for WebSocket path (e.g., "order-confirmation").
                       If empty, Smart Router uses provider-specific defaults.
+            merchant_id: Optional merchant ID for merchant-pool routing
+            direction: Optional call direction ("inbound"/"outbound") for
+                       direction-scoped merchant-pool routing
 
         Returns:
             PodAllocation if successful, None if no pods or error
@@ -232,6 +237,10 @@ class SmartRouterClient:
         }
         if template:
             payload["template"] = template
+        if merchant_id:
+            payload["merchant_id"] = merchant_id
+        if direction:
+            payload["direction"] = direction
 
         start_time = time.time()
 
@@ -516,6 +525,8 @@ async def safe_allocate_pod(
     reseller_id: Optional[str] = None,
     flow: str = "v2",
     template: str = "",
+    merchant_id: Optional[str] = None,
+    direction: Optional[str] = None,
 ) -> Optional[PodAllocation]:
     """
     Allocate a pod if pod isolation is enabled. Never raises.
@@ -533,6 +544,8 @@ async def safe_allocate_pod(
         provider=provider,
         flow=flow,
         template=template,
+        merchant_id=merchant_id,
+        direction=direction,
     )
     if allocation:
         logger.info(
