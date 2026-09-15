@@ -43,6 +43,7 @@ from app.crm.outreach.nodes.wait_event import TOPIC_KEY
 from app.crm.outreach.repeat import _as_number, apply_repeat
 from app.crm.outreach.reply_attribution import Addressed, addressed_run
 from app.crm.outreach.schemas import (
+    ATTRIBUTED_TOPICS,
     EnrollmentRun,
     Workflow,
     WorkflowDefinition,
@@ -170,6 +171,26 @@ async def consume_attributed_event(
                 break  # topics are unique across a plan's doors
 
 
+def _scoped_to_this_run(
+    run: EnrollmentRun, definition: WorkflowDefinition, event: RawEvent
+) -> bool:
+    """PURE: does entry.key say this letter is about ANOTHER run of hers,
+    when no author-set match/tier key already decided? Skips the check
+    entirely for ATTRIBUTED_TOPICS (a provider's own reply/outcome shape,
+    e.g. a WhatsApp wamid) — that field is never a fact about the run."""
+    key = definition.entry_key()
+    if key is None:
+        return True  # no key at all, or doors disagree
+    if event.topic in ATTRIBUTED_TOPICS:
+        return True  # a provider's own reply/outcome shape: never entry's
+    value = field_value(
+        event.payload, canonical_path(key), derive_for(event.source, event.topic)
+    )
+    if value in (None, ""):
+        return True
+    return str(run.enrollment_key) == str(value)
+
+
 async def _end_on_goal(
     run: EnrollmentRun,
     definition: WorkflowDefinition,
@@ -184,6 +205,7 @@ async def _end_on_goal(
     and is skipped; one naming another run of hers is not this run's.
     Time-aware on the founding letter (G7) in the statement. Returns True
     when the run ended."""
+    in_scope = _scoped_to_this_run(run, definition, event)
     for tier in definition.goal_tiers(event.topic):
         key: Optional[Tuple[str, str]] = None
         if tier.key:
@@ -193,6 +215,8 @@ async def _end_on_goal(
             if str(run.context.get(tier.key.run, "")) != str(value):
                 continue  # about another run of hers
             key = (tier.key.run, str(value))
+        elif not in_scope:
+            continue
         if await enrollment_accessor.cancel_run(
             run.merchant_id,
             str(run.id),
@@ -249,7 +273,7 @@ async def _wake_on_reply(
     for node in definition.nodes:
         if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
             continue
-        if not _is_about(node, event, run):
+        if not _is_about(node, event, run, definition):
             continue  # another run's letter (phase 18): not this square's
         answer = _answer_for(node, event)
         if answer is None:
@@ -292,7 +316,7 @@ async def _wake_on_reply(
     if any(
         NODE_TYPES[n.type].listens
         and event.topic in n.topics
-        and _is_about(n, event, run)
+        and _is_about(n, event, run, definition)
         and _answer_for(n, event) is not None
         for n in definition.nodes
     ):
@@ -301,14 +325,25 @@ async def _wake_on_reply(
         )
 
 
-def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
+def _is_about(
+    node: WorkflowNode,
+    event: RawEvent,
+    run: EnrollmentRun,
+    definition: WorkflowDefinition,
+) -> bool:
     """PURE: is this letter about THIS run, as the square's `match` asks
     (phase 18)? The letter's field against the run's own id or a context
-    field, as text (the goal-key precedent). No match word = every
-    letter on the topic is hers; a letter without the field claims
-    nobody, so it is not hers either."""
+    field, as text (the goal-key precedent). No match word on a $topic
+    square (phase 15: a business event, sharing the entry's own payload
+    convention) falls back to entry.key, same default as a goal tier's
+    unset key (_scoped_to_this_run); no match word on any other square —
+    a provider's own reply/outcome shape (button_id, outcome, reply) —
+    means every letter on the topic is hers, same as always: that
+    payload's fields are the provider's, never a fact about the run. A
+    letter without the match field claims nobody, so it is not hers
+    either."""
     if node.match is None:
-        return True
+        return node.key != TOPIC_KEY or _scoped_to_this_run(run, definition, event)
     claimed = field_value(
         event.payload,
         canonical_path(node.match.payload),
@@ -375,7 +410,8 @@ async def _answered_by(
                 # and apply_repeat would skip a repeat it owes.
                 return False
             return (
-                _is_about(square, event, run) and _answer_for(square, event) is not None
+                _is_about(square, event, run, pinned)
+                and _answer_for(square, event) is not None
             )
     return False
 

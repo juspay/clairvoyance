@@ -538,6 +538,108 @@ def test_a_reply_wakes_only_the_runs_whose_own_version_listens_for_it(
     ]
 
 
+def test_a_keyed_door_isolates_wake_and_goal_without_authored_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two applications, one identity, entry.key: customer_id — and no
+    match/goal-key hand-written anywhere in the board. A letter or a goal
+    for one application's customer_id must not touch the other's run."""
+    plan = {
+        "entry": {"topic": "LINE_INITIATED", "key": "customer_id"},
+        "nodes": [
+            {
+                "id": "listen",
+                "type": "wait_event",
+                "topics": ["LINE_OFFERED"],
+                "key": "$topic",
+                "minutes": 60,
+            },
+        ],
+        "edges": [],
+        "goals": [{"topics": ["LINE_ACTIVE"]}],
+    }
+    flow = _flow(plan, version=1)
+    a = _run(flow, 1, "listen", {"customer_id": "APP-A"}, key="APP-A")
+    b = _run(flow, 1, "listen", {"customer_id": "APP-B"}, key="APP-B")
+    spine = _Spine([flow], [a, b], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+
+    _consume(_event("LINE_OFFERED", {"customer_id": "APP-A"}))
+    assert [r[0] for r in spine.resumes] == [str(a.id)]
+
+    spine.resumes.clear()
+    _consume(_event("LINE_ACTIVE", {"customer_id": "APP-A"}))
+    assert [(r, reason) for r, reason, _, _ in spine.cancels] == [
+        (str(a.id), "goal_met")
+    ]
+
+
+def test_a_provider_shape_goal_topic_is_never_narrowed_by_entry_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A goal tier on message.inbound must not fall back to entry.key — its
+    "id" is a WhatsApp wamid, not the run's key — so it stays identity-wide
+    and still ends every open run, instead of silently never firing."""
+    plan = {
+        "entry": {"topic": "checkout.initiated", "key": "id"},
+        "nodes": [{"id": "wait-30m", "type": "wait", "minutes": 30}],
+        "edges": [],
+        "goals": [{"topics": ["message.inbound"], "exit_reason": "goal_met"}],
+    }
+    flow = _flow(plan, version=1)
+    a = _run(flow, 1, "wait-30m", {}, key="APP-A")
+    b = _run(flow, 1, "wait-30m", {}, key="APP-B")
+    spine = _Spine([flow], [a, b], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    _consume(_event("message.inbound", {"id": "wamid.HBgMOTE5"}, source="whatsapp"))
+    assert {r for r, reason, _, _ in spine.cancels} == {str(a.id), str(b.id)}
+    assert {reason for _, reason, _, _ in spine.cancels} == {"goal_met"}
+
+
+def test_a_keyless_door_dissents_so_its_own_runs_stay_identity_wide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One plan, two doors: an application door keyed by customer_id, and
+    a deliberately unkeyed door (a door's own word wins over the shared
+    fold, schemas.py:_doors_take_the_shared_words) for a cart-recovery-
+    style path that wants identity-wide coalescing. The OTHER door having
+    a key must not make _scoped_to_this_run treat this run's own door as
+    keyed too — a run admitted through the unkeyed door stays identity-
+    wide for both the wake and the goal path."""
+    plan = {
+        "entry": [
+            {"topic": "LINE_INITIATED", "key": "customer_id", "start": "listen"},
+            {"topic": "CART_ABANDONED", "start": "listen"},
+        ],
+        "nodes": [
+            {
+                "id": "listen",
+                "type": "wait_event",
+                "topics": ["OFFERED"],
+                "key": "$topic",
+                "minutes": 60,
+            },
+        ],
+        "edges": [],
+        "goals": [{"topics": ["ACTIVE"]}],
+    }
+    flow = _flow(plan, version=1)
+    keyed_run = _run(flow, 1, "listen", {"customer_id": "APP-A"}, key="APP-A")
+    unkeyed_run = _run(flow, 1, "listen", {}, key="c-1")
+    spine = _Spine([flow], [keyed_run, unkeyed_run], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+
+    _consume(_event("OFFERED", {"customer_id": "APP-A"}))
+    assert {r[0] for r in spine.resumes} == {str(keyed_run.id), str(unkeyed_run.id)}
+
+    spine.resumes.clear()
+    _consume(_event("ACTIVE", {"customer_id": "APP-A"}))
+    assert {r for r, _, _, _ in spine.cancels} == {
+        str(keyed_run.id),
+        str(unkeyed_run.id),
+    }
+
+
 def test_entries_still_match_the_latest_version(
     two_versions: _Spine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
