@@ -298,7 +298,7 @@ def test_a_payload_can_never_plant_bookkeeping_keys_in_context() -> None:
     walker's own; a producer key with one of those names would corrupt the
     accumulate branch (jsonb_array_length on a scalar) or the founding-event
     dedupe. The filter is nodes.py's one definition, not a second list."""
-    context = entry._context_from_payload(
+    context = entry.context_from_payload(
         {
             "item": "tv",
             "repeat_items": "not-a-list",

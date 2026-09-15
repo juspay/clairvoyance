@@ -49,8 +49,18 @@ from app.crm.outreach.schemas import WorkflowNode
 
 NODE_TYPES: Dict[str, NodeSpec] = {
     "wait": NodeSpec(validate=wait.validate, execute=None, is_wait=True),
-    "send": NodeSpec(validate=send.validate, execute=send.execute, is_wait=False),
-    "call": NodeSpec(validate=call.validate, execute=call.execute, is_wait=False),
+    "send": NodeSpec(
+        validate=send.validate,
+        execute=send.execute,
+        is_wait=False,
+        describe=send.describe,
+    ),
+    "call": NodeSpec(
+        validate=call.validate,
+        execute=call.execute,
+        is_wait=False,
+        describe=call.describe,
+    ),
     "wait_event": NodeSpec(
         validate=wait_event.validate,
         execute=None,
@@ -58,18 +68,25 @@ NODE_TYPES: Dict[str, NodeSpec] = {
         branches=True,
         listens=True,
     ),
-    "action": NodeSpec(validate=action.validate, execute=action.execute, is_wait=False),
+    "action": NodeSpec(
+        validate=action.validate,
+        execute=action.execute,
+        is_wait=False,
+        describe=action.describe,
+    ),
     "condition": NodeSpec(
         validate=condition.validate,
         execute=condition.execute,
         is_wait=False,
         branches=True,
+        decide=condition.decide,
     ),
     "split": NodeSpec(
         validate=split.validate,
         execute=split.execute,
         is_wait=False,
         branches=True,
+        decide=split.decide,
     ),
 }
 

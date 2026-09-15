@@ -829,7 +829,7 @@ def test_the_declared_half_crosses_the_same_bridge_as_the_payload(
     listening: _Spine,
 ) -> None:
     """One bridge, not two: the declared variables cross
-    _context_from_payload exactly as enrol's do, so a dict or an over-cap
+    context_from_payload exactly as enrol's do, so a dict or an over-cap
     value is dropped at the wake as a starting run would drop it — two
     filters would drift the first time one learned a rule."""
     (run,) = listening.runs
