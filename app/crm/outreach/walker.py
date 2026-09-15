@@ -31,6 +31,7 @@ from app.core.config.static import (
     CRM_WALKER_MAX_ATTEMPTS,
 )
 from app.core.logger import logger
+from app.core.logger.context import set_log_context, update_log_context
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -57,6 +58,8 @@ from app.crm.outreach.steps import (
 from app.crm.outreach.window import alarm, opens_at
 from app.crm.record.contracts import customer_has_event
 
+LOG_COMPONENT = "crm.outreach.walker"
+
 # One claim executes consecutive immediate nodes (call -> next wait) in a
 # single visit; the bound is a runaway-document guard, not a feature.
 _MAX_STEPS_PER_VISIT = 10
@@ -77,8 +80,22 @@ async def claim_due_runs(batch: int) -> List[EnrollmentRun]:
     """The walker's claim for the drain loop (worker-runtime.md): the
     wake_at lease push — one UPDATE that moves the alarm one lease window
     forward IS the lock, so replicas never collide and a crashed claim
-    self-heals when the pushed alarm comes due again."""
-    return await enrollment_accessor.claim_due_runs(batch, CRM_WALKER_LEASE_SECONDS)
+    self-heals when the pushed alarm comes due again.
+
+    Resets the log context first: the ids the last run stamped are still
+    standing (same task), and the pass line is not about that run.
+    batch_full says only that the claim hit its LIMIT — one full batch may
+    be exactly the last due rows, so it is not proof of backlog on its
+    own. SUSTAINED full batches are: the alert rule counts consecutive
+    ones, which is how "the walker is behind" is known without a query the
+    claim's own wake_at push would have made meaningless anyway."""
+    set_log_context(component=LOG_COMPONENT)
+    runs = await enrollment_accessor.claim_due_runs(batch, CRM_WALKER_LEASE_SECONDS)
+    if runs:
+        logger.bind(claimed=len(runs), batch_full=len(runs) >= batch).info(
+            f"walker pass: claimed {len(runs)} due run(s)"
+        )
+    return runs
 
 
 async def walk_run(run: EnrollmentRun) -> None:
@@ -93,7 +110,17 @@ async def walk_run(run: EnrollmentRun) -> None:
     already re-arms the run, and the next claim re-reads it WITH the
     reply and takes the right branch. Action nodes are idempotent
     (dedupe run:node, uuid5 lead), so a re-executed visit is exactly as
-    safe as the lease retry this file already relied on."""
+    safe as the lease retry this file already relied on.
+
+    Stamped before the lease check, so even the earliest failure line
+    carries the run's ids; the nodes this visit executes inherit them."""
+    set_log_context(
+        component=LOG_COMPONENT,
+        merchant_id=run.merchant_id,
+        workflow_id=str(run.workflow_id),
+        run_id=str(run.id),
+        node=run.current_node,
+    )
     lease = run.wake_at
     if lease is None:
         # A claimed run always carries its lease (the claim wrote it, and
@@ -123,12 +150,14 @@ async def walk_run(run: EnrollmentRun) -> None:
                     f"definition v{run.workflow_version} unreadable: {e}"
                 )
                 ejected = None
-            if not await enrollment_accessor.exit_run(
+            if await enrollment_accessor.exit_run(
                 str(run.id),
                 "ejected",
                 lease,
                 steps=as_rows(closing(run, ejected, "ejected")),
             ):
+                _log_exit(run, "ejected")
+            else:
                 _deferred(run, "eject")
             return
         if workflow.status == "paused":
@@ -143,7 +172,12 @@ async def walk_run(run: EnrollmentRun) -> None:
         await _advance(run, definition, lease)
     except NodeParked as e:
         if await enrollment_accessor.park_run(str(run.id), str(e), lease):
-            logger.warning(f"walker: run {run.id} parked — {e}")
+            # A defect needs the document fixed; resuming alone re-parks it.
+            # park_kind, NOT reason_class: that name carries dispatch's
+            # fixed vocabulary, and one column holding two groups by neither.
+            logger.bind(park_kind="defect", permanent=True).warning(
+                f"walker: run {run.id} parked — {e}"
+            )
         else:
             _deferred(run, "park")
     except Exception as e:
@@ -151,7 +185,11 @@ async def walk_run(run: EnrollmentRun) -> None:
             if await enrollment_accessor.park_run(
                 str(run.id), f"attempts exhausted: {e}", lease
             ):
-                logger.error(f"walker: run {run.id} parked after retries — {e}")
+                # The other kind: transient, never settled. Same dead end,
+                # different fix — hence a field, not a message prefix.
+                logger.bind(park_kind="attempts_exhausted", permanent=True).error(
+                    f"walker: run {run.id} parked after retries — {e}"
+                )
             else:
                 _deferred(run, "park")
         else:
@@ -159,9 +197,20 @@ async def walk_run(run: EnrollmentRun) -> None:
             if await enrollment_accessor.record_run_error(
                 str(run.id), str(e), retry_in, lease
             ):
-                logger.warning(f"walker: run {run.id} retries in {retry_in}s — {e}")
+                # permanent=False keeps this out of the failure counts:
+                # the ladder is not spent, so nothing is owed yet.
+                logger.bind(
+                    retry_in_s=retry_in, attempts=run.attempts, permanent=False
+                ).warning(f"walker: run {run.id} retries in {retry_in}s — {e}")
             else:
                 _deferred(run, "retry")
+
+
+def _log_exit(run: EnrollmentRun, reason: str) -> None:
+    """How a run ended is otherwise written only to its row, where no
+    alert rule can see it — and a rising `timed_out` share is how silent
+    breakage upstream shows up."""
+    logger.bind(exit_reason=reason).info(f"walker: run {run.id} exited {reason}")
 
 
 def _deferred(run: EnrollmentRun, write: str) -> None:
@@ -179,6 +228,16 @@ def _deferred(run: EnrollmentRun, write: str) -> None:
 async def _advance(
     run: EnrollmentRun, definition: WorkflowDefinition, lease: datetime
 ) -> None:
+    """One visit: exits judged first, then the token moves as far as it
+    can without waiting.
+
+    The order is the contract — age ceiling, then goal, then the board —
+    because both exits must end a run standing on ANY square, including
+    one whose action would otherwise fire. The loop executes consecutive
+    immediate squares under the one claim and stops when the next square
+    waits; a wait's alarm IS its action. Raises NodeParked for anything
+    the document itself got wrong.
+    """
     nodes = {node.id: node for node in definition.nodes}
     outgoing = definition.outgoing()
     now = datetime.now(timezone.utc)
@@ -187,12 +246,14 @@ async def _advance(
     # timed_out no matter which square it stands on.
     max_age = timedelta(days=definition.exits.max_age_days)
     if now - run.entered_at > max_age:
-        if not await enrollment_accessor.exit_run(
+        if await enrollment_accessor.exit_run(
             str(run.id),
             "timed_out",
             lease,
             steps=as_rows(closing(run, definition, "timed_out")),
         ):
+            _log_exit(run, "timed_out")
+        else:
             _deferred(run, "timed_out")
         return
 
@@ -212,12 +273,14 @@ async def _advance(
         if await customer_has_event(
             run.merchant_id, str(run.customer_id), tier.topics, since, where
         ):
-            if not await enrollment_accessor.exit_run(
+            if await enrollment_accessor.exit_run(
                 str(run.id),
                 tier.exit_reason,
                 lease,
                 steps=as_rows(closing(run, definition, tier.exit_reason)),
             ):
+                _log_exit(run, tier.exit_reason)
+            else:
                 _deferred(run, tier.exit_reason)
             return
 
@@ -234,6 +297,10 @@ async def _advance(
     walked: List[StepRecord] = []
     first = True
     for _ in range(_MAX_STEPS_PER_VISIT):
+        # walk_run stamped the square the token ARRIVED on; a park three
+        # squares later would blame it. update_, not set_ — set_ would
+        # drop merchant/workflow/run.
+        update_log_context(node=current_id)
         node = nodes.get(current_id)
         if node is None:
             # A pinned version never loses a node under a run (pin), and
@@ -322,7 +389,7 @@ async def _advance(
                 first,
                 dispatched,
             )
-            if not await enrollment_accessor.exit_run(
+            if await enrollment_accessor.exit_run(
                 str(run.id),
                 "completed",
                 lease,
@@ -330,6 +397,8 @@ async def _advance(
                 context=context,
                 steps=as_rows(walked),
             ):
+                _log_exit(run, "completed")
+            else:
                 _deferred(run, "completed")
             return
 

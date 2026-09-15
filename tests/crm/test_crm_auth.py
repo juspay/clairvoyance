@@ -214,6 +214,102 @@ def test_caller_no_token_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
     assert e.value.status_code == 401
 
 
+# --- every refusal leaves a line (the door used to refuse in silence) ---
+
+
+class _Lines:
+    """A logger that records what each line BOUND, not what it said."""
+
+    def __init__(self, sink: List[Dict[str, Any]] | None = None) -> None:
+        self.lines: List[Dict[str, Any]] = [] if sink is None else sink
+        self._bound: Dict[str, Any] = {}
+
+    def bind(self, **fields: Any) -> "_Lines":
+        view = _Lines(self.lines)
+        view._bound = {**self._bound, **fields}
+        return view
+
+    def _record(self, message: Any) -> None:
+        self.lines.append({**self._bound, "message": str(message)})
+
+    info = warning = error = _record
+
+
+def _refusals(monkeypatch: pytest.MonkeyPatch) -> List[Dict[str, Any]]:
+    lines = _Lines()
+    monkeypatch.setattr(crm_auth, "logger", lines)
+    return lines.lines
+
+
+@pytest.mark.parametrize(
+    "reason,stored,scopes,headers",
+    [
+        ("missing_token", None, ["*"], {}),
+        ("unknown_merchant", None, ["*"], {"x-s2s-token": "relay"}),
+        ("not_provisioned", None, ["m1"], {"x-s2s-token": "t"}),
+        ("token_mismatch", "rotated-in", ["m1"], {"x-s2s-token": "rotated-out"}),
+    ],
+)
+def test_each_refusal_names_its_reason_and_merchant(
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str,
+    stored: str | None,
+    scopes: List[str],
+    headers: Dict[str, str],
+) -> None:
+    """A merchant whose token breaks gets no error anyone sees — their
+    events just stop arriving. One WARNING per refusal, reason as a
+    field so a rule can count them per merchant."""
+    _caller(monkeypatch, stored=stored, merchant_ids=scopes)
+    if reason == "unknown_merchant":
+
+        async def absent(merchant_id: str) -> bool:
+            return False
+
+        monkeypatch.setattr(crm_auth, "check_merchant_identifier_exists", absent)
+    lines = _refusals(monkeypatch)
+
+    with pytest.raises(HTTPException):
+        asyncio.run(verify_s2s_caller("m1", _request(headers)))
+
+    assert len(lines) == 1, "one refusal, one line"
+    assert lines[0]["reason"] == reason
+    assert lines[0]["merchant_id"] == "m1"
+    assert lines[0]["component"] == crm_auth.S2S_LOG_COMPONENT
+
+
+def test_a_token_the_manager_rejects_is_logged_then_re_raised_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The token manager's verdict; we add a line and hand its answer
+    back untouched."""
+    _caller(monkeypatch, stored=None, merchant_ids=["*"])
+    refused = HTTPException(status_code=401, detail="Token expired")
+
+    def reject(token: str) -> Any:
+        raise refused
+
+    monkeypatch.setattr(crm_auth.rbac_token_manager, "verify_rbac_token", reject)
+    lines = _refusals(monkeypatch)
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(verify_s2s_caller("m1", _request({"x-s2s-token": "nope"})))
+
+    assert caught.value is refused  # the same object, not a reworded copy
+    assert [line["reason"] for line in lines] == ["bad_token"]
+
+
+def test_an_accepted_caller_says_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One line per accepted push would bury every refusal."""
+    _caller(monkeypatch, stored="tok", merchant_ids=["m1"])
+    lines = _refusals(monkeypatch)
+
+    assert (
+        asyncio.run(verify_s2s_caller("m1", _request({"x-s2s-token": "tok"}))) == "m1"
+    )
+    assert lines == []
+
+
 def test_caller_fails_closed_when_token_lookup_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

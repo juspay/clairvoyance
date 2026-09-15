@@ -104,7 +104,10 @@ async def execute(
             f"walker: run {run.id} send {dedupe_key} already queued (lease retry)"
         )
         return {}
-    logger.info(f"walker: run {run.id} queued message {message_id} (node {node.id})")
+    # message_id as a FIELD, to join against dispatch's terminal line.
+    logger.bind(message_id=message_id).info(
+        f"walker: run {run.id} queued message {message_id} (node {node.id})"
+    )
     written: Dict[str, Any] = {f"message_{node.id}": message_id}
     if chosen:
         written[playbook_key(node.id)] = chosen

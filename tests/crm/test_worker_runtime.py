@@ -13,6 +13,8 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.workers as outreach_workers
+import app.crm.shared.worker as shared_worker
+from app.core.logger.context import get_log_context, set_log_context
 from app.crm.outreach.db.accessors import version as version_accessor
 from app.crm.outreach.nodes.context import send_variables
 from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
@@ -52,7 +54,161 @@ def test_claim_sweeps_once_an_hour_then_claims(monkeypatch: pytest.MonkeyPatch) 
     assert seen == ["sweep", "claim:50", "claim:50"]
 
 
-# --- the consumer ---
+# --- the scaffold's own lines (what the alert rules read) ---
+
+
+class _Lines:
+    """A logger that records what each line BOUND, not what it said."""
+
+    def __init__(self, sink: Optional[List[Dict[str, Any]]] = None) -> None:
+        self.lines: List[Dict[str, Any]] = [] if sink is None else sink
+        self._bound: Dict[str, Any] = {}
+
+    def bind(self, **fields: Any) -> "_Lines":
+        view = _Lines(self.lines)
+        view._bound = {**self._bound, **fields}
+        return view
+
+    def _record(self, message: Any) -> None:
+        self.lines.append({**self._bound, "message": str(message)})
+
+    info = warning = error = _record
+
+
+def _drain_once(
+    monkeypatch: pytest.MonkeyPatch,
+    claim: Any,
+    handle: Any,
+    *,
+    name: str = "walker",
+) -> List[Dict[str, Any]]:
+    """One working iteration, heartbeat due, lines returned.
+
+    Stop is raised on the SECOND claim: the row loop checks it before
+    each row, so stopping in the first would skip the handling under
+    test — and a claim that RAISES never reaches a stop placed after it.
+    """
+    lines = _Lines()
+    monkeypatch.setattr(shared_worker, "logger", lines)
+    monkeypatch.setattr(shared_worker, "CRM_WORKER_HEARTBEAT", 0)  # beat every pass
+
+    stop = asyncio.Event()
+    passes = {"n": 0}
+
+    async def claiming(batch: int) -> List[Any]:
+        passes["n"] += 1
+        if passes["n"] > 1:
+            stop.set()
+            return []
+        return await claim(batch)
+
+    asyncio.run(
+        shared_worker.run_drain_loop(
+            claiming, handle, interval=0, batch=10, stop_event=stop, name=name
+        )
+    )
+    return lines.lines
+
+
+def test_every_scaffold_line_names_its_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The absence rule asks "did 'walker' say anything in 5 minutes",
+    so the name must be a column, not a word in the message."""
+
+    async def claim(batch: int) -> List[str]:
+        return ["row"]
+
+    async def handle(row: str) -> None:
+        raise RuntimeError("bad row")
+
+    lines = _drain_once(monkeypatch, claim, handle)
+
+    assert lines, "the pass emitted nothing"
+    assert all(line["worker"] == "walker" for line in lines)
+    assert any("row failed" in line["message"] for line in lines)
+    # The beat counts the rows worked since the last one — a worker that
+    # is alive but doing nothing reads differently from a busy one.
+    beats = [line["rows_since_beat"] for line in lines if "alive" in line["message"]]
+    assert beats == [0, 1]
+
+
+def test_a_failing_claim_still_names_its_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def claim(batch: int) -> List[Any]:
+        raise RuntimeError("db gone")
+
+    async def handle(row: Any) -> None:  # never reached
+        return None
+
+    lines = _drain_once(monkeypatch, claim, handle, name="dispatcher")
+    failed = [line for line in lines if "claim failed" in line["message"]]
+    assert len(failed) == 1 and failed[0]["worker"] == "dispatcher"
+
+
+def test_the_loop_clears_the_context_a_handler_left_behind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The handler's ids are still standing at the top of the next
+    iteration, and the heartbeat fires BEFORE the claim that resets
+    them — so uncleared, every beat is filed under the last row."""
+    seen: List[Dict[str, Any]] = []
+    stop = asyncio.Event()
+
+    monkeypatch.setattr(shared_worker, "logger", _Lines())
+    monkeypatch.setattr(shared_worker, "CRM_WORKER_HEARTBEAT", 0)
+
+    async def claim(batch: int) -> List[str]:
+        seen.append(get_log_context())
+        if len(seen) == 2:
+            stop.set()
+        return ["row"]
+
+    async def handle(row: str) -> None:
+        set_log_context(component="crm.outreach.walker", merchant_id="m1", run_id="r1")
+
+    asyncio.run(
+        shared_worker.run_drain_loop(
+            claim, handle, interval=0, batch=10, stop_event=stop, name="walker"
+        )
+    )
+
+    assert seen == [{}, {}]  # the second pass did not inherit the first's row
+
+
+def test_a_row_never_inherits_the_previous_rows_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per pass is not enough — both rows below are in ONE batch. The
+    first stamps its ids; the second raises BEFORE it stamps anything.
+    Uncleared, the failure line names the first row: a line that is
+    wrong rather than empty, and nothing downstream can tell."""
+    entered: List[Dict[str, Any]] = []
+    stop = asyncio.Event()
+
+    monkeypatch.setattr(shared_worker, "logger", _Lines())
+
+    async def claim(batch: int) -> List[str]:
+        if entered:  # the batch has been worked; end the loop
+            stop.set()
+            return []
+        return ["first", "second"]
+
+    async def handle(row: str) -> None:
+        entered.append(get_log_context())
+        if row == "first":
+            set_log_context(component="crm.outreach.walker", run_id="r-first")
+            return
+        raise RuntimeError("bad row")
+
+    asyncio.run(
+        shared_worker.run_drain_loop(
+            claim, handle, interval=0, batch=10, stop_event=stop, name="walker"
+        )
+    )
+
+    assert entered == [{}, {}]
 
 
 def _flow(topic: str = "checkout.initiated", goal: str = "order.placed") -> Workflow:

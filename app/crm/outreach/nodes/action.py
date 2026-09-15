@@ -11,6 +11,7 @@ action carries a deterministic (run, node) key.
 
 from typing import Any, Dict, List
 
+from app.core.logger import logger
 from app.crm.connectivity.contracts import (
     ActionError,
     action_names,
@@ -136,6 +137,13 @@ async def execute(
         )
     except ActionError as e:
         raise NodeParked(f"action node {node.id}: {e}") from e
+    # The fourth verb's own line — without it a performed action is visible
+    # only on the run's context. connector/action passed the registry: closed
+    # vocabulary, safe in text.
+    logger.bind(connector=node.connector, action=node.action, ok=True).info(
+        f"walker: run {run.id} performed {node.connector}/{node.action} "
+        f"(node {node.id})"
+    )
     # The action's OWN normalised facts, kept under the square's bookkeeping
     # key rather than discarded. `action_` is a bookkeeping prefix, so this
     # stays out of run_facts and can never reach a template — but it is on

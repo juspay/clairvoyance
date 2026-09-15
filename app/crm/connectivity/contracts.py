@@ -136,7 +136,9 @@ __all__ = [
     "consume_template_event",
     # webhook subscription recovery
     "resubscribe",
-    # the read-side word for a stored reason (the row keeps the code)
+    # the read-side word for a stored reason (the row keeps the code).
+    # reason_class stays module-local until something outside connectivity
+    # imports it — alert rules read it off the log stream (#1014 lesson).
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",

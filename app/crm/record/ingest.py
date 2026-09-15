@@ -24,6 +24,11 @@ from typing import Any, Dict, Optional
 from app.core.logger import logger
 from app.crm.record.db import accessor
 
+#: What per-merchant volume is counted by. Latency is NOT measured here:
+#: one DB call is not the request, and the load balancer already times
+#: the whole thing.
+LOG_COMPONENT = "crm.ingest"
+
 
 async def ingest_event(
     *,
@@ -37,8 +42,14 @@ async def ingest_event(
     customer_id: Optional[str] = None,
 ) -> Optional[str]:
     """Store one letter, honestly: the new event id, None on duplicate,
-    a raised exception when the store failed."""
-    return await accessor.insert_event(
+    a raised exception when the store failed.
+
+    The accepted line is the only place a merchant's TRAFFIC is visible:
+    a sender that stops raises no error anywhere, so counting letters is
+    what catches it. A store failure logs nothing here — it raises, and
+    the door turns that into its own 503 line.
+    """
+    event_id = await accessor.insert_event(
         merchant_id,
         source,
         topic,
@@ -48,6 +59,28 @@ async def ingest_event(
         occurred_at,
         customer_id,
     )
+    logger.bind(
+        component=LOG_COMPONENT,
+        merchant_id=merchant_id,
+        source=source,
+        topic=topic,
+        # Where the trail starts — the run-started line carries the same
+        # value as source_event_id, so the two hops join. None on a
+        # duplicate: no new letter was filed.
+        event_id=event_id,
+        # Counted, but marked: a producer stuck in a retry loop must not
+        # read as healthy volume.
+        duplicate=event_id is None,
+        # !r in the text: source and topic are caller-supplied (the schema
+        # checks only min_length) and a raw newline in either would forge a
+        # log line in the text sink (CWE-117); repr escapes it. The fields
+        # above stay raw — a field is data, not rendered text.
+    ).info(
+        f"duplicate event ignored: {source!r}/{topic!r}"
+        if event_id is None
+        else f"event accepted: {source!r}/{topic!r}"
+    )
+    return event_id
 
 
 async def record_event(
@@ -75,8 +108,15 @@ async def record_event(
             customer_id=customer_id,
         )
     except Exception as e:
-        logger.error(
-            f"event spine ingest failed for {source}/{topic} "
-            f"external_id={external_id}: {e}"
+        # Full fields: the mirrors call this with no route context to
+        # inherit, and without them the failure rate sees only the push door.
+        logger.bind(
+            component=LOG_COMPONENT,
+            merchant_id=merchant_id,
+            source=source,
+            topic=topic,
+        ).error(
+            f"event spine ingest failed for {source!r}/{topic!r} "
+            f"external_id={external_id!r}: {e}"
         )
         return None
