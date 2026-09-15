@@ -137,9 +137,11 @@ async def push_event_route(
         # Front door fails CLOSED: a 200 here would silently drop the
         # producer's event; 503 tells them to retry (dedupe makes the
         # retry safe).
-        logger.error(
-            f"push door store failed for {event.source}/{event.topic} "
-            f"external_id={event.external_id}: {e}"
+        # source/topic as FIELDS (component + merchant ride the route's
+        # context above); !r in text — both are caller-supplied.
+        logger.bind(source=event.source, topic=event.topic).error(
+            f"push door store failed for {event.source!r}/{event.topic!r} "
+            f"external_id={event.external_id!r}: {e}"
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

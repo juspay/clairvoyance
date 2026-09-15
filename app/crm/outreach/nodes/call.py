@@ -144,13 +144,16 @@ async def execute(
         lead = await get_lead_by_id(lead_id)
         if lead is None:
             raise RuntimeError(f"call node {node.id}: lead insert returned None")
-        logger.info(
+        logger.bind(lead_id=lead_id).info(
             f"walker: run {run.id} lead {lead_id} already exists "
             f"(lease retry of visit {visit}) — continuing"
         )
 
     await update_lead_enrollment_id(lead_id, str(run.id))
-    logger.info(f"walker: run {run.id} pushed lead {lead_id} (node {node.id})")
+    # lead_id as a FIELD — the join to Buddy's dial line needs a column.
+    logger.bind(lead_id=lead_id).info(
+        f"walker: run {run.id} pushed lead {lead_id} (node {node.id})"
+    )
     written: Dict[str, Any] = {
         f"lead_{node.id}": lead_id,
         _visits_key(node.id): visit,

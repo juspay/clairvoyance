@@ -2,10 +2,11 @@
 
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.config.static import _positive_float, _positive_int
+from app.core.logger.context import get_log_context
 from app.crm.connectivity import dispatch
 from app.crm.connectivity.channels import CHANNELS, gate_handle_kind_for
 from app.crm.connectivity.db.queries.message import (
@@ -21,6 +22,7 @@ from app.crm.connectivity.dispatch import (
     REASON_SEND_ERROR,
     REASON_SUPPRESSED,
     RETRY_MAX_SECONDS,
+    DispatchPlan,
     _jittered,
     backoff_seconds,
     plan_for_outcome,
@@ -29,7 +31,18 @@ from app.crm.connectivity.dispatch import (
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.reasons import (
     PROVIDER_CODE_REASONS,
+    REASON_BAD_VARIABLES,
+    REASON_CLASS_MERCHANT,
+    REASON_CLASS_POLICY,
+    REASON_CLASS_PROVIDER,
+    REASON_GATE_REFUSED,
+    REASON_NO_CREDENTIAL,
     REASON_RECLAIMED_STALE_CLAIM,
+    REASON_TEMPLATE_NOT_APPROVED,
+    REASON_TIMEOUT,
+    REASON_TRANSPORT,
+    REASON_UNREADABLE,
+    reason_class,
 )
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
 from app.crm.connectivity.status import (
@@ -909,3 +922,207 @@ def test_the_read_side_turns_a_stored_code_into_its_meaning() -> None:
     # And no entry may map to a digit string, which would defeat the point.
     for code, word in PROVIDER_CODE_REASONS.items():
         assert not word.isdigit(), code
+
+
+# --- the fields the alert rules read off the dispatcher's lines ---
+
+
+class _Lines:
+    """Captures each line WITH its bound fields."""
+
+    def __init__(self, sink=None) -> None:
+        self.lines = [] if sink is None else sink
+        self._bound = {}
+
+    def bind(self, **fields):
+        view = _Lines(self.lines)
+        view._bound = {**self._bound, **fields}
+        return view
+
+    def _record(self, message) -> None:
+        self.lines.append({**self._bound, "message": str(message)})
+
+    info = warning = error = _record
+
+    def opt(self, **_):  # loguru's exception passthrough
+        return self
+
+
+async def test_the_outcome_line_names_the_outcome_and_who_asked(monkeypatch) -> None:
+    """A workflow's send fails invisibly to its run, so only this line
+    can attribute it: source_kind from the context, outcome and reason
+    from the line."""
+    captured = _Lines()
+    monkeypatch.setattr(dispatch, "logger", captured)
+
+    async def refused(send_token, message):
+        return SendOutcome(status=MESSAGE_FAILED, reason="131047", retryable=False)
+
+    async def record_outcome(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", refused)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+
+    message = _message()
+    message.source_kind = "workflow"
+    message.source_id = "run-7"
+    await dispatch._dispatch_one(message, 3)
+
+    # Two mechanisms, one JSON row: the outcome is this line's own (bound),
+    # the ids are the whole pass's (context). Both land as columns.
+    terminal = [line for line in captured.lines if "-> " in line["message"]][-1]
+    assert terminal["outcome"] == MESSAGE_FAILED
+    assert terminal["reason"] == "131047"  # the provider's code, verbatim
+
+    context = get_log_context()
+    assert context["source_kind"] == "workflow"
+    assert context["source_id"] == "run-7"
+    assert context["merchant_id"] == "m-1000"
+
+
+def test_the_dispatch_pass_line_reports_lag_as_a_number(monkeypatch) -> None:
+    captured = _Lines()
+    monkeypatch.setattr(dispatch, "logger", captured)
+    stale = _message()
+    stale.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+    dispatch._log_queue_lag([stale], 1)
+
+    line = captured.lines[0]
+    assert line["claimed"] == 1
+    assert line["batch_full"] is True
+    assert 29 <= line["lag_s"] <= 32
+
+
+# --- whose failure is it (reason_class) ---
+
+
+def test_only_what_a_merchant_can_act_on_is_theirs() -> None:
+    """The class decides where a failure is REPORTED, so it has to be about
+    who acts — not about what the error mentions. A wrong variable mapping
+    is theirs even though nothing is wrong with their credentials."""
+    for their_fault in (
+        REASON_TEMPLATE_NOT_APPROVED,
+        REASON_NO_CREDENTIAL,
+        REASON_BAD_VARIABLES,
+        "190",  # token_expired
+        "132000",  # template_variable_count_mismatch — a mapping fault
+        "131008",  # required_parameter_missing — also a mapping fault
+        "132016",  # template_disabled
+    ):
+        assert reason_class(their_fault) == REASON_CLASS_MERCHANT
+
+    for ours in (
+        REASON_SEND_ERROR,
+        REASON_TIMEOUT,
+        REASON_TRANSPORT,
+        REASON_ATTEMPTS_EXHAUSTED,
+        REASON_GATE_UNAVAILABLE,
+        REASON_UNREADABLE,
+        "429",  # rate limited — we should be backing off
+        "130429",  # throughput_limit_reached
+    ):
+        assert reason_class(ours) == REASON_CLASS_PROVIDER
+
+    for nobodys in (REASON_GATE_REFUSED, REASON_SUPPRESSED, "131047"):
+        assert reason_class(nobodys) == REASON_CLASS_POLICY
+
+
+def test_an_unknown_reason_never_blames_the_merchant() -> None:
+    """Fail closed on BLAME. Misrouting ours as theirs tells a customer to
+    fix a token we broke; misrouting theirs as ours costs one dashboard
+    look. So every code we have never seen is ours."""
+    for unknown in ("999999", "some_new_word_we_add_next_month", ""):
+        assert reason_class(unknown) == REASON_CLASS_PROVIDER
+    assert reason_class(None) is None
+
+
+def test_every_named_provider_code_is_classified_deliberately() -> None:
+    """A new code added to PROVIDER_CODE_REASONS without a class silently
+    becomes 'ours' — correct by default, but it should be a decision. This
+    fails when someone adds a code and skips that decision."""
+    unclassified = [
+        code
+        for code in PROVIDER_CODE_REASONS
+        if reason_class(code) == REASON_CLASS_PROVIDER
+    ]
+    # The provider-class codes we HAVE decided on: rate limits (we back off)
+    # and invalid_parameter (ambiguous — could be our request shaping).
+    assert sorted(unclassified) == sorted(
+        ["4", "613", "80007", "131056", "130429", "131048", "131049", "429", "100"]
+    )
+
+
+async def test_the_outcome_line_says_whose_failure_it_was(monkeypatch) -> None:
+    """The field both routing gates turn on: many merchants failing
+    'provider' at once is an outage we chase; one merchant failing
+    'merchant' is theirs and must never page us."""
+    captured = _Lines()
+    monkeypatch.setattr(dispatch, "logger", captured)
+
+    async def token_expired(send_token, message):
+        return SendOutcome(status=MESSAGE_FAILED, reason="190", retryable=False)
+
+    async def record_outcome(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", token_expired)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+
+    await dispatch._dispatch_one(_message(), 3)
+
+    terminal = [line for line in captured.lines if "-> " in line["message"]][-1]
+    assert terminal["reason"] == "190"  # the provider's code, verbatim
+    assert terminal["reason_class"] == REASON_CLASS_MERCHANT
+    assert terminal["permanent"] is True
+
+
+async def test_a_row_going_back_on_the_ladder_is_not_a_settled_failure(
+    monkeypatch,
+) -> None:
+    """This line fires for EVERY attempt, requeues included. Counting a
+    requeue as a failure alarms on work still in progress, and mailing a
+    merchant about it blames them for something that may yet succeed."""
+    captured = _Lines()
+    monkeypatch.setattr(dispatch, "logger", captured)
+
+    async def flaked(send_token, message):
+        return SendOutcome(
+            status=MESSAGE_FAILED, reason=REASON_TRANSPORT, retryable=True
+        )
+
+    async def record_outcome(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", flaked)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+
+    await dispatch._dispatch_one(_message(), 3)
+
+    terminal = [line for line in captured.lines if "-> " in line["message"]][-1]
+    assert terminal["outcome"] == MESSAGE_QUEUED
+    assert terminal["permanent"] is False
+
+
+def test_permanent_is_derived_from_the_plan_not_stored_twice() -> None:
+    """Every terminal status is the last word; only a requeue is not.
+    Asserted over the whole vocabulary so a new terminal status cannot be
+    added without deciding what it means for the ladder."""
+    for status in (MESSAGE_ACCEPTED, MESSAGE_BLOCKED, MESSAGE_FAILED, MESSAGE_DEAD):
+        plan = DispatchPlan(
+            status=status, reason=None, provider_message_id=None, mark_sent=False
+        )
+        assert plan.permanent is True
+
+    requeued = DispatchPlan(
+        status=MESSAGE_QUEUED,
+        reason="transport_error",
+        provider_message_id=None,
+        mark_sent=False,
+        retry_after_seconds=60,
+    )
+    assert requeued.permanent is False

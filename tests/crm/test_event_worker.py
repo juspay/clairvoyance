@@ -21,7 +21,7 @@ turn that contract red.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import pytest
@@ -988,6 +988,32 @@ def test_stop_event_during_a_wait_ends_the_loop() -> None:
     _run_loop(scenario())
 
 
+class _Beats:
+    """Captures the scaffold's lines WITH their bound fields.
+
+    Patching ``logger.info`` no longer sees them: the scaffold binds its
+    worker name once and logs through that view, so the interception has
+    to be the logger itself.
+    """
+
+    def __init__(self, sink: Optional[List[Dict[str, Any]]] = None) -> None:
+        self.lines: List[Dict[str, Any]] = [] if sink is None else sink
+        self._bound: Dict[str, Any] = {}
+
+    def bind(self, **fields: Any) -> "_Beats":
+        view = _Beats(self.lines)
+        view._bound = {**self._bound, **fields}
+        return view
+
+    def _record(self, message: Any) -> None:
+        self.lines.append({**self._bound, "message": str(message)})
+
+    info = warning = error = _record
+
+    def beats(self) -> List[Dict[str, Any]]:
+        return [line for line in self.lines if "alive" in line["message"]]
+
+
 def test_idle_worker_still_heartbeats(monkeypatch: pytest.MonkeyPatch) -> None:
     """A silent worker and a dead worker look identical in logs; the
     heartbeat is what tells them apart, so it must fire with no rows."""
@@ -995,10 +1021,8 @@ def test_idle_worker_still_heartbeats(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(worker_mod, "_jittered_wait", waits)
     monkeypatch.setattr(worker_mod, "CRM_WORKER_HEARTBEAT", 0.0)
 
-    beats: List[str] = []
-    monkeypatch.setattr(
-        worker_mod.logger, "info", lambda msg, *a, **k: beats.append(str(msg))
-    )
+    captured = _Beats()
+    monkeypatch.setattr(worker_mod, "logger", captured)
 
     stop_event = asyncio.Event()
 
@@ -1014,7 +1038,11 @@ def test_idle_worker_still_heartbeats(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
 
-    assert any("ew: alive" in b for b in beats)
+    beats = captured.beats()
+    assert beats, "expected a heartbeat from an idle worker"
+    # The name is a FIELD, not just a word in the message: the absence
+    # rule that catches a hung loop asks for it by column.
+    assert all(beat["worker"] == "ew" for beat in beats)
 
 
 def test_heartbeat_counts_rows_since_the_last_beat(
@@ -1022,10 +1050,8 @@ def test_heartbeat_counts_rows_since_the_last_beat(
 ) -> None:
     monkeypatch.setattr(worker_mod, "CRM_WORKER_HEARTBEAT", 0.0)
 
-    beats: List[str] = []
-    monkeypatch.setattr(
-        worker_mod.logger, "info", lambda msg, *a, **k: beats.append(str(msg))
-    )
+    captured = _Beats()
+    monkeypatch.setattr(worker_mod, "logger", captured)
 
     stop_event = asyncio.Event()
     calls = {"n": 0}
@@ -1046,12 +1072,12 @@ def test_heartbeat_counts_rows_since_the_last_beat(
         )
     )
 
-    counted: List[Tuple[str, int]] = [
-        (b, int(b.split("alive, ")[1].split(" rows")[0])) for b in beats if "alive" in b
-    ]
+    counted = [beat["rows_since_beat"] for beat in captured.beats()]
     assert counted, "expected at least one heartbeat"
     # first beat precedes any work; a later one reports the batch just done
-    assert any(n == 3 for _, n in counted)
+    assert 3 in counted
+    # and the count rides as a number, not as text to be parsed back out
+    assert all(isinstance(n, int) for n in counted)
 
 
 def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
@@ -1285,3 +1311,70 @@ def test_no_mapping_and_no_standard_keys_still_quarantines(
     )
     _run(workers._process_one(_fake_txn(), event))
     assert fake_accessor.quarantined == [("evt-1", "no_handle")]
+
+
+# --- the fields the alert rules read off this worker's lines ---
+
+
+def test_a_quarantined_letter_is_named_in_fields_and_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rate is watched per merchant, so the ids must be columns;
+    ``quarantined`` separates "given up" from "will try again"."""
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+    captured = _Beats()
+    monkeypatch.setattr(workers, "logger", captured)
+
+    exhausted = _event("evt-9", attempts=workers.CRM_EVENT_MAX_ATTEMPTS)
+    _run(workers._after_failed_row(_fake_txn(), exhausted, RuntimeError("boom")))
+
+    assert len(captured.lines) == 1
+    line = captured.lines[0]
+    assert line["quarantined"] is True
+    assert line["merchant_id"] == "m1"
+    assert line["event_id"] == "evt-9"
+    assert line["source"] == "lead-api" and line["topic"] == "lead.pushed"
+    assert line["attempts"] == workers.CRM_EVENT_MAX_ATTEMPTS
+
+
+def test_a_row_below_the_ceiling_is_named_but_not_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It returns next poll; counting it would make a healthy retry
+    look like a lost letter."""
+    fake_accessor = _FakeAccessor()
+    monkeypatch.setattr(workers, "accessor", fake_accessor)
+    captured = _Beats()
+    monkeypatch.setattr(workers, "logger", captured)
+
+    _run(workers._after_failed_row(_fake_txn(), _event(attempts=1), ValueError("x")))
+
+    assert fake_accessor.quarantined == []
+    assert "quarantined" not in captured.lines[0]
+    assert captured.lines[0]["event_id"] == "evt-1"
+
+
+def test_the_pass_line_reports_lag_as_a_number(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lag rule compares a column; parsed out of message text it
+    would scan the busiest stream we have."""
+    captured = _Beats()
+    monkeypatch.setattr(workers, "logger", captured)
+    old = _event("evt-old")
+    old.received_at = datetime.now(timezone.utc) - timedelta(seconds=42)
+
+    workers._log_queue_lag([old, _event("evt-new")], 2)
+
+    line = captured.lines[0]
+    assert line["claimed"] == 2
+    assert line["batch_full"] is True  # batch filled
+    assert 41 <= line["lag_s"] <= 44  # measured from the OLDEST row
+
+
+def test_an_empty_pass_logs_no_lag(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _Beats()
+    monkeypatch.setattr(workers, "logger", captured)
+    workers._log_queue_lag([], 10)
+    assert captured.lines == []

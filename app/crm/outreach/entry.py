@@ -32,7 +32,7 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.enrol import enrol
+from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
 from app.crm.outreach.nodes import listens
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
@@ -149,8 +149,15 @@ async def consume_attributed_event(
         definition = await definition_for(run)
         if definition is None:
             # No version row for the pin: nothing honest can be judged for
-            # this run here; the walker parks it at its next claim.
-            logger.warning(
+            # this run here; the walker parks it at its next claim. Fields,
+            # because nothing else says this run can no longer hear its goal.
+            logger.bind(
+                component=ENROL_LOG_COMPONENT,
+                merchant_id=run.merchant_id,
+                workflow_id=str(run.workflow_id),
+                run_id=str(run.id),
+                ignored_reason="definition_missing",
+            ).warning(
                 f"run {run.id}: definition v{run.workflow_version} missing — "
                 f"goals and listening not judged (event {event.id})"
             )
@@ -218,6 +225,20 @@ async def _end_on_goal(
                 closing(run, definition, tier.exit_reason, cut_short_by=str(event.id))
             ),
         ):
+            # The event side ends the HAPPY runs; counting only the
+            # walker's exits would read every plan as all timeouts.
+            logger.bind(
+                component=ENROL_LOG_COMPONENT,
+                merchant_id=run.merchant_id,
+                workflow_id=str(run.workflow_id),
+                run_id=str(run.id),
+                exit_reason=tier.exit_reason,
+                topic=event.topic,
+            ).info(
+                # !r: the topic is event data; repr escapes a newline that
+                # would otherwise forge a log line (CWE-117).
+                f"run {run.id} exited {tier.exit_reason} on {event.topic!r}"
+            )
             return True
     return False
 
@@ -276,7 +297,13 @@ async def _wake_on_reply(
             # on the listened topic without the key ended the listening
             # window early. The window simply continues; only the alarm
             # may time it out.
-            logger.info(
+            logger.bind(
+                component=ENROL_LOG_COMPONENT,
+                merchant_id=run.merchant_id,
+                workflow_id=str(run.workflow_id),
+                run_id=str(run.id),
+                ignored_reason="reply_key_missing",
+            ).info(
                 f"listening wait reply ignored: key {node.key!r} missing "
                 f"(run {run.id}, event {event.id})"
             )
@@ -533,9 +560,15 @@ async def _try_enrol(
         # the founding event by, the time is what goals are measured from.
         key = enrollment_key or customer_id
         if await _answered_by(open_runs, flow, key, event, addressed):
-            logger.info(
-                f"run for {key} on {flow.id}: {event.topic} is its square's answer "
-                f"— moved, not a repeat (event {event.id})"
+            logger.bind(
+                component=ENROL_LOG_COMPONENT,
+                merchant_id=event.merchant_id,
+                workflow_id=str(flow.id),
+                topic=event.topic,
+                ignored_reason="answered_wait",
+            ).info(
+                f"run for {key!r} on {flow.id}: {event.topic!r} is its square's "
+                f"answer — moved, not a repeat (event {event.id})"
             )
             return
         repeat_facts = {k: v for k, v in context.items() if k not in _FOUNDING_KEYS}
@@ -595,7 +628,15 @@ def _enrollment_key(
         event.payload, canonical_path(field), derive_for(event.source, event.topic)
     )
     if value in (None, ""):
-        logger.info(
+        # The refusal that reads as silence: every event arrives, every
+        # one is refused, no run starts. Shares the refusal shape so one
+        # rule counts it beside the expected ones and says which grew.
+        logger.bind(
+            component=ENROL_LOG_COMPONENT,
+            merchant_id=event.merchant_id,
+            workflow_id=workflow_id,
+            skip_reason="entry_key_missing",
+        ).info(
             f"enrol skipped: entry.key {field!r} missing in payload "
             f"(workflow {workflow_id}, event {event.id})"
         )
