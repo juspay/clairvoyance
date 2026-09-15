@@ -67,6 +67,24 @@ def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
     return problems
 
 
+def describe(
+    node: WorkflowNode, context: Dict[str, Any], definition: WorkflowDefinition
+) -> Dict[str, Any]:
+    """PURE: the write this square WOULD ask a connector to perform (enh
+    A/05) — the app, the verb and the args with every {placeholder}
+    resolved by the same resolved_args execute uses. A missing fact raises
+    KeyError naming it, which is the park an author most wants to see
+    before a customer does."""
+    facts = run_facts(context, node)
+    try:
+        args = resolved_args(node.args, facts)
+    except KeyError as e:
+        raise ValueError(
+            f"the letter carries no {e.args[0]!r} — this action would park"
+        ) from e
+    return {"connector": node.connector, "action": node.action, "args": args}
+
+
 async def execute(
     run: EnrollmentRun, node: WorkflowNode, definition: WorkflowDefinition
 ) -> Dict[str, Any]:

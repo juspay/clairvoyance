@@ -107,3 +107,16 @@ async def send_behind(
     that sent the message. None means no message of ours carries that id.
     """
     return await message_accessor.send_behind(merchant_id, provider_message_id)
+
+
+async def message_id_for_dedupe(merchant_id: str, dedupe_key: str) -> Optional[str]:
+    """Which row a dedupe key names (enh A/06, N12).
+
+    queue_message answers None when a producer's retry is absorbed, and
+    tells it to carry on as if it had queued — but a walker that carried
+    on without the row's id could not write `message_<node>` into the
+    run, and the listening square after the send matches letters on
+    exactly that id. So the producer asks, once, and writes what the
+    first attempt wrote. Read-only, merchant-scoped, the insert's own
+    unique index."""
+    return await message_accessor.message_id_for_dedupe(merchant_id, dedupe_key)

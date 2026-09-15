@@ -22,10 +22,12 @@ from pydantic import BaseModel, Field
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import merchant_scope
-from app.crm.outreach import plans, runs, versions
+from app.crm.outreach import plans, runs, simulate, versions
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
+    SimulateRequest,
+    SimulateResult,
     VersionMigration,
     Workflow,
     WorkflowRunSummary,
@@ -196,6 +198,36 @@ async def workflow_summary_route(
     ),
 ) -> WorkflowRunSummary:
     return await runs.workflow_summary(merchant_id, workflow_id, since, until)
+
+
+@router.post("/{workflow_id}/simulate", response_model=SimulateResult)
+async def simulate_route(
+    workflow_id: str,
+    request: SimulateRequest,
+    merchant_id: str = Depends(
+        merchant_scope("simulate a workflow", "crm.workflows.simulate")
+    ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> SimulateResult:
+    """Walk this plan against a sample letter without writing anything
+    (enh A/05): who gets admitted, what fires and when, where the run
+    ends. Nothing reaches a provider, the spine or a customer.
+
+    422 carries the publish validator's own list when the document does
+    not validate — the same words a publish would refuse with, so an
+    author fixes one thing rather than two."""
+    try:
+        result = await simulate.simulate(merchant_id, workflow_id, request)
+    except simulate.SimulationRefused as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        ) from e
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workflow not found or not this merchant's",
+        )
+    return result
 
 
 @router.get("/{workflow_id}/versions", response_model=List[WorkflowVersion])

@@ -15,6 +15,7 @@ from app.crm.connectivity.db.queries.message import (
     apply_outcome_query,
     claim_queued_messages_query,
     insert_message_query,
+    message_id_for_dedupe_query,
     requeue_stale_claims_query,
     send_behind_provider_id_query,
 )
@@ -48,6 +49,15 @@ async def insert_message(
         variables,
         dedupe_key,
     )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return str(row["id"]) if row else None
+
+
+async def message_id_for_dedupe(merchant_id: str, dedupe_key: str) -> Optional[str]:
+    """None = no row names this key (the caller's insert was not absorbed
+    by a dedupe, so something else went wrong)."""
+    query, values = message_id_for_dedupe_query(merchant_id, dedupe_key)
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return str(row["id"]) if row else None
