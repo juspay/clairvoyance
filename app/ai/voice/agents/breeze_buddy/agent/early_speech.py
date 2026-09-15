@@ -27,7 +27,11 @@ import re
 from collections import Counter
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from pipecat.frames.frames import TTSSpeakFrame, UserStartedSpeakingFrame
+from pipecat.frames.frames import (
+    LLMAssistantPushAggregationFrame,
+    TTSSpeakFrame,
+    UserStartedSpeakingFrame,
+)
 
 from app.core.logger import logger
 
@@ -365,6 +369,14 @@ class EarlySpeechRouter:
                 target = self._target()
                 if target is not None:
                     await self._queue_say(target, " ".join(parts))
+                    # The handler path runs INSIDE an LLM response, where
+                    # TTSSpeakFrame's append_to_context never flushes the
+                    # assistant aggregation (_llm_response_started stays True
+                    # for the whole response) — the say tail would sit in the
+                    # buffer and never reach the context/transcript. Force the
+                    # push; the TTS serialization queue emits it only after
+                    # this tail's audio (and TTSTextFrames) have drained.
+                    await target.queue_frame(LLMAssistantPushAggregationFrame())
         except Exception as e:
             logger.warning(
                 f"[early-speech] handler speak failed for {function_name}: {e}"
