@@ -69,9 +69,18 @@ async def _after_failed_row(txn: DbTxn, event: RawEvent, error: Exception) -> No
     queue forever, re-running resolve()/assert_facts() every poll. Below
     the ceiling the row stays pending and returns next poll, as before.
     Quarantine, never delete: replay is the recovery. The log names the
-    letter, never its payload."""
+    letter, never its payload — as fields, since the rate is watched per
+    merchant. ``quarantined`` separates "will try again" from "given
+    up"; only the second is worth anyone's attention."""
+    log = logger.bind(
+        merchant_id=event.merchant_id,
+        source=event.source,
+        topic=event.topic,
+        event_id=str(event.id),
+        attempts=event.attempts,
+    )
     if event.attempts < CRM_EVENT_MAX_ATTEMPTS:
-        logger.error(
+        log.error(
             f"event {event.id} ({event.source}/{event.topic}) pass failed on "
             f"attempt {event.attempts}, will retry next poll: {error}"
         )
@@ -85,13 +94,13 @@ async def _after_failed_row(txn: DbTxn, event: RawEvent, error: Exception) -> No
             await accessor.quarantine_event(txn, str(event.id), reason)
     except Exception as quarantine_error:
         # The batch must not die for one row's bookkeeping; the row stays
-        # pending and the next claim tries the quarantine again.
-        logger.error(
+        # pending and the next claim tries again — so not flagged.
+        log.error(
             f"event {event.id} ({event.source}/{event.topic}) could not be "
             f"quarantined, stays pending: {quarantine_error}"
         )
         return
-    logger.error(
+    log.bind(quarantined=True).error(
         f"event {event.id} ({event.source}/{event.topic}) quarantined after "
         f"{event.attempts} attempts: {error}"
     )
@@ -255,15 +264,17 @@ async def _run_processor(txn: DbTxn, event: RawEvent) -> _Processed:
 
 def _log_queue_lag(events: List[RawEvent], limit: int) -> None:
     """How long the oldest claimed row sat unprocessed — the alert that rises
-    whatever the cause (received_at is timestamptz NOT NULL, so always aware)."""
+    whatever the cause (received_at is timestamptz NOT NULL, so always aware).
+    Numbers as fields — the lag rule compares a column."""
     if not events:
         return
     oldest = min(e.received_at for e in events)
     lag_s = (datetime.now(timezone.utc) - oldest).total_seconds()
-    logger.info(
-        f"event-worker pass: claimed={len(events)} lag_s={lag_s:.1f} "
-        f"queue_deeper_than_batch={len(events) >= limit}"
-    )
+    logger.bind(
+        claimed=len(events),
+        lag_s=round(lag_s, 1),
+        batch_full=len(events) >= limit,
+    ).info(f"event-worker pass: claimed {len(events)} event(s)")
 
 
 async def observe_processed_event(event: RawEvent) -> None:

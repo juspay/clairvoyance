@@ -148,6 +148,24 @@ def merchant_scope(operation: str, component: str) -> Callable[..., Awaitable[st
     return _scope
 
 
+#: Both s2s doors (event push, schema registration) share one auth, so
+#: they share one name for a rule to count refusals by.
+S2S_LOG_COMPONENT = "crm.ingest.auth"
+
+
+def _log_refusal(merchant_id: str, reason: str) -> None:
+    """A merchant whose token breaks gets no error anyone here sees —
+    their events just stop arriving. Fields, not interpolation: a
+    newline in a wire-supplied merchant_id would forge a log line.
+
+    WARNING, not ERROR — a refused caller is the door working; it is the
+    RATE that is worth waking someone for.
+    """
+    logger.bind(
+        component=S2S_LOG_COMPONENT, merchant_id=merchant_id, reason=reason
+    ).warning("crm s2s: caller refused")
+
+
 def _extract_token(request: Request) -> Optional[str]:
     auth = request.headers.get("authorization")
     if auth and auth.lower().startswith("bearer "):
@@ -168,19 +186,28 @@ async def verify_s2s_merchant(merchant_id: str, request: Request) -> str:
     """
     stored_token = await get_merchant_s2s_token(merchant_id)
     if not stored_token:
+        _log_refusal(merchant_id, "not_provisioned")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Integration not found",
         )
     presented = _extract_token(request)
     if not presented or not hmac.compare_digest(presented, stored_token):
+        # Where a token scoped to ANOTHER merchant lands too — one
+        # refusal for both, exactly as the caller sees it.
+        _log_refusal(merchant_id, "token_mismatch")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid s2s token",
         )
     # The stored token is a JWT — verifying it rejects expired/rotated
     # tokens even when the byte-compare still matches.
-    rbac_token_manager.verify_rbac_token(stored_token)
+    try:
+        rbac_token_manager.verify_rbac_token(stored_token)
+    except HTTPException:
+        # Re-raised unchanged: the answer stays the token manager's.
+        _log_refusal(merchant_id, "stored_token_expired")
+        raise
     return merchant_id
 
 
@@ -219,6 +246,7 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
     """
     presented = _extract_token(request)
     if not presented:
+        _log_refusal(merchant_id, "missing_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing s2s token",
@@ -226,7 +254,11 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
 
     # Local decode, no DB. Raises 401 on a bad signature, an expiry, or a
     # widget/demo token.
-    caller = rbac_token_manager.verify_rbac_token(presented)
+    try:
+        caller = rbac_token_manager.verify_rbac_token(presented)
+    except HTTPException:
+        _log_refusal(merchant_id, "bad_token")
+        raise
 
     # A wildcard scope can only belong to a relay/admin credential, never
     # to a per-merchant token — so there is no stored row it could have
@@ -246,6 +278,7 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
         # indexed read, same 404 the narrow path gives, so the door stays
         # non-enumerable the same way.
         if not await check_merchant_identifier_exists(merchant_id):
+            _log_refusal(merchant_id, "unknown_merchant")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Integration not found",

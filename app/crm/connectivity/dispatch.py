@@ -36,6 +36,7 @@ from app.crm.connectivity.reasons import (
     REASON_PROVIDER_REJECTED,
     REASON_SEND_ERROR,
     REASON_SUPPRESSED,
+    reason_class,
 )
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
@@ -96,6 +97,18 @@ class DispatchPlan:
     mark_sent: bool
     # Only set when requeuing; a terminal outcome has no next attempt.
     retry_after_seconds: Optional[int] = None
+
+    @property
+    def permanent(self) -> bool:
+        """Is this the row's last word, or is another attempt coming?
+
+        Derived, never a second stored field: the ladder is the only thing
+        that can still change a verdict, and MESSAGE_QUEUED is the only
+        status that keeps a row on it. Logged beside reason_class so one
+        predicate answers "whose fault, and is it settled" — a
+        merchant-class failure mid-ladder is not yet their problem.
+        """
+        return self.status != MESSAGE_QUEUED
 
 
 def plan_for_outcome(
@@ -277,9 +290,13 @@ def _log_queue_lag(messages: Sequence[QueuedMessage], limit: int) -> None:
         return
     oldest = min(m.next_attempt_at for m in messages)
     lag_s = (datetime.now(timezone.utc) - oldest).total_seconds()
-    logger.info(
-        f"crm dispatch claimed {len(messages)} message(s) lag_s={lag_s:.1f} "
-        f"queue_deeper_than_batch={len(messages) >= limit}: "
+    # Numbers as fields for the rule, ids in the text for the human.
+    logger.bind(
+        claimed=len(messages),
+        lag_s=round(lag_s, 1),
+        batch_full=len(messages) >= limit,
+    ).info(
+        f"crm dispatch claimed {len(messages)} message(s): "
         f"{sample_ids([m.id for m in messages])}"
     )
 
@@ -307,6 +324,10 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         dedupe_key=message.dedupe_key,
         channel=message.channel,
         attempt=message.attempt,
+        # Who asked (canon T16 col 7/8). A workflow's send fails
+        # invisibly to its run, so only this line can attribute it.
+        source_kind=message.source_kind,
+        source_id=message.source_id,
     )
     refusal = await _gate(message)
     if refusal is not None:
@@ -365,7 +386,19 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         )
         return
 
-    logger.info(
+    # Every message ends here, so counting this line by status IS the
+    # send-failure rate — no second signal to keep in step. reason_class
+    # says WHOSE failure it is: many merchants failing `provider` at once is
+    # an outage we chase, one merchant failing `merchant` is theirs to fix.
+    # permanent says whether it is SETTLED: this line also fires for a row
+    # going back on the ladder, and counting those as failures would alarm
+    # on work still in progress.
+    logger.bind(
+        outcome=plan.status,
+        reason=plan.reason,
+        reason_class=reason_class(plan.reason),
+        permanent=plan.permanent,
+    ).info(
         f"message {message.id} -> {plan.status}"
         + (f" ({plan.reason})" if plan.reason else "")
     )

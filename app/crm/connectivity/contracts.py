@@ -56,6 +56,11 @@ What is here, and why each thing is on the surface:
   that SHOWS a row — the coming message read / "why didn't it send" view —
   translates through this at read, so the stored evidence is never
   rewritten.
+- ``reason_class`` — WHOSE failure a reason is (provider · merchant ·
+  policy), pure. reason_label answers what happened; this answers who has
+  to act, which is what decides whether a failure reaches our on-call or
+  the merchant. Unknown fails closed to `provider`: we never tell a
+  merchant it is their fault when we cannot tell.
 
 - ``consume_template_event`` — the spine consumer that turns a provider's
   template webhook into a registry row change (approved, rejected, paused,
@@ -87,7 +92,7 @@ from app.crm.connectivity.onboarding import (
     resubscribe,
 )
 from app.crm.connectivity.queue import queue_message, send_behind
-from app.crm.connectivity.reasons import reason_label
+from app.crm.connectivity.reasons import reason_class, reason_label
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -137,6 +142,7 @@ __all__ = [
     # webhook subscription recovery
     "resubscribe",
     # the read-side word for a stored reason (the row keeps the code)
+    "reason_class",
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",

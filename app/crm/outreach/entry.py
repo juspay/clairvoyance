@@ -32,7 +32,7 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.enrol import enrol
+from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
 from app.crm.outreach.nodes import listens
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
@@ -201,6 +201,20 @@ async def _end_on_goal(
             key,
             goal_patch,
         ):
+            # The event side ends the HAPPY runs; counting only the
+            # walker's exits would read every plan as all timeouts.
+            logger.bind(
+                component=ENROL_LOG_COMPONENT,
+                merchant_id=run.merchant_id,
+                workflow_id=str(run.workflow_id),
+                run_id=str(run.id),
+                exit_reason=tier.exit_reason,
+                topic=event.topic,
+            ).info(
+                # !r: the topic is event data; repr escapes a newline that
+                # would otherwise forge a log line (CWE-117).
+                f"run {run.id} exited {tier.exit_reason} on {event.topic!r}"
+            )
             return True
     return False
 
@@ -546,7 +560,15 @@ def _enrollment_key(
         event.payload, canonical_path(field), derive_for(event.source, event.topic)
     )
     if value in (None, ""):
-        logger.info(
+        # The refusal that reads as silence: every event arrives, every
+        # one is refused, no run starts. Shares the refusal shape so one
+        # rule counts it beside the expected ones and says which grew.
+        logger.bind(
+            component=ENROL_LOG_COMPONENT,
+            merchant_id=event.merchant_id,
+            workflow_id=workflow_id,
+            skip_reason="entry_key_missing",
+        ).info(
             f"enrol skipped: entry.key {field!r} missing in payload "
             f"(workflow {workflow_id}, event {event.id})"
         )
