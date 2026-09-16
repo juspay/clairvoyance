@@ -11,6 +11,7 @@ it gathered as an argument.
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
+from app.crm.connectivity.contracts import action_declares
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.nodes import NODE_TYPES
 from app.crm.outreach.nodes.action import placeholder_names
@@ -70,6 +71,15 @@ def entry_against_catalog(
     ]
     listened = listened_facts(definition, catalogs)
     open_squares = unenumerable_squares(definition, catalogs)
+    # What an action square DECLARES it will write (enh A/03: a merchant
+    # endpoint's answer becomes facts) is readable by every later square,
+    # the same way a listened letter's declared fields are.
+    produced = {
+        name
+        for node in definition.nodes
+        if node.type == "action" and node.connector and node.action
+        for name in action_declares(node.connector, node.action, node.args)
+    }
     for entry in definition.entries:
         topic = entry.topic
         fields = catalogs.get(topic)
@@ -82,7 +92,7 @@ def entry_against_catalog(
                 )
             continue
         declared = {variable_name(f.path) for f in fields.values() if f.variable}
-        allowed = declared | _WALKER_FACTS | listened
+        allowed = declared | _WALKER_FACTS | listened | produced
         for node_id, blank, fact in mapped:
             if fact not in allowed and not _from_open_square(fact, open_squares):
                 problems.append(

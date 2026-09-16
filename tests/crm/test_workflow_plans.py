@@ -1,6 +1,7 @@
 """W1 publish-validator laws: the exact edit classes canon T19 says the
 validator must block, each as a red test."""
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import uuid4
@@ -10,7 +11,7 @@ import pytest
 import app.crm.outreach.plans as plans
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.outreach.db import DbTxn
-from app.crm.outreach.plans import validate_definition
+from app.crm.outreach.plans import Catalogs, validate_definition
 from app.crm.outreach.schemas import (
     Workflow,
     WorkflowDefinition,
@@ -1106,3 +1107,88 @@ def test_the_exemption_belongs_to_the_square_that_earned_it() -> None:
         "'facts_ask_not_a_field' is not a declared variable field" in p
         for p in problems
     ), problems
+
+
+# --- enh A/03: an action square may draw `done` / `failed` ------------------
+
+_LINK = {
+    "entry": {"topic": "orders/create"},
+    "nodes": [
+        {
+            "id": "get-link",
+            "type": "action",
+            "connector": "merchant_http",
+            "action": "request",
+            "args": {
+                "path": "/link",
+                "body": {"order": "{id}"},
+                "facts": {"payment_link": "data.link"},
+            },
+        },
+        {"id": "ring", "type": "call", "template_id": "tpl"},
+        {"id": "wait-1d", "type": "wait", "minutes": 1440},
+    ],
+    "edges": [
+        ["get-link", "ring", "done"],
+        ["get-link", "wait-1d", "failed"],
+        ["ring", "wait-1d"],
+    ],
+    "goal": {"topics": ["orders/paid"]},
+}
+
+
+def test_an_action_may_draw_done_and_failed_or_one_plain_arrow() -> None:
+    assert validate_definition(_LINK) == []
+    plain = {**_LINK, "edges": [["get-link", "ring"], ["ring", "wait-1d"]]}
+    assert validate_definition(plain) == []
+    mixed = {**_LINK, "edges": [["get-link", "ring", "done"], ["get-link", "wait-1d"]]}
+    assert any("label every edge, or none" in p for p in validate_definition(mixed))
+    wrong = {
+        **_LINK,
+        "edges": [["get-link", "ring", "ok"], ["get-link", "wait-1d", "failed"]],
+    }
+    assert any("edge labels are done · failed" in p for p in validate_definition(wrong))
+    no_done = {**_LINK, "edges": [["get-link", "wait-1d", "failed"]]}
+    assert any("needs a 'done' edge" in p for p in validate_definition(no_done))
+    twice = {
+        **_LINK,
+        "edges": [["get-link", "ring", "done"], ["get-link", "wait-1d", "done"]],
+    }
+    assert any("two edges with the same on" in p for p in validate_definition(twice))
+
+
+def test_a_fact_an_action_declares_is_admitted_for_a_later_square() -> None:
+    """The catalog law admits a send variable only from declared fields;
+    what a merchant endpoint's answer writes is declared by the action's
+    args (`facts`), so a later square may name {payment_link} and publish."""
+    catalogs: Catalogs = {
+        e.topic: {f.path: f for f in e.fields} for e in code_entries()
+    }
+    doc = {
+        **_LINK,
+        "nodes": [
+            *_LINK["nodes"],
+            {
+                "id": "tell",
+                "type": "send",
+                "channel": "whatsapp",
+                "template": "pay_link",
+                "variables": {"1": "payment_link"},
+            },
+        ],
+        "edges": [
+            ["get-link", "tell", "done"],
+            ["get-link", "wait-1d", "failed"],
+            ["tell", "ring"],
+            ["ring", "wait-1d"],
+        ],
+        "purpose_key": "utility.order.confirmation",
+    }
+    problems = [
+        p for p in validate_definition(doc, catalogs=catalogs) if "payment_link" in p
+    ]
+    assert problems == []
+    undeclared = json.loads(json.dumps(doc))
+    undeclared["nodes"][0]["args"]["facts"] = {"other": "data.x"}
+    problems = validate_definition(undeclared, catalogs=catalogs)
+    assert any("'payment_link' is not a declared variable field" in p for p in problems)

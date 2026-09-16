@@ -24,6 +24,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, is_wait
+from app.crm.outreach.nodes.action import ACTION_LABELS, DONE
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
     GOAL_EXIT_REASONS,
@@ -164,6 +165,19 @@ def validate_definition(
                 problems.append(f"every edge out of {word} {src} needs an on")
             if len(set(labels)) != len(labels):
                 problems.append(f"{word} {src} has two edges with the same on")
+        elif word == "action" and any(on is not None for on in labels):
+            # enh A/03: an action may draw `done` / `failed` instead of one
+            # plain arrow. Both labelled, `done` present, nothing else.
+            if None in labels:
+                problems.append(f"action {src}: label every edge, or none")
+            if set(labels) - set(ACTION_LABELS):
+                problems.append(
+                    f"action {src}: edge labels are {' · '.join(ACTION_LABELS)}"
+                )
+            if DONE not in labels:
+                problems.append(f"action {src} needs a {DONE!r} edge")
+            if len(set(labels)) != len(labels):
+                problems.append(f"action {src} has two edges with the same on")
         else:
             if any(on is not None for on in labels):
                 problems.append(f"only a branching node may label its edges ({src})")

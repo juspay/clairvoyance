@@ -546,3 +546,54 @@ def test_a_condition_branches_and_the_visit_continues_to_the_next_wait(
     ((verb, args),) = writes.calls
     assert verb == "advance" and args[1] == "wait-1d"
     assert "reply_decide" not in args[3]
+
+
+def test_a_squares_writes_reach_the_next_square_in_the_same_visit(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """Two immediate squares walk in one claim. The second reads
+    run.context; before this, it read the row as CLAIMED and never saw
+    what the first had just written — a link fetched by an action never
+    reached the call meant to read it out (enh A/03, seen live)."""
+    import app.crm.outreach.nodes.action as action_node
+
+    two = {
+        "entry": {"topic": "checkout.initiated"},
+        "nodes": [
+            {
+                "id": "get-link",
+                "type": "action",
+                "connector": "shopify",
+                "action": "add_tag",
+                "args": {"order_id": "1", "tags": ["x"]},
+            },
+            {
+                "id": "use-link",
+                "type": "action",
+                "connector": "shopify",
+                "action": "add_note",
+                "args": {"order_id": "1", "note": "{payment_link}"},
+            },
+            {"id": "wait-1d", "type": "wait", "minutes": 1440},
+        ],
+        "edges": [["get-link", "use-link"], ["use-link", "wait-1d"]],
+        "goal": {"topics": ["order.placed"]},
+    }
+    seen: List[Dict[str, Any]] = []
+
+    async def fake_perform(merchant_id, connector, action, args, context):
+        seen.append(args)
+        if action == "add_tag":
+            return {"ok": True, "facts": {"payment_link": "https://p/1"}}
+        return {"ok": True}
+
+    monkeypatch.setattr(action_node, "perform_action", fake_perform)
+    writes = _Writes(matched=True, definition=two)
+    _install(monkeypatch, writes)
+    run = _run()
+    run.current_node = "get-link"
+    _advance(writes, run)
+    assert seen[1] == {"order_id": "1", "note": "https://p/1"}
+    ((verb, args),) = writes.calls
+    assert verb == "advance" and args[1] == "wait-1d"
+    assert args[3]["payment_link"] == "https://p/1"

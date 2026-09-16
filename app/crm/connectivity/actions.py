@@ -73,6 +73,19 @@ def validate_action_args(
     return []
 
 
+def action_declares(connector_key: str, action: str, args: Dict[str, Any]) -> List[str]:
+    """PURE: the fact names this action will write for these args, or [] —
+    the publish validator's read, so a later square may name
+    `{payment_link}` and be admitted. A face that produces no facts for a
+    later square (Shopify's tag) declares nothing and needs no method."""
+    spec = CONNECTORS.get(connector_key)
+    face = spec.actions.get(action) if spec else None
+    declares = getattr(face, "declares", None)
+    if face is None or declares is None:
+        return []
+    return list(declares(args))
+
+
 def _bad_fields(error: ValidationError) -> List[str]:
     """PURE: the dotted field names pydantic refused, deduplicated in order."""
     seen: List[str] = []

@@ -7,7 +7,7 @@ Everything else here is the publish validator refusing structure that
 cannot run.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import pytest
@@ -241,3 +241,21 @@ def test_a_producer_key_cannot_invent_an_experiment_in_the_report() -> None:
     bookkeeping filter (above) is what keeps it out, on entry and on wake."""
     assert is_bookkeeping("split_payment")
     assert "split_payment" not in _context_from_payload({"split_payment": "emi"}, 256)
+
+
+def test_a_labelled_action_square_walks_by_its_answer() -> None:
+    """enh A/03: an action with `done`/`failed` arrows is walked by the
+    answer it wrote; a plain one still takes its one arrow; a run from a
+    version predating the answer walks `done`."""
+    node = WorkflowNode(
+        id="get-link",
+        type="action",
+        connector="merchant_http",
+        action="request",
+        args={"path": "/x"},
+    )
+    arrows: List[Tuple[str, Optional[str]]] = [("ring", "done"), ("wait-1d", "failed")]
+    assert pick_next(node, arrows, {reply_key("get-link"): "done"}) == "ring"
+    assert pick_next(node, arrows, {reply_key("get-link"): "failed"}) == "wait-1d"
+    assert pick_next(node, arrows, {}) == "ring"
+    assert pick_next(node, [("ring", None)], {reply_key("get-link"): "done"}) == "ring"

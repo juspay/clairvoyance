@@ -338,6 +338,13 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
 
 # JWT Authentication Configuration
+# Local-dev escape hatch for the SSRF egress guard (app/core/security/ssrf.py):
+# when true, egress to private/loopback ranges is permitted. Defaults to false
+# so the secure posture never depends on ENVIRONMENT being set correctly.
+SSRF_ALLOW_PRIVATE_EGRESS = os.environ.get(
+    "SSRF_ALLOW_PRIVATE_EGRESS", "false"
+).lower() in ("1", "true", "yes")
+
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "")
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
