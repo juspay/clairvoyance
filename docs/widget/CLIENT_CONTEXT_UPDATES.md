@@ -159,6 +159,8 @@ Per-template config block (new, sibling to `quick_replies`/`ui_catalog`): `confi
 | `facts_placement: "user_tail" \| "system"` | Default landing for rendered facts (default `user_tail`). `system` = instruction-strength adherence, knowingly trades cache on Anthropic/Gemini. See §4.3. |
 | `trusted_facts: [str]` | Subset of `facts_allowlist` permitted to occupy **`system`** placement. Keys **not** listed here always render `user_tail`, even when `facts_placement="system"`. Default `[]` → nothing may be elevated to instructions. This is the injection gate: only merchant-curated keys belong here, never shopper-supplied ones. |
 
+**Built-in facts** (`client_context.BUILTIN_FACTS`, currently `current_product`): keys the widget pushes on its own to describe the page it sits on — the product page the shopper is viewing. They are accepted by EVERY template, including one with no `client_context` block, because they are platform behaviour rather than a merchant feature (requiring an allowlist entry would mean editing every template row). Everything else about them is unchanged: they render `user_tail` as untrusted data, they can never be elevated via `trusted_facts`, and `render: false` still suppresses them. The engine folds them in where it filters a push (`compute_context_patch`) and where it renders the block (`render_client_context`) — callers pass the template's policy exactly as before, `None` included.
+
 Optional per-push override: a `/context` (or piggyback) call may set `placement: "system"` on the push, but it's **bounded by config** — only keys in `trusted_facts` are honored; everything else falls back to `user_tail`. The client can request elevation; it can't grant it.
 
 Non-negotiables:
