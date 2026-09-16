@@ -76,11 +76,12 @@ def test_two_plain_edges_out_of_one_node_fail() -> None:
     assert any("2 outgoing edges" in p for p in problems)
 
 
-def test_wait_without_minutes_fails() -> None:
+def test_a_wait_with_nothing_to_wait_for_fails() -> None:
+    """No minutes, no window, no topics: a wait that waits for nothing."""
     problems = validate_definition(
         _definition(nodes=[{"id": "w", "type": "wait"}], edges=[])
     )
-    assert any("needs minutes" in p for p in problems)
+    assert any("waits for nothing" in p for p in problems)
 
 
 def test_call_without_template_id_fails() -> None:
@@ -165,7 +166,7 @@ _COD = {
     "nodes": [
         {
             "id": "ask",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["button.reply"],
             "key": "button_id",
             "minutes": 60,
@@ -182,11 +183,11 @@ def test_wait_event_with_labelled_edges_passes() -> None:
     assert validate_definition(_COD) == []
 
 
-def test_wait_event_needs_topics_key_and_minutes() -> None:
-    bad = {**_COD, "nodes": [{"id": "ask", "type": "wait_event"}, *_COD["nodes"][1:]]}
+def test_a_listening_wait_needs_a_key_and_real_minutes() -> None:
+    ask = {"id": "ask", "type": "wait", "topics": ["message.inbound"], "minutes": 0}
+    bad = {**_COD, "nodes": [ask, *_COD["nodes"][1:]]}
     problems = validate_definition(bad)
-    assert any("needs minutes" in p for p in problems)
-    assert any("needs topics" in p for p in problems)
+    assert any("minutes must be > 0" in p for p in problems)
     assert any("needs a payload key" in p for p in problems)
 
 
@@ -598,7 +599,7 @@ _LADDER: Dict[str, Any] = {
     "nodes": [
         {
             "id": "at-profile",
-            "type": "wait_event",
+            "type": "wait",
             "key": "$topic",
             "minutes": 30,
             "topics": ["loan.kyc_completed"],
@@ -732,7 +733,7 @@ def test_a_square_may_carry_a_stage_label_and_a_door_the_restart_word() -> None:
 def _after_call(**words: Any) -> Dict[str, Any]:
     return {
         "id": "after-call",
-        "type": "wait_event",
+        "type": "wait",
         "topics": ["call.completed"],
         "key": "outcome",
         "minutes": 1440,
@@ -779,7 +780,7 @@ def test_only_a_listening_square_may_say_whose_letter_it_hears() -> None:
             edges=[],
         )
     )
-    assert any("w" in p and "match" in p and "wait_event" in p for p in problems)
+    assert any("w" in p and "match" in p and "lists topics" in p for p in problems)
 
 
 def test_else_is_one_catch_all_arrow_out_of_a_listening_square() -> None:
@@ -946,7 +947,7 @@ def test_send_variables_may_name_a_stage_letters_fact_and_the_square() -> None:
         "nodes": [
             {
                 "id": "ask",
-                "type": "wait_event",
+                "type": "wait",
                 "topics": ["orders/paid"],
                 "key": "$topic",
                 "minutes": 60,
@@ -995,7 +996,7 @@ def test_an_unenumerable_square_exempts_only_its_own_facts() -> None:
             # Listens on a topic no layer declares — a call's own outcome.
             {
                 "id": "after-call",
-                "type": "wait_event",
+                "type": "wait",
                 "topics": ["call.completed"],
                 "key": "outcome",
                 "minutes": 60,
@@ -1058,14 +1059,14 @@ def test_the_exemption_belongs_to_the_square_that_earned_it() -> None:
         "nodes": [
             {
                 "id": "after-call",
-                "type": "wait_event",
+                "type": "wait",
                 "topics": ["call.completed"],
                 "key": "outcome",
                 "minutes": 60,
             },
             {
                 "id": "ask",
-                "type": "wait_event",
+                "type": "wait",
                 "topics": ["orders/paid"],
                 "key": "$topic",
                 "minutes": 60,

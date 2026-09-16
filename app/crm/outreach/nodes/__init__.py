@@ -15,13 +15,13 @@ sanctioned shape for a non-empty __init__: the registry and its type are
 the package's public surface, so they are built where the package is
 imported. That is ALL this file exports. Every other name is imported by
 full path — the run-context filters from ``nodes.context``, ``NodeParked``
-from ``nodes.spec``, the listening square's words from ``nodes.wait_event``
+from ``nodes.spec``, the listening wait's words from ``nodes.wait``
 — because an ``__init__`` that re-exports its siblings is the 132-line
 accessor hub scar (modules/00 §1), and a test pins ``__all__`` to the
 registry so it cannot grow back into one.
 
-  wait.py        time passes; the alarm was set on arrival.
-  wait_event.py  the alarm OR an event, whichever first (W5).
+  wait.py        time passes, or an event cuts it short when it lists
+                 topics (W5; `wait_event` folded in, 17 Sep 2026).
   call.py        a buddy lead into today's dispatch machine (ADR 0010).
   send.py        one manifest row, queued, no verdict (gate-mechanics §1).
   action.py      a connector DOES one thing for this run.
@@ -42,7 +42,6 @@ from app.crm.outreach.nodes import (
     send,
     split,
     wait,
-    wait_event,
 )
 from app.crm.outreach.nodes.spec import NodeSpec
 from app.crm.outreach.schemas import WorkflowNode
@@ -51,13 +50,6 @@ NODE_TYPES: Dict[str, NodeSpec] = {
     "wait": NodeSpec(validate=wait.validate, execute=None, is_wait=True),
     "send": NodeSpec(validate=send.validate, execute=send.execute, is_wait=False),
     "call": NodeSpec(validate=call.validate, execute=call.execute, is_wait=False),
-    "wait_event": NodeSpec(
-        validate=wait_event.validate,
-        execute=None,
-        is_wait=True,
-        branches=True,
-        listens=True,
-    ),
     "action": NodeSpec(validate=action.validate, execute=action.execute, is_wait=False),
     "condition": NodeSpec(
         validate=condition.validate,
@@ -81,4 +73,17 @@ def is_wait(node: WorkflowNode) -> bool:
     return NODE_TYPES[node.type].is_wait
 
 
-__all__ = ["NODE_TYPES", "NodeSpec", "is_wait"]
+def listens(node: WorkflowNode) -> bool:
+    """Does a letter wake this square? A wait that lists topics (ruled 17
+    Sep 2026) — a property of the node, not of the word: the entry consumer
+    wakes it, and `match` belongs to it."""
+    return NODE_TYPES[node.type].is_wait and bool(node.topics)
+
+
+def branches(node: WorkflowNode) -> bool:
+    """Do this square's edges carry labels? A condition or split always; a
+    wait when it listens. pick_next reads the answer from reply_<node>."""
+    return NODE_TYPES[node.type].branches or listens(node)
+
+
+__all__ = ["NODE_TYPES", "NodeSpec", "branches", "is_wait", "listens"]

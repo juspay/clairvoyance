@@ -431,7 +431,7 @@ _ASK_TWICE = {
     "nodes": [
         {
             "id": "ask",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["button.reply"],
             "key": "button_id",
             "minutes": 60,
@@ -546,3 +546,200 @@ def test_a_condition_branches_and_the_visit_continues_to_the_next_wait(
     ((verb, args),) = writes.calls
     assert verb == "advance" and args[1] == "wait-1d"
     assert "reply_decide" not in args[3]
+
+
+# --- the calling window: the timer waits for the hours, a letter never does --
+
+# NOW is 17:30 IST. _CLOSED has shut for the day; _OPEN is still open.
+_CLOSED = {"opens": "09:00", "closes": "17:00", "timezone": "Asia/Kolkata"}
+_OPEN = {"opens": "09:00", "closes": "18:00", "timezone": "Asia/Kolkata"}
+# 09:00 IST on the next day, in UTC.
+_NEXT_OPENING = datetime(2026, 9, 4, 3, 30, tzinfo=timezone.utc)
+
+
+def _windowed(hours: Dict[str, str]) -> Dict[str, Any]:
+    """The Flipkart ladder's shape: quiet -> call -> gap, both waits held to
+    the hours; a letter on quiet goes to listen, which has no window."""
+    listening = {"type": "wait", "topics": ["checkout.updated"], "key": "$topic"}
+    return {
+        "entry": {"topic": "checkout.initiated"},
+        "nodes": [
+            {"id": "quiet", "minutes": 15, "window": hours, **listening},
+            {"id": "call-1", "type": "call", "template_id": "tpl-1"},
+            {"id": "gap", "minutes": 30, "window": hours, **listening},
+            {"id": "listen", "minutes": 1440, **listening},
+        ],
+        "edges": [
+            ["quiet", "call-1", "timeout"],
+            ["quiet", "listen", "checkout.updated"],
+            ["call-1", "gap"],
+            ["gap", "listen", "timeout"],
+            ["gap", "listen", "checkout.updated"],
+            ["listen", "quiet", "checkout.updated"],
+        ],
+        "goal": {"topics": ["order.placed"]},
+    }
+
+
+def _on_quiet(context: Optional[Dict[str, Any]] = None) -> EnrollmentRun:
+    run = _run()
+    run.current_node = "quiet"
+    run.context = {"phone": "+919876543210", **(context or {})}
+    return run
+
+
+def test_a_timer_ending_after_hours_holds_the_run_until_the_window_opens(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """No call is queued at night: the run stays on quiet, still listening,
+    with its alarm at the next opening."""
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=True, definition=_windowed(_CLOSED))
+    _install(monkeypatch, writes)
+    run = _on_quiet()
+    _advance(writes, run)
+    assert fired == []
+    assert writes.calls == [
+        ("advance", (str(run.id), "quiet", _NEXT_OPENING, run.context, LEASE))
+    ]
+
+
+def test_inside_the_hours_the_timer_moves_on_and_the_next_wait_honours_them(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """17:30 is open: the call goes out now. gap's 30 minutes would end at
+    18:00, when the window closes (`to` is exclusive), so its alarm is the
+    next opening."""
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=True, definition=_windowed(_OPEN))
+    _install(monkeypatch, writes)
+    _advance(writes, _on_quiet())
+    assert fired == ["call"]
+    ((verb, args),) = writes.calls
+    assert (verb, args[1], args[2]) == ("advance", "gap", _NEXT_OPENING)
+
+
+def test_a_letter_is_never_held_by_the_window(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The hours are shut, but a letter woke the square: the run follows the
+    letter's arrow now, so the rule is judged on it at night."""
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=True, definition=_windowed(_CLOSED))
+    _install(monkeypatch, writes)
+    _advance(writes, _on_quiet({"reply_quiet": "checkout.updated"}))
+    assert fired == []
+    ((verb, args),) = writes.calls
+    assert (verb, args[1], args[2]) == ("advance", "listen", NOW + timedelta(days=1))
+
+
+# --- one wait (17 Sep 2026): old documents walk, minutes are optional ---------
+
+
+def test_a_stored_wait_event_document_still_walks(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The version rows are immutable and thousands say wait_event: a reply
+    takes its labelled arrow and the timer takes timeout, as before."""
+    old = {
+        **_ASK_TWICE,
+        "nodes": [
+            {**_ASK_TWICE["nodes"][0], "type": "wait_event"},
+            _ASK_TWICE["nodes"][1],
+        ],
+    }
+    old["edges"] = [["ask", "wait-1d", "YES"], ["ask", "wait-1d", "timeout"]]
+    for context in (
+        {"phone": "+919876543210", "reply_ask": "YES"},
+        {"phone": "+919876543210"},
+    ):
+        writes = _Writes(matched=True, definition=old)
+        _install(monkeypatch, writes)
+        run = _run()
+        run.current_node = "ask"
+        run.context = dict(context)
+        _advance(writes, run)
+        ((verb, args),) = writes.calls
+        assert (verb, args[1], args[2]) == (
+            "advance",
+            "wait-1d",
+            NOW + timedelta(days=1),
+        )
+
+
+def test_arriving_on_a_listening_wait_without_minutes_sleeps_for_the_runs_life(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    board = {
+        **_TWO_WAITS,
+        "nodes": [
+            {"id": "wait-30m", "type": "wait", "minutes": 30},
+            {"id": "wait-1d", "type": "wait", "topics": ["x"], "key": "$topic"},
+        ],
+        "edges": [["wait-30m", "wait-1d"]],
+    }
+    writes = _Writes(matched=True, definition=board)
+    _install(monkeypatch, writes)
+    run = _run()
+    _advance(writes, run)
+    ((verb, args),) = writes.calls
+    life_ends = run.entered_at + timedelta(days=7)  # the default max_age_days
+    assert (verb, args[1], args[2]) == (
+        "advance",
+        "wait-1d",
+        life_ends + timedelta(minutes=1),
+    )
+
+
+def test_a_wait_until_the_window_that_is_already_open_moves_on_in_the_same_visit(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """No minutes and the hours are open (17:30 IST inside 09:00-18:00): the
+    alarm is due, so the walker walks straight on to the next wait."""
+    board = {
+        **_TWO_WAITS,
+        "nodes": [
+            {"id": "wait-30m", "type": "wait", "minutes": 30},
+            {"id": "till-open", "type": "wait", "window": _OPEN},
+            {"id": "wait-1d", "type": "wait", "minutes": 1440},
+        ],
+        "edges": [["wait-30m", "till-open"], ["till-open", "wait-1d"]],
+    }
+    writes = _Writes(matched=True, definition=board)
+    _install(monkeypatch, writes)
+    _advance(writes, _run())
+    ((verb, args),) = writes.calls
+    assert (verb, args[1], args[2]) == ("advance", "wait-1d", NOW + timedelta(days=1))
+
+
+def test_arriving_on_a_listening_wait_with_a_window_listens_even_when_the_hours_are_open(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """17:30 IST is inside 09:00-18:00, but the square lists topics and has no
+    minutes: it listens for the run's life, it does not walk straight through
+    and take its timeout arrow."""
+    board = {
+        **_TWO_WAITS,
+        "nodes": [
+            {"id": "wait-30m", "type": "wait", "minutes": 30},
+            {
+                "id": "listen",
+                "type": "wait",
+                "topics": ["x"],
+                "key": "$topic",
+                "window": _OPEN,
+            },
+            {"id": "wait-1d", "type": "wait", "minutes": 1440},
+        ],
+        "edges": [["wait-30m", "listen"], ["listen", "wait-1d", "timeout"]],
+    }
+    writes = _Writes(matched=True, definition=board)
+    _install(monkeypatch, writes)
+    run = _run()
+    _advance(writes, run)
+    ((verb, args),) = writes.calls
+    life_ends = run.entered_at + timedelta(days=7, minutes=1)  # 17:00 IST, open
+    assert (verb, args[1], args[2]) == ("advance", "listen", life_ends)

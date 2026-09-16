@@ -50,14 +50,14 @@ _CONFIRM_PLAN: Dict[str, Any] = {
         },
         {
             "id": "await-reply",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["message.inbound"],
             "key": "reply",
             "minutes": 1440,
         },
         {
             "id": "chase",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["message.inbound"],
             "key": "reply",
             "minutes": 1440,

@@ -32,7 +32,7 @@
     },
     {
       "id": "await-reply",
-      "type": "wait_event",
+      "type": "wait",
       "topics": [
         "message.inbound"
       ],

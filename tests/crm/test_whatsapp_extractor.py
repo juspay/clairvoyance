@@ -464,7 +464,7 @@ def test_a_submission_picks_the_arrow_an_author_labelled() -> None:
 
     square = WorkflowNode(
         id="wait-reply",
-        type="wait_event",
+        type="wait",
         topics=["message.inbound"],
         key="reply",
         minutes=2880,

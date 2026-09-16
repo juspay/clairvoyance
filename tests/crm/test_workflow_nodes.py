@@ -1,11 +1,13 @@
 """The node vocabulary registry (modules/05-outreach, ruled 31 Aug 2026):
 the schema's Literal and NODE_TYPES are two halves of one language, pinned
-together here so a type added to only one side fails CI."""
+together here so a type added to only one side fails CI. Since 17 Sep 2026
+one word, `wait`, has three forms (a timer, a listening timer, either held
+to hours); `wait_event` is retired but readable."""
 
 from typing import get_args
 
-from app.crm.outreach.nodes import NODE_TYPES, is_wait
-from app.crm.outreach.schemas import WorkflowNode
+from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
+from app.crm.outreach.schemas import RETIRED_WAIT_EVENT, WorkflowNode
 
 
 def _literal_words() -> set:
@@ -13,20 +15,25 @@ def _literal_words() -> set:
 
 
 def test_registry_and_schema_literal_speak_the_same_words() -> None:
-    assert set(NODE_TYPES) == _literal_words()
+    """The Literal keeps the retired word so stored rows still parse; the
+    registry never answers for it (the model reads it as a wait first)."""
+    assert set(NODE_TYPES) == _literal_words() - {RETIRED_WAIT_EVENT}
+    assert RETIRED_WAIT_EVENT in _literal_words()
 
 
-def test_branches_and_listens_are_the_registrys_answers() -> None:
-    """N1 retired (enh A/01): nothing matches a type string. `branches`
-    is true for the squares whose edges carry labels (wait_event,
-    condition, split — enh A/04); `listens` only for the one that hears a
-    letter."""
-    assert {w for w, s in NODE_TYPES.items() if s.branches} == {
-        "wait_event",
-        "condition",
-        "split",
-    }
-    assert {w for w, s in NODE_TYPES.items() if s.listens} == {"wait_event"}
+def test_only_condition_and_split_branch_by_word() -> None:
+    """N1 retired (enh A/01): nothing matches a type string. A condition or
+    split always labels its edges; a wait's labels depend on its topics."""
+    assert {w for w, s in NODE_TYPES.items() if s.branches} == {"condition", "split"}
+
+
+def test_a_wait_listens_and_branches_exactly_when_it_lists_topics() -> None:
+    timer = WorkflowNode(id="t", type="wait", minutes=15)
+    hearing = WorkflowNode(id="h", type="wait", minutes=15, topics=["x"], key="$topic")
+    assert (listens(timer), branches(timer)) == (False, False)
+    assert (listens(hearing), branches(hearing)) == (True, True)
+    # topics on a word that cannot wait make it neither
+    assert listens(WorkflowNode(id="c", type="call", topics=["x"])) is False
 
 
 def test_a_wait_has_no_action_and_an_action_is_not_a_wait() -> None:
@@ -44,7 +51,6 @@ def test_is_wait_answers_for_every_word() -> None:
     }
     assert answers == {
         "wait": True,
-        "wait_event": True,
         "send": False,
         "call": False,
         "action": False,
@@ -55,14 +61,20 @@ def test_is_wait_answers_for_every_word() -> None:
 
 def test_the_package_init_exports_the_registry_and_nothing_else() -> None:
     """The one sanctioned non-empty __init__ (record/extractors precedent)
-    assembles the registry; it does not re-export its siblings. The split
-    of 7 Sep 2026 shipped a 21-name hub (three of them private) so twelve
-    importers could stay unchanged — the accessor/__init__ scar in a new
-    coat. Importers name the file they mean: nodes.context, nodes.spec,
-    nodes.wait_event, nodes.<word>."""
+    assembles the registry and the three questions asked of a node; it does
+    not re-export its siblings. The split of 7 Sep 2026 shipped a 21-name
+    hub (three of them private) so twelve importers could stay unchanged —
+    the accessor/__init__ scar in a new coat. Importers name the file they
+    mean: nodes.context, nodes.spec, nodes.wait, nodes.<word>."""
     import app.crm.outreach.nodes as package
 
-    assert set(package.__all__) == {"NODE_TYPES", "NodeSpec", "is_wait"}
+    assert set(package.__all__) == {
+        "NODE_TYPES",
+        "NodeSpec",
+        "branches",
+        "is_wait",
+        "listens",
+    }
     exported = {
         name
         for name in dir(package)
@@ -79,7 +91,6 @@ def test_the_package_init_exports_the_registry_and_nothing_else() -> None:
             "send",
             "split",
             "wait",
-            "wait_event",
             "context",
             "spec",
         }

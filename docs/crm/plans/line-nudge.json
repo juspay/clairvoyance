@@ -1,5 +1,5 @@
 {
-  "_comment": "A lending journey on a merchant's OWN registered events. The condition reads a fact the catalog rendered from INSIDE an array: the topic declares payload.loan_applications.offers as a list with item_where [facility_type is CREDIT_LINE, offers exists] and item_numbered, so `offers` exists on the run only when at least one credit line made an offer — and carries only those lines. Every letter re-decides: a later event whose filter leaves nothing writes `offers` as None, so the run reads no offers and takes `else` — an earlier letter's offers never outlive the letter that made none.",
+  "_comment": "A lending journey on a merchant's OWN registered events. The condition reads a fact the catalog rendered from INSIDE an array: the topic declares payload.loan_applications.offers as a list with item_where [facility_type is CREDIT_LINE, offers exists] and item_numbered, so `offers` exists on the run only when at least one credit line made an offer — and carries only those lines. Every letter re-decides: a later event whose filter leaves nothing writes `offers` as None, so the run reads no offers and takes `else` — an earlier letter's offers never outlive the letter that made none. The rule also reads `context.products not_exists`: this journey calls only customers with no product in hand — a letter that carries products takes `else`, and a later letter without them re-decides. quiet-30m carries a calling window: 30 quiet minutes that end outside 07:00-23:00 IST hold the run on quiet-30m, still listening, until 07:00 — a letter on quiet-30m goes back to the rule and never straight to the call (publish refuses that shape), so no call is queued at night for the dialler to ring in the morning, and a goal or a new letter overnight is judged before any call exists. The window reads the plan's clock (Asia/Kolkata), not the customer's; the dialler's calling hours remain the check.",
   "entry": {
     "topic": "LINE_INITIATED",
     "key": "customer_id",
@@ -15,6 +15,10 @@
           "on": "yes",
           "if": [
             {
+              "field": "context.products",
+              "op": "not_exists"
+            },
+            {
               "field": "context.offers",
               "op": "exists"
             }
@@ -24,7 +28,7 @@
     },
     {
       "id": "quiet-30m",
-      "type": "wait_event",
+      "type": "wait",
       "topics": [
         "LINE_INITIATED",
         "LINE_ACCOUNT_AGGREGATOR_REQUIRED",
@@ -36,7 +40,12 @@
         "LINE_LENDER_ATTEMPT_FAILED"
       ],
       "key": "$topic",
-      "minutes": 30
+      "minutes": 30,
+      "window": {
+        "opens": "07:00",
+        "closes": "23:00",
+        "timezone": "Asia/Kolkata"
+      }
     },
     {
       "id": "nudge-call",
@@ -45,7 +54,7 @@
     },
     {
       "id": "listen",
-      "type": "wait_event",
+      "type": "wait",
       "topics": [
         "LINE_INITIATED",
         "LINE_ACCOUNT_AGGREGATOR_REQUIRED",
@@ -56,8 +65,7 @@
         "LINE_KYC_COMPLETED",
         "LINE_LENDER_ATTEMPT_FAILED"
       ],
-      "key": "$topic",
-      "minutes": 43200
+      "key": "$topic"
     }
   ],
   "edges": [

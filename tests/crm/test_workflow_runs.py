@@ -119,7 +119,7 @@ def test_the_current_squares_facts_win_and_every_squares_stay_reachable() -> Non
     }
     node = WorkflowNode(
         id="at-kyc",
-        type="wait_event",
+        type="wait",
         topics=["loan.bank_linked"],
         key="$topic",
         minutes=30,

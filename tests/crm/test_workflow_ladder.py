@@ -74,7 +74,7 @@ def test_three_stages_expand_to_the_exact_board() -> None:
     by_id = _by_id(doc)
     assert by_id["at-profile-created"] == {
         "id": "at-profile-created",
-        "type": "wait_event",
+        "type": "wait",
         "key": "$topic",
         "topics": ["loan.kyc_completed", "loan.bank_linked"],
         "minutes": 30,
@@ -89,7 +89,7 @@ def test_three_stages_expand_to_the_exact_board() -> None:
     }
     assert by_id["after-profile-created"] == {
         "id": "after-profile-created",
-        "type": "wait_event",
+        "type": "wait",
         "key": "$topic",
         "topics": ["loan.kyc_completed", "loan.bank_linked"],
         "minutes": 1440,
@@ -440,7 +440,7 @@ def test_a_keyed_ladder_listens_only_for_letters_about_its_own_key() -> None:
     stage's plain wait listens for nothing and carries no match."""
     keyed = expand_stages(_ladder())
     for node in keyed["nodes"]:
-        if node["type"] == "wait_event":
+        if node["type"] == "wait" and node.get("topics"):
             assert node["match"] == {
                 "payload": "application_id",
                 "run": "application_id",

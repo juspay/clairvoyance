@@ -7,9 +7,14 @@ here + the catalog's OPS_BY_TYPE + the SQL compiler together, or not at all.
 Leaf by law: imports nothing internal.
 
 Evaluation is deliberately conservative: a field that is MISSING from the
-payload satisfies no op except nothing — not even `is_not` — so a filter
+payload satisfies no op except `not_exists` — not even `is_not` — so a filter
 gone stale never quietly widens who gets contacted; and the `is` family
 compares text exactly (no numeric coercion — that is `=`'s job).
+
+`not_exists` is the one op that holds on a missing field, and only on one: it
+is how a plan says "only when this is absent" (a line nudge for customers
+with no products), which `else` of an `exists` rule could say only as a
+second rule.
 """
 
 import re
@@ -18,7 +23,7 @@ from typing import Any, Callable, Iterable, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-Op = Literal["is", "is_not", "in", ">", ">=", "<", "<=", "=", "exists"]
+Op = Literal["is", "is_not", "in", ">", ">=", "<", "<=", "=", "exists", "not_exists"]
 # The op FAMILIES, by what they compare. The catalog's OPS_BY_TYPE (record/
 # catalog.py) is built from these, so a type's allowed ops and the evaluator
 # that runs them cannot drift apart.
@@ -26,6 +31,8 @@ TEXT_OPS = ("is", "is_not", "in")  # exact text, never coerced
 ORDER_OPS = (">", ">=", "<", "<=")  # numbers or datetimes
 EQUALS_OP = "="  # numbers only
 EXISTS_OP = "exists"
+NOT_EXISTS_OP = "not_exists"
+PRESENCE_OPS = (EXISTS_OP, NOT_EXISTS_OP)  # no value: the field is there or not
 _NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
 
 
@@ -44,9 +51,9 @@ class Condition(BaseModel):
                 raise ValueError("'in' needs a non-empty list value")
             if any(isinstance(v, (list, dict)) or v is None for v in self.value):
                 raise ValueError("'in' values must be scalars")
-        elif self.op == "exists":
+        elif self.op in PRESENCE_OPS:
             if self.value is not None:
-                raise ValueError("'exists' takes no value")
+                raise ValueError(f"{self.op!r} takes no value")
         elif self.value is None or isinstance(self.value, (list, dict)):
             raise ValueError(f"{self.op!r} needs a scalar value")
         return self
@@ -110,10 +117,12 @@ def _ordered(op: str, actual: Any, expected: Any) -> bool:
 
 def evaluate(condition: Condition, actual: Any) -> bool:
     """One condition against the value the payload holds at its field.
-    None = the field is absent: only `exists` has an opinion (no)."""
+    None = the field is absent: `not_exists` holds, every other op does not."""
+    op = condition.op
+    if op == NOT_EXISTS_OP:
+        return actual is None
     if actual is None:
         return False
-    op = condition.op
     if op == "exists":
         return True
     if op == "is":

@@ -11,7 +11,7 @@ letter re-arms whatever square the run stands on.
 
 The document is a `stages` **ladder** (rollout phase 17, notes §16.2):
 the five stage topics in order, the clocks and the action stated once.
-Create/draft/publish expand it into the wait_event board the walker runs
+Create/draft/publish expand it into the wait board the walker runs
 and store both — `GET /workflows/<wf>` shows `stages` beside the
 `nodes`/`edges`/`entry` it produced. Per stage the squares are
 `at-<stage>` (listening for every later stage, the idle clock),

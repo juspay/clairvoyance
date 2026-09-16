@@ -63,7 +63,7 @@ def is_bookkeeping(key: str) -> bool:
 
 
 def reply_key(node_id: str) -> str:
-    """Where a wait_event square's answer lives in the run's context."""
+    """Where a listening wait's answer lives in the run's context."""
     return f"reply_{node_id}"
 
 

@@ -24,6 +24,7 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowNode,
 )
+from app.crm.outreach.window import alarm
 
 
 def _admission(
@@ -44,15 +45,15 @@ def _admission(
     return True, "admitted"
 
 
-def _first_wake(start: WorkflowNode, now: datetime) -> datetime:
+def _first_wake(start: WorkflowNode, now: datetime, max_age_days: float) -> datetime:
     """Arrival scheduling: the token arrives on the door's start square; a
-    wait node's alarm is arrival + delay, an action node's alarm is now
-    (the canon 'enrolled = waiting with an immediate wake'). "Is it a
-    wait?" is the registry's answer, never a type string — a wait_event
-    first node used to fall through here and enrol with a zero listening
-    window."""
-    if is_wait(start) and start.minutes:
-        return now + timedelta(minutes=start.minutes)
+    wait's alarm is window.alarm (its minutes, the window's next opening,
+    or the end of the run's life), an action node's alarm is now (the
+    canon 'enrolled = waiting with an immediate wake'). "Is it a wait?" is
+    the registry's answer, never a type string — a listening first node
+    once fell through here and enrolled with a zero listening window."""
+    if is_wait(start):
+        return alarm(start, now, now + timedelta(days=max_age_days))
     return now
 
 
@@ -152,7 +153,7 @@ async def _enrol_in_txn(
         workflow.version,
         customer_id,
         door.start,
-        _first_wake(start, now),
+        _first_wake(start, now, definition.exits.max_age_days),
         context,
         enrollment_key,
     )

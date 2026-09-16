@@ -305,7 +305,7 @@ _COD_DEFINITION = {
     "nodes": [
         {
             "id": "ask",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["button.reply"],
             "key": "button_id",
             "minutes": 60,

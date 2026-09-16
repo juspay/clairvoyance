@@ -22,7 +22,7 @@ import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.ladder import expand_stages
-from app.crm.outreach.nodes.wait_event import TIMEOUT
+from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     Workflow,
@@ -41,7 +41,7 @@ _LISTENING_PLAN = {
     "nodes": [
         {
             "id": "ask",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["button.reply"],
             "key": "button_id",
             "minutes": 60,
@@ -261,14 +261,14 @@ def test_a_letter_that_finds_the_run_on_a_deaf_square_refreshes_its_facts(
             },
             {
                 "id": "quiet",
-                "type": "wait_event",
+                "type": "wait",
                 "topics": ["loan.offered"],
                 "key": "$topic",
                 "minutes": 30,
             },
             {
                 "id": "listen",
-                "type": "wait_event",
+                "type": "wait",
                 "topics": ["loan.offered"],
                 "key": "$topic",
                 "minutes": 60,
@@ -327,7 +327,7 @@ def _tap_plan(key: str) -> Dict[str, Any]:
         "nodes": [
             {
                 "id": "ask",
-                "type": "wait_event",
+                "type": "wait",
                 "topics": ["message.inbound"],
                 "key": key,
                 "minutes": 30,
@@ -456,7 +456,7 @@ _V3 = {
         {"id": "wait-30m", "type": "wait", "minutes": 30},
         {
             "id": "ask",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["button.reply"],
             "key": "button_id",
             "minutes": 60,
@@ -477,7 +477,7 @@ _V5 = {
         {"id": "hold-30m", "type": "wait", "minutes": 30},
         {
             "id": "ask",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["list.reply"],
             "key": "button_id",
             "minutes": 60,
@@ -661,7 +661,7 @@ def test_the_alarm_path_still_times_a_listening_node_out() -> None:
     the timeout edge. B1 is fixed at the consumer, never here."""
     node = WorkflowNode(
         id="ask",
-        type="wait_event",
+        type="wait",
         topics=["button.reply"],
         key="button_id",
         minutes=60,
@@ -684,7 +684,7 @@ _LADDER: Dict[str, Any] = {
     "nodes": [
         {
             "id": "at-profile",
-            "type": "wait_event",
+            "type": "wait",
             "key": "$topic",
             "minutes": 30,
             "topics": ["loan.kyc_completed", "loan.bank_linked"],
@@ -908,7 +908,7 @@ _CALL_PLAN: Dict[str, Any] = {
         {"id": "rescue-call", "type": "call", "template_id": "t"},
         {
             "id": "after-call",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["call.completed"],
             "key": "outcome",
             "minutes": 1440,
@@ -998,7 +998,7 @@ def test_else_catches_any_answer_without_an_arrow_of_its_own() -> None:
     too."""
     node = WorkflowNode(
         id="after-call",
-        type="wait_event",
+        type="wait",
         topics=["call.completed"],
         key="outcome",
         minutes=5,
@@ -1088,3 +1088,25 @@ def test_a_merchant_level_letter_starts_ends_and_wakes_nothing(
         received_at=datetime.now(timezone.utc),
     )
     asyncio.run(entry_module.consume_attributed_event(event, None, {}))
+
+
+def test_a_stored_wait_event_square_is_still_woken_by_its_letter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One wait (17 Sep 2026): a run pinned to a version that still says
+    wait_event hears its reply exactly as before."""
+    old = {
+        **_LISTENING_PLAN,
+        "nodes": [
+            {**_LISTENING_PLAN["nodes"][0], "type": "wait_event"},
+            *_LISTENING_PLAN["nodes"][1:],
+        ],
+    }
+    flow = _flow(old)
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): old})
+    _install(monkeypatch, spine)
+    _consume(_event("button.reply", {"button_id": "YES"}))
+    assert spine.resumes == [
+        (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+    ]

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pytest
 
+from app.crm.outreach import predicates
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.plans import Catalogs, validate_definition
 from app.crm.outreach.schemas import WorkflowDefinition
@@ -215,6 +216,42 @@ def test_the_split_cart_board_sends_two_letters_in_a_fixed_share() -> None:
     assert ["wa-variant", "wait-1d"] in doc["edges"]
 
 
+def test_the_line_board_calls_only_customers_without_products() -> None:
+    """The not_exists example: one condition square reads `context.products
+    not_exists` AND `context.offers exists`. No products and an offer ->
+    `yes` (quiet, then the call); a letter carrying products -> `else`
+    (listen), and a later letter without them re-decides on its own."""
+    doc = WorkflowDefinition.model_validate(_load(LINE))
+    decide = next(n for n in doc.nodes if n.id == "is-credit-line")
+    offers = {"offers": "1. Fibe offer LSP1: 9 months at 22.00 percent"}
+    assert predicates.choose(decide.rules, offers, {}, None) == "yes"
+    with_products = {**offers, "products": "Apple Mobile Mobile"}
+    assert predicates.choose(decide.rules, with_products, {}, None) is None
+    assert predicates.choose(decide.rules, {}, {}, None) is None  # no offer either
+    assert sorted(
+        tuple(e) for e in _load(LINE)["edges"] if e[0] == "is-credit-line"
+    ) == [
+        ("is-credit-line", "listen", "else"),
+        ("is-credit-line", "quiet-30m", "yes"),
+    ]
+
+
+def test_the_line_board_calls_only_inside_the_calling_window() -> None:
+    """The window example: quiet-30m's timer fires only 07:00-23:00 IST, so
+    the call after it is never queued at night."""
+    doc = WorkflowDefinition.model_validate(_load(LINE))
+    quiet = next(n for n in doc.nodes if n.id == "quiet-30m")
+    assert quiet.window is not None
+    assert (quiet.window.opens, quiet.window.closes, quiet.window.timezone) == (
+        "07:00",
+        "23:00",
+        "Asia/Kolkata",
+    )
+    assert ("quiet-30m", "nudge-call", "timeout") in {
+        tuple(e) for e in _load(LINE)["edges"]
+    }
+
+
 def test_every_cart_send_maps_its_blanks() -> None:
     """send_variables posts EXACTLY the map, nothing when it is empty — a
     shipped board with an unmapped send would refuse on every send."""
@@ -338,7 +375,7 @@ def test_cart_recovery_fallback_is_the_cart_board_with_the_call_outcome_branch()
         ("send", None),
         ("wait", 30),
         ("call", None),
-        ("wait_event", 1440),
+        ("wait", 1440),
         ("send", None),
         ("wait", 1440),
     ]
@@ -368,7 +405,7 @@ def test_the_cod_board_declares_no_match_and_does_not_need_one() -> None:
     would quietly reintroduce something to get wrong.
     """
     board = _load(COD)
-    square = next(n for n in board["nodes"] if n["type"] == "wait_event")
+    square = next(n for n in board["nodes"] if n["type"] == "wait" and n.get("topics"))
     assert square["topics"] == ["message.inbound"]
     assert "match" not in square
     assert ["confirm", square["id"]] in [e[:2] for e in board["edges"]]

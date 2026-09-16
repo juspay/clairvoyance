@@ -12,9 +12,9 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.crm.outreach.ladder import expand_stages
-from app.crm.outreach.nodes import NODE_TYPES
+from app.crm.outreach.nodes import NODE_TYPES, listens
 from app.crm.outreach.nodes.action import placeholder_names
-from app.crm.outreach.schemas import WorkflowDefinition
+from app.crm.outreach.schemas import RETIRED_WAIT_EVENT, WorkflowDefinition
 from app.crm.record.contracts import (
     AmbiguousTopic,
     CatalogField,
@@ -22,7 +22,7 @@ from app.crm.record.contracts import (
     catalog_fields,
     variable_name,
 )
-from app.crm.shared.predicate import Condition, as_number
+from app.crm.shared.predicate import PRESENCE_OPS, Condition, as_number
 
 # The catalog handed to validate_definition: topic -> (path -> field, both
 # layers), with None for a topic no layer knows — every door's topic and
@@ -122,14 +122,14 @@ _WALKER_FACTS = frozenset({"current_node", "current_stage"})
 
 
 def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
-    """PURE: every facts_<square>_<key> a send may name — a wait_event
-    square's letter (phase 16: kept under context.facts.<square>) exposes
+    """PURE: every facts_<square>_<key> a send may name — a listening wait's
+    letter (phase 16: kept under context.facts.<square>) exposes
     the variable fields declared for ANY topic that square listens on."""
     names: set = set()
     if catalogs is None:
         return names
     for node in definition.nodes:
-        if not NODE_TYPES[node.type].listens:
+        if not listens(node):
             continue
         for topic in node.topics:
             for field in (catalogs.get(topic) or {}).values():
@@ -139,7 +139,7 @@ def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
 
 
 def unenumerable_squares(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
-    """PURE: the wait_event squares whose letters nobody can enumerate.
+    """PURE: the listening waits whose letters nobody can enumerate.
 
     A call's answers are declared by the TEMPLATE, so no catalog lists them.
     Per SQUARE: every other name in the document stays checked.
@@ -148,7 +148,7 @@ def unenumerable_squares(definition: WorkflowDefinition, catalogs: Catalogs) -> 
     if catalogs is None:
         return open_squares
     for node in definition.nodes:
-        if node.type != "wait_event":
+        if not listens(node):
             continue
         if any(catalogs.get(topic) is None for topic in node.topics):
             open_squares.add(node.id)
@@ -178,7 +178,7 @@ def condition_against_catalog(
     if field.deprecated:
         logger.warning(f"where: {condition.field!r} is deprecated in the catalog")
     values = condition.value if condition.op == "in" else [condition.value]
-    if condition.op == "exists":
+    if condition.op in PRESENCE_OPS:
         return []
     if field.type == "choice" and field.values:
         bad = [v for v in values if str(v) not in field.values]
@@ -221,8 +221,9 @@ async def gather_catalogs(merchant_id: str, raw: Dict[str, Any]) -> Catalogs:
     for node in raw.get("nodes") or [] if isinstance(raw, dict) else []:
         if not isinstance(node, dict):
             continue
-        spec = NODE_TYPES.get(str(node.get("type")))
-        if spec is not None and spec.listens:
+        word = str(node.get("type"))
+        spec = NODE_TYPES.get("wait" if word == RETIRED_WAIT_EVENT else word)
+        if spec is not None and spec.is_wait:
             topics.update(str(t) for t in node.get("topics") or [] if t)
     catalogs: Dict[str, Optional[Dict[str, CatalogField]]] = {}
     problems: List[str] = []

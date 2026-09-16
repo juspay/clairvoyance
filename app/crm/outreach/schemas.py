@@ -4,13 +4,14 @@ internal — db/decoder.py is the only place a row becomes one of these.
 The definition models mirror canon T19's document sections exactly:
 {entry, nodes, edges, goal, exits}. Pydantic checks SHAPE here; the graph
 LAWS (unique node ids, edges reference real nodes, branching only out of
-a wait_event node) live in plans.validate_definition — a pure decide
+a listening wait or a condition/split) live in plans.validate_definition — a pure decide
 function, testable without a database.
 """
 
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -134,15 +135,62 @@ class WorkflowMatch(BaseModel):
     run: str = Field(min_length=1)
 
 
+# A clock time on a window, HH:MM on the 24-hour clock.
+_HH_MM = r"^([01]\d|2[0-3]):[0-5]\d$"
+
+# The retired listening word (ruled 17 Sep 2026): a `wait` with topics is
+# what `wait_event` was. Stored version rows still say it and still parse
+# (WorkflowNode reads it as a wait); publish refuses it in a new document.
+RETIRED_WAIT_EVENT = "wait_event"
+
+
+class WaitWindow(BaseModel):
+    """The hours a waiting square's timer may fire in (the calling window,
+    17 Sep 2026): `opens` and `closes` are HH:MM on the `timezone` clock,
+    `closes` exclusive, and an `opens` later than `closes` spans midnight. A timer that
+    ends outside the hours holds the run on its square, still listening,
+    until the window next opens (outreach/window.py). A letter is never
+    held: it moves the run the moment it lands, as it always did — so
+    publish refuses a letter arrow from a windowed square that reaches a
+    call without waiting (plans.py).
+
+    A scheduling window on the PLAN's clock, not the customer's: the author
+    names the timezone, and a wrong one calls at the wrong local hour. It is
+    NOT the quiet-hours control (ADR 0018's customer-timezone gate, which
+    voice is outside of — ADR 0010); the dialler's calling hours remain the
+    check on every call."""
+
+    opens: str = Field(pattern=_HH_MM)
+    closes: str = Field(pattern=_HH_MM)
+    timezone: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _a_window_that_opens(self) -> "WaitWindow":
+        if self.opens == self.closes:
+            raise ValueError("window: opens and closes must differ")
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"window: unknown timezone {self.timezone!r}")
+        return self
+
+
 class WorkflowNode(BaseModel):
     """One square of the board. Vocabulary is code, not CHECKs:
-    wait (minutes) · send (channel + template, via connectivity) ·
+    wait · send (channel + template, via connectivity) ·
     call (template_id, via buddy's lead machine — ADR 0010) ·
-    wait_event (topics + key + minutes: waits for an event OR the timer,
-    whichever first; the branch taken is the edge whose `on` equals the
-    event's payload[key], or "timeout") · action (connector + action +
-    args: a connector DOES something for the run — see the three fields
-    below). key: "$topic" (rollout phase 15)
+    action (connector + action + args: a connector DOES something for the
+    run — see the three fields below) · condition · split.
+
+    `wait` has three forms (ruled 17 Sep 2026; `wait_event` folded in),
+    and `topics` is the discriminant: no topics = a plain timer; topics =
+    the timer OR an event, whichever first — the branch taken is the edge
+    whose `on` equals the event's payload[key], or "timeout"; either one
+    may carry a `window`. `minutes` is optional: absent, a listening wait
+    lasts the run's life (exits.max_age_days) and a bare window waits only
+    for the hours; the window then applies to whatever that duration is
+    (outreach/window.py). A wait with none of the three waits for nothing
+    and is refused at publish. key: "$topic" (rollout phase 15)
     branches on the event's TOPIC instead — the edge's `on` is the topic
     string — so a stage board reads "she went to KYC" from the letter's
     name; $topic is the only $-word. An edge labelled "else" (phase 18)
@@ -150,6 +198,8 @@ class WorkflowNode(BaseModel):
     is no "timeout" edge."""
 
     id: str = Field(min_length=1)
+    # `wait_event` stays readable (stored version rows) and is read as a
+    # listening `wait` before this Literal judges it.
     type: Literal["wait", "send", "call", "wait_event", "action", "condition", "split"]
     minutes: Optional[float] = None
     channel: Optional[str] = None
@@ -174,6 +224,9 @@ class WorkflowNode(BaseModel):
     stage: Optional[str] = Field(None, min_length=1)
     # Phase 18: only the letter about THIS run wakes the square.
     match: Optional[WorkflowMatch] = None
+    # wait only: the hours the timer may fire in. Outside them the run
+    # holds on the square until the window opens.
+    window: Optional[WaitWindow] = None
     # send only: which run fact fills which template blank, {blank: fact}.
     # Left = the parameter the provider's registered template declares
     # ({{customer_name}} named, or "1"/"2" positional); right = the key in
@@ -193,10 +246,20 @@ class WorkflowNode(BaseModel):
     # needs no `else`.
     arms: List["SplitArm"] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _wait_event_is_a_listening_wait(cls, data: Any) -> Any:
+        """`wait_event` (every document before 17 Sep 2026) is a `wait`
+        with topics — lossless, it always carried them. Stored versions keep
+        walking; publish refuses the old word in a new document (plans.py)."""
+        if isinstance(data, dict) and data.get("type") == RETIRED_WAIT_EVENT:
+            data = {**data, "type": "wait"}
+        return data
+
 
 # An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a
-# wait_event node ("YES", "NO", "timeout"); every other node has one plain
-# arrow.
+# listening wait ("YES", "NO", a topic, "timeout") or a condition / split;
+# every other node has one plain arrow.
 WorkflowEdge = Union[Tuple[str, str], Tuple[str, str, str]]
 
 
@@ -273,7 +336,7 @@ class Stages(BaseModel):
     """The ladder (rollout phase 17; notes §16.2): an ordered funnel of
     stage topics, one clock for "went quiet on a stage", one action when
     it fires, one listening window after the action. ladder.py expands
-    it into the wait_event board: the author never draws the O(n²)
+    it into the wait board: the author never draws the O(n²)
     arrows and the walker never sees the word. Shape only here — the
     expansion's laws (distinct square names, nothing hand-drawn beside
     the ladder) are the expander's."""

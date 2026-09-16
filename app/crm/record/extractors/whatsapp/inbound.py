@@ -81,7 +81,7 @@ def reply(payload: Dict[str, Any]) -> Optional[Any]:
     """What the customer answered, whatever shape Meta used: a template
     quick-reply's payload, an interactive button's or list row's id,
     ``FORM_SUBMITTED`` for a Flow submission, else the text body. One
-    field, so a wait_event square branches on the answer without knowing
+    field, so a listening wait branches on the answer without knowing
     which widget the template put in front of her — a tap, a form and a
     typed reply land on the same key.
 
@@ -134,7 +134,7 @@ def fields() -> List[CatalogField]:
             derived=True,
         ),
         _f("message_text", "text", "Message text", variable=True, derived=True),
-        # The answer, whichever widget carried it — what a wait_event
+        # The answer, whichever widget carried it — what a listening wait
         # square branches on (key: "reply"). The label carries the one
         # word an author cannot guess: a completed form answers
         # FORM_SUBMITTED, and that is what an arrow's label must say.

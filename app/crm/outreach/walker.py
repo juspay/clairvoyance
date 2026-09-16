@@ -36,11 +36,12 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.nodes import NODE_TYPES, is_wait
+from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
 from app.crm.outreach.nodes.context import reply_key, without_reply
 from app.crm.outreach.nodes.spec import ELSE, NodeParked
-from app.crm.outreach.nodes.wait_event import TIMEOUT
+from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
+from app.crm.outreach.window import alarm, opens_at
 from app.crm.record.contracts import customer_has_event
 
 # One claim executes consecutive immediate nodes (call -> next wait) in a
@@ -187,12 +188,26 @@ async def _advance(
                 f"node {current_id} not in definition v{run.workflow_version}"
             )
 
+        if node.window is not None and context.get(reply_key(node.id)) is None:
+            # The timer fired, not a letter. Outside the window's hours the
+            # run holds on this square, still listening, until it opens. A
+            # letter is never held; publish refuses a letter arrow from here
+            # that reaches a call without waiting (plans.py), so together
+            # nothing is queued at night for the dialler to ring at 7 AM.
+            opening = opens_at(now, node.window)
+            if opening > now:
+                if not await enrollment_accessor.advance_run(
+                    str(run.id), node.id, opening, context, lease
+                ):
+                    _deferred(run, f"hold on {node.id}")
+                return
+
         execute = NODE_TYPES[node.type].execute
         if execute is not None:  # a wait's action IS the alarm
             context.update(await execute(run, node, definition))
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
-        if NODE_TYPES[node.type].branches:
+        if branches(node):
             # Leaving a branching square: its answer is spent (phase 15).
             # A door may start a run on any square, so this one can be
             # revisited — a stale reply would resolve the revisit at once.
@@ -211,18 +226,19 @@ async def _advance(
         next_node = nodes.get(next_id)
         if next_node is None:
             raise NodeParked(f"edge points at unknown node {next_id}")
-        if is_wait(next_node) and next_node.minutes:
-            # Arrival scheduling: the wait's alarm starts now.
-            if not await enrollment_accessor.advance_run(
-                str(run.id),
-                next_id,
-                datetime.now(timezone.utc) + timedelta(minutes=next_node.minutes),
-                context,
-                lease,
-            ):
-                _deferred(run, f"advance to {next_id}")
-            return
-        current_id = next_id  # action node: execute in this same visit
+        if is_wait(next_node):
+            # Arrival scheduling: the wait's alarm starts now — its minutes,
+            # the window's next opening, or the end of the run's life
+            # (window.alarm). A wait already due moves on in this same visit.
+            arrived = datetime.now(timezone.utc)
+            wake = alarm(next_node, arrived, run.entered_at + max_age)
+            if wake > arrived:
+                if not await enrollment_accessor.advance_run(
+                    str(run.id), next_id, wake, context, lease
+                ):
+                    _deferred(run, f"advance to {next_id}")
+                return
+        current_id = next_id  # an action, or a due wait: this same visit
 
     raise NodeParked(
         f"{_MAX_STEPS_PER_VISIT} immediate nodes in one visit — runaway document"
@@ -250,11 +266,11 @@ def pick_next(
     node: WorkflowNode, arrows: List[Tuple[str, Optional[str]]], context: Dict[str, Any]
 ) -> Optional[str]:
     """PURE: which arrow leaves this square. A plain node has one. A
-    branching node (the registry's word — wait_event, condition) takes
+    branching node (a listening wait, a condition, a split) takes
     the arrow labelled with its answer, or "timeout" when the alarm fired
     first, else the "else" arrow (phase 18) when it has one; no matching
     arrow = the end."""
-    if not NODE_TYPES[node.type].branches:
+    if not branches(node):
         return arrows[0][0] if arrows else None
     answer = context.get(reply_key(node.id))
     wanted = TIMEOUT if answer is None else answer

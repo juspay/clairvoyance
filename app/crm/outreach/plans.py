@@ -6,7 +6,7 @@ waiting tokens, an edge into nowhere, vocabulary the walker doesn't speak.
 gather -> decide (PURE, returns the problems) -> apply.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
@@ -23,14 +23,17 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
-from app.crm.outreach.nodes import NODE_TYPES, is_wait
+from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
+from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
     GOAL_EXIT_REASONS,
+    RETIRED_WAIT_EVENT,
     Workflow,
     WorkflowDefinition,
     WorkflowEntry,
     WorkflowEntryAt,
+    WorkflowNode,
     WorkflowSummary,
 )
 from app.crm.record.contracts import (
@@ -83,6 +86,16 @@ def validate_definition(
             "entry.where is a list of conditions [{field, op, value}] — the "
             "equality map is retired (migration 069)"
         )
+    raw_nodes = raw.get("nodes") if isinstance(raw, dict) else None
+    for raw_node in raw_nodes if isinstance(raw_nodes, list) else []:
+        # Read as a listening wait for the stored rows that still say it (the
+        # model maps it); a document being WRITTEN today speaks the one word.
+        if isinstance(raw_node, dict) and raw_node.get("type") == RETIRED_WAIT_EVENT:
+            problems.append(
+                f"node {raw_node.get('id')}: {RETIRED_WAIT_EVENT} is retired — "
+                "write type wait with its topics (a wait that lists topics "
+                "listens)"
+            )
     problems.extend(entry_against_catalog(definition, catalogs))
     node_ids = [node.id for node in definition.nodes]
     seen = set()
@@ -95,10 +108,15 @@ def validate_definition(
     # walker executes from, so validator and walker cannot disagree.
     for node in definition.nodes:
         problems.extend(NODE_TYPES[node.type].validate(node, definition))
-        if node.match is not None and not NODE_TYPES[node.type].listens:
+        if node.match is not None and not listens(node):
             problems.append(
-                f"node {node.id}: match belongs to a wait_event — only a "
-                "listening square hears a letter"
+                f"node {node.id}: match belongs to a wait that lists topics — "
+                "only a listening square hears a letter"
+            )
+        if node.window is not None and not is_wait(node):
+            problems.append(
+                f"node {node.id}: window belongs to a wait — only a timer can "
+                "wait for the hours"
             )
 
     # The doors (phase 15): one per topic, each starting on a real square.
@@ -150,7 +168,7 @@ def validate_definition(
             )
         reasons_seen.add(tier.exit_reason)
 
-    node_types = {node.id: node.type for node in definition.nodes}
+    nodes_by_id = {node.id: node for node in definition.nodes}
     for src, dst in ((edge[0], edge[1]) for edge in definition.edges):
         if src not in seen:
             problems.append(f"edge from unknown node: {src}")
@@ -158,17 +176,18 @@ def validate_definition(
             problems.append(f"edge to unknown node: {dst}")
     for src, arrows in definition.outgoing().items():
         labels = [on for _, on in arrows]
-        word = node_types.get(src)
-        if word is not None and NODE_TYPES[word].branches:
+        node = nodes_by_id.get(src)
+        if node is not None and branches(node):
             if None in labels:
-                problems.append(f"every edge out of {word} {src} needs an on")
+                problems.append(f"every edge out of {node.type} {src} needs an on")
             if len(set(labels)) != len(labels):
-                problems.append(f"{word} {src} has two edges with the same on")
+                problems.append(f"{node.type} {src} has two edges with the same on")
         else:
             if any(on is not None for on in labels):
                 problems.append(f"only a branching node may label its edges ({src})")
             if len(arrows) > 1:
                 problems.append(f"node {src} has {len(arrows)} outgoing edges")
+    problems.extend(_letter_paths_onto_a_call(definition))
 
     # The stranding laws are migrate-mode preconditions (ADR 0023): only a
     # document that will be pushed UNDER the open runs can strand them.
@@ -191,6 +210,57 @@ def validate_definition(
                 )
 
     return problems
+
+
+def _letter_paths_onto_a_call(definition: WorkflowDefinition) -> List[str]:
+    """PURE: the calling window's publish law. A window holds a square's
+    TIMER, never a letter — a letter moves the run the moment it lands. So a
+    call reached from a windowed square by any arrow but its timer's, either
+    directly or through squares that act at once (condition, split, action,
+    send), would be queued in the shut hours: the very thing the window
+    exists to stop. Refused here rather than trusted to the author; the
+    letter must reach a waiting square first (a ladder sends it back to its
+    rule, whose arrows land on waits)."""
+    nodes = {node.id: node for node in definition.nodes}
+    outgoing = definition.outgoing()
+    problems: List[str] = []
+    for node in definition.nodes:
+        if node.window is None:
+            continue
+        for dst, on in outgoing.get(node.id, []):
+            if on == TIMEOUT or not branches(node):
+                continue  # the timer's own arrow: the hold guards it
+            call = _call_reached_without_waiting(dst, nodes, outgoing)
+            if call is not None:
+                problems.append(
+                    f"{node.type} {node.id} has a window, but its {on!r} edge "
+                    f"reaches call {call} without waiting — a letter is never "
+                    "held, so that call would be queued outside the hours; "
+                    "send the letter to a waiting square first"
+                )
+    return problems
+
+
+def _call_reached_without_waiting(
+    start: str,
+    nodes: Dict[str, WorkflowNode],
+    outgoing: Dict[str, List[Tuple[str, Optional[str]]]],
+) -> Optional[str]:
+    """PURE: the first call a run reaches from `start` in one visit — through
+    the squares that act at once, stopping at every wait (its own alarm, and
+    window, decide from there)."""
+    seen = set()
+    queue = [start]
+    while queue:
+        node_id = queue.pop(0)
+        node = nodes.get(node_id)
+        if node is None or node_id in seen or is_wait(node):
+            continue
+        seen.add(node_id)
+        if node.type == "call":
+            return node_id
+        queue.extend(dst for dst, _ in outgoing.get(node_id, []))
+    return None
 
 
 def _entry_changed(raw_entry: Any, live_entry: Any) -> bool:

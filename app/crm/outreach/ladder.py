@@ -1,5 +1,5 @@
 """The stages ladder (rollout phase 17; notes §14.1, §16.2): an ordered
-funnel written as ONE small object, expanded into the wait_event board by
+funnel written as ONE small object, expanded into the wait board by
 the validator — PURE, and idempotent because every square's id derives
 from its stage's topic. The author never draws the O(n²) arrows, the
 walker never learns the word, and the console can re-edit the funnel
@@ -7,11 +7,11 @@ because the ladder is stored beside the board it produced.
 
 For stage i (topic T_i, slug s_i) with later stages T_{i+1} .. T_n:
 
-  at-s_i      wait_event  key $topic · topics = the later stages ·
+  at-s_i      wait        key $topic · topics = the later stages ·
                           minutes = idle (the "went quiet on this stage"
                           clock; the stage is labelled on the square)
   act-s_i     the on_idle action — a call or a send
-  after-s_i   wait_event  the same later stages · minutes = after_action
+  after-s_i   wait        the same later stages · minutes = after_action
                           (the listening window after the action)
   arrows      at-s_i     --T_j-->      at-s_j    for every later stage j
               at-s_i     --timeout-->  act-s_i   -->  after-s_i
@@ -41,7 +41,7 @@ for one would otherwise move both.
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.crm.outreach.nodes.wait_event import TIMEOUT, TOPIC_KEY
+from app.crm.outreach.nodes.wait import TIMEOUT, TOPIC_KEY
 from app.crm.outreach.schemas import StageAction, Stages
 
 # What the ladder produces. A document carrying a ladder may not draw
@@ -163,7 +163,7 @@ def _listening_square(
 ) -> Dict[str, Any]:
     square: Dict[str, Any] = {
         "id": node_id,
-        "type": "wait_event",
+        "type": "wait",
         "key": TOPIC_KEY,
         "topics": list(topics),
         "minutes": minutes,
