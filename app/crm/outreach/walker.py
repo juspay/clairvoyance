@@ -190,12 +190,19 @@ async def _advance(
         execute = NODE_TYPES[node.type].execute
         if execute is not None:  # a wait's action IS the alarm
             context.update(await execute(run, node, definition))
+            # The NEXT square in this visit reads run.context (the call
+            # square's payload, an action's placeholders): hand it the
+            # writes so far, or a link fetched one square earlier never
+            # reaches the call that was meant to read it out (seen live,
+            # enh A/03). The row is written once, at the visit's end.
+            run = run.model_copy(update={"context": context})
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
-        if NODE_TYPES[node.type].branches:
-            # Leaving a branching square: its answer is spent (phase 15).
-            # A door may start a run on any square, so this one can be
-            # revisited — a stale reply would resolve the revisit at once.
+        if NODE_TYPES[node.type].branches or reply_key(node.id) in context:
+            # Leaving a branching square (or an action that answered): its
+            # answer is spent (phase 15). A door may start a run on any
+            # square, so this one can be revisited — a stale reply would
+            # resolve the revisit at once.
             context = without_reply(context, node.id)
         if next_id is None:
             if not await enrollment_accessor.exit_run(
@@ -255,7 +262,13 @@ def pick_next(
     first, else the "else" arrow (phase 18) when it has one; no matching
     arrow = the end."""
     if not NODE_TYPES[node.type].branches:
-        return arrows[0][0] if arrows else None
+        # A plain square has one arrow. An action square may instead draw
+        # `done` / `failed` (enh A/03): then its answer picks, `done` when
+        # a version predating the answer left none.
+        if not any(on for _, on in arrows):
+            return arrows[0][0] if arrows else None
+        answer = context.get(reply_key(node.id)) or "done"
+        return next((dst for dst, on in arrows if on == answer), None)
     answer = context.get(reply_key(node.id))
     wanted = TIMEOUT if answer is None else answer
     for dst, on in arrows:

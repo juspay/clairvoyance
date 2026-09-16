@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 
@@ -30,7 +32,24 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.http_handler import (
 
 # isort: on
 
-_validate = hr.HttpRequestExecutor._validate_resolved_url
+# The transport's guard is the shared egress guard (app/core/security/ssrf,
+# PT-03/07/11/17): resolve, refuse private/loopback/link-local/metadata,
+# https only, re-check every redirect hop. It reads no environment: dev is
+# refused exactly as production. These tests pin that posture through the
+# function the executor calls, with DNS stubbed so no network is touched.
+from app.core.security import ssrf  # isort: skip
+
+
+def _validate(url: str) -> None:
+    asyncio.run(ssrf.validate_egress_url(url))
+
+
+def _public_dns(monkeypatch):
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(2, 1, 6, "", ("93.184.216.34", port or 443))]
+
+    monkeypatch.setattr(ssrf.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(ssrf, "_ALLOW_PRIVATE_EGRESS", False)
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +57,6 @@ _validate = hr.HttpRequestExecutor._validate_resolved_url
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("env", ["dev", "development", "staging", "production"])
 @pytest.mark.parametrize(
     "url",
     [
@@ -48,25 +66,22 @@ _validate = hr.HttpRequestExecutor._validate_resolved_url
         "http://example.com/x",
     ],
 )
-def test_plain_http_is_refused_in_every_environment(monkeypatch, env, url):
-    monkeypatch.setattr(hr, "ENVIRONMENT", env)
-    with pytest.raises(ValueError, match="Only HTTPS"):
+def test_plain_http_is_refused_in_every_environment(monkeypatch, url):
+    _public_dns(monkeypatch)
+    assert not hasattr(hr, "ENVIRONMENT")  # the guard reads no environment
+    with pytest.raises(ValueError, match="Disallowed URL scheme"):
         _validate(url)
 
 
-@pytest.mark.parametrize("env", ["dev", "production"])
-def test_loopback_and_private_targets_blocked_over_https_too(monkeypatch, env):
-    monkeypatch.setattr(hr, "ENVIRONMENT", env)
-    # production refuses by hostname first ("localhost ... not allowed"),
-    # dev by address class ("loopback") — refused either way.
-    with pytest.raises(ValueError, match="not allowed"):
+def test_loopback_and_private_targets_blocked_over_https_too(monkeypatch):
+    _public_dns(monkeypatch)
+    with pytest.raises(ValueError, match="loopback"):
         _validate("https://127.0.0.1/x")
-    with pytest.raises(ValueError, match="not allowed"):
+    with pytest.raises(ValueError, match="loopback"):
         _validate("https://[::1]/x")
-
     with pytest.raises(ValueError, match="private"):
         _validate("https://192.168.1.1/x")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="link-local"):
         _validate("https://169.254.169.254/latest/meta-data")
     _validate("https://api.example.com/v1")  # public https is always fine
 

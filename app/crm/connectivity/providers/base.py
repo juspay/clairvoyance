@@ -275,6 +275,14 @@ class ConnectorAction(Protocol):
        response paths are written against these, so passing a transport's
        raw body through would break every plan the day the transport
        changes.
+
+    One convention on the result, read by the action square: a ``facts``
+    key holding ``{name: scalar}`` is the part of the answer a LATER
+    square may read (a payment link the call reads out). Everything else
+    stays under the square's bookkeeping key. A face that offers facts
+    also answers ``declares(args) -> [name, ...]`` (a staticmethod; no
+    protocol member, read by getattr) so the publish validator can admit
+    those names before any run exists.
     """
 
     #: The pydantic model a plan's ``args`` must satisfy. Read at PUBLISH by

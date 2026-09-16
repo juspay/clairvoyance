@@ -11,15 +11,25 @@ action carries a deterministic (run, node) key.
 
 from typing import Any, Dict, List
 
+from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.crm.connectivity.contracts import (
     ActionError,
+    action_declares,
     action_names,
     perform_action,
     validate_action_args,
 )
-from app.crm.outreach.nodes.context import run_facts
+from app.crm.outreach.nodes.context import is_bookkeeping, reply_key, run_facts
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
+
+# The two answers an action square may branch on (enh A/03). Optional: a
+# square with one plain arrow keeps today's behaviour exactly — success
+# walks on, a defect parks. Drawn with these labels, a defect takes
+# `failed` instead of parking, and `done` is the way on.
+DONE = "done"
+FAILED = "failed"
+ACTION_LABELS = (DONE, FAILED)
 
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
@@ -59,6 +69,12 @@ def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
             f"action '{node.action}' (has: {', '.join(known)})"
         ]
 
+    for name in action_declares(str(node.connector), str(node.action), node.args):
+        if is_bookkeeping(name):
+            problems.append(
+                f"action node {node.id}: response fact {name!r} is a walker "
+                "name — pick another"
+            )
     bad = validate_action_args(
         str(node.connector), str(node.action), args_for_check(node.args)
     )
@@ -128,14 +144,48 @@ async def execute(
             {"run_id": str(run.id), "node_id": node.id},
         )
     except ActionError as e:
-        raise NodeParked(f"action node {node.id}: {e}") from e
-    # The action's OWN normalised facts, kept under the square's bookkeeping
-    # key rather than discarded. `action_` is a bookkeeping prefix, so this
-    # stays out of run_facts and can never reach a template — but it is on
-    # the run for whoever triages it, and a test asserts its shape, which is
-    # what stops "responses are normalised" from becoming a promise with no
-    # reader.
-    return {f"action_{node.id}": result}
+        if not _has_failed_arrow(node, definition):
+            raise NodeParked(f"action node {node.id}: {e}") from e
+        # The plan drew a `failed` arrow: a defect is an ANSWER here, not a
+        # parked run — the author said what to do when the endpoint refuses.
+        return {
+            f"action_{node.id}": {"ok": False, "error": str(e)},
+            reply_key(node.id): FAILED,
+        }
+    written: Dict[str, Any] = {
+        # The action's OWN normalised facts, kept under the square's
+        # bookkeeping key rather than discarded. `action_` is a bookkeeping
+        # prefix, so this stays out of run_facts and can never reach a
+        # template — but it is on the run for whoever triages it.
+        f"action_{node.id}": result,
+        reply_key(node.id): DONE,
+    }
+    facts = result.get("facts") if isinstance(result, dict) else None
+    if isinstance(facts, dict) and facts:
+        # The part of the answer a LATER square may read, written at the
+        # TOP level of the run like the founding letter's facts — not as a
+        # letter under facts.<square>. An action is not a letter: making it
+        # the latest letter demoted the real latest letter's facts (the
+        # call lost LINE_OFFERED's offers to a link square, seen live), and
+        # run_facts lets one square's slot win. Top-level, the letter's
+        # facts still override by name and everything else rides along.
+        # The same scalar and size gate the entry applies (a value the
+        # founding letter would drop must not arrive by this door either).
+        max_chars = await CRM_CONTEXT_VALUE_MAX_CHARS()
+        for name, value in facts.items():
+            if is_bookkeeping(name) or value is None:
+                continue  # the validator refuses these names at publish
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                continue
+            if len(str(value)) > max_chars:
+                continue
+            written[name] = value
+    return written
+
+
+def _has_failed_arrow(node: WorkflowNode, definition: WorkflowDefinition) -> bool:
+    """PURE: did the author draw the `failed` arrow out of this square?"""
+    return any(on == FAILED for _, on in definition.outgoing().get(node.id, []))
 
 
 # --- the pure arg helpers (this square's own; nothing else resolves args) ---
@@ -177,6 +227,9 @@ def placeholder_names(args: Dict[str, Any]) -> List[str]:
         elif isinstance(value, list):
             for item in value:
                 walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
 
     for value in args.values():
         walk(value)
@@ -204,4 +257,9 @@ def _resolve(value: Any, facts: Dict[str, Any]) -> Any:
         return str(fact)
     if isinstance(value, list):
         return [_resolve(item, facts) for item in value]
+    if isinstance(value, dict):
+        # A nested map (an http body, a query) resolves the same way its
+        # parent does — one rule for every depth, or a body's `{id}` went
+        # out as the literal string (seen live, enh A/03).
+        return {key: _resolve(item, facts) for key, item in value.items()}
     return value

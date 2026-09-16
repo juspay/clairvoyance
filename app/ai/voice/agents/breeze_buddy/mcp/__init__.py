@@ -48,6 +48,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ToolUiHint,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import SSRFError, validate_egress_url
 
 # --- HITL approval for MCP tools -------------------------------------------
 # Watchdog budget for a gated MCP tool: approval wait + the handler's dispatch
@@ -252,6 +253,24 @@ def _create_direct_http_tool_handler(
     """
 
     async def handler(args: Dict[str, Any], flow_manager: Any) -> FlowResult:
+        # SECURITY: _build_server_params validated this URL at flow-BUILD time,
+        # but this handler runs per tool call — potentially minutes later and
+        # many times. Re-validate here, because the DNS answer can change in
+        # between (rebinding) and because this path attaches tenant credentials
+        # from server_params.headers. Validation happens before those headers
+        # are assembled, so a host that fails never has credentials built for
+        # it at all (PT-03).
+        try:
+            await validate_egress_url(server_params.url)
+        except SSRFError as e:
+            logger.error(
+                f"[BUDDY_MCP] direct {tool_name!r} blocked by egress guard: {e}"
+            )
+            return cast(
+                FlowResult,
+                {"status": "error", "data": f"Request blocked by egress policy: {e}"},
+            )
+
         merged_args = _deep_merge_defaults(args, default_args or {})
         body = {
             "jsonrpc": "2.0",
@@ -274,7 +293,11 @@ def _create_direct_http_tool_handler(
             server_params.timeout.total_seconds() if server_params.timeout else 30.0
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout_s) as client:
+            # follow_redirects=False is httpx's default, but state it: a silent
+            # upgrade would send the credentialed POST to an unvalidated host.
+            async with httpx.AsyncClient(
+                timeout=timeout_s, follow_redirects=False
+            ) as client:
                 resp = await client.post(server_params.url, json=body, headers=headers)
         except Exception as e:
             logger.warning(f"[BUDDY_MCP] direct {tool_name!r} transport failed: {e}")
@@ -543,7 +566,7 @@ def _build_auth_headers(
     return {}
 
 
-def _build_server_params(
+async def _build_server_params(
     server: McpServerConfig,
     template_vars: Dict[str, Any],
 ) -> StreamableHttpParameters:
@@ -552,8 +575,16 @@ def _build_server_params(
     Shared by the voice loader (per-call clients) and the chat session pool
     (per-turn persistent clients). Substitutes ``{variable}`` placeholders in
     the URL and auth fields from ``template_vars``.
+
+    SECURITY: the resolved URL is a template-controlled destination that we are
+    about to attach decrypted tenant credentials to (via ``_build_auth_headers``)
+    and hit at flow-build time. It MUST pass the shared SSRF egress guard first —
+    https-only, no internal/loopback/link-local/metadata targets — so it cannot
+    be pointed at cloud metadata or an internal service (PT-03). Validation
+    happens before any credential header is built.
     """
     resolved_url = _resolve_placeholders(server.url, template_vars)
+    await validate_egress_url(resolved_url)
     if resolved_url != server.url:
         # Don't log the resolved URL — it can contain customer-identifying
         # values (e.g. shop subdomain). Operators can correlate via the
@@ -595,7 +626,7 @@ async def _load_server_tools(
 
     Each tool handler creates a fresh MCPClient per invocation for thread safety.
     """
-    server_params = _build_server_params(server, template_vars)
+    server_params = await _build_server_params(server, template_vars)
     # Prefer the stable name; fall back to the raw template URL (with
     # placeholders) rather than the resolved URL to avoid logging
     # customer-identifying substitutions.
@@ -810,7 +841,7 @@ async def get_mcp_global_functions_cached(
             continue
 
         try:
-            server_params = _build_server_params(server, template_vars)
+            server_params = await _build_server_params(server, template_vars)
         except Exception as e:
             logger.error(
                 f"[BUDDY_MCP] chat: failed to build server params for "

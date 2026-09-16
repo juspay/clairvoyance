@@ -164,7 +164,9 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
     # the square's `action_` bookkeeping key, so they stay out of run_facts
     # and can never reach a template. This assertion is what stops
     # "responses are normalised" from being a promise with no reader.
-    assert result == {"action_tag-vip": {"ok": True}}
+    # (`reply_tag-vip: done` rides along — the answer a `done`/`failed`
+    # arrow would pick on, cleared when the token leaves the square.)
+    assert result == {"action_tag-vip": {"ok": True}, "reply_tag-vip": "done"}
     assert calls == [
         {
             "merchant_id": "m1",
@@ -234,3 +236,133 @@ async def test_a_version_predating_the_validator_parks_rather_than_calling(
     with pytest.raises(NodeParked, match="no connector/action to perform"):
         await execute_action(_run({"id": "1"}), _node(action=None), _DEFINITION)
     assert calls == []
+
+
+# --- enh A/03: an action's answer becomes facts, and may branch -----------------
+
+
+def _definition_with_arrows(*edges: Any, args: Dict[str, Any] | None = None):
+    return WorkflowDefinition(
+        entry={"topic": "checkout.initiated"},
+        nodes=[
+            {
+                "id": "tag-vip",
+                "type": "action",
+                "connector": "shopify",
+                "action": "add_tag",
+                "args": args or {"order_id": "{id}", "tags": ["vip"]},
+            },
+            {"id": "ring", "type": "call", "template_id": "tpl"},
+            {"id": "wait-1d", "type": "wait", "minutes": 1440},
+        ],
+        edges=list(edges),
+        goals=[{"topics": ["order.placed"]}],
+    )
+
+
+async def test_the_answers_facts_land_at_the_top_of_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A merchant endpoint's answer (its `facts`) is what a LATER square
+    reads: written at the top level like the founding letter's facts, so
+    the next call carries {payment_link} AND still carries the latest
+    letter's own facts (an action is not a letter and must not demote
+    one). Nothing else of the answer leaves the bookkeeping key; a value
+    the entry would drop is dropped here too."""
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+
+    async def with_facts(*a: Any, **k: Any) -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "status": 200,
+            "facts": {
+                "payment_link": "https://p/1",
+                "phone": "+91",
+                "flag": True,
+                "nested": {"x": 1},
+                "gone": None,
+            },
+        }
+
+    monkeypatch.setattr(action_node, "perform_action", with_facts)
+    run = _run(
+        {
+            "id": "1",
+            "loan_state": "CLA",
+            "facts": {"listen": {"loan_state": "OFFERED", "offers": "1. A"}},
+            "latest_letter": "listen",
+        }
+    )
+    written = await execute_action(run, _node(), _DEFINITION)
+    assert written["payment_link"] == "https://p/1"
+    assert written["reply_tag-vip"] == "done"
+    assert "facts" not in written and "latest_letter" not in written
+    assert "phone" not in written and "flag" not in written and "nested" not in written
+    facts = run_facts({**run.context, **written})
+    assert facts["payment_link"] == "https://p/1"
+    assert (
+        facts["loan_state"] == "OFFERED" and facts["offers"] == "1. A"
+    )  # the letter still wins
+    assert "ok" not in facts and "status" not in facts
+
+
+def test_a_declared_fact_may_not_take_a_walker_name() -> None:
+    problems = _validate_action(
+        _node(
+            connector="merchant_http",
+            action="request",
+            args={
+                "path": "/x",
+                "facts": {"phone": "data.phone", "payment_link": "data.link"},
+            },
+        ),
+        _DEFINITION,
+    )
+    assert problems == [
+        "action node tag-vip: response fact 'phone' is a walker name — pick another"
+    ]
+
+
+async def test_a_defect_takes_the_failed_arrow_when_the_plan_drew_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With `done`/`failed` arrows a refusal is an ANSWER, not a parked run:
+    the author said what to do when the endpoint says no. Without the
+    arrow, today's behaviour — the run parks."""
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls, raises=ActionError("refused (404)"))
+    drawn = _definition_with_arrows(
+        ["tag-vip", "ring", "done"], ["tag-vip", "wait-1d", "failed"]
+    )
+    written = await execute_action(_run({"id": "1"}), _node(), drawn)
+    assert written["reply_tag-vip"] == "failed"
+    assert written["action_tag-vip"] == {"ok": False, "error": "refused (404)"}
+    assert "facts" not in written
+
+    plain = _definition_with_arrows(["tag-vip", "ring"])
+    with pytest.raises(NodeParked, match="refused"):
+        await execute_action(_run({"id": "1"}), _node(), plain)
+
+    # a BAD MOMENT is never an answer, arrows or not
+    _install(monkeypatch, calls, raises=RuntimeError("502"))
+    with pytest.raises(RuntimeError):
+        await execute_action(_run({"id": "1"}), _node(), drawn)
+
+
+async def test_placeholders_resolve_inside_a_nested_map_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An http body or query is a map inside args: `{customer_id}` there is
+    the same lookup as at the top, and the catalog law walks it too."""
+    from app.crm.outreach.nodes.action import placeholder_names
+
+    args = {"path": "/link", "body": {"customer_id": "{cid}", "meta": {"n": "{n}"}}}
+    assert placeholder_names(args) == ["cid", "n"]
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+    await execute_action(_run({"cid": "FK1", "n": 3}), _node(args=args), _DEFINITION)
+    assert calls[0]["args"] == {
+        "path": "/link",
+        "body": {"customer_id": "FK1", "meta": {"n": "3"}},
+    }

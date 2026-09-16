@@ -31,6 +31,11 @@ from app.crm.connectivity.providers.base import (
     TemplateProvider,
     TemplateProviderError,
 )
+from app.crm.connectivity.providers.merchant_http.actions import MERCHANT_HTTP_ACTIONS
+from app.crm.connectivity.providers.merchant_http.onboard import (
+    MerchantHttpOnboarder,
+    OnboardMerchantHttpRequest,
+)
 from app.crm.connectivity.providers.shopify.actions import SHOPIFY_ACTIONS
 from app.crm.connectivity.providers.shopify.onboard import (
     OnboardShopifyRequest,
@@ -141,6 +146,18 @@ CONNECTORS: Dict[str, ConnectorSpec] = {
         templates=None,
         request_model=OnboardShopifyRequest,
         actions=SHOPIFY_ACTIONS,
+    ),
+    # A merchant's OWN endpoint as a door (enh A/03, the ruled shape): the
+    # base URL and one auth header are onboarded once; a plan names only
+    # the connector, the verb and its args. No channel, no templates.
+    "merchant_http": ConnectorSpec(
+        key="merchant_http",
+        source="merchant_http",
+        channel=None,
+        onboarder=MerchantHttpOnboarder(),
+        templates=None,
+        request_model=OnboardMerchantHttpRequest,
+        actions=MERCHANT_HTTP_ACTIONS,
     ),
 }
 
