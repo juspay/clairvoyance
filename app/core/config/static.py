@@ -705,6 +705,55 @@ BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT = (
 BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS = int(
     os.environ.get("BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS", "500")
 )  # Max delay (ms) for Soniox native endpoint detection (500-3000, default 500)
+# Endpoint watchdog: force-finalize Soniox finals left un-endpointed this long
+# (incident 2026-09-16: ~35-50s dead air when <end> never arrives). Must stay
+# above Soniox's max_endpoint_delay_ms budget (500ms) so it never preempts a
+# healthy endpoint; 1.0s = 2x that budget. Templates override via
+# stt.soniox.finalize_after_secs; 0 disables.
+BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS = float(
+    os.environ.get("BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS", "1.0")
+)
+if not math.isfinite(BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS) or (
+    BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS < 0
+):
+    # nan/inf silently disable the watchdog; negatives make every tick
+    # idle-expired (force-finalize storm). Fail fast at boot instead.
+    raise ValueError(
+        "BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS must be a finite number >= 0, "
+        f"got {BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS!r}"
+    )
+# Websocket liveness: the websockets library defaults (20s ping / 20s pong /
+# 10s close) took 20-40s to notice a silently dead Soniox connection. Measured
+# detection = ping interval + pong timeout + close timeout (the library waits
+# for a graceful close a dead path can never answer), so 3/5/3 surfaces it in
+# <=11s worst case for the base class's automatic reconnect. Timeout stays 5s
+# deliberately: it is the false-positive guard against transient pong delays.
+BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL = float(
+    os.environ.get("BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL", "3.0")
+)
+BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT = float(
+    os.environ.get("BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT", "5.0")
+)
+BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT = float(
+    os.environ.get("BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT", "3.0")
+)
+for _name, _val in (
+    ("BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL", BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL),
+    ("BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT", BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT),
+):
+    if not math.isfinite(_val) or _val <= 0:
+        # Only None disables websockets keepalive; a 0 interval is a sleep(0)
+        # ping storm and a 0 timeout fails every connection on its first ping
+        # — a reconnect loop that drops caller audio each cycle.
+        raise ValueError(f"{_name} must be a finite number > 0, got {_val!r}")
+if not math.isfinite(BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT) or (
+    BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT < 0
+):
+    # 0 is legitimate (abort the close handshake immediately); negative is not.
+    raise ValueError(
+        "BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT must be a finite number >= 0, "
+        f"got {BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT!r}"
+    )
 
 ENABLE_BREEZE_BUDDY_USER_INTERRUPTION = (
     os.environ.get("ENABLE_BREEZE_BUDDY_USER_INTERRUPTION", "false").lower() == "true"

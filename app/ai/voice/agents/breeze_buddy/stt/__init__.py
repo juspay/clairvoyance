@@ -36,10 +36,14 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_CONTEXT,
+    BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS,
     BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
     BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
     BREEZE_BUDDY_SONIOX_MODEL,
     BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+    BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT,
+    BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL,
+    BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT,
     BREEZE_BUDDY_STT_SERVICE,
     DEEPGRAM_API_KEY,
     GOOGLE_CREDENTIALS_JSON,
@@ -128,6 +132,13 @@ async def create_stt_from_config(config: STTConfiguration):
 
         language = _normalize_language(config.language)
         enable_lang_id = sx.enable_language_identification if sx else None
+        # Template field wins; 0 (= disabled) must flow through, so the env
+        # default only applies when the template left it unset.
+        effective_finalize_after = (
+            sx.finalize_after_secs
+            if sx and sx.finalize_after_secs is not None
+            else BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS
+        )
         return build_soniox_stt(
             SonioxConfig(
                 api_key=SONIOX_API_KEY,
@@ -139,6 +150,10 @@ async def create_stt_from_config(config: STTConfiguration):
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),
                 enable_language_identification=enable_lang_id,
+                finalize_after_secs=effective_finalize_after,
+                ws_ping_interval=BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL,
+                ws_ping_timeout=BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT,
+                ws_close_timeout=BREEZE_BUDDY_SONIOX_WS_CLOSE_TIMEOUT,
             )
         )
 

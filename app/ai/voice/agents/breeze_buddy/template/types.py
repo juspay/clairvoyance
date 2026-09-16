@@ -77,6 +77,14 @@ class SonioxSTTConfig(BaseModel):
         None,
         description="Enable automatic language identification. Defaults to None.",
     )
+    finalize_after_secs: Optional[float] = Field(
+        None,
+        ge=0,
+        description="Force-finalize (push) an un-endpointed final transcript "
+        "after this many seconds without an <end> token from Soniox — the "
+        "endpoint watchdog. Caps dead air when Soniox's endpoint detection "
+        "hangs. Defaults from env (1.0s); 0 disables.",
+    )
 
 
 class DeepgramSTTConfig(BaseModel):

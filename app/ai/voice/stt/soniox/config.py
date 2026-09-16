@@ -40,6 +40,10 @@ class SonioxConfig:
     log_context: str = "Soniox"
     language_hints_strict: bool = False
     enable_language_identification: Optional[bool] = None
+    finalize_after_secs: Optional[float] = 1.0
+    ws_ping_interval: Optional[float] = 3.0
+    ws_ping_timeout: Optional[float] = 5.0
+    ws_close_timeout: Optional[float] = 3.0
 
 
 def _parse_soniox_context(
@@ -159,13 +163,18 @@ def build_soniox_stt(config: SonioxConfig):
             hints_display = ",".join(config.language_hints)
 
     logger.info(
-        "Using %s Soniox STT service with model: %s, language_hints: %s, "
-        "VAD force endpoint: %s, max_endpoint_delay_ms: %s",
+        "Using {} Soniox STT service with model: {}, language_hints: {}, "
+        "VAD force endpoint: {}, max_endpoint_delay_ms: {}, "
+        "finalize_after_secs: {}, ws_ping: {}/{}, close: {}",
         config.log_context,
         config.model,
         hints_display,
         config.vad_force_turn_endpoint,
         config.max_endpoint_delay_ms,
+        config.finalize_after_secs,
+        config.ws_ping_interval,
+        config.ws_ping_timeout,
+        config.ws_close_timeout,
     )
 
     return SonioxSTTServiceWithEndpointDelay(
@@ -173,4 +182,8 @@ def build_soniox_stt(config: SonioxConfig):
         settings=soniox_settings,
         vad_force_turn_endpoint=config.vad_force_turn_endpoint,
         max_endpoint_delay_ms=config.max_endpoint_delay_ms,
+        finalize_after_secs=config.finalize_after_secs,
+        ws_ping_interval=config.ws_ping_interval,
+        ws_ping_timeout=config.ws_ping_timeout,
+        ws_close_timeout=config.ws_close_timeout,
     )
