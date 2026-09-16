@@ -28,7 +28,7 @@ from app.crm.identity.contracts import CustomerFacts, customer_facts
 from app.crm.identity.facts import winning_attributes
 from app.crm.identity.schemas import CrmCustomer
 from app.crm.outreach import predicates
-from app.crm.outreach.nodes import NODE_TYPES
+from app.crm.outreach.nodes import NODE_TYPES, branches, listens
 from app.crm.outreach.nodes.condition import (
     execute as execute_condition,
 )
@@ -86,6 +86,36 @@ def test_a_text_rule_is_exact_and_first_match_wins() -> None:
     assert predicates.choose(rules, FACTS, {}, None) == "offered"
     assert predicates.choose(rules, {"loanState": "KYC"}, {}, None) == "any"
     assert predicates.choose(rules, {}, {}, None) is None
+
+
+def test_not_exists_picks_the_rule_when_the_fact_is_absent() -> None:
+    """The line nudge in ONE condition square: no products AND a credit line
+    with offers. A customer with products (the checkout journey's) is else."""
+    line = ConditionRule.model_validate(
+        {
+            "on": "yes",
+            "if": [
+                {"field": "context.products", "op": "not_exists"},
+                {"field": "context.facility_type", "op": "is", "value": "CREDIT_LINE"},
+                {"field": "context.offers", "op": "exists"},
+            ],
+        }
+    )
+    facts = {"facility_type": "CREDIT_LINE", "offers": "1. Fibe: 9 months"}
+    assert predicates.choose([line], facts, {}, None) == "yes"
+    assert (
+        predicates.choose([line], {**facts, "products": "Apple Mobile"}, {}, None)
+        is None
+    )
+    # run_facts drops a None, so a letter that CLEARED products reads absent too
+    assert predicates.choose([line], {**facts, "products": None}, {}, None) == "yes"
+    with pytest.raises(ValueError):
+        ConditionRule.model_validate(
+            {
+                "on": "yes",
+                "if": [{"field": "context.products", "op": "not_exists", "value": "x"}],
+            }
+        )
 
 
 def test_ordering_ops_read_numeric_strings_and_refuse_text() -> None:
@@ -268,10 +298,11 @@ def test_a_condition_board_validates() -> None:
 
 def test_the_registry_knows_the_word_and_it_branches() -> None:
     spec = NODE_TYPES["condition"]
-    assert spec.branches is True and spec.is_wait is False and spec.listens is False
-    assert NODE_TYPES["wait_event"].branches is True
-    assert NODE_TYPES["wait_event"].listens is True
-    assert NODE_TYPES["call"].branches is False and NODE_TYPES["send"].listens is False
+    assert spec.branches is True and spec.is_wait is False
+    decide = WorkflowNode(id="d", type="condition")
+    assert branches(decide) is True and listens(decide) is False
+    assert NODE_TYPES["call"].branches is False
+    assert listens(WorkflowNode(id="s", type="send")) is False
 
 
 def test_a_missing_else_edge_is_refused() -> None:

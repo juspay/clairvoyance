@@ -154,8 +154,9 @@ class CatalogField(BaseModel):
     item_format: Optional[str] = Field(None, min_length=1, max_length=160)
     # Type list only: which ELEMENTS of the first array on the path render.
     # Fields are element-relative dot paths; ops are the where-grammar's
-    # text ops (is · is_not · in · exists). An empty array reads as absent
-    # to `exists`, so "has any offers" is `offers exists`.
+    # text ops (is · is_not · in · exists · not_exists). An empty array reads
+    # as absent, so "has any offers" is `offers exists` and "has none" is
+    # `offers not_exists`.
     item_where: List["Condition"] = Field(default_factory=list)
     # Type list with an item_format only: one numbered line per element
     # ("1. …\n2. …") instead of a comma list. For a call payload — a

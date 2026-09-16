@@ -1,7 +1,7 @@
 """The where-grammar (app/crm/shared/predicate.py): the closed op set, the
 value shapes each op accepts, and the conservative evaluator — a missing
-field satisfies nothing, the `is` family compares text exactly, and only
-`=` and the ordering ops read numeric strings as numbers."""
+field satisfies nothing but `not_exists`, the `is` family compares text
+exactly, and only `=` and the ordering ops read numeric strings as numbers."""
 
 import pytest
 
@@ -41,6 +41,11 @@ from app.crm.shared.predicate import Condition, evaluate, from_equality_map, mat
         ("=", 2, "two", False),
         ("exists", None, "", True),
         ("exists", None, 0, True),
+        # not_exists is the mirror: any present value, even "" or 0, is there
+        ("not_exists", None, "", False),
+        ("not_exists", None, 0, False),
+        ("not_exists", None, "Apple Mobile", False),
+        ("not_exists", None, False, False),
     ],
 )
 def test_evaluate(op, value, actual, expected) -> None:
@@ -57,6 +62,15 @@ def test_missing_field_satisfies_nothing(op, value) -> None:
     assert evaluate(Condition(field="payload.x", op=op, value=value), None) is False
 
 
+def test_not_exists_holds_only_on_a_missing_field() -> None:
+    """The one op a missing field satisfies: "only when this is absent" (a
+    line nudge for customers with no products) in one condition, instead of
+    the else of an `exists` rule."""
+    absent = Condition(field="payload.products", op="not_exists")
+    assert evaluate(absent, None) is True
+    assert evaluate(absent, "Apple Mobile Mobile") is False
+
+
 @pytest.mark.parametrize(
     "op, value",
     [
@@ -64,6 +78,8 @@ def test_missing_field_satisfies_nothing(op, value) -> None:
         ("in", []),
         ("in", [None]),
         ("exists", 1),
+        ("not_exists", 1),
+        ("not_exists", "x"),
         ("is", None),
         ("is", [1]),
         (">", {"a": 1}),
@@ -77,6 +93,19 @@ def test_value_shape_is_checked_at_the_shape(op, value) -> None:
 def test_unknown_op_is_refused() -> None:
     with pytest.raises(ValueError):
         Condition(field="payload.x", op="contains", value="x")  # type: ignore[arg-type]
+
+
+def test_not_exists_ands_with_the_rest() -> None:
+    """The line nudge's one rule: no products AND a credit line."""
+    rule = [
+        Condition(field="payload.products", op="not_exists"),
+        Condition(field="payload.facility_type", op="is", value="CREDIT_LINE"),
+    ]
+    line = {"facility_type": "CREDIT_LINE"}
+    checkout = {"facility_type": "CREDIT_LINE", "products": "Apple Mobile"}
+    assert matches(rule, lambda p: line.get(p.removeprefix("payload.")))
+    assert not matches(rule, lambda p: checkout.get(p.removeprefix("payload.")))
+    assert not matches(rule, lambda p: {}.get(p.removeprefix("payload.")))
 
 
 def test_matches_is_and() -> None:

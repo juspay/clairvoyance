@@ -42,9 +42,8 @@ class NodeSpec:
     execute: Optional[Execute]
     is_wait: bool
     # enh A/01, N1 retired: nothing outside the registry matches a type
-    # string. `branches`: the square's edges carry labels and pick_next
-    # reads its answer from reply_<node> (wait_event, condition).
-    # `listens`: the square hears a letter — the entry consumer wakes it
-    # and `match` belongs to it (wait_event only).
+    # string. `branches`: the WORD's edges always carry labels and pick_next
+    # reads its answer from reply_<node> (condition, split). Whether a wait
+    # listens — and so branches — is a property of the NODE (its topics),
+    # answered by nodes.listens / nodes.branches (ruled 17 Sep 2026).
     branches: bool = False
-    listens: bool = False

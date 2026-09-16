@@ -62,31 +62,31 @@ def test_cooldown_admits_after_window() -> None:
 
 
 def test_first_wake_of_wait_node_is_arrival_plus_delay() -> None:
-    assert _first_wake(_definition().nodes[0], NOW) == NOW + timedelta(minutes=30)
+    assert _first_wake(_definition().nodes[0], NOW, 7) == NOW + timedelta(minutes=30)
 
 
-def test_first_wake_of_wait_event_node_is_arrival_plus_delay() -> None:
+def test_first_wake_of_a_listening_wait_is_arrival_plus_delay() -> None:
     # The MAJOR from the 31 Aug review: a plan whose FIRST square listens
-    # (wait_event) used to enrol with wake_at = now — the walker claimed
+    # (then wait_event) used to enrol with wake_at = now — the walker claimed
     # it at once, saw no reply, took the timeout edge, and the listening
     # window was silently zero.
     definition = _definition(
         first_node={
             "id": "listen",
-            "type": "wait_event",
+            "type": "wait",
             "topics": ["payment.confirmed"],
             "key": "status",
             "minutes": 30,
         }
     )
-    assert _first_wake(definition.nodes[0], NOW) == NOW + timedelta(minutes=30)
+    assert _first_wake(definition.nodes[0], NOW, 7) == NOW + timedelta(minutes=30)
 
 
 def test_first_wake_of_action_node_is_immediate() -> None:
     definition = _definition(
         first_node={"id": "call-now", "type": "call", "template_id": "t"}
     )
-    assert _first_wake(definition.nodes[0], NOW) == NOW
+    assert _first_wake(definition.nodes[0], NOW, 7) == NOW
 
 
 def test_context_passthrough_keeps_scalars_drops_structures() -> None:

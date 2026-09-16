@@ -113,7 +113,7 @@ The variant is the same board with one listening square after the call
 (rollout phase 18, G2):
 
 ```json
-{"id": "after-call", "type": "wait_event", "topics": ["call.completed"],
+{"id": "after-call", "type": "wait", "topics": ["call.completed"],
  "key": "outcome", "minutes": 1440,
  "match": {"payload": "enrollment_id", "run": "id"}}
 ```
@@ -173,8 +173,10 @@ with edges `["decide", "rescue-call", "big"]` and `["decide", "wa-nudge", "else"
   the edge. OR is two rules. None holding takes the mandatory `else` edge —
   a predicate never parks a run.
 - **The ops are the door's own where-grammar** (`is`, `is_not`, `in`, `=`,
-  `>`, `>=`, `<`, `<=`, `exists`): `is` compares text exactly, `=` and the
-  ordering ops read numbers (Shopify posts money as `"1850.00"`).
+  `>`, `>=`, `<`, `<=`, `exists`, `not_exists`): `is` compares text exactly,
+  `=` and the ordering ops read numbers (Shopify posts money as `"1850.00"`).
+  `exists` and `not_exists` take no value: `not_exists` holds only when the
+  fact is absent (a letter that cleared it reads absent too).
 - **Fields** say where the value comes from: `context.<key>` (the run's
   facts, plus `current_node` / `current_stage`), `facts.<node>.<key>` (one
   stage's letter), `customer.display_name` / `primary_locale` / `timezone`
@@ -184,6 +186,36 @@ with edges `["decide", "rescue-call", "big"]` and `["decide", "wa-nudge", "else"
 - **The customer is read once**, and only when a rule names `customer.`.
 - The square is not a wait: the walker evaluates it, takes the edge, runs
   the next action and writes once, all in the same visit.
+
+## Calling hours on a wait (`window`)
+
+A `wait` may carry a window, so its timer only moves the run on
+inside those hours:
+
+```json
+{ "id": "wait-30m", "type": "wait", "topics": ["checkouts/update"], "key": "$topic",
+  "minutes": 30, "window": { "opens": "09:00", "closes": "21:00", "timezone": "Asia/Kolkata" } }
+```
+
+- `opens` / `closes` are HH:MM on the `timezone` clock; `closes` is exclusive, and an
+  `opens` later than `closes` spans midnight.
+- `minutes` may be left out. A wait with only a window waits until the window opens
+  ("wait until morning"; at once when it is already open). A listening wait with no
+  `minutes` listens for as long as the run may live (`exits.max_age_days`) — and with
+  a window too, it still listens for the run's life and only acts inside the hours.
+- The window decides when the timer may act, so when a call is QUEUED; the dialler's
+  own calling hours decide when the phone rings. A narrow window is unforgiving: a
+  duration that overshoots its close by minutes waits until the next day's opening.
+- A timer that ends outside the hours holds the run on the square, still listening,
+  until the window opens; then it moves on. Inside the hours nothing changes.
+- A letter is never held: it moves the run the moment it lands, and a goal ends the
+  run at any hour. So publish refuses a plan where a letter arrow from a windowed
+  square reaches a `call` without first reaching a waiting square — send the letter
+  back to the rule or to another wait.
+- **This is a scheduling window on the plan's clock, not the customer's, and not the
+  quiet-hours control.** Nothing here knows the customer's timezone: a wrong
+  `timezone` calls at the wrong local hour. The dialler's calling hours on the call
+  template remain the check on every call.
 
 ## Watch it run
 

@@ -45,18 +45,18 @@ from app.crm.record.schemas import (
     SampledField,
     SchemaRegistration,
 )
-from app.crm.shared.predicate import EQUALS_OP, EXISTS_OP, ORDER_OPS, TEXT_OPS
+from app.crm.shared.predicate import EQUALS_OP, ORDER_OPS, PRESENCE_OPS, TEXT_OPS
 
 # Type -> the ops the where-grammar implements for it. Spelled from the
 # evaluator's own families (shared/predicate.py), so the UI shows exactly
 # what the engine runs — parity is structural, not a convention. phone is
 # identity — never filterable.
 OPS_BY_TYPE: Dict[str, List[str]] = {
-    "text": [*TEXT_OPS, EXISTS_OP],
-    "choice": [*TEXT_OPS, EXISTS_OP],
-    "number": [*ORDER_OPS, EQUALS_OP, EXISTS_OP],
-    "boolean": ["is", "is_not", EXISTS_OP],
-    "datetime": [*ORDER_OPS, EXISTS_OP],
+    "text": [*TEXT_OPS, *PRESENCE_OPS],
+    "choice": [*TEXT_OPS, *PRESENCE_OPS],
+    "number": [*ORDER_OPS, EQUALS_OP, *PRESENCE_OPS],
+    "boolean": ["is", "is_not", *PRESENCE_OPS],
+    "datetime": [*ORDER_OPS, *PRESENCE_OPS],
     "phone": [],
     # A list is a template variable and nothing else. No ops, so the
     # where-grammar never receives an array and the matcher never learns
@@ -70,8 +70,9 @@ SAMPLE_WINDOW_EVENTS = 200
 SEEN_WINDOW_DAYS = 7
 
 # An element filter names a path INSIDE the element, never payload.* — the
-# element is the root; `exists` on an empty array reads as absent.
-_ITEM_WHERE_OPS = ("is", "is_not", "in", "exists")
+# element is the root; an empty array reads as absent (`exists` no,
+# `not_exists` yes).
+_ITEM_WHERE_OPS = ("is", "is_not", "in", *PRESENCE_OPS)
 _ELEMENT_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _PAYLOAD_PATH = re.compile(
     r"^payload\.[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$"

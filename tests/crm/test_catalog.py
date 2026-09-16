@@ -514,12 +514,35 @@ def test_every_catalog_op_is_an_op_the_evaluator_speaks() -> None:
     spoken = set(get_args(predicate.Op))
     for field_type, ops in catalog.OPS_BY_TYPE.items():
         assert set(ops) <= spoken, (field_type, set(ops) - spoken)
-    assert catalog.OPS_BY_TYPE["text"] == [*predicate.TEXT_OPS, predicate.EXISTS_OP]
+    assert catalog.OPS_BY_TYPE["text"] == [*predicate.TEXT_OPS, *predicate.PRESENCE_OPS]
     assert catalog.OPS_BY_TYPE["number"] == [
         *predicate.ORDER_OPS,
         predicate.EQUALS_OP,
-        predicate.EXISTS_OP,
+        *predicate.PRESENCE_OPS,
     ]
+
+
+def test_every_filterable_type_offers_not_exists_and_a_list_still_offers_none() -> None:
+    """not_exists rides with exists on every type that can be filtered; a
+    list stays a template variable only, phone stays identity only."""
+    for field_type in ("text", "choice", "number", "boolean", "datetime"):
+        assert predicate.NOT_EXISTS_OP in catalog.OPS_BY_TYPE[field_type], field_type
+    assert catalog.OPS_BY_TYPE["list"] == [] and catalog.OPS_BY_TYPE["phone"] == []
+
+
+def test_not_exists_on_a_declared_field_needs_no_value_check() -> None:
+    """Like exists: a choice field's values are not consulted, there is no value."""
+    field = catalog.with_ops(
+        CatalogField(
+            path="payload.state", type="choice", label="State", values=["A", "B"]
+        )
+    )
+    assert (
+        condition_against_catalog(
+            Condition(field="payload.state", op="not_exists"), {"payload.state": field}
+        )
+        == []
+    )
 
 
 def _row(
@@ -697,7 +720,13 @@ def test_a_list_field_is_never_filterable() -> None:
     )
     assert field.ops == []
     # …and the refusal itself, through the function that does it
-    for op, value in (("is", "x"), ("in", ["x"]), ("exists", None), (">", 1)):
+    for op, value in (
+        ("is", "x"),
+        ("in", ["x"]),
+        ("exists", None),
+        ("not_exists", None),
+        (">", 1),
+    ):
         problems = condition_against_catalog(
             Condition(field="payload.items", op=op, value=value),
             {"payload.items": field},
@@ -724,10 +753,24 @@ def test_the_stored_row_keeps_item_format_only_where_it_means_something() -> Non
 # --- item_where / item_numbered: the registration law ---------------------------
 
 
-def test_an_element_filter_belongs_to_a_list_and_speaks_four_ops() -> None:
+def test_an_element_filter_belongs_to_a_list_and_speaks_five_ops() -> None:
     """A filter on a text field has no elements to judge; an ordering op on
     an element field has no declared type to fit — the element filter
-    speaks is · is_not · in · exists and nothing else."""
+    speaks is · is_not · in · exists · not_exists and nothing else."""
+    assert catalog._ITEM_WHERE_OPS == ("is", "is_not", "in", "exists", "not_exists")
+    assert not catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [{"field": "offers", "op": "not_exists"}],
+                }
+            ]
+        )
+    )
     where = [{"field": "facility_type", "op": "is", "value": "CREDIT_LINE"}]
     problems = catalog.validate_registration(
         _reg([{"path": "payload.a", "type": "text", "label": "A", "item_where": where}])

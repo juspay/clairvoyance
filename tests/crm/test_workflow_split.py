@@ -13,7 +13,7 @@ from uuid import uuid4
 import pytest
 
 from app.crm.outreach.entry import _context_from_payload
-from app.crm.outreach.nodes import NODE_TYPES
+from app.crm.outreach.nodes import NODE_TYPES, listens
 from app.crm.outreach.nodes.context import (
     is_bookkeeping,
     reply_key,
@@ -201,7 +201,7 @@ def test_the_square_is_registered_as_a_branching_word() -> None:
     spec = NODE_TYPES["split"]
     assert spec.branches is True
     assert spec.is_wait is False
-    assert spec.listens is False
+    assert listens(WorkflowNode(id="s", type="split")) is False
     assert spec.execute is not None
 
 

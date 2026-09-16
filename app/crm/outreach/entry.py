@@ -4,7 +4,7 @@ docs/crm/workflow-rollout/context/reading-notes.md §15.3):
 
   1. HER OPEN RUNS, each judged by the version it entered under
      (definitions.py): a goal tier of THAT document ends the run
-     (goal-cancel); a wait_event square of THAT document wakes it with
+     (goal-cancel); a listening wait of THAT document wakes it with
      the answer written in its context (W5). A v3 run is ended by v3's
      goals and woken by v3's listening even after v5 changed them, and
      every write names the run it is about. A migrate plan is the
@@ -33,13 +33,13 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
-from app.crm.outreach.nodes import NODE_TYPES
+from app.crm.outreach.nodes import listens
 from app.crm.outreach.nodes.context import (
     LATEST_LETTER_KEY,
     is_bookkeeping,
     reply_key,
 )
-from app.crm.outreach.nodes.wait_event import TOPIC_KEY
+from app.crm.outreach.nodes.wait import TOPIC_KEY
 from app.crm.outreach.repeat import _as_number, apply_repeat
 from app.crm.outreach.reply_attribution import Addressed, addressed_run
 from app.crm.outreach.schemas import (
@@ -212,7 +212,7 @@ async def _wake_on_reply(
     variables: Optional[Dict[str, Any]] = None,
     addressed: Optional[Addressed] = None,
 ) -> None:
-    """A wait_event square of ITS document listening on this topic wakes
+    """A listening wait of ITS document hearing this topic wakes
     the run with the answer — the statement decides whether the token is
     standing there (a reply to a square it has left, or not yet reached,
     changes nothing), waiting or parked (phase 16: an event is evidence
@@ -247,7 +247,7 @@ async def _wake_on_reply(
         **_context_from_payload(variables or {}, max_chars),
     }
     for node in definition.nodes:
-        if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
+        if not listens(node) or event.topic not in node.topics:
             continue
         if not _is_about(node, event, run):
             continue  # another run's letter (phase 18): not this square's
@@ -260,7 +260,7 @@ async def _wake_on_reply(
             # window early. The window simply continues; only the alarm
             # may time it out.
             logger.info(
-                f"wait_event reply ignored: key {node.key!r} missing "
+                f"listening wait reply ignored: key {node.key!r} missing "
                 f"(run {run.id}, event {event.id})"
             )
             continue
@@ -287,10 +287,10 @@ async def _wake_on_reply(
     # its topic, its match, its key), so a letter the squares would ignore
     # is ignored here too.
     current = next((n for n in definition.nodes if n.id == run.current_node), None)
-    if current is None or NODE_TYPES[current.type].listens:
+    if current is None or listens(current):
         return
     if any(
-        NODE_TYPES[n.type].listens
+        listens(n)
         and event.topic in n.topics
         and _is_about(n, event, run)
         and _answer_for(n, event) is not None
@@ -329,7 +329,7 @@ def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
     keys; None when the square is not listening for the topic, or the
     field is missing (B1). The ONE definition of "this letter is this
     square's answer": the wake and the repeat refusal below both ask it."""
-    if not NODE_TYPES[node.type].listens or event.topic not in node.topics:
+    if not listens(node) or event.topic not in node.topics:
         return None
     answer = (
         event.topic

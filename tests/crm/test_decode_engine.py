@@ -616,6 +616,26 @@ def test_an_empty_array_reads_as_absent_to_exists() -> None:
     assert engine.extract(only_dmi, spec).variables == {"lender_name": None}
 
 
+def test_not_exists_keeps_the_elements_with_nothing_there() -> None:
+    """`offers not_exists` is "made no offer": DMI's [] reads as absent, so
+    DMI alone is kept; FINNABLE and HDB have offers."""
+    spec = spec_for_entry(
+        _entry(
+            CatalogField(
+                path="payload.loan_applications.lender_name",
+                type="list",
+                label="No offer yet",
+                variable=True,
+                item_where=[{"field": "offers", "op": "not_exists"}],
+            )
+        ),
+        {},
+    )
+    assert engine.extract({"loan_applications": _APPS}, spec).variables == {
+        "lender_name": "DMI"
+    }
+
+
 def test_a_filter_that_leaves_nothing_says_so_as_none() -> None:
     """The condition square's `context.offers exists` is exactly "any
     application passed": no survivor, the declared name is None — a fact

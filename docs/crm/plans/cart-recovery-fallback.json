@@ -58,7 +58,7 @@
     },
     {
       "id": "after-call",
-      "type": "wait_event",
+      "type": "wait",
       "topics": [
         "call.completed"
       ],
