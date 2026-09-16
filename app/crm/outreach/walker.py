@@ -40,8 +40,13 @@ from app.crm.outreach.nodes import NODE_TYPES, is_wait
 from app.crm.outreach.nodes.context import reply_key, without_reply
 from app.crm.outreach.nodes.spec import ELSE, NodeParked
 from app.crm.outreach.nodes.wait_event import TIMEOUT
-from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
-from app.crm.record.contracts import customer_has_event
+from app.crm.outreach.schemas import (
+    ATTRIBUTED_TOPICS,
+    EnrollmentRun,
+    WorkflowDefinition,
+    WorkflowNode,
+)
+from app.crm.record.contracts import customer_has_event, flat_payload_field
 
 # One claim executes consecutive immediate nodes (call -> next wait) in a
 # single visit; the bound is a runaway-document guard, not a feature.
@@ -153,12 +158,16 @@ async def _advance(
             _deferred(run, "timed_out")
         return
 
-    # Goal re-check at fire time — one indexed EXISTS per tier via
-    # record's contract, never a foreign SELECT. Tiers are judged
-    # keyed-first (goal_tiers, phase 06): "THIS cart recovered" beats
-    # "she bought something", and the run exits with the tier's reason.
-    # Measured from the founding letter's own time (G7), not the row's.
+    # Goal re-check at fire time — one indexed EXISTS per tier (goal_tiers,
+    # phase 06), measured from the founding letter's own time (G7). An
+    # unkeyed tier falls back to entry.key (matching entry.py's
+    # _scoped_to_this_run exactly) unless the key isn't a flat top-level
+    # payload field (flat_payload_field — the SQL `where` can't reach a
+    # nested/derived one) or the tier's topic is provider-shape
+    # (ATTRIBUTED_TOPICS) — both cases stay phone-wide instead.
     since = goal_since(run)
+    entry_key = definition.entry_key()
+    entry_field = flat_payload_field(entry_key) if entry_key is not None else None
     for tier in definition.goal_tiers():
         where: Optional[Tuple[str, str]] = None
         if tier.key:
@@ -166,6 +175,8 @@ async def _advance(
             if value in (None, ""):
                 continue  # this run cannot match a keyed tier
             where = (tier.key.event, str(value))
+        elif entry_field is not None and not set(tier.topics) & ATTRIBUTED_TOPICS:
+            where = (entry_field, str(run.enrollment_key))
         if await customer_has_event(
             run.merchant_id, str(run.customer_id), tier.topics, since, where
         ):

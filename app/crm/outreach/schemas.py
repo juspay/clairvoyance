@@ -99,6 +99,11 @@ class WorkflowGoalKey(BaseModel):
 # completed are the walker's own verdicts, never a tier's.
 GOAL_EXIT_REASONS = ("goal_met", "converted_elsewhere", "withdrawn")
 
+# Topics carrying a provider's own reply/outcome shape (a WhatsApp wamid,
+# a call result), never a fact about the run — entry.py and walker.py both
+# skip the entry.key fallback on these.
+ATTRIBUTED_TOPICS = frozenset({"message.inbound"})
+
 
 class WorkflowGoal(BaseModel):
     """One goal TIER (rollout phase 06): the 'she did the thing' topics,
@@ -369,6 +374,21 @@ class WorkflowDefinition(BaseModel):
         if isinstance(self.entry, list):
             return list(self.entry)
         return [WorkflowEntryAt(**self.entry.model_dump(), start=self.nodes[0].id)]
+
+    def entry_key(self) -> Optional[str]:
+        """PURE: the one payload field every door of this plan agrees keys
+        admission (WorkflowEntry.key), else None — no key at all, or doors
+        disagreeing (a keyless door dissents too). This is ADMISSION's own
+        rule, not authored per node/tier; callers that judge "is this event
+        or this fire-time re-check about THIS run, or another run of the
+        same identity" fall back to it exactly where they have no more
+        specific key of their own (entry.py's _scoped_to_this_run,
+        walker.py's goal re-check) — one place both agree on, never two."""
+        keys = {door.key for door in self.entries}
+        if len(keys) != 1:
+            return None
+        (key,) = keys
+        return key
 
     @model_validator(mode="before")
     @classmethod

@@ -19,6 +19,7 @@ from app.crm.record.catalog import (
     canonical_path,
     catalog_fields,
     derive_for,
+    flat_payload_field,
     topic_counts,
 )
 from app.crm.record.events import customer_has_event
@@ -48,6 +49,7 @@ __all__ = [
     "catalog_fields",
     "derive_for",
     "field_value",
+    "flat_payload_field",
     "topic_counts",
     "variable_name",
 ]

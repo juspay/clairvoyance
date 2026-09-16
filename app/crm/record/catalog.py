@@ -157,6 +157,24 @@ def canonical_path(path: str) -> str:
     return PAYLOAD_PREFIX + path
 
 
+def flat_payload_field(path: str) -> Optional[str]:
+    """PURE: the bare top-level JSON key a literal ``payload->>$n`` SQL
+    predicate can search for, decided from canonical_path(path) — or None
+    when the path is nested (payload.a.b, which ->> cannot reach) or names
+    a derived field (computed by a deriver, never stored under that name
+    at all — flow_token, replied_to, status_message_id are keyable,
+    declared, and derived today). The walker's fire-time goal re-check
+    (record/db/queries.py: customer_has_event_query) only ever compares
+    one flat key; asking it for anything else is not "narrower", it is
+    EXISTS(false) forever — a silent false negative on the safety net that
+    is worse than the broad check it would replace."""
+    canon = canonical_path(path)
+    if not canon.startswith(PAYLOAD_PREFIX):
+        return None  # a derived name: no stored key to compare against
+    field = canon[len(PAYLOAD_PREFIX) :]
+    return field if "." not in field else None  # nested: ->> cannot dig it
+
+
 def _all_derived_names() -> Set[str]:
     return {name for table in DERIVE.values() for name in table}
 

@@ -315,6 +315,59 @@ def test_a_run_without_the_key_falls_back_to_the_row_time_and_the_unkeyed_tier(
     assert [verb for verb, _ in writes.calls] == ["advance"]  # no goal -> moved on
 
 
+_KEYED_ENTRY_UNKEYED_GOAL = {
+    **_TWO_WAITS,
+    "entry": {"topic": "checkout.initiated", "key": "customer_id"},
+    "goals": [{"topics": ["orders/create"], "exit_reason": "goal_met"}],
+}
+del _KEYED_ENTRY_UNKEYED_GOAL["goal"]
+
+
+def test_a_keyed_door_scopes_the_goal_recheck_to_this_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """entry.key already keys ADMISSION per <field> — two applications, one
+    phone, two runs, two enrollment_keys. An unkeyed tier's fire-time
+    re-check must fall back to THIS run's own key, not ask phone-wide —
+    else another application's terminal event fires this run's alarm-time
+    exit (the leak entry.py's _scoped_to_this_run already closes on the
+    event-consumption path)."""
+    writes = _Writes(matched=True, definition=_KEYED_ENTRY_UNKEYED_GOAL)
+    _install(monkeypatch, writes)
+    asked = _goal_recheck(monkeypatch, {("customer_id", "APP-A"): True})
+    run = _run()
+    run.enrollment_key = "APP-A"
+    _advance(writes, run)
+    assert asked == [(("orders/create",), run.entered_at, ("customer_id", "APP-A"))]
+    ((verb, args),) = writes.calls
+    assert verb == "exit" and args[1] == "goal_met"
+
+
+_KEYED_ENTRY_PROVIDER_SHAPE_GOAL = {
+    **_TWO_WAITS,
+    "entry": {"topic": "checkout.initiated", "key": "id"},
+    "goals": [{"topics": ["message.inbound"], "exit_reason": "goal_met"}],
+}
+del _KEYED_ENTRY_PROVIDER_SHAPE_GOAL["goal"]
+
+
+def test_a_provider_shape_goal_topic_is_never_scoped_by_entry_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """message.inbound's "id" is a WhatsApp wamid, not the run's order id —
+    falling back to entry.key here would compare them and silently skip
+    the tier forever; the re-check must stay phone-wide instead."""
+    writes = _Writes(matched=True, definition=_KEYED_ENTRY_PROVIDER_SHAPE_GOAL)
+    _install(monkeypatch, writes)
+    asked = _goal_recheck(monkeypatch, {None: True})
+    run = _run()
+    run.enrollment_key = "O-1"
+    _advance(writes, run)
+    assert asked == [(("message.inbound",), run.entered_at, None)]
+    ((verb, args),) = writes.calls
+    assert verb == "exit" and args[1] == "goal_met"
+
+
 def test_walk_run_never_writes_without_a_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
