@@ -18,10 +18,18 @@ from app.core.config.static import (
     CRM_RUN_SWEEP_BATCH_SIZE,
 )
 from app.core.logger import logger
+from app.crm.outreach import steps as steps_log
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
+    step as step_accessor,
 )
-from app.crm.outreach.schemas import CustomerRun, EnrollmentRun, WorkflowRunSummary
+from app.crm.outreach.definitions import definition_for
+from app.crm.outreach.schemas import (
+    CustomerRun,
+    EnrollmentRun,
+    RunStep,
+    WorkflowRunSummary,
+)
 
 _LISTABLE_STATUSES = ("waiting", "parked", "exited")
 
@@ -50,6 +58,40 @@ async def resume_run(
     if run:
         logger.info(f"run resumed by operator: {run_id} (merchant {merchant_id})")
     return run
+
+
+async def run_steps(
+    merchant_id: str, workflow_id: str, run_id: str, limit: int
+) -> Optional[List[RunStep]]:
+    """Where this run has BEEN, oldest first (canon T26) — the closed
+    squares UNIONED with the one it stands on now (law 3: the past is N
+    rows, the present is the run row). None when the run is not this
+    merchant's or not this plan's, which the route turns into a 404.
+
+    The pinned document is read for the open square's node TYPE — the
+    closed rows carry their own, denormalised, so forty steps render
+    without resolving forty documents. The read is guarded the way the
+    walker guards it on the eject path: a version row that no longer
+    validates must not turn a timeline into a 500 — the open square just
+    renders with an empty type."""
+    run = await enrollment_accessor.get_run(merchant_id, workflow_id, run_id)
+    if run is None:
+        return None
+    # The open square counts against the caller's limit: timeline() appends
+    # it, so reading `limit` closed rows would return limit + 1.
+    open_square = run.status != "exited" and run.node_arrived_at is not None
+    closed = await step_accessor.run_steps(
+        merchant_id, run_id, max(0, limit - 1) if open_square else limit
+    )
+    try:
+        definition = await definition_for(run)
+    except Exception as e:
+        logger.warning(
+            f"run_steps: run {run_id} rendered without its open square's "
+            f"type — definition v{run.workflow_version} unreadable: {e}"
+        )
+        definition = None
+    return steps_log.timeline(run, closed, definition)
 
 
 async def workflow_summary(

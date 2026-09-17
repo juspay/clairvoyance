@@ -137,7 +137,7 @@ def _wire(
             else None
         )
 
-    async def cancel_run(*args: Any) -> bool:
+    async def cancel_run(*args: Any, **kwargs: Any) -> bool:
         calls.append(("cancel", args))
         return True
 
@@ -351,18 +351,21 @@ def test_reply_wakes_the_run_standing_on_the_listening_node(
 ) -> None:
     calls: List[Any] = []
     run = _wire(monkeypatch, _cod_flow(), calls)
-    asyncio.run(
-        entry.consume_attributed_event(
-            _event_with("button.reply", {"button_id": "YES"}), "cust-1"
-        )
-    )
+    letter = _event_with("button.reply", {"button_id": "YES"})
+    asyncio.run(entry.consume_attributed_event(letter, "cust-1"))
     ((kind, args),) = calls
     assert kind == "resume"
     assert args == (
         "m1",
         str(run.id),
         "ask",
-        {"reply_ask": "YES", "latest_letter": "ask"},
+        {
+            "reply_ask": "YES",
+            "latest_letter": "ask",
+            # canon T26: the letter that beat the alarm, left for the flush
+            # that follows so the closed square names what cut it short.
+            "cut_short_by": str(letter.id),
+        },
         {"button_id": "YES"},
     )
 

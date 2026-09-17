@@ -28,22 +28,35 @@ _BOOKKEEPING_KEYS = (
     "repeat_items",  # repeat.py: accumulate's list — never a template variable
     "facts",  # entry.py: each square's letter, by square (phase 16) — flattened below
     "latest_letter",  # entry.py: which square heard the most recent letter (phase 17)
+    "cut_short_by",  # entry.py: the letter that re-armed the run (canon T26)
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
 )
+# The letter that woke a run in place, left for the flush that follows
+# (canon T26): the walker reads it when it closes the square — recording it
+# as the step's cut_short_by and the next square's arrived_by = letter —
+# and clears it on the same write, the way a branching square's reply is
+# cleared. A pointer into crm_event_raw, never a photocopy.
+CUT_SHORT_BY_KEY = "cut_short_by"
 # The pointer the consumer writes with every reply (phase 17): the square
 # that heard the most recent letter, so run_facts can let that letter win
 # — on a ladder the letter that moves the run is heard on the square it
 # LEAVES, and the action then executes as its own square, so "the current
 # square's facts" would never be the latest stage's.
 LATEST_LETTER_KEY = "latest_letter"
+# The bookkeeping keys whose value is the ID OF WHAT THIS SQUARE HANDED
+# TO A DISPATCHER — a call's lead, a send's manifest row. Neither verb
+# contacts anyone itself; canon T26 keeps the receipt in one column.
+# `action_` is deliberately absent: an action is synchronous and returns a
+# result, not an id, and `reply_`/`split_` are answers, not rows.
+_DISPATCH_PREFIXES = ("lead_", "message_")
 # split_<node> is the arm a split square recorded (enh A/04): ours to write,
 # never a producer's — a payload key spelled `split_payment` would be counted
 # by the by_split report as an experiment, could overwrite a recorded arm,
 # and the real arm must never ride a template or a lead payload.
-_BOOKKEEPING_PREFIXES = (
-    "lead_",
-    "message_",
+# The dispatch pair is composed in, not copied: two spellings of the same
+# subset drift the day a verb is added.
+_BOOKKEEPING_PREFIXES = _DISPATCH_PREFIXES + (
     "reply_",
     "action_",
     "split_",
@@ -70,6 +83,22 @@ def is_bookkeeping(key: str) -> bool:
     branch or the founding-event dedupe). Two lists would let a walker key
     reach a customer's message the day they diverged."""
     return key in _BOOKKEEPING_KEYS or key.startswith(_BOOKKEEPING_PREFIXES)
+
+
+def dispatch_id(patch: Dict[str, Any], node_id: str) -> Optional[str]:
+    """PURE: what this square just handed to a dispatcher, out of the
+    context patch its execute() returned — or None when it handed over
+    nothing.
+
+    Read from the PATCH, never the whole context: a revisit must report the
+    id this visit made, not the one still lying around from the last. Kept
+    here beside _BOOKKEEPING_PREFIXES because it is the same list read for a
+    different reason, and two copies would drift the day a verb is added."""
+    for prefix in _DISPATCH_PREFIXES:
+        value = patch.get(f"{prefix}{node_id}")
+        if value not in (None, ""):
+            return str(value)
+    return None
 
 
 def reply_key(node_id: str) -> str:

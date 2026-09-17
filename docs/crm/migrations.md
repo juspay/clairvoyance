@@ -74,7 +74,10 @@ Rules the template encodes:
   edits and never deletes (ADR 0023 §5 as amended: no retention sweep;
   064's UPDATE guard + 067's DELETE guard — 064's comment saying a sweep
   would delete is superseded); its `on_publish` is a closed enum in a
-  CHECK).
+  CHECK; `crm_workflow_step` (073, canon T26) is outreach's as well — the
+  append-only trail behind the token, inserted by the statement that moves
+  the run and never updated, read by no one on the hot path, cascade-deleted
+  with its run).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)

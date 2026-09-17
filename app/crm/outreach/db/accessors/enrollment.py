@@ -22,6 +22,7 @@ from app.crm.outreach.db.queries.enrollment import (
     customer_runs_query,
     enrollment_counts_query,
     exit_run_query,
+    get_run_query,
     insert_enrollment_query,
     list_runs_query,
     occupied_nodes_on_version_query,
@@ -168,14 +169,28 @@ async def advance_run(
     wake_at: datetime,
     context: Dict[str, Any],
     leased_wake_at: datetime,
+    node_arrived_at: Optional[datetime] = None,
+    steps: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
-    """True when the row still carried the lease (the write landed)."""
+    """True when the row still carried the lease (the write landed, and
+    the buffered squares landed with it)."""
     query, values = advance_run_query(
-        run_id, current_node, wake_at, context, leased_wake_at
+        run_id, current_node, wake_at, context, leased_wake_at, node_arrived_at, steps
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
-    return row is not None
+    return _moved(row)
+
+
+def _moved(row: Optional[Any]) -> bool:
+    """The CAS answer, read off the flush statement (canon T26).
+
+    A plain `UPDATE ... RETURNING` answered by returning no row. The flush
+    statements end in a SELECT of two scalars, so they ALWAYS return one
+    row and `row is not None` would read every stale lease as a win — the
+    walker would stop deferring and start clobbering replies. The answer is
+    the UPDATE's own id, which is NULL when nothing matched."""
+    return row is not None and row["moved_id"] is not None
 
 
 async def exit_run(
@@ -184,14 +199,15 @@ async def exit_run(
     leased_wake_at: datetime,
     current_node: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
+    steps: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """True when the row still carried the lease (the write landed)."""
     query, values = exit_run_query(
-        run_id, exit_reason, current_node, context, leased_wake_at
+        run_id, exit_reason, current_node, context, leased_wake_at, steps
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
-    return row is not None
+    return _moved(row)
 
 
 async def park_run(run_id: str, last_error: str, leased_wake_at: datetime) -> bool:
@@ -212,6 +228,17 @@ async def record_run_error(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return row is not None
+
+
+async def get_run(
+    merchant_id: str, workflow_id: str, run_id: str
+) -> Optional[EnrollmentRun]:
+    """One run by id, or None when it is not this merchant's or not this
+    plan's."""
+    query, values = get_run_query(merchant_id, workflow_id, run_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_run(row) if row else None
 
 
 async def open_runs_for_customer(
@@ -241,11 +268,17 @@ async def resume_run_by_id(
 
 
 async def refresh_run_facts(
-    merchant_id: str, run_id: str, node_id: str, facts: Dict[str, Any]
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    facts: Dict[str, Any],
+    cut_short_by: Optional[str] = None,
 ) -> bool:
     """True when the run was standing (waiting or parked) on that
     non-listening square and took the letter's facts as its newest."""
-    query, values = refresh_run_facts_query(merchant_id, run_id, node_id, facts)
+    query, values = refresh_run_facts_query(
+        merchant_id, run_id, node_id, facts, cut_short_by
+    )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return row is not None
@@ -258,15 +291,16 @@ async def cancel_run(
     occurred_at: Optional[datetime] = None,
     key: Optional[Tuple[str, str]] = None,
     context_patch: Optional[Dict[str, Any]] = None,
+    steps: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """True when the run was open (and, keyed, still the one the letter
-    is about) and ended."""
+    is about) and ended — with its final square flushed (trap 3)."""
     query, values = cancel_run_query(
-        merchant_id, run_id, exit_reason, occurred_at, key, context_patch
+        merchant_id, run_id, exit_reason, occurred_at, key, context_patch, steps
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
-    return row is not None
+    return _moved(row)
 
 
 async def patch_open_run(

@@ -29,6 +29,7 @@ def test_decode_run_parses_string_context() -> None:
         "enrollment_key": str(cust_id),
         "attempts": 0,
         "last_error": None,
+        "node_arrived_at": NOW,
     }
     run = decode_run(row)
     assert run.context["phone"] == "+91"

@@ -70,14 +70,18 @@ def test_goal_cancel_can_stash_the_goal_on_the_runs_it_ends() -> None:
         "m1", "run-1", "goal_met", NOW, key=("cart_token", "chk-1"), context_patch=patch
     )
     assert "context = context || $7::jsonb" in sql and "AND context->>$5 = $6" in sql
-    assert len(params) == 7 and '"1850.00"' in params[6]
+    # +1: the T26 flush payload is the last param on every ending writer.
+    assert len(params) == 8 and '"1850.00"' in params[6] and params[7] == "[]"
     sql, params = cancel_run_query(
         "m1", "run-1", "converted_elsewhere", NOW, context_patch=patch
     )
-    assert "context = context || $5::jsonb" in sql and "$6" not in sql
-    assert len(params) == 5
+    # Unkeyed: the patch takes $5 and the flush $6 — "no $6" no longer
+    # says "no key", so the keyed predicate itself is what is pinned.
+    assert "context = context || $5::jsonb" in sql
+    assert "AND context->>" not in sql
+    assert len(params) == 6
     sql, params = cancel_run_query("m1", "run-1", "goal_met", NOW)
-    assert "context = context ||" not in sql and len(params) == 4
+    assert "context = context ||" not in sql and len(params) == 5
 
 
 def test_the_goal_stash_is_bookkeeping_not_a_template_variable() -> None:
@@ -184,6 +188,7 @@ def test_decoder_carries_the_plan_name_on_a_customer_run() -> None:
         "enrollment_key": "APP-1",
         "attempts": 1,
         "last_error": None,
+        "node_arrived_at": NOW,
         "workflow_name": "loan-dropoff-02-kyc",
     }
     run = decode_customer_run(row)
