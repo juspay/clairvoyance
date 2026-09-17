@@ -325,6 +325,71 @@ BB_DAILY_BOT_MAX_LIFETIME_SECS = int(
     os.environ.get("BB_DAILY_BOT_MAX_LIFETIME_SECS", "4500")
 )
 
+# Shared Daily REST connection pool (services/daily/_pools.py). api.daily.co
+# advertises no keep-alive timeout and was observed reusing a connection after
+# 60s idle, so close from our side first at 45s: a stale pooled socket costs a
+# failed call, a slightly-too-eager close costs one 676ms handshake.
+BB_DAILY_REST_KEEPALIVE_SECS = float(
+    os.environ.get("BB_DAILY_REST_KEEPALIVE_SECS", "45")
+)
+# Concurrent sockets to Daily. Room creation is three quick calls per voice
+# session, bounded above by BB_MAX_CONCURRENT_DAILY_BOTS; recording downloads
+# share the pool and are the only long-lived borrowers.
+BB_DAILY_REST_POOL_LIMIT = int(os.environ.get("BB_DAILY_REST_POOL_LIMIT", "40"))
+# 300s is aiohttp's own default, kept deliberately: recording downloads share
+# this session and a tighter bound would fail large ones that pass today.
+BB_DAILY_REST_TOTAL_TIMEOUT_SECS = float(
+    os.environ.get("BB_DAILY_REST_TOTAL_TIMEOUT_SECS", "300")
+)
+BB_DAILY_REST_CONNECT_TIMEOUT_SECS = float(
+    os.environ.get("BB_DAILY_REST_CONNECT_TIMEOUT_SECS", "10")
+)
+# Connections the warmer keeps open per pod. Two, because start_daily_session
+# mints its two meeting tokens concurrently and HTTP/1.1 cannot multiplex — a
+# single warm connection would send the second token request to a cold one.
+BB_DAILY_REST_WARM_CONNECTIONS = int(
+    os.environ.get("BB_DAILY_REST_WARM_CONNECTIONS", "2")
+)
+# How often the warmer touches those connections. Must stay under
+# BB_DAILY_REST_KEEPALIVE_SECS or they expire between voice sessions and the
+# pool buys nothing on sparse traffic — which is exactly beta's traffic shape.
+BB_DAILY_REST_WARM_INTERVAL_SECS = float(
+    os.environ.get("BB_DAILY_REST_WARM_INTERVAL_SECS", "30")
+)
+# Pre-created Daily rooms held ready per pod, per recording flavour
+# (services/daily/room_pool.py). The depth is not fixed: a controller sizes
+# each flavour to its own observed demand, starting at MIN, growing to MAX
+# under load and draining to zero when a flavour goes quiet. MAX defaults to
+# BB_MAX_CONCURRENT_DAILY_BOTS because that is the largest burst the capacity
+# gate will ever admit. MAX=0 disables the pool and every room is created
+# inline, which is the pre-pool behaviour.
+BB_DAILY_ROOM_POOL_MIN = int(os.environ.get("BB_DAILY_ROOM_POOL_MIN", "3"))
+BB_DAILY_ROOM_POOL_MAX = int(
+    os.environ.get("BB_DAILY_ROOM_POOL_MAX", str(BB_MAX_CONCURRENT_DAILY_BOTS))
+)
+# Quiet for this long and the flavour drains to zero. Must exceed the gap
+# between calls in slow traffic or the pool is dumped before every one.
+BB_DAILY_ROOM_POOL_IDLE_SECS = float(
+    os.environ.get("BB_DAILY_ROOM_POOL_IDLE_SECS", "1800")
+)
+# Share of sessions allowed to wait on the Daily API. Feeds the Erlang-B term.
+BB_DAILY_ROOM_POOL_TARGET_MISS = float(
+    os.environ.get("BB_DAILY_ROOM_POOL_TARGET_MISS", "0.01")
+)
+# Life given to a pooled room and its tokens. Must exceed
+# BB_DAILY_ROOM_MIN_REMAINING_SECS by enough to cover pool dwell time.
+BB_DAILY_ROOM_POOL_TTL_SECS = float(
+    os.environ.get("BB_DAILY_ROOM_POOL_TTL_SECS", "7200")
+)
+# A pooled room is only handed out with at least this much life left — the same
+# hour the on-demand path gives, so sitting in the pool never shortens a call.
+BB_DAILY_ROOM_MIN_REMAINING_SECS = float(
+    os.environ.get("BB_DAILY_ROOM_MIN_REMAINING_SECS", "3600")
+)
+BB_DAILY_ROOM_POOL_REFILL_INTERVAL_SECS = float(
+    os.environ.get("BB_DAILY_ROOM_POOL_REFILL_INTERVAL_SECS", "10")
+)
+
 # KMS Configuration
 SKIP_KMS_DECRYPT = os.getenv("SKIP_KMS_DECRYPT", "false").lower() == "true"
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")

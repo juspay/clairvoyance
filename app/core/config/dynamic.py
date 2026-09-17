@@ -119,6 +119,30 @@ async def BB_RECONCILE_BACKLOG_LIMIT() -> int:
     return await get_config("BB_RECONCILE_BACKLOG_LIMIT", 1000, int)
 
 
+async def BB_DAILY_ROOM_POOL() -> bool:
+    """Hand out pre-created Daily rooms instead of building one per call
+    (default: True).
+
+    Takes the ~476ms of room + token round trips off the request path. On by
+    default because an idle room is free: Daily bills participant-minutes, and
+    a room nobody has joined has no participants — it is a row in Daily's
+    database with nothing running against it. An unused pooled room costs the
+    same as no room at all, so there is no traffic threshold to clear before
+    this is worth having.
+
+    (Contrast a pre-joined bot, which IS a participant and bills for every idle
+    minute. That is why warm bots need their own flag and their own sizing,
+    and this does not.)
+
+    The flag remains the escape hatch for the code path rather than the cost.
+    It is read every refill tick, so flipping it takes effect within
+    BB_DAILY_ROOM_POOL_REFILL_INTERVAL_SECS in both directions: off drains the
+    pool to zero and every session builds its room inline, which is the
+    pre-pool behaviour.
+    """
+    return await get_config("BB_DAILY_ROOM_POOL", True, bool)
+
+
 async def BB_DAILY_BOT_SUBPROCESS() -> bool:
     """Run each Daily voice bot in its own OS subprocess (default: True).
 

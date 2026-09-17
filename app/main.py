@@ -30,11 +30,20 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.worker impo
     start_analysis_worker,
     stop_analysis_worker,
 )
+
+# Database imports
+from app.ai.voice.agents.breeze_buddy.services.daily._pools import (
+    close_daily_rest_pool,
+    start_daily_rest_warmer,
+    stop_daily_rest_warmer,
+)
+from app.ai.voice.agents.breeze_buddy.services.daily.room_pool import (
+    start_room_pool,
+    stop_room_pool,
+)
 from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
     monitor_dragontts_health,
 )
-
-# Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
 from app.ai.voice.tts.catalog import get_enabled_voices as load_tts_voice_catalog
 from app.api.routers import breeze_buddy, devcycle, feature_flags, systems
@@ -156,6 +165,16 @@ async def lifespan(_app: FastAPI):
     # existed solely to pre-warm Automatic sessions and were removed with
     # it. Breeze Buddy provisions Daily rooms on demand via its own
     # services/daily helper.
+
+    # Keep the pod's connections to api.daily.co open. Voice sessions create
+    # their room on these, and a cold connection costs a 676ms TLS handshake
+    # on the caller's critical path. Only on api pods: worker pods never call
+    # start_daily_session, so warming there would be traffic for nothing.
+    if CRM_ROLE == "api":
+        start_daily_rest_warmer()
+        # Build a few Daily rooms ahead of demand so a voice session never
+        # waits on the Daily API. Same per-pod reasoning as the warmer.
+        start_room_pool()
 
     # Start background task scheduler if enabled
     global _background_scheduler
@@ -380,6 +399,12 @@ async def lifespan(_app: FastAPI):
     # Close shared httpx pools used by chat LLM clients (Azure today).
     # Drains keep-alive connections cleanly so we don't leak fds on SIGTERM.
     await close_llm_http_pools()
+    # Same for the pod-wide Daily REST session (voice room creation). The
+    # warmer holds that session, so it is stopped first.
+    await stop_daily_rest_warmer()
+    # Before the connection pool closes — releasing rooms needs it.
+    await stop_room_pool()
+    await close_daily_rest_pool()
     # Close database pool
     await close_db_pool()
     # Close Redis connections

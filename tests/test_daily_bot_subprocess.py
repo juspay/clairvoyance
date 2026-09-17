@@ -12,6 +12,7 @@ rolls back the recording sentinel when the launch fails.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, List, Tuple
 
 import pytest
@@ -24,6 +25,7 @@ from app.ai.voice.agents.breeze_buddy.services.daily import (
 from app.ai.voice.agents.breeze_buddy.services.daily.launch_payload import (
     BotLaunchPayload,
 )
+from app.ai.voice.agents.breeze_buddy.services.daily.room_pool import PooledRoom
 
 
 async def _flag_on() -> bool:
@@ -304,10 +306,18 @@ async def test_launch_failure_clears_recording_sentinel(
     async def failing_launch(runner_args: Any) -> None:
         raise RuntimeError("fork failed")
 
-    monkeypatch.setattr(
-        daily_mod, "create_aiohttp_session", lambda: _FakeAiohttpSession()
-    )
-    monkeypatch.setattr(daily_mod, "DailyRESTHelper", _FakeRESTHelper)
+    # The room now comes from the pool rather than being built here, so the
+    # seam moved from DailyRESTHelper to acquire_room.
+    async def fake_acquire_room(enable_recording: bool) -> Any:
+        return PooledRoom(
+            room_url=_FakeRoom.url,
+            room_name=_FakeRoom.name,
+            user_token="user-tok",
+            bot_token="bot-tok",
+            expires_at=time.time() + 7200,
+        )
+
+    monkeypatch.setattr(daily_mod, "acquire_room", fake_acquire_room)
     monkeypatch.setattr(daily_mod, "update_lead_call_id_by_id", fake_update_call_id)
     monkeypatch.setattr(
         daily_mod, "update_lead_call_recording_url", fake_update_recording_url
