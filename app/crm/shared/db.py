@@ -18,7 +18,7 @@ from typing import (
 
 import asyncpg
 
-from app.database import get_db_connection
+from app.database import db_connection
 
 # The opaque vocabulary logic files are allowed to see (via each module's
 # db/ door). Logic types against DbTxn and catches UniqueViolation without
@@ -34,12 +34,13 @@ async def crm_connection() -> AsyncIterator[asyncpg.Connection]:
     BEGIN/COMMIT is two wasted round-trips; use crm_transaction() only
     when several statements must share one fate.
 
-    get_db_connection() is the repo's async-generator dependency; the
-    `async for ... return` drives it exactly once and its finally-block
-    releases the connection to the pool when this context exits."""
-    async for conn in get_db_connection():
+    db_connection() guarantees release on exit. The old
+    `async for ... return` form did NOT: `return` abandons the generator,
+    so the connection went back to the pool only when the event loop
+    finalised it, and a burst of sequential statements opened one connection
+    each instead of reusing one."""
+    async with db_connection() as conn:
         yield conn
-        return
 
 
 P = ParamSpec("P")
@@ -67,10 +68,9 @@ async def crm_transaction() -> AsyncIterator[asyncpg.Connection]:
     """One pooled connection with an open transaction — ONLY for
     multi-statement fate-sharing, declared by a logic file (the boundary
     law). Seeing this name in code always signals real atomicity."""
-    async for conn in get_db_connection():
+    async with db_connection() as conn:
         async with conn.transaction():
             yield conn
-        return
 
 
 @asynccontextmanager
