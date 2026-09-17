@@ -265,6 +265,10 @@ def test_golden_search_to_hydrated_product_grid():
                     # payload names no (or one) variant — same
                     # empty-collection precedent as tags.
                     "variants": [],
+                    # Server-decided try-on gate: a sports bra is wearable,
+                    # so the card may offer it. Stamped by the projection,
+                    # never by the model.
+                    "try_on_eligible": True,
                 },
                 {
                     "id": "gid://shopify/Product/2",
@@ -272,6 +276,7 @@ def test_golden_search_to_hydrated_product_grid():
                     "price": {"amount": 2199.0, "currency": "INR"},
                     "tags": [],
                     "variants": [],
+                    "try_on_eligible": True,
                 },
             ],
             "max_items": 6,
