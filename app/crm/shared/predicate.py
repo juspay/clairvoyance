@@ -15,6 +15,13 @@ compares text exactly (no numeric coercion — that is `=`'s job).
 is how a plan says "only when this is absent" (a line nudge for customers
 with no products), which `else` of an `exists` rule could say only as a
 second rule.
+
+`includes` is the list's one question (design/event-catalog.md §The `list`
+ruling): does ANY of the field's values equal the value written in the plan
+— the exact dual of `in` ("is the field's one value among these"). Judged
+against the raw array; a scalar counts as a list of one, so a vendor that
+collapses a one-item array to a bare value is judged the same way. Absent
+holds nothing, as everywhere.
 """
 
 import re
@@ -23,7 +30,9 @@ from typing import Any, Callable, Iterable, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-Op = Literal["is", "is_not", "in", ">", ">=", "<", "<=", "=", "exists", "not_exists"]
+Op = Literal[
+    "is", "is_not", "in", ">", ">=", "<", "<=", "=", "exists", "not_exists", "includes"
+]
 # The op FAMILIES, by what they compare. The catalog's OPS_BY_TYPE (record/
 # catalog.py) is built from these, so a type's allowed ops and the evaluator
 # that runs them cannot drift apart.
@@ -33,6 +42,8 @@ EQUALS_OP = "="  # numbers only
 EXISTS_OP = "exists"
 NOT_EXISTS_OP = "not_exists"
 PRESENCE_OPS = (EXISTS_OP, NOT_EXISTS_OP)  # no value: the field is there or not
+INCLUDES_OP = "includes"
+LIST_OPS = (INCLUDES_OP,)  # any of the field's values equals the plan's one value
 _NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
 
 
@@ -131,6 +142,10 @@ def evaluate(condition: Condition, actual: Any) -> bool:
         return not _same(actual, condition.value)
     if op == "in":
         return any(_same(actual, v) for v in condition.value)
+    if op == INCLUDES_OP:
+        # The scalar-is-a-list-of-one rule lives here, once.
+        values = actual if isinstance(actual, list) else [actual]
+        return any(_same(v, condition.value) for v in values)
     if op == "=":
         a, b = as_number(actual), as_number(condition.value)
         return a is not None and b is not None and a == b

@@ -126,3 +126,60 @@ def test_from_equality_map_is_what_migration_069_writes() -> None:
     assert from_equality_map({"gateway": "COD"}) == [
         Condition(field="payload.gateway", op="is", value="COD")
     ]
+
+
+# --- `includes`: the list's one question (event-catalog.md §The `list` ruling) ---
+
+
+@pytest.mark.parametrize(
+    "actual, expected",
+    [
+        (["Mobile", "Fridge"], True),  # any element equals the value
+        (["Fridge", "Mobile"], True),
+        (["Fridge"], False),
+        ([], False),  # an empty list holds nothing…
+        (None, False),  # …and neither does an absent field
+        ("Mobile", True),  # a scalar counts as a list of one
+        ("Fridge", False),
+        ([1, "Mobile"], True),
+        (["mobile"], False),  # exact text, never coerced — as `is`
+        ([True], False),
+    ],
+)
+def test_includes_asks_whether_any_value_equals_the_plans_value(
+    actual, expected
+) -> None:
+    assert (
+        evaluate(
+            Condition(
+                field="payload.products.sub_category", op="includes", value="Mobile"
+            ),
+            actual,
+        )
+        is expected
+    )
+
+
+def test_includes_takes_one_scalar_value() -> None:
+    """A list on the right would be `in` over `includes` — a question the
+    grammar does not ask (correlated matching is deferred, not forgotten)."""
+    with pytest.raises(ValueError):
+        Condition(field="payload.tags", op="includes", value=["a", "b"])
+    with pytest.raises(ValueError):
+        Condition(field="payload.tags", op="includes")
+
+
+@pytest.mark.parametrize(
+    "one, many",
+    [
+        ("Mobile", ["Mobile", "Fridge"]),
+        ("Fridge", ["Mobile", "Fridge"]),
+        ("TV", ["Mobile", "Fridge"]),
+    ],
+)
+def test_includes_is_the_dual_of_in(one: str, many: list) -> None:
+    """`in`: is the field's ONE value among these; `includes`: is this ONE
+    value among the field's many. Same comparison, mirrored, same verdict."""
+    assert evaluate(Condition(field="f", op="in", value=many), one) is evaluate(
+        Condition(field="f", op="includes", value=one), many
+    )

@@ -50,7 +50,13 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowNode,
 )
-from app.crm.record.contracts import RawEvent, canonical_path, derive_for, field_value
+from app.crm.record.contracts import (
+    RawEvent,
+    canonical_path,
+    derive_for,
+    field_value,
+    list_values,
+)
 from app.crm.shared.normalize import normalize_phone
 from app.crm.shared.predicate import matches
 
@@ -404,12 +410,27 @@ def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
     """One door's typed where-grammar against the payload
     (shared/predicate.py); fields resolve through record's catalog paths —
     dot-walks and the code layer's derived fields. No table read: the
-    validator guaranteed op-type fit at publish."""
+    validator guaranteed op-type fit at publish.
+
+    A path that crosses an array (payload.products.sub_category) reads as
+    the RAW list of what the elements hold — the engine's own list walk, no
+    item_where, no rendering — so `includes "Mobile"` asks whether any
+    product is a mobile, with the value written in the plan (design/
+    event-catalog.md §The `list` ruling). An empty array reads as absent
+    (`or None`): `exists` then does not hold on an empty basket and
+    `not_exists` does — the same normalisation _element_holds applies. A
+    path that crosses no array keeps its dot-walk, and a bare value where
+    an array was expected reaches the evaluator as a scalar, which
+    `includes` counts as a list of one."""
     derive = derive_for(event.source, event.topic)
-    return matches(
-        door.where,
-        lambda path: field_value(event.payload, path, derive),
-    )
+
+    def lookup(path: str) -> Any:
+        values = list_values(event.payload, path)
+        if values is not None:
+            return values or None
+        return field_value(event.payload, path, derive)
+
+    return matches(door.where, lookup)
 
 
 def _context_from_payload(payload: dict, max_chars: int) -> dict:

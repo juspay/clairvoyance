@@ -45,7 +45,13 @@ from app.crm.record.schemas import (
     SampledField,
     SchemaRegistration,
 )
-from app.crm.shared.predicate import EQUALS_OP, ORDER_OPS, PRESENCE_OPS, TEXT_OPS
+from app.crm.shared.predicate import (
+    EQUALS_OP,
+    INCLUDES_OP,
+    ORDER_OPS,
+    PRESENCE_OPS,
+    TEXT_OPS,
+)
 
 # Type -> the ops the where-grammar implements for it. Spelled from the
 # evaluator's own families (shared/predicate.py), so the UI shows exactly
@@ -58,11 +64,14 @@ OPS_BY_TYPE: Dict[str, List[str]] = {
     "boolean": ["is", "is_not", *PRESENCE_OPS],
     "datetime": [*ORDER_OPS, *PRESENCE_OPS],
     "phone": [],
-    # A list is a template variable and nothing else. No ops, so the
-    # where-grammar never receives an array and the matcher never learns
-    # array semantics (design/event-catalog.md, sealed) — a condition on a
-    # list field is refused at publish, naming the empty set.
-    "list": [],
+    # A list answers ONE existential question, against the raw array, with
+    # the value written in the plan (design/event-catalog.md §The `list`
+    # ruling): `includes` = any element equals the value, `exists` = the
+    # array is non-empty, `not_exists` = empty or absent. Never is/in/
+    # ordering — those compare a field's ONE value, and a list has many.
+    # item_where keeps its one job, narrowing what the renderer joins into
+    # the template variable; it never decides a door.
+    "list": [INCLUDES_OP, *PRESENCE_OPS],
 }
 KEYABLE_TYPES = ("text", "number")
 MAX_REGISTERED_FIELDS = 200
@@ -231,10 +240,13 @@ def validate_registration(registration: SchemaRegistration) -> List[str]:
                 f"{field.path}: item_numbered belongs to a type list with an item_format"
             )
         if field.type == LIST_TYPE:
-            # No ops and never a handle, so a list that is not a variable can
-            # be neither filtered, keyed nor templated — a field nothing can
-            # read is a mistake, not a declaration. (keyable is refused below:
-            # KEYABLE_TYPES is text | number.)
+            # Never a handle, never keyable (KEYABLE_TYPES is text | number).
+            # A list is declared to be RENDERED — the template variable is
+            # what item_format / item_where / item_numbered shape, and the
+            # only thing a list gives a run — so a list that is not a
+            # variable declares nothing a run will ever carry: a mistake,
+            # not a declaration. (A door's includes / exists reads the raw
+            # array and does not depend on this rule.)
             if not field.variable:
                 problems.append(
                     f"{field.path}: type list is a template variable or nothing "
