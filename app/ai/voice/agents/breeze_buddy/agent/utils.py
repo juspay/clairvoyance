@@ -5,11 +5,10 @@ import base64
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from fastapi import WebSocket
 from pipecat.frames.frames import OutputAudioRawFrame
-from pipecat.pipeline.task import PipelineTask
 
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import (
@@ -34,6 +33,9 @@ class GreetingResult:
 
     source: Optional[str]  # "template_static", "lead_dynamic", or None
     text: Optional[str]  # The resolved greeting text for LLM context
+    # Daily only: greeting audio, queued by the caller AFTER flow init.
+    audio: Optional[OutputAudioRawFrame] = None
+    commit: Optional[Callable[[], Awaitable[None]]] = None
 
 
 async def send_initial_greeting(
@@ -141,17 +143,17 @@ def _transcode_mulaw_to_daily_pcm(mulaw_bytes: bytes) -> bytes:
     return pcm_daily
 
 
-async def send_initial_greeting_daily(
-    task: PipelineTask,
+async def prepare_initial_greeting_daily(
     lead: LeadCallTracker,
     template: TemplateModel,
     errors: Optional[List[Dict[str, Any]]] = None,
 ) -> GreetingResult:
-    """Send initial greeting audio for Daily-mode calls.
+    """Prepare initial greeting audio for Daily-mode calls.
 
     Reuses the telephony Redis greeting cache (mulaw 8 kHz), transcodes to PCM
-    24 kHz to match the Daily transport's output sample rate, and queues an
-    ``OutputAudioRawFrame`` through the pipeline for playback.
+    24 kHz to match the Daily transport's output sample rate. The frame is
+    returned, not queued: the caller must play it on ``transport.output()``
+    (past STT) and only after ``flow_manager.initialize()``.
 
     The cache keys are identical to telephony, so the dispatch worker's
     pre-synthesis (which runs for outbound) populates the cache for both
@@ -160,14 +162,14 @@ async def send_initial_greeting_daily(
     in the agent setup, same pattern as inbound telephony.
 
     Args:
-        task: Pipeline task to queue the audio frame on
         lead: Lead data
         template: Template model
         errors: Optional errors list to track failures
 
     Returns:
-        GreetingResult with source and resolved greeting text. ``source`` is
-        ``None`` when no cached audio is available (falls through to LLM-speaks-first).
+        GreetingResult with source, resolved greeting text and the audio frame
+        to play. ``source`` is ``None`` when no cached audio is available
+        (falls through to LLM-speaks-first).
     """
     try:
         redis = await get_redis_service()
@@ -187,7 +189,8 @@ async def send_initial_greeting_daily(
             if template.configurations and template.configurations.initial_greeting:
                 greeting_text = template.configurations.initial_greeting
 
-        # 2. Dynamic greeting (per-lead cache, deleted after retrieval)
+        # 2. Dynamic greeting (per-lead cache, deleted once played).
+        commit: Optional[Callable[[], Awaitable[None]]] = None
         if not mulaw_data:
             lead_greeting_key = f"greeting:{lead.id}"
             lead_greeting_data = await redis.get(lead_greeting_key)
@@ -200,8 +203,14 @@ async def send_initial_greeting_daily(
                 except (json.JSONDecodeError, KeyError):
                     # Legacy format: raw base64 mulaw, no JSON wrapper
                     mulaw_data = base64.b64decode(lead_greeting_data)
-                await redis.delete(lead_greeting_key)
-                logger.info(f"Deleted dynamic greeting from Redis for lead {lead.id}")
+
+                async def delete_lead_greeting() -> None:
+                    await redis.delete(lead_greeting_key)
+                    logger.info(
+                        f"Deleted dynamic greeting from Redis for lead {lead.id}"
+                    )
+
+                commit = delete_lead_greeting
 
         if not mulaw_data:
             logger.info("No greeting audio cached for Daily call; LLM will speak first")
@@ -209,22 +218,24 @@ async def send_initial_greeting_daily(
 
         pcm_daily = _transcode_mulaw_to_daily_pcm(mulaw_data)
 
-        await task.queue_frame(
-            OutputAudioRawFrame(
+        logger.info(
+            f"Prepared Daily initial greeting (source={greeting_source}, "
+            f"{len(pcm_daily)} bytes PCM at {DAILY_OUTPUT_SAMPLE_RATE} Hz)"
+        )
+        return GreetingResult(
+            source=greeting_source,
+            text=greeting_text,
+            audio=OutputAudioRawFrame(
                 audio=pcm_daily,
                 sample_rate=DAILY_OUTPUT_SAMPLE_RATE,
                 num_channels=1,
-            )
+            ),
+            commit=commit,
         )
-        logger.info(
-            f"Queued Daily initial greeting (source={greeting_source}, "
-            f"{len(pcm_daily)} bytes PCM at {DAILY_OUTPUT_SAMPLE_RATE} Hz)"
-        )
-        return GreetingResult(source=greeting_source, text=greeting_text)
 
     except Exception as e:
-        logger.error(f"Failed to send Daily initial greeting: {e}", exc_info=True)
-        track_error(errors, f"Failed to send Daily initial greeting: {e}")
+        logger.error(f"Failed to prepare Daily initial greeting: {e}", exc_info=True)
+        track_error(errors, f"Failed to prepare Daily initial greeting: {e}")
         return GreetingResult(source=None, text=None)
 
 
