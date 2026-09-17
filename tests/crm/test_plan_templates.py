@@ -17,7 +17,7 @@ from app.crm.outreach import predicates
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.plans import Catalogs, validate_definition
 from app.crm.outreach.schemas import WorkflowDefinition
-from app.crm.record.catalog import code_entries
+from app.crm.record.catalog import code_entries, with_ops
 from app.crm.record.contracts import CatalogField
 
 PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
@@ -28,6 +28,7 @@ CART_SPLIT = PLANS / "cart-recovery-split.json"
 LOAN = PLANS / "loan-dropoff.json"
 COD = PLANS / "cod-confirm.json"
 LINE = PLANS / "line-nudge.json"
+LINE_MOBILE = PLANS / "line-nudge-mobile.json"
 # The lending journey on a merchant's OWN events (line-nudge.json): eight
 # non-terminal topics the squares listen on, three terminals the goal ends on.
 LINE_OPEN = [
@@ -88,10 +89,12 @@ def _catalogs() -> Catalogs:
     catalogs: Dict[str, Optional[Dict[str, CatalogField]]] = {
         entry.topic: {f.path: f for f in entry.fields} for entry in code_entries()
     }
+    # A registered row's ops are computed on read (catalog.with_ops), as the
+    # server's gather does — so a door's op on a registered field is judged.
     for topic in [*LOAN_STAGES, LOAN_DONE, *LOAN_OUT]:
-        catalogs[topic] = _loan_registration()
+        catalogs[topic] = {p: with_ops(f) for p, f in _loan_registration().items()}
     for topic in [*LINE_OPEN, *LINE_DONE]:
-        catalogs[topic] = _line_registration()
+        catalogs[topic] = {p: with_ops(f) for p, f in _line_registration().items()}
     return catalogs
 
 
@@ -120,6 +123,12 @@ def _line_registration() -> Dict[str, CatalogField]:
         ),
         CatalogField(
             path="payload.event_name", type="text", label="Event", variable=True
+        ),
+        CatalogField(
+            path="payload.products.sub_category",
+            type="list",
+            label="Product sub-categories",
+            variable=True,
         ),
         CatalogField(
             path="payload.loan_applications",
@@ -153,12 +162,14 @@ def test_the_expected_documents_exist() -> None:
     assert CART_TIERED.is_file(), CART_TIERED
     assert CART_SPLIT.is_file(), CART_SPLIT
     assert LINE.is_file(), LINE
+    assert LINE_MOBILE.is_file(), LINE_MOBILE
     assert _every_plan() == [
         CART_FALLBACK,
         CART_SPLIT,
         CART_TIERED,
         CART,
         COD,
+        LINE_MOBILE,
         LINE,
         LOAN,
     ]
@@ -411,3 +422,22 @@ def test_the_cod_board_declares_no_match_and_does_not_need_one() -> None:
     assert ["confirm", square["id"]] in [e[:2] for e in board["edges"]]
     labels = {e[2] for e in board["edges"] if len(e) > 2}
     assert {"CONFIRM", "CANCEL", "form_submitted", "timeout"} <= labels
+
+
+def test_the_mobile_door_asks_the_list_its_one_question_and_nothing_else() -> None:
+    """line-nudge-mobile.json gates enrolment with `includes "Mobile"` on a
+    list inside `products` (the value written in the plan); an op that
+    would compare the list as one value is refused by the catalog law."""
+    doc = _load(LINE_MOBILE)
+    assert doc["entry"]["where"] == [
+        {"field": "payload.products.sub_category", "op": "includes", "value": "Mobile"}
+    ]
+    doc["entry"]["where"] = [
+        {"field": "payload.products.sub_category", "op": "is", "value": "Mobile"}
+    ]
+    problems = validate_definition(doc, catalogs=_catalogs())
+    assert any(
+        "payload.products.sub_category" in p
+        and "allowed: includes, exists, not_exists" in p
+        for p in problems
+    ), problems

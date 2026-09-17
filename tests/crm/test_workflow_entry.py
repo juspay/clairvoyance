@@ -1110,3 +1110,99 @@ def test_a_stored_wait_event_square_is_still_woken_by_its_letter(
     assert spine.resumes == [
         (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
     ]
+
+
+# --- a door gated on a value inside an array (event-catalog.md §The `list` ruling) ---
+
+_MOBILE_DOOR_PLAN = {
+    "entry": {
+        "topic": "LINE_INITIATED",
+        "where": [
+            {
+                "field": "payload.products.sub_category",
+                "op": "includes",
+                "value": "Mobile",
+            }
+        ],
+    },
+    "nodes": [{"id": "wait-30m", "type": "wait", "minutes": 30}],
+    "edges": [],
+    "goals": [{"topics": ["LINE_ACTIVE"], "exit_reason": "goal_met"}],
+}
+
+
+def _doors_opened(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: Dict[str, Any],
+    where: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    plan = {**_MOBILE_DOOR_PLAN}
+    if where is not None:
+        plan["entry"] = {"topic": "LINE_INITIATED", "where": where}
+    flow = _flow(plan)
+    _install(monkeypatch, _Spine([flow], [], {(flow.id, 1): plan}))
+    opened: List[str] = []
+
+    async def enrol(**kwargs: Any) -> object:
+        opened.append(kwargs["door"].topic)
+        return object()
+
+    monkeypatch.setattr(entry, "enrol", enrol)
+    _consume(_event("LINE_INITIATED", payload, source="flipkart"))
+    return len(opened)
+
+
+@pytest.mark.parametrize(
+    "basket, admitted",
+    [
+        ({"products": [{"sub_category": "Mobile"}, {"sub_category": "Fridge"}]}, 1),
+        ({"products": [{"sub_category": "Fridge"}, {"sub_category": "TV"}]}, 0),
+        ({"products": {"sub_category": "Mobile"}}, 1),  # a bare object: a list of one
+        ({"products": {"sub_category": "Fridge"}}, 0),  # …judged, never routed around
+        ({"products": []}, 0),
+        ({}, 0),
+        ({"products": [{"brand": "vivo"}]}, 0),  # elements without the key
+    ],
+    ids=[
+        "array-with",
+        "array-without",
+        "object-with",
+        "object-without",
+        "empty",
+        "missing",
+        "no-key",
+    ],
+)
+def test_a_door_asks_the_array_whether_any_product_is_a_mobile(
+    monkeypatch: pytest.MonkeyPatch, basket: Dict[str, Any], admitted: int
+) -> None:
+    """`includes "Mobile"` is judged on the RAW array with the value written
+    in the plan: one mobile among many admits; none refuses; a one-product
+    basket sent as a bare object is a list of one, whichever way it falls —
+    a vendor's shape can never route around the question."""
+    assert _doors_opened(monkeypatch, basket) == admitted
+
+
+def test_exists_on_a_list_means_non_empty_and_not_exists_means_empty_or_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty array reads as absent — the engine's own rule — so `exists`
+    does not hold on an empty basket and `not_exists` does."""
+    exists = [{"field": "payload.products.sub_category", "op": "exists"}]
+    absent = [{"field": "payload.products.sub_category", "op": "not_exists"}]
+    two = {"products": [{"sub_category": "Fridge"}, {"sub_category": "TV"}]}
+    assert _doors_opened(monkeypatch, two, exists) == 1
+    assert _doors_opened(monkeypatch, {"products": []}, exists) == 0
+    assert _doors_opened(monkeypatch, {}, exists) == 0
+    assert _doors_opened(monkeypatch, {"products": []}, absent) == 1
+    assert _doors_opened(monkeypatch, {}, absent) == 1
+    assert _doors_opened(monkeypatch, two, absent) == 0
+
+
+def test_a_scalar_door_field_is_read_from_the_payload_as_before(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path that crosses no array keeps its dot-walk."""
+    where = [{"field": "payload.order.sub_category", "op": "is", "value": "Mobile"}]
+    assert _doors_opened(monkeypatch, {"order": {}}, where) == 0
+    assert _doors_opened(monkeypatch, {"order": {"sub_category": "Mobile"}}, where) == 1

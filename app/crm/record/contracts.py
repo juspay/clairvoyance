@@ -22,7 +22,7 @@ from app.crm.record.catalog import (
     topic_counts,
 )
 from app.crm.record.events import customer_has_event
-from app.crm.record.extractors.engine import field_value, variable_name
+from app.crm.record.extractors.engine import field_value, list_values, variable_name
 from app.crm.record.ingest import record_event
 from app.crm.record.ingress import IngressSpec, register_ingress
 from app.crm.record.schemas import CatalogField, EventIn, RawEvent, TopicCount
@@ -48,6 +48,7 @@ __all__ = [
     "catalog_fields",
     "derive_for",
     "field_value",
+    "list_values",
     "topic_counts",
     "variable_name",
 ]

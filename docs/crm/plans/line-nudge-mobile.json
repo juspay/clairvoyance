@@ -1,0 +1,189 @@
+{
+  "_comment": "line-nudge.json gated at the DOOR: only a journey that starts with a mobile in the basket enrols. payload.products.sub_category is a list (one value per product), and the door asks it the list's one question, `includes` with the value Mobile: does ANY product's sub_category equal Mobile, judged against the raw array with the value written here in the plan (design/event-catalog.md, The list ruling). One mobile is enough, whatever else is in the basket; a basket without one never starts a run (a condition square would enrol everyone and only withhold the call). A vendor that sends one product as a bare object is judged the same way: a scalar counts as a list of one. A list admits includes / exists / not_exists at the door and nothing else: is and in compare a field's ONE value, and a list has many. The rule then asks for offers as line-nudge.json does; the calling window and the ladder are unchanged.",
+  "entry": {
+    "topic": "LINE_INITIATED",
+    "key": "customer_id",
+    "where": [
+      {
+        "field": "payload.products.sub_category",
+        "op": "includes",
+        "value": "Mobile"
+      }
+    ],
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "nodes": [
+    {
+      "id": "is-credit-line",
+      "type": "condition",
+      "rules": [
+        {
+          "on": "yes",
+          "if": [
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quiet-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_REQUIRED",
+        "LINE_ACCOUNT_AGGREGATOR_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_COMPLETED",
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "07:00",
+        "closes": "23:00",
+        "timezone": "Asia/Kolkata"
+      }
+    },
+    {
+      "id": "nudge-call",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "listen",
+      "type": "wait",
+      "topics": [
+        "LINE_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_REQUIRED",
+        "LINE_ACCOUNT_AGGREGATOR_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_COMPLETED",
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic"
+    }
+  ],
+  "edges": [
+    [
+      "is-credit-line",
+      "quiet-30m",
+      "yes"
+    ],
+    [
+      "is-credit-line",
+      "listen",
+      "else"
+    ],
+    [
+      "quiet-30m",
+      "nudge-call",
+      "timeout"
+    ],
+    [
+      "nudge-call",
+      "listen"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_INITIATED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_REQUIRED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_INITIATED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_COMPLETED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_INITIATED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_REQUIRED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_INITIATED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_COMPLETED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ]
+  ],
+  "goals": [
+    {
+      "topics": [
+        "LINE_ACTIVE",
+        "LINE_HARD_OFFER_REJECTED",
+        "LINE_KYC_REJECTED"
+      ],
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 30
+  },
+  "purpose_key": "utility.loan.checkout_nudge"
+}
