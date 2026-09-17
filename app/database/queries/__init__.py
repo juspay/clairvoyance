@@ -6,7 +6,7 @@ from typing import Any, List
 
 import asyncpg
 
-from app.database import get_db_connection
+from app.database import db_connection
 
 
 # Helper function to execute parameterized queries
@@ -19,7 +19,5 @@ async def run_parameterized_query(
     Raises exceptions on failure so callers can handle them appropriately
     (all accessor functions have try/except that log and re-raise).
     """
-    async for conn in get_db_connection():
-        result = await conn.fetch(query_text, *values)
-        return result
-    return []
+    async with db_connection() as conn:
+        return await conn.fetch(query_text, *values)

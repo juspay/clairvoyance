@@ -21,7 +21,7 @@ from app.core.config.static import (
     GEMINI_API_KEY,
 )
 from app.core.logger import logger
-from app.database import get_db_connection
+from app.database import db_connection
 from app.services.redis.client import get_redis_service
 
 router = APIRouter()
@@ -161,7 +161,7 @@ async def database_health_check():
     """Check database connectivity and health."""
     logger.info("Database health check endpoint called")
     try:
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             result = await conn.fetchval("SELECT 1")
             if result == 1:
                 return JSONResponse(

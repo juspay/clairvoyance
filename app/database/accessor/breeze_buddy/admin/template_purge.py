@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from app.core.logger import logger
-from app.database import get_db_connection
+from app.database import db_connection
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.admin.template_purge import (
     delete_template_row_query,
@@ -45,7 +45,7 @@ async def purge_template_with_sessions(template_id: str) -> Optional[Dict[str, A
     """
     sessions_query, sessions_values = delete_template_sessions_query(template_id)
     row_query, row_values = delete_template_row_query(template_id)
-    async for conn in get_db_connection():
+    async with db_connection() as conn:
         async with conn.transaction():
             sessions = await conn.fetch(sessions_query, *sessions_values)
             row = await conn.fetchrow(row_query, *row_values)

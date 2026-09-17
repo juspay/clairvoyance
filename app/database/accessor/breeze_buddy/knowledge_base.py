@@ -8,7 +8,7 @@ from uuid import uuid4
 import asyncpg
 
 from app.core.logger import logger
-from app.database import get_db_connection
+from app.database import db_connection
 from app.database.decoder.breeze_buddy.knowledge_base import (
     decode_kb_document_list,
     decode_knowledge_base_list,
@@ -459,7 +459,7 @@ async def hybrid_search_chunks(
         candidate_k=candidate_k,
     )
     try:
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             # Probe the pgvector >= 0.8 GUC once, in its OWN transaction so a
             # failed probe can't poison the query transaction. Only a missing
             # GUC pins the flag False; transient errors leave it None so the
