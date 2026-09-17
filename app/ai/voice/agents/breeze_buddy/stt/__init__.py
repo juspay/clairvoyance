@@ -12,15 +12,19 @@ from typing import Optional
 from pipecat.transcriptions.language import Language
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    AssemblyAISTTConfig,
     DeepgramSTTConfig,
     SonioxSTTConfig,
     STTConfiguration,
     STTProvider,
+    TurnDetectionMode,
 )
 from app.ai.voice.stt import (
+    AssemblyAIConfig,
     DeepgramConfig,
     SarvamConfig,
     SonioxConfig,
+    build_assemblyai_stt,
     build_deepgram_stt,
     build_google_stt,
     build_openai_stt,
@@ -34,6 +38,7 @@ from app.core.config.dynamic import (
     BB_SARVAM_STT_VAD_SIGNALS,
 )
 from app.core.config.static import (
+    ASSEMBLYAI_API_KEY,
     BREEZE_BUDDY_SONIOX_CONTEXT,
     BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
     BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
@@ -78,6 +83,31 @@ def _deepgram_language(language: str | list[str] | None) -> str:
             )
         return language[0] if language else "en"
     return language
+
+
+def _assemblyai_languages(language: str | list[str] | None) -> list[Language]:
+    """Normalize language for AssemblyAI (a list of ``Language`` enums).
+
+    AssemblyAI steers on declared languages rather than a single code: one
+    entry pins, several allow code-switching among that subset. Unknown codes
+    are dropped with a warning rather than failing the call — an empty list
+    sends no steering and leaves the model default in place.
+    """
+    if language is None:
+        return []
+    codes = [language] if isinstance(language, str) else language
+
+    languages: list[Language] = []
+    for code in codes:
+        try:
+            languages.append(Language(code))
+        except ValueError:
+            logger.warning(
+                "Unknown language code '{}' for AssemblyAI; skipping steering "
+                "for it",
+                code,
+            )
+    return languages
 
 
 async def create_stt_from_config(config: STTConfiguration):
@@ -175,6 +205,41 @@ async def create_stt_from_config(config: STTConfiguration):
             temperature=0.0,
         )
 
+    if config.provider == STTProvider.ASSEMBLYAI:
+        if not ASSEMBLYAI_API_KEY:
+            raise ValueError("ASSEMBLYAI_API_KEY is required for assemblyai STT")
+
+        aa = config.assemblyai or AssemblyAISTTConfig()
+
+        # stt_native hands the turn decision to AssemblyAI's own model, the
+        # same way it hands it to Soniox's <end> token — one wait, in the
+        # engine, so the pipeline adds no second timeout on top. smart_turn
+        # and timeout keep the pipeline in charge and make AssemblyAI finalize
+        # as fast as it can.
+        native_turns = config.turn_detection == TurnDetectionMode.STT_NATIVE
+
+        assemblyai_config = AssemblyAIConfig(
+            api_key=ASSEMBLYAI_API_KEY,
+            language_codes=_assemblyai_languages(config.language),
+            sample_rate=SAMPLE_RATE,
+            keyterms_prompt=aa.keyterms_prompt,
+            formatted_finals=aa.formatted_finals,
+            language_detection=aa.language_detection,
+            vad_force_turn_endpoint=not native_turns,
+            end_of_turn_confidence_threshold=aa.end_of_turn_confidence_threshold,
+            mode=aa.mode,
+            voice_focus=aa.voice_focus,
+            voice_focus_threshold=aa.voice_focus_threshold,
+            interruption_delay=aa.interruption_delay,
+        )
+        if aa.model:
+            assemblyai_config.model = aa.model
+        if aa.min_turn_silence is not None:
+            assemblyai_config.min_turn_silence = aa.min_turn_silence
+        if aa.max_turn_silence is not None:
+            assemblyai_config.max_turn_silence = aa.max_turn_silence
+        return build_assemblyai_stt(assemblyai_config)
+
     # Default: Google
     logger.info("Using Google STT service for Breeze Buddy")
     return build_google_stt(credentials_json=GOOGLE_CREDENTIALS_JSON)
@@ -202,6 +267,7 @@ async def get_stt_service(
         "sarvam": STTProvider.SARVAM,
         "openai": STTProvider.OPENAI,
         "google": STTProvider.GOOGLE,
+        "assemblyai": STTProvider.ASSEMBLYAI,
     }
     provider = provider_map.get(BREEZE_BUDDY_STT_SERVICE, STTProvider.GOOGLE)
 

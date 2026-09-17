@@ -60,6 +60,7 @@ class STTProvider(str, Enum):
     SARVAM = "sarvam"
     OPENAI = "openai"
     GOOGLE = "google"
+    ASSEMBLYAI = "assemblyai"
 
 
 class SonioxSTTConfig(BaseModel):
@@ -126,6 +127,80 @@ class SarvamSTTConfig(BaseModel):
     )
     language_code: Optional[str] = Field(
         None, description="Sarvam language code. Defaults from env."
+    )
+
+
+class AssemblyAISTTConfig(BaseModel):
+    """AssemblyAI-specific STT settings.
+
+    Language steering comes from ``STTConfiguration.language``; these are the
+    knobs that have no provider-agnostic equivalent.
+    """
+
+    model: Optional[str] = Field(
+        None,
+        description="AssemblyAI streaming model (e.g. 'u3-rt-pro'). "
+        "Defaults to the builder's u3-rt-pro.",
+    )
+    keyterms_prompt: Optional[list[str]] = Field(
+        None,
+        description="Domain terms to bias recognition (brand names, product "
+        "names). U3 Pro models only.",
+    )
+    formatted_finals: bool = Field(
+        True,
+        description="Return punctuated/formatted final transcripts.",
+    )
+    language_detection: bool = Field(
+        False,
+        description="Automatic language detection (AssemblyAI's analogue of "
+        "Soniox enable_language_identification).",
+    )
+    min_turn_silence: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Silence (ms) before AssemblyAI closes a turn — the dial "
+        "that controls sentence fragmentation, analogous to Soniox "
+        "max_endpoint_delay_ms. Defaults to 300ms in the builder.",
+    )
+    max_turn_silence: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Ceiling (ms) before a turn is force-ended. Only applies "
+        "with turn_detection='stt_native'; otherwise pipecat pins it equal "
+        "to min_turn_silence.",
+    )
+    end_of_turn_confidence_threshold: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="How confident AssemblyAI must be that the speaker "
+        "finished before closing a turn. Higher = fewer early cuts.",
+    )
+    mode: Optional[Literal["min_latency", "balanced", "max_accuracy"]] = Field(
+        None,
+        description="Latency/accuracy preset. U3 Pro only; server default is "
+        "'balanced'.",
+    )
+    voice_focus: Optional[Literal["near-field", "far-field"]] = Field(
+        None,
+        description="Isolate the primary speaker. 'near-field' for handsets "
+        "and headsets (telephony), 'far-field' for room capture. U3 Pro only, "
+        "billed as an add-on.",
+    )
+    voice_focus_threshold: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="How aggressively background audio is suppressed. No "
+        "effect unless voice_focus is set.",
+    )
+    interruption_delay: Optional[int] = Field(
+        None,
+        ge=0,
+        le=1000,
+        description="Milliseconds before the first partial is emitted. The "
+        "server adds 256ms on top. u3-rt-pro only.",
     )
 
 
@@ -241,6 +316,7 @@ class STTConfiguration(BaseModel):
     soniox: Optional[SonioxSTTConfig] = None
     deepgram: Optional[DeepgramSTTConfig] = None
     sarvam: Optional[SarvamSTTConfig] = None
+    assemblyai: Optional[AssemblyAISTTConfig] = None
 
     # SmartTurn ML config — only used when turn_detection='smart_turn'
     smart_turn: Optional[SmartTurnConfig] = None

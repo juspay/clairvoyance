@@ -7,7 +7,7 @@ reuse the same provider-specific setup logic.
 from __future__ import annotations
 
 # Export all builder functions and config classes
-from .assemblyai import build_assemblyai_stt
+from .assemblyai import AssemblyAIConfig, build_assemblyai_stt
 from .deepgram import DeepgramConfig, build_deepgram_stt
 from .google import build_google_stt
 from .openai import build_openai_stt
@@ -21,6 +21,7 @@ __all__ = [
     "TranscriptionError",
     "transcribe_audio",
     # AssemblyAI
+    "AssemblyAIConfig",
     "build_assemblyai_stt",
     # Deepgram
     "DeepgramConfig",
