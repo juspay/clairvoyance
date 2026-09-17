@@ -103,6 +103,9 @@ class _Writes:
         self.versions = versions if versions is not None else {1: definition}
         self.definition_reads: List[Tuple[str, str, int]] = []
         self.calls: List[Tuple[str, Tuple[Any, ...]]] = []
+        # The T26 flush rides as keyword arguments, so `args` keeps the
+        # positional shape every assertion below already unpacks.
+        self.flushes: List[Dict[str, Any]] = []
 
     async def get_workflow(self, merchant_id: str, workflow_id: str) -> Workflow:
         return Workflow(
@@ -124,12 +127,14 @@ class _Writes:
         self.definition_reads.append((merchant_id, workflow_id, version))
         return self.versions.get(version)
 
-    async def advance_run(self, *args: Any) -> bool:
+    async def advance_run(self, *args: Any, **kwargs: Any) -> bool:
         self.calls.append(("advance", args))
+        self.flushes.append(kwargs)
         return self.matched
 
     async def exit_run(self, *args: Any, **kwargs: Any) -> bool:
         self.calls.append(("exit", args + tuple(kwargs.values())))
+        self.flushes.append(kwargs)
         return self.matched
 
     async def park_run(self, *args: Any) -> bool:

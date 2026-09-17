@@ -37,10 +37,23 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
-from app.crm.outreach.nodes.context import reply_key, without_reply
+from app.crm.outreach.nodes.context import (
+    CUT_SHORT_BY_KEY,
+    dispatch_id,
+    reply_key,
+    without_reply,
+)
 from app.crm.outreach.nodes.spec import ELSE, NodeParked
 from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
+from app.crm.outreach.steps import (
+    ARRIVED_BY_WALK,
+    StepRecord,
+    as_rows,
+    closing,
+    first_arrival,
+    step,
+)
 from app.crm.outreach.window import alarm, opens_at
 from app.crm.record.contracts import customer_has_event
 
@@ -93,7 +106,29 @@ async def walk_run(run: EnrollmentRun) -> None:
             run.merchant_id, str(run.workflow_id)
         )
         if workflow is None or workflow.status == "archived":
-            if not await enrollment_accessor.exit_run(str(run.id), "ejected", lease):
+            # The ejected run's last square still closes (canon T26). The
+            # pinned document is read for its node TYPE alone, off the LRU
+            # that the normal path would have hit a line later anyway.
+            #
+            # Never at the cost of the eject itself: before T26 this path
+            # did not read a document at all, and a version row that no
+            # longer validates would now park a run that an archived plan
+            # should simply release. The record never stops the token — the
+            # closing row is skipped and the exit proceeds.
+            try:
+                ejected = await definition_for(run)
+            except Exception as e:
+                logger.warning(
+                    f"walker: run {run.id} ejecting without a closing step — "
+                    f"definition v{run.workflow_version} unreadable: {e}"
+                )
+                ejected = None
+            if not await enrollment_accessor.exit_run(
+                str(run.id),
+                "ejected",
+                lease,
+                steps=as_rows(closing(run, ejected, "ejected")),
+            ):
                 _deferred(run, "eject")
             return
         if workflow.status == "paused":
@@ -131,8 +166,10 @@ async def walk_run(run: EnrollmentRun) -> None:
 
 def _deferred(run: EnrollmentRun, write: str) -> None:
     """A CAS miss: the run moved under the lease (a reply or repeat landed
-    mid-visit). Nothing to undo — the event side's alarm stands and the
-    next claim re-reads the run as it now is."""
+    mid-visit). Nothing to undo — the event side's alarm stands, the
+    buffered history is discarded with the move it belonged to (the INSERT
+    selects FROM the UPDATE's own RETURNING), and the next claim re-reads
+    the run as it now is."""
     logger.info(
         f"walker: run {run.id} changed under the lease ({write} skipped) — "
         f"deferring to the next wake"
@@ -150,7 +187,12 @@ async def _advance(
     # timed_out no matter which square it stands on.
     max_age = timedelta(days=definition.exits.max_age_days)
     if now - run.entered_at > max_age:
-        if not await enrollment_accessor.exit_run(str(run.id), "timed_out", lease):
+        if not await enrollment_accessor.exit_run(
+            str(run.id),
+            "timed_out",
+            lease,
+            steps=as_rows(closing(run, definition, "timed_out")),
+        ):
             _deferred(run, "timed_out")
         return
 
@@ -171,13 +213,26 @@ async def _advance(
             run.merchant_id, str(run.customer_id), tier.topics, since, where
         ):
             if not await enrollment_accessor.exit_run(
-                str(run.id), tier.exit_reason, lease
+                str(run.id),
+                tier.exit_reason,
+                lease,
+                steps=as_rows(closing(run, definition, tier.exit_reason)),
             ):
                 _deferred(run, tier.exit_reason)
             return
 
     current_id = run.current_node
     context = dict(run.context)
+    # The letter that woke this run in place, if one did (canon T26): it
+    # dates the square we are about to close and names how this visit began.
+    # POPPED, not read — written back it would age into a later visit and
+    # credit the wrong square, the way a stale reply would.
+    cut_short_by = context.pop(CUT_SHORT_BY_KEY, None)
+    cut_short_by = str(cut_short_by) if cut_short_by else None
+    arrived_by = first_arrival(run, cut_short_by)
+    arrived_at = run.node_arrived_at
+    walked: List[StepRecord] = []
+    first = True
     for _ in range(_MAX_STEPS_PER_VISIT):
         node = nodes.get(current_id)
         if node is None:
@@ -196,29 +251,84 @@ async def _advance(
             # nothing is queued at night for the dialler to ring at 7 AM.
             opening = opens_at(now, node.window)
             if opening > now:
+                # TRAP 1 (canon T26): the hold calls advance_run with this
+                # square's OWN id. The token has NOT left it, so no row
+                # closes here — and the arrival is restamped only when THIS
+                # visit walked into the square, never when the run was
+                # already standing on it. Keyed on "we called advance", an
+                # overnight hold would write a zero-length step every
+                # morning and make "waiting since Friday" render as
+                # "waiting since 9am".
+                #
+                # Squares this visit already finished before reaching the
+                # hold still flush: they were left, and they share the fate
+                # of the write that records the hold.
                 if not await enrollment_accessor.advance_run(
-                    str(run.id), node.id, opening, context, lease
+                    str(run.id),
+                    node.id,
+                    opening,
+                    # The letter that re-armed this run is put BACK: the
+                    # square it woke is still the square the token stands
+                    # on, and the visit that finally closes it is the one
+                    # that owes the pointer. Consuming it here would leave
+                    # that row saying `timer` — a plausible-looking lie, and
+                    # the hold is reached almost only by a re-arm, so this
+                    # is the common path, not a corner.
+                    (
+                        {**context, CUT_SHORT_BY_KEY: cut_short_by}
+                        if cut_short_by
+                        else context
+                    ),
+                    lease,
+                    node_arrived_at=None if first else arrived_at,
+                    steps=as_rows(walked),
                 ):
                     _deferred(run, f"hold on {node.id}")
                 return
 
         execute = NODE_TYPES[node.type].execute
+        dispatched: Optional[str] = None
         if execute is not None:  # a wait's action IS the alarm
-            context.update(await execute(run, node, definition))
+            patch = await execute(run, node, definition)
+            context.update(patch)
+            dispatched = dispatch_id(patch, node.id)
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
+        outcome: Optional[str] = None
         if branches(node):
+            # The answer that resolved this square IS its outcome (canon
+            # T26) — a reply, a condition's rule label, a split's arm, or
+            # the timeout when the alarm won. Read BEFORE the clear below,
+            # which is the whole reason a condition's branch reaches disk
+            # nowhere else.
+            answer = context.get(reply_key(node.id))
+            outcome = TIMEOUT if answer is None else str(answer)
             # Leaving a branching square: its answer is spent (phase 15).
             # A door may start a run on any square, so this one can be
             # revisited — a stale reply would resolve the revisit at once.
             context = without_reply(context, node.id)
+        left_at = datetime.now(timezone.utc)
+
         if next_id is None:
+            walked += step(
+                node,
+                arrived_at,
+                left_at,
+                arrived_by,
+                outcome,
+                None,
+                run,
+                cut_short_by,
+                first,
+                dispatched,
+            )
             if not await enrollment_accessor.exit_run(
                 str(run.id),
                 "completed",
                 lease,
                 current_node=current_id,
                 context=context,
+                steps=as_rows(walked),
             ):
                 _deferred(run, "completed")
             return
@@ -230,14 +340,50 @@ async def _advance(
             # Arrival scheduling: the wait's alarm starts now — its minutes,
             # the window's next opening, or the end of the run's life
             # (window.alarm). A wait already due moves on in this same visit.
-            arrived = datetime.now(timezone.utc)
-            wake = alarm(next_node, arrived, run.entered_at + max_age)
-            if wake > arrived:
+            wake = alarm(next_node, left_at, run.entered_at + max_age)
+            if wake > left_at:
+                walked += step(
+                    node,
+                    arrived_at,
+                    left_at,
+                    arrived_by,
+                    outcome,
+                    next_id,
+                    run,
+                    cut_short_by,
+                    first,
+                    dispatched,
+                )
                 if not await enrollment_accessor.advance_run(
-                    str(run.id), next_id, wake, context, lease
+                    str(run.id),
+                    next_id,
+                    wake,
+                    context,
+                    lease,
+                    # The token really did move, so the new square's arrival
+                    # is this one's exit — gapless by construction.
+                    node_arrived_at=left_at,
+                    steps=as_rows(walked),
                 ):
                     _deferred(run, f"advance to {next_id}")
                 return
+
+        walked += step(
+            node,
+            arrived_at,
+            left_at,
+            arrived_by,
+            outcome,
+            next_id,
+            run,
+            cut_short_by,
+            first,
+            dispatched,
+        )
+        arrived_at = left_at  # the next square's arrival is this one's exit
+        arrived_by = ARRIVED_BY_WALK
+        cut_short_by = None  # the letter cut short ONE square, not the chain
+        first = False
         current_id = next_id  # an action, or a due wait: this same visit
 
     raise NodeParked(

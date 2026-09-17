@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.crm.outreach.db.queries.step import flush_arm
 from app.crm.outreach.db.queries.tables import (
     ENROLLMENT_TABLE,
     VERSION_TABLE,
@@ -17,8 +18,14 @@ from app.crm.outreach.schemas import SPLIT_PREFIX
 _RUN_COLUMNS = """
     id, merchant_id, workflow_id, workflow_version, customer_id, status,
     current_node, wake_at, entered_at, exited_at, exit_reason, context,
-    enrollment_key, attempts, last_error
+    enrollment_key, attempts, last_error, node_arrived_at
 """
+
+# --- the T26 flush (canon T26, migration 073) ------------------------------
+#
+# Every statement that MOVES a token composes step.flush_arm, which lives
+# with ITS table: the INSERT selects FROM the UPDATE's own RETURNING, so a
+# stale lease means no move AND no history, discarded together.
 
 
 def repin_open_runs_query(
@@ -118,12 +125,20 @@ def insert_enrollment_query(
 ) -> Tuple[str, List[Any]]:
     """The token is born. The partial unique (merchant, workflow, key)
     WHERE not exited absorbs the enrol race — a UniqueViolation here
-    means 'already in flow', never an error."""
+    means 'already in flow', never an error.
+
+    node_arrived_at is stamped with the SAME now() that defaults
+    entered_at (canon T26): no row is written here — the door's square has
+    not been left — but the arrival has to be on the row before the first
+    flush can date it. Equal to entered_at is also what lets
+    steps.first_arrival read `door` with no stored flag, for exactly as
+    long as the run has never moved."""
     query = f"""
         INSERT INTO {ENROLLMENT_TABLE}
             (merchant_id, workflow_id, workflow_version, customer_id,
-             current_node, wake_at, context, enrollment_key)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+             current_node, wake_at, context, enrollment_key,
+             entered_at, node_arrived_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
         RETURNING {_RUN_COLUMNS}
     """
     return query, [
@@ -220,22 +235,45 @@ def advance_run_query(
     wake_at: datetime,
     context: Dict[str, Any],
     leased_wake_at: datetime,
+    node_arrived_at: Optional[datetime] = None,
+    steps: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, List[Any]]:
     """A successful step: move the token, set its next alarm, reset the
-    failure counter (only CONSECUTIVE failures park a run).
+    failure counter (only CONSECUTIVE failures park a run), and flush the
+    squares this visit finished (canon T26).
 
     The lease is the generation: a write under a stale lease is a no-op.
     A reply or a repeat that landed mid-visit moved wake_at, so this
     UPDATE matches nothing and the walker defers instead of clobbering
-    the answer with the timeout path (P1)."""
+    the answer with the timeout path (P1) — and the buffered history is
+    discarded with the move it belonged to.
+
+    ``node_arrived_at`` is COALESCEd, not assigned: a WINDOWED HOLD calls
+    this with its OWN node id (trap 1), and restamping there would write a
+    zero-length step and reset the clock — "waiting since Friday" would
+    render as "waiting since 9am". The walker passes None for a hold, and
+    an empty ``steps`` with it."""
     query = f"""
-        UPDATE {ENROLLMENT_TABLE}
-        SET current_node = $2, wake_at = $3, context = $4::jsonb,
-            attempts = 0, last_error = NULL
-        WHERE id = $1 AND status = 'waiting' AND wake_at = $5
-        RETURNING id
+        WITH moved AS (
+            UPDATE {ENROLLMENT_TABLE}
+            SET current_node = $2, wake_at = $3, context = $4::jsonb,
+                node_arrived_at = COALESCE($5::timestamptz, node_arrived_at),
+                attempts = 0, last_error = NULL
+            WHERE id = $1 AND status = 'waiting' AND wake_at = $6
+            RETURNING id, merchant_id, workflow_id, workflow_version
+        ), wrote AS ({flush_arm("moved", "$7")})
+        SELECT (SELECT id FROM moved) AS moved_id,
+               (SELECT count(*) FROM wrote) AS steps
     """
-    return query, [run_id, current_node, wake_at, json.dumps(context), leased_wake_at]
+    return query, [
+        run_id,
+        current_node,
+        wake_at,
+        json.dumps(context),
+        node_arrived_at,
+        leased_wake_at,
+        json.dumps(steps or []),
+    ]
 
 
 def exit_run_query(
@@ -244,6 +282,7 @@ def exit_run_query(
     current_node: Optional[str],
     context: Optional[Dict[str, Any]],
     leased_wake_at: datetime,
+    steps: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, List[Any]]:
     """The WALKER's exit (timed_out, goal_met, completed, ejected). An exit
     without a context KEEPS the row's context: the exited row's pointers
@@ -252,15 +291,24 @@ def exit_run_query(
     at-least-once redelivery enrol a second run from a stale checkout.
 
     The lease is the generation: a write under a stale lease is a no-op
-    (P1). The event side's exit is cancel_run_query, unconditional."""
+    (P1). The event side's exit is cancel_run_query, unconditional.
+
+    The exit CLOSES the square the run was standing on, so ``steps``
+    carries it (canon T26): a completed chain flushes its whole visit with
+    next_node = NULL on the last row, while timed_out / ejected / a goal
+    tier flush the single square the token never left."""
     query = f"""
-        UPDATE {ENROLLMENT_TABLE}
-        SET status = 'exited', exit_reason = $2, exited_at = now(),
-            wake_at = NULL,
-            current_node = COALESCE($3, current_node),
-            context = COALESCE($4::jsonb, context)
-        WHERE id = $1 AND status <> 'exited' AND wake_at = $5
-        RETURNING id
+        WITH moved AS (
+            UPDATE {ENROLLMENT_TABLE}
+            SET status = 'exited', exit_reason = $2, exited_at = now(),
+                wake_at = NULL,
+                current_node = COALESCE($3, current_node),
+                context = COALESCE($4::jsonb, context)
+            WHERE id = $1 AND status <> 'exited' AND wake_at = $5
+            RETURNING id, merchant_id, workflow_id, workflow_version
+        ), wrote AS ({flush_arm("moved", "$6")})
+        SELECT (SELECT id FROM moved) AS moved_id,
+               (SELECT count(*) FROM wrote) AS steps
     """
     return query, [
         run_id,
@@ -268,6 +316,7 @@ def exit_run_query(
         current_node,
         None if context is None else json.dumps(context),
         leased_wake_at,
+        json.dumps(steps or []),
     ]
 
 
@@ -370,7 +419,11 @@ def resume_run_by_id_query(
 
 
 def refresh_run_facts_query(
-    merchant_id: str, run_id: str, node_id: str, facts: Dict[str, Any]
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    facts: Dict[str, Any],
+    cut_short_by: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """A letter that finds the run on a square that listens to NOTHING —
     the door's start square before the walker's first visit, or an
@@ -381,10 +434,21 @@ def refresh_run_facts_query(
     and redone on these facts. The latest letter decides, never an earlier
     one: two events two seconds apart act once, on the second. Only an
     open run still on that square is touched; parked is forgiven exactly
-    as a reply forgives it."""
+    as a reply forgives it.
+
+    ``cut_short_by`` (canon T26) is its OWN parameter and merges at the TOP
+    level, deliberately not folded into ``facts``: on the reply path the
+    same-shaped dict becomes ``context.facts.<square>``, and ``run_facts``
+    flattens that namespace into template variables — a marker that drifted
+    in there would ride into a customer's message. It stays here."""
+    marker = ""
+    params: List[Any] = [merchant_id, run_id, node_id, json.dumps(facts)]
+    if cut_short_by:
+        marker = "|| jsonb_build_object('cut_short_by', $5::text)"
+        params.append(cut_short_by)
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
-        SET context = context || $4::jsonb,
+        SET context = context || $4::jsonb {marker},
             wake_at = now(),
             last_error = NULL,
             status = 'waiting',
@@ -393,7 +457,7 @@ def refresh_run_facts_query(
           AND status IN ('waiting', 'parked') AND current_node = $3
         RETURNING id
     """
-    return query, [merchant_id, run_id, node_id, json.dumps(facts)]
+    return query, params
 
 
 def cancel_run_query(
@@ -403,6 +467,7 @@ def cancel_run_query(
     occurred_at: Optional[datetime] = None,
     key: Optional[Tuple[str, str]] = None,
     context_patch: Optional[Dict[str, Any]] = None,
+    steps: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, List[Any]]:
     """Goal-cancel, by run id (phase 13): the tier that matched is the
     RUN'S version's, so the write names the run — a v3 goal never touches
@@ -426,7 +491,21 @@ def cancel_run_query(
     ``context_patch`` (phase 09) rides the same UPDATE — context ||
     $n::jsonb — so the run remembers which letter ended it and what it
     was worth (context.goal), for the summary's recovered revenue. Its
-    placeholder follows the optional key."""
+    placeholder follows the optional key.
+
+    ``steps`` is trap 3 (canon T26): this is the ONE writer outside the
+    walker that ends a run. No claim, no visit, no lease — so without a
+    flush here EVERY CONVERTED RUN, the ones that matter most, would lose
+    its final square.
+
+    The closing row is guarded, the exit is NOT. Ending the run is
+    unconditional by law (the walker defers to the event side), but the row
+    describes a snapshot the caller read a moment earlier: a walker that
+    advanced in between would already have closed that square, and writing
+    it again would duplicate it and name a square the run no longer stands
+    on. So the exit always lands and the row lands only while the snapshot
+    is still true — a lost closing row in a rare race, never a wrong one,
+    and never a customer who bought still being nudged."""
     params: List[Any] = [merchant_id, run_id, exit_reason, occurred_at]
     keyed = ""
     if key:
@@ -436,15 +515,31 @@ def cancel_run_query(
     if context_patch is not None:
         patched = f", context = context || ${len(params) + 1}::jsonb"
         params.append(json.dumps(context_patch))
+    steps_param = f"${len(params) + 1}"
+    params.append(json.dumps(steps or []))
     query = f"""
-        UPDATE {ENROLLMENT_TABLE}
-        SET status = 'exited', exit_reason = $3, exited_at = now(),
-            wake_at = NULL{patched}
-        WHERE merchant_id = $1 AND id = $2
-          AND status <> 'exited'
-          AND ($4::timestamptz IS NULL OR COALESCE((context->>'entered_event_at')::timestamptz, entered_at) < $4::timestamptz)
-          {keyed}
-        RETURNING id
+        WITH moved AS (
+            UPDATE {ENROLLMENT_TABLE}
+            SET status = 'exited', exit_reason = $3, exited_at = now(),
+                wake_at = NULL{patched}
+            WHERE merchant_id = $1 AND id = $2
+              AND status <> 'exited'
+              AND ($4::timestamptz IS NULL OR COALESCE((context->>'entered_event_at')::timestamptz, entered_at) < $4::timestamptz)
+              {keyed}
+            RETURNING id, merchant_id, workflow_id, workflow_version,
+                      current_node, node_arrived_at
+        ), wrote AS (
+            {flush_arm(
+                "moved",
+                steps_param,
+                guard=(
+                    "WHERE m.current_node = s.node "
+                    "AND m.node_arrived_at IS NOT DISTINCT FROM s.arrived_at"
+                ),
+            )}
+        )
+        SELECT (SELECT id FROM moved) AS moved_id,
+               (SELECT count(*) FROM wrote) AS steps
     """
     return query, params
 
@@ -534,6 +629,20 @@ def patch_open_run_query(
         debounce_minutes,
         anywhere,
     ]
+
+
+def get_run_query(
+    merchant_id: str, workflow_id: str, run_id: str
+) -> Tuple[str, List[Any]]:
+    """One run, by id — what the timeline read unions its open square from
+    (canon T26, law 3). Tenancy and the plan are both predicates: the route
+    names a workflow, and a run id from another plan is a 404, not a row."""
+    query = f"""
+        SELECT {_RUN_COLUMNS}
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2 AND id = $3
+    """
+    return query, [merchant_id, workflow_id, run_id]
 
 
 def list_runs_query(

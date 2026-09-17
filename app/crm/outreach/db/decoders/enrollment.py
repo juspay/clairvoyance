@@ -31,6 +31,7 @@ def decode_run(row: Mapping[str, Any]) -> EnrollmentRun:
         enrollment_key=row["enrollment_key"],
         attempts=row["attempts"],
         last_error=row["last_error"],
+        node_arrived_at=row["node_arrived_at"],
     )
 
 
