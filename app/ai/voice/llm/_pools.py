@@ -33,6 +33,8 @@ from typing import Optional
 
 import httpx
 from anthropic import AsyncAnthropicVertex
+from google import genai
+from google.genai import types as genai_types
 from google.oauth2 import service_account
 
 from app.core.logger import logger
@@ -41,6 +43,7 @@ __all__ = [
     "close_all_pools",
     "get_anthropic_vertex_client",
     "get_azure_httpx_client",
+    "get_genai_vertex_client",
 ]
 
 # ``keepalive_expiry=120s`` stays comfortably under Azure's idle timeout
@@ -113,6 +116,43 @@ def get_anthropic_vertex_client(
     return client
 
 
+_GENAI_VERTEX_POOLS: dict[tuple[str, str, str, int], genai.Client] = {}
+
+
+def get_genai_vertex_client(
+    *,
+    credentials_json: str,
+    project_id: str,
+    location: str,
+    timeout_ms: int,
+) -> genai.Client:
+    """Return a shared Vertex ``genai.Client`` for these settings.
+
+    Same reason as the Anthropic pool: one client keeps its connections
+    and its OAuth token between requests.
+    """
+    key = (project_id, location, _credentials_fingerprint(credentials_json), timeout_ms)
+    client = _GENAI_VERTEX_POOLS.get(key)
+    if client is None:
+        creds = service_account.Credentials.from_service_account_info(
+            json.loads(credentials_json),
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        client = genai.Client(
+            vertexai=True,
+            credentials=creds,
+            project=project_id,
+            location=location,
+            http_options=genai_types.HttpOptions(timeout=timeout_ms),
+        )
+        _GENAI_VERTEX_POOLS[key] = client
+        logger.info(
+            f"genai Vertex pool created for project={project_id} "
+            f"location={location} creds_fp={key[2]}"
+        )
+    return client
+
+
 async def _close_anthropic_vertex_clients() -> None:
     for key, client in list(_ANTHROPIC_VERTEX_POOLS.items()):
         close: Optional[object] = getattr(client, "aclose", None) or getattr(
@@ -141,3 +181,10 @@ async def close_all_pools() -> None:
 
     await _close_anthropic_vertex_clients()
     logger.info("All AsyncAnthropicVertex pools closed")
+
+    for key, client in list(_GENAI_VERTEX_POOLS.items()):
+        try:
+            await client.aio.aclose()
+        except Exception as exc:
+            logger.warning(f"genai Vertex pool close failed for {key[:2]}: {exc}")
+    _GENAI_VERTEX_POOLS.clear()
