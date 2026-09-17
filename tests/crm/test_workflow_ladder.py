@@ -321,6 +321,7 @@ def _workflow(
         status=status,
         version=1,
         created_by=None,
+        updated_by=None,
         created_at=NOW,
         updated_at=NOW,
         definition=definition,
@@ -341,7 +342,10 @@ async def test_create_and_draft_store_the_ladder_and_its_board(
         return _workflow("draft", None, draft)
 
     async def update_draft(
-        merchant_id: str, workflow_id: str, draft: Dict[str, Any]
+        merchant_id: str,
+        workflow_id: str,
+        draft: Dict[str, Any],
+        updated_by: Optional[str] = None,
     ) -> Workflow:
         stored.append(draft)
         return _workflow("draft", None, draft)
@@ -382,7 +386,9 @@ class _PublishAccessor:
     ) -> None:
         return None
 
-    async def apply_publish(self, conn: Any, m: str, w: str) -> Workflow:
+    async def apply_publish(
+        self, conn: Any, m: str, w: str, updated_by: Any = None
+    ) -> Workflow:
         return _workflow("live", self.draft, None)
 
     async def insert_version(

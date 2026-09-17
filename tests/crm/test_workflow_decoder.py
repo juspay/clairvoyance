@@ -46,6 +46,7 @@ def test_decode_workflow_carries_both_documents() -> None:
         "status": "live",
         "version": 3,
         "created_by": "ops@x",
+        "updated_by": "ops@x",
         "created_at": NOW,
         "updated_at": NOW,
         "definition": json.dumps(definition),

@@ -351,14 +351,17 @@ async def create_workflow(
 
 
 async def update_draft(
-    merchant_id: str, workflow_id: str, definition: Dict[str, Any]
+    merchant_id: str,
+    workflow_id: str,
+    definition: Dict[str, Any],
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
     catalogs = await _gather_catalogs(merchant_id, definition)
     problems = validate_definition(definition, catalogs=catalogs)
     if problems:
         raise WorkflowValidationError(problems)
     return await workflow_accessor.update_draft(
-        merchant_id, workflow_id, expand_stages(definition)
+        merchant_id, workflow_id, expand_stages(definition), updated_by
     )
 
 
@@ -424,7 +427,9 @@ async def _publish_in_txn(
     problems = await _template_problems(merchant_id, definition)
     if problems:
         raise WorkflowValidationError(problems)
-    published = await workflow_accessor.apply_publish(txn, merchant_id, workflow_id)
+    published = await workflow_accessor.apply_publish(
+        txn, merchant_id, workflow_id, published_by
+    )
     if published is None:  # a racing publish consumed the draft first
         raise WorkflowValidationError(["draft already published"])
     # The version row holds the document that just became live — the draft
@@ -479,7 +484,10 @@ async def _template_problems(
 
 
 async def set_status(
-    merchant_id: str, workflow_id: str, status: str
+    merchant_id: str,
+    workflow_id: str,
+    status: str,
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
     """live <-> paused, or archived (terminal). Archiving force-exits open
     runs as 'ejected' at the walker's next claim — the paused/archived
@@ -504,7 +512,9 @@ async def set_status(
             "archived": "archiving it",
         }
         raise WorkflowValidationError([f"publish a draft before {verb[status]}"])
-    return await workflow_accessor.set_workflow_status(merchant_id, workflow_id, status)
+    return await workflow_accessor.set_workflow_status(
+        merchant_id, workflow_id, status, updated_by
+    )
 
 
 async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]:

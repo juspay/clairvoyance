@@ -111,6 +111,7 @@ def _workflow(draft: Dict[str, Any], definition: Optional[Dict[str, Any]]) -> Wo
         status="live" if definition else "draft",
         version=1 if definition else 0,
         created_by=None,
+        updated_by=None,
         created_at=NOW,
         updated_at=NOW,
         definition=definition,
@@ -131,7 +132,9 @@ class _PublishAccessor:
     async def occupied_nodes(self, conn: Any, m: str, w: str) -> List[str]:
         return self.occupied
 
-    async def apply_publish(self, conn: Any, m: str, w: str) -> Workflow:
+    async def apply_publish(
+        self, conn: Any, m: str, w: str, updated_by: Any = None
+    ) -> Workflow:
         published = _workflow({}, self.draft)
         published.version = 2
         return published

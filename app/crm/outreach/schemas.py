@@ -473,6 +473,7 @@ class WorkflowSummary(BaseModel):
     status: str
     version: int
     created_by: Optional[str]
+    updated_by: Optional[str]
     created_at: datetime
     updated_at: datetime
     # Drift observability (event-catalog.md §Seen vs matched): events on

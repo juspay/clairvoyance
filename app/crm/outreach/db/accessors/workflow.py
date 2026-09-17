@@ -40,9 +40,12 @@ async def insert_workflow(
 
 
 async def update_draft(
-    merchant_id: str, workflow_id: str, draft: Dict[str, Any]
+    merchant_id: str,
+    workflow_id: str,
+    draft: Dict[str, Any],
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
-    query, values = update_draft_query(merchant_id, workflow_id, draft)
+    query, values = update_draft_query(merchant_id, workflow_id, draft, updated_by)
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
@@ -75,17 +78,25 @@ async def workflow_for_publish(
 
 
 async def apply_publish(
-    conn: asyncpg.Connection, merchant_id: str, workflow_id: str
+    conn: asyncpg.Connection,
+    merchant_id: str,
+    workflow_id: str,
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
-    query, values = publish_workflow_query(merchant_id, workflow_id)
+    query, values = publish_workflow_query(merchant_id, workflow_id, updated_by)
     row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
 
 
 async def set_workflow_status(
-    merchant_id: str, workflow_id: str, status: str
+    merchant_id: str,
+    workflow_id: str,
+    status: str,
+    updated_by: Optional[str] = None,
 ) -> Optional[Workflow]:
-    query, values = set_workflow_status_query(merchant_id, workflow_id, status)
+    query, values = set_workflow_status_query(
+        merchant_id, workflow_id, status, updated_by
+    )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
