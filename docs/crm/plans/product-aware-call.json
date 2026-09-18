@@ -1,0 +1,129 @@
+{
+  "_comment": "One call square, three templates plus a default. The square does not BRANCH — one arrow out, one lead, one visit counter — but WHICH template the lead carries is a question asked of facts already in hand. template_rules is an if/else-if ladder judged in document order: the first arm whose conditions ALL hold names the template, and the square's own template_id is the `else`, so no arm holding fires the default rather than parking the run. Conditions within one arm are ANDed; OR is two arms naming the SAME template — arms 2 and 3 are one rule written as two, because a predicate has no `or`. The fields are the run's rendered variables, named by the LAST segment of the catalog path (payload.products.category -> context.category); the grammar is flat, so context.category, never context.products.category. A rendered list variable is ABSENT when its item_where kept nothing, which is exactly what `not_exists` asks — context.category exists only for a customer whose product the category filter kept, and context.brand is absent for a customer with no product at all. context.event_name is the MOST RECENT letter's, not the founding one's: a run that entered on LINE_INITIATED and later heard LINE_OFFERED is judged on LINE_OFFERED when the call finally fires. A merchant whose own catalog registers INITIATED rather than LINE_INITIATED swaps those topic strings and nothing else — the call square is unchanged.",
+  "entry": {
+    "topic": "LINE_INITIATED",
+    "key": "customer_id",
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "entries": [
+    {
+      "topic": "LINE_INITIATED",
+      "key": "customer_id",
+      "start": "quiet-30m",
+      "reenter": true,
+      "cooldown_hours": 0
+    },
+    {
+      "topic": "LINE_OFFERED",
+      "key": "customer_id",
+      "start": "quiet-30m",
+      "reenter": true,
+      "cooldown_hours": 0
+    }
+  ],
+  "nodes": [
+    {
+      "id": "quiet-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_INITIATED",
+        "LINE_OFFERED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "07:00",
+        "closes": "23:00",
+        "timezone": "Asia/Kolkata"
+      }
+    },
+    {
+      "id": "nudge-call",
+      "type": "call",
+      "template_id": "TEMPLATE_GENERIC",
+      "template_rules": [
+        {
+          "if": [
+            {
+              "field": "context.event_name",
+              "op": "is",
+              "value": "LINE_INITIATED"
+            },
+            {
+              "field": "context.category",
+              "op": "exists"
+            }
+          ],
+          "template_id": "TEMPLATE_INITIATED_WITH_CATEGORY"
+        },
+        {
+          "if": [
+            {
+              "field": "context.event_name",
+              "op": "is",
+              "value": "LINE_INITIATED"
+            },
+            {
+              "field": "context.products",
+              "op": "not_exists"
+            }
+          ],
+          "template_id": "TEMPLATE_NO_PRODUCT"
+        },
+        {
+          "if": [
+            {
+              "field": "context.event_name",
+              "op": "is",
+              "value": "LINE_OFFERED"
+            },
+            {
+              "field": "context.brand",
+              "op": "not_exists"
+            }
+          ],
+          "template_id": "TEMPLATE_NO_PRODUCT"
+        }
+      ]
+    },
+    {
+      "id": "listen",
+      "type": "wait",
+      "topics": [
+        "LINE_INITIATED",
+        "LINE_OFFERED"
+      ],
+      "key": "$topic"
+    }
+  ],
+  "edges": [
+    [
+      "quiet-30m",
+      "nudge-call",
+      "timeout"
+    ],
+    [
+      "quiet-30m",
+      "quiet-30m",
+      "else"
+    ],
+    [
+      "nudge-call",
+      "listen"
+    ],
+    [
+      "listen",
+      "quiet-30m",
+      "else"
+    ]
+  ],
+  "goals": [
+    {
+      "topics": [
+        "LINE_ACTIVE",
+        "LINE_KYC_REJECTED"
+      ]
+    }
+  ]
+}

@@ -47,7 +47,7 @@ from app.crm.record.schemas import (
 )
 from app.crm.shared.predicate import (
     EQUALS_OP,
-    INCLUDES_OP,
+    LIST_OPS,
     ORDER_OPS,
     PRESENCE_OPS,
     TEXT_OPS,
@@ -64,14 +64,18 @@ OPS_BY_TYPE: Dict[str, List[str]] = {
     "boolean": ["is", "is_not", *PRESENCE_OPS],
     "datetime": [*ORDER_OPS, *PRESENCE_OPS],
     "phone": [],
-    # A list answers ONE existential question, against the raw array, with
-    # the value written in the plan (design/event-catalog.md §The `list`
-    # ruling): `includes` = any element equals the value, `exists` = the
-    # array is non-empty, `not_exists` = empty or absent. Never is/in/
-    # ordering — those compare a field's ONE value, and a list has many.
-    # item_where keeps its one job, narrowing what the renderer joins into
-    # the template variable; it never decides a door.
-    "list": [INCLUDES_OP, *PRESENCE_OPS],
+    # A list answers existential and data-quality questions, against the raw
+    # array, with the value(s) written in the plan (design/event-catalog.md
+    # §The `list` ruling): `includes`/`excludes` = any/none of the field's
+    # elements equal any of the plan's value(s) — one scalar or a list, same
+    # shape both sides — `all_present` = no element is null/missing (no
+    # value — a structural question), `exists` = the array is non-empty,
+    # `not_exists` = empty or absent. Never is/in/ordering — those compare a
+    # field's ONE value, and a list has many.
+    # Spelled from LIST_OPS so a future list op needs no second edit here.
+    # item_where keeps its one job, narrowing what the renderer joins into the
+    # template variable; it never decides a door.
+    "list": [*LIST_OPS, *PRESENCE_OPS],
 }
 KEYABLE_TYPES = ("text", "number")
 MAX_REGISTERED_FIELDS = 200

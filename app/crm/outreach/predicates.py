@@ -1,8 +1,11 @@
-"""The condition node's FIELD grammar and its judgement (enh A/01) — PURE.
+"""The rule FIELD grammar and its judgement (enh A/01) — PURE.
 
 A `condition` square reads facts already in hand and picks a labelled
 edge without waiting. Its rules are judged here, in document order; the
 first rule whose conditions all hold names the edge, none names `else`.
+A `call` square asks the same question of the same fields to pick which
+TEMPLATE it fires, its own template_id the `else` — one judgement
+(`first_matching`), two readings of what the winning arm names.
 
 The OP grammar is not this file's: it is the one where-grammar the corpus
 sealed (design/event-catalog.md §The where-grammar; shared/predicate.py),
@@ -30,11 +33,24 @@ the run to retry — a blip must never branch a customer down the wrong arm.
 """
 
 import re
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Set, TypeVar
 
 from app.crm.identity.contracts import CustomerFacts
 from app.crm.outreach.schemas import ConditionRule
-from app.crm.shared.predicate import matches
+from app.crm.shared.predicate import Condition, matches
+
+
+class Rule(Protocol):
+    """What the judging needs of a rule, and all it needs: the conditions
+    that must ALL hold. What an arm NAMES when it holds — an edge label
+    (schemas.ConditionRule) or a template (schemas.TemplateRule) — is the
+    caller's business, so ONE matcher serves both and the two can never
+    drift on what "this rule holds" means."""
+
+    if_: List[Condition]
+
+
+R = TypeVar("R", bound=Rule)
 
 CUSTOMER_COLUMNS = (
     "display_name",
@@ -120,26 +136,41 @@ def lookup(
     return getattr(customer, column, None) if column in CUSTOMER_COLUMNS else None
 
 
+def first_matching(
+    rules: Iterable[R],
+    facts: Dict[str, Any],
+    stage_facts: Dict[str, Any],
+    customer: Optional[CustomerFacts],
+) -> Optional[R]:
+    """PURE decide: the first rule whose conditions ALL hold, or None — the
+    caller's `else`. Document order is the author's if/else-if ladder, so a
+    narrower arm placed below a broader one is simply never reached.
+
+    Never raises: every lookup is total and the evaluator treats an
+    unreadable value as "does not hold"."""
+    for rule in rules:
+        if matches(rule.if_, lambda path: lookup(path, facts, stage_facts, customer)):
+            return rule
+    return None
+
+
 def choose(
     rules: List[ConditionRule],
     facts: Dict[str, Any],
     stage_facts: Dict[str, Any],
     customer: Optional[CustomerFacts],
 ) -> Optional[str]:
-    """PURE decide: the label of the first rule whose conditions ALL hold,
-    or None — the caller's `else`. Never raises: every lookup is total and
-    the evaluator treats an unreadable value as "does not hold"."""
-    for rule in rules:
-        if matches(rule.if_, lambda path: lookup(path, facts, stage_facts, customer)):
-            return rule.on
-    return None
+    """PURE decide: the LABEL the first holding rule names, or None — the
+    condition square's reading of first_matching."""
+    rule = first_matching(rules, facts, stage_facts, customer)
+    return rule.on if rule is not None else None
 
 
-def needs_customer(rules: Iterable[ConditionRule]) -> bool:
-    """PURE: does any rule read the customer? The one DB read a condition
-    may cost is paid only when a rule asks for it."""
+def needs_customer(rules: Iterable[Rule]) -> bool:
+    """PURE: does any rule read the customer? The one DB read judging may
+    cost is paid only when a rule asks for it."""
     return any(c.field.startswith("customer.") for rule in rules for c in rule.if_)
 
 
-def fields_named(rules: Iterable[ConditionRule]) -> Set[str]:
+def fields_named(rules: Iterable[Rule]) -> Set[str]:
     return {c.field for rule in rules for c in rule.if_}

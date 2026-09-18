@@ -178,7 +178,8 @@ class WaitWindow(BaseModel):
 class WorkflowNode(BaseModel):
     """One square of the board. Vocabulary is code, not CHECKs:
     wait · send (channel + template, via connectivity) ·
-    call (template_id, via buddy's lead machine — ADR 0010) ·
+    call (template_id, via buddy's lead machine — ADR 0010; template_rules
+    pick that template by condition) ·
     action (connector + action + args: a connector DOES something for the
     run — see the three fields below) · condition · split.
 
@@ -241,6 +242,12 @@ class WorkflowNode(BaseModel):
     # condition only (enh A/01): the rules, judged in order; the first whose
     # conditions all hold names the edge, none -> the mandatory `else` edge.
     rules: List["ConditionRule"] = Field(default_factory=list)
+    # call only: which template this square fires, by condition. Judged in
+    # document order; the first arm whose conditions all hold names the
+    # template, none -> the node's own template_id. The square does NOT
+    # branch for this — one plain arrow out, one lead, one visit counter;
+    # only which template the lead carries differs.
+    template_rules: List["TemplateRule"] = Field(default_factory=list)
     # split only (enh A/04): the shares, in document order. Percents are
     # whole and sum to 100, so every run takes exactly one arm and a split
     # needs no `else`.
@@ -283,6 +290,27 @@ class ConditionRule(BaseModel):
                 f"a rule may not be labelled {self.on!r} — the walker owns it"
             )
         return self
+
+
+class TemplateRule(BaseModel):
+    """One arm of a call square's template choice: the template it names and
+    the conditions that must ALL hold for it — the same where-grammar a
+    condition square speaks (shared/predicate.Condition) over the same
+    fields (outreach/predicates.py). OR is two arms.
+
+    Not a ConditionRule: that one's `on` is an EDGE LABEL, checked against
+    the square's arrows and forbidden the walker's words. A call square's
+    arrows are unlabelled — what an arm names is a template.
+
+    No arm holding is not an error: the node's own template_id is the
+    `else`, so a call always has a template to fire. That is the condition
+    square's mandatory-else law (nodes/condition.py) spelled for a square
+    that chooses cargo instead of a road."""
+
+    template_id: str = Field(min_length=1)
+    if_: List[Condition] = Field(alias="if", min_length=1)
+
+    model_config = {"populate_by_name": True}
 
 
 #: Where a split square records the arm a run took (enh A/04). Spelled on
