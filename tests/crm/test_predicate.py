@@ -128,7 +128,7 @@ def test_from_equality_map_is_what_migration_069_writes() -> None:
     ]
 
 
-# --- `includes`: the list's one question (event-catalog.md §The `list` ruling) ---
+# --- `includes`/`excludes`: the list's pair (event-catalog.md §The `list` ruling) ---
 
 
 @pytest.mark.parametrize(
@@ -146,7 +146,7 @@ def test_from_equality_map_is_what_migration_069_writes() -> None:
         ([True], False),
     ],
 )
-def test_includes_asks_whether_any_value_equals_the_plans_value(
+def test_includes_with_a_scalar_value_asks_whether_any_value_equals_it(
     actual, expected
 ) -> None:
     assert (
@@ -160,11 +160,38 @@ def test_includes_asks_whether_any_value_equals_the_plans_value(
     )
 
 
-def test_includes_takes_one_scalar_value() -> None:
-    """A list on the right would be `in` over `includes` — a question the
-    grammar does not ask (correlated matching is deferred, not forgotten)."""
+@pytest.mark.parametrize(
+    "actual, wanted, expected",
+    [
+        (["Mobile", "Fridge"], ["Mobile", "Electronics"], True),
+        (["Electronics"], ["Mobile", "Electronics"], True),
+        (["Fridge"], ["Mobile", "Electronics"], False),
+        ([], ["Mobile", "Electronics"], False),  # an empty list holds nothing…
+        (None, ["Mobile", "Electronics"], False),  # …and neither does an absent field
+        ("Mobile", ["Mobile", "Electronics"], True),  # a scalar counts as a list of one
+        ("Fridge", ["Mobile", "Electronics"], False),
+        (["mobile"], ["Mobile"], False),  # exact text, never coerced — as `is`
+    ],
+)
+def test_includes_with_a_list_value_asks_whether_any_value_equals_any_of_them(
+    actual, wanted, expected
+) -> None:
+    assert (
+        evaluate(
+            Condition(field="payload.products.category", op="includes", value=wanted),
+            actual,
+        )
+        is expected
+    )
+
+
+def test_includes_takes_a_scalar_or_a_non_empty_list_of_scalars() -> None:
+    """One value written bare or written as its own one-item list ask the
+    same question — the grammar never forces a merchant to choose."""
     with pytest.raises(ValueError):
-        Condition(field="payload.tags", op="includes", value=["a", "b"])
+        Condition(field="payload.tags", op="includes", value=[])
+    with pytest.raises(ValueError):
+        Condition(field="payload.tags", op="includes", value=[None])
     with pytest.raises(ValueError):
         Condition(field="payload.tags", op="includes")
 
@@ -183,3 +210,90 @@ def test_includes_is_the_dual_of_in(one: str, many: list) -> None:
     assert evaluate(Condition(field="f", op="in", value=many), one) is evaluate(
         Condition(field="f", op="includes", value=one), many
     )
+
+
+def test_a_bare_value_and_its_one_item_list_ask_the_same_question() -> None:
+    """ "one value means also they will add in [] only": `{value: "Mobile"}`
+    and `{value: ["Mobile"]}` are the same condition, on both ops."""
+    for actual in (["Mobile", "Fridge"], ["Fridge"], [], None, "Mobile", "Fridge"):
+        for op in ("includes", "excludes"):
+            assert evaluate(
+                Condition(field="f", op=op, value=["Mobile"]), actual
+            ) is evaluate(Condition(field="f", op=op, value="Mobile"), actual)
+
+
+@pytest.mark.parametrize(
+    "actual, wanted, expected",
+    [
+        # excludes: category holds none of these
+        (["Fridge"], ["Mobile", "Electronics"], True),
+        (["Mobile"], ["Mobile", "Electronics"], False),
+        (["Mobile", "Fridge"], ["Mobile", "Electronics"], False),
+        ("Fridge", ["Mobile", "Electronics"], True),
+        ("Mobile", ["Mobile", "Electronics"], False),
+        # present-but-empty proves nothing, so it stays False like `includes`
+        # — not a vacuous "confirmed none of these"
+        ([], ["Mobile", "Electronics"], False),
+        (None, ["Mobile", "Electronics"], False),  # absent, same law
+        (["mobile"], ["Mobile"], True),  # exact text, never coerced
+    ],
+)
+def test_excludes_asks_whether_no_value_equals_any_of_the_plans_values(
+    actual, wanted, expected
+) -> None:
+    assert (
+        evaluate(
+            Condition(field="payload.products.category", op="excludes", value=wanted),
+            actual,
+        )
+        is expected
+    )
+
+
+def test_excludes_takes_a_scalar_or_a_non_empty_list_of_scalars() -> None:
+    with pytest.raises(ValueError):
+        Condition(field="payload.tags", op="excludes", value=[])
+    with pytest.raises(ValueError):
+        Condition(field="payload.tags", op="excludes", value=[None])
+    with pytest.raises(ValueError):
+        Condition(field="payload.tags", op="excludes")
+
+
+def test_excludes_never_makes_a_missing_field_satisfy_the_condition() -> None:
+    """The `is_not` precedent: a missing field fails `excludes` exactly as
+    it fails `includes` — a filter gone stale must never quietly admit an
+    event just because the field it was supposed to check isn't there."""
+    assert evaluate(Condition(field="f", op="excludes", value="Mobile"), None) is False
+
+
+# --- `all_present`: the list's data-quality question, generic over any field ---
+
+
+@pytest.mark.parametrize(
+    "actual, expected",
+    [
+        (["Alice", "Bob"], True),  # every element carries a value
+        (["Alice", None], False),  # one null in the basket blocks the whole door
+        ([None, "Bob"], False),
+        ([None, None], False),  # a missing key or an explicit null, judged the same
+        ([], False),  # nothing to be all-present about
+        (None, False),  # absent, as everywhere
+        ("Alice", True),  # a scalar counts as a list of one
+        (["Alice", "", "Bob"], True),  # "" is present — only None/missing blocks
+    ],
+)
+def test_all_present_asks_whether_every_value_is_non_null(actual, expected) -> None:
+    assert (
+        evaluate(
+            Condition(field="payload.products.product_name", op="all_present"),
+            actual,
+        )
+        is expected
+    )
+
+
+def test_all_present_takes_no_value() -> None:
+    with pytest.raises(ValueError):
+        Condition(field="payload.products.product_name", op="all_present", value="x")
+    with pytest.raises(ValueError):
+        Condition(field="payload.products.product_name", op="all_present", value=["x"])

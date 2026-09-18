@@ -1183,6 +1183,123 @@ def test_a_door_asks_the_array_whether_any_product_is_a_mobile(
     assert _doors_opened(monkeypatch, basket) == admitted
 
 
+@pytest.mark.parametrize(
+    "basket, admitted",
+    [
+        ({"products": [{"sub_category": "Mobile"}]}, 1),
+        ({"products": [{"sub_category": "Electronics"}]}, 1),
+        ({"products": [{"sub_category": "Mobile"}, {"sub_category": "Fridge"}]}, 1),
+        ({"products": [{"sub_category": "Fridge"}, {"sub_category": "TV"}]}, 0),
+        (
+            {"products": {"sub_category": "Electronics"}},
+            1,
+        ),  # a bare object: a list of one
+        ({"products": []}, 0),
+        ({}, 0),
+    ],
+    ids=[
+        "mobile-only",
+        "electronics-only",
+        "mobile-among-others",
+        "neither",
+        "object-electronics",
+        "empty",
+        "missing",
+    ],
+)
+def test_a_door_asks_the_array_whether_any_product_is_mobile_or_electronics(
+    monkeypatch: pytest.MonkeyPatch, basket: Dict[str, Any], admitted: int
+) -> None:
+    """`includes ["Mobile", "Electronics"]` is `includes` with several
+    acceptable plan values instead of one: one match among many admits,
+    judged on the same raw array a scalar value reads."""
+    where = [
+        {
+            "field": "payload.products.sub_category",
+            "op": "includes",
+            "value": ["Mobile", "Electronics"],
+        }
+    ]
+    assert _doors_opened(monkeypatch, basket, where) == admitted
+
+
+@pytest.mark.parametrize(
+    "basket, admitted",
+    [
+        ({"products": [{"product_name": "Sneakers"}]}, 1),
+        (
+            {"products": [{"product_name": "Sneakers"}, {"product_name": "Mixer"}]},
+            1,
+        ),
+        (
+            {"products": [{"product_name": "Sneakers"}, {"brand": "vivo"}]},
+            0,
+        ),  # one product with no product_name key blocks the whole basket
+        (
+            {"products": [{"product_name": "Sneakers"}, {"product_name": None}]},
+            0,
+        ),  # an explicit null, judged the same as a missing key
+        ({"products": {"product_name": "Sneakers"}}, 1),  # a bare object: a list of one
+        ({"products": {"brand": "vivo"}}, 0),
+        ({"products": []}, 0),  # nothing to be all-present about
+        ({}, 0),
+    ],
+    ids=[
+        "one-named",
+        "two-named",
+        "one-missing-key",
+        "one-explicit-null",
+        "object-named",
+        "object-unnamed",
+        "empty",
+        "missing",
+    ],
+)
+def test_a_door_refuses_the_basket_when_any_product_name_is_null(
+    monkeypatch: pytest.MonkeyPatch, basket: Dict[str, Any], admitted: int
+) -> None:
+    """`all_present` is the generic null-guard flipkart asked for ("don't
+    process events where product_name is null"): built on the field's raw
+    array, not on product_name by name — the same op gates category or any
+    other list field with no code change, only a where-clause."""
+    where = [
+        {"field": "payload.products.product_name", "op": "all_present"},
+    ]
+    assert _doors_opened(monkeypatch, basket, where) == admitted
+
+
+@pytest.mark.parametrize(
+    "basket, admitted",
+    [
+        ({"products": [{"sub_category": "Fridge"}, {"sub_category": "TV"}]}, 1),
+        ({"products": [{"sub_category": "Mobile"}, {"sub_category": "Fridge"}]}, 0),
+        ({"products": [{"sub_category": "Electronics"}]}, 0),
+        ({"products": {"sub_category": "Fridge"}}, 1),  # a bare object: a list of one
+        # an empty or missing basket stays refused — the door cannot conclude
+        # "confirmed neither Mobile nor Electronics" from nothing, the same
+        # way `is_not` refuses a missing field today
+        ({"products": []}, 0),
+        ({}, 0),
+    ],
+    ids=["neither", "mobile", "electronics", "object-neither", "empty", "missing"],
+)
+def test_excludes_asks_the_basket_holds_neither_category(
+    monkeypatch: pytest.MonkeyPatch, basket: Dict[str, Any], admitted: int
+) -> None:
+    """The flipkart ask this answers: "accept only when category holds
+    NEITHER Mobile nor Electronics" is `excludes` with the same list value
+    `includes` would take for "either" — the door-only list-reach `includes`
+    already has."""
+    where = [
+        {
+            "field": "payload.products.sub_category",
+            "op": "excludes",
+            "value": ["Mobile", "Electronics"],
+        }
+    ]
+    assert _doors_opened(monkeypatch, basket, where) == admitted
+
+
 def test_exists_on_a_list_means_non_empty_and_not_exists_means_empty_or_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

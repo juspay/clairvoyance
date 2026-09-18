@@ -16,7 +16,7 @@ import pytest
 from app.crm.outreach import predicates
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.plans import Catalogs, validate_definition
-from app.crm.outreach.schemas import WorkflowDefinition
+from app.crm.outreach.schemas import TemplateRule, WorkflowDefinition
 from app.crm.record.catalog import code_entries, with_ops
 from app.crm.record.contracts import CatalogField
 
@@ -29,6 +29,7 @@ LOAN = PLANS / "loan-dropoff.json"
 COD = PLANS / "cod-confirm.json"
 LINE = PLANS / "line-nudge.json"
 LINE_MOBILE = PLANS / "line-nudge-mobile.json"
+PRODUCT_CALL = PLANS / "product-aware-call.json"
 # The lending journey on a merchant's OWN events (line-nudge.json): eight
 # non-terminal topics the squares listen on, three terminals the goal ends on.
 LINE_OPEN = [
@@ -163,6 +164,7 @@ def test_the_expected_documents_exist() -> None:
     assert CART_SPLIT.is_file(), CART_SPLIT
     assert LINE.is_file(), LINE
     assert LINE_MOBILE.is_file(), LINE_MOBILE
+    assert PRODUCT_CALL.is_file(), PRODUCT_CALL
     assert _every_plan() == [
         CART_FALLBACK,
         CART_SPLIT,
@@ -172,6 +174,7 @@ def test_the_expected_documents_exist() -> None:
         LINE_MOBILE,
         LINE,
         LOAN,
+        PRODUCT_CALL,
     ]
 
 
@@ -438,6 +441,55 @@ def test_the_mobile_door_asks_the_list_its_one_question_and_nothing_else() -> No
     problems = validate_definition(doc, catalogs=_catalogs())
     assert any(
         "payload.products.sub_category" in p
-        and "allowed: includes, exists, not_exists" in p
+        and "allowed: includes, excludes, all_present, exists, not_exists" in p
         for p in problems
     ), problems
+
+
+def test_the_product_aware_call_picks_its_template_without_branching() -> None:
+    """product-aware-call.json chooses CARGO, not a road: the call square
+    keeps its one plain arrow and reads an if/else-if ladder to decide which
+    template the lead carries. OR has no op — arms 2 and 3 are one rule
+    written as two, so they name the same template."""
+    doc = _load(PRODUCT_CALL)
+    call = next(n for n in doc["nodes"] if n["type"] == "call")
+
+    assert call["template_id"] == "TEMPLATE_GENERIC", "the default is the `else`"
+    assert [a["template_id"] for a in call["template_rules"]] == [
+        "TEMPLATE_INITIATED_WITH_CATEGORY",
+        "TEMPLATE_NO_PRODUCT",
+        "TEMPLATE_NO_PRODUCT",
+    ]
+    # One plain arrow out: choosing a template is not branching.
+    arrows = [e for e in doc["edges"] if e[0] == call["id"]]
+    assert len(arrows) == 1 and len(arrows[0]) == 2, arrows
+
+    # The fields are flat run variables, never a dotted payload path.
+    for arm in call["template_rules"]:
+        for cond in arm["if"]:
+            assert not predicates.field_problems(cond["field"], []), cond
+            assert cond["field"].count(".") == 1, cond["field"]
+
+
+def test_the_product_aware_ladder_is_judged_in_document_order() -> None:
+    """The arms, run as the square runs them: first holder wins, and a
+    customer no arm claims gets the default rather than a parked run."""
+    call = next(n for n in _load(PRODUCT_CALL)["nodes"] if n["type"] == "call")
+    arms = [TemplateRule.model_validate(a) for a in call["template_rules"]]
+
+    def fired(**facts: Any) -> str:
+        arm = predicates.first_matching(arms, facts, {}, None)
+        return arm.template_id if arm else call["template_id"]
+
+    assert (
+        fired(event_name="LINE_INITIATED", category="Mobile")
+        == "TEMPLATE_INITIATED_WITH_CATEGORY"
+    )
+    assert fired(event_name="LINE_INITIATED") == "TEMPLATE_NO_PRODUCT"
+    assert fired(event_name="LINE_OFFERED") == "TEMPLATE_NO_PRODUCT"
+    assert fired(event_name="LINE_OFFERED", brand="Apple") == "TEMPLATE_GENERIC"
+    # A product whose category the item_where dropped: no arm holds.
+    assert (
+        fired(event_name="LINE_INITIATED", products="Bosch Home Kettle", brand="Bosch")
+        == "TEMPLATE_GENERIC"
+    )

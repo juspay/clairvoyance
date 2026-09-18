@@ -16,12 +16,29 @@ is how a plan says "only when this is absent" (a line nudge for customers
 with no products), which `else` of an `exists` rule could say only as a
 second rule.
 
-`includes` is the list's one question (design/event-catalog.md §The `list`
-ruling): does ANY of the field's values equal the value written in the plan
-— the exact dual of `in` ("is the field's one value among these"). Judged
-against the raw array; a scalar counts as a list of one, so a vendor that
-collapses a one-item array to a bare value is judged the same way. Absent
-holds nothing, as everywhere.
+`includes`/`excludes` are the list's pair (design/event-catalog.md §The
+`list` ruling): does ANY of the field's raw values equal the plan's value —
+`excludes` is the same question, negated. The plan's `value` is either ONE
+scalar or a list of them; a bare scalar is a list of one, so `{value:
+"Mobile"}` and `{value: ["Mobile"]}` ask the same question — the grammar
+never makes a merchant write `[...]` around a single value, but reads it the
+same way when they do. Judged against the raw array; a scalar field counts
+as a list of one, so a vendor that collapses a one-item array to a bare
+value is judged the same way. Absent or present-but-empty holds nothing for
+`includes` (nothing to match) and, by the same law, PROVES nothing for
+`excludes` either — an empty basket is not a confirmed "none of these", it
+is unanswerable, so `excludes` fails closed on it exactly like `includes`
+does, never a vacuous true.
+
+`all_present` is the list's data-quality question, and takes no value: is
+EVERY one of the field's raw values non-null — one item with a missing or
+null value fails the whole condition, the same way one bad record should
+stop a door rather than nudge a customer with a blank name. Built generic
+(any list field, not a named one) so "don't process when X is null" for a
+future X is a catalog registration and a where-clause, never a new op.
+Absent (the array itself missing or empty) fails too, by the same
+missing-satisfies-nothing law as everywhere else — there is nothing to be
+all-present about.
 """
 
 import re
@@ -31,7 +48,19 @@ from typing import Any, Callable, Iterable, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 Op = Literal[
-    "is", "is_not", "in", ">", ">=", "<", "<=", "=", "exists", "not_exists", "includes"
+    "is",
+    "is_not",
+    "in",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "=",
+    "exists",
+    "not_exists",
+    "includes",
+    "excludes",
+    "all_present",
 ]
 # The op FAMILIES, by what they compare. The catalog's OPS_BY_TYPE (record/
 # catalog.py) is built from these, so a type's allowed ops and the evaluator
@@ -43,7 +72,14 @@ EXISTS_OP = "exists"
 NOT_EXISTS_OP = "not_exists"
 PRESENCE_OPS = (EXISTS_OP, NOT_EXISTS_OP)  # no value: the field is there or not
 INCLUDES_OP = "includes"
-LIST_OPS = (INCLUDES_OP,)  # any of the field's values equals the plan's one value
+EXCLUDES_OP = "excludes"
+ALL_PRESENT_OP = "all_present"
+# any of the field's values equals any of the plan's values (`includes`), or
+# none of them does (`excludes` — scalar-or-list on both, same shape), or
+# none of the field's values is null/missing (`all_present`, no value: a
+# structural question, not a comparison)
+LIST_OPS = (INCLUDES_OP, EXCLUDES_OP, ALL_PRESENT_OP)
+NO_VALUE_OPS = (*PRESENCE_OPS, ALL_PRESENT_OP)  # ops the plan writes no value for
 _NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
 
 
@@ -59,10 +95,18 @@ class Condition(BaseModel):
     def _value_matches_op(self) -> "Condition":
         if self.op == "in":
             if not isinstance(self.value, list) or not self.value:
-                raise ValueError("'in' needs a non-empty list value")
+                raise ValueError(f"{self.op!r} needs a non-empty list value")
             if any(isinstance(v, (list, dict)) or v is None for v in self.value):
-                raise ValueError("'in' values must be scalars")
-        elif self.op in PRESENCE_OPS:
+                raise ValueError(f"{self.op!r} values must be scalars")
+        elif self.op in (INCLUDES_OP, EXCLUDES_OP):
+            if isinstance(self.value, list):
+                if not self.value:
+                    raise ValueError(f"{self.op!r} needs a non-empty list value")
+                if any(isinstance(v, (list, dict)) or v is None for v in self.value):
+                    raise ValueError(f"{self.op!r} values must be scalars")
+            elif self.value is None or isinstance(self.value, dict):
+                raise ValueError(f"{self.op!r} needs a scalar or a list of scalars")
+        elif self.op in NO_VALUE_OPS:
             if self.value is not None:
                 raise ValueError(f"{self.op!r} takes no value")
         elif self.value is None or isinstance(self.value, (list, dict)):
@@ -128,12 +172,20 @@ def _ordered(op: str, actual: Any, expected: Any) -> bool:
 
 def evaluate(condition: Condition, actual: Any) -> bool:
     """One condition against the value the payload holds at its field.
-    None = the field is absent: `not_exists` holds, every other op does not."""
+    None = the field is absent: `not_exists` holds, every other op does
+    not."""
     op = condition.op
     if op == NOT_EXISTS_OP:
         return actual is None
     if actual is None:
         return False
+    if op == ALL_PRESENT_OP:
+        values = actual if isinstance(actual, list) else [actual]
+        if not values:
+            # Present but empty, not missing — still nothing to be
+            # all-present about.
+            return False
+        return all(v is not None for v in values)
     if op == "exists":
         return True
     if op == "is":
@@ -142,10 +194,19 @@ def evaluate(condition: Condition, actual: Any) -> bool:
         return not _same(actual, condition.value)
     if op == "in":
         return any(_same(actual, v) for v in condition.value)
-    if op == INCLUDES_OP:
-        # The scalar-is-a-list-of-one rule lives here, once.
+    if op in (INCLUDES_OP, EXCLUDES_OP):
+        # The scalar-is-a-list-of-one rule lives here, once, on both sides.
         values = actual if isinstance(actual, list) else [actual]
-        return any(_same(v, condition.value) for v in values)
+        wanted = (
+            condition.value if isinstance(condition.value, list) else [condition.value]
+        )
+        if not values:
+            # Present but empty proves nothing either way — not even
+            # `excludes`, which would otherwise read this as a vacuous
+            # "confirmed none of these" instead of "we don't know".
+            return False
+        any_match = any(_same(v, w) for v in values for w in wanted)
+        return any_match if op == INCLUDES_OP else not any_match
     if op == "=":
         a, b = as_number(actual), as_number(condition.value)
         return a is not None and b is not None and a == b

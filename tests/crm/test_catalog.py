@@ -711,16 +711,39 @@ def test_a_registration_may_declare_a_formatted_list() -> None:
     )
 
 
-def test_a_list_field_admits_one_existential_question_and_nothing_else() -> None:
-    """A door asks a list `includes` (any element equals the plan's value),
-    `exists` or `not_exists` — against the raw array (event-catalog.md
-    §The `list` ruling) — and never an op that compares a field's ONE value."""
-    assert catalog.OPS_BY_TYPE["list"] == ["includes", "exists", "not_exists"]
+def test_a_list_field_admits_existential_questions_and_nothing_else() -> None:
+    """A door asks a list `includes` (any element equals any of the plan's
+    value(s) — one scalar or a list, same shape either side), `excludes`
+    (none of them does), `all_present` (no element is null/missing — no
+    value), `exists` or `not_exists` — against the raw array
+    (event-catalog.md §The `list` ruling) — and never an op that compares a
+    field's ONE value."""
+    assert catalog.OPS_BY_TYPE["list"] == [
+        "includes",
+        "excludes",
+        "all_present",
+        "exists",
+        "not_exists",
+    ]
     field = catalog.with_ops(
         CatalogField(path="payload.items", type="list", label="Items", variable=True)
     )
-    assert field.ops == ["includes", "exists", "not_exists"]
-    for op, value in (("includes", "x"), ("exists", None), ("not_exists", None)):
+    assert field.ops == [
+        "includes",
+        "excludes",
+        "all_present",
+        "exists",
+        "not_exists",
+    ]
+    for op, value in (
+        ("includes", "x"),
+        ("includes", ["x", "y"]),
+        ("excludes", "x"),
+        ("excludes", ["x", "y"]),
+        ("all_present", None),
+        ("exists", None),
+        ("not_exists", None),
+    ):
         assert (
             condition_against_catalog(
                 Condition(field="payload.items", op=op, value=value),
@@ -733,17 +756,23 @@ def test_a_list_field_admits_one_existential_question_and_nothing_else() -> None
             Condition(field="payload.items", op=op, value=value),
             {"payload.items": field},
         )
-        assert problems and "allowed: includes, exists, not_exists" in problems[0], (
-            op,
-            problems,
-        )
+        assert problems and (
+            "allowed: includes, excludes, all_present, exists, not_exists"
+            in problems[0]
+        ), (op, problems)
 
 
-def test_includes_is_refused_on_every_type_that_is_not_a_list() -> None:
-    """`includes` asks a field's MANY values; a scalar field has one, and the
-    question for one value is `is` / `in`."""
+def test_includes_and_excludes_are_refused_on_every_type_that_is_not_a_list() -> None:
+    """`includes`/`excludes` ask a field's MANY values; a scalar field has
+    one, and the question for one value is `is` / `in`. `all_present` is the
+    same list-only question about the array's data quality, not a
+    comparison."""
     for field_type in ("text", "choice", "number", "boolean", "datetime"):
         assert predicate.INCLUDES_OP not in catalog.OPS_BY_TYPE[field_type], field_type
+        assert predicate.EXCLUDES_OP not in catalog.OPS_BY_TYPE[field_type], field_type
+        assert (
+            predicate.ALL_PRESENT_OP not in catalog.OPS_BY_TYPE[field_type]
+        ), field_type
         field = catalog.with_ops(
             CatalogField(
                 path="payload.f",
@@ -759,7 +788,24 @@ def test_includes_is_refused_on_every_type_that_is_not_a_list() -> None:
             field_type,
             problems,
         )
+        problems = condition_against_catalog(
+            Condition(field="payload.f", op="excludes", value=["x"]),
+            {"payload.f": field},
+        )
+        assert problems and "'excludes' is not an op" in problems[0], (
+            field_type,
+            problems,
+        )
+        problems = condition_against_catalog(
+            Condition(field="payload.f", op="all_present"), {"payload.f": field}
+        )
+        assert problems and "'all_present' is not an op" in problems[0], (
+            field_type,
+            problems,
+        )
     assert predicate.INCLUDES_OP not in catalog.OPS_BY_TYPE["phone"]
+    assert predicate.EXCLUDES_OP not in catalog.OPS_BY_TYPE["phone"]
+    assert predicate.ALL_PRESENT_OP not in catalog.OPS_BY_TYPE["phone"]
 
 
 def test_the_stored_row_keeps_item_format_only_where_it_means_something() -> None:

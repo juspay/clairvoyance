@@ -22,7 +22,7 @@ from app.crm.record.contracts import (
     catalog_fields,
     variable_name,
 )
-from app.crm.shared.predicate import PRESENCE_OPS, Condition, as_number
+from app.crm.shared.predicate import NO_VALUE_OPS, Condition, as_number
 
 # The catalog handed to validate_definition: topic -> (path -> field, both
 # layers), with None for a topic no layer knows — every door's topic and
@@ -177,9 +177,12 @@ def condition_against_catalog(
         ]
     if field.deprecated:
         logger.warning(f"where: {condition.field!r} is deprecated in the catalog")
-    values = condition.value if condition.op == "in" else [condition.value]
-    if condition.op in PRESENCE_OPS:
+    if condition.op in NO_VALUE_OPS:
         return []
+    # `in`/`includes`/`excludes` may already be a list (a bare value on
+    # either side is a list of one, judged the same way) — shape by what
+    # was actually written, not by which op wrote it.
+    values = condition.value if isinstance(condition.value, list) else [condition.value]
     if field.type == "choice" and field.values:
         bad = [v for v in values if str(v) not in field.values]
         if bad:

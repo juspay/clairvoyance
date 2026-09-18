@@ -5,6 +5,11 @@ ADR 0010: voice stays outside the gate, governed by its existing checks
 050 customer-stamp pattern; the accessor's created hooks give the lead its
 customer stamp + lead.pushed mirror for free). Each visit to the square
 mints its own lead.
+
+Which template it fires may be a question rather than a constant:
+``template_rules`` is an if/else-if ladder over facts already in hand, the
+square's own ``template_id`` the ``else``. The square does NOT branch for
+it — one arrow out, one lead, one visit counter; only the cargo differs.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -12,6 +17,8 @@ from typing import Any, Dict, List
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
+from app.crm.identity.contracts import customer_facts
+from app.crm.outreach import predicates
 from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.nodes.context import lead_request_id, run_facts
 from app.crm.outreach.nodes.spec import NodeParked
@@ -27,9 +34,25 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
+    """The square needs its default template, and every arm must name a real
+    field — judged at publish so a typo is a sentence the author reads, never
+    a run that silently fires the default forever.
+
+    Op/value fit is Condition's own validator (the sealed where-grammar), so
+    nothing is re-spelled here. No labels are checked: an arm names a
+    template, not an edge, and a call square's arrows stay plain.
+    """
     if not node.template_id:
-        return [f"call node {node.id} needs a template_id"]
-    return []
+        return [
+            f"call node {node.id} needs a template_id — the template it fires, "
+            "and the `else` when no arm of template_rules holds"
+        ]
+    node_ids = [n.id for n in definition.nodes]
+    return [
+        f"call node {node.id}: {problem}"
+        for field in sorted(predicates.fields_named(node.template_rules))
+        for problem in predicates.field_problems(field, node_ids)
+    ]
 
 
 def _visits_key(node_id: str) -> str:
@@ -52,6 +75,30 @@ def _visits_so_far(context: Dict[str, Any], node_id: str) -> int:
     return value if isinstance(value, int) and value >= 0 else 0
 
 
+async def _chosen_template_id(
+    run: EnrollmentRun, node: WorkflowNode, facts: Dict[str, Any]
+) -> str:
+    """Which template this visit fires: the first arm whose conditions ALL
+    hold, else the square's own template_id.
+
+    The one read an arm may cost — the customer's predicate-safe facts
+    through identity's contract — is paid only when an arm names customer.*,
+    exactly as a condition square pays it. A customer with no row makes those
+    arms not hold, so the default fires; a read that FAILS propagates and
+    parks the run for retry, because a blip must never quietly downgrade a
+    branded call to the generic template.
+    """
+    if not node.template_rules:
+        return str(node.template_id)
+    stage_facts = run.context.get("facts")
+    stage_facts = stage_facts if isinstance(stage_facts, dict) else {}
+    customer = None
+    if predicates.needs_customer(node.template_rules):
+        customer = await customer_facts(run.merchant_id, str(run.customer_id))
+    arm = predicates.first_matching(node.template_rules, facts, stage_facts, customer)
+    return arm.template_id if arm is not None else str(node.template_id)
+
+
 async def execute(
     run: EnrollmentRun, node: WorkflowNode, definition: WorkflowDefinition
 ) -> Dict[str, Any]:
@@ -65,10 +112,18 @@ async def execute(
     if not phone:
         raise NodeParked(f"call node {node.id}: no phone in run context")
 
-    template = await get_template_by_id(str(node.template_id))
+    # The facts an arm is judged on are the same ones the template will be
+    # filled from — and they are judged BEFORE the phone is added below, so
+    # no arm can read a handle value (predicates.py: HANDLE_LIKE).
+    facts: Dict[str, Any] = run_facts(run.context, node)
+    template_id = await _chosen_template_id(run, node, facts)
+
+    template = await get_template_by_id(template_id)
     if template is None:
-        raise NodeParked(f"call node {node.id}: template {node.template_id} not found")
+        raise NodeParked(f"call node {node.id}: template {template_id} not found")
     if template.merchant_id is not None and template.merchant_id != run.merchant_id:
+        # The chosen one, whichever arm named it: an arm may not reach
+        # another merchant's template.
         raise NodeParked(f"call node {node.id}: template belongs to another merchant")
     config = await get_call_execution_config_by_template_id(str(template.id))
     if config is None:
@@ -91,8 +146,7 @@ async def execute(
     # payload — {placeholder}s in the template resolve from these keys.
     # reporting_webhook_url rides too: the lead machine reads it from the
     # lead payload to report the call's outcome back to the merchant.
-    payload: Dict[str, Any] = run_facts(run.context, node)
-    payload["customer_mobile_number"] = phone
+    payload: Dict[str, Any] = {**facts, "customer_mobile_number": phone}
 
     try:
         lead = await create_lead_call_tracker(
