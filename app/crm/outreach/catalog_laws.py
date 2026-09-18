@@ -14,6 +14,7 @@ from app.core.logger import logger
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, listens
 from app.crm.outreach.nodes.action import placeholder_names
+from app.crm.outreach.playbook import block_names, line_holes
 from app.crm.outreach.schemas import RETIRED_WAIT_EVENT, WorkflowDefinition
 from app.crm.record.contracts import (
     AmbiguousTopic,
@@ -68,8 +69,15 @@ def entry_against_catalog(
         if node.type == "action"
         for name in placeholder_names(node.args)
     ]
+    # A playbook line's {hole} is the same lookup against the same run_facts
+    # as an args placeholder, so it answers to the same allow-list. Without
+    # this, a line naming {order_id} on a door whose topic declares only `id`
+    # publishes cleanly and parks on the first call — with the agent already
+    # dialled, which is later than an args hole fails.
+    asked += [("playbook", name) for name in line_holes(definition)]
     listened = listened_facts(definition, catalogs)
     open_squares = unenumerable_squares(definition, catalogs)
+    blocks = block_names(definition)
     for entry in definition.entries:
         topic = entry.topic
         fields = catalogs.get(topic)
@@ -83,6 +91,17 @@ def entry_against_catalog(
             continue
         declared = {variable_name(f.path) for f in fields.values() if f.variable}
         allowed = declared | _WALKER_FACTS | listened
+        # A block is merged into the facts LAST (nodes/blocks.py), so a block
+        # named like a fact silently wins over the letter's own value, and one
+        # named like a walker key slips past the run_facts filter that exists
+        # to stop it. Refused here, where the door's declared names are in
+        # hand — a name collision is a wrong sentence on a live call.
+        for name in sorted(blocks & allowed):
+            problems.append(
+                f"playbook block {name!r} shadows a fact of topic {topic!r} — "
+                "a block is merged over the run's facts, so the letter's own "
+                "value would be lost; rename the block"
+            )
         for node_id, blank, fact in mapped:
             if fact not in allowed and not _from_open_square(fact, open_squares):
                 problems.append(
@@ -92,9 +111,14 @@ def entry_against_catalog(
                 )
         for node_id, name in asked:
             if name not in allowed and not _from_open_square(name, open_squares):
+                where = (
+                    "playbook: a line asks"
+                    if node_id == "playbook"
+                    else f"action node {node_id}: args ask"
+                )
                 problems.append(
-                    f"action node {node_id}: args ask for {{{name}}}, which is not "
-                    f"a declared variable field (topic {topic!r}; declared: "
+                    f"{where} for {{{name}}}, which is not a declared variable "
+                    f"field (topic {topic!r}; declared: "
                     f"{', '.join(sorted(declared)) or 'none'})"
                 )
         for condition in entry.where:

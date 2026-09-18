@@ -175,4 +175,10 @@ def _listening_square(
 
 
 def _action_square(node_id: str, action: StageAction, stage: str) -> Dict[str, Any]:
-    return {"id": node_id, **action.model_dump(exclude_none=True), "stage": stage}
+    # exclude_defaults on `blocks` as well as exclude_none: a stage that asks
+    # for no playbook block mints exactly the square it always minted, so the
+    # expansion is unchanged for every board that does not use one.
+    minted = action.model_dump(exclude_none=True)
+    if not minted.get("blocks"):
+        minted.pop("blocks", None)
+    return {"id": node_id, **minted, "stage": stage}

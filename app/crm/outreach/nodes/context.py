@@ -41,7 +41,17 @@ LATEST_LETTER_KEY = "latest_letter"
 # never a producer's — a payload key spelled `split_payment` would be counted
 # by the by_split report as an experiment, could overwrite a recorded arm,
 # and the real arm must never ride a template or a lead payload.
-_BOOKKEEPING_PREFIXES = ("lead_", "message_", "reply_", "action_", "split_")
+_BOOKKEEPING_PREFIXES = (
+    "lead_",
+    "message_",
+    "reply_",
+    "action_",
+    "split_",
+    # playbook_<node> records WHICH row a block chose, for the funnel. The
+    # TEXT is never recorded: it is rendered into the payload and nowhere
+    # else, so a run row stays small and a script never reaches a log.
+    "playbook_",
+)
 
 # The merchant's own id for the thing a call is about. Buddy's reporter
 # echoes lead.request_id back to the merchant as orderId on every outcome
@@ -75,6 +85,17 @@ def split_key(node_id: str) -> str:
     one is not — a report groups runs by arm days later, and an
     experiment that forgets which arm a run took is not an experiment."""
     return f"{SPLIT_PREFIX}{node_id}"
+
+
+def playbook_key(node_id: str) -> str:
+    """Where a square records WHICH row each block chose (modules/05 §The
+    playbook).
+
+    Beside ``split_key`` because they are the same kind of fact: the arm a
+    run took, kept for the funnel. NAMES only — the rendered text rides the
+    lead payload and never the run row, which canon T20 col 12 keeps small.
+    """
+    return f"playbook_{node_id}"
 
 
 def without_reply(context: Dict[str, Any], node_id: str) -> Dict[str, Any]:
@@ -144,6 +165,7 @@ def send_variables(
     mapping: Dict[str, str],
     context: Dict[str, Any],
     node: Optional[WorkflowNode] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """PURE: the template's fill-ins = EXACTLY the facts the send node
     mapped, {blank: facts[fact]} over run_facts (so a blank may name a
@@ -156,7 +178,7 @@ def send_variables(
     (KeyError(fact)), and a mapped value a provider cannot render — a
     bool, a None, a list (ValueError naming the fact): "True" or "None"
     inside a customer's message is corruption that looks delivered."""
-    facts = run_facts(context, node)
+    facts = {**run_facts(context, node), **(extra or {})}
     variables: Dict[str, Any] = {}
     for blank, fact in mapping.items():
         value = facts[fact]

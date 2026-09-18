@@ -13,7 +13,12 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
 from app.crm.outreach.db import UniqueViolation
-from app.crm.outreach.nodes.context import lead_request_id, run_facts
+from app.crm.outreach.nodes.blocks import blocks_for
+from app.crm.outreach.nodes.context import (
+    lead_request_id,
+    playbook_key,
+    run_facts,
+)
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.database.accessor import (
@@ -91,8 +96,15 @@ async def execute(
     # payload — {placeholder}s in the template resolve from these keys.
     # reporting_webhook_url rides too: the lead machine reads it from the
     # lead payload to report the call's outcome back to the merchant.
-    payload: Dict[str, Any] = run_facts(run.context, node)
-    payload["customer_mobile_number"] = phone
+    # The finished blocks ride BESIDE the scalars, into the payload only:
+    # the run context has a size ceiling and canon keeps the row small,
+    # so a rendered walk never touches it.
+    rendered, chosen = await blocks_for(run, node, definition, node.blocks)
+    payload: Dict[str, Any] = {
+        **run_facts(run.context, node),
+        **rendered,
+        "customer_mobile_number": phone,
+    }
 
     try:
         lead = await create_lead_call_tracker(
@@ -139,4 +151,10 @@ async def execute(
 
     await update_lead_enrollment_id(lead_id, str(run.id))
     logger.info(f"walker: run {run.id} pushed lead {lead_id} (node {node.id})")
-    return {f"lead_{node.id}": lead_id, _visits_key(node.id): visit}
+    written: Dict[str, Any] = {
+        f"lead_{node.id}": lead_id,
+        _visits_key(node.id): visit,
+    }
+    if chosen:
+        written[playbook_key(node.id)] = chosen
+    return written

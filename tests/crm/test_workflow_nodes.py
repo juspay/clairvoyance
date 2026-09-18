@@ -93,6 +93,7 @@ def test_the_package_init_exports_the_registry_and_nothing_else() -> None:
             "wait",
             "context",
             "spec",
+            "blocks",
         }
         and name not in {"Dict", "WorkflowNode"}
     }

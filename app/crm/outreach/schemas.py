@@ -245,6 +245,12 @@ class WorkflowNode(BaseModel):
     # whole and sum to 100, so every run takes exactly one arm and a split
     # needs no `else`.
     arms: List["SplitArm"] = Field(default_factory=list)
+    # call only: which playbook blocks this square takes into its lead
+    # payload. NOTHING IMPLICIT — a block nobody asks for is never
+    # evaluated, never in a payload, never in a log (the send node's own
+    # philosophy, where a blank names the fact it wants). A send names its
+    # blocks on the right of `variables`, an action inside `args`.
+    blocks: List[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -321,6 +327,10 @@ class StageAction(BaseModel):
     template_id: Optional[str] = None
     channel: Optional[str] = None
     template: Optional[str] = None
+    # The ladder sets `blocks` for every call square it mints, the way it
+    # sets template_id — otherwise a stages board (the loan funnel) could
+    # never use the playbook on the squares the expander owns.
+    blocks: List[str] = Field(default_factory=list)
 
 
 class StageOverride(BaseModel):
@@ -365,6 +375,55 @@ class Stages(BaseModel):
         return self
 
 
+class PlaybookBlock(BaseModel):
+    """One row of a block: the first row whose `when` holds names what is
+    said — a line, or an ordered list of lines.
+
+    `when` is the where-grammar over the condition square's field grammar,
+    so a block reads exactly what a condition square can read and nothing
+    more. The LAST row carries no `when`: that is the condition square's
+    mandatory `else`, and it is what guarantees the agent never speaks a
+    literal "{hook_line}" on a live call."""
+
+    when: List[Condition] = Field(default_factory=list)
+    say: Union[str, List[str]]
+
+    @model_validator(mode="after")
+    def _say_names_something(self) -> "PlaybookBlock":
+        names = [self.say] if isinstance(self.say, str) else self.say
+        if not names or any(not n or not n.strip() for n in names):
+            raise ValueError("say names a line, or an ordered list of lines")
+        return self
+
+
+class Playbook(BaseModel):
+    """The plan fills the agent's holes.
+
+    The agent is an actor and its template is a script with holes in it.
+    The words that fill them — the opening line, the walk, the lender's
+    notes — are chosen HERE, from what the event said, and handed over
+    finished. The agent never picks; its template is edited only to change
+    how the agent behaves, never what it says.
+
+    Two rules hold the shape together:
+
+      1. Every piece of text lives in `lines`, ONCE. A block never contains
+         a sentence, it names one — so rewording a step changes every walk
+         that uses it, and adding a lender is its lines plus one `when` row
+         per block.
+      2. `say` is a name, or an ordered list of names. One name renders as
+         that line's text; a list renders one "- name: text" per line, in
+         order.
+
+    It lives in the plan document, so publish copies it into the version
+    row: a journey that started on script v3 keeps saying v3, and a wording
+    fix reaches open runs only with `on_publish: migrate`. That is the
+    property a live vendor registration cannot have."""
+
+    lines: Dict[str, str] = Field(default_factory=dict)
+    blocks: Dict[str, List[PlaybookBlock]] = Field(default_factory=dict)
+
+
 class WorkflowDefinition(BaseModel):
     """THE plan, whole (canon T19). Node ids are minted by the author and
     never regenerated (the publish validator's first law).
@@ -391,6 +450,10 @@ class WorkflowDefinition(BaseModel):
     # ladder.expand_stages) so the console can re-edit the funnel. The
     # validator refuses a ladder with a hand-drawn board beside it.
     stages: Optional[Stages] = None
+    # The words the agent says, chosen by the plan from the event
+    # (modules/05-outreach §The playbook; canon T19 col 6). Pinned with the
+    # document at publish, unlike a registration, which is live under open runs.
+    playbook: Optional[Playbook] = None
 
     def send_templates(self) -> List[Tuple[str, str]]:
         """PURE: every (channel, template name) a send node of this document

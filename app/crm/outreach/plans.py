@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
+from app.crm.outreach import playbook
 from app.crm.outreach.catalog_laws import (
     Catalogs,
     WorkflowValidationError,
@@ -118,6 +119,8 @@ def validate_definition(
                 f"node {node.id}: window belongs to a wait — only a timer can "
                 "wait for the hours"
             )
+
+    problems.extend(playbook.laws(definition))
 
     # The doors (phase 15): one per topic, each starting on a real square.
     # Repeat-entry words per door (repeat.py owns the vocabulary); debounce

@@ -10,7 +10,8 @@ from typing import Any, Dict, List
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import queue_message
-from app.crm.outreach.nodes.context import send_variables
+from app.crm.outreach.nodes.blocks import blocks_for
+from app.crm.outreach.nodes.context import playbook_key, send_variables
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
@@ -66,8 +67,14 @@ async def execute(
     if not definition.purpose_key:
         raise NodeParked(f"send node {node.id}: plan has no purpose_key")
 
+    rendered, chosen = await blocks_for(run, node, definition, node.variables.values())
     try:
-        variables = send_variables(node.variables, run.context, node)
+        variables = send_variables(
+            node.variables,
+            run.context,
+            node,
+            extra=rendered,
+        )
     except KeyError as e:
         raise NodeParked(
             f"send node {node.id}: mapped fact {e.args[0]!r} is not in the run "
@@ -98,4 +105,7 @@ async def execute(
         )
         return {}
     logger.info(f"walker: run {run.id} queued message {message_id} (node {node.id})")
-    return {f"message_{node.id}": message_id}
+    written: Dict[str, Any] = {f"message_{node.id}": message_id}
+    if chosen:
+        written[playbook_key(node.id)] = chosen
+    return written
