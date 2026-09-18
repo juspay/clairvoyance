@@ -427,7 +427,9 @@ def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
     def lookup(path: str) -> Any:
         values = list_values(event.payload, path)
         if values is not None:
-            return values or None
+            if not values or all(v is None for v in values):
+                return None
+            return values
         return field_value(event.payload, path, derive)
 
     return matches(door.where, lookup)
