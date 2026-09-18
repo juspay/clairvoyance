@@ -668,6 +668,14 @@ EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY", "")
 EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", "")
 # Exotel Webhook Authentication - required for inbound webhook security
 EXOTEL_WEBHOOK_AUTH_TOKEN = os.getenv("EXOTEL_WEBHOOK_AUTH_TOKEN", "")
+
+ENFORCE_TELEPHONY_WEBHOOK_SIGNATURES = (
+    os.environ.get("ENFORCE_TELEPHONY_WEBHOOK_SIGNATURES", "true").lower() == "true"
+)
+
+TELEPHONY_WEBHOOK_PATH_PREFIX = os.environ.get(
+    "TELEPHONY_WEBHOOK_PATH_PREFIX", ""
+).rstrip("/")
 AWS_VAYU_URL = os.environ.get("AWS_VAYU_URL")
 AWS_VAYU_READ_API_KEY = os.environ.get("AWS_VAYU_READ_API_KEY")
 AWS_VAYU_WRITE_API_KEY = os.environ.get("AWS_VAYU_WRITE_API_KEY")
