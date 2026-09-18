@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 
 from app.core.logger import logger
 from app.core.security.password import hash_password_async
-from app.database import get_db_connection
+from app.database import db_connection
 from app.database.accessor.breeze_buddy.access_grants import (
     ensure_reseller_on_conn,
     sync_user_access_on_conn,
@@ -160,7 +160,7 @@ async def create_merchant_and_user_atomically(
         owner_id=None,
     )
 
-    async for conn in get_db_connection():
+    async with db_connection() as conn:
         async with conn.transaction():
             # The umbrella must exist before the merchants-row FK lands
             # (BB_SELF_SIGNUP_RESELLER_ID may point at an unprovisioned slug).
@@ -225,7 +225,7 @@ async def create_user(
     )
 
     try:
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             async with conn.transaction():
                 result = await conn.fetch(query, *values)
                 row = result[0] if result else None
@@ -379,7 +379,7 @@ async def update_user(
     access_changed = reseller_ids is not None or merchant_ids is not None
 
     try:
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             async with conn.transaction():
                 result = await conn.fetch(query, *values)
                 row = result[0] if result else None

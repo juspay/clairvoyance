@@ -11,7 +11,7 @@ from typing import Optional
 import asyncpg
 
 from app.core.logger import logger
-from app.database import get_db_connection
+from app.database import db_connection
 from app.database.decoder.breeze_buddy.wallets import (
     decode_wallet,
     decode_wallet_transaction,
@@ -145,7 +145,7 @@ async def apply_recharge(
             gateway_ref_id=gateway_ref_id,
             made_by=made_by,
         )
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             async with conn.transaction():
                 rows = await conn.fetch(query, *values)
 
@@ -209,7 +209,7 @@ async def apply_deduction(
             gateway_ref_id=gateway_ref_id,
             made_by=None,
         )
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             async with conn.transaction():
                 rows = await conn.fetch(query, *values)
 

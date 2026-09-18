@@ -9,7 +9,7 @@ decoders from decoder.breeze_buddy.merchants.
 from typing import List, Optional, Tuple
 
 from app.core.logger import logger
-from app.database import get_db_connection
+from app.database import db_connection
 from app.database.accessor.breeze_buddy.access_grants import ensure_reseller_on_conn
 from app.database.accessor.breeze_buddy.wallets import (
     create_wallet_on_conn,
@@ -81,7 +81,7 @@ async def create_merchant(
     )
 
     try:
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             async with conn.transaction():
                 if reseller_id:
                     # merchants.reseller_id carries an FK to resellers; keep
@@ -309,7 +309,7 @@ async def update_merchant(
         return await get_merchant_by_merchant_identifier(merchant_id)
 
     try:
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             async with conn.transaction():
                 if reseller_id:
                     # Reassignment must satisfy the resellers FK; materialize
@@ -364,7 +364,7 @@ async def delete_merchant(merchant_id: str) -> bool:
     query, values = delete_merchant_query(merchant_id)
 
     try:
-        async for conn in get_db_connection():
+        async with db_connection() as conn:
             async with conn.transaction():
                 wallet = await get_wallet_for_update_on_conn(conn, merchant_id)
                 if wallet and wallet.balance_credits > 0:
