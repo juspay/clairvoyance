@@ -45,13 +45,13 @@ import time
 from typing import Any, Dict, List, Optional, cast
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.flows.types import FlowsDirectFunctionWrapper, FlowsFunctionSchema
 from pipecat.processors.aggregators.llm_context import (
     NOT_GIVEN,
     LLMContext,
     LLMContextMessage,
 )
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
-from pipecat_flows.types import FlowsDirectFunctionWrapper, FlowsFunctionSchema
 
 from app.ai.voice.llm.types import LLMConfiguration, LLMProvider
 from app.core.concurrency import spawn_background_task

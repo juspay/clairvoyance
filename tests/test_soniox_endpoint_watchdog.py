@@ -21,7 +21,8 @@ import asyncio
 import time
 
 from pipecat.frames.frames import TranscriptionFrame
-from pipecat.services.soniox.stt import FINALIZE_MESSAGE
+from pipecat.services import websocket_service as pipecat_websocket_service
+from pipecat.services.soniox.stt import FINALIZE_MESSAGE, SonioxSTTService
 from websockets.protocol import State
 
 from app.ai.voice.agents.breeze_buddy.stt import (
@@ -33,8 +34,13 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     STTConfiguration,
     STTProvider,
 )
-from app.ai.voice.stt.soniox import service as soniox_service_module
 from app.ai.voice.stt.soniox.service import SonioxSTTServiceWithEndpointDelay
+
+
+def _endpoint_delay(ms: int) -> SonioxSTTService.Settings:
+    """max_endpoint_delay_ms became a pipecat setting in 1.8 (it used to be a
+    constructor argument of this subclass)."""
+    return SonioxSTTService.Settings(max_endpoint_delay_ms=ms)
 
 
 class FakeWebSocket:
@@ -163,17 +169,16 @@ async def test_connect_uses_tight_pings_and_spawns_watchdog(monkeypatch):
         captured.update(kwargs)
         return FakeWebSocket()
 
-    monkeypatch.setattr(soniox_service_module, "websocket_connect", fake_connect)
-    svc = SonioxSTTServiceWithEndpointDelay(api_key="test-key")
+    monkeypatch.setattr(pipecat_websocket_service, "websocket_connect", fake_connect)
+    svc = SonioxSTTServiceWithEndpointDelay(api_key="test-key", ws_close_timeout=3.0)
     await svc._connect_websocket()
 
-    # Library defaults are 20s/20s/10s — the incident's 20-40s detection
-    # window (interval + timeout + close_timeout).
-    assert captured == {
-        "ping_interval": 3.0,
-        "ping_timeout": 5.0,
-        "close_timeout": 3.0,
-    }
+    # Library ping defaults are 20s/20s — the incident's 20-40s detection
+    # window (interval + timeout + close_timeout). close_timeout rides on
+    # pipecat's own ws_close_timeout.
+    assert captured["ping_interval"] == 3.0
+    assert captured["ping_timeout"] == 5.0
+    assert captured["close_timeout"] == 3.0
     assert svc._watchdog_alive()
 
     await svc._disconnect_websocket()
@@ -189,12 +194,17 @@ async def test_connect_passes_customize_pings(monkeypatch):
         captured.update(kwargs)
         return FakeWebSocket()
 
-    monkeypatch.setattr(soniox_service_module, "websocket_connect", fake_connect)
+    monkeypatch.setattr(pipecat_websocket_service, "websocket_connect", fake_connect)
     svc = SonioxSTTServiceWithEndpointDelay(
-        api_key="test-key", ws_ping_interval=3.0, ws_ping_timeout=4.0
+        api_key="test-key",
+        ws_ping_interval=3.0,
+        ws_ping_timeout=4.0,
+        ws_close_timeout=3.0,
     )
     await svc._connect_websocket()
-    assert captured == {"ping_interval": 3.0, "ping_timeout": 4.0, "close_timeout": 3.0}
+    assert captured["ping_interval"] == 3.0
+    assert captured["ping_timeout"] == 4.0
+    assert captured["close_timeout"] == 3.0
     await svc._disconnect_websocket()
 
 
@@ -332,7 +342,7 @@ async def test_watchdog_lifecycle_across_reconnect_cycles(monkeypatch):
     async def fake_connect(url, **kwargs):
         return FakeWebSocket()
 
-    monkeypatch.setattr(soniox_service_module, "websocket_connect", fake_connect)
+    monkeypatch.setattr(pipecat_websocket_service, "websocket_connect", fake_connect)
     svc = SonioxSTTServiceWithEndpointDelay(api_key="test-key")
     for _ in range(3):
         await svc._connect_websocket()
@@ -429,19 +439,19 @@ def test_finalize_floored_against_endpoint_delay_budget():
             api_key="test-key", vad_force_turn_endpoint=False, **kwargs
         )
 
-    svc = _native(max_endpoint_delay_ms=2000, finalize_after_secs=1.0)
+    svc = _native(settings=_endpoint_delay(2000), finalize_after_secs=1.0)
     assert svc._finalize_after_secs == 4.0  # 2 x 2000ms
 
-    svc = _native(max_endpoint_delay_ms=500, finalize_after_secs=0.5)
+    svc = _native(settings=_endpoint_delay(500), finalize_after_secs=0.5)
     assert svc._finalize_after_secs == 1.0  # max(2 x 500ms, 1.0s floor)
 
-    svc = _native(max_endpoint_delay_ms=500, finalize_after_secs=2.0)
+    svc = _native(settings=_endpoint_delay(500), finalize_after_secs=2.0)
     assert svc._finalize_after_secs == 2.0  # above the floor: honored
 
     # VAD-forced endpointing has no native <end> budget to protect.
     svc = SonioxSTTServiceWithEndpointDelay(
         api_key="test-key",
-        max_endpoint_delay_ms=2000,
+        settings=_endpoint_delay(2000),
         finalize_after_secs=1.0,
         vad_force_turn_endpoint=True,
     )
@@ -454,7 +464,7 @@ def test_finalize_floored_against_endpoint_delay_budget():
     # Explicitly disabled stays disabled.
     svc = SonioxSTTServiceWithEndpointDelay(
         api_key="test-key",
-        max_endpoint_delay_ms=2000,
+        settings=_endpoint_delay(2000),
         finalize_after_secs=0,
         vad_force_turn_endpoint=False,
     )

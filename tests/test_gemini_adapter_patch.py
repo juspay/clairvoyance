@@ -554,8 +554,12 @@ def test_injected_only_stamp_is_silent(monkeypatch):
 
 def test_no_signature_regime_means_no_stamp(monkeypatch):
     """With no captured signatures at all (thinking off / non-signing
-    model), functionCall messages stay exactly as adapted — the stamp
-    never changes behavior outside an active signature regime."""
+    model), our stamp stays off — it never changes behavior outside an
+    active signature regime.
+
+    pipecat 1.11 stamps unsigned model turns with a placeholder of its own
+    (its fix for the same Gemini 3 rejection), so the assertion is that OUR
+    placeholder is absent rather than that no signature is present."""
     recorder = _LogRecorder()
     monkeypatch.setattr(adapter_patch_module, "logger", recorder)
     adapter = AdjacentMergeGeminiAdapter()
@@ -568,7 +572,8 @@ def test_no_signature_regime_means_no_stamp(monkeypatch):
     context = LLMContext(messages=cast(List[LLMContextMessage], messages))
     contents = adapter.get_llm_invocation_params(context)["messages"]
     sigs = signatures_by_call_id(contents)
-    assert sigs == {"call_1": None, "call_2": None}
+    assert set(sigs) == {"call_1", "call_2"}
+    assert PLACEHOLDER_THOUGHT_SIGNATURE not in sigs.values()
     assert recorder.warnings == []
 
 

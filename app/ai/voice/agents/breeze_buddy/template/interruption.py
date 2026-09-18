@@ -245,7 +245,7 @@ async def _apply_interruption_config(
 
     if config.mode == InterruptionMode.DISABLED_DISCARD:
         mute_strategy = AlwaysUserMuteStrategy()
-        await mute_strategy.setup(user_aggregator.task_manager)
+        await mute_strategy.setup(user_aggregator.processor_setup)
         old_mute.append(mute_strategy)
     else:
         # When switching from muted → unmuted, clear the mute flag so frames
