@@ -1107,3 +1107,53 @@ def test_the_exemption_belongs_to_the_square_that_earned_it() -> None:
         "'facts_ask_not_a_field' is not a declared variable field" in p
         for p in problems
     ), problems
+
+
+def test_a_playbook_line_must_name_declared_facts_too() -> None:
+    """A line's {hole} is the same lookup against the same run_facts as an
+    args placeholder, so it answers to the same allow-list. Without it a line
+    naming {nonesuch} publishes and parks on the first CALL — with the agent
+    already dialled, which is later than an args hole fails.
+    """
+    catalogs: plans.Catalogs = {"orders/create": _orders_create_catalog()}
+
+    def _board(text: str) -> Dict[str, Any]:
+        return {
+            **_COD,
+            "nodes": [
+                {
+                    "id": "ring",
+                    "type": "call",
+                    "template_id": "t",
+                    "blocks": ["hook_line"],
+                }
+            ],
+            "edges": [],
+            "playbook": {
+                "lines": {"hook": text},
+                "blocks": {"hook_line": [{"say": "hook"}]},
+            },
+        }
+
+    # `id` is declared on orders/create.
+    assert validate_definition(_board("order {id} is waiting"), catalogs=catalogs) == []
+
+    problems = validate_definition(
+        _board("order {nonesuch} is waiting"), catalogs=catalogs
+    )
+    assert any("playbook: a line asks for {nonesuch}" in p for p in problems), problems
+
+
+def test_a_playbook_block_may_not_shadow_a_declared_fact() -> None:
+    """A block is merged over the run's facts, so a block named like a
+    declared field silently replaces the letter's own value on the way to
+    the agent."""
+    catalogs: plans.Catalogs = {"orders/create": _orders_create_catalog()}
+    board = {
+        **_COD,
+        "nodes": [{"id": "ring", "type": "call", "template_id": "t", "blocks": ["id"]}],
+        "edges": [],
+        "playbook": {"lines": {"hook": "hello"}, "blocks": {"id": [{"say": "hook"}]}},
+    }
+    problems = validate_definition(board, catalogs=catalogs)
+    assert any("shadows a fact of topic" in p for p in problems), problems

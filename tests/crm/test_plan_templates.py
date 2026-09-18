@@ -29,6 +29,7 @@ LOAN = PLANS / "loan-dropoff.json"
 COD = PLANS / "cod-confirm.json"
 LINE = PLANS / "line-nudge.json"
 LINE_MOBILE = PLANS / "line-nudge-mobile.json"
+LINE_PLAYBOOK = PLANS / "line-nudge-playbook.json"
 # The lending journey on a merchant's OWN events (line-nudge.json): eight
 # non-terminal topics the squares listen on, three terminals the goal ends on.
 LINE_OPEN = [
@@ -163,6 +164,7 @@ def test_the_expected_documents_exist() -> None:
     assert CART_SPLIT.is_file(), CART_SPLIT
     assert LINE.is_file(), LINE
     assert LINE_MOBILE.is_file(), LINE_MOBILE
+    assert LINE_PLAYBOOK.is_file(), LINE_PLAYBOOK
     assert _every_plan() == [
         CART_FALLBACK,
         CART_SPLIT,
@@ -170,6 +172,7 @@ def test_the_expected_documents_exist() -> None:
         CART,
         COD,
         LINE_MOBILE,
+        LINE_PLAYBOOK,
         LINE,
         LOAN,
     ]

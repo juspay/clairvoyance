@@ -17,7 +17,8 @@ from app.crm.connectivity.contracts import (
     perform_action,
     validate_action_args,
 )
-from app.crm.outreach.nodes.context import run_facts
+from app.crm.outreach.nodes.blocks import blocks_for
+from app.crm.outreach.nodes.context import playbook_key, run_facts
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
@@ -108,6 +109,12 @@ async def execute(
         raise NodeParked(f"action node {node.id}: no connector/action to perform")
 
     facts = run_facts(run.context, node)
+    # An args placeholder may name a block by the same name a send's
+    # variables would — one lookup, one allow-list, three squares.
+    rendered, chosen = await blocks_for(
+        run, node, definition, placeholder_names(node.args)
+    )
+    facts.update(rendered)
     try:
         args = resolved_args(node.args, facts)
     except KeyError as e:
@@ -135,7 +142,10 @@ async def execute(
     # the run for whoever triages it, and a test asserts its shape, which is
     # what stops "responses are normalised" from becoming a promise with no
     # reader.
-    return {f"action_{node.id}": result}
+    written: Dict[str, Any] = {f"action_{node.id}": result}
+    if chosen:
+        written[playbook_key(node.id)] = chosen
+    return written
 
 
 # --- the pure arg helpers (this square's own; nothing else resolves args) ---

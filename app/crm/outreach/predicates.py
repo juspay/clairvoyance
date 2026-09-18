@@ -36,6 +36,10 @@ from app.crm.identity.contracts import CustomerFacts
 from app.crm.outreach.schemas import ConditionRule
 from app.crm.shared.predicate import matches
 
+#: The one spelling of "this field reads the customer", shared by the
+#: grammar and by every caller that decides whether to pay the read.
+CUSTOMER_PREFIX = "customer."
+
 CUSTOMER_COLUMNS = (
     "display_name",
     "primary_locale",
@@ -138,7 +142,7 @@ def choose(
 def needs_customer(rules: Iterable[ConditionRule]) -> bool:
     """PURE: does any rule read the customer? The one DB read a condition
     may cost is paid only when a rule asks for it."""
-    return any(c.field.startswith("customer.") for rule in rules for c in rule.if_)
+    return any(c.field.startswith(CUSTOMER_PREFIX) for rule in rules for c in rule.if_)
 
 
 def fields_named(rules: Iterable[ConditionRule]) -> Set[str]:
