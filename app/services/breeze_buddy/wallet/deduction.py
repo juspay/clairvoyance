@@ -28,6 +28,13 @@ def _voice_call_credits(duration_seconds: int, **_: object) -> Decimal:
     return Decimal(math.ceil(duration_seconds / 30))
 
 
+#: Credits one generated try-on image costs. A flat price, kept here with
+#: the rule that applies it — the same place chat_turn's 1 and
+#: voice_call's 30-second block live. The wallet check reads it too, so
+#: the balance a shopper is refused on is the price they would be charged.
+TRY_ON_CREDITS = 5
+
+
 # Each rule receives whatever event-specific kwargs the caller passes into
 # deduct(), and returns the (positive) number of credits the event costs.
 # "chat_turn" needs no extra data (flat 1 credit per turn). "voice_call" is
@@ -37,6 +44,7 @@ def _voice_call_credits(duration_seconds: int, **_: object) -> Decimal:
 BILLING_RULES: Dict[str, Callable[..., Decimal]] = {
     "chat_turn": lambda **_: Decimal(1),
     "voice_call": _voice_call_credits,
+    "try_on": lambda **_: Decimal(TRY_ON_CREDITS),
 }
 
 

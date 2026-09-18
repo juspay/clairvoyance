@@ -569,6 +569,16 @@ class WidgetSurfaceWire(BaseModel):
             "stays the enforcement point at /voice/connect."
         ),
     )
+    try_on_enabled: bool = Field(
+        False,
+        description=(
+            "Merchant is entitled to virtual try-on "
+            "(configurations.enable_try_on). Advisory like voice_enabled: "
+            "it decides whether the widget draws the affordance, while the "
+            "/try-on route re-reads the template and refuses on its own — "
+            "this gates spend, so a browser is not trusted with it."
+        ),
+    )
     catalog_active: str = Field(
         "v1",
         description=(

@@ -431,6 +431,10 @@
       "description": "Whether the free-text composer is visible to the user. Default true. Set false to restrict input to quick-reply buttons only (bot-driven or menu-style flows).",
       "example": true
     },
+    "enable_try_on": {
+      "description": "Whether this merchant's shoppers can try products on their own photo. Default false: the widget shows no try-on affordance and the /try-on route refuses, so a merchant is never billed for a feature they did not ask for. Independent of the commerce catalog.",
+      "example": true
+    },
     "response_reveal": {
       "description": "How the widget reveals assistant prose. 'stream' (default) = paced typewriter as tokens arrive. 'complete' = a typing indicator while the reply is in flight, then the full message at once (Messenger style). Presentation-only: the SSE transport streams either way.",
       "example": "complete"

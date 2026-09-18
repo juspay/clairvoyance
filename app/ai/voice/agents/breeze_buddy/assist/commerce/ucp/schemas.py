@@ -40,6 +40,10 @@ from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.step_labels import (
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.tool_meta import (
     register_commerce_tool_meta,
 )
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.try_on_policy import (
+    is_try_on_eligible,
+    sign_try_on_image,
+)
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.ui_prompt import (
     register_commerce_render_ui_prompt,
 )
@@ -194,6 +198,9 @@ class ProductP(BaseModel):
     # were re-derived from that variant record, the picker preselects it,
     # and view_product/add_to_cart carry it forward.
     featured_variant_id: Optional[str] = None
+    # Server-decided try-on gate, same rules as the detail projection, so
+    # a ProductCard can offer try-on directly.
+    try_on_eligible: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -238,6 +245,7 @@ class ProductP(BaseModel):
             # card's picker must agree with the detail overlay's (which
             # projects the same call below).
             out["variants"] = normalize_variants(well_formed)[:_MAX_PROJECTED_VARIANTS]
+        out["try_on_eligible"] = is_try_on_eligible(out)
         return out
 
 
@@ -450,6 +458,14 @@ class ProductDetailP(BaseModel):
     tags: List[str] = Field(default_factory=list)
     variants: List[VariantP] = Field(default_factory=list)
     default_variant_id: Optional[str] = None
+    # Server-decided, never model-authored: whether this product can be
+    # tried on. Stamped by the projection below from try_on_policy,
+    # because the rules read merchant vocabulary the widget must not have
+    # to know.
+    try_on_eligible: bool = False
+    # Signature for images[0], the image the widget fits. The try-on route
+    # refuses a garment URL without it. Set only when eligible.
+    try_on_image_token: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -467,6 +483,10 @@ class ProductDetailP(BaseModel):
             out["price"] = out["price_range"].get("min")
         if "compare_at" not in out and isinstance(out.get("list_price_range"), dict):
             out["compare_at"] = out["list_price_range"].get("min")
+        # Try-on eligibility rides the projection rather than the
+        # post-hydration hook: the detail overlay is opened by the DIRECT
+        # view_product intent, whose resolver never calls that hook.
+        out["try_on_eligible"] = is_try_on_eligible(out)
         if "images" not in out and isinstance(out.get("media"), list):
             out["images"] = [
                 m
@@ -490,6 +510,17 @@ class ProductDetailP(BaseModel):
             # option pills must not render a choice that isn't one.
             out["variants"] = normalize_variants(well_formed)
         return out
+
+    @model_validator(mode="after")
+    def _sign_try_on_image(self) -> "ProductDetailP":
+        # Signed after validation: HttpUrl may normalise the URL, and the
+        # widget sends back the serialised string.
+        self.try_on_image_token = (
+            sign_try_on_image(str(self.images[0].src))
+            if self.try_on_eligible and self.images
+            else None
+        )
+        return self
 
 
 class ProductDetail(_CatalogBase):
