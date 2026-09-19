@@ -1,10 +1,15 @@
 """One end-to-end orchestration check for the topic queue and worker."""
 
-from datetime import date, datetime, timezone
+import asyncio
+import json
+import time
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
+import openai
 import pytest
 from fastapi import HTTPException
 
@@ -555,3 +560,417 @@ def test_topic_filter_normalizes_template_alias() -> None:
     filters["template_id"] = "00000000-0000-0000-0000-000000000002"
     with pytest.raises(HTTPException):
         _validate_topic_filters(filters, drilldown=True)
+
+
+EVALUATION = {
+    "id": "00000000-0000-0000-0000-000000000010",
+    "evaluation_type": "TOPIC",
+    "topics": [],
+    "configuration": {"model": "open-large-sa"},
+}
+
+
+def _status_error(
+    error_class: Any, status_code: int, headers: dict | None = None
+) -> openai.APIStatusError:
+    request = httpx.Request("POST", "https://grid.example/v1/chat/completions")
+    response = httpx.Response(status_code, request=request, headers=headers)
+    return error_class("model call failed", response=response, body=None)
+
+
+def _job() -> ConversationEvaluationJob:
+    return ConversationEvaluationJob(
+        source_id="call-id",
+        channel=ConversationChannel.VOICE,
+        template_id=TEMPLATE_ID,
+    )
+
+
+def test_model_failures_are_classified() -> None:
+    request = httpx.Request("POST", "https://grid.example/v1/chat/completions")
+    classify = evaluator.classify_failure
+
+    assert classify(TimeoutError()) == evaluator.MODEL_UNAVAILABLE
+    assert (
+        classify(openai.APIConnectionError(request=request))
+        == evaluator.MODEL_UNAVAILABLE
+    )
+    assert (
+        classify(_status_error(openai.InternalServerError, 503))
+        == evaluator.MODEL_UNAVAILABLE
+    )
+    assert (
+        classify(_status_error(openai.RateLimitError, 429))
+        == evaluator.MODEL_UNAVAILABLE
+    )
+    assert (
+        classify(_status_error(openai.AuthenticationError, 401))
+        == evaluator.EVALUATION_ERROR
+    )
+    assert (
+        classify(extractor.TopicModelResponseError("no content"))
+        == evaluator.MODEL_BAD_RESPONSE
+    )
+    assert (
+        classify(json.JSONDecodeError("Expecting value", "", 0))
+        == evaluator.MODEL_BAD_RESPONSE
+    )
+    assert (
+        classify(ValueError("evaluation_config.model is required"))
+        == evaluator.EVALUATION_ERROR
+    )
+    assert classify(KeyError("transcript")) == evaluator.EVALUATION_ERROR
+
+
+async def test_unreachable_model_is_raised_for_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extract = AsyncMock(
+        side_effect=[
+            _status_error(openai.InternalServerError, 503),
+            _status_error(openai.RateLimitError, 429, {"retry-after": "7"}),
+        ]
+    )
+    save = AsyncMock()
+    save_failure = AsyncMock()
+    monkeypatch.setattr(evaluator, "extract_topics", extract)
+    monkeypatch.setattr(evaluator, "save_evaluation_results", save)
+    monkeypatch.setattr(evaluator, "save_evaluation_failure", save_failure)
+
+    with pytest.raises(evaluator.ModelUnavailableError) as raised:
+        await evaluator.analyze_topics(_context(), EVALUATION)
+
+    assert extract.await_count == 2
+    assert raised.value.retry_after == 7
+    assert "model=open-large-sa" in str(raised.value)
+    save.assert_not_awaited()
+    save_failure.assert_not_awaited()
+
+
+async def test_bad_model_response_saves_a_failed_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extract = AsyncMock(
+        side_effect=extractor.TopicModelResponseError(
+            "Topic evaluator returned no content"
+        )
+    )
+    save = AsyncMock()
+    save_failure = AsyncMock()
+    monkeypatch.setattr(evaluator, "extract_topics", extract)
+    monkeypatch.setattr(evaluator, "save_evaluation_results", save)
+    monkeypatch.setattr(evaluator, "save_evaluation_failure", save_failure)
+
+    await evaluator.analyze_topics(_context(), EVALUATION)
+
+    assert extract.await_count == 2
+    save.assert_not_awaited()
+    failure_call = save_failure.await_args
+    assert failure_call is not None
+    assert failure_call.args[:3] == (EVALUATION["id"], "TOPIC", "call-id")
+    assert failure_call.args[-1] == (
+        "MODEL_BAD_RESPONSE after 2 attempt(s): "
+        "TopicModelResponseError: Topic evaluator returned no content"
+    )
+
+
+async def test_config_error_is_saved_without_retrying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extract = AsyncMock(side_effect=_status_error(openai.AuthenticationError, 401))
+    save_failure = AsyncMock()
+    monkeypatch.setattr(evaluator, "extract_topics", extract)
+    monkeypatch.setattr(evaluator, "save_evaluation_failure", save_failure)
+
+    await evaluator.analyze_topics(_context(), EVALUATION)
+
+    assert extract.await_count == 1
+    failure_call = save_failure.await_args
+    assert failure_call is not None
+    assert failure_call.args[-1].startswith(
+        "EVALUATION_ERROR after 1 attempt(s): AuthenticationError"
+    )
+
+
+def _patch_evaluate_dependencies(
+    monkeypatch: pytest.MonkeyPatch, analyze: AsyncMock
+) -> AsyncMock:
+    requeue = AsyncMock()
+    monkeypatch.setattr(worker, "_consecutive_failures", 0)
+    monkeypatch.setattr(worker, "_paused_until", 0.0)
+    monkeypatch.setattr(
+        worker, "get_enabled_evaluations", AsyncMock(return_value=[EVALUATION])
+    )
+    monkeypatch.setattr(
+        worker, "get_analysis_context", AsyncMock(return_value=_context())
+    )
+    monkeypatch.setattr(worker, "analyze_topics", analyze)
+    monkeypatch.setattr(worker, "requeue_conversation_evaluation", requeue)
+    return requeue
+
+
+async def test_unreachable_model_requeues_job_and_backs_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    analyze = AsyncMock(
+        side_effect=[
+            evaluator.ModelUnavailableError("timeout after 120s"),
+            evaluator.ModelUnavailableError("timeout after 120s"),
+            evaluator.ModelUnavailableError("rate limited", retry_after=7),
+            None,
+        ]
+    )
+    requeue = _patch_evaluate_dependencies(monkeypatch, analyze)
+    job = _job()
+
+    pauses = []
+    for _ in range(3):
+        # A consumer only retries after sleeping the pause out, so expire it
+        # here. Failures arriving *during* a pause are one outage, not three.
+        worker._paused_until = time.monotonic()
+        await worker._evaluate(job)
+        pauses.append(round(worker._paused_until - time.monotonic()))
+
+    assert pauses == [30, 60, 7]
+    assert worker._consecutive_failures == 3
+    assert requeue.await_count == 3
+    requeue.assert_awaited_with(job)
+
+    await worker._evaluate(job)
+
+    assert worker._consecutive_failures == 0
+    assert worker._paused_until == 0.0
+
+
+async def test_consumers_evaluate_jobs_in_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs: asyncio.Queue = asyncio.Queue()
+    for index in range(4):
+        jobs.put_nowait(
+            ConversationEvaluationJob(
+                source_id=f"call-{index}",
+                channel=ConversationChannel.CHAT,
+                template_id=TEMPLATE_ID,
+            )
+        )
+    finished = []
+
+    async def slow_evaluate(job: ConversationEvaluationJob) -> None:
+        await asyncio.sleep(0.2)
+        finished.append(job.source_id)
+
+    monkeypatch.setattr(worker, "_consecutive_failures", 0)
+    monkeypatch.setattr(worker, "dequeue_conversation_evaluation", jobs.get)
+    monkeypatch.setattr(worker, "_evaluate", slow_evaluate)
+
+    started_at = time.monotonic()
+    await worker.start_analysis_worker()
+    try:
+        while len(finished) < 4 and time.monotonic() - started_at < 2:
+            await asyncio.sleep(0.01)
+        elapsed = time.monotonic() - started_at
+    finally:
+        await worker.stop_analysis_worker()
+
+    assert sorted(finished) == ["call-0", "call-1", "call-2", "call-3"]
+    assert elapsed < 0.5
+    assert worker._consumer_tasks == []
+
+
+async def test_consumer_waiting_for_a_job_honours_a_new_pause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs: asyncio.Queue = asyncio.Queue()
+    evaluated_at = []
+
+    async def record_evaluate(job: ConversationEvaluationJob) -> None:
+        evaluated_at.append(time.monotonic())
+
+    monkeypatch.setattr(worker, "_consecutive_failures", 1)
+    monkeypatch.setattr(worker, "_paused_until", 0.0)
+    monkeypatch.setattr(worker, "dequeue_conversation_evaluation", jobs.get)
+    monkeypatch.setattr(worker, "_evaluate", record_evaluate)
+
+    await worker.start_analysis_worker()
+    try:
+        await asyncio.sleep(0.05)
+        paused_at = time.monotonic()
+        monkeypatch.setattr(worker, "_paused_until", paused_at + 0.3)
+        jobs.put_nowait(_job())
+        while not evaluated_at and time.monotonic() - paused_at < 2:
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop_analysis_worker()
+
+    assert evaluated_at
+    assert evaluated_at[0] - paused_at >= 0.29
+
+
+# --- concurrency, crash-safety and recovery regressions ---------------------
+
+
+async def test_concurrent_jobs_keep_their_own_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Four jobs evaluated at once — each save must carry its own source_id.
+
+    Latencies are deliberately shuffled so the finish order differs from the
+    start order. If any per-job state were shared, results would cross over.
+    """
+    delays = {"call-0": 0.30, "call-1": 0.05, "call-2": 0.20, "call-3": 0.10}
+
+    async def context_for(job: ConversationEvaluationJob) -> dict:
+        return {
+            "source_id": job.source_id,
+            "reseller_id": f"reseller-{job.source_id}",
+            "merchant_id": f"merchant-{job.source_id}",
+            "template_id": str(job.template_id),
+            "started_at": datetime.now(timezone.utc),
+            "transcript": [{"role": "user", "content": job.source_id}],
+        }
+
+    async def extract(transcript: Any, topics: Any, configuration: Any) -> list:
+        source_id = transcript[0]["content"]
+        await asyncio.sleep(delays[source_id])
+        return [{"type": "t", "label": f"label-{source_id}"}]
+
+    saved: list = []
+
+    async def save(
+        evaluation_id: str,
+        evaluation_type: str,
+        source_id: str,
+        reseller_id: str,
+        merchant_id: Any,
+        template_id: str,
+        started_at: datetime,
+        results: list,
+    ) -> None:
+        saved.append((source_id, reseller_id, results))
+
+    monkeypatch.setattr(worker, "_consecutive_failures", 0)
+    monkeypatch.setattr(
+        worker, "get_enabled_evaluations", AsyncMock(return_value=[EVALUATION])
+    )
+    monkeypatch.setattr(worker, "get_analysis_context", context_for)
+    monkeypatch.setattr(evaluator, "extract_topics", extract)
+    monkeypatch.setattr(evaluator, "save_evaluation_results", save)
+    monkeypatch.setattr(evaluator, "add_discovered_topics", AsyncMock())
+
+    jobs = [
+        ConversationEvaluationJob(
+            source_id=f"call-{index}",
+            channel=ConversationChannel.CHAT,
+            template_id=TEMPLATE_ID,
+        )
+        for index in range(4)
+    ]
+    started_at = time.monotonic()
+    await asyncio.gather(*(worker._evaluate(job) for job in jobs))
+    elapsed = time.monotonic() - started_at
+
+    # Ran together, not one after another (sequential would be 0.65s).
+    assert elapsed < 0.45
+    assert sorted(saved) == [
+        (
+            f"call-{index}",
+            f"reseller-call-{index}",
+            [{"type": "t", "label": f"label-call-{index}"}],
+        )
+        for index in range(4)
+    ]
+
+
+async def test_pod_death_mid_evaluation_loses_the_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BLPOP removes the job, so a pod dying mid-evaluation drops it.
+
+    Documents the at-most-once delivery we ship with: there is no in-flight
+    list and no reaper, unlike the dispatcher.
+    """
+    pending = [_job()]
+    completed: list = []
+
+    async def dequeue() -> ConversationEvaluationJob:
+        if pending:
+            return pending.pop(0)
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    async def still_working(job: ConversationEvaluationJob) -> None:
+        await asyncio.sleep(3600)
+        completed.append(job.source_id)
+
+    monkeypatch.setattr(worker, "_consecutive_failures", 0)
+    monkeypatch.setattr(worker, "dequeue_conversation_evaluation", dequeue)
+    monkeypatch.setattr(worker, "_evaluate", still_working)
+
+    await worker.start_analysis_worker()
+    await asyncio.sleep(0.05)
+    await worker.stop_analysis_worker()
+
+    assert pending == []
+    assert completed == []
+
+
+async def test_concurrent_failures_do_not_inflate_the_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One outage is one rung on the ladder, however many consumers hit it."""
+
+    _patch_evaluate_dependencies(
+        monkeypatch,
+        AsyncMock(side_effect=evaluator.ModelUnavailableError("model down")),
+    )
+
+    await asyncio.gather(*(worker._evaluate(_job()) for _ in range(4)))
+
+    pause = worker._paused_until - time.monotonic()
+    assert pause <= worker._FIRST_PAUSE_SECONDS
+
+
+async def test_a_no_op_job_does_not_reset_the_backoff_ladder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A job with nothing to evaluate never reached the model.
+
+    Clearing the outage here would drop the ladder back to its first rung and
+    hammer a model that is still down, so the pause must survive it.
+    """
+    monkeypatch.setattr(worker, "_consecutive_failures", 3)
+    paused_until = time.monotonic() + 300
+    monkeypatch.setattr(worker, "_paused_until", paused_until)
+    monkeypatch.setattr(
+        worker, "get_enabled_evaluations", AsyncMock(return_value=[EVALUATION])
+    )
+    monkeypatch.setattr(worker, "get_analysis_context", AsyncMock(return_value=None))
+
+    await worker._evaluate(_job())
+
+    assert worker._consecutive_failures == 3
+    assert worker._paused_until == paused_until
+
+
+async def test_consumer_count_comes_from_dynamic_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evaluation concurrency is a Redis-turnable knob, not a constant."""
+    jobs: asyncio.Queue = asyncio.Queue()
+    monkeypatch.setattr(worker, "dequeue_conversation_evaluation", jobs.get)
+
+    monkeypatch.setattr(worker, "BB_ANALYSIS_CONSUMER_COUNT", AsyncMock(return_value=7))
+    await worker.start_analysis_worker()
+    try:
+        assert len(worker._consumer_tasks) == 7
+    finally:
+        await worker.stop_analysis_worker()
+
+    # A zero in Redis must not silently stop evaluations altogether.
+    monkeypatch.setattr(worker, "BB_ANALYSIS_CONSUMER_COUNT", AsyncMock(return_value=0))
+    await worker.start_analysis_worker()
+    try:
+        assert len(worker._consumer_tasks) == 1
+    finally:
+        await worker.stop_analysis_worker()

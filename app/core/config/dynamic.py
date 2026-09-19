@@ -194,6 +194,18 @@ async def BB_RECONCILE_BACKLOG_LIMIT() -> int:
     return await get_config("BB_RECONCILE_BACKLOG_LIMIT", 1000, int)
 
 
+async def BB_ANALYSIS_CONSUMER_COUNT() -> int:
+    """How many post-conversation evaluation consumers one pod runs.
+
+    These consumers live only on api pods, so this is the whole fleet's
+    evaluation concurrency. Raise it to drain a topic backlog faster; lower it
+    when the model gateway starts answering 429. An evaluation holds no DB
+    connection across its model call, so the count can sit well above the
+    Postgres pool size. Read once at worker start, so a change lands on the
+    next pod restart."""
+    return await get_config("BB_ANALYSIS_CONSUMER_COUNT", 4, int)
+
+
 async def BB_DAILY_BOT_ZYGOTE() -> bool:
     """Fork Daily voice bots from a pre-imported zygote (default: False).
 

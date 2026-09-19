@@ -36,3 +36,36 @@ def save_evaluation_results_query(
         started_at,
         results_json,
     ]
+
+
+def save_evaluation_failure_query(
+    evaluation_config_id: str,
+    evaluation_type: str,
+    source_id: str,
+    reseller_id: str,
+    merchant_id: Optional[str],
+    template_id: str,
+    started_at: datetime,
+    error_message: str,
+) -> Tuple[str, List[Any]]:
+    query = """
+        INSERT INTO evaluation_result (
+            evaluation_config_id, evaluation_type,
+            source_id, reseller_id, merchant_id, template_id,
+            started_at, status, error_message
+        )
+        VALUES (
+            $1::uuid, $2::evaluation_type,
+            $3, $4, $5, $6::uuid, $7, 'FAILED', $8
+        )
+    """
+    return query, [
+        evaluation_config_id,
+        evaluation_type,
+        source_id,
+        reseller_id,
+        merchant_id,
+        template_id,
+        started_at,
+        error_message,
+    ]

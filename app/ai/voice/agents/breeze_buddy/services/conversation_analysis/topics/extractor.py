@@ -5,11 +5,17 @@ import re
 from typing import Any, Dict, List, Mapping, Optional
 
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.services.openai.llm import OpenAILLMService
 
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.llm import LLMConfiguration, LLMProvider, LLMSdk
 from app.schemas.breeze_buddy.conversation_analysis import TopicExtractionResult
 from app.services.live_config.store import get_config
+
+
+class TopicModelResponseError(ValueError):
+    """The model answered, but not with usable topics."""
+
 
 _PROMPT_ONLY_RESPONSE_INSTRUCTION = """Return only valid JSON with exactly this shape:
 {"customer_needs":[{"summary":"short customer need","evidence_turns":[1]}],"topics":[{"type":"short_snake_case_key","label":"short label","phrase":"exact customer words","evidence_turns":[1]}]}
@@ -104,7 +110,7 @@ def _decode_json_object(content: Any) -> Dict[str, Any]:
             raise
         value = json.loads(text[start : end + 1])
     if not isinstance(value, dict):
-        raise ValueError("Topic evaluator response is not a JSON object")
+        raise TopicModelResponseError("Topic evaluator response is not a JSON object")
     return value
 
 
@@ -122,7 +128,7 @@ async def _request_llm(
             endpoint = (await get_config("OPENAI_GATEWAY_BASE_URL", "", str)).strip()
             api_key_name = "OPENAI_GATEWAY_API_KEY"
         if not endpoint:
-            raise RuntimeError(
+            raise ValueError(
                 "OpenAI gateway base URL is not configured; set OPENAI_GATEWAY_BASE_URL"
             )
         endpoint = endpoint.rstrip("/").removesuffix("/chat/completions")
@@ -138,13 +144,15 @@ async def _request_llm(
             max_tokens=runtime["settings"]["max_output_tokens"],
         )
     )
+    if isinstance(llm, OpenAILLMService):
+        llm._client = llm._client.with_options(max_retries=0)
     context = LLMContext([{"role": "user", "content": transcript}])
     content = await llm.run_inference(
         context,
         system_instruction=prompt + "\n\n" + _PROMPT_ONLY_RESPONSE_INSTRUCTION,
     )
     if not content:
-        raise ValueError("Topic evaluator returned no content")
+        raise TopicModelResponseError("Topic evaluator returned no content")
     return _decode_json_object(content)
 
 
