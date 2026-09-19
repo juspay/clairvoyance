@@ -95,9 +95,10 @@ def test_goal_cancel_can_be_keyed_to_the_run_it_is_about() -> None:
         "m1", "run-1", "goal_met", NOW, key=("cart_token", "chk-88412")
     )
     assert "AND context->>$5 = $6" in sql
-    assert params[4:] == ["cart_token", "chk-88412"]
+    # The T26 flush payload is the last param on every run-ending writer.
+    assert params[4:] == ["cart_token", "chk-88412", "[]"]
     sql, params = cancel_run_query("m1", "run-1", "converted_elsewhere")
-    assert "$5" not in sql and len(params) == 4
+    assert "$5" in sql and len(params) == 5 and params[-1] == "[]"
 
 
 def test_goal_recheck_can_be_keyed_to_the_run_it_is_about() -> None:
@@ -144,17 +145,26 @@ def test_walker_writes_are_conditional_on_the_leased_wake_at() -> None:
     """P1 (rollout phase 03): the claim's wake_at is the generation token.
     Every event-side writer (a reply, a repeat patch) moves wake_at, so a
     walker write under a stale lease matches zero rows instead of
-    clobbering the reply — and RETURNING id is how the walker learns it."""
+    clobbering the reply — and the UPDATE's own id is how the walker
+    learns it.
+
+    The two writers that MOVE a token now end in the T26 flush's final
+    SELECT rather than a bare RETURNING, so they always return a row and
+    the CAS answer is `moved_id` being non-NULL (accessor._moved). The two
+    that do not move one are unchanged."""
     leased = NOW
     for sql, params, placeholder in (
-        (*advance_run_query("r-1", "wait-1d", NOW, {"k": 1}, leased), "$5"),
+        (*advance_run_query("r-1", "wait-1d", NOW, {"k": 1}, leased), "$6"),
         (*exit_run_query("r-1", "completed", None, None, leased), "$5"),
         (*park_run_query("r-1", "boom", leased), "$3"),
         (*record_run_error_query("r-1", "boom", 600, leased), "$4"),
     ):
         assert f"AND wake_at = {placeholder}" in sql, sql
         assert "RETURNING id" in sql, sql
-        assert params[-1] is leased
+    assert advance_run_query("r-1", "w", NOW, {}, leased)[1][5] is leased
+    assert exit_run_query("r-1", "completed", None, None, leased)[1][4] is leased
+    assert park_run_query("r-1", "boom", leased)[1][-1] is leased
+    assert record_run_error_query("r-1", "boom", 600, leased)[1][-1] is leased
 
 
 def test_event_side_writes_stay_unconditional() -> None:

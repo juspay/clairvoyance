@@ -607,6 +607,35 @@ class EnrollmentRun(BaseModel):
     enrollment_key: str
     attempts: int
     last_error: Optional[str]
+    # When the token landed on current_node (073, canon T26 col 19): the
+    # ONLY place the current square's arrival lives until its step closes,
+    # and therefore the `arrived_at` of the next flushed row. NULL for runs
+    # that pre-date 073 — honest, never backfilled to entered_at.
+    node_arrived_at: Optional[datetime] = None
+
+
+class RunStep(BaseModel):
+    """One square a run has BEEN on (canon T26).
+
+    Also the shape of the square it stands on NOW: ``steps.timeline()``
+    unions the closed rows with the open square, and ``left_at is None`` is
+    what says "still here". The table's own column is NOT NULL — only
+    closed steps are ever written."""
+
+    node: str
+    node_type: str
+    arrived_at: Optional[datetime]
+    left_at: Optional[datetime]
+    arrived_by: str
+    outcome: Optional[str] = None
+    next_node: Optional[str] = None
+    attempts: int = 1
+    last_error: Optional[str] = None
+    # What this square handed to a dispatcher — a lead for a call, a
+    # manifest row for a send. Resolved by (node_type, dispatch_id); T26.
+    dispatch_id: Optional[str] = None
+    cut_short_by: Optional[UUID] = None
+    workflow_version: Optional[int] = None
 
 
 class CustomerRun(EnrollmentRun):

@@ -26,6 +26,7 @@ from app.crm.outreach import plans, runs, versions
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
+    RunStep,
     VersionMigration,
     Workflow,
     WorkflowRunSummary,
@@ -167,6 +168,27 @@ async def list_runs_route(
     ),
 ) -> List[EnrollmentRun]:
     return await runs.list_runs(merchant_id, workflow_id, run_status, limit, offset)
+
+
+@router.get("/{workflow_id}/runs/{run_id}/steps", response_model=List[RunStep])
+async def run_steps_route(
+    workflow_id: str,
+    run_id: str,
+    limit: int = Query(200, ge=1, le=1000),
+    merchant_id: str = Depends(
+        merchant_scope("read a run's steps", "crm.workflows.runs")
+    ),
+) -> List[RunStep]:
+    """Where this run has BEEN (canon T26): the closed squares, oldest
+    first, with the square it stands on now appended — ``left_at`` null is
+    what says "still here"."""
+    steps = await runs.run_steps(merchant_id, workflow_id, run_id, limit)
+    if steps is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Run not found, or not this merchant's",
+        )
+    return steps
 
 
 @router.post("/{workflow_id}/runs/{run_id}/resume", response_model=EnrollmentRun)

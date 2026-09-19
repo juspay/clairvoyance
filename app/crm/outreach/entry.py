@@ -35,6 +35,7 @@ from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import enrol
 from app.crm.outreach.nodes import listens
 from app.crm.outreach.nodes.context import (
+    CUT_SHORT_BY_KEY,
     LATEST_LETTER_KEY,
     is_bookkeeping,
     reply_key,
@@ -50,6 +51,7 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowNode,
 )
+from app.crm.outreach.steps import as_rows, closing
 from app.crm.record.contracts import (
     RawEvent,
     canonical_path,
@@ -206,6 +208,15 @@ async def _end_on_goal(
             event.occurred_at,
             key,
             goal_patch,
+            # Trap 3 (canon T26): this is the ONE writer outside the walker
+            # that ends a run — no claim, no visit, no flush of its own.
+            # Without this every CONVERTED run, the ones that matter most,
+            # would lose its final square. The letter in hand is the one
+            # that cut that square short — it is named, or the pointer
+            # column would lie exactly where a merchant looks first.
+            steps=as_rows(
+                closing(run, definition, tier.exit_reason, cut_short_by=str(event.id))
+            ),
         ):
             return True
     return False
@@ -278,7 +289,15 @@ async def _wake_on_reply(
             run.merchant_id,
             str(run.id),
             node.id,
-            {reply_key(node.id): answer, LATEST_LETTER_KEY: node.id},
+            {
+                reply_key(node.id): answer,
+                LATEST_LETTER_KEY: node.id,
+                # The letter that beat the alarm (canon T26): left for the
+                # flush that follows, which records it as this square's
+                # cut_short_by and reads the visit as arrived_by = letter.
+                # A pointer into crm_event_raw, never a photocopy.
+                CUT_SHORT_BY_KEY: str(event.id),
+            },
             facts,
         )
     # The run may be standing on a square that listens to NOTHING: the
@@ -303,7 +322,14 @@ async def _wake_on_reply(
         for n in definition.nodes
     ):
         await enrollment_accessor.refresh_run_facts(
-            run.merchant_id, str(run.id), current.id, facts
+            run.merchant_id,
+            str(run.id),
+            current.id,
+            facts,
+            # Its own argument, never folded into `facts`: the same dict on
+            # the reply path becomes context.facts.<square>, which run_facts
+            # flattens into template variables (canon T26).
+            cut_short_by=str(event.id),
         )
 
 

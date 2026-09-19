@@ -145,6 +145,10 @@ class _Spine:
         self.versions = {(str(wf), v): d for (wf, v), d in versions.items()}
         self.definition_reads: List[Tuple[str, int]] = []
         self.cancels: List[Tuple[str, str, Optional[Tuple[str, str]], Any]] = []
+        # Trap 3: the goal-cancel is the one run-ending writer outside the
+        # walker, so it is the one that would silently lose a final square.
+        self.cancel_steps: List[List[Dict[str, Any]]] = []
+        self.refresh_markers: List[Optional[str]] = []
         self.resumes: List[Tuple[str, str, Dict[str, Any]]] = []
         self.facts: List[Tuple[str, str, Any]] = []
         self.refreshes: List[Tuple[str, str, Dict[str, Any]]] = []
@@ -172,8 +176,10 @@ class _Spine:
         occurred_at: Optional[datetime] = None,
         key: Optional[Tuple[str, str]] = None,
         context_patch: Optional[Dict[str, Any]] = None,
+        steps: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
         self.cancels.append((run_id, exit_reason, key, context_patch))
+        self.cancel_steps.append(steps or [])
         if run_id in self.exited:
             return False
         self.exited.add(run_id)
@@ -192,9 +198,17 @@ class _Spine:
         return True
 
     async def refresh_run_facts(
-        self, merchant_id: str, run_id: str, node_id: str, facts: Dict[str, Any]
+        self,
+        merchant_id: str,
+        run_id: str,
+        node_id: str,
+        facts: Dict[str, Any],
+        cut_short_by: Optional[str] = None,
     ) -> bool:
         self.refreshes.append((run_id, node_id, facts))
+        # canon T26: the marker travels apart from the facts, because the
+        # same dict on the reply path becomes context.facts.<square>.
+        self.refresh_markers.append(cut_short_by)
         return True
 
 
@@ -234,7 +248,11 @@ def test_a_reply_carrying_the_key_wakes_the_listening_run(listening: _Spine) -> 
     _consume(_event("button.reply", {"button_id": "YES"}))
     (run,) = listening.runs
     assert listening.resumes == [
-        (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+        (
+            str(run.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
     ]
     assert listening.cancels == []  # a button reply is not a goal event
 
@@ -303,6 +321,9 @@ def test_a_letter_that_finds_the_run_on_a_deaf_square_refreshes_its_facts(
             {"loan_state": "OFFERED", "offers": "1. FINNABLE offer A"},
         )
     ]
+    # The letter names itself for the flush that follows, beside the facts
+    # rather than inside them (canon T26).
+    assert spine.refresh_markers == ["ev-1"]
     # a topic no square listens for is ignored on a deaf square as well
     spine.refreshes.clear()
     _consume(_event("loan.unrelated", {"loan_state": "X"}))
@@ -362,7 +383,15 @@ def test_a_button_tap_wakes_the_square_through_the_catalog(
     _install(monkeypatch, spine)
     _consume(_event("message.inbound", _TAP, source="whatsapp"))
     assert spine.resumes == [
-        (str(run.id), "ask", {"reply_ask": "CONFIRM_ORDER", "latest_letter": "ask"})
+        (
+            str(run.id),
+            "ask",
+            {
+                "reply_ask": "CONFIRM_ORDER",
+                "latest_letter": "ask",
+                "cut_short_by": "ev-1",
+            },
+        )
     ]
 
 
@@ -529,12 +558,20 @@ def test_a_reply_wakes_only_the_runs_whose_own_version_listens_for_it(
     a, b = two_versions.runs
     _consume(_event("button.reply", {"button_id": "YES"}))
     assert two_versions.resumes == [
-        (str(a.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+        (
+            str(a.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
     ]
     two_versions.resumes.clear()
     _consume(_event("list.reply", {"button_id": "NO"}))
     assert two_versions.resumes == [
-        (str(b.id), "ask", {"reply_ask": "NO", "latest_letter": "ask"})
+        (
+            str(b.id),
+            "ask",
+            {"reply_ask": "NO", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
     ]
 
 
@@ -717,7 +754,11 @@ def test_a_topic_keyed_square_wakes_with_the_topic_as_its_answer(
         (
             str(run.id),
             "at-profile",
-            {"reply_at-profile": "loan.bank_linked", "latest_letter": "at-profile"},
+            {
+                "reply_at-profile": "loan.bank_linked",
+                "latest_letter": "at-profile",
+                "cut_short_by": "ev-1",
+            },
         )
     ]
 
@@ -770,7 +811,11 @@ def test_a_reply_carries_the_letters_scalar_facts_for_its_square(
         )
     )
     assert listening.resumes == [
-        (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+        (
+            str(run.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
     ]
     assert listening.facts == [(str(run.id), "ask", {"button_id": "YES", "amount": 5})]
 
@@ -888,7 +933,11 @@ def test_a_letter_the_square_listens_for_moves_the_run_and_is_not_its_repeat(
         (
             str(run.id),
             "at-profile",
-            {"reply_at-profile": "loan.kyc_completed", "latest_letter": "at-profile"},
+            {
+                "reply_at-profile": "loan.kyc_completed",
+                "latest_letter": "at-profile",
+                "cut_short_by": "ev-1",
+            },
         )
     ]
     assert repeats == []
@@ -946,7 +995,11 @@ def test_a_call_outcome_wakes_only_the_run_that_placed_the_call(
         (
             str(b.id),
             "after-call",
-            {"reply_after-call": "NO_ANSWER", "latest_letter": "after-call"},
+            {
+                "reply_after-call": "NO_ANSWER",
+                "latest_letter": "after-call",
+                "cut_short_by": "ev-1",
+            },
         )
     ]
     _consume(_event("call.completed", {"outcome": "BUSY"}, "ev-2"))
@@ -1108,7 +1161,11 @@ def test_a_stored_wait_event_square_is_still_woken_by_its_letter(
     _install(monkeypatch, spine)
     _consume(_event("button.reply", {"button_id": "YES"}))
     assert spine.resumes == [
-        (str(run.id), "ask", {"reply_ask": "YES", "latest_letter": "ask"})
+        (
+            str(run.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
     ]
 
 
