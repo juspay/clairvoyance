@@ -35,6 +35,7 @@ import httpx
 from anthropic import AsyncAnthropicVertex
 from google import genai
 from google.oauth2 import service_account
+from openai import DefaultAsyncHttpxClient
 
 from app.core.logger import logger
 
@@ -43,6 +44,7 @@ __all__ = [
     "get_anthropic_vertex_client",
     "get_azure_httpx_client",
     "get_genai_vertex_client",
+    "get_openai_httpx_client",
 ]
 
 # ``keepalive_expiry=120s`` stays comfortably under Azure's idle timeout
@@ -150,6 +152,25 @@ def get_genai_vertex_client(
     return client
 
 
+_OPENAI_HTTPX_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def get_openai_httpx_client() -> httpx.AsyncClient:
+    """Return the one httpx client every short-lived OpenAI service shares.
+
+    pipecat gives each ``OpenAILLMService`` its own client with
+    ``keepalive_expiry=None`` and never closes it, so a service built per
+    request leaves its connection open until the garbage collector finds it:
+    open sockets grow with requests served. Sharing one pool bounds them by
+    requests *in flight* and reuses them. One client serves every base URL:
+    httpx pools per origin, and the API key rides each request, not the pool.
+    """
+    global _OPENAI_HTTPX_CLIENT
+    if _OPENAI_HTTPX_CLIENT is None:
+        _OPENAI_HTTPX_CLIENT = DefaultAsyncHttpxClient()
+    return _OPENAI_HTTPX_CLIENT
+
+
 async def _close_anthropic_vertex_clients() -> None:
     for key, client in list(_ANTHROPIC_VERTEX_POOLS.items()):
         close: Optional[object] = getattr(client, "aclose", None) or getattr(
@@ -175,6 +196,14 @@ async def close_all_pools() -> None:
             logger.warning(f"Azure httpx pool close failed for {key}: {exc}")
     _AZURE_HTTPX_POOLS.clear()
     logger.info("All Azure httpx pools closed")
+
+    global _OPENAI_HTTPX_CLIENT
+    if _OPENAI_HTTPX_CLIENT is not None:
+        try:
+            await _OPENAI_HTTPX_CLIENT.aclose()
+        except Exception as exc:
+            logger.warning(f"OpenAI httpx pool close failed: {exc}")
+        _OPENAI_HTTPX_CLIENT = None
 
     await _close_anthropic_vertex_clients()
     logger.info("All AsyncAnthropicVertex pools closed")

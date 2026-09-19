@@ -40,7 +40,8 @@ def initialize_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]
 
 def get_enabled_evaluations_query(template_id: str) -> Tuple[str, List[Any]]:
     query = """
-        SELECT id, evaluation_type::text AS evaluation_type, topics, configuration
+        SELECT id, evaluation_type::text AS evaluation_type, topics, configuration,
+               configuration ->> 'model' AS model
         FROM evaluation_config
         WHERE template_id = $1::uuid
           AND enabled
