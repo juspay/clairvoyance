@@ -125,6 +125,17 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
                 )
                 self._finalize_after_secs = floor
 
+    @property
+    def requires_vad_analyzer(self) -> bool:
+        """Whether turn endpoints depend on a VAD analyzer being in the pipeline.
+
+        With vad_force_turn_endpoint the service disables Soniox native
+        endpointing and finalizes on every VADUserStoppedSpeakingFrame; without
+        a VAD upstream that frame never arrives and finals flush only via the
+        endpoint watchdog.
+        """
+        return self._vad_force_turn_endpoint
+
     async def _connect_websocket(self):
         """Override to inject ``max_endpoint_delay_ms`` + liveness settings."""
         try:

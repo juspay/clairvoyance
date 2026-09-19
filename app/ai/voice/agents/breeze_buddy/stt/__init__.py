@@ -139,11 +139,17 @@ async def create_stt_from_config(config: STTConfiguration):
             if sx and sx.finalize_after_secs is not None
             else BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS
         )
+        # Same precedence for the VAD-forced endpoint trigger.
+        effective_vad_force = (
+            sx.vad_force_turn_endpoint
+            if sx and sx.vad_force_turn_endpoint is not None
+            else BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT
+        )
         return build_soniox_stt(
             SonioxConfig(
                 api_key=SONIOX_API_KEY,
                 model=effective_model,
-                vad_force_turn_endpoint=BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT,
+                vad_force_turn_endpoint=effective_vad_force,
                 language_hints=language or BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
                 context_json=effective_context,
                 max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
