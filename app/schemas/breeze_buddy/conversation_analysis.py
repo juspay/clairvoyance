@@ -22,6 +22,7 @@ class ConversationEvaluationJob(BaseModel):
     source_id: str = Field(min_length=1, max_length=255)
     channel: ConversationChannel
     template_id: UUID
+    deliveries: int = 0
 
 
 class ConversationTopic(BaseModel):
