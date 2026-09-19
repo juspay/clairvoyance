@@ -1,8 +1,10 @@
 """Post-conversation evaluation worker."""
 
 import asyncio
-from typing import Any, Dict
+import time
+from typing import Any, Dict, List
 
+from app.core.config.dynamic import BB_ANALYSIS_CONSUMER_COUNT
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.chat_session import (
     get_chat_session_by_id,
@@ -20,10 +22,16 @@ from app.schemas.breeze_buddy.conversation_analysis import (
     EvaluationType,
 )
 
-from .queue import dequeue_conversation_evaluation
-from .topics.evaluator import analyze_topics
+from .queue import dequeue_conversation_evaluation, requeue_conversation_evaluation
+from .topics.evaluator import ModelUnavailableError, analyze_topics
 
-_consumer_task: asyncio.Task | None = None
+_FIRST_PAUSE_SECONDS = 30
+_MAX_PAUSE_SECONDS = 600
+
+_consumer_tasks: List[asyncio.Task] = []
+
+_consecutive_failures: int = 0
+_paused_until: float = 0.0
 
 
 def _enabled(metadata: Dict[str, Any], key: str) -> bool:
@@ -102,12 +110,18 @@ async def get_analysis_context(
     return context
 
 
-async def _consume_queue() -> None:
-    """Consume Redis jobs sequentially."""
+async def _consume_queue(recovery_lock: asyncio.Lock) -> None:
+    """Take jobs off the Redis queue and evaluate them, one at a time."""
     while True:
         try:
             job = await dequeue_conversation_evaluation()
-            await _evaluate(job)
+            if _consecutive_failures == 0:
+                await _evaluate(job)
+                continue
+
+            async with recovery_lock:
+                await asyncio.sleep(max(0.0, _paused_until - time.monotonic()))
+                await _evaluate(job)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -116,6 +130,8 @@ async def _consume_queue() -> None:
 
 
 async def _evaluate(job: ConversationEvaluationJob) -> None:
+    global _consecutive_failures, _paused_until
+
     evaluations = await get_enabled_evaluations(str(job.template_id))
     if not evaluations:
         return
@@ -133,25 +149,58 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
                 f"{job.template_id}: {evaluation.get('evaluation_type')}"
             )
             continue
-        if evaluation_type is EvaluationType.TOPIC:
+        if evaluation_type is not EvaluationType.TOPIC:
+            continue
+
+        try:
             await analyze_topics(context, evaluation)
+        except ModelUnavailableError as exc:
+            now = time.monotonic()
+            if now >= _paused_until:
+                # First failure of this round. Consumers already mid-call when
+                # the model went down land here microseconds apart; they are
+                # one outage, not four, so only the first climbs a rung —
+                # otherwise the opening pause jumps straight to minutes.
+                _consecutive_failures += 1
+                backoff = _FIRST_PAUSE_SECONDS * 2 ** (_consecutive_failures - 1)
+                _paused_until = now + min(
+                    exc.retry_after or backoff, _MAX_PAUSE_SECONDS
+                )
+            await requeue_conversation_evaluation(job)
+            logger.error(
+                f"Topic evaluation {job.source_id} MODEL_UNAVAILABLE ({exc}): "
+                f"job re-queued, all consumers paused for "
+                f"{_paused_until - now:.0f}s "
+                f"(failure #{_consecutive_failures} in a row)"
+            )
+            return
+
+    if _consecutive_failures:
+        logger.info("Topic evaluation resumed after the model recovered")
+        _consecutive_failures = 0
+        _paused_until = 0.0
 
 
 async def start_analysis_worker() -> None:
-    global _consumer_task
-    if _consumer_task is not None and not _consumer_task.done():
+    if any(not task.done() for task in _consumer_tasks):
         return
-    _consumer_task = asyncio.create_task(
-        _consume_queue(), name="conversation-analysis-consumer"
-    )
-    logger.info("Conversation analysis worker started")
+    count = max(1, await BB_ANALYSIS_CONSUMER_COUNT())
+    recovery_lock = asyncio.Lock()
+    _consumer_tasks[:] = [
+        asyncio.create_task(
+            _consume_queue(recovery_lock),
+            name=f"conversation-analysis-consumer-{index}",
+        )
+        for index in range(count)
+    ]
+    logger.info(f"Conversation analysis worker started with {count} consumers")
 
 
 async def stop_analysis_worker() -> None:
-    global _consumer_task
-    if _consumer_task is None:
+    if not _consumer_tasks:
         return
-    _consumer_task.cancel()
-    await asyncio.gather(_consumer_task, return_exceptions=True)
-    _consumer_task = None
+    for task in _consumer_tasks:
+        task.cancel()
+    await asyncio.gather(*_consumer_tasks, return_exceptions=True)
+    _consumer_tasks.clear()
     logger.info("Conversation analysis worker stopped")

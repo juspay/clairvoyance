@@ -51,3 +51,10 @@ async def dequeue_conversation_evaluation() -> ConversationEvaluationJob:
         timeout=0,
     )
     return ConversationEvaluationJob.model_validate_json(popped[1])
+
+
+async def requeue_conversation_evaluation(job: ConversationEvaluationJob) -> None:
+    """Put a job back at the head of the queue so it is the next one tried."""
+    redis = await get_redis_service()
+    client: Any = cast(Any, await redis.get_client())
+    await client.lpush(CONVERSATION_EVALUATION_QUEUE, job.model_dump_json())
