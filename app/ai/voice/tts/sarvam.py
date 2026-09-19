@@ -103,8 +103,8 @@ async def _generate_sarvam_audio(
         raise ValueError("SARVAM_API_KEY is required for Sara voice")
 
     defaults = await BB_VOICE_PROVIDER_DEFAULTS("sarvam")
-    model = model or defaults.get("model", "bulbul:v2")
-    voice_id = voice_id or defaults.get("voice_id", "manisha")
+    model = model or defaults.get("model", "bulbul:v3")
+    voice_id = voice_id or defaults.get("voice_id", "shreya")
     language_code = language or defaults.get("language", "en-IN")
     pitch = pitch if pitch is not None else defaults.get("pitch", 0.0)
     pace = speed if speed is not None else defaults.get("speed", 0.9)

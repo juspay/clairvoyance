@@ -397,8 +397,8 @@ class TTSConfig(BaseModel):
     Example (Sarvam):
         {
             "provider": "sarvam",
-            "voice_id": "manisha",
-            "model": "bulbul:v2",
+            "voice_id": "shreya",
+            "model": "bulbul:v3",
             "language": "en-IN",
             "speed": 0.9,
             "pitch": 0.0
@@ -427,7 +427,7 @@ class TTSConfig(BaseModel):
     voice_id: Optional[str] = Field(None, description="Provider-specific voice ID")
     model: Optional[str] = Field(
         None,
-        description="Provider model (e.g. 'eleven_flash_v2_5', 'sonic-3', 'bulbul:v2', 'gemini-3.1-flash-tts-preview')",
+        description="Provider model (e.g. 'eleven_flash_v2_5', 'sonic-3', 'bulbul:v3', 'gemini-3.1-flash-tts-preview')",
     )
     language: Optional[str] = Field(
         None, description="TTS language code (e.g. 'en', 'hi', 'en-IN')"

@@ -42,6 +42,7 @@ from pipecat.turns.user_stop import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from app.ai.voice.agents.breeze_buddy.agent.utils import DAILY_OUTPUT_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
@@ -601,6 +602,9 @@ async def create_pipeline_task(
 
     task_params: dict[str, Any] = {
         "params": PipelineParams(
+            audio_out_sample_rate=(
+                DAILY_OUTPUT_SAMPLE_RATE if is_daily_mode else TELEPHONY_SAMPLE_RATE
+            ),
             enable_metrics=True,
             enable_usage_metrics=True,
         ),

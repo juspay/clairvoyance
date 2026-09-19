@@ -8,12 +8,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
+from pipecat.flows import NodeConfig
 from pipecat.frames.frames import (
     MixerEnableFrame,
     MixerUpdateSettingsFrame,
     TTSSpeakFrame,
 )
-from pipecat_flows import NodeConfig
 
 from app.core.logger import logger
 

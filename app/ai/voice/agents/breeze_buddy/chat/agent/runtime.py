@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat_flows import FlowsFunctionSchema
+from pipecat.flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.ui.chips import carries_identifier
 

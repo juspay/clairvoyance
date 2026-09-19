@@ -9,6 +9,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.flows import FlowManager
 from pipecat.frames.frames import LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
@@ -20,7 +21,6 @@ from pipecat.runner.utils import (
     create_transport,
     parse_telephony_websocket,
 )
-from pipecat_flows import FlowManager
 
 from app.ai.voice.agents.breeze_buddy.agent.approval import (
     RTVI_APPROVAL_DECISION,

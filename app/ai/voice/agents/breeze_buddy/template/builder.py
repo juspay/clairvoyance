@@ -6,13 +6,13 @@ This module builds Pipecat flow configurations from database models.
 
 from typing import AbstractSet, Any, Callable, Dict, List, Optional, Set, cast
 
-from pipecat_flows import (
+from pipecat.flows import (
     FlowManager,
     FlowsDirectFunction,
     FlowsFunctionSchema,
     NodeConfig,
 )
-from pipecat_flows.types import ActionConfig, FlowResult
+from pipecat.flows.types import ActionConfig, FlowResult
 
 from app.ai.voice.agents.breeze_buddy.handlers.internal import (
     builtin_function_dispatcher,
@@ -733,6 +733,7 @@ class FlowConfigBuilder:
             handler=wrapper_handler,
             properties=func.properties,
             required=func.required,
+            cancel_on_interruption=True,
         )
 
     def _build_action(self, action: FlowAction) -> Dict[str, Any]:
@@ -755,7 +756,11 @@ class FlowConfigBuilder:
             logger.debug(
                 f"Building TTS_SAY action with text: {action.text[:50] if action.text else 'empty'}..."
             )
-            return {"type": "tts_say", "text": action.text or ""}
+            return {
+                "type": "tts_say",
+                "text": action.text or "",
+                "append_text_to_context": False,
+            }
         elif action_type == ActionType.FUNCTION:
             if not action.handler:
                 logger.error("FUNCTION action requires a handler name")

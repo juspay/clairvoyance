@@ -20,11 +20,12 @@ entry point; revisit on upgrade).
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.google.llm import GoogleLLMService
+from pipecat.utils.types import NotGiven
 
 from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (
     compact_tool_results_universal,
@@ -104,8 +105,11 @@ async def stream_gemini(
             tool_choice=context._tool_choice,
         )
 
+    system_instruction = service._settings.system_instruction
+    if isinstance(system_instruction, NotGiven):
+        system_instruction = None
     invocation_params = adapter.get_llm_invocation_params(
-        call_context, system_instruction=service._settings.system_instruction
+        call_context, system_instruction=system_instruction
     )
 
     # Per-cycle forced tool choice (RFC-002): mode=ANY constrains the model
@@ -206,7 +210,7 @@ async def stream_gemini(
     async def _open_stream(params: Dict[str, Any]):
         stream = await service._client.aio.models.generate_content_stream(
             model=model_name,
-            contents=invocation_params["messages"],
+            contents=cast(Any, invocation_params["messages"]),
             config=GenerateContentConfig(**params),
         )
         iterator = stream.__aiter__()

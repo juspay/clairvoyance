@@ -10,12 +10,12 @@ import json
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, cast
 
+from pipecat.flows import FlowsFunctionSchema
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import (
     LLMContext,
     LLMContextMessage,
 )
-from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
     _CHIPS_NUDGE,

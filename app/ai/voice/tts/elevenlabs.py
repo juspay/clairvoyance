@@ -6,8 +6,13 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import httpx
+from pipecat.services.elevenlabs.dialogue.tts import (
+    ElevenLabsDialogueTTSService,
+    ElevenLabsDialogueTTSSettings,
+)
 from pipecat.services.elevenlabs.tts import (
     ElevenLabsTTSService,
+    ElevenLabsTTSSettings,
     language_to_elevenlabs_language,
 )
 from pipecat.services.tts_service import TextAggregationMode
@@ -42,9 +47,27 @@ class ElevenLabsConfig:
 
 
 def build_elevenlabs_tts(config: ElevenLabsConfig):
-    """Create an ElevenLabs TTS service."""
+    """Create an ElevenLabs TTS service.
+
+    Eleven v3 models are rejected by the text-to-speech WebSocket and are only
+    served on the Text-to-Dialogue WebSocket. That endpoint reads stability
+    alone, so speed, similarity_boost and SSML parsing do not apply to v3.
+    """
 
     text_filters = list(config.text_filters) if config.text_filters else None
+
+    if config.model.startswith("eleven_v3"):
+        return ElevenLabsDialogueTTSService(
+            api_key=config.api_key,
+            url=config.url,
+            settings=ElevenLabsDialogueTTSSettings(
+                model=config.model,
+                voice=config.voice_id,
+                language=config.language,
+                stability=config.stability,
+            ),
+            text_filters=text_filters,
+        )
 
     return ElevenLabsTTSService(
         api_key=config.api_key,
@@ -52,7 +75,7 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
         model=config.model,
         url=config.url,
         enable_ssml_parsing=config.enable_ssml_parsing,
-        settings=ElevenLabsTTSService.Settings(
+        settings=ElevenLabsTTSSettings(
             speed=config.speed,
             stability=config.stability,
             similarity_boost=config.similarity_boost,

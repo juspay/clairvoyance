@@ -23,17 +23,24 @@ from __future__ import annotations
 
 import asyncio
 
+from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import TranscriptionFrame
+from pipecat.processors.frame_processor import FrameProcessorSetup
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
-from pipecat.utils.asyncio.task_manager import TaskManager, TaskManagerParams
+from pipecat.utils.asyncio.task_manager import TaskManager
 
 from app.ai.voice.agents.breeze_buddy.template import interruption
 
 
-def _make_task_manager() -> TaskManager:
-    tm = TaskManager()
-    tm.setup(TaskManagerParams(loop=asyncio.get_running_loop()))
-    return tm
+def _make_setup() -> FrameProcessorSetup:
+    """pipecat 1.8 sets strategies up with a FrameProcessorSetup, not a bare
+    TaskManager. These strategies only use the task manager, so there is no
+    PipelineWorker here."""
+    return FrameProcessorSetup(
+        clock=SystemClock(),
+        task_manager=TaskManager(),
+        pipeline_worker=None,  # pyrefly: ignore
+    )
 
 
 def _transcription(text: str = "hello", finalized: bool = True) -> TranscriptionFrame:
@@ -64,7 +71,7 @@ async def test_setup_and_reset_do_not_raise_with_positive_timeout():
     The deleted subclass raised AttributeError here; the base class must not.
     """
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=1.0)
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
     await strat.reset()  # called by the turn controller on every turn start/stop
     await strat.cleanup()
 
@@ -76,7 +83,7 @@ async def test_fires_after_timeout_in_no_vad_fallback():
     fired = asyncio.Event()
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.05)
     strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
 
     await strat.process_frame(_transcription(finalized=True))
     # Not fired immediately — the policy floor must elapse first.
@@ -92,7 +99,7 @@ async def test_timer_rearms_on_each_transcript():
     fired = asyncio.Event()
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.15)
     strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
 
     # Three transcripts spaced under the timeout — each rearms the timer.
     for _ in range(3):
@@ -111,7 +118,7 @@ async def test_fires_quickly_with_zero_timeout_stt_native():
     fired = asyncio.Event()
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)
     strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-    await strat.setup(_make_task_manager())
+    await strat.setup(_make_setup())
 
     await strat.process_frame(_transcription(finalized=True))
     await asyncio.wait_for(fired.wait(), timeout=1.0)

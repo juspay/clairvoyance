@@ -61,6 +61,7 @@ async def build_gemini_tts(config: GeminiConfig) -> GeminiTTSService:
     model = config.model or await GEMINI_TTS_MODEL()
 
     return GeminiTTSService(
+        sample_rate=_GEMINI_SAMPLE_RATE,
         credentials=config.credentials or GOOGLE_CREDENTIALS_JSON or None,
         settings=GeminiTTSService.Settings(
             model=model,
