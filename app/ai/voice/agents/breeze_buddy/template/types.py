@@ -77,6 +77,15 @@ class SonioxSTTConfig(BaseModel):
         None,
         description="Enable automatic language identification. Defaults to None.",
     )
+    vad_force_turn_endpoint: Optional[bool] = Field(
+        None,
+        description="Force turn endpoints from VAD speech-end instead of Soniox "
+        "native endpoint detection (Soniox endpoint detection is disabled; the "
+        "service sends a finalize on every VADUserStoppedSpeakingFrame). Needs a "
+        "VAD analyzer in the pipeline — BREEZE_BUDDY_ENABLE_VAD=true or "
+        "turn_detection='smart_turn'; without one, finals flush only via the "
+        "endpoint watchdog. Overrides env BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT.",
+    )
     finalize_after_secs: Optional[float] = Field(
         None,
         ge=0,

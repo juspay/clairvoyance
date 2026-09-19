@@ -373,6 +373,18 @@ async def build_pipeline(
             "SmartTurn mode: auto-created Silero VAD (stop_secs=0.2) as trigger"
         )
 
+    # Generic STT guard: services whose turn endpoints come from VAD speech-end
+    # (requires_vad_analyzer) instead of provider-native endpointing need a VAD
+    # analyzer upstream; without one their finals flush only via the endpoint
+    # watchdog. Any provider can opt into this contract by exposing the
+    # property — the pipeline stays provider-agnostic.
+    if vad_analyzer is None and getattr(stt, "requires_vad_analyzer", False):
+        logger.warning(
+            "STT turn endpointing depends on a VAD analyzer but none is "
+            "attached — finals flush only via the endpoint watchdog. Enable "
+            "BREEZE_BUDDY_ENABLE_VAD or set turn_detection='smart_turn'."
+        )
+
     # --- User turn start strategies ---
     start_strategies: list[BaseUserTurnStartStrategy] = []
 

@@ -490,3 +490,48 @@ def test_ws_liveness_env_validation(monkeypatch):
         # Restore clean values so later tests are not poisoned by the
         # partially-updated module a failed reload leaves behind.
         _reload()
+
+
+async def test_template_vad_force_turn_endpoint_flows_to_service(monkeypatch):
+    """stt.soniox.vad_force_turn_endpoint overrides the env default; unset
+    falls back to BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT. False must win
+    over a true env (opt-out), True must win over a false env (opt-in)."""
+    import app.ai.voice.agents.breeze_buddy.stt as bb_stt
+
+    monkeypatch.setattr(bb_stt, "SONIOX_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", False)
+
+    svc_on = await create_stt_from_config(
+        STTConfiguration(
+            provider=STTProvider.SONIOX,
+            soniox=SonioxSTTConfig(vad_force_turn_endpoint=True),
+        )
+    )
+    assert isinstance(svc_on, SonioxSTTServiceWithEndpointDelay)
+    assert svc_on._vad_force_turn_endpoint is True
+    assert svc_on.requires_vad_analyzer is True
+
+    monkeypatch.setattr(bb_stt, "BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", True)
+    svc_off = await create_stt_from_config(
+        STTConfiguration(
+            provider=STTProvider.SONIOX,
+            soniox=SonioxSTTConfig(vad_force_turn_endpoint=False),
+        )
+    )
+    assert isinstance(svc_off, SonioxSTTServiceWithEndpointDelay)
+    assert svc_off._vad_force_turn_endpoint is False
+    assert svc_off.requires_vad_analyzer is False
+
+    # Unset template field inherits the env value in both directions.
+    svc_env_on = await create_stt_from_config(
+        STTConfiguration(provider=STTProvider.SONIOX)
+    )
+    assert isinstance(svc_env_on, SonioxSTTServiceWithEndpointDelay)
+    assert svc_env_on._vad_force_turn_endpoint is True
+
+    monkeypatch.setattr(bb_stt, "BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", False)
+    svc_env_off = await create_stt_from_config(
+        STTConfiguration(provider=STTProvider.SONIOX)
+    )
+    assert isinstance(svc_env_off, SonioxSTTServiceWithEndpointDelay)
+    assert svc_env_off._vad_force_turn_endpoint is False
