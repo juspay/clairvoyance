@@ -123,3 +123,85 @@ def reason_label(reason):
     if reason is None:
         return None
     return PROVIDER_CODE_REASONS.get(reason, reason)
+
+
+# --- WHOSE failure it is, for the router -------------------------------------
+#
+# reason_label answers "what happened" for a human. This answers "who has to
+# act", which is the question that decides where a failure is reported at
+# all: a merchant's own setup is theirs to fix and must never page our
+# on-call; anything else is ours to chase and must never be mailed to them
+# as their fault.
+REASON_CLASS_PROVIDER = "provider"  # us or the far end — we chase it
+REASON_CLASS_MERCHANT = "merchant"  # their setup — only they can fix it
+REASON_CLASS_POLICY = "policy"  # a rule declined it; nobody is at fault
+
+#: Only what a merchant can actually act on, and only what says so
+#: unambiguously. Everything absent from this map is PROVIDER by default —
+#: see reason_class().
+_MERCHANT_REASONS = frozenset(
+    {
+        # Ours, refused before the wire (send.py): the connection or the
+        # template the plan named is not set up.
+        REASON_NO_BINDING,
+        REASON_NO_INSTALLATION,
+        REASON_TEMPLATE_NOT_APPROVED,
+        REASON_NO_CREDENTIAL,
+        REASON_NO_TEMPLATE,
+        # The plan's variable mapping does not fit the template it names, or
+        # the address their data carried is not one.
+        REASON_BAD_VARIABLES,
+        REASON_BAD_ADDRESS,
+        # The provider's own verdicts on their account and their templates.
+        "190",  # token_expired
+        "10",  # permission_denied
+        "200",  # permission_denied
+        "131005",  # access_denied
+        "133010",  # number_not_registered
+        "131030",  # recipient_not_in_allowed_list
+        "132001",  # template_not_found
+        "132005",  # template_too_long
+        "132007",  # template_policy_violation
+        "132015",  # template_paused
+        "132016",  # template_disabled
+        # Mapping faults — the case a "credential" word would have missed:
+        # nothing is wrong with their token, they wired a field wrongly.
+        "132000",  # template_variable_count_mismatch
+        "132012",  # template_variable_format_invalid
+        "131008",  # required_parameter_missing
+        "131009",  # parameter_value_invalid
+    }
+)
+
+#: A rule said no and it worked. Not a failure anyone fixes: the 24h window
+#: closed, the customer opted out, the person cannot receive this channel.
+_POLICY_REASONS = frozenset(
+    {
+        REASON_GATE_REFUSED,
+        REASON_SUPPRESSED,
+        "131047",  # outside_24h_window
+        "131026",  # recipient_cannot_receive_whatsapp
+    }
+)
+
+
+def reason_class(reason):
+    """PURE: who has to act on this reason — provider · merchant · policy.
+
+    Total, and deliberately asymmetric. A reason earns MERCHANT only by
+    being named above; everything else — our transport errors, rate limits,
+    a connector we marked unhealthy for reasons the word does not carry, and
+    every provider code we have never seen — is PROVIDER.
+
+    That default is the whole point. Misrouting ours as theirs tells a
+    customer to go fix a token we broke; misrouting theirs as ours costs us
+    one look at a dashboard. So the unknown case fails closed on BLAME, the
+    same way the permission gate fails closed on access.
+    """
+    if reason is None:
+        return None
+    if reason in _MERCHANT_REASONS:
+        return REASON_CLASS_MERCHANT
+    if reason in _POLICY_REASONS:
+        return REASON_CLASS_POLICY
+    return REASON_CLASS_PROVIDER

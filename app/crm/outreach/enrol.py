@@ -26,6 +26,43 @@ from app.crm.outreach.schemas import (
 )
 from app.crm.outreach.window import alarm
 
+#: Where entry-side lines file themselves — the walker has its own.
+LOG_COMPONENT = "crm.outreach.entry"
+
+
+def _log_skipped(
+    merchant_id: str,
+    workflow_id: str,
+    skip_reason: str,
+    *,
+    customer_id: Optional[str] = None,
+    workflow_status: Optional[str] = None,
+) -> None:
+    """One shape for every refusal to start a run. INFO, because most are
+    the plan working as written (a cooldown, a run already open); what
+    they feed is the comparison — events arriving while runs stop
+    starting, grouped by which refusal grew.
+
+    Each identifier rides under its own name, and only when it applies: one
+    field holding a customer on one path and a plan's status on another is
+    not something a query can group by.
+    """
+    named = {
+        name: value
+        for name, value in (
+            ("customer_id", customer_id),
+            ("workflow_status", workflow_status),
+        )
+        if value is not None
+    }
+    logger.bind(
+        component=LOG_COMPONENT,
+        merchant_id=merchant_id,
+        workflow_id=workflow_id,
+        skip_reason=skip_reason,
+        **named,
+    ).info(f"enrol skipped: {skip_reason} (workflow {workflow_id})")
+
 
 def _admission(
     door: WorkflowEntry,
@@ -73,14 +110,16 @@ async def enrol(
     carries pointers + the small facts the sends need ({source_event_id,
     phone, ...}), never payloads."""
     if workflow.status != "live" or not workflow.definition:
-        logger.info(
-            f"enrol skipped: workflow {workflow.id} not live "
-            f"(status={workflow.status})"
+        _log_skipped(
+            merchant_id,
+            str(workflow.id),
+            "not_live",
+            workflow_status=workflow.status,
         )
         return None
     definition = WorkflowDefinition.model_validate(workflow.definition)
     try:
-        return await atomically(
+        run = await atomically(
             _enrol_in_txn,
             merchant_id,
             workflow,
@@ -93,11 +132,30 @@ async def enrol(
     except UniqueViolation:
         # The open-run partial unique IS the race arbiter: two entry
         # events, one token. Already in flow — a normal outcome.
-        logger.info(
-            f"enrol skipped: open run exists (workflow {workflow.id}, "
-            f"customer {customer_id})"
+        _log_skipped(
+            merchant_id, str(workflow.id), "open_run_exists", customer_id=customer_id
         )
         return None
+    if run is not None:
+        # THE denominator: parks and exits only alarm as a share of runs
+        # started, and this is the only line that counts one — logged HERE,
+        # after the atom returns, so a commit failure cannot count a run
+        # that was rolled back. source_event_id is the trail's other half —
+        # the letter that caused this run; null when nothing triggered it.
+        source_event_id = context.get("source_event_id")
+        logger.bind(
+            component=LOG_COMPONENT,
+            merchant_id=merchant_id,
+            workflow_id=str(workflow.id),
+            run_id=str(run.id),
+            customer_id=customer_id,
+            node=run.current_node,
+            source_event_id=str(source_event_id) if source_event_id else None,
+        ).info(
+            f"enrolled: run {run.id} (workflow {workflow.id}, "
+            f"customer {customer_id}, node {run.current_node})"
+        )
+    return run
 
 
 async def _enrol_in_txn(
@@ -119,7 +177,16 @@ async def _enrol_in_txn(
     if source_event_id and await enrollment_accessor.source_event_used(
         txn, merchant_id, str(workflow.id), customer_id, str(source_event_id)
     ):
-        return None  # this event already made its run (at-least-once scan)
+        # This event already made its run (at-least-once scan). Named like
+        # every other refusal: unlogged, it is the one way "events arriving,
+        # no runs starting" can be normal and invisible at once.
+        _log_skipped(
+            merchant_id,
+            str(workflow.id),
+            "source_event_replayed",
+            customer_id=customer_id,
+        )
+        return None
 
     # Keyed plan: the guards judge THIS key's history (B2 — "one run per
     # <field>" means reenter/cooldown are about the order, not the
@@ -134,10 +201,7 @@ async def _enrol_in_txn(
     now = datetime.now(timezone.utc)
     admit, reason = _admission(door, facts["runs"], facts["latest_entered_at"], now)
     if not admit:
-        logger.info(
-            f"enrol skipped: {reason} (workflow {workflow.id}, "
-            f"customer {customer_id})"
-        )
+        _log_skipped(merchant_id, str(workflow.id), reason, customer_id=customer_id)
         return None
 
     start = next((node for node in definition.nodes if node.id == door.start), None)
@@ -157,8 +221,6 @@ async def _enrol_in_txn(
         context,
         enrollment_key,
     )
-    logger.info(
-        f"enrolled: run {run.id} (workflow {workflow.id}, "
-        f"customer {customer_id}, node {run.current_node})"
-    )
+    # No log here: "enrolled" is emitted by enrol() AFTER the atom commits,
+    # or a failed commit would count a run that never existed.
     return run
