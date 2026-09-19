@@ -117,7 +117,7 @@ def test_live_workflows_read_is_merchant_scoped() -> None:
 
 
 def test_publish_requires_a_draft_to_exist() -> None:
-    sql, _ = publish_workflow_query("m1", "wf-1")
+    sql, _ = publish_workflow_query("m1", "wf-1", "editor@merchant.com")
     assert "draft IS NOT NULL" in sql
     assert "version = version + 1" in sql
 

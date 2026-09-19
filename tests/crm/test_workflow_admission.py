@@ -148,6 +148,7 @@ def _workflow(key: Optional[str], reenter: bool = False) -> Workflow:
         status="live",
         version=1,
         created_by=None,
+        updated_by=None,
         created_at=NOW,
         updated_at=NOW,
         definition={
@@ -294,6 +295,7 @@ def test_enrol_holds_the_templates_the_document_sends_before_the_insert() -> Non
             status="live",
             version=1,
             created_by=None,
+            updated_by=None,
             created_at=NOW,
             updated_at=NOW,
             draft=None,

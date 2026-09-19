@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.crm.outreach.db.queries.tables import WORKFLOW_TABLE
 
 _WORKFLOW_SUMMARY_COLUMNS = """
-    id, merchant_id, name, status, version, created_by,
+    id, merchant_id, name, status, version, created_by, updated_by,
     created_at, updated_at
 """
 
@@ -22,25 +22,26 @@ def insert_workflow_query(
     merchant_id: str, name: str, draft: Dict[str, Any], created_by: Optional[str]
 ) -> Tuple[str, List[Any]]:
     """A new plan is born as a draft — the walker cannot see it until
-    publish copies draft -> definition."""
+    publish copies draft -> definition. updated_by starts equal to
+    created_by: the creator is the only person who has touched it yet."""
     query = f"""
-        INSERT INTO {WORKFLOW_TABLE} (merchant_id, name, draft, created_by)
-        VALUES ($1, $2, $3::jsonb, $4)
+        INSERT INTO {WORKFLOW_TABLE} (merchant_id, name, draft, created_by, updated_by)
+        VALUES ($1, $2, $3::jsonb, $4, $4)
         RETURNING {_WORKFLOW_COLUMNS}
     """
     return query, [merchant_id, name, json.dumps(draft), created_by]
 
 
 def update_draft_query(
-    merchant_id: str, workflow_id: str, draft: Dict[str, Any]
+    merchant_id: str, workflow_id: str, draft: Dict[str, Any], updated_by: Optional[str]
 ) -> Tuple[str, List[Any]]:
     query = f"""
         UPDATE {WORKFLOW_TABLE}
-        SET draft = $3::jsonb, updated_at = now()
+        SET draft = $3::jsonb, updated_by = $4, updated_at = now()
         WHERE merchant_id = $1 AND id = $2
         RETURNING {_WORKFLOW_COLUMNS}
     """
-    return query, [merchant_id, workflow_id, json.dumps(draft)]
+    return query, [merchant_id, workflow_id, json.dumps(draft), updated_by]
 
 
 def get_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
@@ -72,7 +73,9 @@ def list_workflows_query(
     return query, [merchant_id, limit, offset]
 
 
-def publish_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
+def publish_workflow_query(
+    merchant_id: str, workflow_id: str, updated_by: Optional[str]
+) -> Tuple[str, List[Any]]:
     """Publish = copy draft -> definition, bump version (the audit stamp),
     go/stay live. Runs inside the publish atom AFTER the validator said
     yes — the WHERE re-checks a draft still exists so a racing publish
@@ -83,23 +86,24 @@ def publish_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, Lis
             draft = NULL,
             version = version + 1,
             status = CASE WHEN status = 'draft' THEN 'live' ELSE status END,
+            updated_by = $3,
             updated_at = now()
         WHERE merchant_id = $1 AND id = $2 AND draft IS NOT NULL
         RETURNING {_WORKFLOW_COLUMNS}
     """
-    return query, [merchant_id, workflow_id]
+    return query, [merchant_id, workflow_id, updated_by]
 
 
 def set_workflow_status_query(
-    merchant_id: str, workflow_id: str, status: str
+    merchant_id: str, workflow_id: str, status: str, updated_by: Optional[str]
 ) -> Tuple[str, List[Any]]:
     query = f"""
         UPDATE {WORKFLOW_TABLE}
-        SET status = $3, updated_at = now()
+        SET status = $3, updated_by = $4, updated_at = now()
         WHERE merchant_id = $1 AND id = $2 AND status <> 'archived'
         RETURNING {_WORKFLOW_COLUMNS}
     """
-    return query, [merchant_id, workflow_id, status]
+    return query, [merchant_id, workflow_id, status, updated_by]
 
 
 def live_workflows_query(merchant_id: str) -> Tuple[str, List[Any]]:

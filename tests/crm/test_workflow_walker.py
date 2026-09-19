@@ -112,6 +112,7 @@ class _Writes:
             status="live",
             version=1,
             created_by=None,
+            updated_by=None,
             created_at=NOW,
             updated_at=NOW,
             definition=self.definition,
