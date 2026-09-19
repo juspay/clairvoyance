@@ -129,6 +129,19 @@ app/
 - Migrations: never edit a merged one; next number; one table owner per file.
 - New tables: canon-conformant DDL + `TABLE_OWNERS` entry in
   `scripts/check_crm_boundaries.py`, or CI fails the PR by itself.
+- **DB code must survive transaction pooling** (PgBouncer/Cloud SQL MCP):
+  never open an asyncpg pool/connection without passing
+  `statement_cache_size` (CI-guarded; pass `POSTGRES_STATEMENT_CACHE_SIZE`,
+  whose default follows `POSTGRES_BEHIND_POOLER`), no session state (LISTEN/NOTIFY, session `SET`, advisory
+  locks, temp tables), and `SELECT ... FOR UPDATE` only inside a transaction —
+  through `run_parameterized_query()` it silently does not lock. **Never open a
+  second pooled connection while a transaction is open** (thread the `txn`
+  through) — that one DEADLOCKS rather than erroring. Enforced by rule 13 in
+  `scripts/check_crm_boundaries.py`, which follows local calls out of every
+  `*_in_txn` body; existing sites are allowlisted there and the set is closed.
+  Registry-mediated nesting is late-bound and cannot be caught statically —
+  sizing plus `query_wait_timeout` is what covers it. Full contract + local
+  rig: `docs/PGBOUNCER.md`.
 
 ## Breeze Buddy essentials
 

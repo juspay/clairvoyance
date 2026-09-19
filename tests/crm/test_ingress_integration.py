@@ -122,11 +122,13 @@ async def db() -> AsyncIterator[asyncpg.Connection]:
     """
     import app.database as database
 
-    pool = await asyncpg.create_pool(dsn=DSN, min_size=1, max_size=2)
+    pool = await asyncpg.create_pool(
+        dsn=DSN, min_size=1, max_size=2, statement_cache_size=0
+    )
     # The ignore is because the module declares `pool = None` and only ever
     # reassigns it from inside itself.
     previous, database.pool = database.pool, pool  # type: ignore[assignment]
-    conn = await asyncpg.connect(DSN)
+    conn = await asyncpg.connect(DSN, statement_cache_size=0)
     try:
         await _seed(conn)
         yield conn

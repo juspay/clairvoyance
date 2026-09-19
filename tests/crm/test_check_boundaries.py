@@ -421,3 +421,57 @@ def test_sql_in_split_accessors_folder_fails(tmp_path: Path) -> None:
         },
     )
     assert any("SQL statement outside db/queries" in e for e in check(root))
+
+
+# --- 13. no second pooled connection inside an atom -------------------------
+# The atom's transaction pins one server connection; a second one taken while
+# it is open needs a SECOND slot at the same time. Behind a transaction pooler
+# that is a deadlock, not an error (docs/PGBOUNCER.md).
+
+_NESTED = (
+    "from app.crm.identity.contracts import resolve\n"
+    "\n"
+    "async def _thing_in_txn(txn, merchant_id):\n"
+    '    """ATOMIC: the claim and its stamps share one commit."""\n'
+    "    await _sub_step(merchant_id)\n"
+    "\n"
+    "async def _sub_step(merchant_id):\n"
+    "    await resolve(merchant_id)\n"
+)
+
+
+def test_nested_connection_inside_an_atom_fails(tmp_path: Path) -> None:
+    """A contract call reached from an atom fails, even a hop down.
+
+    The reach is transitive on purpose: every real site puts the offending
+    call in a private sub-step, so a lexical scan of the _in_txn body alone
+    finds nothing.
+    """
+    root = _tree(tmp_path, {"app/crm/outreach/plan_logic.py": _NESTED})
+    assert any("SECOND pooled connection" in e for e in check(root))
+
+
+def test_a_grandfathered_nested_connection_passes(tmp_path: Path) -> None:
+    """The known sites are allowlisted by path — and the set is closed."""
+    root = _tree(tmp_path, {"app/crm/record/workers.py": _NESTED})
+    assert not any("SECOND pooled connection" in e for e in check(root))
+
+
+def test_an_atom_that_threads_its_txn_passes(tmp_path: Path) -> None:
+    """The correct shape must not trip the rule: one handle, threaded down."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/outreach/plan_logic.py": (
+                "from app.crm.outreach.db import accessor\n"
+                "\n"
+                "async def _thing_in_txn(txn, merchant_id):\n"
+                '    """ATOMIC: one commit, one connection."""\n'
+                "    await _sub_step(txn, merchant_id)\n"
+                "\n"
+                "async def _sub_step(txn, merchant_id):\n"
+                "    await accessor.read_plan(txn, merchant_id)\n"
+            )
+        },
+    )
+    assert not any("SECOND pooled connection" in e for e in check(root))

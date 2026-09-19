@@ -8,12 +8,15 @@ from typing import Optional
 import asyncpg
 
 from app.core.config.static import (
+    POSTGRES_ACQUIRE_TIMEOUT_SECONDS,
+    POSTGRES_BEHIND_POOLER,
     POSTGRES_DB,
     POSTGRES_HOST,
     POSTGRES_MAX_OVERFLOW,
     POSTGRES_PASSWORD,
     POSTGRES_POOL_SIZE,
     POSTGRES_PORT,
+    POSTGRES_STATEMENT_CACHE_SIZE,
     POSTGRES_USER,
 )
 from app.core.logger import logger
@@ -69,8 +72,33 @@ async def init_db_pool(min_size: Optional[int] = None, max_size: Optional[int] =
                 port=POSTGRES_PORT,
                 min_size=min_size,
                 max_size=max_size,
+                statement_cache_size=POSTGRES_STATEMENT_CACHE_SIZE,
             )
-            logger.info("Database pool initialized successfully.")
+            if POSTGRES_BEHIND_POOLER and POSTGRES_STATEMENT_CACHE_SIZE != 0:
+                # Valid, and deliberate: behind a pooler the cache DEFAULTS to
+                # 0, so a non-zero value here was set explicitly. It is safe
+                # only while the pooler re-prepares statements on the server
+                # connection it hands out (PgBouncer max_prepared_statements
+                # > 0; ours pins 200 rather than inheriting the 1.25 default).
+                # The app cannot verify that from here -- it only sees a
+                # socket -- so this records the coupling instead of asserting
+                # it. If the pooler drops to 0, every pooled client fails with
+                # InvalidSQLStatementNameError, under concurrency, fleet-wide.
+                logger.warning(
+                    "POSTGRES_STATEMENT_CACHE_SIZE=%s with "
+                    "POSTGRES_BEHIND_POOLER=true: valid ONLY while the pooler "
+                    "runs max_prepared_statements > 0. Lower that and this "
+                    "deployment must go to 0 first. See docs/PGBOUNCER.md.",
+                    POSTGRES_STATEMENT_CACHE_SIZE,
+                )
+            logger.info(
+                "Database pool initialized successfully "
+                "(min=%s max=%s statement_cache_size=%s acquire_timeout=%s).",
+                min_size,
+                max_size,
+                POSTGRES_STATEMENT_CACHE_SIZE,
+                POSTGRES_ACQUIRE_TIMEOUT_SECONDS or "none",
+            )
         except Exception as e:
             logger.error(f"Database pool initialization failed: {e}")
             raise
@@ -87,7 +115,10 @@ async def get_db_connection():
     if pool is None:
         raise RuntimeError("Database pool is not initialized")
 
-    async with pool.acquire() as connection:
+    # timeout=None restores asyncpg's unbounded wait; the configured default
+    # converts a pool-slot deadlock into an error instead of a silent hang.
+    timeout = POSTGRES_ACQUIRE_TIMEOUT_SECONDS or None
+    async with pool.acquire(timeout=timeout) as connection:
         yield connection
 
 
@@ -95,6 +126,7 @@ async def close_db_pool():
     """
     Close the database connection pool.
     """
+    global pool
     if pool:
         try:
             await pool.close()
@@ -102,6 +134,10 @@ async def close_db_pool():
         except Exception as e:
             logger.error(f"Failed to close database pool: {e}")
             raise
+        finally:
+            # Clear the handle so a later get_db_connection() re-initializes
+            # instead of calling acquire() on a closed pool (InterfaceError).
+            pool = None
 
 
 __all__ = [

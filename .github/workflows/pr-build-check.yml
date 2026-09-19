@@ -127,6 +127,10 @@ jobs:
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
           uv run pytest tests/crm -q
+          # Transaction-pooling contract (docs/PGBOUNCER.md). The rig-gated
+          # integration tests skip without PGBOUNCER_RIG=1; the pool-config
+          # and connection-site guards run here and must stay green.
+          uv run pytest tests/database -q
         continue-on-error: false
 
       # Step 13: Check commit count (must be exactly 1)
