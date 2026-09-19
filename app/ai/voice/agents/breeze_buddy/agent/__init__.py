@@ -836,19 +836,35 @@ class Agent:
             logger.error("Transport or task not initialized")
             return
 
+        from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+            raise_pipeline_failure,
+        )
+
         @self.task.event_handler("on_pipeline_error")
         async def on_pipeline_error(task, error):
             """Capture TTS/STT/LLM pipeline failures."""
-            processor = getattr(error, "processor", "unknown")
+            processor = getattr(error, "processor", None)
+            processor_name = str(processor) if processor is not None else "unknown"
             error_msg = getattr(error, "error", str(error))
-            detailed_msg = f"[PIPELINE] {processor}: {error_msg}"
+            detailed_msg = f"[PIPELINE] {processor_name}: {error_msg}"
             logger.info(f"[PIPELINE_ERROR] {detailed_msg}")
             track_error(self.errors, detailed_msg)
             if self._rtvi_processor:
                 await self._emit_rtvi_event(
                     "pipeline-error",
-                    {"processor": str(processor), "error": error_msg},
+                    {"processor": processor_name, "error": error_msg},
                 )
+            # Best-effort; throttled per (stage, processor) inside the alert.
+            category = getattr(error, "category", None)
+            await raise_pipeline_failure(
+                processor=processor_name,
+                error=str(error_msg),
+                call_sid=self.call_sid,
+                reseller_id=self.lead.reseller_id if self.lead else None,
+                merchant_id=self.lead.merchant_id if self.lead else None,
+                template=self.lead.template if self.lead else None,
+                category=getattr(category, "value", None),
+            )
 
         @self.transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
