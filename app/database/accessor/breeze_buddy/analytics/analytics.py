@@ -6,7 +6,7 @@ All queries are optimized to filter at database level.
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
-from app.database.queries import run_parameterized_query
+from app.database.queries import run_parameterized_query, run_reader_query
 from app.database.queries.breeze_buddy.analytics.analytics import (
     get_analytics_call_details_grouped_count_query,
     get_analytics_call_details_grouped_query,
@@ -539,7 +539,7 @@ async def get_distinct_outcomes_from_db(
     logger.info(f"[Analytics DB] Fetching distinct outcomes with filters: {filters}")
     try:
         query, values = get_distinct_outcomes_query(filters)
-        result = await run_parameterized_query(query, values)
+        result = await run_reader_query(query, values)
 
         if not result:
             return []

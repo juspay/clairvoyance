@@ -291,6 +291,24 @@ POSTGRES_HOST = os.getenv("POSTGRES_HOST", "")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "")
 
+# Optional read replica (e.g. a GCP Cloud SQL read replica). Setting
+# POSTGRES_READER_HOST enables a second pool that opt-in read queries use
+# via run_reader_query. The remaining vars each default to the writer's
+# value, so a same-credential replica only needs the host.
+POSTGRES_READER_USER = os.getenv("POSTGRES_READER_USER", "")
+POSTGRES_READER_PASSWORD = os.getenv("POSTGRES_READER_PASSWORD", "")
+POSTGRES_READER_HOST = os.getenv("POSTGRES_READER_HOST", "")
+POSTGRES_READER_PORT = os.getenv("POSTGRES_READER_PORT", "")
+POSTGRES_READER_DB = os.getenv("POSTGRES_READER_DB", "")
+
+# Statement ceiling for reader queries (seconds). The writer fallback in
+# run_reader_query can only fire on an EXCEPTION -- a replica that accepts
+# the connection and then stops responding (lock contention, a runaway
+# query, a black-holed network) would otherwise hang the request forever
+# and never fall back. This bound is what turns a hang into an error the
+# fallback can catch. Callers may pass their own; 0 disables the default.
+POSTGRES_READER_TIMEOUT_SECS = float(os.getenv("POSTGRES_READER_TIMEOUT_SECS", "10"))
+
 # Connection pool settings
 POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
 POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
