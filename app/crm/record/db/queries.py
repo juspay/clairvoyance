@@ -159,6 +159,19 @@ def customer_has_event_query(
     return query, params
 
 
+def event_topics_query(merchant_id: str, event_ids: List[str]) -> Tuple[str, List[Any]]:
+    """The topic behind each of a few letter ids — what a run's trail
+    names when it says which letter moved a square (T26 keeps the pointer,
+    never the photocopy). Tenant first; an id from another merchant is
+    simply absent from the answer."""
+    query = f"""
+        SELECT id, topic
+        FROM {EVENT_RAW_TABLE}
+        WHERE merchant_id = $1 AND id = ANY($2::uuid[])
+    """
+    return query, [merchant_id, event_ids]
+
+
 # --- crm_event_schema (T24) + the catalog's compute-on-read queries ---------
 
 EVENT_SCHEMA_TABLE = "crm_event_schema"

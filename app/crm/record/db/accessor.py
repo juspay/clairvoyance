@@ -19,6 +19,7 @@ from app.crm.record.db.decoder import (
 from app.crm.record.db.queries import (
     claim_pending_events_query,
     customer_has_event_query,
+    event_topics_query,
     get_customer_journey_query,
     get_schema_query,
     insert_detected_schema_query,
@@ -136,6 +137,17 @@ async def register_schema(
     if row is None:
         raise RuntimeError("schema registration returned no row")
     return decode_event_schema(row)
+
+
+async def event_topics(merchant_id: str, event_ids: List[str]) -> Dict[str, str]:
+    """{event id: topic} for the ids this merchant owns. Empty ids read
+    nothing, never the whole table."""
+    if not event_ids:
+        return {}
+    query, values = event_topics_query(merchant_id, event_ids)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return {str(row["id"]): str(row["topic"]) for row in rows}
 
 
 async def list_schemas(merchant_id: str) -> List[EventSchema]:

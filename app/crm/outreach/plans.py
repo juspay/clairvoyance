@@ -454,6 +454,64 @@ async def _publish_in_txn(
     return published
 
 
+async def check_draft(
+    merchant_id: str, workflow_id: str
+) -> Optional[Tuple[bool, List[str]]]:
+    """Every problem Publish would raise on the saved draft, without
+    publishing: the document laws, the ladder-board check and the template
+    approvals — the console's "N to fix before publishing". None when the
+    plan is unknown. The catalogs are gathered before the atom, exactly as
+    publish_workflow gathers them."""
+    workflow = await workflow_accessor.get_workflow(merchant_id, workflow_id)
+    if workflow is None:
+        return None
+    if not workflow.draft:
+        return False, []
+    catalogs = await _gather_catalogs(merchant_id, workflow.draft)
+    # The atom's answer is the answer: it read the draft under the
+    # snapshot, so a plan published or deleted between the two reads is
+    # reported as it now is, never coalesced into "has a clean draft".
+    return await atomically(_check_draft_in_txn, merchant_id, workflow_id, catalogs)
+
+
+async def _check_draft_in_txn(
+    txn: DbTxn,
+    merchant_id: str,
+    workflow_id: str,
+    catalogs: Catalogs = None,
+) -> Optional[Tuple[bool, List[str]]]:
+    """ATOMIC: the draft, the occupied squares and the live entry are read
+    in one transaction — the snapshot the publish atom would judge, so the
+    advice matches what Publish would say at that moment. Writes nothing.
+    Returns (has_draft, problems), or None when the plan is gone."""
+    workflow = await workflow_accessor.workflow_for_publish(
+        txn, merchant_id, workflow_id
+    )
+    if workflow is None:
+        return None
+    draft = workflow.draft
+    if not draft:
+        return False, []  # nothing to publish (published meanwhile)
+    occupied = await enrollment_accessor.occupied_nodes(txn, merchant_id, workflow_id)
+    live_entry = (workflow.definition or {}).get("entry")
+    problems = validate_definition(
+        draft,
+        occupied_nodes=occupied,
+        live_entry=live_entry,
+        catalogs=catalogs,
+    )
+    if problems:
+        return True, problems
+    if expand_stages(draft) != draft:
+        return True, [
+            "draft is a ladder saved without its board — save the draft "
+            "again (PUT /draft) before publishing; publish copies it verbatim"
+        ]
+    return True, await _template_problems(
+        merchant_id, WorkflowDefinition.model_validate(draft)
+    )
+
+
 async def _template_problems(
     merchant_id: str, definition: WorkflowDefinition
 ) -> List[str]:

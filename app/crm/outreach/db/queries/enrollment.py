@@ -645,30 +645,247 @@ def get_run_query(
     return query, [merchant_id, workflow_id, run_id]
 
 
+def _like_pattern(text: str) -> str:
+    """A LIKE pattern that matches ``text`` literally anywhere: the three
+    LIKE metacharacters are escaped (ESCAPE '\\' in the statement)."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+# The runs table's filters, shared by the page read and the count read so
+# the two can never disagree on what "matching" means. $1/$2 are the plan;
+# $3–$10 the filters; $11/$12 the anchor (see list_runs_query). The page
+# read's LIMIT/OFFSET come AFTER, as $13/$14, so the count read binds
+# exactly $1–$12 and pads nothing.
+_RUN_FILTERS = """
+              AND ($3::text IS NULL OR status = $3::text)
+              AND ($4::text IS NULL OR current_node = $4::text)
+              AND ($5::int IS NULL OR workflow_version = $5::int)
+              AND ($6::text IS NULL OR exit_reason = $6::text)
+              AND ($7::text IS NULL
+                   OR enrollment_key ILIKE $7::text ESCAPE '\\'
+                   OR context->>'customer_name' ILIKE $7::text ESCAPE '\\'
+                   OR ($8::text IS NOT NULL AND context->>'phone' LIKE $8::text))
+              AND ($9::timestamptz IS NULL OR entered_at >= $9::timestamptz)
+              AND ($10::timestamptz IS NULL OR entered_at < $10::timestamptz)
+              AND ($11::timestamptz IS NULL
+                   OR (entered_at, id) <= ($11::timestamptz, $12::uuid))
+"""
+
+
+def _run_filter_values(
+    merchant_id: str,
+    workflow_id: str,
+    status: Optional[str],
+    node: Optional[str],
+    version: Optional[int],
+    exit_reason: Optional[str],
+    search: Optional[str],
+    since: Optional[datetime],
+    until: Optional[datetime],
+    anchor_entered_at: Optional[datetime],
+    anchor_id: Optional[str],
+) -> List[Any]:
+    """$1–$12: the plan, the filters and the anchor — the count read's whole
+    list; the page read appends its LIMIT/OFFSET as $13/$14."""
+    phone_digits = "".join(ch for ch in (search or "") if ch.isdigit())
+    return [
+        merchant_id,
+        workflow_id,
+        status,
+        node,
+        version,
+        exit_reason,
+        _like_pattern(search) if search else None,
+        f"%{phone_digits}%" if len(phone_digits) >= 4 else None,
+        since,
+        until,
+        anchor_entered_at,
+        anchor_id,
+    ]
+
+
 def list_runs_query(
     merchant_id: str,
     workflow_id: str,
     status: Optional[str],
     limit: int,
     offset: int,
+    node: Optional[str] = None,
+    version: Optional[int] = None,
+    exit_reason: Optional[str] = None,
+    search: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    anchor_entered_at: Optional[datetime] = None,
+    anchor_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """The ops read behind canon's 'last_error readable on the merchant's
-    screen': a flow's runs, newest first, optionally one status
-    (parked = the triage view)."""
-    status_predicate = "AND status = $3" if status else ""
-    limit_params = ("$4", "$5") if status else ("$3", "$4")
+    screen': a flow's runs, newest first, optionally narrowed (status —
+    parked = the triage view —, the square it stands on, its version, how
+    it ended, a search over key / customer name / phone digits, and a
+    window of entered_at).
+
+    The list is newest first and the plan keeps taking runs, so an offset
+    alone drifts: a run that enters between two page reads shifts every
+    row down one and the next page repeats a row. The ANCHOR fixes that:
+    (anchor_entered_at, anchor_id) is the newest row the client saw on its
+    first page, and every later page reads only rows at or before it in
+    (entered_at, id) order — a keyset on the very fields the sort uses,
+    with id as the tie-breaker — so what entered later cannot move the
+    pages underneath the reader. Offset then pages inside that fixed set.
+
+    Each row also says which of its key's runs of this plan it is ("Run 3
+    of 3"): numbered over EVERY run the plan holds for that key, bound only
+    by merchant and plan, so a filter never renumbers a run. The numbering
+    is done for the PAGE's rows only — two correlated counts per row on
+    the (merchant_id, workflow_id, enrollment_key, entered_at, id) index
+    (075) — never as a window over the whole plan, which would sort every
+    run the plan ever had on every page turn. Each row carries the filtered
+    total (count(*) OVER ()), so a page and its "1–10 of 46" come from one
+    statement; an empty page has no rows to carry it, and the accessor
+    asks count_runs_query instead. A NULL filter is no filter."""
     query = f"""
-        SELECT {_RUN_COLUMNS}
-        FROM {ENROLLMENT_TABLE}
-        WHERE merchant_id = $1 AND workflow_id = $2 {status_predicate}
-        ORDER BY entered_at DESC, id DESC
-        LIMIT {limit_params[0]} OFFSET {limit_params[1]}
+        WITH page AS (
+            SELECT {_RUN_COLUMNS}, count(*) OVER () AS total
+            FROM {ENROLLMENT_TABLE}
+            WHERE merchant_id = $1 AND workflow_id = $2
+              {_RUN_FILTERS}
+            ORDER BY entered_at DESC, id DESC
+            LIMIT $13 OFFSET $14
+        )
+        SELECT p.*,
+               (SELECT count(*) FROM {ENROLLMENT_TABLE} k
+                WHERE k.merchant_id = $1 AND k.workflow_id = $2
+                  AND k.enrollment_key = p.enrollment_key
+                  AND (k.entered_at, k.id) <= (p.entered_at, p.id))::int AS run_number,
+               (SELECT count(*) FROM {ENROLLMENT_TABLE} k
+                WHERE k.merchant_id = $1 AND k.workflow_id = $2
+                  AND k.enrollment_key = p.enrollment_key)::int AS runs_for_key
+        FROM page p
+        ORDER BY p.entered_at DESC, p.id DESC
     """
-    params: List[Any] = [merchant_id, workflow_id]
-    if status:
-        params.append(status)
-    params.extend([limit, offset])
-    return query, params
+    return query, _run_filter_values(
+        merchant_id,
+        workflow_id,
+        status,
+        node,
+        version,
+        exit_reason,
+        search,
+        since,
+        until,
+        anchor_entered_at,
+        anchor_id,
+    ) + [limit, offset]
+
+
+def count_runs_query(
+    merchant_id: str,
+    workflow_id: str,
+    status: Optional[str],
+    node: Optional[str] = None,
+    version: Optional[int] = None,
+    exit_reason: Optional[str] = None,
+    search: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    anchor_entered_at: Optional[datetime] = None,
+    anchor_id: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """How many runs match list_runs_query's filters — the same fragment,
+    no page. Read only when a page comes back empty (an offset past the
+    last match), where count(*) OVER () has no row to ride on and the
+    page's ``total`` would otherwise say 0 for a list that is not.
+    Binds $1–$12 exactly: the same list the page read starts from."""
+    query = f"""
+        SELECT count(*)::int AS total
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2
+          {_RUN_FILTERS}
+    """
+    return query, _run_filter_values(
+        merchant_id,
+        workflow_id,
+        status,
+        node,
+        version,
+        exit_reason,
+        search,
+        since,
+        until,
+        anchor_entered_at,
+        anchor_id,
+    )
+
+
+def runs_per_day_query(
+    merchant_id: str,
+    workflow_id: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+    tz: str,
+) -> Tuple[str, List[Any]]:
+    """Runs that entered per calendar day in ``tz`` over the summary's
+    window — the list sparkline. Only days with runs come back."""
+    query = f"""
+        SELECT (entered_at AT TIME ZONE $5)::date AS day, count(*)::int AS runs
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2
+          AND ($3::timestamptz IS NULL OR entered_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR entered_at < $4::timestamptz)
+        GROUP BY 1
+        ORDER BY 1
+    """
+    return query, [merchant_id, workflow_id, since, until, tz]
+
+
+def open_by_node_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
+    """Open runs (waiting + parked = not exited, the CHECK's third value)
+    by the square they stand on now. `status <> 'exited'` is spelled the
+    way the open-runs partial index (075) is, so the read walks only the
+    open rows — a plan's history grows without bound, its open set does
+    not."""
+    query = f"""
+        SELECT current_node, count(*)::int AS runs
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2
+          AND status <> 'exited'
+        GROUP BY current_node
+    """
+    return query, [merchant_id, workflow_id]
+
+
+def run_endings_in_window_query(
+    merchant_id: str,
+    workflow_id: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> Tuple[str, List[Any]]:
+    """Every run of a plan that ENTERED in the window, with how it stands
+    and when it ended — the report's raw material.
+
+    The id rides along because the split the report is about (did a
+    conversation happen before this ended?) lives in the lead store, and
+    the contract there takes ids; exited_at is the moment that split is
+    judged against. Windowed on entered_at, never on exited_at: a report
+    answers "of the people who came in during this window, what happened",
+    so a run that entered inside it and ended after it still belongs to
+    the window it entered.
+
+    entered_at rides along too: a retry lead carries no enrollment_id
+    (only the customer's request_id), so the lead read finds it by
+    request_id inside the run's own lifetime. current_node names the
+    square an open run stands on — the report's "still open, by square"."""
+    query = f"""
+        SELECT id, enrollment_key, status, exit_reason, exited_at,
+               entered_at, current_node
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND workflow_id = $2
+          AND ($3::timestamptz IS NULL OR entered_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR entered_at < $4::timestamptz)
+    """
+    return query, [merchant_id, workflow_id, since, until]
 
 
 def resume_run_query(

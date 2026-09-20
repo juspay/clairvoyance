@@ -11,7 +11,7 @@ seam every module keeps).
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from app.core.config.static import (
     CRM_RUN_RETENTION_DAYS,
@@ -27,8 +27,13 @@ from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
+    RunCall,
+    RunRow,
     RunStep,
-    WorkflowRunSummary,
+)
+from app.crm.record.contracts import event_topics
+from app.database.accessor import (
+    get_leads_by_enrollment_id,
 )
 
 _LISTABLE_STATUSES = ("waiting", "parked", "exited")
@@ -40,11 +45,34 @@ async def list_runs(
     status: Optional[str],
     limit: int,
     offset: int,
-) -> List[EnrollmentRun]:
+    node: Optional[str] = None,
+    version: Optional[int] = None,
+    exit_reason: Optional[str] = None,
+    search: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    anchor: Optional[Tuple[datetime, str]] = None,
+) -> Tuple[List[RunRow], int]:
+    """One page of a plan's runs and how many match in all. ``anchor`` is
+    the newest (entered_at, id) the client's first page saw: later pages
+    read at or before it, so runs entering meanwhile cannot shift them."""
     if status is not None and status not in _LISTABLE_STATUSES:
         raise ValueError(f"unknown run status: {status}")
+    search = (search or "").strip() or None
     return await enrollment_accessor.list_runs(
-        merchant_id, workflow_id, status, limit, offset
+        merchant_id,
+        workflow_id,
+        status,
+        limit,
+        offset,
+        node,
+        version,
+        exit_reason,
+        search,
+        since,
+        until,
+        anchor[0] if anchor else None,
+        anchor[1] if anchor else None,
     )
 
 
@@ -91,19 +119,78 @@ async def run_steps(
             f"type — definition v{run.workflow_version} unreadable: {e}"
         )
         definition = None
-    return steps_log.timeline(run, closed, definition)
+    steps = steps_log.timeline(run, closed, definition)
+    return await name_letters(merchant_id, run, steps)
 
 
-async def workflow_summary(
-    merchant_id: str,
-    workflow_id: str,
-    since: Optional[datetime],
-    until: Optional[datetime],
-) -> WorkflowRunSummary:
-    """The plan's report over a window of entered_at (rollout phase 09)."""
-    return await enrollment_accessor.workflow_summary(
-        merchant_id, workflow_id, since, until
+async def name_letters(
+    merchant_id: str, run: EnrollmentRun, steps: List[RunStep]
+) -> List[RunStep]:
+    """Fill ``event_topic`` on the rows a letter explains: the door row
+    (the founding letter, context.source_event_id), every row a letter cut
+    short (cut_short_by), and the closing row of a run a goal ended
+    (context.goal.topic, already a name). One read for all the ids."""
+    goal = run.context.get("goal")
+    founding = run.context.get("source_event_id")
+    wanted = {str(s.cut_short_by) for s in steps if s.cut_short_by}
+    if isinstance(founding, str):
+        wanted.add(founding)
+    topics = await event_topics(merchant_id, sorted(wanted)) if wanted else {}
+    for i, step in enumerate(steps):
+        if step.cut_short_by and str(step.cut_short_by) in topics:
+            step.event_topic = topics[str(step.cut_short_by)]
+        elif i == 0 and step.arrived_by == "door" and isinstance(founding, str):
+            step.event_topic = topics.get(founding)
+        elif (
+            step.left_at is not None
+            and step.next_node is None
+            and isinstance(goal, dict)
+            and step.outcome == run.exit_reason
+            and run.exit_reason in ("goal_met", "withdrawn")
+        ):
+            step.event_topic = goal.get("topic")
+    return steps
+
+
+async def run_calls(
+    merchant_id: str, workflow_id: str, run_id: str
+) -> Optional[List[RunCall]]:
+    """Every call the run placed, in the order they were queued. None when
+    the run is not this plan's (or not this merchant's)."""
+    run = await enrollment_accessor.get_run(merchant_id, workflow_id, run_id)
+    if run is None:
+        return None
+    leads = await get_leads_by_enrollment_id(
+        merchant_id, str(run.id), run.entered_at, run.exited_at
     )
+    calls: List[RunCall] = []
+    for lead in leads:
+        payload = lead.payload or {}
+        node = payload.get("current_node")
+        duration = (
+            int((lead.call_end_time - lead.call_initiated_time).total_seconds())
+            if lead.call_end_time
+            and lead.call_initiated_time
+            and lead.call_end_time > lead.call_initiated_time
+            else None
+        )
+        calls.append(
+            RunCall(
+                lead_id=lead.id,
+                node=node if isinstance(node, str) else None,
+                status=getattr(lead.status, "value", str(lead.status)),
+                outcome=lead.outcome,
+                next_attempt_at=lead.next_attempt_at,
+                call_initiated_time=lead.call_initiated_time,
+                call_end_time=lead.call_end_time,
+                duration_seconds=duration,
+                attempt_count=lead.attempt_count,
+                template=lead.template,
+                call_id=lead.call_id,
+                cost=lead.cost,
+            )
+        )
+    return calls
 
 
 async def customer_runs(

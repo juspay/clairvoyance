@@ -43,9 +43,12 @@ def test_sweep_deletes_only_old_exited_rows_batched() -> None:
 
 def test_list_runs_is_merchant_first_with_optional_status() -> None:
     sql, params = list_runs_query("m1", "wf-1", None, 50, 0)
-    assert "merchant_id = $1" in sql and params == ["m1", "wf-1", 50, 0]
+    assert "merchant_id = $1" in sql
+    # $1/$2 the plan, $3 status, $11/$12 the anchor (off), $13/$14 the page
+    assert params[:3] == ["m1", "wf-1", None] and params[12:] == [50, 0]
+    assert set(params[3:12]) == {None}
     sql, params = list_runs_query("m1", "wf-1", "parked", 50, 0)
-    assert "status = $3" in sql and params == ["m1", "wf-1", "parked", 50, 0]
+    assert "status = $3" in sql and params[2] == "parked"
 
 
 @pytest.mark.asyncio

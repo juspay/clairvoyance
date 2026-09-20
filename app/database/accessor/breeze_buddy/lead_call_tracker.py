@@ -3,7 +3,7 @@ Database accessor functions for the application.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
 
@@ -17,10 +17,13 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
+    get_call_facts_by_runs_query,
+    get_call_stats_by_runs_query,
     get_lead_based_analytics_query,
     get_lead_by_call_id_query,
     get_lead_by_id_query,
     get_lead_call_trackers_count_query,
+    get_leads_by_enrollment_id_query,
     get_leads_by_request_id_query,
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
@@ -386,6 +389,61 @@ async def get_leads_by_request_id(
 
     logger.info(f"No leads found for request_id {request_id}")
     return []
+
+
+async def get_leads_by_enrollment_id(
+    merchant_id: str,
+    enrollment_id: str,
+    entered_at: datetime,
+    exited_at: Optional[datetime],
+) -> List[LeadCallTracker]:
+    """Every lead one workflow run placed, oldest first — its stamped leads
+    plus the retry leads minted for them while the run was open."""
+    query_text, values = get_leads_by_enrollment_id_query(
+        merchant_id, enrollment_id, entered_at, exited_at
+    )
+    result = await run_parameterized_query(query_text, values)
+    decoded = [decode_lead_call_tracker(row) for row in result or []]
+    return [lead for lead in decoded if lead is not None]
+
+
+async def get_call_stats_by_runs(
+    merchant_id: str,
+    runs: Sequence[Tuple[str, datetime, Optional[datetime]]],
+) -> List[Dict[str, Any]]:
+    """Calls placed by these workflow runs (stamped leads and retries):
+    one row per (template, outcome, spoke) with calls, runs, talk seconds
+    over timed calls, attempts, cost. ``runs`` is (id, entered_at,
+    exited_at) per run. Plain dicts: the data layer knows no CRM shape."""
+    if not runs:
+        return []
+    query_text, values = get_call_stats_by_runs_query(
+        merchant_id, [r[0] for r in runs], [r[1] for r in runs], [r[2] for r in runs]
+    )
+    return [
+        dict(row) for row in await run_parameterized_query(query_text, values) or []
+    ]
+
+
+async def get_call_facts_by_runs(
+    merchant_id: str,
+    runs: Sequence[Tuple[str, datetime, Optional[datetime]]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Per workflow run (keyed by its id): one row per template that rang
+    it — template, leads, placed, answered, no_answer, busy, in_progress,
+    first_answered_at. ``runs`` is (id, entered_at, exited_at) per run: the
+    id finds the leads the run stamped, the lifetime bounds its retries. A
+    run with no lead is absent. Plain dicts: the data layer knows no CRM
+    shape."""
+    if not runs:
+        return {}
+    query_text, values = get_call_facts_by_runs_query(
+        merchant_id, [r[0] for r in runs], [r[1] for r in runs], [r[2] for r in runs]
+    )
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for row in await run_parameterized_query(query_text, values) or []:
+        out.setdefault(str(row["enrollment_id"]), []).append(dict(row))
+    return out
 
 
 async def update_lead_call_initiated_time(

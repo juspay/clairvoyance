@@ -12,6 +12,7 @@ import asyncpg
 from app.crm.outreach.db.decoders.enrollment import (
     decode_customer_run,
     decode_run,
+    decode_run_row,
     decode_run_summary,
 )
 from app.crm.outreach.db.queries.enrollment import (
@@ -19,6 +20,7 @@ from app.crm.outreach.db.queries.enrollment import (
     advance_run_query,
     cancel_run_query,
     claim_due_runs_query,
+    count_runs_query,
     customer_runs_query,
     enrollment_counts_query,
     exit_run_query,
@@ -27,6 +29,7 @@ from app.crm.outreach.db.queries.enrollment import (
     list_runs_query,
     occupied_nodes_on_version_query,
     occupied_nodes_query,
+    open_by_node_query,
     open_runs_for_customer_query,
     park_run_query,
     patch_open_run_query,
@@ -36,6 +39,8 @@ from app.crm.outreach.db.queries.enrollment import (
     repin_runs_on_version_query,
     resume_run_by_id_query,
     resume_run_query,
+    run_endings_in_window_query,
+    runs_per_day_query,
     runs_referencing_template_query,
     source_event_used_query,
     sweep_exited_runs_query,
@@ -45,6 +50,8 @@ from app.crm.outreach.db.queries.enrollment import (
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
+    RunEnding,
+    RunRow,
     WorkflowRunSummary,
 )
 from app.crm.shared.db import crm_connection
@@ -342,11 +349,77 @@ async def list_runs(
     status: Optional[str],
     limit: int,
     offset: int,
-) -> List[EnrollmentRun]:
-    query, values = list_runs_query(merchant_id, workflow_id, status, limit, offset)
+    node: Optional[str] = None,
+    version: Optional[int] = None,
+    exit_reason: Optional[str] = None,
+    search: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    anchor_entered_at: Optional[datetime] = None,
+    anchor_id: Optional[str] = None,
+) -> Tuple[List[RunRow], int]:
+    """One page of runs and the filtered total. The total rides on the
+    rows; an empty page (an offset past the last match) has none, so it
+    is counted on its own — never reported as 0 for a list that is not."""
+    query, values = list_runs_query(
+        merchant_id,
+        workflow_id,
+        status,
+        limit,
+        offset,
+        node,
+        version,
+        exit_reason,
+        search,
+        since,
+        until,
+        anchor_entered_at,
+        anchor_id,
+    )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
-    return [decode_run(row) for row in rows]
+        if rows:
+            total = int(rows[0]["total"])
+        else:
+            count_query, count_values = count_runs_query(
+                merchant_id,
+                workflow_id,
+                status,
+                node,
+                version,
+                exit_reason,
+                search,
+                since,
+                until,
+                anchor_entered_at,
+                anchor_id,
+            )
+            total = int(await conn.fetchval(count_query, *count_values) or 0)
+    return [decode_run_row(row) for row in rows], total
+
+
+async def run_endings_in_window(
+    merchant_id: str,
+    workflow_id: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> List[RunEnding]:
+    """One RunEnding per run of the plan that entered in the window."""
+    query, values = run_endings_in_window_query(merchant_id, workflow_id, since, until)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [
+        RunEnding(
+            str(row["id"]),
+            str(row["enrollment_key"]),
+            str(row["status"]),
+            row["exit_reason"],
+            row["exited_at"],
+            row["entered_at"],
+            row["current_node"],
+        )
+        for row in rows
+    ]
 
 
 async def resume_run(
@@ -370,6 +443,7 @@ async def workflow_summary(
     workflow_id: str,
     since: Optional[datetime],
     until: Optional[datetime],
+    tz: str = "Asia/Kolkata",
 ) -> WorkflowRunSummary:
     query, values = workflow_summary_query(merchant_id, workflow_id, since, until)
     # The arm counts are their own statement (enh A/04): a run with two
@@ -379,10 +453,16 @@ async def workflow_summary(
     split_query, split_values = workflow_split_counts_query(
         merchant_id, workflow_id, since, until
     )
+    day_query, day_values = runs_per_day_query(
+        merchant_id, workflow_id, since, until, tz
+    )
+    node_query, node_values = open_by_node_query(merchant_id, workflow_id)
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
         split_rows = await conn.fetch(split_query, *split_values)
-    return decode_run_summary(rows, split_rows)
+        day_rows = await conn.fetch(day_query, *day_values)
+        node_rows = await conn.fetch(node_query, *node_values)
+    return decode_run_summary(rows, split_rows, day_rows, node_rows)
 
 
 async def customer_runs(
