@@ -8,8 +8,8 @@ a listening wait or a condition/split) live in plans.validate_definition — a p
 function, testable without a database.
 """
 
-from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from datetime import date, datetime
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, Union
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -552,6 +552,14 @@ class Workflow(WorkflowSummary):
     draft: Optional[Dict[str, Any]]
 
 
+class DayCount(BaseModel):
+    """One day of a per-day series: ``day`` is the calendar date in the
+    timezone the caller asked for."""
+
+    day: date
+    runs: int
+
+
 class WorkflowRunSummary(BaseModel):
     """One plan's runs over a window (rollout phase 09, G9): how many
     started, how they ended, what is still in flight, how long they took,
@@ -567,6 +575,12 @@ class WorkflowRunSummary(BaseModel):
     # Empty for every plan with no split — the experiment's own report,
     # read from the runs themselves so there is no counter to drift.
     by_split: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+    # The console's list sparkline: runs that entered per day of the window,
+    # in the caller's timezone. Days with none are absent, not zero.
+    runs_per_day: List[DayCount] = Field(default_factory=list)
+    # "Where open runs are": waiting + parked runs by the square they stand
+    # on NOW — a present-tense count, so the window does not narrow it.
+    open_by_node: Dict[str, int] = Field(default_factory=dict)
 
 
 class WorkflowVersion(BaseModel):
@@ -636,6 +650,215 @@ class RunStep(BaseModel):
     dispatch_id: Optional[str] = None
     cut_short_by: Optional[UUID] = None
     workflow_version: Optional[int] = None
+    # The letter this row is about, by name: the one the run ENTERED on (the
+    # door row), the one that cut this square short, or the one that ended
+    # the run (the closing row). Resolved on read from the ids the trail
+    # keeps — record's event_topics — never stored twice.
+    event_topic: Optional[str] = None
+
+
+class RunRow(EnrollmentRun):
+    """A run as the runs list shows it: which of this key's runs of the
+    plan it is ("Run 3 of 3"), counted over every run the plan holds for
+    the same enrollment_key — exited ones included, until retention
+    sweeps them."""
+
+    run_number: int = 1
+    runs_for_key: int = 1
+
+
+class RunAnchor(BaseModel):
+    """The newest row the first page saw, in the list's own sort keys
+    (entered_at DESC, id DESC). The server establishes it on page 1 and
+    the client echoes it back on every later page — opaquely, so no
+    consumer has to know what the rows are sorted by."""
+
+    entered_at: datetime
+    id: UUID
+
+
+class RunPage(BaseModel):
+    """One page of a plan's runs: the rows, the total matching the filters
+    (and the anchor, when one bounds the set), and the anchor itself. The
+    total travels in the body, typed, where OpenAPI and every client can
+    see it — never in a header a cross-origin page reads as null."""
+
+    items: List[RunRow]
+    total: int
+    anchor: Optional[RunAnchor] = None
+
+
+class PublishCheck(BaseModel):
+    """The publish laws run on the saved draft without publishing: empty
+    ``problems`` means Publish would pass them (templates included).
+    ``has_draft`` false = there is nothing to publish, so nothing to fix."""
+
+    has_draft: bool
+    problems: List[str]
+
+
+class RunCall(BaseModel):
+    """One call the run placed (a lead stamped with its enrollment_id)."""
+
+    lead_id: str
+    node: Optional[str]
+    status: str
+    outcome: Optional[str]
+    next_attempt_at: Optional[datetime]
+    call_initiated_time: Optional[datetime]
+    call_end_time: Optional[datetime]
+    duration_seconds: Optional[int]
+    attempt_count: int
+    template: Optional[str]
+    call_id: Optional[str]
+    cost: Optional[float]
+
+
+class TemplateCalls(BaseModel):
+    """One agent's share of a plan's calls. A plan may fire more than one
+    template — the call square's own, and (PR #1156) an arm's — and "which
+    agent got which outcome" is the question a merchant asks of a
+    multi-template plan; a single plan-wide bar cannot answer it."""
+
+    template: str
+    placed: int
+    connected: int
+    by_outcome: Dict[str, int]
+    talk_seconds_avg: Optional[float]
+    attempts_avg: Optional[float]
+    cost_total: Optional[float]
+
+
+class RunEnding(NamedTuple):
+    """How one run stands, as the report judges it: nothing more than the
+    columns build_report reads. A leaf shape (this file), not a db type —
+    the accessor fills it, the pure fold consumes it."""
+
+    id: str
+    enrollment_key: str
+    status: str
+    exit_reason: Optional[str]
+    exited_at: Optional[datetime]
+    entered_at: Optional[datetime] = None
+    current_node: Optional[str] = None
+
+
+class ReportReach(BaseModel):
+    """How the runs that got THIS far ended. Three stages partition the
+    runs — never dialled, dialled but nobody answered, spoken to — and
+    within each the five endings partition the stage, so a flow chart
+    drawn from these (Entered → stage → ending) is a true whole with no
+    remainder invented on the way."""
+
+    runs: int
+    goal_met: int
+    withdrawn: int
+    ejected: int
+    other_ended: int
+    open: int
+
+
+# The three stages of ReportCustomers.by_reach, in journey order.
+REACH_STAGES = ("never_dialled", "dialled_no_answer", "spoke")
+
+
+class ReportCustomers(BaseModel):
+    """Customer level: one row per run that ENTERED the window. A run is a
+    customer's journey through the plan, so these read as customers.
+
+    ``reached`` = at least one ANSWERED call (placed, finished, outcome
+    not NO_ANSWER / BUSY / a carrier failure). The before/after split is
+    decided per run by time: the run's first answered call against its
+    exited_at — "after" says a conversation preceded the end, never that
+    it caused it.
+
+    ``by_reach`` is the same runs cut the other way, keyed by REACH_STAGES:
+    a run is "spoke" when a conversation preceded its end (or, still open,
+    has happened), "dialled_no_answer" when it was rung but not spoken to,
+    else "never_dialled" — so goal_met_after_reach IS by_reach["spoke"]
+    .goal_met and goal_met_before_reach is the other two stages' sum.
+    ``open_by_square`` says where the still-open runs stand right now
+    (current_node → runs), so "still open" splits into waiting-for-a-call
+    and waiting-for-an-event by the plan's own squares."""
+
+    runs: int
+    unique_customers: int
+    # How many calls each run was placed → how many runs: {"0": never
+    # dialled, "1": once, "2": twice, ...}. Only counts that occurred appear,
+    # so "2+" or "5+" is the reader's sum and never a field to add here.
+    calls_per_customer: Dict[str, int]
+    reached: int
+    goal_met_before_reach: int
+    goal_met_after_reach: int
+    withdrawn_before_reach: int
+    withdrawn_after_reach: int
+    ejected: int
+    other_ended: int
+    open: int
+    by_reach: Dict[str, ReportReach] = Field(default_factory=dict)
+    open_by_square: Dict[str, int] = Field(default_factory=dict)
+
+
+class ReportCalls(BaseModel):
+    """Call level: every lead those runs minted. ``repeat_calls`` are
+    placed calls beyond the first to a run; ``repeat_answered`` answered
+    calls beyond the first — the second conversation with the same
+    person. Rates are the reader's (a percentage is a presentation)."""
+
+    leads: int
+    placed: int
+    answered: int
+    no_answer: int
+    busy: int
+    in_progress: int
+    repeat_calls: int
+    repeat_answered: int
+
+
+class ReportTemplate(BaseModel):
+    """The call table, and the per-customer counts that depend on it,
+    scoped to ONE agent — so a merchant reading a multi-template plan can
+    look at each agent on its own. ``reached`` is runs this agent spoke
+    to; ``calls_per_customer`` counts only this agent's calls."""
+
+    template: str
+    calls: ReportCalls
+    reached: int
+    calls_per_customer: Dict[str, int]
+
+
+class WorkflowReport(BaseModel):
+    """The day report a merchant is shown: the two tables, from one
+    window on entered_at, plus the call table again per agent that rang
+    (busiest first). The plan-wide numbers are the sum of the cards, folded
+    from the same read, so the two can never disagree."""
+
+    customers: ReportCustomers
+    calls: ReportCalls
+    by_template: List[ReportTemplate] = Field(default_factory=list)
+
+
+class WorkflowCallSummary(BaseModel):
+    """The plan's calls over a window of its runs' entered_at: every lead
+    its runs placed — stamped leads and their retries, the same set the
+    report folds. connected = someone spoke, judged by the lead store's one
+    answered definition (placed, finished, outcome not NO_ANSWER / BUSY /
+    NUMBER_UNAVAILABLE / FAILED); answered adds BUSY, an answered line
+    where nobody spoke. reached_runs / contacted_runs count runs the same
+    way the report does."""
+
+    placed: int
+    connected: int
+    answered: int
+    by_outcome: Dict[str, int]
+    # One card per agent that rang, busiest first — the totals above are
+    # their sum, folded from the same read.
+    by_template: List[TemplateCalls] = Field(default_factory=list)
+    talk_seconds_avg: Optional[float]
+    attempts_avg: Optional[float]
+    contacted_runs: int
+    reached_runs: int
+    cost_total: Optional[float]
 
 
 class CustomerRun(EnrollmentRun):

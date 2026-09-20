@@ -248,6 +248,163 @@ def get_leads_by_request_id_query(request_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
+_PRODUCTION = "\"execution_mode\" IN ('TELEPHONY', 'HOLD_TRANSFER')"
+
+# An answered call: placed, finished, and someone spoke. BUSY is an answered
+# line where nobody did; NO_ANSWER is every carrier failure; the last two are
+# the dialler's own refusals. The one definition, spelled once — the report,
+# the calls summary and "reached" all read it.
+_ANSWERED = (
+    '"call_initiated_time" IS NOT NULL AND "status" = \'FINISHED\' '
+    "AND COALESCE(\"outcome\", '') NOT IN "
+    "('NO_ANSWER', 'BUSY', 'NUMBER_UNAVAILABLE', 'FAILED')"
+)
+
+# A run's retry lead, as the lead store itself knows it: the dispatcher mints a
+# NO_ANSWER re-dial with NO enrollment_id, attempt_count one higher than its
+# parent, the parent's request_id, and the parent's payload. So a retry is an
+# unstamped row with attempt_count > 0 whose request_id one of the run's own
+# stamped leads carries, created while the run was open. Nothing about how a
+# workflow derives request_id is decided here — the stamped lead already did.
+_RETRY_OF_RUN = (
+    '{l}"enrollment_id" IS NULL AND {l}"attempt_count" > 0 '
+    'AND {l}"request_id" IN ({parent_request_ids}) '
+    'AND {l}"created_at" >= {entered} AND {l}"created_at" <= COALESCE({exited}, now())'
+)
+
+
+def get_leads_by_enrollment_id_query(
+    merchant_id: str,
+    enrollment_id: str,
+    entered_at: datetime,
+    exited_at: Optional[datetime],
+) -> Tuple[str, List[Any]]:
+    """Every lead one workflow run placed (the call step stamps its run's
+    id) plus its retry leads, in the order they were queued. The partial
+    enrollment index (059) carries the first half, the request_id index
+    (004) the second; merchant_id keeps a foreign id from reading."""
+    parents = (
+        f'SELECT "request_id" FROM "{LEAD_CALL_TRACKER_TABLE}" '
+        'WHERE "merchant_id" = $2 AND "enrollment_id" = $1'
+    )
+    retry = _RETRY_OF_RUN.format(
+        l="", parent_request_ids=parents, entered="$3", exited="$4::timestamptz"
+    )
+    text = f"""
+        SELECT *
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "merchant_id" = $2
+          AND ("enrollment_id" = $1 OR ({retry}))
+        ORDER BY "next_attempt_at" NULLS LAST, "id";
+    """
+    return text, [enrollment_id, merchant_id, entered_at, exited_at]
+
+
+def _run_leads_cte() -> str:
+    """The ONE lead set every per-run read folds: for each run in the three
+    parallel arrays ($2 ids, $3 entered_at, $4 exited_at), its stamped
+    leads UNION ALL its retry leads (_RETRY_OF_RUN), production modes only,
+    merchant-scoped on both halves. ``mine`` carries run_id beside every
+    lead column, so the reads below group by it. Two joins, each on its own
+    index (059 for the stamp, 004 for request_id)."""
+    retry = _RETRY_OF_RUN.format(
+        l="l.",
+        parent_request_ids='SELECT "request_id" FROM stamped s2 WHERE s2.run_id = s.run_id',
+        entered="s.entered_at",
+        exited="s.exited_at",
+    )
+    return f"""
+        WITH runs AS (
+            SELECT * FROM unnest($2::uuid[], $3::timestamptz[], $4::timestamptz[])
+                     AS r(id, entered_at, exited_at)
+        ), stamped AS (
+            SELECT r.id AS run_id, r.entered_at, r.exited_at, l.*
+            FROM runs r
+            JOIN "{LEAD_CALL_TRACKER_TABLE}" l ON l."enrollment_id" = r.id
+            WHERE l."merchant_id" = $1 AND l.{_PRODUCTION}
+        ), retries AS (
+            SELECT s.run_id, s.entered_at, s.exited_at, l.*
+            FROM (SELECT DISTINCT run_id, entered_at, exited_at FROM stamped) s
+            JOIN "{LEAD_CALL_TRACKER_TABLE}" l
+              ON l."merchant_id" = $1 AND l.{_PRODUCTION}
+             AND {retry}
+        ), mine AS (
+            SELECT * FROM stamped
+            UNION ALL
+            SELECT * FROM retries
+        )
+    """
+
+
+def get_call_stats_by_runs_query(
+    merchant_id: str,
+    enrollment_ids: List[str],
+    entered_ats: List[datetime],
+    exited_ats: List[Optional[datetime]],
+) -> Tuple[str, List[Any]]:
+    """Calls placed by a set of workflow runs (their stamped leads AND their
+    retries — the same ``mine`` set the report folds), one row per
+    (template, outcome, spoke): how many, how many runs they touch, talk
+    time and attempts, cost. A lead counts as placed once the dialler
+    initiated it. ``spoke`` is _ANSWERED judged per row and emitted as a
+    column, so Python never re-decides who spoke; NULL outcome is its own
+    row.
+
+    Grouped by TEMPLATE as well as outcome because a plan may fire more
+    than one agent — a call square's own template, and (PR #1156) an arm's
+    — and "which agent got which outcome" is the question a merchant asks
+    of a multi-template plan. The caller folds the templates together for
+    the plan-wide totals, so one read answers both."""
+    text = f"""
+        {_run_leads_cte()}
+        SELECT COALESCE("template", '') AS template,
+               COALESCE("outcome", 'N/A') AS outcome,
+               ({_ANSWERED}) AS spoke,
+               count(*)::int AS calls,
+               count(DISTINCT run_id)::int AS runs,
+               sum(EXTRACT(EPOCH FROM ("call_end_time" - "call_initiated_time")))
+                   FILTER (WHERE "call_end_time" > "call_initiated_time") AS talk_seconds,
+               count(*) FILTER (WHERE "call_end_time" > "call_initiated_time")::int AS timed_calls,
+               sum("attempt_count")::int AS attempts,
+               sum("cost") AS cost
+        FROM mine
+        WHERE "call_initiated_time" IS NOT NULL
+        GROUP BY 1, 2, 3;
+    """
+    return text, [merchant_id, enrollment_ids, entered_ats, exited_ats]
+
+
+def get_call_facts_by_runs_query(
+    merchant_id: str,
+    enrollment_ids: List[str],
+    entered_ats: List[datetime],
+    exited_ats: List[Optional[datetime]],
+) -> Tuple[str, List[Any]]:
+    """Per run AND template: how many leads it minted, how many were
+    placed, answered, NO_ANSWER, BUSY, still in flight — and WHEN its first
+    answered call began. The report judges "before or after we spoke" from
+    that moment against the run's own exited_at, so it needs the time, not
+    a flag. Grouped by template too, so one read scopes the whole call
+    table to one agent (a plan may ring more than one). Over the same
+    ``mine`` set as get_call_stats_by_runs_query — stamped leads and
+    retries alike."""
+    text = f"""
+        {_run_leads_cte()}
+        SELECT run_id AS enrollment_id,
+               COALESCE("template", '') AS template,
+               count(*)::int AS leads,
+               count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL)::int AS placed,
+               count(*) FILTER (WHERE {_ANSWERED})::int AS answered,
+               count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'NO_ANSWER')::int AS no_answer,
+               count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'BUSY')::int AS busy,
+               count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL AND "status" <> 'FINISHED')::int AS in_progress,
+               min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at
+        FROM mine
+        GROUP BY 1, 2;
+    """
+    return text, [merchant_id, enrollment_ids, entered_ats, exited_ats]
+
+
 def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by ID.

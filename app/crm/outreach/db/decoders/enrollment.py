@@ -3,12 +3,14 @@ outreach took the shape 3 Sep 2026, structure PR 2). DB-side translation only â€
 imported outside db/.
 """
 
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from app.crm.outreach.schemas import (
     SPLIT_PREFIX,
     CustomerRun,
+    DayCount,
     EnrollmentRun,
+    RunRow,
     WorkflowRunSummary,
 )
 from app.crm.shared.decode import jsonb_value as _jsonb
@@ -39,6 +41,22 @@ def decode_customer_run(row: Mapping[str, Any]) -> CustomerRun:
     return CustomerRun(
         **decode_run(row).model_dump(), workflow_name=row["workflow_name"]
     )
+
+
+def decode_run_row(row: Mapping[str, Any]) -> RunRow:
+    return RunRow(
+        **decode_run(row).model_dump(),
+        run_number=int(row["run_number"] or 1),
+        runs_for_key=int(row["runs_for_key"] or 1),
+    )
+
+
+def decode_day_counts(rows: Iterable[Mapping[str, Any]]) -> List[DayCount]:
+    return [DayCount(day=row["day"], runs=int(row["runs"] or 0)) for row in rows]
+
+
+def decode_node_counts(rows: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
+    return {str(row["current_node"]): int(row["runs"] or 0) for row in rows}
 
 
 def _number(value: Any) -> Optional[float]:
@@ -72,6 +90,8 @@ def decode_split_counts(
 def decode_run_summary(
     rows: Iterable[Mapping[str, Any]],
     split_rows: Optional[Iterable[Mapping[str, Any]]] = None,
+    day_rows: Optional[Iterable[Mapping[str, Any]]] = None,
+    node_rows: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> WorkflowRunSummary:
     """Fold workflow_summary_query's grouping-set rows into one summary.
     grouping_level 0 rows are one (status, exit_reason) each; the level-3
@@ -80,7 +100,10 @@ def decode_run_summary(
 
     ``split_rows`` is the second statement's own rows (enh A/04), optional
     because a plan with no split square has none and a caller reading only
-    the aggregate should not have to say so."""
+    the aggregate should not have to say so. ``day_rows`` (runs per day)
+    and ``node_rows`` (open runs by square) are the third and fourth
+    statements; the whole model is composed HERE, so the accessor hands
+    back one decoded shape and never patches fields onto a model."""
     runs = 0
     by_exit_reason: Dict[str, int] = {}
     open_runs = {"waiting": 0, "parked": 0}
@@ -106,4 +129,6 @@ def decode_run_summary(
         median_minutes_to_exit=median,
         recovered_amount=recovered,
         by_split=decode_split_counts(split_rows or ()),
+        runs_per_day=decode_day_counts(day_rows or ()),
+        open_by_node=decode_node_counts(node_rows or ()),
     )

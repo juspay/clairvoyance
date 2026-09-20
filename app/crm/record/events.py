@@ -8,7 +8,7 @@ signature.
 """
 
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.crm.record.db import accessor
 
@@ -25,3 +25,10 @@ async def customer_has_event(
     return await accessor.customer_has_event(
         merchant_id, customer_id, topics, since, where
     )
+
+
+async def event_topics(merchant_id: str, event_ids: List[str]) -> Dict[str, str]:
+    """{letter id: topic} for a few ids a run's trail points at — so the
+    console can say WHICH event moved a square without outreach reading
+    record's table (rule 12's one direction)."""
+    return await accessor.event_topics(merchant_id, event_ids)
