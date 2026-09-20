@@ -60,6 +60,7 @@ class STTProvider(str, Enum):
     SARVAM = "sarvam"
     OPENAI = "openai"
     GOOGLE = "google"
+    ELEVENLABS = "elevenlabs"
 
 
 class SonioxSTTConfig(BaseModel):
@@ -143,6 +144,79 @@ class SarvamSTTConfig(BaseModel):
     )
     language_code: Optional[str] = Field(
         None, description="Sarvam language code. Defaults from env."
+    )
+
+
+class ElevenLabsSTTConfig(BaseModel):
+    """ElevenLabs Scribe v2 Realtime STT settings.
+
+    Only the parameters pipecat 1.1.0 exposes on the realtime WebSocket
+    service are surfaced. ``keyterms``, ``no_verbatim``, and token-based auth
+    are not yet exposed by pipecat and are out of scope.
+
+    Note on ``enable_logging``: pipecat only sends the request parameter when
+    set ``True``, so a template value of ``False`` (the privacy default)
+    cannot be transmitted. True zero-retention requires a pipecat patch.
+    """
+
+    model: str = Field(
+        "scribe_v2_realtime",
+        description="ElevenLabs transcription model. Defaults to the realtime "
+        "Scribe v2 model.",
+    )
+    language_code: Optional[str] = Field(
+        None,
+        description="Primary language code for STT. None (default) = fall back "
+        "to the top-level ``language``; still None = Scribe auto-detects.",
+    )
+    secondary_languages: Optional[list[str]] = Field(
+        None,
+        description="Extra language codes Scribe may decode alongside the "
+        "primary (constrained decoding, e.g. Hinglish = 'hi' + ['en']). None "
+        "(default) = derive from the top-level ``language`` list. Only sent "
+        "when a primary language_code is set.",
+    )
+    include_language_detection: bool = Field(
+        False,
+        description="Include language detection in the transcript response.",
+    )
+    include_timestamps: bool = Field(
+        False,
+        description="Include word-level timestamps in transcripts.",
+    )
+    enable_logging: bool = Field(
+        False,
+        description="Enable logging on ElevenLabs' side. Defaults to False "
+        "(privacy). See class docstring for the pipecat transmission caveat.",
+    )
+    vad_silence_threshold_secs: Optional[float] = Field(
+        None,
+        ge=0.3,
+        le=3.0,
+        description="Scribe-side voice-activity-detection silence threshold "
+        "(seconds). Only sent when turn_detection='stt_native' "
+        "(commit_strategy='vad').",
+    )
+    vad_threshold: Optional[float] = Field(
+        None,
+        ge=0.1,
+        le=0.9,
+        description="Scribe-side VAD detection threshold. Only sent when "
+        "turn_detection='stt_native' (commit_strategy='vad').",
+    )
+    min_speech_duration_ms: Optional[int] = Field(
+        None,
+        ge=50,
+        le=2000,
+        description="Minimum speech duration (ms) for Scribe-side VAD. Only "
+        "sent when turn_detection='stt_native' (commit_strategy='vad').",
+    )
+    min_silence_duration_ms: Optional[int] = Field(
+        None,
+        ge=50,
+        le=2000,
+        description="Minimum silence duration (ms) for Scribe-side VAD. Only "
+        "sent when turn_detection='stt_native' (commit_strategy='vad').",
     )
 
 
@@ -258,6 +332,7 @@ class STTConfiguration(BaseModel):
     soniox: Optional[SonioxSTTConfig] = None
     deepgram: Optional[DeepgramSTTConfig] = None
     sarvam: Optional[SarvamSTTConfig] = None
+    elevenlabs: Optional[ElevenLabsSTTConfig] = None
 
     # SmartTurn ML config — only used when turn_detection='smart_turn'
     smart_turn: Optional[SmartTurnConfig] = None
@@ -3034,8 +3109,7 @@ class IvrOption(BaseModel):
 
     digit: str = Field(
         ...,
-        description="The keypad digit that selects this option: "
-        "'0'-'9', '*', or '#'.",
+        description="The keypad digit that selects this option: '0'-'9', '*', or '#'.",
     )
     action: IvrAction
     label: Optional[str] = Field(None, description="Human-readable note (not spoken).")

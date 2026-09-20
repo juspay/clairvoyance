@@ -9,6 +9,7 @@ from __future__ import annotations
 # Export all builder functions and config classes
 from .assemblyai import build_assemblyai_stt
 from .deepgram import DeepgramConfig, build_deepgram_stt
+from .elevenlabs import ElevenLabsConfig, build_elevenlabs_stt
 from .google import build_google_stt
 from .openai import build_openai_stt
 from .sarvam import SarvamConfig, build_sarvam_stt, get_sarvam_language
@@ -25,6 +26,9 @@ __all__ = [
     # Deepgram
     "DeepgramConfig",
     "build_deepgram_stt",
+    # ElevenLabs
+    "ElevenLabsConfig",
+    "build_elevenlabs_stt",
     # Google
     "build_google_stt",
     # OpenAI
