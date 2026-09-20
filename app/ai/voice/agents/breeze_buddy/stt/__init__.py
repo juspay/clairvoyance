@@ -9,23 +9,31 @@ from __future__ import annotations
 
 from typing import Optional
 
+from pipecat.services.elevenlabs.stt import CommitStrategy
 from pipecat.transcriptions.language import Language
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     DeepgramSTTConfig,
+    ElevenLabsSTTConfig,
     SonioxSTTConfig,
     STTConfiguration,
     STTProvider,
+    TurnDetectionMode,
 )
 from app.ai.voice.stt import (
     DeepgramConfig,
+    ElevenLabsConfig,
     SarvamConfig,
     SonioxConfig,
     build_deepgram_stt,
+    build_elevenlabs_stt,
     build_google_stt,
     build_openai_stt,
     build_sarvam_stt,
     build_soniox_stt,
+)
+from app.ai.voice.stt.elevenlabs import (
+    resolve_languages as resolve_elevenlabs_languages,
 )
 from app.core.config.dynamic import (
     BB_SARVAM_STT_HIGH_VAD_SENSITIVITY,
@@ -46,6 +54,7 @@ from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT,
     BREEZE_BUDDY_STT_SERVICE,
     DEEPGRAM_API_KEY,
+    ELEVENLABS_API_KEY,
     GOOGLE_CREDENTIALS_JSON,
     OPENAI_STT_API_KEY,
     OPENAI_STT_MODEL,
@@ -198,6 +207,59 @@ async def create_stt_from_config(config: STTConfiguration):
             temperature=0.0,
         )
 
+    if config.provider == STTProvider.ELEVENLABS:
+        if not ELEVENLABS_API_KEY:
+            raise ValueError("ELEVENLABS_API_KEY is required for elevenlabs STT")
+
+        el = config.elevenlabs or ElevenLabsSTTConfig()
+
+        # Map the normalized turn mode to ElevenLabs' commit strategy.
+        # SMART_TURN is the exception, not STT_NATIVE: it is the only mode
+        # that gets a VAD analyzer (pipeline.py auto-creates a Silero when
+        # none is attached), and MANUAL commit is reachable ONLY through a
+        # VADUserStoppedSpeakingFrame. TIMEOUT gets no VAD and
+        # BREEZE_BUDDY_ENABLE_VAD defaults to False, so under MANUAL it would
+        # never commit: Scribe streams interims forever, no TranscriptionFrame
+        # is ever produced and the LLM is never invoked — the caller talks to
+        # a bot that cannot hear, for the whole call.
+        #
+        # VAD commit is also correct for TIMEOUT rather than merely safe.
+        # SpeechTimeoutUserTurnStopStrategy's documented fallback — "when a
+        # transcript arrives without a VAD stop event, user_speech_timeout
+        # measures inactivity since the last transcript, rearmed on each
+        # transcript" — IS timeout semantics, and it only runs on finals.
+        commit_strategy = (
+            CommitStrategy.MANUAL
+            if config.turn_detection == TurnDetectionMode.SMART_TURN
+            else CommitStrategy.VAD
+        )
+
+        primary_language, secondary_languages = resolve_elevenlabs_languages(
+            el.language_code, el.secondary_languages, config.language
+        )
+
+        logger.info(
+            "Using ElevenLabs Scribe v2 Realtime STT service for Breeze Buddy "
+            "(commit_strategy={})",
+            commit_strategy.value,
+        )
+        return build_elevenlabs_stt(
+            ElevenLabsConfig(
+                api_key=ELEVENLABS_API_KEY,
+                commit_strategy=commit_strategy,
+                model=el.model,
+                language_code=primary_language,
+                secondary_languages=secondary_languages,
+                include_language_detection=el.include_language_detection,
+                include_timestamps=el.include_timestamps,
+                enable_logging=el.enable_logging,
+                vad_silence_threshold_secs=el.vad_silence_threshold_secs,
+                vad_threshold=el.vad_threshold,
+                min_speech_duration_ms=el.min_speech_duration_ms,
+                min_silence_duration_ms=el.min_silence_duration_ms,
+            )
+        )
+
     # Default: Google
     logger.info("Using Google STT service for Breeze Buddy")
     return build_google_stt(credentials_json=GOOGLE_CREDENTIALS_JSON)
@@ -225,6 +287,7 @@ async def get_stt_service(
         "sarvam": STTProvider.SARVAM,
         "openai": STTProvider.OPENAI,
         "google": STTProvider.GOOGLE,
+        "elevenlabs": STTProvider.ELEVENLABS,
     }
     provider = provider_map.get(BREEZE_BUDDY_STT_SERVICE, STTProvider.GOOGLE)
 
