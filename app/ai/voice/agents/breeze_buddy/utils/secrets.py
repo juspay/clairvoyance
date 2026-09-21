@@ -191,6 +191,12 @@ def mask_template_secrets(template: TemplateModel) -> TemplateModel:
         id=template.id,
         reseller_id=template.reseller_id,
         merchant_id=template.merchant_id,
+        # Lineage field (read-only) must be carried through the masked copy,
+        # same rationale as ``supported_channels`` below -- otherwise version
+        # list/get/rollback responses would report the ``TemplateModel``
+        # default (``current_version=1``) instead of the template's actual
+        # lineage state.
+        current_version=template.current_version,
         name=template.name,
         flow=template.flow,
         expected_payload_schema=template.expected_payload_schema,

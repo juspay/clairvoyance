@@ -3389,6 +3389,10 @@ class TemplateModel(BaseModel):
     merchant_id: Optional[str] = None
     created_at: Optional[Any] = None
     updated_at: Optional[Any] = None
+    # Lineage (read-only; written via the versioning endpoints only).
+    # ReplaceTemplateRequest has extra="ignore", so GET→PUT round-trips
+    # strip it automatically — do NOT add it to the request models.
+    current_version: int = 1
 
     # Editable fields (these match ReplaceTemplateRequest field names 1:1).
     name: str

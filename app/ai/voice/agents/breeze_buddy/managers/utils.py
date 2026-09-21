@@ -13,9 +13,11 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.tts import generate_audio
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     _gemini_realtime_config,
+    gemini_realtime_from_configurations,
     greeting_has_variables,
 )
 from app.ai.voice.llm.realtime.gemini.opening_line import generate_opening_line_mulaw
+from app.core.concurrency import spawn_background_task
 from app.core.config.dynamic import LEAD_GREETING_CACHE_TTL_SECONDS
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
@@ -340,3 +342,44 @@ async def ensure_realtime_opening_line_cached(
             f"{template.id}: {type(e).__name__}"
         )
         return None
+
+
+def realtime_opening_line_applies(template) -> bool:
+    """True when a saved template should have a pre-generated opening line:
+    Gemini realtime + a non-empty initial_greeting."""
+    configs = getattr(template, "configurations", None)
+    if not configs or not getattr(configs, "initial_greeting", None):
+        return False
+    return gemini_realtime_from_configurations(configs) is not None
+
+
+def spawn_realtime_opening_line_regeneration(template) -> None:
+    """Regenerate the Gemini Live opening line in the background (best-effort).
+
+    For every write that changes a template's head and invalidates its cache
+    (PUT, rollback): invalidate_template() drops ``greeting:template:{id}``,
+    and connect-time paths never generate it, so a write that skips this
+    leaves inbound/web calls without the opening line until the next save.
+
+    The save has already committed; generation takes ~4-8s and must not block
+    the API response. On any failure the task logs and leaves the cache empty
+    — the first dispatched lead regenerates lazily before dialing
+    (ensure_realtime_opening_line_cached's miss path). A no-op when the
+    template does not qualify (non-Gemini / no static greeting).
+    """
+    if not realtime_opening_line_applies(template):
+        return
+    try:
+        spawn_background_task(
+            ensure_realtime_opening_line_cached(template, force=True),
+            name=f"rt-opening-line:{template.id}",
+        )
+        logger.info(
+            f"Scheduled realtime opening-line regeneration for template "
+            f"{template.id}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to schedule opening-line regeneration for template "
+            f"{template.id}: {type(e).__name__} — first call will generate lazily"
+        )

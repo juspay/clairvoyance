@@ -18,6 +18,10 @@
       "description": "Optional merchant sub-namespace within the reseller. Null for reseller-level templates.",
       "example": "merchant-42"
     },
+    "current_version": {
+      "description": "Read-only. Monotonically increasing version number; every write appends a snapshot row to template_version. Starts at 1.",
+      "example": 3
+    },
     "name": {
       "description": "Human-readable display name shown in dashboards and logs.",
       "example": "COD Confirmation – Hindi+English"

@@ -9,8 +9,11 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    emit_template_updated_alert,
+)
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
-    ensure_realtime_opening_line_cached,
+    spawn_realtime_opening_line_regeneration,
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -74,41 +77,6 @@ def _validate_static_realtime_greeting(configurations) -> None:
                 "pre-generated once per template in the call's Live voice; "
                 "personalise it in the conversation instead."
             ),
-        )
-
-
-def _realtime_opening_line_applies(template) -> bool:
-    """True when a saved template should have a pre-generated opening line:
-    Gemini realtime + a non-empty initial_greeting."""
-    configs = getattr(template, "configurations", None)
-    if not configs or not getattr(configs, "initial_greeting", None):
-        return False
-    return gemini_realtime_from_configurations(configs) is not None
-
-
-def _spawn_realtime_opening_line_regeneration(template) -> None:
-    """Regenerate the Gemini Live opening line in the background (best-effort).
-
-    The save has already committed; generation takes ~4-8s and must not block
-    the API response. On any failure the task logs and leaves the cache empty
-    — the first dispatched lead regenerates lazily before dialing
-    (ensure_realtime_opening_line_cached's miss path).
-    """
-    if not _realtime_opening_line_applies(template):
-        return
-    try:
-        spawn_background_task(
-            ensure_realtime_opening_line_cached(template, force=True),
-            name=f"rt-opening-line:{template.id}",
-        )
-        logger.info(
-            f"Scheduled realtime opening-line regeneration for template "
-            f"{template.id}"
-        )
-    except Exception as e:
-        logger.warning(
-            f"Failed to schedule opening-line regeneration for template "
-            f"{template.id}: {type(e).__name__} — first call will generate lazily"
         )
 
 
@@ -224,6 +192,7 @@ async def create_template_handler(
             is_active=template_data.is_active,
             supported_channels=list(template_data.supported_channels),
             now=now,
+            changed_by=current_user.username,
         )
 
         if not template:
@@ -248,7 +217,7 @@ async def create_template_handler(
 
         # Pre-generate the Gemini Live opening line in the background (no-op
         # for templates without one) so the first call finds it cached.
-        _spawn_realtime_opening_line_regeneration(template)
+        spawn_realtime_opening_line_regeneration(template)
 
         return {
             "status": "success",
@@ -310,7 +279,6 @@ async def list_templates_handler(
             filters["merchant_id"] = merchant_id
         if not include_inactive:
             filters["is_active"] = True
-
         # Apply RBAC filtering (validates access and injects user's accessible merchants/shops)
         filters = apply_hierarchical_template_filters(filters, current_user)
 
@@ -597,6 +565,7 @@ async def replace_template_handler(
             merchant_id=template_data.merchant_id,
             supported_channels=supported_channels,
             now=now,
+            changed_by=current_user.username,
         )
 
         if not updated_template:
@@ -633,7 +602,24 @@ async def replace_template_handler(
         # the updated template no longer qualifies (greeting removed /
         # non-Gemini / disabled), this is a no-op and the invalidated key
         # stays deleted.
-        _spawn_realtime_opening_line_regeneration(updated_template)
+        spawn_realtime_opening_line_regeneration(updated_template)
+
+        spawn_background_task(
+            emit_template_updated_alert(
+                template_id=str(updated_template.id),
+                template_name=updated_template.name,
+                from_version=existing_template.current_version,
+                to_version=updated_template.current_version,
+                updated_by=current_user.username,
+                updated_at=(
+                    updated_template.updated_at.isoformat(timespec="seconds")
+                    if updated_template.updated_at
+                    else now.isoformat(timespec="seconds")
+                ),
+                merchant_id=updated_template.merchant_id,
+            ),
+            name=f"template-updated-alert:{updated_template.id}",
+        )
 
         logger.info(
             f"Successfully updated template with id: {updated_template.id} containing flow "

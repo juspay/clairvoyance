@@ -15,6 +15,9 @@ Throttle TTLs reflect severity:
 
 Slack failures never break dispatch — every alert is best-effort and the
 underlying observation is also logged at the source.
+
+``emit_template_updated_alert`` is the one unthrottled notice here: an audit
+trail of template saves, where every event must reach the channel.
 """
 
 from __future__ import annotations
@@ -334,6 +337,90 @@ async def raise_dragontts_degraded() -> None:
             },
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Template audit notice — unthrottled; every save and rollback reaches the
+# channel.
+# ---------------------------------------------------------------------------
+
+
+# Longest raw value a field carries. Escaping can grow it up to 5x (``&`` ->
+# ``&amp;``), and Slack rejects field text over 2000 chars — which would drop
+# the whole notice, silently, since send() never raises.
+_SLACK_FIELD_MAX_CHARS = 300
+
+
+def _slack_text(value: str) -> str:
+    """Author-supplied text made inert for a mrkdwn field.
+
+    Template names have no charset constraint and merchant users can save
+    them, so ``<!channel>`` or ``<https://evil|Juspay SSO>`` would render as a
+    mention or a disguised link on every save. Slack's own escaping rule:
+    ``&``, ``<``, ``>`` — ``&`` first. Truncated BEFORE escaping, so the cut
+    can never land inside an entity.
+    """
+    text = str(value)
+    if len(text) > _SLACK_FIELD_MAX_CHARS:
+        text = text[: _SLACK_FIELD_MAX_CHARS - 1] + "…"
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+async def emit_template_updated_alert(
+    template_id: str,
+    template_name: str,
+    from_version: int,
+    to_version: int,
+    updated_by: str,
+    updated_at: str,
+    merchant_id: Optional[str],
+    change_source: Optional[str] = None,
+) -> None:
+    """Best-effort Slack notice that a template changed.
+
+    ``change_source`` says how the head moved when it was not a plain save
+    (``"rollback to v3"``), so ``updated_by`` stays a username.
+
+    Spawned, never awaited in the request. ``slack_alert.send`` cannot fail a
+    save — it never raises — but it caps itself at a 30s ``ClientTimeout``, and
+    awaiting that inline puts up to 30 seconds between a committed write and
+    the author's response: the save has already happened, so the spinner is
+    lying, and a re-submit during it appends a spurious version row.
+    ``_emit_rate_limit_alert`` awaits inline because it runs on the dispatch
+    WORKER, where a stall delays a queued call; the template update handler
+    is an HTTP handler, and its opening-line regeneration backgrounds its
+    work for the same reason. The cost is that a notice can be lost if the
+    pod dies inside the millisecond-wide window before it is sent — cheaper
+    than a 30s hang.
+
+    Deliberately NOT throttled like the ``raise_*`` helpers in this module:
+    they throttle per alert name so a sustained problem cannot page on-call
+    repeatedly. This is an audit notice, not a problem signal — two templates
+    saved inside one throttle window are two things someone needs to see, and
+    swallowing the second would make the channel lie about what changed.
+    """
+    fields = [
+        {
+            "name": "Template",
+            "value": f"{_slack_text(template_name)} ({_slack_text(template_id)})",
+        },
+        {"name": "Version", "value": f"v{from_version} -> v{to_version}"},
+        {"name": "Updated by", "value": _slack_text(updated_by)},
+        {"name": "Updated at", "value": _slack_text(updated_at)},
+        {"name": "Merchant", "value": _slack_text(merchant_id or "-")},
+    ]
+    if change_source:
+        fields.append({"name": "Change", "value": _slack_text(change_source)})
+    try:
+        await slack_alert.send(
+            title="Breeze Buddy Template Updated",
+            fields=fields,
+            include_tags=False,
+        )
+    except Exception as slack_exc:  # noqa: BLE001
+        logger.warning(
+            f"[TEMPLATE_UPDATED] Slack alert failed for {template_id}: {slack_exc}"
+        )
 
 
 # ---------------------------------------------------------------------------
