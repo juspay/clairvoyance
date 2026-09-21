@@ -162,8 +162,9 @@ async def get_storefront_widget_config(
     request: Request, merchant_domain: str
 ) -> Response:
     """200 with the config + ``ETag``; 304 (no body) when ``If-None-Match``
-    carries the current tag. Both say ``Cache-Control: no-cache``: the loader
-    keeps its own short copy and revalidates."""
+    carries the current tag; 200 ``{"enabled": false}`` when the shop has no
+    active config. All say ``Cache-Control: no-cache``: the loader keeps its
+    own short copy and revalidates."""
     return await storefront_widget_config_handler(request, merchant_domain)
 
 

@@ -9,8 +9,9 @@ not its input.
 
 Trust model mirrors ``POST /widget/session``: anonymous, but the caller's
 Origin must be in the row's ``allowed_origins`` and per-IP rate limits
-apply. Unknown merchant, inactive row and origin mismatch are indistinguishable
-to the caller (404/403 with no detail) so the door isn't enumerable.
+apply. Unknown merchant and inactive row get the same ``200
+{"enabled": false}`` so the door isn't enumerable; an origin mismatch on a
+live row is a 403 with no detail.
 """
 
 from __future__ import annotations
@@ -141,12 +142,19 @@ async def storefront_widget_config_handler(
     if cfg is None:
         # Unknown and inactive are indistinguishable — same posture as the
         # public-key path in widget_common.resolve_widget_config_for_request.
+        # A merchant can enable the theme app embed before onboarding, so
+        # "no widget here" is an ordinary answer, not an error: 200 keeps it
+        # out of the load balancer's 4xx ratio.
         logger.info(
             f"widget: no active storefront config for merchant_domain={normalized_domain}"
         )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Widget configuration not found",
+        return JSONResponse(
+            content={
+                "enabled": False,
+                "merchant_domain": normalized_domain,
+                "cache_ttl_seconds": _CACHE_TTL_SECONDS,
+            },
+            headers=_RESPONSE_HEADERS,
         )
 
     enforce_widget_origin(request=request, cfg=cfg)

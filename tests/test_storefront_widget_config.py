@@ -108,7 +108,7 @@ def test_normalizes_shop_before_lookup(client: TestClient, lookup: AsyncMock) ->
     lookup.assert_awaited_once_with(*STANDALONE)
 
 
-def test_unknown_and_inactive_are_the_same_404(
+def test_unknown_and_inactive_are_the_same_not_enabled_200(
     client: TestClient, lookup: AsyncMock
 ) -> None:
     lookup.return_value = None
@@ -123,8 +123,13 @@ def test_unknown_and_inactive_are_the_same_404(
         params={"merchant_domain": MERCHANT_DOMAIN},
         headers={"Origin": STOREFRONT_ORIGIN},
     )
-    assert unknown.status_code == inactive.status_code == 404
+    # An enabled theme embed on a shop that never onboarded asks on every
+    # page view; that is a normal "not here" answer, not a 4xx.
+    assert unknown.status_code == inactive.status_code == 200
     assert unknown.json() == inactive.json()
+    assert unknown.json()["enabled"] is False
+    assert "tenant" not in unknown.json()
+    assert unknown.headers["Cache-Control"] == "no-cache"
 
 
 def test_origin_missing_or_foreign_is_403(client: TestClient) -> None:

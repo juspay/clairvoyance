@@ -139,8 +139,9 @@ class StorefrontWidgetConfigResponse(BaseModel):
 
     Everything the storefront loader needs to mount the widget, nothing
     more. ``tenant`` is the public widget key — public by design (it is
-    embedded in every storefront page). Disabled/unknown/blocked merchants
-    never reach this shape; they get 404/403 with no body detail.
+    embedded in every storefront page). Disabled and unknown merchants never
+    reach this shape; they get a bare ``{"enabled": false}``. Blocked origins
+    get a 403 with no body detail.
     """
 
     enabled: bool = True
