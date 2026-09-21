@@ -17,6 +17,7 @@ from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     handle_unanswered_calls,
+    reconcile_completed_call,
     update_call_recording,
 )
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
@@ -35,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
     get_transfer_flag,
 )
+from app.core.concurrency import spawn_background_task
 from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
@@ -325,6 +327,16 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
         if call_status.lower() in ended_statuses:
             await safe_release_pod(
                 call_sid=str(call_sid), reason=f"status_{call_status}"
+            )
+
+        # ``completed`` has no DB writer: the agent closes its own row and the
+        # failure branch below excludes it. A call that ends before the media
+        # socket connects leaves no agent to do so — reconcile out of band,
+        # after a grace period, so a live pipeline always writes first.
+        if call_status.lower() == "completed" and isinstance(call_sid, str):
+            spawn_background_task(
+                reconcile_completed_call(call_sid),
+                name=f"completed-reconcile:{call_sid}",
             )
 
         # Handle failed calls for retry logic
