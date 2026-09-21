@@ -11,6 +11,7 @@ called from ``app.ai.voice.agents.breeze_buddy.dispatch.worker``. See
 docs/BACKLOG_DISPATCHER_REDESIGN.md.
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
@@ -677,12 +678,16 @@ async def reconcile_stuck_processing_leads():
 
             logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
 
-            # Close the stuck record so it won't be picked again
+            # Merge, don't obliterate: the update REPLACES meta_data and
+            # overwrites outcome, so a bare write here destroys whatever a
+            # mid-call outcome hook recorded.
+            cleanup_meta = dict(locked_lead.metaData or {})
+            cleanup_meta["cleanup"] = "stuck_processing_timeout"
             await update_lead_call_completion_details(
                 id=locked_lead.id,
                 status=LeadCallStatus.FINISHED,
-                outcome="UNKNOWN",
-                meta_data={"cleanup": "stuck_processing_timeout"},
+                outcome=locked_lead.outcome or "UNKNOWN",
+                meta_data=cleanup_meta,
                 call_end_time=datetime.now(timezone.utc),
             )
 
@@ -878,6 +883,98 @@ async def handle_unanswered_calls(call_id: str):
         and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
         await _retry_call(lead, config, "NO_ANSWER")
+
+
+# Long enough that a live pipeline has always written FINISHED first —
+# closing on arrival would race end_conversation and re-dial a customer who
+# was already reached.
+COMPLETED_RECONCILE_DELAY_SECONDS = 30
+
+
+async def reconcile_completed_call(call_id: str) -> None:
+    """
+    Close a lead whose call ended before its pipeline could start.
+
+    ``completed`` is the one terminal status with no DB writer: the agent
+    closes its own row, and the status callback's failure branch excludes it.
+    When the far end answers and releases sub-second, the media socket never
+    connects, so no agent runs and this becomes the only terminal signal for
+    that call — leaving the row PROCESSING until the stuck-processing reaper
+    closes it ten minutes later.
+
+    Closes the row itself rather than asserting a cause it cannot observe:
+    a row with no outcome is equally a pipeline that never started and one
+    that died mid-conversation. Acts only on a row with no outcome.
+    """
+    await asyncio.sleep(COMPLETED_RECONCILE_DELAY_SECONDS)
+
+    lead = await get_lead_by_call_id(call_id)
+    if not lead:
+        logger.info(f"No lead for completed call {call_id}; nothing to reconcile.")
+        return
+
+    if lead.status != LeadCallStatus.PROCESSING:
+        logger.debug(f"Completed call {call_id} already closed ({lead.status}).")
+        return
+
+    # The read above is read-then-act; the claim is the atomic one, so exactly
+    # one caller owes the cleanup. force=True because a dispatched outbound
+    # lead holds is_locked for its whole PROCESSING life (worker.py) — an
+    # unforced claim could never match one. Same as the reaper above.
+    claimed = await acquire_lock_on_lead_by_id(
+        lead.id, expected_status=LeadCallStatus.PROCESSING, force=True
+    )
+    if not claimed:
+        logger.info(
+            f"Completed call {call_id}: lead {lead.id} left PROCESSING before "
+            "the claim; another caller owns it."
+        )
+        return
+
+    try:
+        # PROCESSING has two causes that status cannot separate: no pipeline
+        # ever started, or one started and died mid-call. An outcome proves
+        # the latter — read off the claim, never the pre-claim snapshot.
+        if claimed.outcome:
+            logger.warning(
+                f"Completed call {call_id} left lead {lead.id} PROCESSING with "
+                f"outcome={claimed.outcome!r} — pipeline ran and did not "
+                "finalise. Leaving it to the reaper."
+            )
+            return
+
+        logger.warning(
+            f"Call {call_id} completed but lead {lead.id} was still PROCESSING "
+            f"{COMPLETED_RECONCILE_DELAY_SECONDS}s later — nothing closed it."
+        )
+
+        # Closed here rather than through handle_unanswered_calls: that path
+        # asserts NO_ANSWER and blanks meta_data, and a row with no outcome is
+        # equally a pipeline that died mid-conversation. Say UNKNOWN, as the
+        # reaper does — 30s sooner rather than ten minutes later.
+        cleanup_meta = dict(claimed.metaData or {})
+        cleanup_meta["cleanup"] = "completed_no_pipeline"
+        await update_lead_call_completion_details(
+            id=claimed.id,
+            status=LeadCallStatus.FINISHED,
+            outcome=claimed.outcome or "UNKNOWN",
+            meta_data=cleanup_meta,
+            call_end_time=datetime.now(timezone.utc),
+        )
+
+        await _release_call_resources(claimed)
+
+        # Retry parity with the reaper: no outcome argument, so the next
+        # attempt is scheduled without a NO_ANSWER report to the merchant.
+        config = await _get_lead_config(claimed)
+        if (
+            config
+            and claimed.call_direction == CallDirection.OUTBOUND
+            and claimed.execution_mode == ExecutionMode.TELEPHONY
+        ):
+            await _retry_call(claimed, config)
+    finally:
+        await release_lock_on_lead_by_id(lead.id)
 
 
 async def update_call_recording(
