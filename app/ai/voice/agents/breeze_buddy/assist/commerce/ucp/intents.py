@@ -287,6 +287,19 @@ class ViewProductPayload(_IntentPayload):
     variants: Optional[List[Dict[str, Any]]] = Field(None, max_length=24)
 
 
+class PageProductPayload(_IntentPayload):
+    """Widget emission (storefront product page): product_id [+ title].
+
+    Fired when the panel opens on a `/products/<handle>` page. The shopper
+    typed nothing — the widget read the product off the page — so the
+    rewritten instruction persists internal-only while the card the agent
+    renders stays in the thread like any other answer.
+    """
+
+    product_id: str = Field(..., min_length=1, max_length=256)
+    title: Optional[str] = Field(None, max_length=200)
+
+
 class EnrichProductPayload(_IntentPayload):
     """Widget emission (detail overlay, background): product_id [+ title].
 
@@ -299,6 +312,28 @@ class EnrichProductPayload(_IntentPayload):
 
     product_id: str = Field(..., min_length=1, max_length=256)
     title: Optional[str] = Field(None, max_length=200)
+
+
+def _page_product_agent_turn(parsed: ParsedIntent) -> str:
+    """Rewrite show_page_product into the instruction the LLM answers.
+
+    The shopper opened the panel on a product page and has said nothing
+    yet: show that product the way the agent shows any product, so the
+    panel opens on what they are looking at.
+    """
+    payload = parsed.payload
+    assert isinstance(payload, PageProductPayload)  # policy table guarantees
+    # The id alone — `title` is read off the page by the widget, so it is
+    # client-supplied text and does NOT belong inside a system-framed
+    # instruction. get_product returns the real title anyway.
+    return (
+        "[Page context — a system request, not the shopper speaking.] "
+        "The shopper just opened this chat on the product page for "
+        f"{payload.product_id}. "
+        "Look that product up by its product_id and show its product card, "
+        "then one short line about it and the usual quick replies. Do not "
+        "search the catalog for alternatives and do not greet them again."
+    )
 
 
 def _enrich_product_agent_turn(parsed: ParsedIntent) -> str:
@@ -766,6 +801,15 @@ register_intents(
             # context, resume replay never shows it, no user_committed.
             internal=True,
         ),
+        "show_page_product": IntentPolicy(
+            IntentRoute.AGENT_TURN,
+            PageProductPayload,
+            agent_turn=_page_product_agent_turn,
+            # Half-internal: the instruction is ours, the card is the
+            # shopper's — the prompt persists internal (never replayed, no
+            # user_committed) while the answer persists like any turn.
+            internal_prompt=True,
+        ),
         "checkout": IntentPolicy(IntentRoute.CLIENT, CheckoutPayload),
         # WISMO: the OrderStatus card's tracking link — client-routed
         # exactly like checkout (the URL is tool-sourced by construction;
@@ -781,6 +825,7 @@ __all__ = [
     "SetQtyPayload",
     "ViewProductPayload",
     "EnrichProductPayload",
+    "PageProductPayload",
     "CheckoutPayload",
     "TrackOrderPayload",
     "CartToolConfig",

@@ -294,6 +294,7 @@ class ChatAgent(
         # ui_blocks) and no user_committed fires. The live SSE stream is
         # unchanged — the widget owns routing. Set per-turn by run_turn.
         self._internal_turn = False
+        self._internal_prompt = False
         # --- RFC-002: render_ui function tool + forced think-step + plan
         # enforcement. All template-gated; fleet templates without the flags
         # behave exactly as before.
@@ -404,6 +405,7 @@ class ChatAgent(
         history: List[Dict[str, Any]],
         current_node: Optional[str],
         internal: bool = False,
+        internal_prompt: bool = False,
     ) -> AsyncIterator[SSEEvent]:
         # Per-turn aiohttp session for global HTTP function calls. Created
         # lazily, closed in finally below so the ClientSession's TCP
@@ -421,6 +423,7 @@ class ChatAgent(
         # as a new operation even with identical args.
         self._turn_id = uuid.uuid4().hex
         self._internal_turn = internal
+        self._internal_prompt = internal_prompt
         try:
             async for event in self._run_turn_inner(
                 user_content=user_content,
@@ -480,13 +483,22 @@ class ChatAgent(
         # the instruction as an internal-only block (resume replay skips
         # the row; the LLM still sees it) and commit nothing to the wire.
         user_msg = None
-        if self._internal_turn:
-            await insert_chat_message(
+        if self._internal_turn or self._internal_prompt:
+            row = await insert_chat_message(
                 session_id=self.session_id,
                 role=ChatMessageRole.USER,
                 content=None,
                 content_blocks=[internal_text_block(user_content)],
             )
+            # An `internal_prompt` turn IS customer-billable: the shopper
+            # never wrote the instruction, but the answer is an ordinary
+            # turn they keep (the page-context card persists and survives
+            # resume), and it costs the same tools + tokens as any other.
+            # Only a fully `internal` turn — whole exchange hidden, nothing
+            # kept — is free. Holding the row here is what arms both the
+            # credit gate below and the post-turn deduction.
+            if self._internal_prompt:
+                user_msg = row
         else:
             user_msg = await insert_chat_message(
                 session_id=self.session_id,
@@ -502,23 +514,24 @@ class ChatAgent(
                 },
             )
 
-            # Credit gate — internal turns are never customer-billable, so
-            # only the customer-facing branch above is gated. Runs after
-            # the user's message is persisted (so a blocked turn still
-            # leaves a record) and before any LLM call.
-            if not await self._check_sufficient_credits():
-                yield SSEEvent(
-                    event="error",
-                    data={
-                        "code": "insufficient_credits",
-                        "message": (
-                            "We're unable to process your request right "
-                            "now. Please contact support if this continues."
-                        ),
-                    },
-                )
-                yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
-                return
+        # Credit gate — every BILLABLE turn (`user_msg is not None`), which
+        # is the customer-facing branch plus internal_prompt. Fully internal
+        # turns carry no row and are never gated. Runs after the user's
+        # message is persisted (so a blocked turn still leaves a record)
+        # and before any LLM call.
+        if user_msg is not None and not await self._check_sufficient_credits():
+            yield SSEEvent(
+                event="error",
+                data={
+                    "code": "insufficient_credits",
+                    "message": (
+                        "We're unable to process your request right "
+                        "now. Please contact support if this continues."
+                    ),
+                },
+            )
+            yield SSEEvent(event="turn_end", data={"session_status": "FAILED"})
+            return
 
         # Knowledge base context for this turn. In-memory only — like the
         # client-context blocks it is EPHEMERAL (never persisted to

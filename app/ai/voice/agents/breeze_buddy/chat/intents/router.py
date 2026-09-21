@@ -205,6 +205,13 @@ class IntentPolicy:
     # wants them. DIRECT policies use `silent` instead; `internal` is the
     # agent-turn counterpart.
     internal: bool = False
+    # Half-internal AGENT_TURN intents: the rewritten INSTRUCTION persists
+    # internal-only (no bubble, no user_committed, never replayed), while the
+    # assistant's answer persists normally — card and prose come back on
+    # resume like any other turn. For page-context turns the widget triggers
+    # on the shopper's behalf: the shopper never wrote the request, but the
+    # answer is theirs to keep.
+    internal_prompt: bool = False
 
 
 # Process-global registry. Starts empty; ``register_intents`` populates it
