@@ -10,6 +10,7 @@ model and the instruction are dynamic config, so either can change without
 a deploy.
 """
 
+import asyncio
 import base64
 from typing import Optional
 from urllib.parse import urlparse
@@ -46,6 +47,10 @@ _REFUSAL_REASONS = {"IMAGE_SAFETY", "PROHIBITED_CONTENT", "SAFETY"}
 # both the download and the request to the model carry it.
 _MAX_GARMENT_BYTES = 16 * 1024 * 1024
 
+# Wall-clock ceiling for that download. The HTTP client's own timeout is
+# per chunk, so a host sending one byte at a time would never trip it.
+_GARMENT_FETCH_SECONDS = 30
+
 
 class TryOnGenerationError(Exception):
     """Generation produced no image. ``message`` is shopper-safe; ``code`` is
@@ -78,12 +83,10 @@ async def _vertex_client() -> genai.Client:
         raise TryOnGenerationError(
             "Try-on is not configured for this deployment.", code="not_configured"
         )
-    timeout = await TRY_ON_GENERATION_TIMEOUT_SECONDS()
     return get_genai_vertex_client(
         credentials_json=credentials_json,
         project_id=project_id,
         location=_LOCATION,
-        timeout_ms=int(timeout * 1000),
     )
 
 
@@ -93,26 +96,37 @@ async def _fetch_garment(url: str, where: str) -> types.Part:
         raise TryOnGenerationError(
             "That product image cannot be used.", code="garment_rejected"
         )
+    chunks: list[bytes] = []
+    total = 0
     try:
-        async with create_http_client(timeout=30) as http:
-            response = await http.get(url)
-            response.raise_for_status()
+        async with asyncio.timeout(_GARMENT_FETCH_SECONDS):
+            async with create_http_client(timeout=_GARMENT_FETCH_SECONDS) as http:
+                async with http.stream("GET", url) as response:
+                    response.raise_for_status()
+                    mime = response.headers.get("content-type", "image/jpeg").split(
+                        ";"
+                    )[0]
+                    # Counted as it arrives: the cap must hold before the
+                    # body is in memory, not after.
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > _MAX_GARMENT_BYTES:
+                            logger.warning(f"try-on garment too large {where}")
+                            raise TryOnGenerationError(
+                                "That product image cannot be used.",
+                                code="garment_rejected",
+                            )
+                        chunks.append(chunk)
+    except TryOnGenerationError:
+        raise
     except Exception as exc:
-        logger.error(f"try-on garment fetch failed {where}: {exc}")
+        logger.error(f"try-on garment fetch failed {where}: {exc!r}")
         raise TryOnGenerationError(
             "Could not read the product image. Please try again.",
             code="garment_unreadable",
         ) from None
-    if len(response.content) > _MAX_GARMENT_BYTES:
-        logger.warning(
-            f"try-on garment too large {where} bytes={len(response.content)}"
-        )
-        raise TryOnGenerationError(
-            "That product image cannot be used.", code="garment_rejected"
-        )
-    mime = response.headers.get("content-type", "image/jpeg").split(";")[0]
     return types.Part.from_bytes(
-        data=response.content,
+        data=b"".join(chunks),
         mime_type=mime if mime.startswith("image/") else "image/jpeg",
     )
 
@@ -148,8 +162,9 @@ async def generate_try_on_image(
     ]
 
     model = await TRY_ON_MODEL()
+    timeout_ms = int(await TRY_ON_GENERATION_TIMEOUT_SECONDS() * 1000)
     for attempt in (1, 2):
-        image = await _attempt(client, parts, model, where)
+        image = await _attempt(client, parts, model, timeout_ms, where)
         if image:
             return image
         logger.warning(f"try-on empty reply {where} attempt={attempt}")
@@ -159,7 +174,7 @@ async def generate_try_on_image(
 
 
 async def _attempt(
-    client: genai.Client, parts: list, model: str, where: str
+    client: genai.Client, parts: list, model: str, timeout_ms: int, where: str
 ) -> Optional[str]:
     """One generation. Returns the image, or None when the reply carried
     none. Raises when the provider refused this photo."""
@@ -167,7 +182,11 @@ async def _attempt(
         response = await client.aio.models.generate_content(
             model=model,
             contents=[types.Content(role="user", parts=parts)],
-            config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+                # Per request, so the pooled client is not keyed on it.
+                http_options=types.HttpOptions(timeout=timeout_ms),
+            ),
         )
     except Exception as exc:
         logger.error(f"try-on generation call failed {where}: {exc}")

@@ -5,6 +5,7 @@ generation, deciding what may be tried on, and counting a session's spend
 — without a wallet, a Redis, or a provider to call.
 """
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -58,6 +59,31 @@ class TestPricing:
     def test_the_price_is_never_free(self):
         # A zero price would silently give away paid provider calls.
         assert TRY_ON_CREDITS > 0
+
+    @staticmethod
+    async def _enough(monkeypatch, balance, *args, **kwargs):
+        from app.services.breeze_buddy.wallet import deduction
+
+        async def get_wallet(_merchant_id):
+            return SimpleNamespace(balance_credits=Decimal(balance))
+
+        monkeypatch.setattr(deduction, "get_wallet", get_wallet)
+        return await deduction.has_sufficient_credits("m1", *args, **kwargs)
+
+    async def test_the_gate_covers_the_rule_price_and_the_floor(self, monkeypatch):
+        assert await self._enough(monkeypatch, TRY_ON_CREDITS + 1, "try_on", 1)
+        assert not await self._enough(monkeypatch, TRY_ON_CREDITS, "try_on", 1)
+
+    async def test_an_unknown_event_is_the_domain_error(self, monkeypatch):
+        from app.services.breeze_buddy.wallet.exceptions import UnknownEventTypeError
+
+        with pytest.raises(UnknownEventTypeError):
+            await self._enough(monkeypatch, 100, "no_such_event")
+
+    async def test_rule_arguments_reach_the_rule(self, monkeypatch):
+        # voice_call needs its duration; 45 s bills 2 credits.
+        assert await self._enough(monkeypatch, 2, "voice_call", duration_seconds=45)
+        assert not await self._enough(monkeypatch, 1, "voice_call", duration_seconds=45)
 
     def test_chat_and_voice_are_untouched(self):
         assert BILLING_RULES["chat_turn"]() == 1
@@ -244,6 +270,34 @@ class TestImageSignature:
         )
         assert not is_signed_try_on_image(url, "")
 
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "",
+            "nodot",
+            ".sig",
+            "abc.sig",
+            "-1.sig",
+            "+1.sig",
+            " 1.sig",
+            "1e9.sig",
+            "9" * 5000 + ".sig",
+            "é",
+            "١٢٣.sig",
+            "0.sig",
+        ],
+    )
+    def test_a_malformed_token_is_refused_not_raised(self, token):
+        # Client input: any of these must come back False, never raise into
+        # a 500.
+        url = "https://cdn.shopify.com/s/files/1/x/shirt.jpg"
+        assert is_signed_try_on_image(url, token) is False
+
+    def test_an_expired_token_is_refused(self):
+        # Expiry is what lets a rule change reach tokens already handed out.
+        url = "https://cdn.shopify.com/s/files/1/x/shirt.jpg"
+        assert not is_signed_try_on_image(url, sign_try_on_image(url, 1))
+
 
 class _FakeReply:
     """A model reply that carries no image, with the reason that decides
@@ -386,6 +440,13 @@ class _FakeRedis:
     async def delete(self, key):
         return self.keys.pop(key, None) is not None
 
+    async def run_script(self, script, keys, args):
+        # The compare-and-delete release script.
+        if self.keys.get(keys[0]) == args[0]:
+            del self.keys[keys[0]]
+            return 1
+        return 0
+
 
 class TestRequestClaim:
     """One request_id produces at most one image. Without the claim, a
@@ -411,10 +472,10 @@ class TestRequestClaim:
     async def test_a_second_request_waits_while_the_first_runs(self):
         from app.services.breeze_buddy.try_on import claim_try_on_request
 
-        assert await claim_try_on_request("s1", "r1") == "claimed"
-        assert await claim_try_on_request("s1", "r1") == "running"
+        assert await claim_try_on_request("s1", "r1", "t1") == "claimed"
+        assert await claim_try_on_request("s1", "r1", "t2") == "running"
         # Scoped by session: another session's id is its own.
-        assert await claim_try_on_request("s2", "r1") == "claimed"
+        assert await claim_try_on_request("s2", "r1", "t3") == "claimed"
 
     async def test_a_finished_id_is_never_generated_again(self):
         from app.services.breeze_buddy.try_on import (
@@ -422,9 +483,9 @@ class TestRequestClaim:
             finish_try_on_request,
         )
 
-        await claim_try_on_request("s1", "r1")
+        await claim_try_on_request("s1", "r1", "t1")
         await finish_try_on_request("s1", "r1")
-        assert await claim_try_on_request("s1", "r1") == "done"
+        assert await claim_try_on_request("s1", "r1", "t2") == "done"
 
     async def test_a_failed_generation_frees_the_id_for_a_retry(self):
         from app.services.breeze_buddy.try_on import (
@@ -432,6 +493,19 @@ class TestRequestClaim:
             release_try_on_request,
         )
 
-        await claim_try_on_request("s1", "r1")
-        await release_try_on_request("s1", "r1")
-        assert await claim_try_on_request("s1", "r1") == "claimed"
+        await claim_try_on_request("s1", "r1", "t1")
+        await release_try_on_request("s1", "r1", "t1")
+        assert await claim_try_on_request("s1", "r1", "t2") == "claimed"
+
+    async def test_a_late_release_cannot_free_a_newer_claim(self, redis):
+        from app.services.breeze_buddy.try_on import (
+            claim_try_on_request,
+            release_try_on_request,
+        )
+
+        # The first claim expired mid-generation and a retry took the id.
+        await claim_try_on_request("s1", "r1", "t1")
+        redis.keys.clear()
+        await claim_try_on_request("s1", "r1", "t2")
+        await release_try_on_request("s1", "r1", "t1")
+        assert await claim_try_on_request("s1", "r1", "t3") == "running"

@@ -10,6 +10,7 @@ unrecognised product is refused rather than allowed.
 
 import hmac
 import re
+import time
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.config.static import JWT_SECRET_KEY
@@ -159,20 +160,34 @@ def is_try_on_eligible(product: Optional[Dict[str, Any]]) -> bool:
     return garment or _mentions(words, _ACCESSORY_WORDS)
 
 
-def sign_try_on_image(url: str) -> str:
-    """Proof that the server offered try-on for this exact image.
+# How long an offered image stays tryable. Expiry is what makes a rule
+# change in a deploy apply to tokens already handed out.
+_TOKEN_TTL_SECONDS = 24 * 60 * 60
 
-    The try-on route accepts a garment URL only with this signature, so a
-    client cannot spend the merchant's credits on any other image.
+
+def sign_try_on_image(url: str, expires_at: Optional[int] = None) -> str:
+    """Proof that the server offered try-on for this exact image, as
+    ``"<expires_at>.<signature>"``. The try-on route accepts a garment URL
+    only with an unexpired token for it.
     """
-    return calculate_hmac_sha256(f"try_on:{url}", JWT_SECRET_KEY)
-
-
-def is_signed_try_on_image(url: str, signature: str) -> bool:
-    expected = sign_try_on_image(url)
-    # compare_digest raises on non-ASCII str, and the token is client input.
-    return (
-        bool(expected)
-        and signature.isascii()
-        and hmac.compare_digest(expected, signature)
+    exp = (
+        expires_at if expires_at is not None else int(time.time()) + _TOKEN_TTL_SECONDS
     )
+    signature = calculate_hmac_sha256(f"try_on:{exp}:{url}", JWT_SECRET_KEY)
+    return f"{exp}.{signature}" if signature else ""
+
+
+def is_signed_try_on_image(url: str, token: str) -> bool:
+    # The token is client input, so every check here must refuse rather
+    # than raise: compare_digest raises on non-ASCII str, and int() raises
+    # past 4300 digits. A real expiry is a 10-digit Unix time.
+    exp, _, _ = token.partition(".")
+    if (
+        not token.isascii()
+        or not exp.isdigit()
+        or len(exp) > 12
+        or int(exp) < time.time()
+    ):
+        return False
+    expected = sign_try_on_image(url, int(exp))
+    return bool(expected) and hmac.compare_digest(expected, token)

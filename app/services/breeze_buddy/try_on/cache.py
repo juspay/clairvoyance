@@ -19,6 +19,7 @@ from app.core.config.dynamic import (
 )
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
+from app.services.redis.locks import _RELEASE_LUA
 
 _KEY_PREFIX = "try_on:result"
 _CLAIM_PREFIX = "try_on:claim"
@@ -63,7 +64,7 @@ def _claim_key(session_id: str, request_id: str) -> str:
     return f"{_CLAIM_PREFIX}:{session_id}:{request_id}"
 
 
-async def claim_try_on_request(session_id: str, request_id: str) -> str:
+async def claim_try_on_request(session_id: str, request_id: str, token: str) -> str:
     """Reserve this request_id for one generation.
 
     Returns ``"claimed"``, or the state of the earlier claim: ``"running"``
@@ -72,13 +73,14 @@ async def claim_try_on_request(session_id: str, request_id: str) -> str:
 
     A running claim expires just after the longest a generation can take
     (two provider attempts), so a crashed worker cannot block retries.
+    ``token`` marks this claim as the caller's, for the release below.
     """
     key = _claim_key(session_id, request_id)
     running_ttl = 2 * await TRY_ON_GENERATION_TIMEOUT_SECONDS() + 60
     redis = await get_redis_service()
-    if await redis.set(key, "running", nx=True, ex=running_ttl):
+    if await redis.set(key, f"running:{token}", nx=True, ex=running_ttl):
         return "claimed"
-    return await redis.get(key) or "running"
+    return "done" if await redis.get(key) == "done" else "running"
 
 
 async def finish_try_on_request(session_id: str, request_id: str) -> None:
@@ -92,10 +94,18 @@ async def finish_try_on_request(session_id: str, request_id: str) -> None:
         logger.warning(f"try-on claim finish failed request_id={request_id}: {exc}")
 
 
-async def release_try_on_request(session_id: str, request_id: str) -> None:
-    """Free the request_id after a failed generation, so a retry can use it."""
+async def release_try_on_request(session_id: str, request_id: str, token: str) -> None:
+    """Free the request_id after a failed generation, so a retry can use it.
+
+    Only this caller's claim: after an overrun a retry may hold the key,
+    and deleting it would let a third request generate alongside it.
+    """
     try:
         redis = await get_redis_service()
-        await redis.delete(_claim_key(session_id, request_id))
+        await redis.run_script(
+            _RELEASE_LUA,
+            keys=[_claim_key(session_id, request_id)],
+            args=[f"running:{token}"],
+        )
     except Exception as exc:
         logger.warning(f"try-on claim release failed request_id={request_id}: {exc}")
