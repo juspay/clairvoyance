@@ -32,16 +32,29 @@ def test_claim_is_lease_and_attempt_in_one_statement() -> None:
     assert "make_interval(secs => $2)" in sql
     assert "attempts = attempts + 1" in sql
     assert "e.status = 'waiting' AND e.wake_at <= now()" in sql
-    assert params == [25, 300]
+    assert "e.lane = $3" in sql  # one lane per statement (077)
+    assert params == [25, 300, "hot"]
+
+
+def test_a_cold_claim_names_its_plan_and_stays_positional() -> None:
+    """The overnight drain (21 Sep 2026): cold runs are claimed plan by
+    plan under that plan's budget, so the statement names the plan —
+    merchant first — and every value is a bind."""
+    sql, params = claim_due_runs_query(7, 300, "cold", "m1", "wf-1")
+    assert "e.lane = $3 AND e.merchant_id = $4 AND e.workflow_id = $5" in sql
+    assert "ORDER BY node_arrived_at, id" in sql  # oldest held first
+    assert params == [7, 300, "cold", "m1", "wf-1"]
+    assert "m1" not in sql and "wf-1" not in sql
 
 
 def test_enrollment_insert_binds_everything_positionally() -> None:
     sql, params = insert_enrollment_query(
         "m1", "wf-1", 3, "c-1", "wait-30m", NOW, {"phone": "+91"}, "c-1"
     )
-    assert "$8" in sql and "$9" not in sql
+    assert "$9" in sql and "$10" not in sql
     assert params[0] == "m1"  # merchant first — tenancy reads first
     assert json.loads(params[6]) == {"phone": "+91"}
+    assert params[8] == "hot"  # the lane (077), hot unless a window held the alarm
 
 
 def test_goal_cancel_ends_every_open_run_including_parked() -> None:
@@ -203,7 +216,7 @@ def test_claim_skips_paused_plans_and_counts_the_claim() -> None:
     sql, values = claim_due_runs_query(50, 300)
     assert "w.status = 'paused'" in sql and "NOT EXISTS" in sql
     assert "attempts = attempts + 1" in sql
-    assert values == [50, 300]
+    assert values == [50, 300, "hot"]
 
 
 def test_transient_error_writes_the_retry_into_wake_at() -> None:

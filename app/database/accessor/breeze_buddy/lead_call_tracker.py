@@ -13,8 +13,12 @@ from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
+    abort_queued_leads_by_enrollment_query,
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
+    cold_calls_since_query,
+    count_calls_holding_lines_query,
+    count_queued_leads_by_enrollment_query,
     count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
@@ -28,6 +32,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_leads_by_request_id_query,
     get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
+    insert_lead_if_lines_free_query,
     release_lock_on_lead_by_id_query,
     reset_widget_voice_lead_query,
     update_langfuse_scores_query,
@@ -189,6 +194,29 @@ async def create_lead_call_tracker(
     except Exception as e:
         logger.error(f"Error creating lead call tracker: {e}")
         return None
+
+
+async def create_lead_call_tracker_if_lines_free(
+    template_ids: List[str], maximum_channels: int, **lead: Any
+) -> Optional[LeadCallTracker]:
+    """The plain create, written only while the number's lines have room
+    (insert_lead_if_lines_free_query). ``None`` for no room AND for a
+    failed write — the caller treats both as "not now" and comes back."""
+    require_template_link(str(lead.get("template") or ""), lead.get("template_id"))
+    try:
+        query_text, values = insert_lead_if_lines_free_query(
+            template_ids, maximum_channels, **lead
+        )
+        result = await run_parameterized_query(query_text, values)
+    except Exception as e:
+        logger.error(f"Error creating lead call tracker under the line count: {e}")
+        return None
+    if result and get_row_count(result) > 0:
+        decoded_result = decode_lead_call_tracker(result[0])
+        if decoded_result is not None:
+            _fire_hooks(_created_hooks, decoded_result, "created-lead")
+        return decoded_result
+    return None
 
 
 async def acquire_lock_on_lead_by_id(
@@ -853,6 +881,79 @@ async def handle_lead_abort(
     except Exception as e:
         logger.error(f"Error aborting lead {lead_id}: {e}")
         return None
+
+
+async def abort_queued_leads_by_enrollment(
+    enrollment_id: str, cancellation_reason: str
+) -> List[LeadCallTracker]:
+    """
+    Abort the calls a CRM workflow run still has queued — BACKLOG or RETRY,
+    not yet picked up by the dialler. Each aborted lead fires the finished
+    hooks, like handle_lead_abort, so the CRM mirror reports the call as
+    completed with outcome ABORT. Returns the aborted leads; an error is
+    logged and aborts nothing.
+    """
+    try:
+        query_text, values = abort_queued_leads_by_enrollment_query(
+            enrollment_id, cancellation_reason
+        )
+        result = await run_parameterized_query(query_text, values)
+    except Exception as e:
+        logger.error(f"Error aborting queued leads of run {enrollment_id}: {e}")
+        return []
+
+    aborted: List[LeadCallTracker] = []
+    for row in result or []:
+        lead = decode_lead_call_tracker(row)
+        if lead is not None:
+            _fire_hooks(_finished_hooks, lead, "finished-lead")
+            aborted.append(lead)
+    return aborted
+
+
+async def count_calls_holding_lines(template_ids: List[str]) -> Optional[int]:
+    """Calls queued, retrying or on the line across these templates.
+    ``None`` (not ``0``) when the read fails, so the walker can tell "no
+    line held" apart from "we don't know" — and claim nothing cold rather
+    than flood the dialler on a blind count."""
+    if not template_ids:
+        return 0
+    try:
+        query_text, values = count_calls_holding_lines_query(template_ids)
+        result = await run_parameterized_query(query_text, values)
+    except Exception as e:
+        logger.error(f"Error counting calls on templates {template_ids}: {e}")
+        return None
+    rows = list(result or [])
+    return int(rows[0]["holding"] or 0) if rows else 0
+
+
+async def count_queued_leads_by_enrollment(enrollment_id: str) -> Optional[int]:
+    """A run's calls still queued, locked or not. ``None`` on a failed read."""
+    try:
+        query_text, values = count_queued_leads_by_enrollment_query(enrollment_id)
+        result = await run_parameterized_query(query_text, values)
+    except Exception as e:
+        logger.error(f"Error counting queued leads of run {enrollment_id}: {e}")
+        return None
+    rows = list(result or [])
+    return int(rows[0]["queued"] or 0) if rows else 0
+
+
+async def cold_calls_since(merchant_id: str, since: datetime) -> Dict[str, int]:
+    """One merchant's cold calls queued since `since`, split queued /
+    on_line / ended. Zeros on a failed read — the progress line says so."""
+    zero = {"queued": 0, "on_line": 0, "ended": 0}
+    try:
+        query_text, values = cold_calls_since_query(merchant_id, since)
+        result = await run_parameterized_query(query_text, values)
+    except Exception as e:
+        logger.error(f"Error counting cold calls of {merchant_id} since {since}: {e}")
+        return zero
+    rows = list(result or [])
+    if not rows:
+        return zero
+    return {k: int(rows[0][k] or 0) for k in zero}
 
 
 async def update_lead_payload(

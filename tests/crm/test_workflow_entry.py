@@ -150,6 +150,9 @@ class _Spine:
         self.cancel_steps: List[List[Dict[str, Any]]] = []
         self.refresh_markers: List[Optional[str]] = []
         self.resumes: List[Tuple[str, str, Dict[str, Any]]] = []
+        # a run the goal ended takes its queued calls with it (21 Sep 2026)
+        self.aborts: List[Tuple[str, str]] = []
+        self.lanes: List[Optional[str]] = []
         self.facts: List[Tuple[str, str, Any]] = []
         self.refreshes: List[Tuple[str, str, Dict[str, Any]]] = []
         self.exited: set = set()
@@ -185,6 +188,9 @@ class _Spine:
         self.exited.add(run_id)
         return True
 
+    async def cancel_queued_calls(self, run_id: str, reason: str) -> None:
+        self.aborts.append((run_id, reason))
+
     async def resume_run_by_id(
         self,
         merchant_id: str,
@@ -192,9 +198,11 @@ class _Spine:
         node_id: str,
         patch: Dict[str, Any],
         facts: Optional[Dict[str, Any]] = None,
+        lane: Optional[str] = None,
     ) -> bool:
         self.resumes.append((run_id, node_id, patch))
         self.facts.append((run_id, node_id, facts))
+        self.lanes.append(lane)
         return True
 
     async def refresh_run_facts(
@@ -204,8 +212,10 @@ class _Spine:
         node_id: str,
         facts: Dict[str, Any],
         cut_short_by: Optional[str] = None,
+        lane: Optional[str] = None,
     ) -> bool:
         self.refreshes.append((run_id, node_id, facts))
+        self.lanes.append(lane)
         # canon T26: the marker travels apart from the facts, because the
         # same dict on the reply path becomes context.facts.<square>.
         self.refresh_markers.append(cut_short_by)
@@ -217,6 +227,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, spine: _Spine) -> None:
     workflow read, the run reads, and the pinned-definition read (which
     definitions.py owns, on the version table)."""
     definitions._definitions.clear()
+    monkeypatch.setattr(entry, "cancel_queued_calls", spine.cancel_queued_calls)
     for module, name in (
         (entry.workflow_accessor, "live_workflows"),
         (entry.enrollment_accessor, "open_runs_for_customer"),

@@ -175,6 +175,13 @@ class WaitWindow(BaseModel):
         return self
 
 
+# The report a call writes about itself when it ends (breeze_buddy's
+# telephony mirror). An awaiting call square always listens for it — it is
+# put first in the square's topics at parse time, so the entry consumer and
+# the walker read a call square exactly as they read a listening wait.
+CALL_REPORT_TOPIC = "call.completed"
+
+
 class WorkflowNode(BaseModel):
     """One square of the board. Vocabulary is code, not CHECKs:
     wait · send (channel + template, via connectivity) ·
@@ -251,6 +258,39 @@ class WorkflowNode(BaseModel):
     # philosophy, where a blank names the fact it wants). A send names its
     # blocks on the right of `variables`, an action inside `args`.
     blocks: List[str] = Field(default_factory=list)
+    # call only (the overnight drain, 21 Sep 2026): the square queues its
+    # lead and then WAITS for that call's own report (call.completed,
+    # matched on the lead id) before taking its edge, so a run never has
+    # more than one call queued and the next timer counts from the call's
+    # end, not from the insert. OFF unless the plan says `"await": true`
+    # (ruled 22 Sep 2026): a default cannot change what published plans
+    # do — a plan whose NEXT square listens for call.completed would
+    # otherwise see its report eaten by the call square. `await_minutes`
+    # is the backstop: a
+    # report that never comes (dispatcher down, number unavailable) ends
+    # the wait, the queued lead is aborted, and the run takes its edge.
+    # An awaiting square may also list the merchant's `topics`: a letter on
+    # one aborts the queued call and follows that topic's labelled arrow
+    # (the customer acted; the plan re-decides on the new event).
+    await_: bool = Field(False, alias="await")
+    await_minutes: float = Field(1440, gt=0)
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _an_awaiting_call_hears_its_own_report(self) -> "WorkflowNode":
+        """A call square with `await` listens for its own report first, and
+        branches on the letter's NAME: the report takes the square's plain
+        edge, a merchant topic it lists takes that topic's labelled arrow.
+        Written into the node at parse time so nothing downstream special-
+        cases the word — the consumer and the walker see a listening
+        square with topics and key $topic."""
+        if self.type == "call" and self.await_:
+            self.topics = [CALL_REPORT_TOPIC] + [
+                t for t in self.topics if t != CALL_REPORT_TOPIC
+            ]
+            self.key = "$topic"
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -621,6 +661,11 @@ class EnrollmentRun(BaseModel):
     enrollment_key: str
     attempts: int
     last_error: Optional[str]
+    # hot: act now. cold: a calling window held this run's timer overnight
+    # (migration 077); claimed hot-first, and cold only into the lines the
+    # plan's numbers have free (capacity.py). A merchant letter that wakes
+    # or refreshes the run flips it hot; so does queuing its call.
+    lane: str = "hot"
     # When the token landed on current_node (073, canon T26 col 19): the
     # ONLY place the current square's arrival lives until its step closes,
     # and therefore the `arrived_at` of the next flushed row. NULL for runs

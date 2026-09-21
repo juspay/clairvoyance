@@ -220,6 +220,18 @@ def get_templates_count_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
     return f"SELECT COUNT(*) AS total FROM {TEMPLATE_TABLE}{where_clause}", values
 
 
+def template_ids_by_telephony_number_query(
+    telephony_number_id: str,
+) -> Tuple[str, List[Any]]:
+    """Every template that dials through this number — the templates whose
+    calls share its lines (outreach/capacity.py)."""
+    text = f"""
+        SELECT "id" FROM {TEMPLATE_TABLE}
+        WHERE "telephony_number_id" = $1;
+    """
+    return text, [telephony_number_id]
+
+
 def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get a single template by ID (includes full flow).

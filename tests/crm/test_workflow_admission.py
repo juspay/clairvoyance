@@ -62,7 +62,10 @@ def test_cooldown_admits_after_window() -> None:
 
 
 def test_first_wake_of_wait_node_is_arrival_plus_delay() -> None:
-    assert _first_wake(_definition().nodes[0], NOW, 7) == NOW + timedelta(minutes=30)
+    assert _first_wake(_definition().nodes[0], NOW, 7) == (
+        NOW + timedelta(minutes=30),
+        "hot",
+    )
 
 
 def test_first_wake_of_a_listening_wait_is_arrival_plus_delay() -> None:
@@ -79,14 +82,17 @@ def test_first_wake_of_a_listening_wait_is_arrival_plus_delay() -> None:
             "minutes": 30,
         }
     )
-    assert _first_wake(definition.nodes[0], NOW, 7) == NOW + timedelta(minutes=30)
+    assert _first_wake(definition.nodes[0], NOW, 7) == (
+        NOW + timedelta(minutes=30),
+        "hot",
+    )
 
 
 def test_first_wake_of_action_node_is_immediate() -> None:
     definition = _definition(
         first_node={"id": "call-now", "type": "call", "template_id": "t"}
     )
-    assert _first_wake(definition.nodes[0], NOW, 7) == NOW
+    assert _first_wake(definition.nodes[0], NOW, 7) == (NOW, "hot")
 
 
 def test_context_passthrough_keeps_scalars_drops_structures() -> None:
@@ -206,6 +212,7 @@ class _History:
         wake_at: datetime,
         context: Dict[str, Any],
         enrollment_key: str,
+        lane: str = "hot",
     ) -> EnrollmentRun:
         self.inserted.append(enrollment_key)
         self.order.append("insert")

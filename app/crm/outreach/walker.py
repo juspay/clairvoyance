@@ -32,12 +32,21 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.core.logger.context import set_log_context, update_log_context
+from app.crm.outreach.capacity import claim_cold_runs
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
+from app.crm.outreach.nodes import NODE_TYPES, awaits, branches, is_wait
+from app.crm.outreach.nodes.call import (
+    CALL_COMPLETED,
+    EJECT_OUTCOMES,
+    NoRoom,
+    awaiting_key,
+    cancel_queued_calls,
+    report_outcome,
+)
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     dispatch_id,
@@ -55,7 +64,7 @@ from app.crm.outreach.steps import (
     first_arrival,
     step,
 )
-from app.crm.outreach.window import alarm, opens_at
+from app.crm.outreach.window import held_alarm, opens_at
 from app.crm.record.contracts import customer_has_event
 
 LOG_COMPONENT = "crm.outreach.walker"
@@ -90,7 +99,29 @@ async def claim_due_runs(batch: int) -> List[EnrollmentRun]:
     ones, which is how "the walker is behind" is known without a query the
     claim's own wake_at push would have made meaningless anyway."""
     set_log_context(component=LOG_COMPONENT)
-    runs = await enrollment_accessor.claim_due_runs(batch, CRM_WALKER_LEASE_SECONDS)
+    runs = await enrollment_accessor.claim_due_runs(
+        batch, CRM_WALKER_LEASE_SECONDS, lane="hot"
+    )
+    # The overnight drain (capacity.py): cold runs — held to a window's
+    # opening overnight — are claimed AFTER every hot one, plan by plan,
+    # only into the lines the plan's numbers have free. Every hot run just
+    # claimed may queue a call before this pass's cold ones reach the
+    # dialler, so the whole hot batch is charged against the room: an
+    # upper bound, and the cheap one.
+    room = batch - len(runs)
+    if room > 0:
+        # The hot claim above has COMMITTED: those runs are leased and
+        # counted. Nothing in the cold claim may lose them, so its failure
+        # is logged and the pass goes on with what it has.
+        try:
+            for merchant_id, workflow_id in await enrollment_accessor.due_cold_plans():
+                if room <= 0:
+                    break
+                cold = await claim_cold_runs(merchant_id, workflow_id, room)
+                room -= len(cold)
+                runs += cold
+        except Exception as e:
+            logger.error(f"walker: cold claim failed, walking the hot batch only: {e}")
     if runs:
         logger.bind(claimed=len(runs), batch_full=len(runs) >= batch).info(
             f"walker pass: claimed {len(runs)} due run(s)"
@@ -150,15 +181,9 @@ async def walk_run(run: EnrollmentRun) -> None:
                     f"definition v{run.workflow_version} unreadable: {e}"
                 )
                 ejected = None
-            if await enrollment_accessor.exit_run(
-                str(run.id),
-                "ejected",
-                lease,
-                steps=as_rows(closing(run, ejected, "ejected")),
-            ):
-                _log_exit(run, "ejected")
-            else:
-                _deferred(run, "eject")
+            await _end_early(
+                run, "ejected", lease, as_rows(closing(run, ejected, "ejected"))
+            )
             return
         if workflow.status == "paused":
             return  # the lease push IS the snooze; re-checked next wake
@@ -206,6 +231,33 @@ async def walk_run(run: EnrollmentRun) -> None:
                 _deferred(run, "retry")
 
 
+async def _end_early(
+    run: EnrollmentRun,
+    exit_reason: str,
+    lease: datetime,
+    steps: List[Dict[str, Any]],
+    context: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Exit a run before its plan ends — ejected, timed out, a goal, or an
+    awaiting call that could not be dialled — and abort the calls it still
+    has queued. Never for `completed`: a plan whose last square is a call
+    completes the moment that call is queued, and that call must still go
+    out. ``context`` rides only when the exit wrote it (the closing
+    square's outcome); None keeps the row's."""
+    if await enrollment_accessor.exit_run(
+        str(run.id),
+        exit_reason,
+        lease,
+        current_node=run.current_node if context is not None else None,
+        context=context,
+        steps=steps,
+    ):
+        _log_exit(run, exit_reason)
+        await cancel_queued_calls(str(run.id), f"run exited: {exit_reason}")
+    else:
+        _deferred(run, exit_reason)
+
+
 def _log_exit(run: EnrollmentRun, reason: str) -> None:
     """How a run ended is otherwise written only to its row, where no
     alert rule can see it — and a rising `timed_out` share is how silent
@@ -246,15 +298,9 @@ async def _advance(
     # timed_out no matter which square it stands on.
     max_age = timedelta(days=definition.exits.max_age_days)
     if now - run.entered_at > max_age:
-        if await enrollment_accessor.exit_run(
-            str(run.id),
-            "timed_out",
-            lease,
-            steps=as_rows(closing(run, definition, "timed_out")),
-        ):
-            _log_exit(run, "timed_out")
-        else:
-            _deferred(run, "timed_out")
+        await _end_early(
+            run, "timed_out", lease, as_rows(closing(run, definition, "timed_out"))
+        )
         return
 
     # Goal re-check at fire time — one indexed EXISTS per tier via
@@ -273,15 +319,12 @@ async def _advance(
         if await customer_has_event(
             run.merchant_id, str(run.customer_id), tier.topics, since, where
         ):
-            if await enrollment_accessor.exit_run(
-                str(run.id),
+            await _end_early(
+                run,
                 tier.exit_reason,
                 lease,
-                steps=as_rows(closing(run, definition, tier.exit_reason)),
-            ):
-                _log_exit(run, tier.exit_reason)
-            else:
-                _deferred(run, tier.exit_reason)
+                as_rows(closing(run, definition, tier.exit_reason)),
+            )
             return
 
     current_id = run.current_node
@@ -296,6 +339,7 @@ async def _advance(
     arrived_at = run.node_arrived_at
     walked: List[StepRecord] = []
     first = True
+    queued_call = False  # a call square ran this visit: hot from here (077)
     for _ in range(_MAX_STEPS_PER_VISIT):
         # walk_run stamped the square the token ARRIVED on; a park three
         # squares later would blame it. update_, not set_ — set_ would
@@ -349,20 +393,101 @@ async def _advance(
                     lease,
                     node_arrived_at=None if first else arrived_at,
                     steps=as_rows(walked),
+                    # Held overnight: this run is now part of the pile the
+                    # morning drains under the plan's budget (077).
+                    lane="cold",
                 ):
                     _deferred(run, f"hold on {node.id}")
                 return
 
         execute = NODE_TYPES[node.type].execute
         dispatched: Optional[str] = None
-        if execute is not None:  # a wait's action IS the alarm
-            patch = await execute(run, node, definition)
+        resolved: Optional[str] = None  # an awaiting call's own outcome
+        if awaits(node) and context.get(awaiting_key(node.id)):
+            # Standing on the call square, waiting for its call (the
+            # overnight drain, 21 Sep 2026): the lead was queued on an
+            # earlier visit — NEVER queued again — and this visit is the
+            # report, a merchant letter, or the backstop.
+            dispatched = str(context[awaiting_key(node.id)])
+            resolved = await _resolve_awaiting_call(run, node, context)
+            if resolved in EJECT_OUTCOMES:
+                # This customer cannot be called; the next call would fail
+                # the same way. The run ends here with the outcome on its
+                # last square (ruled 22 Sep 2026). Every other failed
+                # outcome takes the plain edge below, like a no-answer.
+                context = without_reply(context, node.id)
+                context.pop(awaiting_key(node.id), None)
+                walked += step(
+                    node,
+                    arrived_at,
+                    datetime.now(timezone.utc),
+                    arrived_by,
+                    resolved,
+                    None,
+                    run,
+                    cut_short_by,
+                    first,
+                    dispatched,
+                )
+                await _end_early(run, "ejected", lease, as_rows(walked), context)
+                return
+        elif execute is not None:  # a wait's action IS the alarm
+            try:
+                patch = await execute(run, node, definition)
+            except NoRoom as e:
+                # A cold run's call square found no free line: nothing was
+                # queued. The token stays on this square (trap 1: its own
+                # id, no row closes, the arrival kept) due NOW, and the
+                # next pass tries again — oldest held first, since the
+                # claim orders cold runs by arrival. Squares walked before
+                # this one flush: they were left.
+                logger.info(f"walker: run {run.id} waits for a line — {e}")
+                if not await enrollment_accessor.advance_run(
+                    str(run.id),
+                    node.id,
+                    datetime.now(timezone.utc),
+                    context,
+                    lease,
+                    node_arrived_at=None if first else arrived_at,
+                    steps=as_rows(walked),
+                ):
+                    _deferred(run, f"no line on {node.id}")
+                return
             context.update(patch)
             dispatched = dispatch_id(patch, node.id)
+            queued_call = queued_call or node.type == "call"
+            if awaits(node) and patch.get(awaiting_key(node.id)):
+                # Queued; now WAIT for that call's own report. The token
+                # stays on this square (trap 1: its own id, no row closes,
+                # the arrival kept) with the backstop as its alarm — in the
+                # SAME write that records the queued lead, so a crash
+                # between them re-enters the wait, never a second queue.
+                wake = datetime.now(timezone.utc) + timedelta(
+                    minutes=node.await_minutes
+                )
+                if not await enrollment_accessor.advance_run(
+                    str(run.id),
+                    node.id,
+                    wake,
+                    context,
+                    lease,
+                    node_arrived_at=None if first else arrived_at,
+                    steps=as_rows(walked),
+                    # Its call is queued: the run holds a line now, and its
+                    # report, its gap and its next call must not wait behind
+                    # the pile (077). Cold ends at the dialler's door.
+                    lane="hot",
+                ):
+                    _deferred(run, f"await on {node.id}")
+                return
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
         outcome: Optional[str] = None
-        if branches(node):
+        if resolved is not None:
+            outcome = resolved
+            context = without_reply(context, node.id)
+            context.pop(awaiting_key(node.id), None)
+        elif branches(node):
             # The answer that resolved this square IS its outcome (canon
             # T26) — a reply, a condition's rule label, a split's arm, or
             # the timeout when the alarm won. Read BEFORE the clear below,
@@ -409,7 +534,8 @@ async def _advance(
             # Arrival scheduling: the wait's alarm starts now — its minutes,
             # the window's next opening, or the end of the run's life
             # (window.alarm). A wait already due moves on in this same visit.
-            wake = alarm(next_node, left_at, run.entered_at + max_age)
+            # A window that MOVED the alarm makes the run cold (077).
+            wake, held = held_alarm(next_node, left_at, run.entered_at + max_age)
             if wake > left_at:
                 walked += step(
                     node,
@@ -433,6 +559,9 @@ async def _advance(
                     # is this one's exit — gapless by construction.
                     node_arrived_at=left_at,
                     steps=as_rows(walked),
+                    # Held again: cold. A call queued this visit: hot from
+                    # the dialler's door on (077). Else the lane it had.
+                    lane="cold" if held else ("hot" if queued_call else None),
                 ):
                     _deferred(run, f"advance to {next_id}")
                 return
@@ -458,6 +587,32 @@ async def _advance(
     raise NodeParked(
         f"{_MAX_STEPS_PER_VISIT} immediate nodes in one visit — runaway document"
     )
+
+
+async def _resolve_awaiting_call(
+    run: EnrollmentRun, node: WorkflowNode, context: Dict[str, Any]
+) -> str:
+    """What ended an awaiting call square's wait, as the outcome its step
+    records — and the queued call's fate (ruled 21 Sep 2026):
+
+    - its own report: the call's outcome (NO_ANSWER, BUSY, INTERESTED …);
+      the call happened, nothing to abort;
+    - a merchant letter the square lists: the customer acted, so the
+      queued call is aborted (a call already ringing is left alone) and
+      the letter's arrow is taken with the new facts;
+    - the backstop (no reply): the call was never placed in the time the
+      square allowed; the queued call is aborted and the plain edge taken."""
+    answer = context.get(reply_key(node.id))
+    if answer is None:
+        await cancel_queued_calls(
+            str(run.id),
+            f"call {node.id} not placed within {node.await_minutes:g} minutes",
+        )
+        return TIMEOUT
+    if str(answer) == CALL_COMPLETED:
+        return report_outcome(context, node.id) or CALL_COMPLETED
+    await cancel_queued_calls(str(run.id), f"superseded by {answer}")
+    return str(answer)
 
 
 def goal_since(run: EnrollmentRun) -> datetime:
@@ -495,4 +650,10 @@ def pick_next(
     for dst, on in arrows:
         if on == ELSE:
             return dst
+    if awaits(node):
+        # An awaiting call's plain edge: its report, its backstop, and any
+        # listed topic the author gave no arrow of its own.
+        for dst, on in arrows:
+            if on is None:
+                return dst
     return None

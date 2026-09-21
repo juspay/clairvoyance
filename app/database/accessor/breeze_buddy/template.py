@@ -28,6 +28,7 @@ from app.database.queries.breeze_buddy.template import (
     get_templates_count_query,
     get_templates_list_query,
     replace_template_query,
+    template_ids_by_telephony_number_query,
 )
 from app.schemas.breeze_buddy.template import TemplateMetadata
 
@@ -274,6 +275,20 @@ async def get_templates_list(
     except Exception as e:
         logger.error(f"Error getting templates list: {e}", exc_info=True)
         return [], 0
+
+
+async def get_template_ids_by_telephony_number(
+    telephony_number_id: str,
+) -> Optional[List[str]]:
+    """Ids of every template pinned to this number. ``None`` on a failed
+    read, so a caller sizing lines can refuse rather than guess."""
+    try:
+        query_text, values = template_ids_by_telephony_number_query(telephony_number_id)
+        result = await run_parameterized_query(query_text, values)
+    except Exception as e:
+        logger.error(f"Error listing templates on number {telephony_number_id}: {e}")
+        return None
+    return [str(row["id"]) for row in result or []]
 
 
 async def get_template_by_id(template_id: str) -> Optional[TemplateModel]:

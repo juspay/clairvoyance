@@ -967,6 +967,19 @@ CRM_WALKER_LEASE_SECONDS = int(os.environ.get("CRM_WALKER_LEASE_SECONDS", 300))
 
 # Consecutive failed claims before a run parks for a human.
 CRM_WALKER_MAX_ATTEMPTS = int(os.environ.get("CRM_WALKER_MAX_ATTEMPTS", 3))
+# The overnight drain (outreach/capacity.py, docs/crm/runbooks/overnight-drain.md).
+# How long the walker trusts its in-process copy of WHICH numbers a plan's
+# call templates dial through and their maximum_channels. The lines in use
+# are never cached: they are read live on every pass that has cold runs due.
+CRM_CHANNEL_CACHE_SECONDS = _positive_float("CRM_CHANNEL_CACHE_SECONDS", 300.0)
+# The drain's progress line — per merchant: cold calls placed since the
+# plan's window opened, on the line, still queued, cold runs still waiting —
+# logged and posted to Slack (SLACK_WEBHOOK_URL) every this many seconds
+# (default 60). Set to 0 to post nothing. One walker replica carries it:
+# set it on that pod only.
+CRM_DRAIN_ALERT_INTERVAL_SECONDS = _positive_float(
+    "CRM_DRAIN_ALERT_INTERVAL_SECONDS", 60.0
+)
 # Exited runs age out (canon T20 exited_at: the retention sweep is most
 # of what keeps the hot table small). Batched; leftovers go next tick.
 CRM_RUN_RETENTION_DAYS = int(os.environ.get("CRM_RUN_RETENTION_DAYS", 90))

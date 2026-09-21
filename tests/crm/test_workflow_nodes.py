@@ -32,8 +32,16 @@ def test_a_wait_listens_and_branches_exactly_when_it_lists_topics() -> None:
     hearing = WorkflowNode(id="h", type="wait", minutes=15, topics=["x"], key="$topic")
     assert (listens(timer), branches(timer)) == (False, False)
     assert (listens(hearing), branches(hearing)) == (True, True)
-    # topics on a word that cannot wait make it neither
-    assert listens(WorkflowNode(id="c", type="call", topics=["x"])) is False
+    # topics on a word that cannot wait make it neither …
+    assert listens(WorkflowNode(id="s", type="send", topics=["x"])) is False
+    # … except the awaiting call (21 Sep 2026), which listens for its own
+    # report first and for the merchant topics it lists; without
+    # `await: true` (the default, 22 Sep 2026) it is the old square, deaf.
+    ringing = WorkflowNode(id="c", type="call", topics=["x"], await_=True)
+    assert ringing.topics == ["call.completed", "x"] and ringing.key == "$topic"
+    assert (listens(ringing), branches(ringing)) == (True, True)
+    deaf = WorkflowNode.model_validate({"id": "c", "type": "call", "await": False})
+    assert (listens(deaf), branches(deaf)) == (False, False)
 
 
 def test_a_wait_has_no_action_and_an_action_is_not_a_wait() -> None:
@@ -71,6 +79,7 @@ def test_the_package_init_exports_the_registry_and_nothing_else() -> None:
     assert set(package.__all__) == {
         "NODE_TYPES",
         "NodeSpec",
+        "awaits",
         "branches",
         "is_wait",
         "listens",

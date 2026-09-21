@@ -3,6 +3,7 @@ Database query functions for the application.
 """
 
 import json
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -103,6 +104,41 @@ def insert_lead_call_tracker_query(
     ]
 
     return text, values
+
+
+def insert_lead_if_lines_free_query(
+    template_ids: List[str], maximum_channels: int, **lead: Any
+) -> Tuple[str, List[Any]]:
+    """
+    The plain insert with ONE condition folded into the statement: the row
+    is written only while the calls already holding this number's lines —
+    queued, retrying or on the line, on every template that dials through
+    it — number fewer than the number's lines. The count and the write are
+    one statement, so there is no moment a caller holds a stale count
+    (outreach/capacity.py: a cold run's call is written by this, a hot
+    run's by the plain insert). Zero rows back = no line free.
+    """
+    text, values = insert_lead_call_tracker_query(**lead)
+    n = len(values)
+    match = re.search(r"VALUES \((.*?)\) RETURNING \*;", text, re.DOTALL)
+    assert match is not None, "the plain insert changed shape"
+    condition = f"""SELECT {match.group(1)}
+        WHERE (
+            SELECT count(*) FROM "{LEAD_CALL_TRACKER_TABLE}"
+            WHERE "template_id" = ANY(${n + 1}::uuid[])
+              AND "status" = ANY(${n + 2}::text[])
+        ) < ${n + 3}
+        RETURNING *;"""
+    text = text[: match.start()] + condition + text[match.end() :]
+    return text, values + [
+        template_ids,
+        [
+            LeadCallStatus.BACKLOG.value,
+            LeadCallStatus.RETRY.value,
+            LeadCallStatus.PROCESSING.value,
+        ],
+        maximum_channels,
+    ]
 
 
 def acquire_lock_on_lead_by_id_query(
@@ -827,6 +863,111 @@ def abort_lead_by_id_query(
         LeadCallStatus.RETRY.value,
     ]
     return text, values
+
+
+def abort_queued_leads_by_enrollment_query(
+    enrollment_id: str, cancellation_reason: str
+) -> Tuple[str, List[Any]]:
+    """
+    Abort every call a CRM workflow run still has queued (ADR 0010) — the
+    same terminal write as abort_lead_by_id_query, for all of the run's
+    leads that have not been dialled yet.
+
+    A locked lead is left alone: the dialler holds it and is placing the
+    call, so it ends like any call already ringing.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "status" = $1,
+            "outcome" = $2,
+            "updated_at" = NOW(),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb
+        WHERE
+            "enrollment_id" = $4
+            AND "status" IN ($5, $6)
+            AND "is_locked" = FALSE
+            AND ("outcome" IS NULL OR "outcome" = '')
+        RETURNING *;
+    """
+    metadata = {
+        "aborted_at": datetime.now().isoformat(),
+        "outcome": {"abort_reason": cancellation_reason},
+    }
+    values = [
+        LeadCallStatus.FINISHED.value,
+        "ABORT",
+        json.dumps(metadata),
+        enrollment_id,
+        LeadCallStatus.BACKLOG.value,
+        LeadCallStatus.RETRY.value,
+    ]
+    return text, values
+
+
+def count_calls_holding_lines_query(template_ids: List[str]) -> Tuple[str, List[Any]]:
+    """
+    How many calls hold this number's lines right now — queued, retrying or
+    on the line, on every template that dials through it. The walker's
+    coarse check before claiming cold runs (outreach/capacity.py); the
+    exact check is the conditional insert above. Reads exactly the rows
+    lead_call_tracker_queued_by_template_ix (078) covers.
+    """
+    text = f"""
+        SELECT count(*)::int AS holding
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "template_id" = ANY($1::uuid[])
+          AND "status" = ANY($2::text[]);
+    """
+    return text, [
+        template_ids,
+        [
+            LeadCallStatus.BACKLOG.value,
+            LeadCallStatus.RETRY.value,
+            LeadCallStatus.PROCESSING.value,
+        ],
+    ]
+
+
+def count_queued_leads_by_enrollment_query(enrollment_id: str) -> Tuple[str, List[Any]]:
+    """A run's calls still queued, locked or not — what an abort may have
+    missed while the dialler held the row (outreach/nodes/call.py retries)."""
+    text = f"""
+        SELECT count(*)::int AS queued
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "enrollment_id" = $1
+          AND "status" = ANY($2::text[])
+          AND ("outcome" IS NULL OR "outcome" = '');
+    """
+    return text, [
+        enrollment_id,
+        [LeadCallStatus.BACKLOG.value, LeadCallStatus.RETRY.value],
+    ]
+
+
+def cold_calls_since_query(merchant_id: str, since: datetime) -> Tuple[str, List[Any]]:
+    """
+    The drain's progress line (outreach/progress.py): one merchant's cold
+    calls queued since `since` (the plan's window last opened), split by
+    where they are — still queued, on the line, ended. The call square
+    stamps meta_data.lane when it queues the lead.
+    """
+    text = f"""
+        SELECT count(*) FILTER (WHERE "status" = ANY($3::text[]))::int AS queued,
+               count(*) FILTER (WHERE "status" = $4)::int AS on_line,
+               count(*) FILTER (WHERE "status" = $5)::int AS ended
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "merchant_id" = $1
+          AND "created_at" >= $2
+          AND "meta_data"->>'lane' = 'cold';
+    """
+    return text, [
+        merchant_id,
+        since,
+        [LeadCallStatus.BACKLOG.value, LeadCallStatus.RETRY.value],
+        LeadCallStatus.PROCESSING.value,
+        LeadCallStatus.FINISHED.value,
+    ]
 
 
 def update_lead_payload_query(

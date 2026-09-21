@@ -21,8 +21,10 @@ from app.crm.outreach.db.queries.enrollment import (
     advance_run_query,
     cancel_run_query,
     claim_due_runs_query,
+    cold_pile_by_merchant_query,
     count_runs_query,
     customer_runs_query,
+    due_cold_plans_query,
     exit_run_query,
     get_run_query,
     insert_enrollment_query,
@@ -145,6 +147,7 @@ async def insert_enrollment(
     wake_at: datetime,
     context: Dict[str, Any],
     enrollment_key: str,
+    lane: str = "hot",
 ) -> EnrollmentRun:
     query, values = insert_enrollment_query(
         merchant_id,
@@ -155,19 +158,45 @@ async def insert_enrollment(
         wake_at,
         context,
         enrollment_key,
+        lane,
     )
     row = await conn.fetchrow(query, *values)
     assert row is not None  # INSERT ... RETURNING always yields the row
     return decode_run(row)
 
 
-async def claim_due_runs(limit: int, lease_seconds: int) -> List[EnrollmentRun]:
+async def claim_due_runs(
+    limit: int,
+    lease_seconds: int,
+    lane: str = "hot",
+    merchant_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+) -> List[EnrollmentRun]:
     """One statement — the lock, the lease push and the attempts count
-    commit together; Postgres runs it atomically, no wrapper needed."""
-    query, values = claim_due_runs_query(limit, lease_seconds)
+    commit together; Postgres runs it atomically, no wrapper needed. One
+    lane per call; a cold claim names its plan (the room is per plan)."""
+    query, values = claim_due_runs_query(
+        limit, lease_seconds, lane, merchant_id, workflow_id
+    )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_run(row) for row in rows]
+
+
+async def cold_pile_by_merchant() -> Dict[str, int]:
+    """Per merchant: cold runs due and not yet claimed."""
+    query, values = cold_pile_by_merchant_query()
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return {str(row["merchant_id"]): int(row["waiting"]) for row in rows}
+
+
+async def due_cold_plans() -> List[Tuple[str, str]]:
+    """(merchant_id, workflow_id) of every live plan with a cold run due."""
+    query, values = due_cold_plans_query()
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [(str(row["merchant_id"]), str(row["workflow_id"])) for row in rows]
 
 
 async def advance_run(
@@ -178,11 +207,20 @@ async def advance_run(
     leased_wake_at: datetime,
     node_arrived_at: Optional[datetime] = None,
     steps: Optional[List[Dict[str, Any]]] = None,
+    lane: Optional[str] = None,
 ) -> bool:
     """True when the row still carried the lease (the write landed, and
-    the buffered squares landed with it)."""
+    the buffered squares landed with it). ``lane`` 'cold' when a window
+    held the alarm; None keeps the run's lane."""
     query, values = advance_run_query(
-        run_id, current_node, wake_at, context, leased_wake_at, node_arrived_at, steps
+        run_id,
+        current_node,
+        wake_at,
+        context,
+        leased_wake_at,
+        node_arrived_at,
+        steps,
+        lane,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
@@ -263,11 +301,13 @@ async def resume_run_by_id(
     node_id: str,
     context_patch: Dict[str, Any],
     facts: Optional[Dict[str, Any]] = None,
+    lane: Optional[str] = None,
 ) -> bool:
     """True when the run was standing on the listening square (waiting or
-    parked) and took the answer and the letter's facts."""
+    parked) and took the answer and the letter's facts. ``lane`` 'hot' for
+    a merchant's letter; None (our own call report) keeps the run's."""
     query, values = resume_run_by_id_query(
-        merchant_id, run_id, node_id, context_patch, facts
+        merchant_id, run_id, node_id, context_patch, facts, lane
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
@@ -280,11 +320,13 @@ async def refresh_run_facts(
     node_id: str,
     facts: Dict[str, Any],
     cut_short_by: Optional[str] = None,
+    lane: Optional[str] = None,
 ) -> bool:
     """True when the run was standing (waiting or parked) on that
-    non-listening square and took the letter's facts as its newest."""
+    non-listening square and took the letter's facts as its newest.
+    ``lane`` as on the reply path."""
     query, values = refresh_run_facts_query(
-        merchant_id, run_id, node_id, facts, cut_short_by
+        merchant_id, run_id, node_id, facts, cut_short_by, lane
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)

@@ -80,7 +80,8 @@ def test_an_alarm_is_arrival_plus_minutes_moved_into_the_hours() -> None:
 
 def test_a_run_starting_on_a_windowed_wait_first_wakes_at_the_opening() -> None:
     start = WorkflowNode(id="quiet", type="wait", minutes=15, window=CALLING_HOURS)
-    assert _first_wake(start, _ist(17, 23, 30), 7) == _ist(18, 7)
+    # held to the opening: the run is born COLD (migration 077)
+    assert _first_wake(start, _ist(17, 23, 30), 7) == (_ist(18, 7), "cold")
 
 
 @pytest.mark.parametrize(

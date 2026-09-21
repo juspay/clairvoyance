@@ -16,6 +16,7 @@ or honour an alarm.
 """
 
 from datetime import datetime, time, timedelta
+from typing import Tuple
 from zoneinfo import ZoneInfo
 
 from app.crm.outreach.schemas import WaitWindow, WorkflowNode
@@ -60,6 +61,45 @@ def opens_at(at: datetime, window: WaitWindow) -> datetime:
 _PAST_THE_END = timedelta(minutes=1)
 
 
+def last_opening(at: datetime, window: WaitWindow) -> datetime:
+    """PURE: the moment the window last opened at or before `at` — the
+    start of the drain the progress line counts from (progress.py): the
+    pile is what the window held since it closed, and it starts moving
+    when the window opens."""
+    if at.tzinfo is None:
+        raise ValueError("last_opening needs an aware datetime")
+    zone = ZoneInfo(window.timezone)
+    local = at.astimezone(zone)
+    opening = datetime.combine(local.date(), _clock(window.opens), tzinfo=zone)
+    if opening > local:
+        opening = datetime.combine(
+            local.date() - timedelta(days=1), _clock(window.opens), tzinfo=zone
+        )
+    return opening.astimezone(at.tzinfo)
+
+
+def held_alarm(
+    node: WorkflowNode, now: datetime, run_ends_at: datetime
+) -> Tuple[datetime, bool]:
+    """PURE: ``alarm`` and whether the window MOVED it — the one fact the
+    run's lane is made of (the overnight drain, 21 Sep 2026). A timer that
+    ends inside the hours keeps its moment and the run keeps its lane; one
+    the window holds to the next opening makes the run cold, and the
+    walker then feeds it to the dialler only into the lines the plan's
+    numbers have free (capacity.py). A letter never comes through here, so
+    a letter never makes a run cold."""
+    if node.minutes:
+        wake = now + timedelta(minutes=node.minutes)
+    elif node.topics:
+        wake = max(run_ends_at, now) + _PAST_THE_END
+    else:
+        wake = now
+    if node.window is None:
+        return wake, False
+    opening = opens_at(wake, node.window)
+    return opening, opening != wake
+
+
 def alarm(node: WorkflowNode, now: datetime, run_ends_at: datetime) -> datetime:
     """PURE: a wait's alarm on arrival (minutes optional, ruled 17 Sep 2026).
     Two questions, composed rather than branched: HOW LONG, then WHEN THAT
@@ -73,10 +113,4 @@ def alarm(node: WorkflowNode, now: datetime, run_ends_at: datetime) -> datetime:
     life and acts at the next opening after it — it never fires on arrival
     just because the hours are open. Publish refuses a wait with none of
     minutes, window or topics."""
-    if node.minutes:
-        wake = now + timedelta(minutes=node.minutes)
-    elif node.topics:
-        wake = max(run_ends_at, now) + _PAST_THE_END
-    else:
-        wake = now
-    return opens_at(wake, node.window) if node.window else wake
+    return held_alarm(node, now, run_ends_at)[0]

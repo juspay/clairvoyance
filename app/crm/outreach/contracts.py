@@ -16,12 +16,14 @@ Logic-layer functions only, never accessors.
 """
 
 from app.crm.outreach.entry import consume_attributed_event
+from app.crm.outreach.progress import drain_progress_loop
 from app.crm.outreach.versions import template_references
 from app.crm.outreach.workers import claim_due_runs, walk_run
 
 __all__ = [
     "consume_attributed_event",
     "claim_due_runs",
+    "drain_progress_loop",
     "walk_run",
     "template_references",
 ]

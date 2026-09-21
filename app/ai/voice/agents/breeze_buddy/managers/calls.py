@@ -14,7 +14,7 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
 # the circular import via ``dispatch/__init__.py`` -> ``dispatch.worker`` ->
@@ -70,6 +70,7 @@ from app.database.accessor import (
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_recording_url,
+    update_lead_enrollment_id,
     update_telephony_number_status,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
@@ -530,6 +531,15 @@ async def _release_call_resources(lead: LeadCallTracker) -> None:
         await release_channel_token(telephony_number.id)
 
 
+def _workflow_meta(lead: LeadCallTracker) -> Dict[str, Any]:
+    """PURE: what a retry inherits from its parent's meta_data — the three
+    workflow keys, and only when the parent belongs to a run."""
+    if not lead.enrollment_id:
+        return {}
+    meta = lead.metaData or {}
+    return {k: meta[k] for k in ("workflow_id", "enrollment_id", "lane") if k in meta}
+
+
 async def _retry_call(
     lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
 ):
@@ -591,7 +601,13 @@ async def _retry_call(
             payload=lead.payload,
             attempt_count=lead.attempt_count + 1,
             request_id=lead.request_id,
-            meta_data={},
+            # A retry of a CRM workflow call is still that run's call: it
+            # keeps the run's id (so the run ending aborts it too) and the
+            # three keys the walker stamped — nothing else, since the rest
+            # of meta_data (a transfer's status, pre-check defers, a
+            # recorded outcome) describes the call that ended, not this
+            # one. {} for a lead that belongs to no run.
+            meta_data=_workflow_meta(lead),
             call_direction=lead.call_direction,  # Inherit call direction from parent lead
         )
 
@@ -607,6 +623,11 @@ async def _retry_call(
                 f"(attempt {lead.attempt_count + 1}); no retry scheduled"
             )
             return
+
+        # A retry of a CRM workflow call belongs to the same run, so the run
+        # ending aborts it too (outreach's cancel_queued_calls).
+        if lead.enrollment_id:
+            await update_lead_enrollment_id(retry_id, lead.enrollment_id)
 
         # Event-driven dispatch: ZADD the retry onto the schedule. Best-effort
         # — DB is authoritative; reconciler heals dropped ZADDs.

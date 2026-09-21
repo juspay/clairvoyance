@@ -24,7 +24,7 @@ from app.crm.outreach.schemas import (
     WorkflowEntryAt,
     WorkflowNode,
 )
-from app.crm.outreach.window import alarm
+from app.crm.outreach.window import held_alarm
 
 #: Where entry-side lines file themselves — the walker has its own.
 LOG_COMPONENT = "crm.outreach.entry"
@@ -82,16 +82,22 @@ def _admission(
     return True, "admitted"
 
 
-def _first_wake(start: WorkflowNode, now: datetime, max_age_days: float) -> datetime:
+def _first_wake(
+    start: WorkflowNode, now: datetime, max_age_days: float
+) -> Tuple[datetime, str]:
     """Arrival scheduling: the token arrives on the door's start square; a
     wait's alarm is window.alarm (its minutes, the window's next opening,
     or the end of the run's life), an action node's alarm is now (the
     canon 'enrolled = waiting with an immediate wake'). "Is it a wait?" is
     the registry's answer, never a type string — a listening first node
-    once fell through here and enrolled with a zero listening window."""
+    once fell through here and enrolled with a zero listening window.
+
+    With the alarm, the run's LANE (migration 077): cold when the start
+    square's window held the alarm to a later opening, hot otherwise."""
     if is_wait(start):
-        return alarm(start, now, now + timedelta(days=max_age_days))
-    return now
+        wake, held = held_alarm(start, now, now + timedelta(days=max_age_days))
+        return wake, "cold" if held else "hot"
+    return now, "hot"
 
 
 async def enrol(
@@ -210,6 +216,7 @@ async def _enrol_in_txn(
     await version_accessor.lock_templates_shared(
         txn, merchant_id, definition.send_templates()
     )
+    wake, lane = _first_wake(start, now, definition.exits.max_age_days)
     run = await enrollment_accessor.insert_enrollment(
         txn,
         merchant_id,
@@ -217,9 +224,10 @@ async def _enrol_in_txn(
         workflow.version,
         customer_id,
         door.start,
-        _first_wake(start, now, definition.exits.max_age_days),
+        wake,
         context,
         enrollment_key,
+        lane,
     )
     # No log here: "enrolled" is emitted by enrol() AFTER the atom commits,
     # or a failed commit would count a run that never existed.

@@ -73,11 +73,24 @@ def is_wait(node: WorkflowNode) -> bool:
     return NODE_TYPES[node.type].is_wait
 
 
+def awaits(node: WorkflowNode) -> bool:
+    """Does this square queue a call and then WAIT for that call's own
+    report (the overnight drain, 21 Sep 2026)? A call square with `await`
+    on — the default. It is the one square that both acts and waits: the
+    walker executes it on arrival, arms its backstop, and moves the token
+    only when the report lands (or the backstop fires, or a merchant
+    letter it lists supersedes the call). is_wait stays False — landing on
+    it is not yet waiting, the queue comes first — which is why this is
+    its own question rather than a fourth entry in the registry."""
+    return node.type == "call" and node.await_
+
+
 def listens(node: WorkflowNode) -> bool:
     """Does a letter wake this square? A wait that lists topics (ruled 17
     Sep 2026) — a property of the node, not of the word: the entry consumer
-    wakes it, and `match` belongs to it."""
-    return NODE_TYPES[node.type].is_wait and bool(node.topics)
+    wakes it, and `match` belongs to it. An awaiting call square listens
+    too: for its own report always, and for the merchant topics it lists."""
+    return bool(node.topics) and (NODE_TYPES[node.type].is_wait or awaits(node))
 
 
 def branches(node: WorkflowNode) -> bool:
@@ -86,4 +99,4 @@ def branches(node: WorkflowNode) -> bool:
     return NODE_TYPES[node.type].branches or listens(node)
 
 
-__all__ = ["NODE_TYPES", "NodeSpec", "branches", "is_wait", "listens"]
+__all__ = ["NODE_TYPES", "NodeSpec", "awaits", "branches", "is_wait", "listens"]

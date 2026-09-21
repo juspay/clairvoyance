@@ -33,7 +33,12 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
-from app.crm.outreach.nodes import listens
+from app.crm.outreach.nodes import awaits, listens
+from app.crm.outreach.nodes.call import (
+    CALL_COMPLETED,
+    awaiting_key,
+    cancel_queued_calls,
+)
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     LATEST_LETTER_KEY,
@@ -53,6 +58,7 @@ from app.crm.outreach.schemas import (
 )
 from app.crm.outreach.steps import as_rows, closing
 from app.crm.record.contracts import (
+    CALL_REPORT_SOURCES,
     RawEvent,
     canonical_path,
     derive_for,
@@ -239,6 +245,7 @@ async def _end_on_goal(
                 # would otherwise forge a log line (CWE-117).
                 f"run {run.id} exited {tier.exit_reason} on {event.topic!r}"
             )
+            await cancel_queued_calls(str(run.id), f"run exited: {tier.exit_reason}")
             return True
     return False
 
@@ -316,16 +323,9 @@ async def _wake_on_reply(
             run.merchant_id,
             str(run.id),
             node.id,
-            {
-                reply_key(node.id): answer,
-                LATEST_LETTER_KEY: node.id,
-                # The letter that beat the alarm (canon T26): left for the
-                # flush that follows, which records it as this square's
-                # cut_short_by and reads the visit as arrived_by = letter.
-                # A pointer into crm_event_raw, never a photocopy.
-                CUT_SHORT_BY_KEY: str(event.id),
-            },
+            _reply_patch(node, event, answer),
             facts,
+            lane=_lane_for(event),
         )
     # The run may be standing on a square that listens to NOTHING: the
     # door's start square before the walker's first visit (a condition, a
@@ -357,7 +357,35 @@ async def _wake_on_reply(
             # the reply path becomes context.facts.<square>, which run_facts
             # flattens into template variables (canon T26).
             cut_short_by=str(event.id),
+            lane=_lane_for(event),
         )
+
+
+def _reply_patch(node: WorkflowNode, event: RawEvent, answer: str) -> Dict[str, str]:
+    """PURE: what a heard letter writes on the run — its answer, the
+    pointer to the letter that beat the alarm (canon T26: left for the
+    flush that follows, which records it as this square's cut_short_by
+    and reads the visit as arrived_by = letter; a pointer into
+    crm_event_raw, never a photocopy), and, when the letter is the
+    producer's word, the pointer that makes its facts the latest
+    (latest_letter). Our own call reports (a call finished) answer their
+    square and keep their facts under it (facts.<square>, readable as
+    facts_<square>_<key>), but never take the pointer: they carry none of
+    the merchant's facts, so a follow-up call after a quiet customer would
+    be built from the founding letter alone — the offers the merchant sent
+    before the first call gone from the second."""
+    patch = {reply_key(node.id): answer, CUT_SHORT_BY_KEY: str(event.id)}
+    if event.source not in CALL_REPORT_SOURCES:
+        patch[LATEST_LETTER_KEY] = node.id
+    return patch
+
+
+def _lane_for(event: RawEvent) -> Optional[str]:
+    """PURE: the lane a heard letter writes (migration 077). A merchant's
+    letter makes the run hot — the customer acted now, whatever pile the
+    run was held in overnight. Our own call report says nothing about the
+    customer and leaves the lane alone (None)."""
+    return None if event.source in CALL_REPORT_SOURCES else "hot"
 
 
 def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
@@ -365,7 +393,20 @@ def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
     (phase 18)? The letter's field against the run's own id or a context
     field, as text (the goal-key precedent). No match word = every
     letter on the topic is hers; a letter without the field claims
-    nobody, so it is not hers either."""
+    nobody, so it is not hers either.
+
+    An awaiting call square asks its own question of its own report: the
+    call.completed whose lead_id is the lead it queued (awaiting_key),
+    never any other call of hers — a late report from an earlier visit,
+    after the backstop moved the square on, names a lead no square is
+    waiting for and wakes nothing. Its merchant topics are judged as any
+    listening square's."""
+    if awaits(node) and event.topic == CALL_COMPLETED:
+        claimed = event.payload.get("lead_id")
+        mine = run.context.get(awaiting_key(node.id))
+        return (
+            claimed not in (None, "") and mine is not None and str(claimed) == str(mine)
+        )
     if node.match is None:
         return True
     claimed = field_value(

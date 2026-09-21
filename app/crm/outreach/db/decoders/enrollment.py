@@ -16,6 +16,17 @@ from app.crm.outreach.schemas import (
 from app.crm.shared.decode import jsonb_value as _jsonb
 
 
+def _lane(row: Mapping[str, Any]) -> str:
+    """The lane (migration 077), or hot for a row read without the column —
+    a join that names its own columns predates the lane the way a run row
+    written before 077 defaults to it."""
+    try:
+        value = row["lane"]
+    except KeyError:
+        return "hot"
+    return str(value) if value else "hot"
+
+
 def decode_run(row: Mapping[str, Any]) -> EnrollmentRun:
     return EnrollmentRun(
         id=row["id"],
@@ -34,6 +45,7 @@ def decode_run(row: Mapping[str, Any]) -> EnrollmentRun:
         attempts=row["attempts"],
         last_error=row["last_error"],
         node_arrived_at=row["node_arrived_at"],
+        lane=_lane(row),
     )
 
 

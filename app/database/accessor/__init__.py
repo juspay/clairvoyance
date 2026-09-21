@@ -32,9 +32,14 @@ from .breeze_buddy.credentials import (
     update_credential,
 )
 from .breeze_buddy.lead_call_tracker import (
+    abort_queued_leads_by_enrollment,
     acquire_lock_on_lead_by_id,
     append_metadata_field,
+    cold_calls_since,
+    count_calls_holding_lines,
+    count_queued_leads_by_enrollment,
     create_lead_call_tracker,
+    create_lead_call_tracker_if_lines_free,
     defer_lead_next_attempt_and_release_lock,
     get_all_lead_call_trackers,
     get_call_facts_by_runs,
@@ -74,6 +79,7 @@ from .breeze_buddy.telephony_number import (
 from .breeze_buddy.template import (
     create_template,
     get_template_by_id,
+    get_template_ids_by_telephony_number,
     get_template_in_scope,
 )
 
@@ -86,6 +92,7 @@ __all__ = [
     "mask_phone",
     "create_template",
     "get_template_by_id",
+    "get_template_ids_by_telephony_number",
     "get_template_in_scope",
     "create_telephony_number",
     "get_telephony_number_by_id",
@@ -131,6 +138,11 @@ __all__ = [
     "get_lead_call_trackers_count",
     "get_leads_by_status_and_time_before",
     "handle_lead_abort",
+    "abort_queued_leads_by_enrollment",
+    "cold_calls_since",
+    "count_calls_holding_lines",
+    "count_queued_leads_by_enrollment",
+    "create_lead_call_tracker_if_lines_free",
     "create_credential",
     "get_credential_by_id",
     "get_credentials_by_merchant",

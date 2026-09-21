@@ -21,6 +21,7 @@ from app.crm.connectivity.contracts import (
 from app.crm.outreach.contracts import (
     claim_due_runs,
     consume_attributed_event,
+    drain_progress_loop,
     template_references,
     walk_run,
 )
@@ -66,15 +67,26 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         stop_event=stop_event,
         name="dispatcher",
     ),
-    "walker": lambda stop_event: run_drain_loop(
-        claim_due_runs,
-        walk_run,
-        interval=CRM_WORKER_INTERVAL,
-        batch=CRM_WORKER_BATCH,
-        stop_event=stop_event,
-        name="walker",
-    ),
+    # The walker carries the drain's progress line beside its loop (a
+    # reader on the same stop event; a no-op unless
+    # CRM_DRAIN_ALERT_INTERVAL_SECONDS is set on this pod).
+    "walker": lambda stop_event: _walker(stop_event),
 }
+
+
+async def _walker(stop_event: asyncio.Event) -> None:
+    await asyncio.gather(
+        run_drain_loop(
+            claim_due_runs,
+            walk_run,
+            interval=CRM_WORKER_INTERVAL,
+            batch=CRM_WORKER_BATCH,
+            stop_event=stop_event,
+            name="walker",
+        ),
+        drain_progress_loop(stop_event),
+    )
+
 
 _task: Optional[asyncio.Task] = None
 _stop_event: Optional[asyncio.Event] = None

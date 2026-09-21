@@ -72,9 +72,14 @@ class _Claim:
         self.runs = runs
         self.leases: List[int] = []
 
-    async def claim_due_runs(self, limit: int, lease: int) -> List[EnrollmentRun]:
+    async def claim_due_runs(
+        self, limit: int, lease: int, lane: str = "hot", **plan: Any
+    ) -> List[EnrollmentRun]:
         self.leases.append(lease)
-        return self.runs[:limit]
+        return self.runs[:limit] if lane == "hot" else []
+
+    async def due_cold_plans(self) -> List[Tuple[str, str]]:
+        return []
 
 
 def _run(
@@ -413,6 +418,7 @@ class _Admits:
         wake_at: datetime,
         context: Dict[str, Any],
         enrollment_key: str,
+        lane: str = "hot",
     ) -> Any:
         return SimpleNamespace(id=uuid4(), current_node=current_node)
 

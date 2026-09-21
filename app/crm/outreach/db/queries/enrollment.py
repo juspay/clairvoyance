@@ -18,7 +18,7 @@ from app.crm.outreach.schemas import SPLIT_PREFIX
 _RUN_COLUMNS = """
     id, merchant_id, workflow_id, workflow_version, customer_id, status,
     current_node, wake_at, entered_at, exited_at, exit_reason, context,
-    enrollment_key, attempts, last_error, node_arrived_at
+    enrollment_key, attempts, last_error, node_arrived_at, lane
 """
 
 # --- the T26 flush (canon T26, migration 073) ------------------------------
@@ -122,6 +122,7 @@ def insert_enrollment_query(
     wake_at: datetime,
     context: Dict[str, Any],
     enrollment_key: str,
+    lane: str = "hot",
 ) -> Tuple[str, List[Any]]:
     """The token is born. The partial unique (merchant, workflow, key)
     WHERE not exited absorbs the enrol race — a UniqueViolation here
@@ -137,8 +138,8 @@ def insert_enrollment_query(
         INSERT INTO {ENROLLMENT_TABLE}
             (merchant_id, workflow_id, workflow_version, customer_id,
              current_node, wake_at, context, enrollment_key,
-             entered_at, node_arrived_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
+             entered_at, node_arrived_at, lane)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now(), $9)
         RETURNING {_RUN_COLUMNS}
     """
     return query, [
@@ -150,6 +151,7 @@ def insert_enrollment_query(
         wake_at,
         json.dumps(context),
         enrollment_key,
+        lane,
     ]
 
 
@@ -200,14 +202,34 @@ def source_event_used_query(
     return query, [merchant_id, workflow_id, customer_id, source_event_id]
 
 
-def claim_due_runs_query(limit: int, lease_seconds: int) -> Tuple[str, List[Any]]:
+def claim_due_runs_query(
+    limit: int,
+    lease_seconds: int,
+    lane: str = "hot",
+    merchant_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
     """The walker's claim — canon T20: wake_at is the timer AND the lease.
     One statement: lock due tokens (SKIP LOCKED — replicas never collide),
     push wake_at one lease window (a dead worker's row self-heals when the
     clock passes again; no reaper), and count the claim against the run
     (attempts++ BY the claim — a poison run that crashes its worker counts
     against itself). A paused plan's rows are skipped, not claimed (canon
-    T19: "the sweeper skips its rows"), so a pause never burns attempts."""
+    T19: "the sweeper skips its rows"), so a pause never burns attempts.
+
+    One LANE per statement (migration 077): the walker claims hot runs
+    first, unbounded, then cold runs plan by plan into the lines that
+    plan's numbers have free (outreach/capacity.py) — so a plan's rows are
+    named when the lane is cold."""
+    plan = ""
+    values: List[Any] = [limit, lease_seconds, lane]
+    if workflow_id is not None:
+        plan = "AND e.merchant_id = $4 AND e.workflow_id = $5"
+        values += [merchant_id, workflow_id]
+    # Hot: by alarm. Cold: by ARRIVAL at the held square — the whole pile
+    # shares one wake_at (the opening), and the customer held at 21:05 is
+    # dialled before the one held at 06:00 (cold_pile_ix, 077).
+    order = "node_arrived_at, id" if lane == "cold" else "wake_at, id"
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET wake_at = now() + make_interval(secs => $2),
@@ -215,18 +237,48 @@ def claim_due_runs_query(limit: int, lease_seconds: int) -> Tuple[str, List[Any]
         WHERE id IN (
             SELECT e.id FROM {ENROLLMENT_TABLE} e
             WHERE e.status = 'waiting' AND e.wake_at <= now()
+              AND e.lane = $3 {plan}
               AND NOT EXISTS (
                   SELECT 1 FROM {WORKFLOW_TABLE} w
                   WHERE w.merchant_id = e.merchant_id AND w.id = e.workflow_id
                     AND w.status = 'paused'
               )
-            ORDER BY wake_at, id
+            ORDER BY {order}
             LIMIT $1
             FOR UPDATE SKIP LOCKED
         )
         RETURNING {_RUN_COLUMNS}
     """
-    return query, [limit, lease_seconds]
+    return query, values
+
+
+def cold_pile_by_merchant_query() -> Tuple[str, List[Any]]:
+    """The drain's progress line: per merchant, cold runs due and not yet
+    claimed — the pile still to feed."""
+    query = f"""
+        SELECT merchant_id, count(*)::int AS waiting
+        FROM {ENROLLMENT_TABLE}
+        WHERE lane = 'cold' AND status = 'waiting' AND wake_at <= now()
+        GROUP BY merchant_id
+    """
+    return query, []
+
+
+def due_cold_plans_query() -> Tuple[str, List[Any]]:
+    """Which plans have cold runs due right now — the walker's second claim
+    goes plan by plan, each into its own numbers' free lines. Paused plans
+    are left out here as the claim leaves them out."""
+    query = f"""
+        SELECT DISTINCT e.merchant_id, e.workflow_id
+        FROM {ENROLLMENT_TABLE} e
+        WHERE e.status = 'waiting' AND e.wake_at <= now() AND e.lane = 'cold'
+          AND NOT EXISTS (
+              SELECT 1 FROM {WORKFLOW_TABLE} w
+              WHERE w.merchant_id = e.merchant_id AND w.id = e.workflow_id
+                AND w.status = 'paused'
+          )
+    """
+    return query, []
 
 
 def advance_run_query(
@@ -237,6 +289,7 @@ def advance_run_query(
     leased_wake_at: datetime,
     node_arrived_at: Optional[datetime] = None,
     steps: Optional[List[Dict[str, Any]]] = None,
+    lane: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """A successful step: move the token, set its next alarm, reset the
     failure counter (only CONSECUTIVE failures park a run), and flush the
@@ -252,12 +305,18 @@ def advance_run_query(
     this with its OWN node id (trap 1), and restamping there would write a
     zero-length step and reset the clock — "waiting since Friday" would
     render as "waiting since 9am". The walker passes None for a hold, and
-    an empty ``steps`` with it."""
+    an empty ``steps`` with it.
+
+    ``lane`` (migration 077) is COALESCEd the same way: a window that held
+    the alarm passes 'cold'; every other move passes None and the run keeps
+    the lane it has — a cold run's own later timers keep it cold, and only
+    a merchant letter (resume / refresh) makes it hot again."""
     query = f"""
         WITH moved AS (
             UPDATE {ENROLLMENT_TABLE}
             SET current_node = $2, wake_at = $3, context = $4::jsonb,
                 node_arrived_at = COALESCE($5::timestamptz, node_arrived_at),
+                lane = COALESCE($8, lane),
                 attempts = 0, last_error = NULL
             WHERE id = $1 AND status = 'waiting' AND wake_at = $6
             RETURNING id, merchant_id, workflow_id, workflow_version
@@ -273,6 +332,7 @@ def advance_run_query(
         node_arrived_at,
         leased_wake_at,
         json.dumps(steps or []),
+        lane,
     ]
 
 
@@ -375,6 +435,7 @@ def resume_run_by_id_query(
     node_id: str,
     context_patch: Dict[str, Any],
     facts: Optional[Dict[str, Any]] = None,
+    lane: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """W5: the reply reaches the token — by run id (phase 13), because
     the listening square is the RUN'S version's, and a sibling run on
@@ -394,7 +455,11 @@ def resume_run_by_id_query(
     parked run that hears it is no longer stuck on the thing that parked
     it — it becomes waiting with its failure counter forgiven (the human
     resume's semantics, now event-driven) and, as for any reply, its
-    last_error cleared: the letter IS the step that unstuck it."""
+    last_error cleared: the letter IS the step that unstuck it.
+
+    ``lane`` (migration 077): a merchant's letter passes 'hot' — the
+    customer acted now, so a run held overnight is no longer part of the
+    pile; our own call report passes None and leaves the lane alone."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET context = context || $4::jsonb
@@ -402,6 +467,7 @@ def resume_run_by_id_query(
                        CASE WHEN jsonb_typeof(context->'facts') = 'object' THEN context->'facts' ELSE '{{}}'::jsonb END
                        || jsonb_build_object($3::text, $5::jsonb)),
             wake_at = now(),
+            lane = COALESCE($6, lane),
             last_error = NULL,
             status = 'waiting',
             attempts = CASE WHEN status = 'parked' THEN 0 ELSE attempts END
@@ -415,6 +481,7 @@ def resume_run_by_id_query(
         node_id,
         json.dumps(context_patch),
         json.dumps(facts or {}),
+        lane,
     ]
 
 
@@ -424,6 +491,7 @@ def refresh_run_facts_query(
     node_id: str,
     facts: Dict[str, Any],
     cut_short_by: Optional[str] = None,
+    lane: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """A letter that finds the run on a square that listens to NOTHING —
     the door's start square before the walker's first visit, or an
@@ -440,16 +508,20 @@ def refresh_run_facts_query(
     level, deliberately not folded into ``facts``: on the reply path the
     same-shaped dict becomes ``context.facts.<square>``, and ``run_facts``
     flattens that namespace into template variables — a marker that drifted
-    in there would ride into a customer's message. It stays here."""
+    in there would ride into a customer's message. It stays here.
+
+    ``lane`` (migration 077) as on the reply path: a merchant's letter
+    passes 'hot', our own call report None."""
     marker = ""
-    params: List[Any] = [merchant_id, run_id, node_id, json.dumps(facts)]
+    params: List[Any] = [merchant_id, run_id, node_id, json.dumps(facts), lane]
     if cut_short_by:
-        marker = "|| jsonb_build_object('cut_short_by', $5::text)"
+        marker = "|| jsonb_build_object('cut_short_by', $6::text)"
         params.append(cut_short_by)
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET context = context || $4::jsonb {marker},
             wake_at = now(),
+            lane = COALESCE($5, lane),
             last_error = NULL,
             status = 'waiting',
             attempts = CASE WHEN status = 'parked' THEN 0 ELSE attempts END
