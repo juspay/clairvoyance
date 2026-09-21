@@ -362,7 +362,15 @@ class CreateTelephonyNumberRequest(BaseModel):
     number: str
     provider: CallProvider
     status: TelephonyNumberStatus = TelephonyNumberStatus.AVAILABLE
-    maximum_channels: Optional[int] = None
+    maximum_channels: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Maximum concurrent channels. Omitted from the INSERT when unset "
+            "so migration 076's DEFAULT applies; the same migration's CHECK "
+            "makes a negative value an opaque 400 without this guard."
+        ),
+    )
     reseller_id: Optional[str] = None
     merchant_id: Optional[str] = None
     shared_pool: bool = False
@@ -377,7 +385,15 @@ class UpdateTelephonyNumberRequest(BaseModel):
     """
 
     status: Optional[TelephonyNumberStatus] = None
-    maximum_channels: Optional[int] = None
+    maximum_channels: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Maximum concurrent channels. Migration 076 added a CHECK "
+            "(maximum_channels >= 0), so a negative value would otherwise "
+            "surface as an opaque 400 from the accessor."
+        ),
+    )
     reseller_id: Optional[str] = None
     merchant_id: Optional[str] = None
     clear_ownership: bool = False

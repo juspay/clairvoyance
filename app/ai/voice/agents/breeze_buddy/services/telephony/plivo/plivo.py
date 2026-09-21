@@ -21,6 +21,7 @@ from app.core.config.static import (
     PLIVO_AUTH_TOKEN,
 )
 from app.core.logger import logger
+from app.database.accessor import increment_telephony_number_channels
 from app.schemas import CallProvider, TelephonyConfig
 
 
@@ -234,3 +235,32 @@ async def handle_mpc_transfer_webhook(params: dict) -> None:
                 outcome_channel,
                 {"status": "unavailable"},
             )
+
+
+async def admit_plivo_inbound_call(telephony_number_id: str) -> bool:
+    """Take one channel for an inbound Plivo call.
+
+    Same gate outbound uses in ``_acquire_number``: the atomic
+    ``channels = channels + 1 WHERE channels < maximum_channels`` update, which
+    returns no row when the number is already at its ceiling. Both directions
+    therefore share one counter, so an inbound call genuinely reduces what
+    outbound can dial and vice versa.
+
+    Returns False when at capacity — and also when the UPDATE itself failed,
+    because the accessor collapses both into None. That makes inbound
+    admission fail *closed* on a DB outage, matching outbound (where the
+    worker simply defers the lead). The visible difference is that an inbound
+    caller hears the busy message instead of waiting invisibly in a queue.
+
+    Not idempotent per call, and deliberately so. A provider that retries a
+    slow answer webhook is mostly absorbed upstream: ``resolve_call_templates``
+    looks the call up by ``call_id`` first, finds the lead the earlier attempt
+    created, and routes the retry down the outbound branch, which never reaches
+    this gate. The residual window is a retry that lands before that first
+    insert commits -- both attempts see no lead, both increment, and one
+    channel is held by a lead nobody will ever close until
+    ``reconcile_stuck_processing_leads`` sweeps it. Closing that properly needs
+    a uniqueness guarantee on inbound ``call_id`` (the column has a plain,
+    non-unique index today), which is a bigger change than this gate.
+    """
+    return await increment_telephony_number_channels(telephony_number_id) is not None

@@ -40,6 +40,9 @@ from starlette.responses import HTMLResponse
 # Imported for its side effect: installs the CRM lead-lifecycle taps
 # (stamp + call.inbound mirror fire from the created hook) in this process.
 from app.ai.voice.agents.breeze_buddy import crm_mirror  # noqa: F401
+from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    raise_inbound_capacity_rejected,
+)
 from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     IVR_CONFIG_CACHE_PREFIX,
     IVR_CONFIG_CACHE_TTL,
@@ -50,9 +53,13 @@ from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_allocate_pod,
 )
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    CAPACITY_REJECTED_OUTCOME,
     check_inbound_policy,
     log_blocked_call,
     set_block_redirect,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
+    admit_plivo_inbound_call,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     start_call_recording,
@@ -85,8 +92,10 @@ from app.schemas import (
     IVR_OPTIONS_TEMPLATE,
     UNKNOWN_TEMPLATE,
     CallDirection,
+    CallProvider,
     InboundBlockAction,
     LeadCallStatus,
+    TelephonyNumber,
 )
 from app.services.redis.client import get_redis_service
 
@@ -132,6 +141,12 @@ async def resolve_call_templates(
             error_status: int              (HTTP status code)
     """
     # Check if lead exists (outbound call)
+    #
+    # Existence alone, with no status check — so a rejected call's own
+    # terminal row counts too, and a provider retrying that answer would take
+    # the outbound branch and connect without passing the capacity gate.
+    # Unlikely (the rejection returns 200 fast), and what a re-answered
+    # terminal call should mean is a policy question, not a gate one.
     with timed_phase("lookup_lead"):
         lead = await get_lead_by_call_id(call_sid)
     if lead:
@@ -233,6 +248,9 @@ async def resolve_call_templates(
         "ivr_greeting": ivr_greeting,
         "ivr_goodbye": ivr_goodbye,
         "reseller_id": first_template.reseller_id if first_template else None,
+        # Returned so the gate and the release key off the same row, and
+        # therefore the same provider, without a second lookup.
+        "telephony_number": telephony_number,
     }
 
 
@@ -384,6 +402,12 @@ def _build_block_response(
 
     Note: Exotel is handled upstream via Redis + WS disconnect flow and should
     never reach this function.
+
+    The reject branch answers the call and then hangs up, which is billable.
+    The cheaper ``<PreAnswer><Speak/></PreAnswer><Hangup reason="busy"/>`` is
+    not billed, but the call is never answered, so the message rides as early
+    media — which plenty of carriers strip. Delivering the message is the whole
+    point of this response, so we pay for the answered leg.
     """
     tts_message = (
         message
@@ -417,11 +441,16 @@ def _build_block_response(
     )
 
 
+_INBOUND_CAPACITY_MESSAGE = (
+    "Sorry, all our agents are currently busy. Please try again later."
+)
+
+
 async def _create_inbound_lead_in_answer_handler(
     call_id: str,
     from_number: str,
     templates: list,
-) -> None:
+) -> bool:
     """Create an inbound lead in the answer handler before returning XML.
 
     This ensures the lead exists in the database even if the caller hangs
@@ -432,10 +461,15 @@ async def _create_inbound_lead_in_answer_handler(
     later in the WebSocket handler if the user chooses a different one.
 
     Errors are swallowed — the answer response must not be blocked by a
-    DB write failure.
+    DB write failure. The boolean is reported, not raised, purely so the
+    Plivo capacity gate can hand its channel back: without a PROCESSING row
+    there is nothing for the call-end callbacks or
+    ``reconcile_stuck_processing_leads`` to decrement, so a silently failed
+    insert would strand that channel forever. Callers that did not take a
+    channel can ignore the result, exactly as before.
     """
     if not templates:
-        return
+        return False
 
     first_template = templates[0]
     is_ivr_mode = len(templates) > 1
@@ -468,11 +502,12 @@ async def _create_inbound_lead_in_answer_handler(
             call_direction=CallDirection.INBOUND,
         )
         if created_lead is None:
+            # The accessor logs and returns None rather than raising.
             logger.error(
                 f"[Answer] Inbound lead insert returned no row for call_id "
                 f"{call_id} — skipping CRM mirror (no lead to reference)"
             )
-            return
+            return False
         logger.info(f"[Answer] Created inbound lead {lead_id} for call_id {call_id}")
 
         # CRM stamp + call.inbound mirror both fire from the created-lead
@@ -480,10 +515,12 @@ async def _create_inbound_lead_in_answer_handler(
         # task so the event is born with its customer_id — a mirror
         # spawned here would race the stamp and record NULL. The answer
         # response still never waits on CRM work.
+        return True
     except Exception as e:
         logger.error(
             f"[Answer] Failed to create inbound lead for call_id {call_id}: {e}"
         )
+        return False
 
 
 async def _build_provider_response(
@@ -662,6 +699,170 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
         return await _handle_provider_answer(request, provider)
 
 
+async def _refuse_inbound_call(
+    provider: str,
+    call_id: str,
+    from_number: str,
+    to_number: str,
+    templates: list,
+    block_message: Optional[str],
+    block_action: Optional[InboundBlockAction],
+    block_redirect: Optional[str],
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
+    tag: str,
+) -> Response:
+    """Turn a refused inbound call into a provider response.
+
+    One place for every refusal — policy blocks and capacity rejections alike
+    — so the three providers are handled identically whatever the reason.
+    """
+    is_redirect = block_action == InboundBlockAction.REDIRECT and block_redirect
+
+    if provider == "exotel":
+        # Exotel only accepts {"url": "wss://..."} at answer-time. For both
+        # REDIRECT and REJECT: accept the call, store block info in Redis. The
+        # WS agent plays the message then closes. For REDIRECT, Exotel applet →
+        # /dial-up → redirect. For REJECT, /dial-up returns 404 → call ends.
+        await set_block_redirect(
+            call_sid=call_id,
+            redirect_number=block_redirect or "",
+            message=block_message,
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
+        )
+        ws_url = _build_websocket_url(
+            provider,
+            str(templates[0].id) if templates else "block",
+            from_number,
+            to_number,
+        )
+        action_label = (
+            f"redirect to {block_redirect}"
+            if is_redirect
+            else "reject (play message then hang up)"
+        )
+        logger.info(
+            f"[{tag}] Exotel block: accepting call {call_id}, "
+            f"{action_label} via WS disconnect"
+        )
+        return _build_json_response(ws_url)
+
+    elif provider == "plivo":
+        # Plivo handles both REDIRECT (Dial XML) and REJECT (Hangup XML)
+        return _build_block_response(
+            provider,
+            block_message,
+            block_action,
+            block_redirect,
+        )
+    else:
+        # TODO: Twilio block handling not yet implemented
+        return _build_block_response(
+            provider,
+            block_message,
+            block_action,
+            block_redirect,
+        )
+
+
+def _gated_plivo_number(provider: str, result: dict) -> Optional[TelephonyNumber]:
+    """The number whose channel this inbound call consumes, or None.
+
+    Only Plivo inbound is gated, so this is also the answer to "do we owe a
+    channel back". Both the gate and the failed-insert path key off it, so the
+    rule lives in one place.
+    """
+    number = result.get("telephony_number")
+    if provider != "plivo" or number is None or number.provider != CallProvider.PLIVO:
+        return None
+    return number
+
+
+async def _gate_inbound_channel(
+    provider: str,
+    call_id: str,
+    from_number: str,
+    to_number: str,
+    result: dict,
+    tag: str,
+) -> Optional[Response]:
+    """Take a channel for an inbound Plivo call.
+
+    Returns the response to send the caller when there is no free channel, or
+    None when the call may proceed — either because it was admitted or because
+    this number is not gated.
+
+    Runs after policy, so a blacklisted or out-of-hours caller never consumes a
+    channel and capacity rejections stay separable from policy blocks in
+    analytics. Runs before the lead insert, so a rejected call leaves exactly
+    one terminal row rather than a PROCESSING row to close.
+    """
+    telephony_number = _gated_plivo_number(provider, result)
+    if telephony_number is None:
+        return None
+
+    with timed_phase("acquire_inbound_channel"):
+        admitted = await admit_plivo_inbound_call(str(telephony_number.id))
+
+    if admitted:
+        return None
+
+    logger.info(
+        f"[{tag}] No free channel on {telephony_number.number} "
+        f"for call {call_id}; rejecting as busy"
+    )
+
+    # Owner fields come off the same post-policy template list the lead would
+    # have been created from, so the rejected row lands in the same analytics
+    # scope as a served call.
+    allowed = result.get("templates") or []
+    first = allowed[0] if allowed else None
+
+    spawn_background_task(
+        log_blocked_call(
+            call_id=call_id,
+            from_number=from_number,
+            to_number=to_number,
+            provider=provider,
+            reseller_id=first.reseller_id if first else "",
+            merchant_id=first.merchant_id if first else None,
+            template_name=first.name if first else UNKNOWN_TEMPLATE,
+            template_id=str(first.id) if first else None,
+            telephony_number_id=str(telephony_number.id),
+            block_action=None,
+            block_reason="channel_capacity_exhausted",
+            block_message=_INBOUND_CAPACITY_MESSAGE,
+            outcome=CAPACITY_REJECTED_OUTCOME,
+        ),
+        name=f"log-capacity-rejection:{call_id}",
+    )
+    spawn_background_task(
+        raise_inbound_capacity_rejected(
+            telephony_number_id=str(telephony_number.id),
+            number=telephony_number.number,
+            reseller_id=first.reseller_id if first else None,
+            merchant_id=first.merchant_id if first else None,
+            maximum_channels=telephony_number.maximum_channels,
+        ),
+        name=f"alert-capacity-rejection:{call_id}",
+    )
+
+    return await _refuse_inbound_call(
+        provider=provider,
+        call_id=call_id,
+        from_number=from_number,
+        to_number=to_number,
+        templates=allowed,
+        block_message=_INBOUND_CAPACITY_MESSAGE,
+        block_action=InboundBlockAction.REJECT,
+        block_redirect=None,
+        reseller_id=first.reseller_id if first else None,
+        merchant_id=first.merchant_id if first else None,
+        tag=tag,
+    )
+
+
 async def _handle_provider_answer(request: Request, provider: str) -> Response:
     """
     Unified answer handler for all telephony providers (Exotel, Plivo).
@@ -767,10 +968,6 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
                 block_redirect = (
                     last_block_result.redirect_number if last_block_result else None
                 )
-                is_redirect = (
-                    block_action == InboundBlockAction.REDIRECT and block_redirect
-                )
-
                 block_message = last_block_result.message if last_block_result else None
 
                 # Fire-and-forget: log blocked call to lead_call_tracker
@@ -800,51 +997,19 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
                     )
                 )
 
-                if provider == "exotel":
-                    # Exotel only accepts {"url": "wss://..."} at answer-time.
-                    # For both REDIRECT and REJECT: accept the call, store block
-                    # info in Redis. The WS agent plays the block message then
-                    # closes. For REDIRECT, Exotel applet → /dial-up → redirect.
-                    # For REJECT, /dial-up returns 404 → call ends.
-                    await set_block_redirect(
-                        call_sid=call_id,
-                        redirect_number=block_redirect or "",
-                        message=block_message,
-                        reseller_id=reseller_id,
-                        merchant_id=merchant_id,
-                    )
-                    ws_url = _build_websocket_url(
-                        provider,
-                        str(templates[0].id) if templates else "block",
-                        from_number,
-                        to_number,
-                    )
-                    action_label = (
-                        f"redirect to {block_redirect}"
-                        if is_redirect
-                        else "reject (play message then hang up)"
-                    )
-                    logger.info(
-                        f"[{tag}] Exotel block: accepting call {call_id}, "
-                        f"{action_label} via WS disconnect"
-                    )
-                    return _build_json_response(ws_url)
-                elif provider == "plivo":
-                    # Plivo handles both REDIRECT (Dial XML) and REJECT (Hangup XML)
-                    return _build_block_response(
-                        provider,
-                        block_message,
-                        block_action,
-                        block_redirect,
-                    )
-                else:
-                    # TODO: Twilio block handling not yet implemented
-                    return _build_block_response(
-                        provider,
-                        block_message,
-                        block_action,
-                        block_redirect,
-                    )
+                return await _refuse_inbound_call(
+                    provider=provider,
+                    call_id=call_id,
+                    from_number=from_number,
+                    to_number=to_number,
+                    templates=templates,
+                    block_message=block_message,
+                    block_action=block_action,
+                    block_redirect=block_redirect,
+                    reseller_id=reseller_id,
+                    merchant_id=merchant_id,
+                    tag=tag,
+                )
 
             # Update result with filtered templates
             if len(allowed_templates) != len(templates):
@@ -853,14 +1018,46 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
                     {"id": str(t.id), "name": t.name} for t in allowed_templates
                 ]
 
+        refusal = await _gate_inbound_channel(
+            provider, call_id, from_number, to_number, result, tag
+        )
+        if refusal is not None:
+            return refusal
+
         # Create inbound lead early so it exists even if caller hangs up before
         # the WebSocket connects. This prevents orphan-call webhooks for normal
         # immediate-hangup behaviour.
+        #
+        # The lead is created PROCESSING, which is what the release side keys
+        # on: whichever callback moves it off PROCESSING returns the channel.
         with timed_phase("create_inbound_lead"):
-            await _create_inbound_lead_in_answer_handler(
+            lead_created = await _create_inbound_lead_in_answer_handler(
                 call_id=call_id,
                 from_number=from_number,
                 templates=result.get("templates", []),
+            )
+
+        # Deliberately NOT refunding. This request does not end the call: it
+        # falls through to the provider response, the caller connects, and the
+        # websocket creates its own PROCESSING lead on this number
+        # (agent/inbound.py::create_lead_from_template_id) which releases the
+        # channel at call end. Refunding here would make that a second release
+        # for one acquire — an under-count, which over-admits.
+        #
+        # The exception is a caller who hangs up before the stream opens:
+        # that channel is a KNOWN, PERMANENT leak. Nothing repairs it (no row
+        # to sweep, nothing recomputes the column, update_telephony_number()
+        # cannot set it), so it needs a manual UPDATE. Refunding to cover it
+        # would cost a channel on every ordinary failed insert instead.
+        gated = _gated_plivo_number(provider, result)
+        if gated is not None and not lead_created:
+            logger.error(
+                f"[{tag}] Inbound lead insert failed for call {call_id} after "
+                f"taking a channel on {gated.id}. Not refunding: the "
+                "websocket creates its own PROCESSING lead which will own and "
+                "release it. If the caller hangs up before the stream opens, "
+                "this channel is leaked permanently and needs a manual "
+                "UPDATE on telephony_numbers.channels."
             )
 
     with timed_phase("build_response"):

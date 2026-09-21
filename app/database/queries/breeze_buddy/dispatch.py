@@ -12,6 +12,9 @@ from typing import Any, List, Tuple
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     LEAD_CALL_TRACKER_TABLE,
 )
+from app.database.queries.breeze_buddy.telephony_number import (
+    TELEPHONY_NUMBER_TABLE,
+)
 
 
 def get_unscheduled_backlog_leads_query(
@@ -38,19 +41,48 @@ def get_unscheduled_backlog_leads_query(
 
 def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
     """
-    For ``reconcile_channel_tokens``: how many calls are PROCESSING right
-    now for each telephony number? The reconciler compares this against
+    For ``reconcile_channel_tokens``: how many calls are HOLDING A CHANNEL on
+    each telephony number right now? The reconciler compares this against
     LLEN of the channel LIST and tops up or trims to maintain
     ``M - in_flight == LLEN``.
+
+    "Holding a channel" is not the same as "is a live call", and the
+    difference is the whole reason this query joins. It must return exactly
+    the set of leads that ``managers.calls._releases_capacity`` will hand a
+    channel back for — the two are a matched pair, and any disagreement
+    silently miscounts free capacity:
+
+    - OUTBOUND: took one in ``_acquire_number`` before dialling, for every
+      dispatchable execution mode.
+    - INBOUND: only Plivo takes one (``admit_plivo_inbound_call``). Exotel
+      and Twilio inbound are ungated, so counting them would shrink the token
+      stock for channels nobody actually took.
+
+    Counting inbound at all is the fix for the churn this query used to
+    cause: while inbound held channels, it reported 0 in-flight, the
+    reconciler stocked Redis with M tokens for 0 free channels, and every
+    outbound worker burned a token-acquire plus a DB round trip to be denied
+    by ``_acquire_number`` and defer. Correct, but a hot loop precisely when
+    the number was busiest. With inbound counted, the tokens are never minted
+    and workers park on BLPOP instead.
     """
     text = f"""
-        SELECT "telephony_number_id", COUNT(*) AS in_flight
-        FROM "{LEAD_CALL_TRACKER_TABLE}"
-        WHERE "status" = 'PROCESSING'
-          AND "telephony_number_id" IS NOT NULL
-          AND "call_direction" = 'OUTBOUND'
-          AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
-        GROUP BY "telephony_number_id";
+        SELECT l."telephony_number_id", COUNT(*) AS in_flight
+        FROM "{LEAD_CALL_TRACKER_TABLE}" l
+        JOIN "{TELEPHONY_NUMBER_TABLE}" n ON n."id" = l."telephony_number_id"
+        WHERE l."status" = 'PROCESSING'
+          AND l."telephony_number_id" IS NOT NULL
+          AND (
+               (
+                    l."call_direction" = 'OUTBOUND'
+                AND l."execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+               )
+            OR (
+                    l."call_direction" = 'INBOUND'
+                AND n."provider" = 'PLIVO'
+               )
+          )
+        GROUP BY l."telephony_number_id";
     """
     return text, []
 

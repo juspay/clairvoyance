@@ -37,6 +37,11 @@ DEFAULT_TIMEZONE = "Asia/Kolkata"
 BLOCK_REDIRECT_PREFIX = "inbound_block_redirect:"
 BLOCK_REDIRECT_TTL = 120  # 2 minutes — enough for WS to connect
 
+# Inbound calls turned away for lack of a free channel. Distinct from
+# BLOCKED_* — that is a merchant policy decision, this is under-provisioning
+# we own. Lives here so call-completion code need not import the API layer.
+CAPACITY_REJECTED_OUTCOME = "CAPACITY_REJECTED"
+
 
 @dataclass
 class PolicyResult:
@@ -231,6 +236,7 @@ async def log_blocked_call(
     block_reason: Optional[str],
     block_message: Optional[str] = None,
     redirect_number: Optional[str] = None,
+    outcome: Optional[str] = None,
 ) -> None:
     """
     Log a blocked inbound call to lead_call_tracker.
@@ -238,11 +244,13 @@ async def log_blocked_call(
     Fire-and-forget: callers should wrap this in asyncio.create_task().
     Fails silently — never breaks call blocking behavior.
 
-    Outcome is set to BLOCKED_REJECT or BLOCKED_REDIRECT based on block_action.
-    Status is set to FINISHED since blocked calls are terminal.
+    Outcome defaults to BLOCKED_REJECT or BLOCKED_REDIRECT based on
+    block_action; pass ``outcome`` to record a non-policy refusal such as
+    CAPACITY_REJECTED. Status is set to FINISHED since blocked calls are
+    terminal.
     """
     try:
-        outcome = (
+        outcome = outcome or (
             "BLOCKED_REDIRECT"
             if block_action == InboundBlockAction.REDIRECT and redirect_number
             else "BLOCKED_REJECT"
