@@ -538,11 +538,11 @@ class WorkflowSummary(BaseModel):
     created_by: Optional[str]
     created_at: datetime
     updated_at: datetime
-    # Drift observability (event-catalog.md §Seen vs matched): events on
-    # the entry topic vs runs started, last 7 days — computed on read.
+    # The first door's topic, read off the stored document — the list's
+    # "Starts on …" line. Nothing on this shape is computed on read (the
+    # week's seen/matched counts were, and cost a 23 s scan per list open
+    # for Flipkart on 21 Sep 2026).
     entry_topic: Optional[str] = None
-    seen_7d: int = 0
-    matched_7d: int = 0
 
 
 class Workflow(WorkflowSummary):
@@ -675,6 +675,15 @@ class RunAnchor(BaseModel):
 
     entered_at: datetime
     id: UUID
+
+
+class WorkflowPage(BaseModel):
+    """One page of a merchant's plans and how many there are in all. The
+    total travels in the body, typed — the RunPage ruling: never in a
+    header a cross-origin page reads as null."""
+
+    items: List[WorkflowSummary]
+    total: int
 
 
 class RunPage(BaseModel):

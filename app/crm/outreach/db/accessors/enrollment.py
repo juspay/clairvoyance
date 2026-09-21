@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
+from app.core.config.static import CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
 from app.crm.outreach.db.decoders.enrollment import (
     decode_customer_run,
     decode_run,
@@ -22,7 +23,6 @@ from app.crm.outreach.db.queries.enrollment import (
     claim_due_runs_query,
     count_runs_query,
     customer_runs_query,
-    enrollment_counts_query,
     exit_run_query,
     get_run_query,
     insert_enrollment_query,
@@ -407,7 +407,11 @@ async def run_endings_in_window(
     """One RunEnding per run of the plan that entered in the window."""
     query, values = run_endings_in_window_query(merchant_id, workflow_id, since, until)
     async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
+        # Bounded like the lead reads it feeds: a report the browser gave
+        # up on must not keep running (asyncpg cancels on timeout).
+        rows = await conn.fetch(
+            query, *values, timeout=CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
+        )
     return [
         RunEnding(
             str(row["id"]),
@@ -472,12 +476,3 @@ async def customer_runs(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_customer_run(row) for row in rows]
-
-
-async def enrollment_counts(merchant_id: str, days: int) -> Dict[str, int]:
-    """The "matched" side of seen-vs-matched: runs started per plan in the
-    window, computed on read — no counter column, nothing to drift."""
-    query, values = enrollment_counts_query(merchant_id, days)
-    async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
-    return {row["workflow_id"]: row["started"] for row in rows}

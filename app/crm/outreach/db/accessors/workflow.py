@@ -13,6 +13,7 @@ from app.crm.outreach.db.decoders.workflow import (
     decode_workflow_summary,
 )
 from app.crm.outreach.db.queries.workflow import (
+    count_workflows_query,
     get_workflow_query,
     insert_workflow_query,
     list_workflows_query,
@@ -62,6 +63,13 @@ async def list_workflows(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_workflow_summary(row) for row in rows]
+
+
+async def count_workflows(merchant_id: str) -> int:
+    query, values = count_workflows_query(merchant_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return int(row["total"]) if row else 0
 
 
 async def workflow_for_publish(

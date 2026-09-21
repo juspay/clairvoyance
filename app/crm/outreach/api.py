@@ -36,9 +36,9 @@ from app.crm.outreach.schemas import (
     VersionMigration,
     Workflow,
     WorkflowCallSummary,
+    WorkflowPage,
     WorkflowReport,
     WorkflowRunSummary,
-    WorkflowSummary,
     WorkflowVersion,
 )
 from app.schemas import UserInfo
@@ -76,13 +76,19 @@ async def create_workflow_route(
         )
 
 
-@router.get("", response_model=List[WorkflowSummary])
+@router.get("", response_model=WorkflowPage)
 async def list_workflows_route(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(10, ge=1, le=200),
     offset: int = Query(0, ge=0),
     merchant_id: str = Depends(merchant_scope("list workflows", "crm.workflows.list")),
-) -> List[WorkflowSummary]:
-    return await plans.list_workflows(merchant_id, limit, offset)
+) -> WorkflowPage:
+    """One page of plans (10 by default) and the merchant's total, in the
+    body (the RunPage ruling), so the console pages on click instead of
+    fetching every plan up front."""
+    return WorkflowPage(
+        items=await plans.list_workflows(merchant_id, limit, offset),
+        total=await plans.count_workflows(merchant_id),
+    )
 
 
 @router.get("/{workflow_id}", response_model=Workflow)

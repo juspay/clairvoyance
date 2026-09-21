@@ -252,21 +252,32 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
 async def get_catalog_route(
     request: Request,
     merchant_id: str = Query(..., description="Tenant scope — required"),
+    counts: bool = Query(
+        False,
+        description=(
+            "Also fill seen_7d (events per topic this week). A GROUP BY over "
+            "the merchant's whole week of events — ask for it only where a "
+            "screen shows it, never on a page load."
+        ),
+    ),
     current_user: UserInfo = Depends(crm_admin_user),
 ) -> Response:
     """The merged catalog (code layer + this merchant's registrations),
     content-addressed: send If-None-Match and get 304 until a deploy or a
-    re-registration changes it."""
+    re-registration changes it. ``counts=true`` adds seen_7d."""
     set_log_context(component="crm.record.catalog", merchant_id=merchant_id)
-    # entries -> etag -> 304, and only a body that is sent pays the
-    # seen-this-week GROUP BY (the ETag excludes seen_7d by design).
+    # entries -> etag -> 304; the seen-this-week GROUP BY runs only when a
+    # body is sent AND the caller asked (the ETag excludes seen_7d by
+    # design). Unasked, it scanned every event of the week on every
+    # editor open — 23 s for Flipkart on 21 Sep 2026.
     entries = await catalog.merged_entries(merchant_id)
     etag = catalog.etag_for(entries)
     if request.headers.get("if-none-match") == etag:
         return Response(
             status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag}
         )
-    entries = await catalog.with_seen_counts(merchant_id, entries)
+    if counts:
+        entries = await catalog.with_seen_counts(merchant_id, entries)
     return JSONResponse(
         content=[e.model_dump(mode="json") for e in entries], headers={"ETag": etag}
     )

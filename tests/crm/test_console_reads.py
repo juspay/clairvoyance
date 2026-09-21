@@ -29,14 +29,12 @@ from app.crm.outreach.db.queries.enrollment import (
     list_runs_query,
     open_by_node_query,
     run_endings_in_window_query,
-    runs_per_day_query,
 )
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     RunEnding,
     RunRow,
     RunStep,
-    WorkflowDefinition,
 )
 from app.crm.record.db.queries import event_topics_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
@@ -174,16 +172,16 @@ def test_lead_reads_are_scoped_to_the_merchant_and_production_calls() -> None:
     # leads carries, inside the run's lifetime — nothing re-derived at read
     # time, so an unkeyed plan's "wf-<run>" request_id is found, and a
     # merchant's /push/lead/v2 row (attempt 0) with the same order id is not
+    assert 'l."merchant_id" = $2 AND l."enrollment_id" = $1' in sql
+    assert 'l."enrollment_id" IS NULL AND l."attempt_count" > 0' in sql
+    # an EQUALITY on the run's own stamped request_ids, never a correlated
+    # subquery (quadratic in runs on prod, 21 Sep 2026)
+    assert 'SELECT DISTINCT "request_id" FROM "lead_call_tracker"' in sql
+    assert 'WHERE "merchant_id" = $2 AND "enrollment_id" = $1) p' in sql
+    assert 'l."request_id" = p.request_id' in sql
     assert (
-        '"enrollment_id" = $1 OR ("enrollment_id" IS NULL AND "attempt_count" > 0'
+        'l."created_at" >= $3 AND l."created_at" <= COALESCE($4::timestamptz, now())'
         in sql
-    )
-    assert (
-        '"request_id" IN (SELECT "request_id" FROM "lead_call_tracker" '
-        'WHERE "merchant_id" = $2 AND "enrollment_id" = $1)' in sql
-    )
-    assert (
-        '"created_at" >= $3 AND "created_at" <= COALESCE($4::timestamptz, now())' in sql
     )
     assert "request_id = $" not in sql  # no caller-supplied request id at all
 
@@ -198,10 +196,12 @@ def test_the_report_and_the_calls_summary_fold_the_same_lead_set() -> None:
     for sql in (facts_sql, stats_sql):
         assert 'JOIN "lead_call_tracker" l ON l."enrollment_id" = r.id' in sql
         assert 'l."enrollment_id" IS NULL AND l."attempt_count" > 0' in sql
-        assert (
-            'l."request_id" IN (SELECT "request_id" FROM stamped s2 '
-            "WHERE s2.run_id = s.run_id)" in sql
-        )
+        # equality on the stamped lead's request_id carried through `s`
+        # (one row per run × request_id); the correlated IN it replaces
+        # was quadratic in runs and held prod's CPU on 21 Sep 2026
+        assert 'l."request_id" = s.request_id' in sql
+        assert 'SELECT DISTINCT run_id, entered_at, exited_at, "request_id"' in sql
+        assert "s2.run_id = s.run_id" not in sql
         assert 'l."created_at" <= COALESCE(s.exited_at, now())' in sql
         assert sql.count('l."merchant_id" = $1') == 2
         assert sql.count("'TELEPHONY', 'HOLD_TRANSFER'") == 2
@@ -684,15 +684,15 @@ def test_who_spoke_is_the_lead_stores_word_not_a_second_python_rule() -> None:
     assert s.by_template[0].connected == 1
 
 
-def test_the_window_is_bounded_and_defaults_to_the_last_month() -> None:
+def test_the_window_is_bounded_and_defaults_to_the_last_day() -> None:
     start, end = analytics.bounded_window(None, T0)
-    assert end == T0 and (end - start).days == analytics.DEFAULT_WINDOW_DAYS
+    assert end == T0 and (end - start).days == analytics.DEFAULT_WINDOW_DAYS == 1
     with pytest.raises(ValueError):
         analytics.bounded_window(T0, T0)
     with pytest.raises(ValueError):
-        analytics.bounded_window(T0 - timedelta(days=93), T0)
-    assert analytics.bounded_window(T0 - timedelta(days=92), T0) == (
-        T0 - timedelta(days=92),
+        analytics.bounded_window(T0 - timedelta(days=8), T0)
+    assert analytics.bounded_window(T0 - timedelta(days=7), T0) == (
+        T0 - timedelta(days=7),
         T0,
     )
 
@@ -714,7 +714,7 @@ def test_a_report_window_over_the_ceiling_is_a_422(
             "until": "2026-09-01T00:00:00Z",
         },
     )
-    assert r.status_code == 422 and "92" in r.text
+    assert r.status_code == 422 and "7 days" in r.text
 
 
 def test_the_summary_is_composed_in_the_decoder_from_all_four_reads() -> None:

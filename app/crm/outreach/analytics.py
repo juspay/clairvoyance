@@ -36,12 +36,12 @@ from app.database.accessor import get_call_facts_by_runs, get_call_stats_by_runs
 # The widest window a report or calls summary will materialise, and the
 # window a caller who names none gets. Both reads pull every run that
 # entered the window into memory (RunEnding tuples, then parallel arrays
-# bound into the lead CTE), so "no window" must never mean "all of
-# retention" — CRM_RUN_RETENTION_DAYS is 90, and one click on the
-# Performance tab with no date filter would page it all through one
-# pooled connection.
-MAX_WINDOW_DAYS = 92
-DEFAULT_WINDOW_DAYS = 30
+# bound into the lead CTE), so the window is bounded by what one pooled
+# connection can carry: Flipkart enters 15k–31k runs a DAY (21 Sep 2026),
+# so a day is the default and a week the ceiling until the fold moves
+# into SQL. A wider ask is a 422, never a silent clip.
+MAX_WINDOW_DAYS = 7
+DEFAULT_WINDOW_DAYS = 1
 
 
 def bounded_window(
