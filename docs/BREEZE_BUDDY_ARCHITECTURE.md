@@ -686,6 +686,18 @@ Creates new template from JSON ([template.py:55-123](app/api/routers/breeze_budd
 - Prevents duplicate templates
 - Validates flow structure
 
+#### 2a. Template Versioning Router
+**Location**: [api/routers/breeze_buddy/templates/version/](app/api/routers/breeze_buddy/templates/version/)
+
+Every write to a template (`PUT /templates/{template_id}`, and the rollback route below) appends an immutable snapshot row to `template_version` instead of mutating history in place — see [docs/TEMPLATE_LINEAGE.md](TEMPLATE_LINEAGE.md) for the full design.
+
+**Version history endpoints** ([version/__init__.py](app/api/routers/breeze_buddy/templates/version/__init__.py)):
+- `GET /templates/{template_id}/versions` — version metadata list, newest first
+- `GET /templates/{template_id}/versions/{version}` — full snapshot of one version (secrets masked)
+- `POST /templates/{template_id}/rollback` — restore an older version as the new head (appends a version; history is never rewritten)
+
+**Never** `UPDATE template SET flow = ...` directly — always go through `app/database/accessor/breeze_buddy/template.py` so the corresponding `template_version` row is written.
+
 ### Database Layer
 
 #### 1. Template Accessor

@@ -11,6 +11,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.core.logger import logger
+from app.database import db_connection
+from app.database.accessor.breeze_buddy.template_version import (
+    insert_template_version_on_conn,
+)
 from app.database.decoder.breeze_buddy.template import decode_template
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.call_execution_config import (
@@ -78,6 +82,7 @@ async def create_template(
     telephony_number_id: Optional[str] = None,
     is_active: bool = True,
     supported_channels: Optional[List[str]] = None,
+    changed_by: Optional[str] = None,
 ) -> Optional[TemplateModel]:
     """Create a new template with flow stored as JSON."""
     logger.info(f"Creating template with ID: {template_id}")
@@ -121,17 +126,19 @@ async def create_template(
             now,
         )
 
-        result = await run_parameterized_query(query, values)
-        if result and get_row_count(result) > 0:
-            decoded_result = decode_template(result[0])
+        async with db_connection() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(query, *values)
+                if row is None:
+                    logger.error("Failed to create template")
+                    return None
+                await insert_template_version_on_conn(
+                    conn, row, change_source="create", changed_by=changed_by
+                )
+            decoded_result = decode_template(row)
             if decoded_result:
                 logger.info(f"Template created successfully: {decoded_result.id}")
-            else:
-                logger.error("Template decoding failed after creation")
             return decoded_result
-
-        logger.error("Failed to create template")
-        return None
 
     except Exception as e:
         logger.error(f"Error creating template: {e}")
@@ -254,6 +261,7 @@ async def get_templates_list(
                     name=row["name"],
                     is_active=row["is_active"],
                     supported_channels=list(row["supported_channels"]),
+                    current_version=row.get("current_version") or 1,
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                 )
@@ -349,6 +357,9 @@ async def replace_template(
     merchant_id: Optional[str],
     now,
     supported_channels: Optional[List[str]] = None,
+    changed_by: Optional[str] = None,
+    change_source: str = "manual_edit",
+    bulk_op_id: Optional[str] = None,
 ) -> Optional[TemplateModel]:
     """
     Update an existing template.
@@ -411,18 +422,23 @@ async def replace_template(
             now,
         )
 
-        result = await run_parameterized_query(query, values)
-
-        if result and get_row_count(result) > 0:
-            decoded_result = decode_template(result[0])
+        async with db_connection() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(query, *values)
+                if row is None:
+                    logger.error(f"Failed to update template: {template_id}")
+                    return None
+                await insert_template_version_on_conn(
+                    conn,
+                    row,
+                    change_source=change_source,
+                    bulk_op_id=bulk_op_id,
+                    changed_by=changed_by,
+                )
+            decoded_result = decode_template(row)
             if decoded_result:
                 logger.info(f"Template updated successfully: {decoded_result.id}")
-            else:
-                logger.error("Template decoding failed after update")
             return decoded_result
-
-        logger.error(f"Failed to update template: {template_id}")
-        return None
 
     except Exception as e:
         logger.error(f"Error updating template: {e}", exc_info=True)
@@ -527,6 +543,7 @@ async def delete_template_if_not_referenced(
                 merchant_id=row.get("merchant_id"),
                 name=row["name"],
                 is_active=row["is_active"],
+                current_version=row.get("current_version") or 1,
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
             )

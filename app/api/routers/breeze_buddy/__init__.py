@@ -56,6 +56,9 @@ from app.api.routers.breeze_buddy.template_generator import (
     router as template_generator_router,
 )
 from app.api.routers.breeze_buddy.templates import router as templates_router
+from app.api.routers.breeze_buddy.templates.version import (
+    router as template_versions_router,
+)
 from app.api.routers.breeze_buddy.topics import router as topics_router
 from app.api.routers.breeze_buddy.tts_catalog import router as tts_catalog_router
 from app.api.routers.breeze_buddy.ui_components import router as ui_components_router
@@ -100,6 +103,8 @@ router.include_router(numbers_router, prefix="", tags=["numbers"])
 
 # Templates (conversational flow definitions)
 router.include_router(templates_router, prefix="", tags=["templates"])
+# Template version history + rollback (lineage).
+router.include_router(template_versions_router, prefix="", tags=["templates"])
 router.include_router(topics_router, prefix="", tags=["topics"])
 
 # DragonTTS kill switch (admin-only: force kill / restore + status)

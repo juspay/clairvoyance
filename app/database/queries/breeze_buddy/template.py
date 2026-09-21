@@ -36,7 +36,7 @@ def get_template_in_scope_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {" AND ".join(conditions)}
     """
@@ -74,7 +74,7 @@ def create_template_query(
     query = f"""
         INSERT INTO {TEMPLATE_TABLE} (id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
-        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+        RETURNING id, reseller_id, merchant_id, name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, current_version, created_at, updated_at
     """
 
     return query, [
@@ -113,7 +113,8 @@ def delete_template_if_not_referenced_query(template_id: str) -> tuple[str, list
         )
         DELETE FROM {TEMPLATE_TABLE}
         WHERE id IN (SELECT id FROM can_delete)
-        RETURNING id, reseller_id, merchant_id, name, is_active, created_at, updated_at
+        RETURNING id, reseller_id, merchant_id, name, is_active,
+                  current_version, created_at, updated_at
     """
     return query, [template_id]
 
@@ -195,7 +196,7 @@ def get_templates_list_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, is_active, supported_channels, created_at, updated_at
+               name, is_active, supported_channels, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         {where_clause}
         ORDER BY {order_by}
@@ -234,7 +235,7 @@ def get_template_by_id_query(template_id: str) -> Tuple[str, List[Any]]:
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE id = $1
         LIMIT 1
@@ -280,7 +281,7 @@ def get_template_by_telephony_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE {' AND '.join(conditions)}
         LIMIT 1
@@ -309,7 +310,7 @@ def get_all_templates_by_telephony_number_id_query(
         SELECT id,
                reseller_id,
                merchant_id,
-               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, telephony_number_id, is_active, supported_channels, created_at, updated_at
+               name, flow, expected_payload_schema, expected_callback_response_schema, configurations, telephony_number_id, is_active, supported_channels, current_version, created_at, updated_at
         FROM {TEMPLATE_TABLE}
         WHERE telephony_number_id = $1
         AND is_active = TRUE
@@ -401,12 +402,13 @@ def replace_template_query(
             reseller_id = $9,
             merchant_id = $10,
             supported_channels = $11,
+            current_version = current_version + 1,
             updated_at = $12
         WHERE id = $13
         RETURNING id,
                   reseller_id,
                   merchant_id,
-                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, created_at, updated_at
+                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, current_version, created_at, updated_at
     """
 
     return query, [
@@ -423,4 +425,72 @@ def replace_template_query(
         supported_channels,
         updated_at,
         template_id,
+    ]
+
+
+def restore_template_head_query(
+    template_id: str,
+    name: str,
+    flow_json: str,
+    expected_payload_schema_json: Optional[str],
+    expected_callback_response_schema_json: Optional[str],
+    configurations_json: Optional[str],
+    secrets_json: Optional[str],
+    supported_channels: List[str],
+    now,
+    owner_reseller_id: str,
+    owner_merchant_id: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """Rollback write: restore the CONTENT columns from a snapshot and bump
+    current_version (rollback is itself a new version, never history surgery).
+
+    ``reseller_id`` / ``merchant_id`` / ``telephony_number_id`` / ``is_active``
+    (ownership, number, pause state) are deliberately NOT restored: reverting
+    last week's wording must not re-activate a paused template or re-take a
+    number that has since moved — and such a conflict should not 409 a pure
+    content rollback. Snapshots still store those columns (provenance + the
+    version row's own audit), only the restore narrows.
+
+    They ARE checked, though, and that is a different thing. The owner is
+    re-verified in this statement's own WHERE rather than trusted from the
+    handler's earlier read: PUT can move a template between resellers or
+    merchants, and the row lock is not taken until this UPDATE runs. Without
+    the predicate a move committing in that window would write the previous
+    owner's name/flow/configurations/secrets onto a row the caller is no
+    longer authorised on. Under READ COMMITTED the UPDATE blocks on the
+    mover's lock and re-evaluates against the updated row, so the move loses
+    the race honestly: 0 rows, which the accessor reports as the same 404 a
+    snapshot from a previous owner already gets."""
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET name = $1,
+            flow = $2::jsonb,
+            expected_payload_schema = $3::jsonb,
+            expected_callback_response_schema = $4::jsonb,
+            configurations = $5::jsonb,
+            secrets = $6::jsonb,
+            supported_channels = $7,
+            current_version = current_version + 1,
+            updated_at = $8
+        WHERE id = $9
+          AND reseller_id IS NOT DISTINCT FROM $10
+          AND merchant_id IS NOT DISTINCT FROM $11
+        RETURNING id, reseller_id, merchant_id, name, flow,
+                  expected_payload_schema, expected_callback_response_schema,
+                  configurations, secrets, telephony_number_id, is_active,
+                  supported_channels, current_version,
+                  created_at, updated_at
+    """
+    return query, [
+        name,
+        flow_json,
+        expected_payload_schema_json,
+        expected_callback_response_schema_json,
+        configurations_json,
+        secrets_json,
+        supported_channels,
+        now,
+        template_id,
+        owner_reseller_id,
+        owner_merchant_id,
     ]
