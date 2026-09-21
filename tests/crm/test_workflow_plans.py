@@ -306,6 +306,7 @@ def _workflow(status: str, definition) -> Workflow:
         status=status,
         version=0 if definition is None else 1,
         created_by=None,
+        updated_by=None,
         created_at=NOW,
         updated_at=NOW,
         definition=definition,
@@ -371,7 +372,7 @@ async def test_a_published_plan_still_pauses_and_resumes(
         return published
 
     async def set_workflow_status(
-        merchant_id: str, workflow_id: str, status: str
+        merchant_id: str, workflow_id: str, status: str, updated_by: object = None
     ) -> Workflow:
         writes.append(status)
         return published
@@ -451,7 +452,9 @@ class _PublishAccessor:
         self.locked.append(list(templates))
         self.order.append("lock")
 
-    async def apply_publish(self, conn: Any, m: str, w: str) -> Workflow:
+    async def apply_publish(
+        self, conn: Any, m: str, w: str, updated_by: Any = None
+    ) -> Workflow:
         self.published = True
         self.order.append("publish")
         return _workflow("live", self.draft)

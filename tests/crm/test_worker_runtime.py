@@ -63,6 +63,7 @@ def _flow(topic: str = "checkout.initiated", goal: str = "order.placed") -> Work
         status="live",
         version=1,
         created_by=None,
+        updated_by=None,
         created_at=NOW,
         updated_at=NOW,
         draft=None,

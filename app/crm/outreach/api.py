@@ -10,8 +10,10 @@ merchants out of their own workflows. Same move the connectors family made
 
 Every route declares ``merchant_scope(...)`` — it finds the merchant, runs
 the check, sets the log context — so a route cannot forget it; a test walks
-the routers to keep it that way. Create and publish also take the plain RBAC
-dependency for the caller's email: a byline, not a door.
+the routers to keep it that way. Every route that writes the plan (create,
+draft, publish, status) also takes the plain RBAC dependency for the
+caller's email: a byline, not a door — created_by/updated_by never gate
+anything.
 """
 
 from datetime import datetime
@@ -97,9 +99,12 @@ async def update_draft_route(
     merchant_id: str = Depends(
         merchant_scope("edit a workflow draft", "crm.workflows.draft")
     ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
 ) -> Workflow:
     try:
-        workflow = await plans.update_draft(merchant_id, workflow_id, body.definition)
+        workflow = await plans.update_draft(
+            merchant_id, workflow_id, body.definition, current_user.email
+        )
     except plans.WorkflowValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
@@ -140,9 +145,12 @@ async def set_workflow_status_route(
     merchant_id: str = Depends(
         merchant_scope("change a workflow's status", "crm.workflows.status")
     ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
 ) -> Workflow:
     try:
-        workflow = await plans.set_status(merchant_id, workflow_id, body.status)
+        workflow = await plans.set_status(
+            merchant_id, workflow_id, body.status, current_user.email
+        )
     except plans.WorkflowValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems

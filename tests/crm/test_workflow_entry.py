@@ -76,6 +76,7 @@ def _flow(definition: Dict[str, Any] = _LISTENING_PLAN, version: int = 1) -> Wor
         status="live",
         version=version,
         created_by=None,
+        updated_by=None,
         created_at=NOW,
         updated_at=NOW,
         definition=definition,
