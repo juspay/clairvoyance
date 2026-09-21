@@ -22,6 +22,11 @@ from typing import TypeVar
 from app.core.logging import logger
 from app.storage.base import CacheRecord, escape_like
 
+# Once-per-day claim keys (rows in slack_state). One per daily job, so two jobs
+# never contend for the same slot. See claim_daily/release_daily.
+SLACK_SUMMARY_CLAIM = "summary_last_post"
+HEALTH_RESTORE_CLAIM = "health_restore_last_run"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cache_entries (
     key              TEXT PRIMARY KEY,
@@ -87,9 +92,11 @@ CREATE TABLE IF NOT EXISTS latency_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_latency_kind_date ON latency_samples(kind, date);
 
--- Once-daily Slack summary coordination across uvicorn workers (DragonTTS has no
--- Redis, so this table is the shared claim). key='summary_last_post', value =
--- today's UTC date once a worker has posted. See claim_slack_summary/release.
+-- Once-daily job coordination across uvicorn workers (DragonTTS has no Redis, so
+-- this table is the shared claim). One row per daily job: value = today's UTC
+-- date once a worker has run it. Keys are the *_CLAIM constants below; see
+-- claim_daily/release_daily. (Named slack_state for the summary, its first
+-- user; it now backs every once-per-day job.)
 CREATE TABLE IF NOT EXISTS slack_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
@@ -1053,12 +1060,12 @@ class SQLiteMetadataStore:
 
         return await self._run(_q)
 
-    async def claim_slack_summary(self, today: str) -> bool:
-        """Atomically claim today's daily-summary slot. Returns True if this
-        caller wins (first to post today); False if another worker already
-        claimed it. The claim key is the UTC date string, so it's once-per-day.
-        On a Slack send failure the caller should :meth:`release_slack_summary`
-        so a later tick retries.
+    async def claim_daily(self, claim_key: str, today: str) -> bool:
+        """Atomically claim today's slot for ``claim_key``. Returns True if this
+        caller wins (first today); False if another worker already claimed it.
+        The stored value is the UTC date string, so the claim is once-per-day.
+        On failure the caller should :meth:`release_daily` so a later tick
+        retries.
 
         Safe across the N uvicorn workers via ``BEGIN IMMEDIATE``: the first
         worker to commit the UPDATE wins (rowcount 1); concurrent callers then
@@ -1069,13 +1076,12 @@ class SQLiteMetadataStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO slack_state(key, value) "
-                    "VALUES('summary_last_post', '')"
+                    "INSERT OR IGNORE INTO slack_state(key, value) VALUES(?, '')",
+                    (claim_key,),
                 )
                 cur = conn.execute(
-                    "UPDATE slack_state SET value=? "
-                    "WHERE key='summary_last_post' AND value<?",
-                    (today, today),
+                    "UPDATE slack_state SET value=? WHERE key=? AND value<?",
+                    (today, claim_key, today),
                 )
                 conn.execute("COMMIT")
                 return cur.rowcount == 1
@@ -1085,16 +1091,23 @@ class SQLiteMetadataStore:
 
         return await self._run(_c)
 
-    async def release_slack_summary(self) -> None:
-        """Clear today's claim (e.g. after a Slack send failure) so a later tick
-        retries. Idempotent."""
+    async def release_daily(self, claim_key: str) -> None:
+        """Clear today's claim for ``claim_key`` so a later tick retries.
+        Idempotent."""
 
         def _r(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "UPDATE slack_state SET value='' WHERE key='summary_last_post'"
-            )
+            conn.execute("UPDATE slack_state SET value='' WHERE key=?", (claim_key,))
 
         await self._run(_r)
+
+    async def claim_slack_summary(self, today: str) -> bool:
+        """Once-per-day claim for the Slack summary (see :meth:`claim_daily`)."""
+        return await self.claim_daily(SLACK_SUMMARY_CLAIM, today)
+
+    async def release_slack_summary(self) -> None:
+        """Release the Slack summary claim so a later tick retries (see
+        :meth:`release_daily`)."""
+        await self.release_daily(SLACK_SUMMARY_CLAIM)
 
     async def latency_summary(
         self, from_date: str | None = None, to_date: str | None = None

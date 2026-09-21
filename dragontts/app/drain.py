@@ -11,9 +11,11 @@ k8s termination sequence we participate in:
    Each worker waits for its own in-flight requests (the gauge below) to finish
    up to ``settings.graceful_drain_max_seconds``, then the existing cleanup
    (metrics flush, checkpoint, pool close) proceeds.
-3. Restore is MANUAL: an operator POSTs ``action=restore`` to clairvoyance's
-   admin endpoint. dragontts does NOT auto-restore on startup, so caching stays
-   bypassed (upstream TTS) until someone explicitly re-enables it.
+3. dragontts does NOT auto-restore on STARTUP — a pod that just came up has
+   proven nothing, so caching stays bypassed (upstream TTS) until the flag is
+   deliberately re-enabled: either MANUALLY (an operator POSTs
+   ``action=restore``) or by the daily job in :mod:`app.health_restore`, which
+   restores only a flag it has positively read as "unhealthy".
 
 The drain flag + Slack + clairvoyance call are once-only by design, so it's fine
 that ``/drain`` is handled by a single worker. The in-flight gauge is per
@@ -73,8 +75,9 @@ def inflight() -> int:
 async def notify_clairvoyance() -> bool:
     """POST clairvoyance's dragontts manage endpoint to ENABLE the kill switch.
 
-    One-way: dragontts only ever engages the kill switch (bypass). Restore is a
-    manual operator action on clairvoyance's admin endpoint — never done here.
+    One-way: this call only ever ENGAGES the kill switch (bypass), never
+    restores. Restoring is a separate, deliberate act — an operator, or the
+    daily :mod:`app.health_restore` job.
     Best-effort: never raises. Returns True on a 2xx, False otherwise. A missing
     ``clairvoyance_url``/token is a clean no-op (feature degrades off), so an
     unconfigured or dev box never depends on clairvoyance being reachable.

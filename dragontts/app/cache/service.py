@@ -1,16 +1,23 @@
-"""Cache service — lookup / synth / store-native / convert-on-serve + metrics.
+"""Cache service — lookup / synth / store / convert-on-serve + metrics.
 
-The cache key is format-agnostic (text + provider + voice + model + language +
-params). Audio is stored once in the provider's *native* format and converted to
-the caller's requested ``output_format`` on serve, so a single entry serves
-every format — the one-shot μ-law path and the streaming PCM path share it.
+Two storage architectures, selected per model:
 
-Read path: cache check → HIT loads native, converts to requested, returns
-(+ records a hit) → MISS synthesizes native, write-throughs native, converts,
-returns (+ records a miss). Streaming MISS forwards native chunks live (when
-the requested format == native) and stores native on clean completion.
-Admin: check / create / delete / clear. Metrics flow into a daily rollup; the
-cache snapshot is served from incrementally-maintained totals.
+- ElevenLabs v3-conversational family (base / ``_tempo`` / ``_clean_tempo``):
+  the provider chain (tempo, hygiene, anti-aliased downsample) bakes the END
+  RESULT in the caller's requested ``output_format``, so the key includes the
+  format and the finished bytes are stored — a HIT is a zero-processing byte
+  serve (no resample, no re-encode, no ffmpeg).
+- Every other model: the key is format-agnostic (text + provider + voice +
+  model + language + params). Audio is stored once in the provider's *native*
+  format and converted to the caller's requested ``output_format`` on serve,
+  so a single entry serves every format.
+
+Read path: cache check → HIT loads and returns (converting first if the entry
+predates the format-keyed scheme) → MISS synthesizes, write-throughs, returns
+(+ records a miss). Streaming MISS forwards native chunks live (when the
+requested format == native) and stores on clean completion. Admin: check /
+create / delete / clear. Metrics flow into a daily rollup; the cache snapshot
+is served from incrementally-maintained totals.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from app.cache.resilience import get_gate
 from app.core.config import settings
 from app.core.logging import logger
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
+from app.providers.elevenlabs_pool import is_elevenlabs_v3_conversational
 from app.providers.registry import ProviderNotConfigured
 from app.schemas.tts import CartesiaVoice, OutputFormat, TTSRequest
 from app.storage.base import CacheRecord, escape_like
@@ -170,6 +178,15 @@ def _same_format(encoding_a: str, rate_a: int, encoding_b: str, rate_b: int) -> 
     return encoding_a.lower() == encoding_b.lower() and rate_a == rate_b
 
 
+def _stores_final(model: str) -> bool:
+    """True for models whose cached bytes are the END RESULT in the caller's
+    requested output_format (tempo/hygiene/downsample baked in at synth
+    time): the ElevenLabs v3-conversational family. Their cache key includes
+    the output format and hits are zero-processing serves. Everything else
+    keeps the format-agnostic native-store architecture."""
+    return is_elevenlabs_v3_conversational(model)
+
+
 class CacheService:
     def __init__(
         self,
@@ -220,6 +237,22 @@ class CacheService:
         # reached the provider (audible artifacts).
         req.transcript = normalize_text(req.transcript)
         provider, model = parse_model_id(req.model_id)
+        # Speaking-rate params: `tempo` is DragonTTS's ffmpeg atempo factor
+        # and applies ONLY to eleven_v3_conversational. For that model the
+        # legacy `speed` param — already sent by existing clients (e.g.
+        # clairvoyance templates) and dropped from voice_settings anyway
+        # (Text-to-Dialogue reads only stability) — is normalized INTO
+        # `tempo`, so those clients get the speed-up with ZERO changes.
+        # Every other model ignores tempo entirely: strip it before keying so
+        # canonical_params can't key on a value the provider ignores (same
+        # audio, two entries). Normalizing speed->tempo (rather than keying on
+        # both) keeps {speed: 1.2} and {tempo: 1.2} on ONE cache entry.
+        if is_elevenlabs_v3_conversational(model):
+            speed = req.params.pop("speed", None)
+            if req.params.get("tempo") is None and speed is not None:
+                req.params["tempo"] = speed
+        else:
+            req.params.pop("tempo", None)
         of = req.output_format
         params_canon = canonical_params(provider, req.params)
         # Number-normalize the transcript (Indian grouping) so the cache KEY and
@@ -236,6 +269,13 @@ class CacheService:
             model=model,
             language=req.language,
             params_canonical=params_canon,
+            # v3-conversational stores the finished bytes per format, so the
+            # format rides in the key (see _stores_final).
+            output_format=(
+                f"{of.encoding.lower()}@{of.sample_rate}"
+                if _stores_final(model)
+                else ""
+            ),
         )
         return provider, model, of, params_canon, key
 
@@ -306,7 +346,7 @@ class CacheService:
         if instance is None:
             raise ProviderNotConfigured(provider)
         gate = get_gate(provider)
-        text = prepend_leading_dot(req.transcript, provider)
+        text = prepend_leading_dot(req.transcript, provider, model)
         async with gate:
             t0 = time.perf_counter()
             if req.params.get("enable_ssml_parsing"):
@@ -324,11 +364,12 @@ class CacheService:
                     params=req.params,
                 ):
                     chunks.append(chunk)
+                ssml_enc, ssml_rate = instance.synth_native_format(model, req.params)
                 result = AudioResult(
                     audio=b"".join(chunks),
                     container="raw",
-                    encoding=instance.native_encoding,
-                    sample_rate=instance.native_sample_rate,
+                    encoding=ssml_enc,
+                    sample_rate=ssml_rate,
                 )
             else:
                 result = await instance.synth(
@@ -449,9 +490,15 @@ class CacheService:
         key: str,
         record,
     ) -> tuple[bytes, str, int, str]:
-        """Synth + store for a MISS. Returns (native, encoding, rate, status)
+        """Synth + store for a MISS. Returns (audio, encoding, rate, status)
         where status is 'MISS', or 'HIT' (if the cache was filled between the
-        outer lookup and here — e.g. by a concurrent request)."""
+        outer lookup and here — e.g. by a concurrent request).
+
+        For final-format models (v3-conversational) the audio is converted to
+        the caller's requested output_format BEFORE storing, so the stored
+        blob is the end result and hits need zero processing. Other models
+        store native (format-agnostic key) as before.
+        """
         rec = await self._metadata.get(key)
         if rec and not self._expired(rec):
             native = await self._hit_native(rec)
@@ -460,6 +507,20 @@ class CacheService:
             # Blob missing (poisoned row): fall through to synth + replace-store,
             # which heals the entry instead of raising FileNotFoundError.
         native = await self._synthesize(req, provider, model)
+        of = req.output_format
+        if _stores_final(model) and not _same_format(
+            of.encoding, of.sample_rate, native.encoding, native.sample_rate
+        ):
+            audio = await self._convert_audio(
+                native.audio,
+                native_encoding=native.encoding,
+                native_rate=native.sample_rate,
+                out_encoding=of.encoding,
+                out_rate=of.sample_rate,
+            )
+            enc, rate = of.encoding, of.sample_rate
+        else:
+            audio, enc, rate = native.audio, native.encoding, native.sample_rate
         if settings.enable_write_through:
             await self._store(
                 key,
@@ -467,12 +528,12 @@ class CacheService:
                 provider,
                 model,
                 params_canon,
-                native.audio,
-                native.encoding,
-                native.sample_rate,
+                audio,
+                enc,
+                rate,
                 existing=record,
             )
-        return native.audio, native.encoding, native.sample_rate, "MISS"
+        return audio, enc, rate, "MISS"
 
     async def _produce_native(
         self,
@@ -568,12 +629,21 @@ class CacheService:
             t_cs = time.perf_counter()
             native = await self._hit_native(record)
             if native is not None:
-                audio = await self._convert_audio(
-                    native,
-                    native_encoding=record.encoding,
-                    native_rate=record.sample_rate,
-                    out_encoding=of.encoding,
-                    out_rate=of.sample_rate,
+                # Stored-as-final entries (format-keyed) match by construction;
+                # the convert branch covers entries stored native by the
+                # pre-format-key scheme.
+                audio = (
+                    native
+                    if _same_format(
+                        of.encoding, of.sample_rate, record.encoding, record.sample_rate
+                    )
+                    else await self._convert_audio(
+                        native,
+                        native_encoding=record.encoding,
+                        native_rate=record.sample_rate,
+                        out_encoding=of.encoding,
+                        out_rate=of.sample_rate,
+                    )
                 )
                 await self._metrics.touch_and_record(
                     key,
@@ -599,12 +669,18 @@ class CacheService:
         native, nenc, nrate, status, produced, coalesced = await self._produce_native(
             req, provider, model, params_canon, key, record
         )
-        audio = await self._convert_audio(
-            native,
-            native_encoding=nenc,
-            native_rate=nrate,
-            out_encoding=of.encoding,
-            out_rate=of.sample_rate,
+        # Already the finished bytes for final-format models; converted here
+        # only for native-store models.
+        audio = (
+            native
+            if _same_format(of.encoding, of.sample_rate, nenc, nrate)
+            else await self._convert_audio(
+                native,
+                native_encoding=nenc,
+                native_rate=nrate,
+                out_encoding=of.encoding,
+                out_rate=of.sample_rate,
+            )
         )
         if produced:
             await self._metrics.record_metrics(
@@ -857,12 +933,12 @@ class CacheService:
         if instance is None:
             raise ProviderNotConfigured(provider)
 
-        if _same_format(
-            of.encoding,
-            of.sample_rate,
-            instance.native_encoding,
-            instance.native_sample_rate,
-        ):
+        # Model-aware native format (e.g. ElevenLabs v3 synthesizes at 8 kHz
+        # for tempo-1 requests while classic models run at 16 kHz) — never
+        # the static class attrs, or a v3 clip would stream/store mislabeled
+        # as 16 kHz. params rides along so request-dependent rates resolve.
+        nenc, nrate = instance.synth_native_format(model, req.params)
+        if _same_format(of.encoding, of.sample_rate, nenc, nrate):
             # Single-flight: if a synth is already in-flight for this key (bytes
             # or stream path), coalesce onto it — await the result and stream the
             # completed clip — instead of opening a 2nd provider stream. Else
@@ -886,8 +962,8 @@ class CacheService:
                         model,
                         params_canon,
                         record,
-                        instance.native_encoding,
-                        instance.native_sample_rate,
+                        nenc,
+                        nrate,
                         fut,
                     ),
                     t0,
@@ -895,8 +971,23 @@ class CacheService:
                 ),
             )
 
-        # Requested format differs from native: synth fully, store native, convert.
+        # Requested format differs from native: synth fully, store, convert.
+        # Final-format models store the CONVERTED end result (zero-processing
+        # hits); native-store models store native as before.
         native = await self._synthesize(req, provider, model)
+        if _stores_final(model) and not _same_format(
+            of.encoding, of.sample_rate, native.encoding, native.sample_rate
+        ):
+            audio = await self._convert_audio(
+                native.audio,
+                native_encoding=native.encoding,
+                native_rate=native.sample_rate,
+                out_encoding=of.encoding,
+                out_rate=of.sample_rate,
+            )
+            enc, rate = of.encoding, of.sample_rate
+        else:
+            audio, enc, rate = native.audio, native.encoding, native.sample_rate
         if settings.enable_write_through:
             await self._store(
                 key,
@@ -904,18 +995,11 @@ class CacheService:
                 provider,
                 model,
                 params_canon,
-                native.audio,
-                native.encoding,
-                native.sample_rate,
+                audio,
+                enc,
+                rate,
                 existing=record,
             )
-        audio = await self._convert_audio(
-            native.audio,
-            native_encoding=native.encoding,
-            native_rate=native.sample_rate,
-            out_encoding=of.encoding,
-            out_rate=of.sample_rate,
-        )
         await self._metrics.record_metrics(
             provider=provider,
             requests=1,
@@ -954,7 +1038,7 @@ class CacheService:
         completed = False
         gate = get_gate(provider)
         gen = instance.stream_synth(
-            text=prepend_leading_dot(req.transcript, provider),
+            text=prepend_leading_dot(req.transcript, provider, model),
             voice_id=req.voice.id,
             model=model,
             language=req.language,
@@ -1063,6 +1147,7 @@ class CacheService:
                     record,
                 )
             fut = self._new_inflight(key)
+            fb_enc, fb_rate = instance.synth_native_format(model, req.params)
             return (
                 {"X-Cache": "MISS", "X-Cache-Key": key},
                 self._stream_and_store(
@@ -1073,8 +1158,8 @@ class CacheService:
                     model,
                     params_canon,
                     record,
-                    instance.native_encoding,
-                    instance.native_sample_rate,
+                    fb_enc,
+                    fb_rate,
                     fut,
                 ),
             )
@@ -1131,6 +1216,22 @@ class CacheService:
             audio = audio_override
             store_encoding, store_rate = of.encoding, of.sample_rate
             source = "base64"
+        elif _stores_final(model):
+            native = await self._synthesize(req, provider, model)
+            if _same_format(
+                of.encoding, of.sample_rate, native.encoding, native.sample_rate
+            ):
+                audio = native.audio
+            else:
+                audio = await self._convert_audio(
+                    native.audio,
+                    native_encoding=native.encoding,
+                    native_rate=native.sample_rate,
+                    out_encoding=of.encoding,
+                    out_rate=of.sample_rate,
+                )
+            store_encoding, store_rate = of.encoding, of.sample_rate
+            source = "synth"
         else:
             native = await self._synthesize(req, provider, model)
             audio = native.audio

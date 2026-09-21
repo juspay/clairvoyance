@@ -12,6 +12,13 @@ ENV PYTHONUNBUFFERED=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 
+# ffmpeg powers the params.tempo atempo stage (eleven_v3_conversational only).
+# Without it the tempo feature degrades to passthrough with an error log —
+# calls never fail — but the image ships the binary so the feature works.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./

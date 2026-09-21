@@ -8,7 +8,7 @@ fields): ``params`` is reserved for phase-2 tuning, ``audio_base64`` lets
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class CartesiaVoice(BaseModel):
@@ -32,3 +32,21 @@ class TTSRequest(BaseModel):
     output_format: OutputFormat = Field(default_factory=OutputFormat)
     params: dict = Field(default_factory=dict)
     audio_base64: str | None = None  # /tts/create extension: pre-supplied audio
+
+    @field_validator("params")
+    @classmethod
+    def _validate_tempo(cls, v: dict) -> dict:
+        # params.tempo is the ffmpeg atempo speaking-rate factor. It applies
+        # ONLY to eleven_v3_conversational (other models get it stripped in
+        # CacheService._resolve); the range is ffmpeg's atempo hard bounds.
+        tempo = v.get("tempo")
+        if tempo is not None:
+            try:
+                t = float(tempo)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "params.tempo must be numeric (ffmpeg atempo factor, 0.5-2.0)"
+                )
+            if not 0.5 <= t <= 2.0:
+                raise ValueError("params.tempo must be within 0.5-2.0 (atempo bounds)")
+        return v

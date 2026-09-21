@@ -70,13 +70,16 @@ def hash_key(
     model: str,
     language: str,
     params_canonical: str,
+    output_format: str = "",
 ) -> str:
     """Deterministic SHA-256 over every input that affects the audio.
 
-    The requested output_format is intentionally NOT part of the key: the cache
-    stores audio in the provider's native format and converts to the requested
-    format on serve, so one entry serves every format (one-shot μ-law and
-    streaming PCM share it).
+    ``output_format`` ("<encoding>@<rate>") is included ONLY for models whose
+    cached bytes ARE the finished product in that format — currently the
+    ElevenLabs v3-conversational family, where tempo/hygiene/downsample are
+    baked in at synth time and a hit must be a zero-processing byte serve.
+    For every other model it stays "" (the cache stores the provider's native
+    format and converts on serve, so one entry serves every format).
     """
     parts = [
         normalize_text(text),
@@ -85,5 +88,6 @@ def hash_key(
         model,
         language or "",
         params_canonical,
+        output_format,
     ]
     return hashlib.sha256(_SEP.join(parts).encode("utf-8")).hexdigest()
