@@ -528,6 +528,29 @@ class CustomComponentWire(BaseModel):
     )
 
 
+class FlavorWire(BaseModel):
+    """One protocol block of `configurations.flavor`, on the wire.
+
+    The mirror of ``FlavorProtocolConfig`` (template/types.py) and just as
+    opaque: connectors name the platforms that serve the protocol, features
+    are its optional switches. Core copies both across without reading a
+    key — which is what lets a widget flavor chunk resolve its own block,
+    and what keeps a new feature or connector from touching this file.
+    """
+
+    connectors: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Platform connectors serving this protocol, by name. Empty = "
+            "the flavor self-selects on the payload."
+        ),
+    )
+    features: Dict[str, bool] = Field(
+        default_factory=dict,
+        description="Optional feature switches. Absent = off (opt-in).",
+    )
+
+
 class WidgetSurfaceWire(BaseModel):
     """Everything the embed needs to paint its chrome for one session.
 
@@ -573,7 +596,7 @@ class WidgetSurfaceWire(BaseModel):
         False,
         description=(
             "Merchant is entitled to virtual try-on "
-            "(configurations.enable_try_on). Advisory like voice_enabled: "
+            "(flavor.ucp.features.try_on). Advisory like voice_enabled: "
             "it decides whether the widget draws the affordance, while the "
             "/try-on route re-reads the template and refuses on its own — "
             "this gates spend, so a browser is not trusted with it."
@@ -591,6 +614,19 @@ class WidgetSurfaceWire(BaseModel):
         description=(
             "Lazy UI flavor groups the template enables — preload these "
             "code-split chunks. Empty when catalog_active is 'v1'."
+        ),
+    )
+    flavor: Dict[str, FlavorWire] = Field(
+        default_factory=dict,
+        description=(
+            "`configurations.flavor`, verbatim: protocol -> "
+            "{connectors, features} (e.g. {'ucp': {'connectors': "
+            "['shopify'], 'features': {'upsell': true}}}). Passed through "
+            "UNINTERPRETED — the engine never reads these keys; a flavor "
+            "resolves its own protocol block by name, and the widget's "
+            "flavor chunks now do the same. Features are OPT-IN, so an "
+            "absent key means off; empty connectors means the flavor "
+            "self-selects on the data."
         ),
     )
     custom_components: List[CustomComponentWire] = Field(

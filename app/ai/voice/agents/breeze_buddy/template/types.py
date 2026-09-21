@@ -2185,15 +2185,6 @@ class ConfigurationModel(BaseModel):
             "agent-driven input is possible."
         ),
     )
-    enable_try_on: bool = Field(
-        False,
-        description=(
-            "Whether this merchant's shoppers can try products on their own "
-            "photo. False (default) = no affordance and the /try-on route "
-            "refuses, so a new merchant is never billed for a feature they "
-            "did not ask for. Independent of the commerce catalog."
-        ),
-    )
     response_reveal: Literal["stream", "complete"] = Field(
         "stream",
         description=(
