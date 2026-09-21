@@ -60,6 +60,22 @@ class BaseTTSProvider(ABC):
     native_encoding: str = "pcm_s16le"
     native_sample_rate: int = 16000
 
+    def synth_native_format(
+        self, model: str | None = None, params: dict | None = None
+    ) -> tuple[str, int]:
+        """(encoding, sample_rate) this provider synthesizes ``model`` at.
+
+        Providers whose native format varies BY MODEL or BY REQUEST PARAMS
+        (e.g. ElevenLabs, whose v3 Text-to-Dialogue socket runs at 8 kHz for
+        tempo-1 requests and the configured full-band rate otherwise, while
+        classic models run at 16 kHz) override this; the class attributes
+        remain the provider-wide default. The cache layer must label
+        stored/streamed audio through this hook, never the static
+        attributes, or a model whose rate differs would store mislabeled
+        audio — which is why ``params`` is passed through from the request.
+        """
+        return self.native_encoding, self.native_sample_rate
+
     @abstractmethod
     async def synth(
         self,

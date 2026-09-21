@@ -40,6 +40,12 @@ PROVIDER_DEFAULTS: dict[str, dict] = {
         # synth); only enable_ssml_parsing=True gets its own key. ElevenLabs
         # only honors this on eleven_flash_v2_5 etc. (NOT eleven_v3).
         "enable_ssml_parsing": False,
+        # ffmpeg atempo speaking-rate factor. Applies ONLY to
+        # eleven_v3_conversational (see ElevenLabsProvider._tempo_for); the
+        # default lives here so canonical_params collapses an explicit
+        # tempo==1.0 with "absent" into one cache key — and 1.0 never
+        # touches ffmpeg at all (pure bypass, zero spawn cost).
+        "tempo": 1.0,
     },
     "gemini": {
         "voice_id": "Kore",
@@ -193,6 +199,72 @@ class Settings(BaseSettings):
     # WS utterance (ElevenLabs delays is_final ~20s). Lower = faster stream
     # close/turn-end; raise if long utterances ever truncate at a >N s pause.
     elevenlabs_stream_idle_timeout: float = 0.8
+    # Warm ElevenLabs Text-to-Dialogue sockets for eleven_v3 models (v3 exists
+    # ONLY there — the classic text-to-speech endpoint 404s for it). Sized
+    # separately from the classic pool: each TTD socket carries a permanent
+    # keepalive context (one of its 5 server-side context slots, leaving 4
+    # usable) and has no HTTP fallback, so 2 warm sockets cover a call's
+    # misses. 0 disables v3 synthesis entirely (no fallback exists).
+    elevenlabs_dialogue_pool_size: int = 2
+    # ffmpeg atempo tempo stage kill switch. When False (or ffmpeg is missing
+    # from PATH) every tempo value is ignored and audio passes through at
+    # 1.0 — calls never fail because of the tempo feature.
+    elevenlabs_atempo_enabled: bool = True
+    # Utterance hygiene for v3 generations: ElevenLabs emits ~300ms average
+    # trailing silence (up to 500ms), ~60-140ms leading pads, occasional
+    # 260-440ms internal pauses, and a noise floor only ~22-27 dB under the
+    # speech (audible hiss in every pause). Clean BEFORE atempo so the cache
+    # stores clean audio. NO-DATA-LOSS guarantee: only frames below the
+    # content line (~-21 dB under the clip's speech level — every measured
+    # v3 noise floor sits below it) are trimmed/capped/gated; anything louder
+    # (soft onsets, breathy tails, quiet expressive pauses) passes through
+    # untouched. Runs for the _clean_tempo variant and plain eleven_v3.
+    elevenlabs_utterance_hygiene_enabled: bool = True
+    elevenlabs_hygiene_lead_ms: int = 60
+    elevenlabs_hygiene_tail_ms: int = 120
+    elevenlabs_hygiene_max_pause_ms: int = 300
+    # Silence attenuation factor. 0.15 ≈ -16 dB: the v3 noise floor drops
+    # from ~-24 dB to ~-40 dB under speech while room-tone continuity
+    # (the "liveness" of the take) survives. 0.0 = dead digital silence
+    # (audibly flatter); 1.0 = no attenuation at all.
+    elevenlabs_hygiene_gate_floor: float = 0.15
+    # Content line dial: frames above max(p95 * factor, abs_floor) are
+    # "actual TTS data" and are NEVER trimmed/capped/gated; frames below are
+    # silence/noise and get cleaned. 0.15 = the loud line = the CALL-APPROVED
+    # chain (byte-identical render to the approved comparisons/recordings).
+    # 0.09 keeps more quiet material (soft tails/pauses to ~-21 dB survive,
+    # ~+100 ms per clip) — safer for data, audibly softer edges.
+    elevenlabs_hygiene_content_factor: float = 0.15
+    elevenlabs_hygiene_content_abs_floor: float = 200.0
+    # The BASE eleven_v3_conversational model speaks ElevenLabs' own pcm_8000
+    # directly: tempo 1 = served unaltered, tempo != 1 = atempo only (no
+    # hygiene, no resample). When False, the base model instead runs the
+    # full-band chain (native rate + hygiene + atempo), i.e. behaves like
+    # eleven_v3_conversational_clean_tempo.
+    elevenlabs_tempo1_direct_pcm8000: bool = True
+    # Default tempo for eleven_v3_conversational requests that don't pass
+    # params.tempo. Set to e.g. 1.15 to make the speed-up global for that
+    # model without any client change (still bypassed at exactly 1.0).
+    elevenlabs_v3conv_default_tempo: float = 1.0
+    # Native PCM rate requested from ElevenLabs for the full-band v3 chains:
+    # the _tempo / _clean_tempo variants (always), plain eleven_v3, and the
+    # base model when elevenlabs_tempo1_direct_pcm8000=False. 8000 =
+    # telephony-native (no resampling); the .env ships 44100 = best 8 kHz
+    # call quality (generate + atempo full-band, ONE anti-aliased sinc
+    # downsample to the caller's rate, stored as the final result).
+    # Probe-confirmed supported on the TTD socket:
+    # 44100/24000/22050/16000/8000.
+    elevenlabs_v3_native_sample_rate: int = 8000
+    # Spark recovery for the full-band variants (_tempo / _clean_tempo):
+    # band-limiting to 8 kHz irreversibly deletes everything above ~3.4 kHz
+    # (sibilance, air, crispness), so this gently re-weights the top
+    # surviving octave — a raised-cosine bell peaking at 2.8 kHz (unity below
+    # 2.0 kHz and above 3.6 kHz) applied full-band before the downsample.
+    # 0.0 = off (the sound is unchanged). 2.0-3.0 dB is audible-but-gentle;
+    # above ~4 dB turns harsh on long calls. Negative = cut. Never touches
+    # the base model or cache hits. NOT part of the cache key — clear the
+    # cache to re-audition a new value.
+    elevenlabs_telephony_presence_boost_db: float = 0.0
     # Warm Sarvam WS sockets. Sarvam is NOT multiplexed (one utterance per socket
     # at a time), so this is a LIFO stack of warm, pre-configured connections. 0
     # => stream via a fresh socket per miss (no pooling).
@@ -285,9 +357,10 @@ class Settings(BaseSettings):
     # --- Graceful drain / clairvoyance kill switch ---
     # On shutdown (k8s preStop -> GET /drain) dragontts FIRST tells clairvoyance
     # to bypass it (so enable_tts_caching templates fall back to their upstream
-    # TTS provider), THEN drains its in-flight requests, THEN exits. Restore is
-    # MANUAL: an operator POSTs action=restore to clairvoyance's admin endpoint —
-    # dragontts does NOT auto-restore on startup. Clairvoyance's admin endpoint is
+    # TTS provider), THEN drains its in-flight requests, THEN exits. dragontts
+    # never restores on STARTUP — a pod that just came up has proven nothing.
+    # Restore is either MANUAL (an operator POSTs action=restore) or the daily
+    # health-restore job below. Clairvoyance's admin endpoint is
     # HTTPBearer + require_admin, so a clairvoyance admin JWT must be supplied
     # (env-injected in prod, never baked
     # into the image). Empty CLAIRVOYANCE_URL => the notify calls are skipped
@@ -295,6 +368,17 @@ class Settings(BaseSettings):
     clairvoyance_url: str = ""
     clairvoyance_jwt_token: str = ""
     clairvoyance_manage_path: str = "/agent/voice/breeze-buddy/admin/dragontts/manage"
+    clairvoyance_status_path: str = "/agent/voice/breeze-buddy/admin/dragontts/status"
+    # Daily health-restore (app/health_restore.py). The kill switch is one-way —
+    # clairvoyance's monitor and our drain both only ever mark us unhealthy — so
+    # without this a transient blip leaves caching bypassed (full synth cost and
+    # latency on every call) until a human notices. Once a day we read the flag
+    # and restore it ONLY if it reads "unhealthy"; an unknown/unreadable state
+    # never restores. 00:30 UTC = 06:00 IST, before the calling window opens.
+    # Reuses the kill switch's URL + JWT, so an unconfigured box is a no-op.
+    health_restore_enabled: bool = True
+    health_restore_time_utc: str = "00:30"
+    health_restore_tick_seconds: int = 900
     # Short timeout so the /drain preStop hook returns fast (k8s waits on it
     # before SIGTERM). Best-effort: clairvoyance's own ~60s health monitor is the
     # backstop if this call fails.

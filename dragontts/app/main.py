@@ -162,6 +162,24 @@ async def lifespan(app: FastAPI):
 
     slack_summary_task = asyncio.create_task(_slack_summary_loop())
 
+    # Once-daily restore of clairvoyance's DragonTTS health flag. The kill
+    # switch is one-way (clairvoyance's monitor and our own drain only ever mark
+    # us unhealthy), so without this a transient blip leaves caching bypassed —
+    # full synth cost and latency on every call — until a human notices. Runs at
+    # health_restore_time_utc, restores ONLY a flag positively read as
+    # "unhealthy", and no-ops when CLAIRVOYANCE_URL/JWT are unset. Never fatal.
+    async def _health_restore_loop():
+        while True:
+            await asyncio.sleep(settings.health_restore_tick_seconds)
+            try:
+                from app.health_restore import run_daily_restore
+
+                await run_daily_restore(cache)
+            except Exception as e:
+                logger.debug(f"health-restore tick failed: {e}")
+
+    health_restore_task = asyncio.create_task(_health_restore_loop())
+
     # Periodic glibc malloc_trim: return freed heap (the large short-lived audio
     # + numpy resample buffers) to the OS so RSS doesn't plateau high. A no-op
     # when nothing is trimmable; skipped silently on non-glibc (musl). No effect
@@ -199,6 +217,7 @@ async def lifespan(app: FastAPI):
     checkpoint_task.cancel()
     ttl_purge_task.cancel()
     slack_summary_task.cancel()
+    health_restore_task.cancel()
     malloc_trim_task.cancel()
     try:
         await checkpoint_task
@@ -210,6 +229,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await slack_summary_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    try:
+        await health_restore_task
     except (asyncio.CancelledError, Exception):
         pass
     try:
