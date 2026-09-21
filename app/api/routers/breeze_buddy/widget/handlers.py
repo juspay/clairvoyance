@@ -20,6 +20,7 @@ same session.
 from __future__ import annotations
 
 import re
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
@@ -78,8 +79,8 @@ from app.core.config.dynamic import (
     TRY_ON_CREDIT_FLOOR,
     TRY_ON_MAX_PER_IP_HOUR,
     TRY_ON_MAX_PER_SESSION,
+    TRY_ON_MAX_PHOTO_BYTES,
     WIDGET_STT_MAX_AUDIO_BYTES,
-    WIDGET_TRY_ON_MAX_PHOTO_BYTES,
 )
 from app.core.config.static import BREEZE_BUDDY_STT_SERVICE
 from app.core.logger import logger
@@ -101,7 +102,6 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 from app.database.accessor.breeze_buddy.tool_approvals import (
     list_pending_tool_approvals,
 )
-from app.database.accessor.breeze_buddy.wallets import get_wallet
 from app.database.accessor.breeze_buddy.widget_config import (
     get_widget_config_by_id,
 )
@@ -143,8 +143,8 @@ from app.services.breeze_buddy.try_on import (
     get_cached_try_on_result,
     release_try_on_request,
 )
-from app.services.breeze_buddy.wallet import deduct
-from app.services.breeze_buddy.wallet.deduction import TRY_ON_CREDITS
+from app.services.breeze_buddy.wallet import deduct, has_sufficient_credits
+from app.services.breeze_buddy.wallet.exceptions import WalletNotFoundError
 from app.services.redis.locks import (
     SESSION_LOCK_TTL_SECONDS,
     LockAcquireError,
@@ -1403,8 +1403,8 @@ async def try_on_widget_handler(
             detail="request_id must be 1-64 characters of A-Z a-z 0-9 _ or -",
         )
 
-    # Its own bucket AND its own ceiling: one try-on costs TRY_ON_CREDITS
-    # (5) from the same wallet a chat turn spends 1 from, so borrowing the
+    # Its own bucket AND its own ceiling: one try-on costs 5 credits (the
+    # "try_on" billing rule) from the same wallet a chat turn spends 1 from, so borrowing the
     # chat limit would let an hour of try-ons buy five hours of silence.
     await enforce_widget_ip_limit(
         request=request,
@@ -1456,10 +1456,11 @@ async def try_on_widget_handler(
             detail="You have reached the try-on limit for this chat.",
         )
 
-    price = TRY_ON_CREDITS
     floor = await TRY_ON_CREDIT_FLOOR()
     try:
-        wallet = await get_wallet(cfg.merchant_id)
+        enough = await has_sufficient_credits(cfg.merchant_id, "try_on", floor)
+    except WalletNotFoundError:
+        enough = False
     except Exception:
         logger.opt(exception=True).error(
             f"try-on wallet read failed merchant={cfg.merchant_id} session={session_id}"
@@ -1472,19 +1473,18 @@ async def try_on_widget_handler(
     # A generation must leave the balance at or above the floor, so images
     # can never take the conversation offline. A floor of 0 is parity with
     # chat: try-on stops exactly when chat would.
-    if wallet is None or wallet.balance_credits < (price + floor):
+    if not enough:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail="This store is out of try-on credits for now.",
         )
 
-    photo_bytes = await _read_upload(
-        photo, await WIDGET_TRY_ON_MAX_PHOTO_BYTES(), "Photo"
-    )
+    photo_bytes = await _read_upload(photo, await TRY_ON_MAX_PHOTO_BYTES(), "Photo")
 
     # The cache above answers a replay whose image is ready. Any other
     # replay must not generate a second image on the same id.
-    claim = await claim_try_on_request(session_id, request_id)
+    claim_token = secrets.token_hex(16)
+    claim = await claim_try_on_request(session_id, request_id, claim_token)
     if claim == "running":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1510,7 +1510,7 @@ async def try_on_widget_handler(
     except Exception as exc:
         # Nothing was charged: the deduction below is the only charge, and
         # it has not run. Free the id so the widget can retry with it.
-        await release_try_on_request(session_id, request_id)
+        await release_try_on_request(session_id, request_id, claim_token)
         if not isinstance(exc, TryOnGenerationError):
             raise
         logger.warning(
@@ -1536,12 +1536,12 @@ async def try_on_widget_handler(
     # customer already has what they asked for.
     credits_charged = 0
     try:
-        await deduct(
+        txn = await deduct(
             merchant_id=cfg.merchant_id,
             event_type="try_on",
             ref_id=f"{session_id}:{request_id}",
         )
-        credits_charged = price
+        credits_charged = int(abs(txn.credits_delta))
     except UniqueViolationError:
         # Already on the ledger. The claim above makes this rare: it needs
         # a replay after the claim expired. The merchant is still charged

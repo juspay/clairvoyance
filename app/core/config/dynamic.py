@@ -325,15 +325,19 @@ async def TRY_ON_MAX_PER_SESSION() -> int:
     means no cap, and 0 is the default** — a shopper trying a sixth look is
     engaged, not abusive, and the wallet plus the IP bucket already bound
     spend. Kept as a dial; counted from session state, so a cap that IS
-    set survives a reload."""
+    set survives a reload.
+
+    WARNING: not safe under concurrency. The count is read before the
+    generation and written after it, so parallel requests on one session
+    can all pass the cap. Fix that before setting a non-zero value."""
     return await get_config("TRY_ON_MAX_PER_SESSION", 0, int)
 
 
-async def WIDGET_TRY_ON_MAX_PHOTO_BYTES() -> int:
+async def TRY_ON_MAX_PHOTO_BYTES() -> int:
     """Max shopper photo accepted by the try-on route. The widget resizes
     to 1280px first (90-200 KB in practice), so this is headroom for a
     client that skipped it, and inside what the provider accepts."""
-    return await get_config("WIDGET_TRY_ON_MAX_PHOTO_BYTES", 4 * 1024 * 1024, int)
+    return await get_config("TRY_ON_MAX_PHOTO_BYTES", 4 * 1024 * 1024, int)
 
 
 async def TRY_ON_RESULT_CACHE_TTL_SECONDS() -> int:

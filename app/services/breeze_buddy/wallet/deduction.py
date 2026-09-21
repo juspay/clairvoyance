@@ -9,7 +9,7 @@ this dict, never a change to deduct() itself or its callers.
 
 import math
 from decimal import Decimal
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 from app.database.accessor.breeze_buddy.wallets import apply_deduction, get_wallet
 from app.schemas.breeze_buddy.wallets import WalletTransactionResponse
@@ -48,9 +48,16 @@ BILLING_RULES: Dict[str, Callable[..., Decimal]] = {
 }
 
 
-async def has_sufficient_credits(merchant_id: str) -> bool:
+async def has_sufficient_credits(
+    merchant_id: str,
+    event_type: Optional[str] = None,
+    floor: int = 0,
+    **event_kwargs: object,
+) -> bool:
     """Cheap, unlocked read-only check: does this merchant currently have a
-    positive balance?
+    positive balance? With ``event_type``, whether the balance covers that
+    event's price and still leaves ``floor`` credits; ``event_kwargs`` are
+    passed to the rule exactly as deduct() passes them.
 
     Deliberately does NOT take the wallet row lock -- this is a pre-flight
     gate, not the source of truth. The actual deduction (deduct(), below)
@@ -61,11 +68,17 @@ async def has_sufficient_credits(merchant_id: str) -> bool:
 
     Raises:
         WalletNotFoundError: if no wallet exists for merchant_id.
+        UnknownEventTypeError: if event_type has no BILLING_RULES entry.
     """
     wallet = await get_wallet(merchant_id)
     if wallet is None:
         raise WalletNotFoundError(merchant_id)
-    return wallet.balance_credits > 0
+    if event_type is None:
+        return wallet.balance_credits > 0
+    rule = BILLING_RULES.get(event_type)
+    if rule is None:
+        raise UnknownEventTypeError(event_type)
+    return wallet.balance_credits >= rule(**event_kwargs) + floor
 
 
 async def deduct(

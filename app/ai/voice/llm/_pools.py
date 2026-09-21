@@ -34,7 +34,6 @@ from typing import Optional
 import httpx
 from anthropic import AsyncAnthropicVertex
 from google import genai
-from google.genai import types as genai_types
 from google.oauth2 import service_account
 
 from app.core.logger import logger
@@ -116,7 +115,7 @@ def get_anthropic_vertex_client(
     return client
 
 
-_GENAI_VERTEX_POOLS: dict[tuple[str, str, str, int], genai.Client] = {}
+_GENAI_VERTEX_POOLS: dict[tuple[str, str, str], genai.Client] = {}
 
 
 def get_genai_vertex_client(
@@ -124,14 +123,13 @@ def get_genai_vertex_client(
     credentials_json: str,
     project_id: str,
     location: str,
-    timeout_ms: int,
 ) -> genai.Client:
     """Return a shared Vertex ``genai.Client`` for these settings.
 
     Same reason as the Anthropic pool: one client keeps its connections
     and its OAuth token between requests.
     """
-    key = (project_id, location, _credentials_fingerprint(credentials_json), timeout_ms)
+    key = (project_id, location, _credentials_fingerprint(credentials_json))
     client = _GENAI_VERTEX_POOLS.get(key)
     if client is None:
         creds = service_account.Credentials.from_service_account_info(
@@ -143,7 +141,6 @@ def get_genai_vertex_client(
             credentials=creds,
             project=project_id,
             location=location,
-            http_options=genai_types.HttpOptions(timeout=timeout_ms),
         )
         _GENAI_VERTEX_POOLS[key] = client
         logger.info(
