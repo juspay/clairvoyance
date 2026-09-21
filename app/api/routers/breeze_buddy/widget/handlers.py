@@ -120,6 +120,7 @@ from app.schemas.breeze_buddy.chat import (
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
     CustomComponentWire,
+    FlavorWire,
     GreetingTileWire,
     QuickReplyWire,
     SendChatMessageRequest,
@@ -279,6 +280,7 @@ async def _surface_wire(
         try_on_enabled=_template_try_on_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
+        flavor=_template_flavor(template),
         custom_components=await _custom_components_wire(template, catalog_active),
     )
 
@@ -298,6 +300,43 @@ async def _custom_components_wire(
         for d in defs.values()
         if d.render_def
     ]
+
+
+def _template_flavor(template: object) -> Dict[str, FlavorWire]:
+    """``configurations.flavor`` as the widget sees it, passed through as-is.
+
+    Protocol -> {connectors, features} (see ``FlavorProtocolConfig``). Its
+    contract is that the ENGINE never interprets the keys: a flavor resolves
+    its own block by name. That has only ever been true server-side because
+    the block never travelled; shipping it whole keeps it true on the wire,
+    so a widget flavor chunk can read its own switches AND know which
+    platform serves them — without core learning either word.
+
+    Both halves earn their place: `features` says whether a behaviour is on,
+    `connectors` says which storefront it is talking to. A widget that knows
+    only the first has to guess the second, which costs a dead fetch per page
+    on look-alike URLs — the exact case FlavorProtocolConfig calls out.
+    """
+    configurations = getattr(template, "configurations", None)
+    blocks = getattr(configurations, "flavor", None) or {}
+    if not isinstance(blocks, dict):
+        return {}
+    out: Dict[str, FlavorWire] = {}
+    for protocol, block in blocks.items():
+        connectors = [str(c) for c in (getattr(block, "connectors", None) or [])]
+        raw_features = getattr(block, "features", None)
+        features = (
+            {str(k): bool(v) for k, v in raw_features.items()}
+            if isinstance(raw_features, dict)
+            else {}
+        )
+        # Every configured protocol, including one written empty: `{"ucp": {}}`
+        # says connectors self-select and all features are off, which is not
+        # the same statement as saying nothing about ucp at all. Dropping it
+        # would be this function interpreting the block it promises to carry
+        # verbatim.
+        out[str(protocol)] = FlavorWire(connectors=connectors, features=features)
+    return out
 
 
 def _template_voice_enabled(template: object) -> bool:
@@ -344,20 +383,27 @@ async def _read_upload(upload: UploadFile, max_bytes: int, label: str) -> bytes:
     return data
 
 
+# Where virtual try-on's switch lives, now that optional commerce
+# behaviours are declared together. Named here rather than inline so the
+# fallback below reads as one decision.
+_TRY_ON_PROTOCOL = "ucp"
+_TRY_ON_FEATURE = "try_on"
+
+
 def _template_try_on_enabled(template: object) -> bool:
     """Whether this merchant may use virtual try-on.
 
-    Reads ``configurations.enable_try_on``, the per-merchant switch, and
-    fails CLOSED: a template that has never heard of try-on, or one the
-    route could not load, gets no generations. Try-on spends the
-    merchant's credits, so "unknown" must mean no.
+    Reads ``flavor.ucp.features.try_on``, beside the other optional
+    commerce behaviours. Fails CLOSED: a template that has never heard of
+    try-on, or one the route could not load, gets no generations. Try-on
+    spends the merchant's credits, so "unknown" must mean no.
 
     Mirrors :func:`_template_voice_enabled` in shape, but not in default:
     voice predates its own flag and so defaults ON for legacy templates.
     A feature that bills per use cannot afford that kindness.
     """
-    configurations = getattr(template, "configurations", None)
-    return bool(getattr(configurations, "enable_try_on", False))
+    block = _template_flavor(template).get(_TRY_ON_PROTOCOL)
+    return bool(block.features.get(_TRY_ON_FEATURE, False)) if block else False
 
 
 # ---------------------------------------------------------------------------

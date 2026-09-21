@@ -327,11 +327,23 @@ class TestEntitlement:
 
         return _template_try_on_enabled(template)
 
+    @staticmethod
+    def _flavor(features):
+        """`configurations.flavor` with one ucp block, as the template writes it."""
+        return _Configurations(
+            flavor={"ucp": _Configurations(connectors=[], features=features)}
+        )
+
     def test_a_template_that_opts_in_is_enabled(self):
-        assert self._enabled(_Template(_Configurations(enable_try_on=True))) is True
+        assert self._enabled(_Template(self._flavor({"try_on": True}))) is True
 
     def test_a_template_that_opts_out_is_not(self):
-        assert self._enabled(_Template(_Configurations(enable_try_on=False))) is False
+        assert self._enabled(_Template(self._flavor({"try_on": False}))) is False
+
+    def test_a_flavor_block_without_the_feature_is_not(self):
+        """Opt-in by contract — another commerce feature being on says
+        nothing about this one."""
+        assert self._enabled(_Template(self._flavor({"upsell": True}))) is False
 
     def test_a_template_that_never_heard_of_try_on_is_not(self):
         assert self._enabled(_Template(_Configurations())) is False

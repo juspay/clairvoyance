@@ -19,6 +19,7 @@ from app.api.routers.breeze_buddy.widget.handlers import _surface_wire, _WidgetS
 from app.schemas.breeze_buddy.chat import (
     CreateDemoSessionResponse,
     CreateWidgetSessionResponse,
+    FlavorWire,
     GreetingTileWire,
     QuickReplyWire,
     WidgetSessionStateResponse,
@@ -184,3 +185,83 @@ def test_widget_resume_strips_llm_context_only_blocks():
     serialized = str(cleaned)
     assert "you have not replied" not in serialized
     assert "ui rendered" not in serialized
+
+
+# ---------------------------------------------------------------------------
+# flavor — the template's opt-in switches, carried UNINTERPRETED
+# ---------------------------------------------------------------------------
+
+
+def _template_with_flavor(features: dict) -> SimpleNamespace:
+    """A template whose `configurations.flavor` holds one protocol block."""
+    return SimpleNamespace(
+        configurations=SimpleNamespace(
+            flavor={"ucp": SimpleNamespace(connectors=["shopify"], features=features)},
+        ),
+        supported_channels=["chat"],
+    )
+
+
+async def test_flavor_rides_the_block_unchanged():
+    """Protocol -> feature -> bool, exactly as the template wrote it.
+
+    The engine must not interpret these keys (see FlavorProtocolConfig):
+    a flavor resolves its own block by name, and now the widget's flavor
+    chunks do too. So the assertion is that NOTHING was renamed, filtered
+    or defaulted on the way out.
+    """
+    block = await _surface_wire(
+        _surface(),
+        _template_with_flavor({"upsell": True, "show_viewed_product": False}),
+        catalog_active="v2",
+        ui_flavors=["commerce"],
+    )
+    block_ucp = block.flavor["ucp"]
+    assert block_ucp.connectors == ["shopify"]
+    assert block_ucp.features == {"upsell": True, "show_viewed_product": False}
+
+
+async def test_no_flavor_block_is_an_empty_map_not_an_error():
+    """`configurations.flavor` is optional, and features are opt-in — a
+    template that never mentions one reads as 'everything off'."""
+    block = await _surface_wire(
+        _surface(), _template(), catalog_active="v2", ui_flavors=[]
+    )
+    assert block.flavor == {}
+
+
+def test_flavor_rides_the_block_ONLY():
+    """A new field belongs on the block, not on the flat twins.
+
+    The flat duplicates exist for embeds in the wild — cached bundles that
+    read the top level and predate the block. None of them has heard of
+    this field, so copying it up there buys nothing and gives the two
+    shapes a way to disagree.
+    """
+    assert "flavor" in WidgetSurfaceWire.model_fields
+    for model in (
+        CreateWidgetSessionResponse,
+        CreateDemoSessionResponse,
+        WidgetSessionStateResponse,
+    ):
+        assert "flavor" not in model.model_fields, model.__name__
+
+
+async def test_an_explicitly_empty_protocol_block_survives():
+    """`{"ucp": {}}` is a statement — connectors self-select, features all
+    off — and it is not the same as saying nothing about ucp. Normalizing it
+    away would be this wire interpreting a block it carries verbatim."""
+    block = await _surface_wire(
+        _surface(),
+        SimpleNamespace(
+            configurations=SimpleNamespace(
+                flavor={"ucp": SimpleNamespace(connectors=[], features={})}
+            ),
+            supported_channels=["chat"],
+        ),
+        catalog_active="v2",
+        ui_flavors=["commerce"],
+    )
+    assert "ucp" in block.flavor
+    assert block.flavor["ucp"].connectors == []
+    assert block.flavor["ucp"].features == {}
