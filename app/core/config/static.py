@@ -429,6 +429,13 @@ BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_
 # Channel semaphore
 BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10))
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
+# Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
+# longer than the 10-minute outbound one: the sweep releases the telephony
+# channel, and an inbound lead PROCESSING for 10 minutes is usually a live
+# call, not a wedged one.
+BB_INBOUND_STUCK_LEAD_MINUTES = int(
+    os.environ.get("BB_INBOUND_STUCK_LEAD_MINUTES", 240)
+)
 
 # Reconcilers
 BB_RECONCILE_BACKLOG_INTERVAL_S = int(

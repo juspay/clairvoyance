@@ -22,6 +22,9 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import WebSocket
 
+from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import (
+    release_inbound_channel,
+)
 from app.ai.voice.agents.breeze_buddy.services.call_redirect import redirect_call
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     check_inbound_policy,
@@ -259,13 +262,48 @@ async def _check_deferred_inbound_policy(
         }
         existing = await get_lead_by_call_id(call_sid)
         if existing:
-            await update_lead_call_completion_details(
+            # Claim the transition, then release only if we won it.
+            #
+            # The PROCESSING row is the receipt for the channel the answer-time
+            # gate took. expected_status makes this UPDATE an atomic claim, so
+            # a returned row means THIS caller performed the transition —
+            # without it the WHERE clause is the id alone and a returned row
+            # only means the row exists, which two racing callbacks would both
+            # see, both refunding the same channel. An under-count over-admits
+            # past maximum_channels in both directions, since _acquire_number
+            # reads the same column.
+            #
+            # `existing` is the pre-UPDATE snapshot and still reads PROCESSING,
+            # which is what release_inbound_channel keys on.
+            #
+            # This protects against other CLAIMING callers, not against
+            # handle_call_completion, which still releases off a pre-update
+            # snapshot and then updates unconditionally. That pairing is
+            # sequential in practice (this block closes the socket, which is
+            # what triggers the teardown), but it is not excluded by
+            # construction. Making every releaser claim first is tracked.
+            #
+            # A successful REDIRECT is released here too, deliberately. It
+            # leaves a real gap — redirect_call goes through
+            # conference_service.handle_transfer, which keeps the caller
+            # conferenced and dials the human from this same DID, so two legs
+            # ride the trunk while the counter shows one freed. The alternative
+            # is worse: holding the channel strands it permanently, because
+            # nothing releases a redirected leg (the conference-end callback
+            # returns static XML and touches no counter, and the lead is
+            # terminal so no call-end path refunds it). A bounded over-admit
+            # beats an unbounded leak. Fixing it properly needs the transfer to
+            # own the channel for the life of its conference.
+            finished = await update_lead_call_completion_details(
                 id=existing.id,
                 status=LeadCallStatus.FINISHED,
                 outcome=outcome,
                 meta_data=meta_data,
                 call_end_time=datetime.now(timezone.utc),
+                expected_status=LeadCallStatus.PROCESSING,
             )
+            if finished:
+                await release_inbound_channel(existing)
             await update_lead_template(
                 lead_id=existing.id,
                 template=template.name,

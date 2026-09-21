@@ -593,16 +593,22 @@ async def update_lead_call_completion_details(
     outcome: Optional[str] = None,
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
+    expected_status: Optional[LeadCallStatus] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call completion details.
     Only updates fields that are not None.
+
+    With ``expected_status`` the write becomes an atomic claim — None then
+    means "another caller got there first", not "the update failed". Callers
+    that release a resource on the transition must pass it; see the query's
+    docstring for why a plain id-only UPDATE cannot be used to decide that.
     """
     logger.info(f"Updating lead call completion details for ID: {id}")
 
     try:
         query_text, values = update_lead_call_completion_details_query(
-            id, status, outcome, meta_data, call_end_time
+            id, status, outcome, meta_data, call_end_time, expected_status
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
@@ -616,7 +622,15 @@ async def update_lead_call_completion_details(
                 _fire_hooks(_finished_hooks, decoded_result, "finished-lead")
             return decoded_result
 
-        logger.error("Failed to update lead call completion details")
+        if expected_status is not None:
+            # Lost the claim: the row is no longer in expected_status because
+            # another caller already transitioned it. Not an error.
+            logger.info(
+                f"Lead {id} was not in {expected_status.value}; another caller "
+                "already claimed the transition"
+            )
+        else:
+            logger.error("Failed to update lead call completion details")
         return None
 
     except Exception as e:

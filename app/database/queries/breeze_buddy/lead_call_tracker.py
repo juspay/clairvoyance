@@ -524,10 +524,23 @@ def update_lead_call_completion_details_query(
     outcome: Optional[str] = None,
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
+    expected_status: Optional[LeadCallStatus] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call completion details.
     Only updates fields that are not None.
+
+    ``expected_status`` turns the UPDATE into an atomic CLAIM: the row is only
+    written when it still holds that status, so a returned row means THIS
+    caller performed the transition and everyone else gets nothing. Without it
+    the WHERE clause is the id alone, and a returned row only means the row
+    exists — which is useless for deciding who owes a side effect.
+
+    That distinction is load-bearing wherever a lead transition also releases a
+    resource: an inbound Plivo lead holds a telephony channel while it is
+    PROCESSING, and two callbacks that both merely "updated the row" would both
+    refund it, under-counting the number and over-admitting past
+    maximum_channels.
     """
     set_clauses: List[str] = []
     values: List[Any] = []
@@ -553,7 +566,13 @@ def update_lead_call_completion_details_query(
 
     # Add id for WHERE clause
     values.append(id)
-    where_clause = f'"id" = ${len(values)}'
+    where_parts = [f'"id" = ${len(values)}']
+
+    if expected_status is not None:
+        values.append(expected_status.value)
+        where_parts.append(f'"status" = ${len(values)}')
+
+    where_clause = " AND ".join(where_parts)
 
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"

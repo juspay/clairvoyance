@@ -26,35 +26,35 @@ def insert_telephony_number_query(
     """
     Generate query to insert telephony number record.
     """
+    # Capacity columns are omitted when not supplied, rather than bound as
+    # NULL. Since migration 076 they are NOT NULL with defaults, and a column
+    # DEFAULT only fires when the column is absent from the INSERT — binding
+    # NULL would raise NotNullViolation and fail the admin create-number call,
+    # which legitimately leaves maximum_channels unset
+    # (CreateTelephonyNumberRequest has no default for it).
+    columns = ["id", "number", "provider", "status"]
+    values: List[Any] = [id, number, provider.value, status.value]
+
+    if channels is not None:
+        columns.append("channels")
+        values.append(channels)
+    if maximum_channels is not None:
+        columns.append("maximum_channels")
+        values.append(maximum_channels)
+
+    columns += ["reseller_id", "merchant_id", "created_at", "updated_at"]
+    values += [reseller_id, merchant_id, datetime.now(), datetime.now()]
+
+    # Identifiers are fixed literals from the list above; every VALUE is a $n
+    # placeholder.
+    column_sql = ", ".join(f'"{c}"' for c in columns)
+    placeholders = ", ".join(f"${i}" for i in range(1, len(values) + 1))
+
     text = f"""
         INSERT INTO "{TELEPHONY_NUMBER_TABLE}"
-        (
-            "id",
-            "number",
-            "provider",
-            "status",
-            "channels",
-            "maximum_channels",
-            "reseller_id",
-            "merchant_id",
-            "created_at",
-            "updated_at"
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *;
+        ({column_sql})
+        VALUES ({placeholders}) RETURNING *;
     """
-
-    values = [
-        id,
-        number,
-        provider.value,
-        status.value,
-        channels,
-        maximum_channels,
-        reseller_id,
-        merchant_id,
-        datetime.now(),
-        datetime.now(),
-    ]
 
     return text, values
 

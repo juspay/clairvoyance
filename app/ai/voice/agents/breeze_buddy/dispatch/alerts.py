@@ -220,6 +220,54 @@ async def raise_no_telephony_number(
     )
 
 
+async def raise_inbound_capacity_rejected(
+    telephony_number_id: str,
+    number: str,
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
+    maximum_channels: Optional[int],
+) -> None:
+    """
+    P1 — an inbound caller was turned away because the number had no free
+    channel.
+
+    Deliberately louder than the outbound capacity path, which only defers a
+    lead onto the schedule and costs nothing. Here a real customer heard a
+    busy message and hung up, so this is a revenue signal, not a queueing
+    signal. Throttled per number so a saturated DID pages once per 30 min
+    rather than once per rejected call.
+    """
+    await _send(
+        alert_name=f"inbound_capacity_rejected:{telephony_number_id}",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy: inbound call rejected — no free channel",
+        fields=[
+            {"name": "Number", "value": number},
+            {"name": "Telephony number id", "value": telephony_number_id},
+            {"name": "Reseller", "value": reseller_id or "n/a"},
+            {"name": "Merchant", "value": merchant_id or "n/a"},
+            {"name": "maximum_channels", "value": str(maximum_channels)},
+            {
+                "name": "Effect",
+                "value": (
+                    "Callers to this number are hearing the busy message and "
+                    "being hung up on. Every rejection is a lost conversation."
+                ),
+            },
+            {
+                "name": "Action",
+                "value": (
+                    "Check `bb_channel_tokens_available` for this number. If "
+                    "saturation is real, raise `maximum_channels` (and the "
+                    "provider-side channel count) or add numbers. If tokens "
+                    "look wrong, suspect a leaked channel — check "
+                    "`channel_drift` alerts for the same number."
+                ),
+            },
+        ],
+    )
+
+
 async def raise_orphan_webhook(call_id: str, source: str) -> None:
     """
     P1 — telephony webhook arrived for a ``call_id`` that has no
