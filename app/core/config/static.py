@@ -578,6 +578,16 @@ CRM_MESSAGE_SEND_TIMEOUT_SECONDS = _positive_int("CRM_MESSAGE_SEND_TIMEOUT_SECON
 # so raising one dial without the other fails CI.
 CRM_ACTION_TIMEOUT_SECONDS = _positive_int("CRM_ACTION_TIMEOUT_SECONDS", 20)
 
+# The console's analytics reads (a plan's report, its calls summary, the
+# runs that entered a window) are cancelled server-side after this many
+# seconds. Below loom's 30 s client timeout on purpose: on 21 Sep 2026 two
+# dozen reports the browser had abandoned kept running on prod and held a
+# 2-vCPU database. A cancelled read is a 500 the operator sees; a silent
+# one is an outage nobody does.
+CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS = _positive_int(
+    "CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS", 25
+)
+
 # Nautilus's inbound route for anything WE ask it to do — today a Shopify
 # order action relayed while nautilus still holds the shops' Shopify tokens
 # (providers/shopify/via_nautilus.py), and the same route once abandonment,

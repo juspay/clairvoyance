@@ -72,6 +72,16 @@ def list_workflows_query(
     return query, [merchant_id, limit, offset]
 
 
+def count_workflows_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """The merchant's plan count, for the list's pager (X-Total-Count)."""
+    query = f"""
+        SELECT count(*)::int AS total
+        FROM {WORKFLOW_TABLE}
+        WHERE merchant_id = $1
+    """
+    return query, [merchant_id]
+
+
 def publish_workflow_query(merchant_id: str, workflow_id: str) -> Tuple[str, List[Any]]:
     """Publish = copy draft -> definition, bump version (the audit stamp),
     go/stay live. Runs inside the publish atom AFTER the validator said

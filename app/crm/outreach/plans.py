@@ -37,11 +37,6 @@ from app.crm.outreach.schemas import (
     WorkflowNode,
     WorkflowSummary,
 )
-from app.crm.record.contracts import (
-    topic_counts,
-)
-
-SEEN_WINDOW_DAYS = 7
 
 
 def validate_definition(
@@ -575,25 +570,20 @@ async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]
 async def list_workflows(
     merchant_id: str, limit: int, offset: int
 ) -> List[WorkflowSummary]:
-    """The list, decorated with seen-vs-matched for the window: events on
-    each plan's entry topic (record's count, any source) against runs it
-    started — "saw 240 · matched 3" is a dashboard fact, never a stored one."""
-    summaries = await workflow_accessor.list_workflows(merchant_id, limit, offset)
-    if not summaries:
-        return summaries
-    seen: Dict[str, int] = {}
-    for count in await topic_counts(merchant_id, SEEN_WINDOW_DAYS):
-        seen[count.topic] = seen.get(count.topic, 0) + count.seen
-    started = await enrollment_accessor.enrollment_counts(merchant_id, SEEN_WINDOW_DAYS)
-    return [
-        s.model_copy(
-            update={
-                "seen_7d": seen.get(s.entry_topic or "", 0),
-                "matched_7d": started.get(str(s.id), 0),
-            }
-        )
-        for s in summaries
-    ]
+    """One page of the plan list, and nothing computed on read: name,
+    status, version, who and when, the first door's topic. The week's
+    seen/matched counts that used to ride here cost a GROUP BY over every
+    event the merchant received in 7 days — 2M rows, a 23 s full scan of
+    crm_event_raw for Flipkart on 21 Sep 2026 — on every open of the list.
+    A count over the log belongs to a rollup written at ingest, not to a
+    list read (record's topic_counts remains for the catalog, behind an
+    explicit ask)."""
+    return await workflow_accessor.list_workflows(merchant_id, limit, offset)
+
+
+async def count_workflows(merchant_id: str) -> int:
+    """How many plans the merchant has — the list's page count."""
+    return await workflow_accessor.count_workflows(merchant_id)
 
 
 class WorkflowNotFound(Exception):

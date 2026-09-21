@@ -266,9 +266,17 @@ _ANSWERED = (
 # unstamped row with attempt_count > 0 whose request_id one of the run's own
 # stamped leads carries, created while the run was open. Nothing about how a
 # workflow derives request_id is decided here — the stamped lead already did.
+#
+# ``{parent_request_id}`` must be a plain column or scalar, never a
+# correlated subquery: written as ``request_id IN (SELECT ... WHERE
+# s2.run_id = s.run_id)`` the planner cannot probe idx_lead_call_tracker
+# _request_id per run and instead pairs every run with every lead of the
+# window and filters — quadratic in runs (25 runs: 11 s on prod, 21 Sep
+# 2026; 3,000 runs locally: 546k rows thrown away). An equality is one
+# index probe per run.
 _RETRY_OF_RUN = (
     '{l}"enrollment_id" IS NULL AND {l}"attempt_count" > 0 '
-    'AND {l}"request_id" IN ({parent_request_ids}) '
+    'AND {l}"request_id" = {parent_request_id} '
     'AND {l}"created_at" >= {entered} AND {l}"created_at" <= COALESCE({exited}, now())'
 )
 
@@ -283,18 +291,21 @@ def get_leads_by_enrollment_id_query(
     id) plus its retry leads, in the order they were queued. The partial
     enrollment index (059) carries the first half, the request_id index
     (004) the second; merchant_id keeps a foreign id from reading."""
-    parents = (
-        f'SELECT "request_id" FROM "{LEAD_CALL_TRACKER_TABLE}" '
-        'WHERE "merchant_id" = $2 AND "enrollment_id" = $1'
-    )
+    # One run: its stamped request_ids are a tiny uncorrelated set, joined
+    # as a plain equality so the request_id index serves the retry half.
     retry = _RETRY_OF_RUN.format(
-        l="", parent_request_ids=parents, entered="$3", exited="$4::timestamptz"
+        l="l.", parent_request_id="p.request_id", entered="$3", exited="$4::timestamptz"
     )
     text = f"""
-        SELECT *
-        FROM "{LEAD_CALL_TRACKER_TABLE}"
-        WHERE "merchant_id" = $2
-          AND ("enrollment_id" = $1 OR ({retry}))
+        SELECT l.*
+        FROM "{LEAD_CALL_TRACKER_TABLE}" l
+        WHERE l."merchant_id" = $2 AND l."enrollment_id" = $1
+        UNION
+        SELECT l.*
+        FROM (SELECT DISTINCT "request_id" FROM "{LEAD_CALL_TRACKER_TABLE}"
+              WHERE "merchant_id" = $2 AND "enrollment_id" = $1) p
+        JOIN "{LEAD_CALL_TRACKER_TABLE}" l
+          ON l."merchant_id" = $2 AND {retry}
         ORDER BY "next_attempt_at" NULLS LAST, "id";
     """
     return text, [enrollment_id, merchant_id, entered_at, exited_at]
@@ -306,10 +317,15 @@ def _run_leads_cte() -> str:
     leads UNION ALL its retry leads (_RETRY_OF_RUN), production modes only,
     merchant-scoped on both halves. ``mine`` carries run_id beside every
     lead column, so the reads below group by it. Two joins, each on its own
-    index (059 for the stamp, 004 for request_id)."""
+    index (059 for the stamp, 004 for request_id).
+
+    The retry join is an EQUALITY on the stamped lead's request_id, carried
+    through ``s`` (one row per run × request_id): the earlier correlated
+    ``IN (SELECT ... WHERE s2.run_id = s.run_id)`` was quadratic in runs
+    and is what held prod's CPU on 21 Sep 2026."""
     retry = _RETRY_OF_RUN.format(
         l="l.",
-        parent_request_ids='SELECT "request_id" FROM stamped s2 WHERE s2.run_id = s.run_id',
+        parent_request_id="s.request_id",
         entered="s.entered_at",
         exited="s.exited_at",
     )
@@ -324,7 +340,8 @@ def _run_leads_cte() -> str:
             WHERE l."merchant_id" = $1 AND l.{_PRODUCTION}
         ), retries AS (
             SELECT s.run_id, s.entered_at, s.exited_at, l.*
-            FROM (SELECT DISTINCT run_id, entered_at, exited_at FROM stamped) s
+            FROM (SELECT DISTINCT run_id, entered_at, exited_at, "request_id"
+                  FROM stamped) s
             JOIN "{LEAD_CALL_TRACKER_TABLE}" l
               ON l."merchant_id" = $1 AND l.{_PRODUCTION}
              AND {retry}
