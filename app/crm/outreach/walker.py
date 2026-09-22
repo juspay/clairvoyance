@@ -38,7 +38,13 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.nodes import NODE_TYPES, awaits, branches, is_wait
-from app.crm.outreach.nodes.call import awaiting_key, report_outcome
+from app.crm.outreach.nodes.call import (
+    CALL_COMPLETED,
+    EJECT_OUTCOMES,
+    awaiting_key,
+    cancel_queued_calls,
+    report_outcome,
+)
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     dispatch_id,
@@ -151,15 +157,9 @@ async def walk_run(run: EnrollmentRun) -> None:
                     f"definition v{run.workflow_version} unreadable: {e}"
                 )
                 ejected = None
-            if await enrollment_accessor.exit_run(
-                str(run.id),
-                "ejected",
-                lease,
-                steps=as_rows(closing(run, ejected, "ejected")),
-            ):
-                _log_exit(run, "ejected")
-            else:
-                _deferred(run, "eject")
+            await _end_early(
+                run, "ejected", lease, as_rows(closing(run, ejected, "ejected"))
+            )
             return
         if workflow.status == "paused":
             return  # the lease push IS the snooze; re-checked next wake
@@ -207,6 +207,33 @@ async def walk_run(run: EnrollmentRun) -> None:
                 _deferred(run, "retry")
 
 
+async def _end_early(
+    run: EnrollmentRun,
+    exit_reason: str,
+    lease: datetime,
+    steps: List[Dict[str, Any]],
+    context: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Exit a run before its plan ends — ejected, timed out, a goal, or a
+    waiting call that could not be dialled — and abort the calls it still
+    has queued. Never for `completed`: a plan whose last square is a call
+    completes the moment that call is queued, and that call must still go
+    out. ``context`` rides only when the exit wrote it (the closing
+    square's outcome); None keeps the row's."""
+    if await enrollment_accessor.exit_run(
+        str(run.id),
+        exit_reason,
+        lease,
+        current_node=run.current_node if context is not None else None,
+        context=context,
+        steps=steps,
+    ):
+        _log_exit(run, exit_reason)
+        await cancel_queued_calls(str(run.id), f"run exited: {exit_reason}")
+    else:
+        _deferred(run, exit_reason)
+
+
 def _log_exit(run: EnrollmentRun, reason: str) -> None:
     """How a run ended is otherwise written only to its row, where no
     alert rule can see it — and a rising `timed_out` share is how silent
@@ -247,15 +274,9 @@ async def _advance(
     # timed_out no matter which square it stands on.
     max_age = timedelta(days=definition.exits.max_age_days)
     if now - run.entered_at > max_age:
-        if await enrollment_accessor.exit_run(
-            str(run.id),
-            "timed_out",
-            lease,
-            steps=as_rows(closing(run, definition, "timed_out")),
-        ):
-            _log_exit(run, "timed_out")
-        else:
-            _deferred(run, "timed_out")
+        await _end_early(
+            run, "timed_out", lease, as_rows(closing(run, definition, "timed_out"))
+        )
         return
 
     # Goal re-check at fire time — one indexed EXISTS per tier via
@@ -274,15 +295,12 @@ async def _advance(
         if await customer_has_event(
             run.merchant_id, str(run.customer_id), tier.topics, since, where
         ):
-            if await enrollment_accessor.exit_run(
-                str(run.id),
+            await _end_early(
+                run,
                 tier.exit_reason,
                 lease,
-                steps=as_rows(closing(run, definition, tier.exit_reason)),
-            ):
-                _log_exit(run, tier.exit_reason)
-            else:
-                _deferred(run, tier.exit_reason)
+                as_rows(closing(run, definition, tier.exit_reason)),
+            )
             return
 
     current_id = run.current_node
@@ -360,9 +378,31 @@ async def _advance(
         if awaits(node) and context.get(awaiting_key(node.id)):
             # Standing on the call square, waiting for its call (22 Sep
             # 2026): the lead was queued on an earlier visit — NEVER queued
-            # again — and this visit is the report or the backstop.
+            # again — and this visit is the report, a merchant letter, or
+            # the backstop.
             dispatched = str(context[awaiting_key(node.id)])
-            resolved = _resolve_awaiting_call(node, context)
+            resolved = await _resolve_awaiting_call(run, node, context)
+            if resolved in EJECT_OUTCOMES:
+                # This customer cannot be called; the next call would fail
+                # the same way. The run ends here with the outcome on its
+                # last square (ruled 22 Sep 2026). Every other failed
+                # outcome takes the plain edge below, like a no-answer.
+                context = without_reply(context, node.id)
+                context.pop(awaiting_key(node.id), None)
+                walked += step(
+                    node,
+                    arrived_at,
+                    datetime.now(timezone.utc),
+                    arrived_by,
+                    resolved,
+                    None,
+                    run,
+                    cut_short_by,
+                    first,
+                    dispatched,
+                )
+                await _end_early(run, "ejected", lease, as_rows(walked), context)
+                return
         elif execute is not None:  # a wait's action IS the alarm
             patch = await execute(run, node, definition)
             context.update(patch)
@@ -492,15 +532,30 @@ async def _advance(
     )
 
 
-def _resolve_awaiting_call(node: WorkflowNode, context: Dict[str, Any]) -> str:
-    """PURE: what ended a waiting call square's wait, as the outcome its
-    step records (22 Sep 2026): its own report — the call's outcome
-    (NO_ANSWER, BUSY, INTERESTED …) — or the backstop (no reply): the call
-    was never placed in the time the square allowed."""
+async def _resolve_awaiting_call(
+    run: EnrollmentRun, node: WorkflowNode, context: Dict[str, Any]
+) -> str:
+    """What ended a waiting call square's wait, as the outcome its step
+    records — and the queued call's fate (ruled 22 Sep 2026):
+
+    - its own report: the call's outcome (NO_ANSWER, BUSY, INTERESTED …);
+      the call happened, nothing to abort;
+    - a merchant letter the square lists: the customer acted, so the
+      queued call is aborted (a call already ringing is left alone) and
+      the letter's arrow is taken with the new facts;
+    - the backstop (no reply): the call was never placed in the time the
+      square allowed; the queued call is aborted and the plain edge taken."""
     answer = context.get(reply_key(node.id))
     if answer is None:
+        await cancel_queued_calls(
+            str(run.id),
+            f"call {node.id} not placed within {node.await_minutes:g} minutes",
+        )
         return TIMEOUT
-    return report_outcome(context, node.id) or str(answer)
+    if str(answer) == CALL_COMPLETED:
+        return report_outcome(context, node.id) or CALL_COMPLETED
+    await cancel_queued_calls(str(run.id), f"superseded by {answer}")
+    return str(answer)
 
 
 def goal_since(run: EnrollmentRun) -> datetime:
@@ -530,16 +585,22 @@ def pick_next(
     arrow = the end."""
     if not branches(node):
         return arrows[0][0] if arrows else None
-    if awaits(node):
-        # A waiting call has one plain edge, taken when the call ends or
-        # the backstop fires (publish refuses any other arrow on it).
-        return next((dst for dst, on in arrows if on is None), None)
     answer = context.get(reply_key(node.id))
     wanted = TIMEOUT if answer is None else answer
     for dst, on in arrows:
         if on == wanted:
             return dst
+    if awaits(node) and (answer is None or str(answer) == CALL_COMPLETED):
+        # The call is over (its report) or was never placed (the backstop):
+        # the plain edge, BEFORE `else` — an `else` arrow answers listed
+        # topics the author gave no arrow of their own, never the call.
+        return next((dst for dst, on in arrows if on is None), None)
     for dst, on in arrows:
         if on == ELSE:
             return dst
+    if awaits(node):
+        # A listed topic with no arrow of its own and no `else`: the plain edge.
+        for dst, on in arrows:
+            if on is None:
+                return dst
     return None

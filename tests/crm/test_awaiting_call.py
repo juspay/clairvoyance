@@ -10,7 +10,7 @@ with a fake accessor slice (the shape test_workflow_walker.py uses).
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 import pytest
@@ -118,6 +118,7 @@ class _Writes:
         self.matched = matched
         self.advances: List[Dict[str, Any]] = []
         self.exits: List[Dict[str, Any]] = []
+        self.aborts: List[Tuple[str, str]] = []
         self.status = "live"
 
     async def get_workflow(self, merchant_id: str, workflow_id: str) -> Workflow:
@@ -155,11 +156,15 @@ class _Writes:
     async def record_run_error(self, *args: Any) -> bool:
         return self.matched
 
+    async def cancel_queued_calls(self, run_id: str, reason: str) -> None:
+        self.aborts.append((run_id, reason))
+
 
 def _install(monkeypatch: pytest.MonkeyPatch, writes: _Writes) -> None:
     patch_accessors(monkeypatch, walker, writes)
     patch_accessors(monkeypatch, definitions, writes)
     definitions._definitions.clear()
+    monkeypatch.setattr(walker, "cancel_queued_calls", writes.cancel_queued_calls)
 
 
 def _queue(monkeypatch: pytest.MonkeyPatch, lead: str = "lead-1") -> List[str]:
@@ -231,11 +236,11 @@ def test_the_ladder_publishes_and_the_other_shapes_are_refused() -> None:
     two_plain = {**_LADDER, "edges": [*_LADDER["edges"], ["call-1", "listen"]]}
     assert any("exactly one plain edge" in p for p in validate_definition(two_plain))
     labelled = {**_LADDER, "edges": [*_LADDER["edges"], ["call-1", "quiet", "OFFERED"]]}
-    assert any("no labelled arrows" in p for p in validate_definition(labelled))
+    assert any("does not list" in p for p in validate_definition(labelled))
     other_event = with_call(event_name="OFFERED")
     assert any("own report" in p for p in validate_definition(other_event))
     matched = with_call(match={"run": "customer_id", "payload": "customer_id"})
-    assert any("never on `match`" in p for p in validate_definition(matched))
+    assert validate_definition(matched) == []  # judges the topics it lists
     deaf_with_topics = with_call(event_name=None, topics=["OFFERED"], key="$topic")
     assert any(
         "only a call that waits" in p for p in validate_definition(deaf_with_topics)
@@ -320,6 +325,7 @@ def test_the_backstop_takes_the_plain_edge_as_a_timeout(
     assert moved["node"] == "gap"
     (row,) = moved["steps"]
     assert row["outcome"] == "timeout"
+    assert writes.aborts == [(str(run.id), "call call-1 not placed within 60 minutes")]
 
 
 def test_a_report_without_an_outcome_still_moves_the_square_on(

@@ -267,19 +267,27 @@ class WorkflowNode(BaseModel):
     # (the default) is today's square: queue and move on at once — a
     # default cannot change what published plans do. `await_minutes` is the
     # backstop: a report that never comes (dispatcher down, number
-    # unavailable) ends the wait and the run takes its edge.
+    # unavailable) ends the wait, the queued lead is aborted, and the run
+    # takes its edge. A waiting square may also list the merchant's
+    # `topics`, judged by `match` like a listening wait: a letter on one
+    # aborts the queued call and follows that topic's labelled arrow (the
+    # customer acted; the plan re-decides on the new event).
     event_name: Optional[str] = None
     await_minutes: float = Field(1440, gt=0)
 
     @model_validator(mode="after")
     def _a_waiting_call_hears_the_event_it_names(self) -> "WorkflowNode":
-        """A call square with `event_name` listens for that one event and
-        branches on the letter's NAME. Written into the node at parse
+        """A call square with `event_name` listens for that event first,
+        then for the merchant topics it lists, and branches on the
+        letter's NAME: the report takes the square's plain edge, a listed
+        topic takes its labelled arrow. Written into the node at parse
         time so nothing downstream special-cases the word — the consumer
         and the walker see a listening square with topics and key
         $topic."""
         if self.type == "call" and self.event_name:
-            self.topics = [self.event_name]
+            self.topics = [self.event_name] + [
+                t for t in self.topics if t != self.event_name
+            ]
             self.key = "$topic"
         return self
 

@@ -34,7 +34,11 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
 from app.crm.outreach.nodes import awaits, listens
-from app.crm.outreach.nodes.call import CALL_COMPLETED, awaiting_key
+from app.crm.outreach.nodes.call import (
+    CALL_COMPLETED,
+    awaiting_key,
+    cancel_queued_calls,
+)
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     LATEST_LETTER_KEY,
@@ -241,6 +245,7 @@ async def _end_on_goal(
                 # would otherwise forge a log line (CWE-117).
                 f"run {run.id} exited {tier.exit_reason} on {event.topic!r}"
             )
+            await cancel_queued_calls(str(run.id), f"run exited: {tier.exit_reason}")
             return True
     return False
 
@@ -313,13 +318,19 @@ async def _wake_on_reply(
         # The answer, and which square heard the latest letter — so the
         # facts of THIS letter win the next call even after the run has
         # moved on (nodes.run_facts; a ladder hears a stage's letter on
-        # the square it leaves).
+        # the square it leaves). The call's own report yields to a letter
+        # already on the square: a merchant letter heard while the call
+        # rang (a ringing lead is not aborted) is the newer word, and the
+        # report landing behind it before the walker's pass would replace
+        # its answer and its facts — the letter lost, the next call built
+        # from the report under the letter's pointer.
         await enrollment_accessor.resume_run_by_id(
             run.merchant_id,
             str(run.id),
             node.id,
             _reply_patch(node, event, answer),
             facts,
+            unless_key=_yields_to(node, event),
         )
     # The run may be standing on a square that listens to NOTHING: the
     # door's start square before the walker's first visit (a condition, a
@@ -373,6 +384,16 @@ def _reply_patch(node: WorkflowNode, event: RawEvent, answer: str) -> Dict[str, 
     return patch
 
 
+def _yields_to(node: WorkflowNode, event: RawEvent) -> Optional[str]:
+    """PURE: the context key whose presence makes this letter stand down,
+    or None. Only the waiting call's own report yields — to the reply a
+    merchant letter already left on the square. Every merchant letter is
+    the latest word and replaces whatever is there."""
+    if awaits(node) and event.topic == CALL_COMPLETED:
+        return reply_key(node.id)
+    return None
+
+
 def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
     """PURE: is this letter about THIS run, as the square's `match` asks
     (phase 18)? The letter's field against the run's own id or a context
@@ -384,7 +405,8 @@ def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
     call.completed whose lead_id is the lead it queued (awaiting_key),
     never any other call of hers — a late report from an earlier visit,
     after the backstop moved the square on, names a lead no square is
-    waiting for and wakes nothing."""
+    waiting for and wakes nothing. Its merchant topics are judged as any
+    listening square's."""
     if awaits(node) and event.topic == CALL_COMPLETED:
         claimed = event.payload.get("lead_id")
         mine = run.context.get(awaiting_key(node.id))

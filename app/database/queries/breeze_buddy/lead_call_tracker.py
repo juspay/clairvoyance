@@ -829,6 +829,46 @@ def abort_lead_by_id_query(
     return text, values
 
 
+def abort_queued_leads_by_enrollment_query(
+    enrollment_id: str, cancellation_reason: str
+) -> Tuple[str, List[Any]]:
+    """
+    Abort every call a CRM workflow run still has queued (ADR 0010) — the
+    same terminal write as abort_lead_by_id_query, for all of the run's
+    leads that have not been dialled yet.
+
+    A locked lead is left alone: the dialler holds it and is placing the
+    call, so it ends like any call already ringing.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "status" = $1,
+            "outcome" = $2,
+            "updated_at" = NOW(),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb
+        WHERE
+            "enrollment_id" = $4
+            AND "status" IN ($5, $6)
+            AND "is_locked" = FALSE
+            AND ("outcome" IS NULL OR "outcome" = '')
+        RETURNING *;
+    """
+    metadata = {
+        "aborted_at": datetime.now().isoformat(),
+        "outcome": {"abort_reason": cancellation_reason},
+    }
+    values = [
+        LeadCallStatus.FINISHED.value,
+        "ABORT",
+        json.dumps(metadata),
+        enrollment_id,
+        LeadCallStatus.BACKLOG.value,
+        LeadCallStatus.RETRY.value,
+    ]
+    return text, values
+
+
 def update_lead_payload_query(
     lead_id: str, payload_updates: Dict[str, Any]
 ) -> Tuple[str, List[Any]]:

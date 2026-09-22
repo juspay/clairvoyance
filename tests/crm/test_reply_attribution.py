@@ -145,7 +145,7 @@ class _Spine:
         return True
 
     async def resume_run_by_id(
-        self, merchant_id, run_id, node_id, patch, facts=None
+        self, merchant_id, run_id, node_id, patch, facts=None, unless_key=None
     ) -> bool:
         self.resumes.append((run_id, node_id))
         return True

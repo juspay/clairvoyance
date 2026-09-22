@@ -375,6 +375,7 @@ def resume_run_by_id_query(
     node_id: str,
     context_patch: Dict[str, Any],
     facts: Optional[Dict[str, Any]] = None,
+    unless_key: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """W5: the reply reaches the token — by run id (phase 13), because
     the listening square is the RUN'S version's, and a sibling run on
@@ -394,7 +395,15 @@ def resume_run_by_id_query(
     parked run that hears it is no longer stuck on the thing that parked
     it — it becomes waiting with its failure counter forgiven (the human
     resume's semantics, now event-driven) and, as for any reply, its
-    last_error cleared: the letter IS the step that unstuck it."""
+    last_error cleared: the letter IS the step that unstuck it.
+
+    ``unless_key``: touch the run only while that context key is ABSENT —
+    the call report's rule on an awaiting square. A merchant letter heard
+    while the call rang already answered the square (reply_<square>) and
+    took the pointer (latest_letter); the report landing behind it, before
+    the walker's pass, must not replace that answer and those facts under
+    the same square, or the letter is lost and the next call speaks the
+    report. Decided in the statement, so the two writers never race."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET context = context || $4::jsonb
@@ -407,6 +416,7 @@ def resume_run_by_id_query(
             attempts = CASE WHEN status = 'parked' THEN 0 ELSE attempts END
         WHERE merchant_id = $1 AND id = $2
           AND status IN ('waiting', 'parked') AND current_node = $3
+          AND ($6::text IS NULL OR NOT (context ? $6::text))
         RETURNING id
     """
     return query, [
@@ -415,6 +425,7 @@ def resume_run_by_id_query(
         node_id,
         json.dumps(context_patch),
         json.dumps(facts or {}),
+        unless_key,
     ]
 
 

@@ -27,6 +27,7 @@ from app.crm.outreach.schemas import (
     WorkflowNode,
 )
 from app.database.accessor import (
+    abort_queued_leads_by_enrollment,
     create_lead_call_tracker,
     get_call_execution_config_by_template_id,
     get_lead_by_id,
@@ -40,6 +41,15 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 # for it, matched on the lead id it queued, and takes its edge when it lands.
 CALL_COMPLETED = CALL_REPORT_TOPIC
 
+# Outcomes that are about the CUSTOMER, not about us: this phone cannot be
+# dialled, or the customer asked never to be called. Walking on to the next
+# call would fail the same way, so a waiting square exits the run instead
+# (ruled 22 Sep 2026); the outcome is left in context for the report. Every
+# other failed outcome — a number misconfigured, no config, a pre-check that
+# ran out, the reaper's UNKNOWN after a call that WAS placed — is ours or
+# transient and takes the plain edge like a no-answer, so the ladder goes on.
+EJECT_OUTCOMES = frozenset({"INVALID_PHONE", "BLACKLISTED"})
+
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
     problems: List[str] = []
@@ -47,17 +57,18 @@ def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
         problems.append(f"call node {node.id} needs a template_id")
     if node.event_name:
         if node.event_name != CALL_COMPLETED:
-            # The one event a call square can wait for is its own report:
-            # it is the only letter matched on the lead the square queued.
+            # The event a call square waits for is its own report: it is
+            # the only letter matched on the lead the square queued. The
+            # merchant's topics ride `topics`, judged by `match`.
             problems.append(
                 f"call node {node.id}: event_name is {CALL_COMPLETED!r} — the "
-                "call's own report is the one event a call square waits for"
+                "call's own report is the event a call square waits for; the "
+                "merchant's topics go in `topics`"
             )
-        if node.match is not None:
-            problems.append(
-                f"call node {node.id}: the call's own report is matched on the "
-                "lead the square queued, never on `match`"
-            )
+        # `match` is allowed and judges the MERCHANT topics the square lists
+        # (two applications on one phone: the letter's customer_id against
+        # the run's, as on a listening wait); the square's own report is
+        # matched on the lead it queued, never on `match`.
     elif node.topics or node.key:
         problems.append(
             f"call node {node.id}: only a call that waits for its report "
@@ -214,3 +225,19 @@ async def execute(
     if chosen:
         written[playbook_key(node.id)] = chosen
     return written
+
+
+async def cancel_queued_calls(run_id: str, reason: str) -> None:
+    """The calls a run still has queued end with the reason that ended
+    them: the run exited (a goal, its max age, its plan archived), a
+    merchant letter superseded the call, or its report never came. A
+    queued call outlives the run otherwise — one waiting out the night
+    would ring, next morning, a customer the run let go at midnight. A call
+    already ringing is left to end on its own. Fail-open: the accessor
+    logs and aborts nothing on a database error."""
+    aborted = await abort_queued_leads_by_enrollment(run_id, reason)
+    if aborted:
+        logger.info(
+            f"run {run_id}: {reason} — aborted queued calls "
+            f"{[lead.id for lead in aborted]}"
+        )
