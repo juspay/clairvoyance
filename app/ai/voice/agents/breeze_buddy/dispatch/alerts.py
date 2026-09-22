@@ -11,6 +11,7 @@ Throttle TTLs reflect severity:
 
     P0 / dispatch halted             5 min
     P1 / duplicate-call detected     30 min
+    P1 / in-call pipeline failure    30 min
     P2 / schedule depth or drift     15 min
 
 Slack failures never break dispatch — every alert is best-effort and the
@@ -333,6 +334,91 @@ async def raise_dragontts_degraded() -> None:
                 ),
             },
         ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# In-call pipeline failures (STT / LLM / TTS / orchestration)
+# ---------------------------------------------------------------------------
+
+# Pipeline leg labels — shared by the throttle key and the action table.
+STAGE_STT = "STT"
+STAGE_LLM = "LLM"
+STAGE_TTS = "TTS"
+STAGE_ORCHESTRATION = "ORCHESTRATION"
+
+# Pipecat names processors ``{ClassName}#{n}``; every voice service here ends
+# in one of these suffixes, so a new provider classifies itself — no list to maintain.
+_STAGE_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("STTService", STAGE_STT),
+    ("TTSService", STAGE_TTS),
+    ("LLMService", STAGE_LLM),
+)
+
+_PIPELINE_STAGE_ACTIONS: Dict[str, str] = {
+    STAGE_STT: (
+        "Check the status and concurrency headroom of the STT provider named "
+        "in the Processor field above. AUTHENTICATION/QUOTA means a key or "
+        "plan problem, not an outage — those will not self-heal."
+    ),
+    STAGE_LLM: (
+        "Check the health, rate limits and concurrency capacity of the LLM "
+        "provider named in the Processor field above — GPU/node health too "
+        "if it's a self-hosted deployment."
+    ),
+    STAGE_TTS: (
+        "Check the status of the TTS provider named in the Processor field "
+        "above. If the template has enable_tts_caching=true, also check "
+        "DragonTTS health — a cache-proxy failure surfaces here."
+    ),
+    STAGE_ORCHESTRATION: (
+        "Not a provider leg — transport, aggregator or flow-manager failure. "
+        "Check the pod logs for this call_sid and the telephony WebSocket."
+    ),
+}
+
+
+def classify_pipeline_stage(processor_name: str) -> str:
+    """Map a pipecat processor name to the pipeline leg that failed."""
+    for suffix, stage in _STAGE_SUFFIXES:
+        if suffix in processor_name:
+            return stage
+    return STAGE_ORCHESTRATION
+
+
+async def raise_pipeline_failure(
+    processor: str,
+    error: str,
+    call_sid: Optional[str] = None,
+    reseller_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
+    template: Optional[str] = None,
+    category: Optional[str] = None,
+) -> None:
+    stage = classify_pipeline_stage(processor)
+    fields = [
+        {"name": "Stage", "value": stage},
+        {"name": "Processor", "value": processor},
+        {"name": "Error", "value": error or "(no detail)"},
+        {"name": "Category", "value": category or "unknown"},
+        {"name": "Call SID", "value": call_sid or "n/a"},
+        {"name": "Reseller", "value": reseller_id or "n/a"},
+        {"name": "Merchant", "value": merchant_id or "n/a"},
+        {"name": "Template", "value": template or "n/a"},
+        {
+            "name": "Scope",
+            "value": (
+                "One representative call — this alert is throttled per "
+                "(stage, processor), so other calls are likely affected too."
+            ),
+        },
+        {"name": "Action", "value": _PIPELINE_STAGE_ACTIONS[stage]},
+    ]
+    await _send(
+        alert_name=f"pipeline_failure:{stage}:{processor}",
+        throttle_seconds=_THROTTLE_P1,
+        title=f"[P1] Breeze Buddy pipeline failure — {stage}",
+        fields=fields,
     )
 
 
