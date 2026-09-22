@@ -24,7 +24,8 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
-from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
+from app.crm.outreach.nodes import NODE_TYPES, awaits, branches, is_wait, listens
+from app.crm.outreach.nodes.spec import ELSE
 from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
@@ -175,7 +176,29 @@ def validate_definition(
     for src, arrows in definition.outgoing().items():
         labels = [on for _, on in arrows]
         node = nodes_by_id.get(src)
-        if node is not None and branches(node):
+        if node is not None and awaits(node):
+            # A waiting call (22 Sep 2026) takes its ONE plain edge when the
+            # event it names lands or its backstop fires, and a labelled
+            # arrow when a merchant topic it lists arrives — the customer
+            # acted, so the plan re-decides. Labels name listed topics, or
+            # `else` (listed topics the author gave no arrow of their own —
+            # never the call: the walker sends the report and the backstop
+            # down the plain edge before it looks at `else`).
+            if labels.count(None) != 1:
+                problems.append(
+                    f"call {src} waits for {node.event_name}, so it has exactly "
+                    "one plain edge (taken when the call ends) — labelled arrows "
+                    "are for the topics it lists"
+                )
+            for on in labels:
+                if on is not None and on != ELSE and on not in node.topics:
+                    problems.append(
+                        f"call {src}: edge {on!r} names a topic the square does "
+                        "not list — add it to the call's topics"
+                    )
+            if len(set(labels)) != len(labels):
+                problems.append(f"{node.type} {src} has two edges with the same on")
+        elif node is not None and branches(node):
             if None in labels:
                 problems.append(f"every edge out of {node.type} {src} needs an on")
             if len(set(labels)) != len(labels):

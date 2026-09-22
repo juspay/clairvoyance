@@ -13,6 +13,7 @@ from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
+    abort_queued_leads_by_enrollment_query,
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
     count_recent_contacted_leads_query,
@@ -853,6 +854,34 @@ async def handle_lead_abort(
     except Exception as e:
         logger.error(f"Error aborting lead {lead_id}: {e}")
         return None
+
+
+async def abort_queued_leads_by_enrollment(
+    enrollment_id: str, cancellation_reason: str
+) -> List[LeadCallTracker]:
+    """
+    Abort the calls a CRM workflow run still has queued — BACKLOG or RETRY,
+    not yet picked up by the dialler. Each aborted lead fires the finished
+    hooks, like handle_lead_abort, so the CRM mirror reports the call as
+    completed with outcome ABORT. Returns the aborted leads; an error is
+    logged and aborts nothing.
+    """
+    try:
+        query_text, values = abort_queued_leads_by_enrollment_query(
+            enrollment_id, cancellation_reason
+        )
+        result = await run_parameterized_query(query_text, values)
+    except Exception as e:
+        logger.error(f"Error aborting queued leads of run {enrollment_id}: {e}")
+        return []
+
+    aborted: List[LeadCallTracker] = []
+    for row in result or []:
+        lead = decode_lead_call_tracker(row)
+        if lead is not None:
+            _fire_hooks(_finished_hooks, lead, "finished-lead")
+            aborted.append(lead)
+    return aborted
 
 
 async def update_lead_payload(

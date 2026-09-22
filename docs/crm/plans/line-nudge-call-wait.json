@@ -1,0 +1,206 @@
+{
+  "_comment": "The lending journey whose call squares WAIT for their call (22 Sep 2026; docs/crm/runbooks/awaiting-call.md). Each call square says `\"event_name\": \"call.completed\"`: it queues its lead and holds the token until that call's own report lands (matched on the lead id it queued), then takes its one plain edge with the call's outcome on the step — so a run never has two calls queued and gap-30m counts from the call's END, not from the insert. `await_minutes` is the backstop, after which the edge is taken anyway. A call square without `event_name` is today's square: queue and move on at once.",
+  "entry": {
+    "topic": "LINE_INITIATED",
+    "key": "customer_id",
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "nodes": [
+    {
+      "id": "is-credit-line",
+      "type": "condition",
+      "rules": [
+        {
+          "on": "yes",
+          "if": [
+            {
+              "field": "context.products",
+              "op": "not_exists"
+            },
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quiet-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "09:00",
+        "closes": "21:00",
+        "timezone": "Asia/Kolkata"
+      },
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    },
+    {
+      "id": "call-1",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER",
+      "await_minutes": 1440,
+      "event_name": "call.completed"
+    },
+    {
+      "id": "gap-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "09:00",
+        "closes": "21:00",
+        "timezone": "Asia/Kolkata"
+      },
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    },
+    {
+      "id": "call-2",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER",
+      "event_name": "call.completed",
+      "await_minutes": 1440
+    },
+    {
+      "id": "listen",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    }
+  ],
+  "edges": [
+    [
+      "is-credit-line",
+      "quiet-30m",
+      "yes"
+    ],
+    [
+      "is-credit-line",
+      "listen",
+      "else"
+    ],
+    [
+      "quiet-30m",
+      "call-1",
+      "timeout"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "call-1",
+      "gap-30m"
+    ],
+    [
+      "gap-30m",
+      "call-2",
+      "timeout"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "call-2",
+      "listen"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ]
+  ],
+  "goals": [
+    {
+      "topics": [
+        "LINE_ACTIVE",
+        "LINE_HARD_OFFER_REJECTED",
+        "LINE_KYC_REJECTED"
+      ],
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 30
+  },
+  "on_publish": "migrate",
+  "purpose_key": "utility.loan.checkout_nudge"
+}

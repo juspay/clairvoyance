@@ -263,11 +263,13 @@ async def resume_run_by_id(
     node_id: str,
     context_patch: Dict[str, Any],
     facts: Optional[Dict[str, Any]] = None,
+    unless_key: Optional[str] = None,
 ) -> bool:
     """True when the run was standing on the listening square (waiting or
-    parked) and took the answer and the letter's facts."""
+    parked) and took the answer and the letter's facts. ``unless_key``:
+    only while that context key is absent (the call report's rule)."""
     query, values = resume_run_by_id_query(
-        merchant_id, run_id, node_id, context_patch, facts
+        merchant_id, run_id, node_id, context_patch, facts, unless_key
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
