@@ -25,6 +25,7 @@ CART = PLANS / "cart-recovery.json"
 CART_FALLBACK = PLANS / "cart-recovery-fallback.json"
 CART_TIERED = PLANS / "cart-recovery-tiered.json"
 CART_SPLIT = PLANS / "cart-recovery-split.json"
+CART_RETRY = PLANS / "cart-recovery-retry.json"
 LOAN = PLANS / "loan-dropoff.json"
 COD = PLANS / "cod-confirm.json"
 LINE = PLANS / "line-nudge.json"
@@ -169,6 +170,7 @@ def test_the_expected_documents_exist() -> None:
     assert LINE_OFFSET.is_file(), LINE_OFFSET
     assert _every_plan() == [
         CART_FALLBACK,
+        CART_RETRY,
         CART_SPLIT,
         CART_TIERED,
         CART,
@@ -447,3 +449,47 @@ def test_the_mobile_door_asks_the_list_its_one_question_and_nothing_else() -> No
         and "allowed: includes, exists, not_exists" in p
         for p in problems
     ), problems
+
+
+def test_the_retry_cart_board_bounds_its_own_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 20's example: a board that rings again must say how often.
+
+    The three properties that make the loop safe, read off the document —
+    the ceiling with its clock, an arrow back to the call square, and the
+    fact judged IMMEDIATELY after that square (it is about the last call
+    attempt, not about today, so a rule read further along can see last
+    night's `true`)."""
+    doc = _load(CART_RETRY)
+    plan = WorkflowDefinition.model_validate(doc)
+
+    # NAMED, not inherited: the example's whole point is a board that says
+    # its own ceiling, so read it from the document rather than the default.
+    assert "max_calls_per_day" in doc["exits"], "the example must name its ceiling"
+    assert plan.exits.max_calls_per_day and plan.exits.max_calls_per_day >= 1
+    assert plan.exits.timezone, "a day is counted on the plan's clock"
+
+    calls = [n.id for n in plan.nodes if n.type == "call"]
+    assert len(calls) == 1
+    ring = calls[0]
+    outgoing = plan.outgoing()
+
+    # an arrow BACK to the call square — the thing the ceiling exists for
+    assert any(
+        dst == ring
+        for src, arrows in outgoing.items()
+        for dst, _ in arrows
+        if src != ring
+    ), "the board must loop, or it needs no ceiling"
+
+    # the call square's own arrow lands on the square that judges the fact
+    ((judge_id, _),) = outgoing[ring]
+    judge = next(n for n in plan.nodes if n.id == judge_id)
+    assert judge.type == "condition"
+    named = (
+        {c.field for rule in judge.rules for c in (rule.if_ or [])}
+        if hasattr(judge.rules[0], "if_")
+        else set(predicates.fields_named(judge.rules))
+    )
+    assert "run.max_calls_reached" in named

@@ -376,6 +376,7 @@ def resolve(
     facts: Dict[str, Any],
     stage_facts: Dict[str, Any],
     customer: Optional[CustomerFacts],
+    run: Optional[predicates.RunLens] = None,
 ) -> Tuple[Dict[str, str], Dict[str, str]]:
     """PURE: ONLY the blocks a node asked for — (rendered, chosen).
 
@@ -393,7 +394,10 @@ def resolve(
         return {}, {}
 
     def lookup(path: str) -> Any:
-        return predicates.lookup(path, facts, stage_facts, customer)
+        # Every source the FIELD grammar has, run facts included: a `when`
+        # may name any field a condition may, or an author has to learn which
+        # words work where.
+        return predicates.lookup(path, facts, stage_facts, customer, run)
 
     out: Dict[str, str] = {}
     chosen: Dict[str, str] = {}

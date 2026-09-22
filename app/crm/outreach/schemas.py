@@ -116,11 +116,52 @@ class WorkflowGoal(BaseModel):
 
 
 class WorkflowExits(BaseModel):
-    """The run's hard ceiling: entered_at + max_age_days -> timed_out."""
+    """The run's ceilings: entered_at + max_age_days -> timed_out; and
+    max_calls_per_day, the calls one run may place in a calendar day, after
+    which a call square places none and the run walks on (phase 20).
+
+    ``max_age_days`` defaults on the model. The call ceiling does NOT, and
+    nothing fills it in anywhere: a board is bounded only when its author
+    writes the word. The day is then the PLAN's, never the server's — the
+    same reasoning ``WaitWindow`` states, since a wrong clock resets the
+    count at the wrong hour."""
 
     # > 0 or every run times out on its first claim (now - entered_at is
     # always positive); rejected at model_validate, so publish refuses it.
     max_age_days: float = Field(7.0, gt=0)
+    # Calls this run may place per CALENDAR DAY, over every call square and
+    # every revisit (each visit mints its own lead since 967a86df). Counted
+    # from the run's own day-stamped ledger (outreach/ceiling.py calls_today);
+    # buddy's per-lead re-dials (call_execution_config.max_retry) are a
+    # separate layer and compose multiplicatively.
+    #
+    # NOT defaulted, here or at the write path: definitions.py re-validates
+    # the STORED document on every claim, so a default would cap runs in
+    # flight under a version their author never capped (ADR 0023 §1/§5).
+    # Nor is it a safe bend — a capped square places no lead, so a wait
+    # listening for call.completed leaves by its timeout arrow instead.
+    # The bound is the author's word or nothing.
+    max_calls_per_day: Optional[int] = Field(None, ge=1)
+    # The clock the day is read on (IANA), REQUIRED whenever a ceiling is
+    # named — WaitWindow.timezone below is required for this exact hazard:
+    # a plan whose window says America/New_York would otherwise reset its
+    # budget at 14:30 ET, mid calling-window.
+    timezone: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _a_daily_ceiling_names_its_clock(self) -> "WorkflowExits":
+        if self.timezone is not None:
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise ValueError(f"exits: unknown timezone {self.timezone!r}")
+        if self.max_calls_per_day is not None and not self.timezone:
+            raise ValueError(
+                "exits.max_calls_per_day needs exits.timezone — the day it "
+                "counts is read on the plan's clock, and an unnamed one would "
+                "reset the count at the server's midnight"
+            )
+        return self
 
 
 class WorkflowMatch(BaseModel):

@@ -68,5 +68,14 @@ async def execute(
     customer = None
     if predicates.needs_customer(node.rules):
         customer = await customer_facts(run.merchant_id, str(run.customer_id))
-    chosen = predicates.choose(node.rules, facts, stage_facts, customer)
+    # The engine's run.* facts are computed by the grammar from the pair
+    # below — this square knows none of them by name, the same way it knows
+    # no customer column.
+    chosen = predicates.choose(
+        node.rules,
+        facts,
+        stage_facts,
+        customer,
+        predicates.RunLens(run.context, definition.exits),
+    )
     return {reply_key(node.id): chosen if chosen is not None else ELSE}

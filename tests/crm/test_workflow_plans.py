@@ -11,10 +11,7 @@ import app.crm.outreach.plans as plans
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.outreach.db import DbTxn
 from app.crm.outreach.plans import validate_definition
-from app.crm.outreach.schemas import (
-    Workflow,
-    WorkflowDefinition,
-)
+from app.crm.outreach.schemas import Workflow, WorkflowDefinition
 from app.crm.record.catalog import code_entries
 from app.crm.record.schemas import CatalogField
 from tests.crm.doubles import patch_accessors

@@ -12,9 +12,16 @@ from typing import Any, Dict, List
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
+from app.crm.outreach.ceiling import (
+    CALLS_TODAY_KEY,
+    calls_today,
+    max_calls_reached,
+    today_on,
+)
 from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.nodes.blocks import blocks_for
 from app.crm.outreach.nodes.context import (
+    OUTCOME_KEY,
     lead_request_id,
     playbook_key,
     run_facts,
@@ -29,6 +36,12 @@ from app.database.accessor import (
     update_lead_enrollment_id,
 )
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
+
+# The ledger and the predicate live in outreach/ceiling.py, not here: a plan
+# routes on the same question through `run.max_calls_reached`, so one
+# implementation answers both and they can never disagree. The word below is
+# this square's alone — what it leaves on its trail row (canon T26 outcome).
+MAX_CALLS_OUTCOME = "max_calls"
 
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
@@ -66,6 +79,28 @@ async def execute(
     existing row is adopted. The accessor turns a duplicate key into None
     like every failure, so the square asks whether its own row is there.
     """
+    # The plan's daily ceiling, judged before anything is read or written
+    # (phase 20): at it, this square places no call and the run takes its
+    # normal arrow. The ledger is not touched — it counts calls PLACED — so
+    # the patch is the same on every re-run of this visit and a lease retry
+    # changes nothing. The wait after this square, if it listens for
+    # call.completed, will hear nothing and leave by its alarm; the runbook
+    # shows the condition on run.max_calls_reached that routes past it.
+    ceiling = definition.exits.max_calls_per_day
+    day = today_on(definition.exits)
+    if max_calls_reached(run.context, definition.exits):
+        logger.bind(
+            lead_skip=MAX_CALLS_OUTCOME,
+            calls_today=calls_today(run.context, day),
+            day=day,
+        ).info(
+            f"walker: run {run.id} at max_calls_per_day={ceiling} on {day} "
+            f"— call square {node.id} places no call"
+        )
+        # The trail word only. No fact is written: a condition computes the
+        # same predicate (nodes/condition.py), so there is nothing to go stale.
+        return {OUTCOME_KEY: MAX_CALLS_OUTCOME}
+
     phone = run.context.get("phone")
     if not phone:
         raise NodeParked(f"call node {node.id}: no phone in run context")
@@ -158,6 +193,14 @@ async def execute(
         f"lead_{node.id}": lead_id,
         _visits_key(node.id): visit,
     }
+    if ceiling is not None:
+        # Re-stamping with today's date IS the reset: a ledger carried over
+        # from yesterday is replaced, never added to. Nothing else is written
+        # — there is no cached "reached" flag to clear, because the predicate
+        # is computed from this ledger every time it is asked. A ceiling taken
+        # away mid-run (`max_calls_per_day: null`) therefore frees the run on
+        # the next question, with no stale `true` to survive it.
+        written[CALLS_TODAY_KEY] = {"day": day, "n": calls_today(run.context, day) + 1}
     if chosen:
         written[playbook_key(node.id)] = chosen
     return written

@@ -140,11 +140,37 @@ with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` → `wa-fallback`
   dispatcher writes itself: `NO_ANSWER`, `BUSY`, `EARLY_HANGUP`,
   `BLACKLISTED`, `PRECHECK_FAILED`, `ABORT`/`ABORTED`, `TRANSFERRED`,
   `UNKNOWN`.
-- **A retry is a second call square, never an arrow back.** The walker
-  mints one lead per (run, square); an arrow from `after-call` back to
-  `rescue-call` re-issues the same lead id, which the lead table absorbs
-  as a lease retry — no second call is placed. Name the retry
-  `rescue-call-2`.
+- **An arrow back to a call square IS another call.** Since 10 Sep 2026
+  every visit to a call square mints its own lead (`lead_visits_<square>`
+  keys the id), so `after-call --NO_ANSWER--> rescue-call` rings again on
+  every pass — bounded only by the run's age. Any board that draws such an
+  arrow is bounded by `exits.max_calls_per_day` (phase 20) — **only when
+  the plan writes it**, counted on `exits.timezone`, which a ceiling must
+  name. Nothing fills either word in, at read or at write, so a board that
+  does not ask for a bound does not get one; write it on any board that can
+  ring again. Past that many calls in a day the call square
+  places none, leaves `max_calls` on its trail row, and the run takes its
+  normal arrow — no fact is written, because `run.max_calls_reached` is
+  COMPUTED from the ledger whenever a rule asks for it. The count starts
+  over at midnight on that clock — no sweep and no cron, because the run's
+  ledger is stamped with the day it counted. Two things follow. A listening
+  wait right after it (`after-call`, 180 minutes on `call.completed` in that
+  plan) hears nothing and leaves by its alarm — put a `condition` on
+  `run.max_calls_reached` between the two to route past it. Being
+  computed, it can be judged anywhere on the board: at 09:00 the next
+  morning it reads the fresh allowance, not last night's answer.
+  `docs/crm/plans/cart-recovery-retry.json` is that shape. And no outcome
+  webhook fires for a call never placed. The ceiling counts the walker's own
+  visits; buddy's per-lead re-dials (`call_execution_config.max_retry`) are
+  a separate layer — `max_calls_per_day: 3` on a template with
+  `max_retry: 2` is up to nine dials in a day.
+
+  **Keep a wait on the way back.** `call → call` and `call → condition →
+  call` run under ONE walker claim, so every lead of the loop is minted
+  milliseconds apart and the visit is parked as a runaway before its ledger
+  ever commits — and the ceiling cannot bound that, because the ledger never
+  persists. Publish does not refuse the shape; the `after-call` square is
+  what keeps this board out of it.
 - **Delivery receipts and STOP** (the message half of phase 18) wait for
   the WhatsApp webhook and extractor PRs (#1040, #1052).
 
@@ -309,6 +335,8 @@ curl -sS "$BASE/customers/<customer_id>/runs?merchant_id=$M" -H "$H"
 | `nodes` | `template` on `wa-nudge`, `template_id` on `rescue-call` | `cart_recovery_1` / placeholder | per merchant |
 | root | `purpose_key` | `marketing.cart.recovery` | must be a `marketing.*` purpose — the permission gate (phase 19) will require consent for it |
 | `exits` | `max_age_days` | 7 | rarely |
+| `exits` | `max_calls_per_day` | **unset** — no ceiling unless you write one | the calls one run may place in a day. Write it on any board that can ring again; leave it out and the board is bounded only by `max_age_days` |
+| `exits` | `timezone` | **unset** — required as soon as you name a ceiling | the clock the day resets on |
 
 Operator knobs (env, all pods): `CRM_WALKER_LEASE_SECONDS` (300),
 `CRM_WALKER_MAX_ATTEMPTS` (3), `CRM_RUN_RETENTION_DAYS` (90, exited runs
