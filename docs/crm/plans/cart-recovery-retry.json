@@ -1,0 +1,126 @@
+{
+  "on_publish": "pin",
+  "entry": {
+    "topic": "checkouts/update",
+    "reenter": true,
+    "cooldown_hours": 24,
+    "on_repeat": "refresh_latest",
+    "debounce_minutes": 30
+  },
+  "goals": [
+    {
+      "topics": [
+        "orders/create",
+        "orders/paid"
+      ],
+      "key": {
+        "event": "cart_token",
+        "run": "cart_token"
+      },
+      "exit_reason": "goal_met"
+    },
+    {
+      "topics": [
+        "orders/create",
+        "orders/paid"
+      ],
+      "exit_reason": "converted_elsewhere"
+    }
+  ],
+  "exits": {
+    "max_age_days": 3,
+    "max_calls_per_day": 6,
+    "timezone": "Asia/Kolkata"
+  },
+  "purpose_key": "marketing.cart.recovery",
+  "nodes": [
+    {
+      "id": "wait-30m",
+      "type": "wait",
+      "minutes": 30
+    },
+    {
+      "id": "rescue-call",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "was-it-capped",
+      "type": "condition",
+      "rules": [
+        {
+          "on": "capped",
+          "if": [
+            {
+              "field": "context.max_calls_reached",
+              "op": "is",
+              "value": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "after-call",
+      "type": "wait",
+      "topics": [
+        "call.completed"
+      ],
+      "key": "outcome",
+      "minutes": 180,
+      "match": {
+        "payload": "enrollment_id",
+        "run": "id"
+      }
+    },
+    {
+      "id": "sleep-till-tomorrow",
+      "type": "wait",
+      "minutes": 480,
+      "window": {
+        "opens": "10:00",
+        "closes": "19:00",
+        "timezone": "Asia/Kolkata"
+      }
+    }
+  ],
+  "edges": [
+    [
+      "wait-30m",
+      "rescue-call"
+    ],
+    [
+      "rescue-call",
+      "was-it-capped"
+    ],
+    [
+      "was-it-capped",
+      "sleep-till-tomorrow",
+      "capped"
+    ],
+    [
+      "was-it-capped",
+      "after-call",
+      "else"
+    ],
+    [
+      "after-call",
+      "rescue-call",
+      "NO_ANSWER"
+    ],
+    [
+      "after-call",
+      "rescue-call",
+      "BUSY"
+    ],
+    [
+      "after-call",
+      "sleep-till-tomorrow",
+      "else"
+    ],
+    [
+      "sleep-till-tomorrow",
+      "rescue-call"
+    ]
+  ]
+}

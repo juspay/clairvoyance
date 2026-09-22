@@ -115,12 +115,79 @@ class WorkflowGoal(BaseModel):
     exit_reason: str = "goal_met"
 
 
+# The ceiling every plan gets unless it says otherwise, and the clock its day
+# is read on. Named constants because the console shows them as the effective
+# value and the runbook quotes them — three spellings would drift.
+DEFAULT_MAX_CALLS_PER_DAY = 6
+DEFAULT_TIMEZONE = "Asia/Kolkata"
+
+
 class WorkflowExits(BaseModel):
-    """The run's hard ceiling: entered_at + max_age_days -> timed_out."""
+    """The run's ceilings: entered_at + max_age_days -> timed_out; and
+    max_calls_per_day, the calls one run may place in a calendar day, after
+    which a call square places none and the run walks on (phase 20).
+
+    ``max_age_days`` defaults on the model. The call ceiling does NOT: it is
+    stamped into the DOCUMENT when a plan is written
+    (``plans.with_default_ceiling``, 6 calls a day on Asia/Kolkata), so every
+    new plan has one without a stored document ever being re-read as
+    something its author did not write (ADR 0023). The day is the PLAN's,
+    never the server's — the same reasoning ``WaitWindow`` states, since a
+    wrong clock resets the count at the wrong hour.
+
+    ``max_calls_per_day: null`` in the document is how a board says "no
+    ceiling" through a republish, and it is deliberately explicit: a board
+    that dials without a bound should have had to ask for it."""
 
     # > 0 or every run times out on its first claim (now - entered_at is
     # always positive); rejected at model_validate, so publish refuses it.
     max_age_days: float = Field(7.0, gt=0)
+    # Calls this run may place per CALENDAR DAY, over every call square and
+    # every revisit (each visit mints its own lead since 967a86df). Counted
+    # from the run's own day-stamped ledger (nodes/context.py calls_today);
+    # buddy's per-lead re-dials (call_execution_config.max_retry) are a
+    # separate layer and compose multiplicatively.
+    #
+    # NOTHING is defaulted on the MODEL, and that is the whole point.
+    # definitions.py re-validates the STORED version row on every claim, so a
+    # default here is applied to documents whose authors never wrote a
+    # ceiling — ADR 0023 §1 (a run executes the plan it entered under) and §5
+    # (the immutable row must keep answering "what did this run execute";
+    # with a model default the answer depends on which code reads the row).
+    #
+    # "Only fewer calls" is not a safe direction either: a capped call square
+    # places no lead, so a board whose next square listens for call.completed
+    # hears nothing and leaves by its timeout arrow. That is a change of
+    # MEANING for a run already walking, and which arrow it takes is the
+    # merchant's board, not ours.
+    #
+    # Every NEW plan still gets a ceiling: plans.with_default_ceiling stamps
+    # DEFAULT_MAX_CALLS_PER_DAY into the document when it is written, so the
+    # row says what its runs do and the publish law can read the validated
+    # model again. `null` in the document is the explicit opt-out.
+    max_calls_per_day: Optional[int] = Field(None, ge=1)
+    # The clock the day boundary is read on (IANA), stamped alongside the
+    # ceiling. Not defaulted here for the same reason, and because
+    # WaitWindow.timezone 60 lines down is REQUIRED for this exact hazard —
+    # a US plan whose window says America/New_York would otherwise reset its
+    # budget at 00:00 IST, 14:30 ET, mid calling-window, with nothing in the
+    # document showing the disagreement.
+    timezone: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _a_daily_ceiling_names_its_clock(self) -> "WorkflowExits":
+        if self.timezone is not None:
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise ValueError(f"exits: unknown timezone {self.timezone!r}")
+        if self.max_calls_per_day is not None and not self.timezone:
+            raise ValueError(
+                "exits.max_calls_per_day needs exits.timezone — the day it "
+                "counts is read on the plan's clock, and an unnamed one would "
+                "reset the count at the server's midnight"
+            )
+        return self
 
 
 class WorkflowMatch(BaseModel):

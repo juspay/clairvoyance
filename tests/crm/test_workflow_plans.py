@@ -10,8 +10,10 @@ import pytest
 import app.crm.outreach.plans as plans
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.outreach.db import DbTxn
-from app.crm.outreach.plans import validate_definition
+from app.crm.outreach.plans import validate_definition, with_default_ceiling
 from app.crm.outreach.schemas import (
+    DEFAULT_MAX_CALLS_PER_DAY,
+    DEFAULT_TIMEZONE,
     Workflow,
     WorkflowDefinition,
 )
@@ -103,6 +105,195 @@ def test_unknown_node_type_fails_shape() -> None:
         _definition(nodes=[{"id": "x", "type": "teleport"}], edges=[])
     )
     assert any("shape invalid" in p for p in problems)
+
+
+_IST = {"timezone": "Asia/Kolkata"}
+
+
+def test_max_calls_per_day_must_be_positive() -> None:
+    """Phase 20: a ceiling of zero would make every call square a no-op; the
+    model refuses it before any law is judged, like max_age_days."""
+    for bad in (0, -1):
+        problems = validate_definition(
+            _definition(exits={"max_calls_per_day": bad, **_IST})
+        )
+        assert any("definition shape invalid" in p for p in problems), bad
+    assert (
+        validate_definition(_definition(exits={"max_calls_per_day": 1, **_IST})) == []
+    )
+
+
+def test_a_daily_ceiling_is_counted_on_a_real_clock() -> None:
+    """The day is read on the plan's clock. Naming a ceiling without one is
+    fine — the write path stamps it — but an unknown zone is refused at the
+    door rather than raising mid-run."""
+    assert validate_definition(_definition(exits={"max_calls_per_day": 2})) == []
+    problems = validate_definition(
+        _definition(exits={"max_calls_per_day": 2, "timezone": "Mars/Olympus"})
+    )
+    assert any("shape invalid" in p for p in problems)
+
+
+def test_the_ceiling_is_stamped_into_new_rows_and_never_onto_old_ones() -> None:
+    """The default is given at WRITE, never at read.
+
+    ADR 0023 §1 pins a run to the plan it entered under, and definitions.py
+    re-validates the stored version row on every claim — so a default on the
+    MODEL would hand a ceiling to documents whose authors never wrote one,
+    and change what a run in flight does. Not a safe bend either: a capped
+    call square places no lead, so a board whose next square listens for
+    `call.completed` hears nothing and leaves by its timeout arrow instead.
+
+    Stamping at write gives the same guardrail with none of that: every plan
+    written from now on carries the number, and the immutable row keeps
+    answering "what did this run execute" (§5) rather than leaning on a
+    default that can change under it."""
+    published_before_this_phase = _definition()
+    pinned = WorkflowDefinition.model_validate(published_before_this_phase)
+    assert pinned.exits.max_calls_per_day is None, "an old row is left as written"
+    assert pinned.exits.timezone is None
+
+    written_today = with_default_ceiling(published_before_this_phase)
+    assert written_today["exits"]["max_calls_per_day"] == DEFAULT_MAX_CALLS_PER_DAY == 6
+    assert written_today["exits"]["timezone"] == DEFAULT_TIMEZONE
+    assert published_before_this_phase.get("exits") is None, "the stamp is PURE"
+
+    # the author's own words survive the stamp, `null` included
+    assert (
+        with_default_ceiling(_definition(exits={"max_calls_per_day": 2}))["exits"][
+            "max_calls_per_day"
+        ]
+        == 2
+    )
+    assert (
+        with_default_ceiling(_definition(exits={"max_calls_per_day": None}))["exits"][
+            "max_calls_per_day"
+        ]
+        is None
+    )
+
+
+# --- phase 20: a call loop must wait on the way back ------------------------
+
+
+def _loop(**overrides) -> Dict[str, Any]:
+    """A board whose call square loops back to a call square."""
+    base: Dict[str, Any] = {
+        "nodes": [
+            {"id": "ring", "type": "call", "template_id": "tpl-1"},
+            {"id": "ring-again", "type": "call", "template_id": "tpl-1"},
+        ],
+        "edges": [["ring", "ring-again"], ["ring-again", "ring"]],
+    }
+    base.update(overrides)
+    return _definition(**base)
+
+
+def test_a_call_that_reaches_a_call_without_waiting_is_refused() -> None:
+    """The walker runs consecutive IMMEDIATE squares under ONE claim, so a
+    call loop with no wait mints every lead of the loop in a single visit —
+    milliseconds apart, same phone — until _MAX_STEPS_PER_VISIT parks the run
+    as a runaway. The park is permanent AND nothing that visit wrote reaches
+    the lease CAS, so the ledger the ceiling counts from is never persisted:
+    the bound cannot bound the one shape it was built for. Hence a publish
+    law, where the shape is."""
+    problems = validate_definition(_loop())
+    assert any("without the run waiting" in p for p in problems), problems
+    assert any("Put a wait on the way back" in p for p in problems)
+
+
+def test_a_condition_on_the_way_back_does_not_count_as_waiting() -> None:
+    """A condition decides at once — it is not a wait. `call -> condition ->
+    call` is the same single-visit loop wearing a hat, and it is the shape an
+    author reaches for first when routing on `context.max_calls_reached`."""
+    problems = validate_definition(
+        _loop(
+            nodes=[
+                {"id": "ring", "type": "call", "template_id": "tpl-1"},
+                {
+                    "id": "was-it-capped",
+                    "type": "condition",
+                    "rules": [
+                        {
+                            "on": "capped",
+                            "if": [
+                                {
+                                    "field": "context.max_calls_reached",
+                                    "op": "is",
+                                    "value": True,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+            edges=[
+                ["ring", "was-it-capped"],
+                ["was-it-capped", "ring", "capped"],
+                ["was-it-capped", "ring", "else"],
+            ],
+        )
+    )
+    assert any("without the run waiting" in p for p in problems), problems
+
+
+def test_one_wait_on_the_way_back_is_enough() -> None:
+    """The wait is what ENDS the visit and lets the ledger commit, so exactly
+    one anywhere on the path clears the law — which is what every shipped
+    board already does."""
+    assert (
+        validate_definition(
+            _loop(
+                nodes=[
+                    {"id": "ring", "type": "call", "template_id": "tpl-1"},
+                    {"id": "after-call", "type": "wait", "minutes": 180},
+                ],
+                edges=[["ring", "after-call"], ["after-call", "ring"]],
+                exits={"max_calls_per_day": 6, "timezone": DEFAULT_TIMEZONE},
+            )
+        )
+        == []
+    )
+
+
+def test_the_daily_ceiling_fits_inside_one_visit_worth_of_steps() -> None:
+    """Even with the loop law, the two numbers must not cross. A run may only
+    ever place its whole day's allowance across SEPARATE visits, and each
+    visit is capped at _MAX_STEPS_PER_VISIT immediate squares; a default that
+    reached the step cap would turn "spend the day's calls" into "park as a
+    runaway". Pinned here so raising either number has to look at the other."""
+    from app.crm.outreach.walker import _MAX_STEPS_PER_VISIT
+
+    assert DEFAULT_MAX_CALLS_PER_DAY < _MAX_STEPS_PER_VISIT, (
+        f"a default of {DEFAULT_MAX_CALLS_PER_DAY} against a per-visit step "
+        f"cap of {_MAX_STEPS_PER_VISIT}"
+    )
+
+
+def test_a_call_less_board_is_never_stamped() -> None:
+    """The publish law refuses a ceiling no square can reach, so stamping one
+    into a board with no call square would make its own next edit
+    unpublishable."""
+    call_less = _definition(
+        nodes=[{"id": "wait-30m", "type": "wait", "minutes": 30}], edges=[]
+    )
+    assert "exits" not in with_default_ceiling(call_less) or not with_default_ceiling(
+        call_less
+    )["exits"].get("max_calls_per_day")
+    assert validate_definition(with_default_ceiling(call_less)) == []
+
+
+def test_a_ceiling_nobody_typed_is_never_called_a_lie() -> None:
+    """The no-call-square law fires on a ceiling the author TYPED, never on
+    the stamp: a call-less board is never stamped, so most boards — which
+    have no call square — validate clean exactly as they did before."""
+    board = {
+        "nodes": [{"id": "wait-30m", "type": "wait", "minutes": 30}],
+        "edges": [],
+    }
+    assert validate_definition(_definition(**board)) == []
+    problems = validate_definition(_definition(**board, exits={"max_calls_per_day": 2}))
+    assert any("no call square" in p for p in problems)
 
 
 def test_exit_ceiling_must_be_positive() -> None:

@@ -355,7 +355,10 @@ async def test_create_and_draft_store_the_ladder_and_its_board(
     monkeypatch.setattr(plans, "_gather_catalogs", no_catalogs)
     await plans.create_workflow("m1", "loan-dropoff", _ladder(), "ops@x")
     await plans.update_draft("m1", "wf-1", _ladder())
-    assert stored == [expand_stages(_ladder())] * 2
+    # The stored draft is what validate_definition judged: the expanded board
+    # WITH the default call ceiling stamped in (the ladder's on_idle is a call
+    # square, so the ceiling can bind). ADR 0023 wants the number in the row.
+    assert stored == [plans.with_default_ceiling(expand_stages(_ladder()))] * 2
     for draft in stored:
         assert draft["stages"] == _ladder()["stages"]
         assert {"nodes", "edges", "entry"} <= set(draft)
@@ -363,7 +366,10 @@ async def test_create_and_draft_store_the_ladder_and_its_board(
     board = expand_stages(_ladder())
     plain = {k: v for k, v in board.items() if k != "stages"}
     await plans.create_workflow("m1", "board", plain, "ops@x")
-    assert stored[-1] == plain and "stages" not in stored[-1]
+    # ...though it too gains the stamped call ceiling, the same as any board
+    # written through create_workflow.
+    assert stored[-1] == plans.with_default_ceiling(plain)
+    assert "stages" not in stored[-1]
 
 
 class _PublishAccessor:

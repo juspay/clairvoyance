@@ -40,6 +40,7 @@ from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
+    OUTCOME_KEY,
     dispatch_id,
     reply_key,
     without_reply,
@@ -355,13 +356,31 @@ async def _advance(
 
         execute = NODE_TYPES[node.type].execute
         dispatched: Optional[str] = None
+        said: Optional[str] = None
         if execute is not None:  # a wait's action IS the alarm
-            patch = await execute(run, node, definition)
+            # The square sees the context AS WALKED, not the one the run was
+            # claimed with. This visit runs consecutive immediate squares
+            # (call -> condition -> call) under one claim and only persists at
+            # the end, so a word reading run.context would read a snapshot
+            # that is already stale by its own earlier squares — two call
+            # squares in one visit both spent the same daily allowance, and
+            # the second overwrote the first's ledger write. The copy is
+            # shallow and read-only to the word: patches still come back as
+            # return values, never as mutations.
+            patch = dict(
+                await execute(
+                    run.model_copy(update={"context": context}), node, definition
+                )
+            )
+            # A plain square may say how it was left (phase 20: a call square
+            # at the plan's ceiling). The word is for the trail row below —
+            # popped here so it is never written into the run's context.
+            said = patch.pop(OUTCOME_KEY, None)
             context.update(patch)
             dispatched = dispatch_id(patch, node.id)
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
-        outcome: Optional[str] = None
+        outcome: Optional[str] = None if said is None else str(said)
         if branches(node):
             # The answer that resolved this square IS its outcome (canon
             # T26) — a reply, a condition's rule label, a split's arm, or

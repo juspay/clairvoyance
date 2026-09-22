@@ -28,6 +28,8 @@ from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
 from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
+    DEFAULT_MAX_CALLS_PER_DAY,
+    DEFAULT_TIMEZONE,
     GOAL_EXIT_REASONS,
     RETIRED_WAIT_EVENT,
     Workflow,
@@ -37,6 +39,40 @@ from app.crm.outreach.schemas import (
     WorkflowNode,
     WorkflowSummary,
 )
+
+
+def with_default_ceiling(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """PURE: the daily call ceiling every plan gets, written INTO the document.
+
+    The model cannot default it (ADR 0023: a stored document is re-validated
+    on every claim, so a model default would re-cap runs in flight under a
+    pinned version their author never capped). Stamping at write instead
+    means the version row carries the number, a run executes what it entered
+    under, and the row still answers "what did this run execute".
+
+    Absent -> the default. Explicitly `null` -> left null, the author's opt
+    out. Any number -> theirs. The clock rides along, since a ceiling with no
+    clock is refused.
+
+    The DEFAULT is only given to a board that HAS a call square: the publish
+    law refuses a ceiling no square can reach, so handing one to a call-less
+    board would make its own next edit unpublishable. A ceiling the author
+    TYPED still gets its clock either way — otherwise a call-less board
+    naming one would be refused for the missing clock and never reach the
+    law that has the useful sentence.
+    """
+    exits = dict(raw.get("exits") or {})
+    if "max_calls_per_day" not in exits:
+        nodes = raw.get("nodes")
+        if not any(
+            isinstance(n, dict) and n.get("type") == "call"
+            for n in (nodes if isinstance(nodes, list) else [])
+        ):
+            return raw
+        exits["max_calls_per_day"] = DEFAULT_MAX_CALLS_PER_DAY
+    if exits.get("max_calls_per_day") is not None and not exits.get("timezone"):
+        exits["timezone"] = DEFAULT_TIMEZONE
+    return {**raw, "exits": exits}
 
 
 def validate_definition(
@@ -64,6 +100,11 @@ def validate_definition(
         return [str(e)]
     except ValueError as e:  # pydantic: the ladder's own shape
         return [f"stages shape invalid: {e}"]
+    # Judged on the document as it will be STORED, ceiling stamped and all
+    # (create_workflow / update_draft write exactly this) — so an author who
+    # names a ceiling and no clock is not refused for a word the write path
+    # fills, and nothing can validate clean and then be stored different.
+    raw = with_default_ceiling(raw)
     try:
         definition = WorkflowDefinition.model_validate(raw)
     except Exception as e:  # pydantic's message is already precise
@@ -114,6 +155,19 @@ def validate_definition(
                 f"node {node.id}: window belongs to a wait — only a timer can "
                 "wait for the hours"
             )
+
+    # Read straight off the validated model. Nothing defaults the ceiling, and
+    # with_default_ceiling only stamps a board that HAS a call square, so a
+    # value here on a call-less board is one the author typed.
+    if definition.exits.max_calls_per_day is not None and not any(
+        node.type == "call" for node in definition.nodes
+    ):
+        problems.append(
+            "exits.max_calls_per_day names a ceiling no square can reach — "
+            "the board has no call square"
+        )
+
+    problems.extend(_call_loops_without_waiting(definition))
 
     problems.extend(playbook.laws(definition))
 
@@ -207,6 +261,43 @@ def validate_definition(
                     "migrating a document without it strands every one"
                 )
 
+    return problems
+
+
+def _call_loops_without_waiting(definition: WorkflowDefinition) -> List[str]:
+    """PURE: a call square that can reach a call square again without the run
+    ever waiting is refused.
+
+    The walker runs consecutive IMMEDIATE squares under one claim, so
+    `call -> call` and `call -> condition -> call` place several leads inside
+    a single visit — milliseconds apart, same phone, same next_attempt_at —
+    until `_MAX_STEPS_PER_VISIT` parks the run as a runaway document. The
+    park is permanent, and nothing written during that visit ever reaches the
+    lease CAS, so the ledger `exits.max_calls_per_day` counts from is not
+    persisted either: the ceiling cannot bound the very shape it was built
+    for.
+
+    So the bound is a publish law, where the shape is, rather than a
+    per-document test. One wait anywhere on the path is enough — that is what
+    ends the visit and lets the ledger commit, and it is what every shipped
+    board already does.
+    """
+    nodes = {node.id: node for node in definition.nodes}
+    outgoing = definition.outgoing()
+    problems: List[str] = []
+    for node in definition.nodes:
+        if node.type != "call":
+            continue
+        for dst, _ in outgoing.get(node.id, []):
+            again = _call_reached_without_waiting(dst, nodes, outgoing)
+            if again is not None:
+                problems.append(
+                    f"call {node.id} reaches call {again} again without the run "
+                    "waiting — every lead of that loop is minted in ONE visit, "
+                    "and the visit is parked as a runaway before its ledger "
+                    "commits. Put a wait on the way back."
+                )
+                break
     return problems
 
 
@@ -344,7 +435,7 @@ async def create_workflow(
     if problems:
         raise WorkflowValidationError(problems)
     return await workflow_accessor.insert_workflow(
-        merchant_id, name, expand_stages(definition), created_by
+        merchant_id, name, with_default_ceiling(expand_stages(definition)), created_by
     )
 
 
@@ -356,7 +447,7 @@ async def update_draft(
     if problems:
         raise WorkflowValidationError(problems)
     return await workflow_accessor.update_draft(
-        merchant_id, workflow_id, expand_stages(definition)
+        merchant_id, workflow_id, with_default_ceiling(expand_stages(definition))
     )
 
 

@@ -15,7 +15,12 @@ from typing import Any, Dict, List
 
 from app.crm.identity.contracts import customer_facts
 from app.crm.outreach import predicates
-from app.crm.outreach.nodes.context import reply_key, run_facts
+from app.crm.outreach.nodes.context import (
+    MAX_CALLS_REACHED_KEY,
+    max_calls_reached,
+    reply_key,
+    run_facts,
+)
 from app.crm.outreach.nodes.spec import ELSE
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
@@ -63,6 +68,12 @@ async def execute(
     The answer rides reply_<node> exactly like a listening square's, so
     pick_next and the reply clearing on advance treat both alike."""
     facts = run_facts(run.context, node)
+    # The one fact a condition cannot read off the run: whether today's call
+    # allowance is spent. Computed here rather than stored, so it cannot go
+    # stale across midnight, cannot be seeded by a producer's payload, and
+    # never rides a lead payload — the call square asks the same predicate
+    # before dialling, so the two can never disagree.
+    facts[MAX_CALLS_REACHED_KEY] = max_calls_reached(run.context, definition.exits)
     stage_facts = run.context.get("facts")
     stage_facts = stage_facts if isinstance(stage_facts, dict) else {}
     customer = None
