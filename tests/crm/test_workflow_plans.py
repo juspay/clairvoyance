@@ -205,7 +205,7 @@ def test_a_call_that_reaches_a_call_without_waiting_is_refused() -> None:
 def test_a_condition_on_the_way_back_does_not_count_as_waiting() -> None:
     """A condition decides at once — it is not a wait. `call -> condition ->
     call` is the same single-visit loop wearing a hat, and it is the shape an
-    author reaches for first when routing on `context.max_calls_reached`."""
+    author reaches for first when routing on `run.max_calls_reached`."""
     problems = validate_definition(
         _loop(
             nodes=[
@@ -218,7 +218,7 @@ def test_a_condition_on_the_way_back_does_not_count_as_waiting() -> None:
                             "on": "capped",
                             "if": [
                                 {
-                                    "field": "context.max_calls_reached",
+                                    "field": "run.max_calls_reached",
                                     "op": "is",
                                     "value": True,
                                 }

@@ -152,13 +152,13 @@ with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` → `wa-fallback`
   republish such a board and it gets the number, in its own document where
   you can read and change it. Past that many calls in a day the call square
   places none, leaves `max_calls` on its trail row, and the run takes its
-  normal arrow — no fact is written, because `context.max_calls_reached` is
+  normal arrow — no fact is written, because `run.max_calls_reached` is
   COMPUTED from the ledger whenever a rule asks for it. The count starts
   over at midnight on that clock — no sweep and no cron, because the run's
   ledger is stamped with the day it counted. Two things follow. A listening
   wait right after it (`after-call`, 180 minutes on `call.completed` in that
   plan) hears nothing and leaves by its alarm — put a `condition` on
-  `context.max_calls_reached` between the two to route past it. Being
+  `run.max_calls_reached` between the two to route past it. Being
   computed, it can be judged anywhere on the board: at 09:00 the next
   morning it reads the fresh allowance, not last night's answer.
   `docs/crm/plans/cart-recovery-retry.json` is that shape. And no outcome

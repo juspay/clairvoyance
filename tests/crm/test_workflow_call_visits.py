@@ -16,18 +16,15 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 
 import app.crm.outreach.nodes.call as call_node
-from app.crm.outreach.db import UniqueViolation
-from app.crm.outreach.nodes.call import MAX_CALLS_OUTCOME, execute
-from app.crm.outreach.nodes.context import (
+from app.crm.outreach.ceiling import (
     CALLS_TODAY_KEY,
-    MAX_CALLS_REACHED_KEY,
-    OUTCOME_KEY,
     calls_today,
-    is_bookkeeping,
     max_calls_reached,
-    run_facts,
     today_on,
 )
+from app.crm.outreach.db import UniqueViolation
+from app.crm.outreach.nodes.call import MAX_CALLS_OUTCOME, execute
+from app.crm.outreach.nodes.context import OUTCOME_KEY, is_bookkeeping, run_facts
 from app.crm.outreach.schemas import (
     DEFAULT_MAX_CALLS_PER_DAY,
     DEFAULT_TIMEZONE,
@@ -283,7 +280,7 @@ async def test_at_todays_ceiling_the_square_places_no_call_and_touches_nothing(
     assert first == {OUTCOME_KEY: MAX_CALLS_OUTCOME}, "the trail word, and nothing else"
     assert again == first
     assert CALLS_TODAY_KEY not in first, "a capped visit never touches the ledger"
-    assert MAX_CALLS_REACHED_KEY not in first, "the answer is computed, never stored"
+    assert "max_calls_reached" not in first, "the answer is computed, never stored"
     assert not any(key.startswith("lead_") for key in first)
 
 
@@ -318,7 +315,7 @@ async def test_a_placed_call_counts_and_the_ledger_is_all_that_is_written(
 
     assert len(inserted) == 1
     assert patch[CALLS_TODAY_KEY] == {"day": today, "n": 2}
-    assert MAX_CALLS_REACHED_KEY not in patch
+    assert "max_calls_reached" not in patch
     assert max_calls_reached(patch, plan.exits), "two of two: the next visit is capped"
 
 
@@ -464,7 +461,7 @@ async def test_a_board_that_names_no_ceiling_grows_no_ledger(
     _install(monkeypatch, inserted)
     patch = await execute(_run({"lead_visits_nudge-call": 40}), _NODE, legacy)
     assert len(inserted) == 1 and patch["lead_visits_nudge-call"] == 41
-    assert CALLS_TODAY_KEY not in patch and MAX_CALLS_REACHED_KEY not in patch
+    assert CALLS_TODAY_KEY not in patch and "max_calls_reached" not in patch
 
 
 def test_max_calls_reached_is_the_one_predicate_both_squares_ask() -> None:
@@ -483,22 +480,53 @@ def test_max_calls_reached_is_the_one_predicate_both_squares_ask() -> None:
     assert not max_calls_reached(_ledger(today, 9), _capped(None).exits)
 
 
-def test_neither_the_trail_word_nor_the_answer_can_reach_a_template() -> None:
-    """Both are the walker's own. OUTCOME_KEY because it belongs on the trail
-    row; the answer because it is COMPUTED at read — the condition square
-    injects it (nodes/condition.py), so a copy sitting in the run's context
-    could only be stale or a producer's, and either would route a live run on
-    a lie. run_facts drops it, so it never rides a lead payload."""
+def test_the_ledger_is_ours_and_the_trail_word_never_reaches_a_template() -> None:
+    """The two keys this phase puts in a run's context are both the walker's.
+    The ledger because a producer who spelled it would hand the run a fresh
+    allowance; the trail word because it belongs on the row, not in a
+    message. run_facts drops both, so neither rides a lead payload."""
+    assert is_bookkeeping(CALLS_TODAY_KEY), "ceiling.CALLS_TODAY_KEY is bookkeeping"
     assert is_bookkeeping(OUTCOME_KEY)
-    assert is_bookkeeping(MAX_CALLS_REACHED_KEY)
-    facts = run_facts({MAX_CALLS_REACHED_KEY: True, OUTCOME_KEY: MAX_CALLS_OUTCOME})
-    assert MAX_CALLS_REACHED_KEY not in facts and OUTCOME_KEY not in facts
+    facts = run_facts({CALLS_TODAY_KEY: {"day": "x", "n": 1}, OUTCOME_KEY: "max_calls"})
+    assert CALLS_TODAY_KEY not in facts and OUTCOME_KEY not in facts
+
+
+def test_the_bookkeeping_list_names_the_ledger_key_the_ceiling_owns() -> None:
+    """`_BOOKKEEPING_KEYS` is a tuple of literals by design — it is read by
+    eye as the list of what is ours. The ceiling owns the constant, so the
+    two spellings are pinned here rather than left to drift: the day they
+    disagree, a producer's `calls_today` is admitted and hands the run a
+    fresh allowance."""
+    from app.crm.outreach.nodes.context import _BOOKKEEPING_KEYS
+
+    assert CALLS_TODAY_KEY in _BOOKKEEPING_KEYS
+
+
+def test_a_producer_cannot_spell_the_answer_because_it_is_not_a_context_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The answer lives in the grammar's `run.` namespace, not the run's
+    context, so there is nothing for a merchant's payload to collide with:
+    `context.max_calls_reached` and `run.max_calls_reached` are two different
+    fields, and only the engine can write the second. This is what replaced
+    guarding a context key by name."""
+    from app.crm.outreach import predicates
+
+    plan = _capped(2)
+    spent = _ledger(today_on(plan.exits), 2)
+    # a merchant sends the word, with the opposite value, as an ordinary fact
+    seeded = {**spent, "max_calls_reached": False}
+    lens = predicates.RunLens(seeded, plan.exits)
+    assert (
+        predicates.lookup("context.max_calls_reached", seeded, {}, None, lens) is False
+    )
+    assert predicates.lookup("run.max_calls_reached", seeded, {}, None, lens) is True
 
 
 async def test_the_condition_square_routes_on_the_computed_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The other half of the predicate: `context.max_calls_reached` is a
+    """The other half of the predicate: `run.max_calls_reached` is a
     field a condition may name even though the run's context never holds it.
     Same ledger, same plan, both squares agree."""
     from app.crm.outreach.nodes.condition import execute as condition_execute
@@ -509,9 +537,7 @@ async def test_the_condition_square_routes_on_the_computed_answer(
         rules=[
             {
                 "on": "capped",
-                "if": [
-                    {"field": "context.max_calls_reached", "op": "is", "value": True}
-                ],
+                "if": [{"field": "run.max_calls_reached", "op": "is", "value": True}],
             }
         ],
     )

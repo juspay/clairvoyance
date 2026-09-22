@@ -1,6 +1,6 @@
 # Phase 20 — A daily ceiling on the calls one run may place (max_calls_per_day)
 
-**Kind**: feat · **PR title**: `feat(crm): cap max calls per run per day` · **Depends on**: 18 (merged) · **Notes**: `nodes/call.py` (967a86df: each visit mints its own lead), `walker.py::_advance` (where a square's outcome word is recorded), canon T19 `exits` / T26 `outcome`, `schemas.WaitWindow` (the clock rule this follows), `modules/05-outreach` §gate (the ruling in *Decisions* §1)
+**Kind**: feat · **PR title**: `feat(crm): cap max calls per run per day` · **Depends on**: 18 (merged) · **Notes**: `nodes/call.py` (967a86df: each visit mints its own lead), `walker.py::_advance` (where a square's outcome word is recorded), canon T19 `exits` / T26 `outcome`, `schemas.WaitWindow` (the clock rule this follows), `outreach/window.py` (the concern-file shape `ceiling.py` copies), `predicates.py` (the `customer.` source the `run.` source is built like), `modules/05-outreach` §gate (the ruling in *Decisions* §1)
 
 ## Why now
 
@@ -103,20 +103,34 @@ alternative endings are recorded under Decisions §4.)
    cleared.
 
    **`max_calls_reached` is COMPUTED, never stored** (law 10: no stored derived
-   state a predicate can answer). `nodes/context.py` owns the ledger key, the
-   predicate and the helpers; the call square asks the predicate before
-   dialling and the `condition` square injects it into the facts it judges
-   (`nodes/condition.py`), so a board routes on `context.max_calls_reached`
-   without the run ever holding it. One implementation, so the square that
-   dials and the square that branches can never disagree. Storing it would
-   have been wrong four ways at once: stale across midnight (the ledger
-   un-caps itself by re-stamp, a flag needs a write only a PLACED call makes —
-   and a capped run places none); seedable by a producer, since a plain key is
-   admitted verbatim by `entry._context_from_payload`; leaked outward on the
-   lead payload and the merchant's outcome webhook via `run_facts`; and
-   unreadable by a template anyway, because `send_variables` refuses a bool and
-   parks the run. It is in `_BOOKKEEPING_KEYS` for the first two reasons and
-   injected at read for the rest.
+   state a predicate can answer). `outreach/ceiling.py` owns the ledger key,
+   the predicate and the day arithmetic — a concern file beside `window.py`,
+   for the same reason: plan-level scheduling arithmetic that is pure and has
+   more than one caller.
+
+   **A plan names it as `run.max_calls_reached`**, the grammar's fifth field
+   source (`predicates.RUN_PREFIX` / `RUN_FACTS`), built exactly like
+   `customer.<column>`: a prefix, a CLOSED list of names, one place the value
+   comes from, and a refusal at publish for a name that is not on the list. No
+   square computes it and no square names it in code — `nodes/condition.py`
+   hands the grammar the run's context and the plan's exits and knows nothing
+   about ceilings, the same way it knows nothing about customer columns. That
+   is what keeps a call-square concern out of a generic word, and it is what
+   makes the typo `run.max_calls_reachd` a sentence the author reads at
+   publish instead of a run that takes `else` for the life of the plan — the
+   guard `context.<key>` cannot give, because a producer's facts are unbounded
+   and a misspelt one is indistinguishable from a real one.
+
+   Storing it would have been wrong four ways at once: stale across midnight
+   (the ledger un-caps itself by re-stamp, a flag needs a write only a PLACED
+   call makes — and a capped run places none); seedable by a producer, since a
+   plain context key is admitted verbatim by `entry._context_from_payload`;
+   leaked outward on the lead payload and the merchant's outcome webhook via
+   `run_facts`; and unreadable by a template anyway, because `send_variables`
+   refuses a bool and parks the run. Living in `run.` rather than `context.`
+   ends the second outright: `context.max_calls_reached` and
+   `run.max_calls_reached` are two different fields, so there is nothing for a
+   merchant's payload to collide with.
 
 4. **The walker records it on the trail (one small, general change).** Today
    `_advance` sets a square's `outcome` only for branching squares (from
@@ -140,7 +154,7 @@ alternative endings are recorded under Decisions §4.)
    - logs: `logger.bind(lead_skip="max_calls", calls_today=n, day=...)` — the
      alertable signal, beside `lead_id` on the placed path;
    - the run's context: the day ledger (`calls_today`) is visible on
-     `GET runs/{id}`, and `context.max_calls_reached` is computed from it for
+     `GET runs/{id}`, and `run.max_calls_reached` is computed from it for
      any `condition` square that names it;
    - the run's ending is whatever it would have been — `by_exit_reason` does not
      single these runs out; the trail and the log field do. `calls_per_customer`
@@ -152,7 +166,7 @@ alternative endings are recorded under Decisions §4.)
    - **A listening wait after a capped call waits for a letter that never
      comes.** `after-call` listening for `call.completed` hears nothing and
      leaves by its alarm. Correct and safe, but a wasted window — put a
-     `condition` on `context.max_calls_reached` between the two and route past
+     `condition` on `run.max_calls_reached` between the two and route past
      it. `docs/crm/plans/cart-recovery-retry.json` is that shape, shipped as a
      validated example.
    - **The answer is about TODAY, read the moment it is asked.** Because it is

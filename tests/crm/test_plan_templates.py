@@ -489,4 +489,4 @@ def test_the_retry_cart_board_bounds_its_own_loop(
         if hasattr(judge.rules[0], "if_")
         else set(predicates.fields_named(judge.rules))
     )
-    assert "context.max_calls_reached" in named
+    assert "run.max_calls_reached" in named

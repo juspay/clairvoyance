@@ -13,6 +13,9 @@ value comes from:
 
     context.<key>              the run's facts, as run_facts() exposes them
                                (top-level facts, current_node, current_stage)
+    run.<name>                  a fact the ENGINE derives about this run, never
+                               stored and never a producer's — the closed list
+                               is RUN_FACTS below (run.max_calls_reached today)
     facts.<node>.<key>         one stage's letter (rollout 16: context.facts)
     customer.<column>          display_name · primary_locale · timezone ·
                                has_phone · has_email  (the last two derived:
@@ -30,9 +33,10 @@ the run to retry — a blip must never branch a customer down the wrong arm.
 """
 
 import re
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Set
 
 from app.crm.identity.contracts import CustomerFacts
+from app.crm.outreach import ceiling
 from app.crm.outreach.schemas import ConditionRule
 from app.crm.shared.predicate import matches
 
@@ -47,6 +51,30 @@ CUSTOMER_COLUMNS = (
     "has_phone",
     "has_email",
 )
+
+#: The same spelling for "this field reads a fact the engine derives".
+RUN_PREFIX = "run."
+
+# The closed list of derived run facts, and the one place they are computed.
+# A name here is a name a plan may write; a name that is not is refused at
+# publish, the way customer.<column> is — which is the whole reason this is a
+# registry and not an injection at a call site. Each value takes the run's
+# context and the plan's exits and answers; anything needing more belongs to
+# its own concern file first (ceiling.py is the shape).
+RUN_FACTS: Dict[str, Callable[[Dict[str, Any], Any], Any]] = {
+    "max_calls_reached": ceiling.max_calls_reached,
+}
+
+
+class RunLens(NamedTuple):
+    """What a derived run fact is computed FROM: the run's context and the
+    plan's exits. A pair rather than the run itself, so this file never
+    learns the shape of a row — the same reason `customer` arrives here as
+    identity's CustomerFacts and not as a table."""
+
+    context: Dict[str, Any]
+    exits: Any
+
 
 # Attribute names a predicate may never name: a handle value read into a
 # branch is a handle value read into a log (module rules: logs never carry
@@ -65,6 +93,7 @@ HANDLE_LIKE = frozenset(
 _FIELD = re.compile(
     r"^(?:"
     r"context\.(?P<ctx>[A-Za-z_][A-Za-z0-9_]*)"
+    r"|run\.(?P<derived>[A-Za-z_][A-Za-z0-9_]*)"
     r"|facts\.(?P<node>[A-Za-z0-9_][A-Za-z0-9_-]*)\.(?P<stage_key>[A-Za-z_][A-Za-z0-9_]*)"
     r"|customer\.(?P<column>[A-Za-z_][A-Za-z0-9_]*)"
     r"|customer\.attributes\.(?P<attribute>[A-Za-z_][A-Za-z0-9_]*)"
@@ -79,11 +108,21 @@ def field_problems(field: str, node_ids: Iterable[str]) -> List[str]:
     m = _FIELD.match(field)
     if m is None:
         return [
-            f"{field!r} is not a condition field (context.<key> · "
+            f"{field!r} is not a condition field (context.<key> · run.<name> · "
             "facts.<node>.<key> · customer.<column> · customer.attributes.<name>)"
         ]
     if m.group("node") is not None and m.group("node") not in set(node_ids):
         return [f"{field!r} names a square this plan does not have"]
+    if m.group("derived") is not None and m.group("derived") not in RUN_FACTS:
+        # The guard context.<key> cannot give: a producer's facts are
+        # unbounded, so a misspelt one is indistinguishable from a real one
+        # and must be allowed. An ENGINE fact is a closed list, so a typo is
+        # a sentence the author reads here instead of a run that takes `else`
+        # for the life of the plan.
+        return [
+            f"{field!r}: run facts are {' · '.join(sorted(RUN_FACTS))} — "
+            "the engine derives these, a plan only names them"
+        ]
     if m.group("attribute") is not None:
         if m.group("attribute") in HANDLE_LIKE:
             return [f"{field!r}: a handle is never readable by a predicate"]
@@ -101,6 +140,7 @@ def lookup(
     facts: Dict[str, Any],
     stage_facts: Dict[str, Any],
     customer: Optional[CustomerFacts],
+    run: Optional[RunLens] = None,
 ) -> Any:
     """PURE: the value a field names right now, or None when absent (which
     satisfies no op — shared/predicate's conservative rule)."""
@@ -109,6 +149,12 @@ def lookup(
         return None
     if m.group("ctx") is not None:
         return facts.get(m.group("ctx"))
+    if m.group("derived") is not None:
+        # Absent without the lens, the same rule the customer arm keeps: a
+        # caller that cannot supply the run reads the fact as unreadable
+        # rather than as False, which would be an answer.
+        derive = RUN_FACTS.get(m.group("derived"))
+        return None if run is None or derive is None else derive(run.context, run.exits)
     if m.group("node") is not None:
         letter = stage_facts.get(m.group("node"))
         return letter.get(m.group("stage_key")) if isinstance(letter, dict) else None
@@ -129,12 +175,15 @@ def choose(
     facts: Dict[str, Any],
     stage_facts: Dict[str, Any],
     customer: Optional[CustomerFacts],
+    run: Optional[RunLens] = None,
 ) -> Optional[str]:
     """PURE decide: the label of the first rule whose conditions ALL hold,
     or None — the caller's `else`. Never raises: every lookup is total and
     the evaluator treats an unreadable value as "does not hold"."""
     for rule in rules:
-        if matches(rule.if_, lambda path: lookup(path, facts, stage_facts, customer)):
+        if matches(
+            rule.if_, lambda path: lookup(path, facts, stage_facts, customer, run)
+        ):
             return rule.on
     return None
 
@@ -143,6 +192,14 @@ def needs_customer(rules: Iterable[ConditionRule]) -> bool:
     """PURE: does any rule read the customer? The one DB read a condition
     may cost is paid only when a rule asks for it."""
     return any(c.field.startswith(CUSTOMER_PREFIX) for rule in rules for c in rule.if_)
+
+
+def needs_run(rules: Iterable[ConditionRule]) -> bool:
+    """PURE: does any rule name a derived run fact? The mirror of
+    needs_customer — nothing here costs a read, but a caller that cannot
+    supply the lens should know before it judges rather than silently read
+    every run fact as absent."""
+    return any(c.field.startswith(RUN_PREFIX) for rule in rules for c in rule.if_)
 
 
 def fields_named(rules: Iterable[ConditionRule]) -> Set[str]:

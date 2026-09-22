@@ -52,7 +52,7 @@
           "on": "capped",
           "if": [
             {
-              "field": "context.max_calls_reached",
+              "field": "run.max_calls_reached",
               "op": "is",
               "value": true
             }

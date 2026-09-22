@@ -807,7 +807,7 @@ def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
         "edges": [["ring", "settle"]],
         "exits": {"max_calls_per_day": 1, "timezone": "Asia/Kolkata"},
     }
-    from app.crm.outreach.nodes.context import CALLS_TODAY_KEY, today_on
+    from app.crm.outreach.ceiling import CALLS_TODAY_KEY, today_on
     from app.crm.outreach.schemas import WorkflowExits
 
     today = today_on(WorkflowExits(max_calls_per_day=1, timezone="Asia/Kolkata"))

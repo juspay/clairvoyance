@@ -8,12 +8,13 @@ are the same list ``entry.py`` filters a merge against. A second copy of
 either would let a walker key reach a customer's message.
 
 Leaf inside the package: imports the schemas and nothing else from
-outreach, so a word module may import it without a cycle.
+outreach, so a word module may import it without a cycle. A concern that
+merely READS the context is not this file's — the call ceiling's ledger key
+is named in the bookkeeping list below (that part IS this file's question),
+while the predicate over it lives in ``outreach/ceiling.py``.
 """
 
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from zoneinfo import ZoneInfo
 
 from app.crm.outreach.schemas import SPLIT_PREFIX, WorkflowNode
 
@@ -34,8 +35,7 @@ _BOOKKEEPING_KEYS = (
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
     "_outcome",  # OUTCOME_KEY: a square's word for the trail, popped by the walker
-    "calls_today",  # CALLS_TODAY_KEY: the call ceiling's day-stamped ledger
-    "max_calls_reached",  # computed at read; never a producer's to seed
+    "calls_today",  # ceiling.CALLS_TODAY_KEY (pinned by test); the call ledger
 )
 # The letter that woke a run in place, left for the flush that follows
 # (canon T26): the walker reads it when it closes the square — recording it
@@ -56,61 +56,6 @@ LATEST_LETTER_KEY = "latest_letter"
 # leak could not reach a template either. A branching square never uses it:
 # its answer already rides reply_<node>.
 OUTCOME_KEY = "_outcome"
-# The day-stamped ledger behind exits.max_calls_per_day:
-# {"day": "2026-09-22", "n": 3}. It lives HERE, not in the call word, because
-# the bookkeeping list above is what makes it ours — `run_facts` drops it so
-# the raw dict never rides a lead payload, and entry.py refuses a producer who
-# spells it, which a contact ceiling needs: admitted as a scalar it would read
-# as junk, count 0, and hand the run a fresh allowance on merchant input.
-CALLS_TODAY_KEY = "calls_today"
-# The name a condition square routes on: `context.max_calls_reached`. It is
-# COMPUTED at read (nodes/condition.py injects it), never stored, because a
-# stored answer to a predicate goes stale the moment the day rolls — the
-# ledger un-caps itself by re-stamp, a flag would need a write nobody makes
-# until the next call. Computing it also keeps it out of the run's context
-# entirely, so a producer cannot seed it through entry._context_from_payload
-# and it never rides a lead payload.
-MAX_CALLS_REACHED_KEY = "max_calls_reached"
-
-
-def today_on(exits: Any, now: Optional[datetime] = None) -> str:
-    """PURE: the plan's calendar day, as the call ledger stamps it.
-
-    Read on the PLAN's clock (exits.timezone), never the server's: a run
-    dialling at 23:30 IST is on the 22nd, and a UTC day would have rolled it
-    to the 23rd two hours earlier. Falls back to UTC only for a plan with no
-    clock, which is a plan with no ceiling to judge.
-    """
-    at = now or datetime.now(timezone.utc)
-    zone = getattr(exits, "timezone", None)
-    return (at.astimezone(ZoneInfo(zone)) if zone else at).date().isoformat()
-
-
-def calls_today(context: Dict[str, Any], day: str) -> int:
-    """PURE: calls this run has placed on ``day``, over every call square.
-
-    A ledger stamped with any other day reads as 0 — that IS the midnight
-    reset, and it needs no sweep, no cron and no write at the boundary: the
-    first call of the new day simply re-stamps the record. Junk reads as 0.
-    """
-    ledger = context.get(CALLS_TODAY_KEY)
-    if not isinstance(ledger, dict) or ledger.get("day") != day:
-        return 0
-    placed = ledger.get("n")
-    return placed if isinstance(placed, int) and placed >= 0 else 0
-
-
-def max_calls_reached(context: Dict[str, Any], exits: Any) -> bool:
-    """PURE: has this run spent today's call allowance?
-
-    THE predicate. The call square asks it before dialling and a condition
-    square asks it to route, so the two can never disagree, and neither can
-    read an answer that was true last night.
-    """
-    ceiling = getattr(exits, "max_calls_per_day", None)
-    if ceiling is None:
-        return False
-    return calls_today(context, today_on(exits)) >= ceiling
 
 
 # The bookkeeping keys whose value is the ID OF WHAT THIS SQUARE HANDED

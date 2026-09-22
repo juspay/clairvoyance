@@ -8,7 +8,7 @@ side of an ordering op, a customer we cannot read — every one of those is
 The op grammar is the ONE where-grammar the corpus sealed
 (shared/predicate.py; the door's `where` speaks it): text-strict `is`,
 numeric `=` and ordering ops, `in`, `exists`. outreach/predicates.py owns
-only the FIELD grammar — context.<key>, facts.<node>.<key>,
+only the FIELD grammar — context.<key>, run.<name>, facts.<node>.<key>,
 customer.<column>, customer.attributes.<name> — as a lookup.
 
 Customer facts are the five whitelisted columns plus each asserted
@@ -37,6 +37,7 @@ from app.crm.outreach.schemas import (
     ConditionRule,
     EnrollmentRun,
     WorkflowDefinition,
+    WorkflowExits,
     WorkflowNode,
 )
 from app.crm.shared.predicate import Condition, matches
@@ -469,3 +470,67 @@ def test_an_incomplete_persisted_claim_is_ignored_not_fatal() -> None:
         "broken": [{"v": "x", "at": "2026-09-01T00:00:00Z"}],
     }
     assert winning_attributes(attributes) == {"tier": "silver"}
+
+
+# --- run.<name>: the facts the ENGINE derives (phase 20) --------------------
+
+
+def test_a_run_fact_is_named_by_the_plan_and_computed_by_the_grammar() -> None:
+    """`run.` is the fifth source, built like `customer.`: a prefix, a closed
+    list, one place the value comes from. A plan NAMES the fact; no square
+    computes it, so every square speaking this grammar gets the same answer.
+    """
+    from app.crm.outreach import ceiling
+
+    assert predicates.RUN_FACTS["max_calls_reached"] is ceiling.max_calls_reached
+
+    exits = WorkflowExits(max_calls_per_day=2, timezone="Asia/Kolkata")
+    today = ceiling.today_on(exits)
+    spent = predicates.RunLens({ceiling.CALLS_TODAY_KEY: {"day": today, "n": 2}}, exits)
+    fresh = predicates.RunLens({ceiling.CALLS_TODAY_KEY: {"day": today, "n": 1}}, exits)
+
+    assert predicates.lookup("run.max_calls_reached", {}, {}, None, spent) is True
+    assert predicates.lookup("run.max_calls_reached", {}, {}, None, fresh) is False
+
+
+def test_an_unknown_run_fact_is_refused_at_publish() -> None:
+    """The guard `context.<key>` cannot give. A producer's facts are
+    unbounded, so a misspelt one must be allowed through; an ENGINE fact is a
+    closed list, so the typo is a sentence the author reads at publish rather
+    than a run that takes `else` for the life of the plan — which is the
+    whole reason this is a registry and not an injection at a call site."""
+    assert predicates.field_problems("run.max_calls_reached", []) == []
+
+    (problem,) = predicates.field_problems("run.max_calls_reachd", [])
+    assert "run facts are" in problem and "max_calls_reached" in problem
+
+    # and the sentence for a field that is no source at all names run.<name>
+    (unknown,) = predicates.field_problems("runmax", [])
+    assert "run.<name>" in unknown
+
+
+def test_a_run_fact_reads_as_absent_without_the_lens() -> None:
+    """The customer arm's rule, kept: a caller that cannot supply the run
+    reads the fact as unreadable, never as False — False is an answer, and
+    an answer nobody computed would branch a live run."""
+    assert predicates.lookup("run.max_calls_reached", {}, {}, None, None) is None
+    assert predicates.needs_run(
+        [
+            ConditionRule(
+                on="capped",
+                **{
+                    "if": [
+                        {"field": "run.max_calls_reached", "op": "is", "value": True}
+                    ]
+                },
+            )
+        ]
+    )
+    assert not predicates.needs_run(
+        [
+            ConditionRule(
+                on="big",
+                **{"if": [{"field": "context.cart_value", "op": ">=", "value": 5}]},
+            )
+        ]
+    )

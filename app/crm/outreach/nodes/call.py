@@ -12,17 +12,19 @@ from typing import Any, Dict, List
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
+from app.crm.outreach.ceiling import (
+    CALLS_TODAY_KEY,
+    calls_today,
+    max_calls_reached,
+    today_on,
+)
 from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.nodes.blocks import blocks_for
 from app.crm.outreach.nodes.context import (
-    CALLS_TODAY_KEY,
     OUTCOME_KEY,
-    calls_today,
     lead_request_id,
-    max_calls_reached,
     playbook_key,
     run_facts,
-    today_on,
 )
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
@@ -35,15 +37,10 @@ from app.database.accessor import (
 )
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 
-# CALLS_TODAY_KEY (nodes/context.py) is the day-stamped ledger, and
-# max_calls_reached() the predicate that reads it. Both live there, not here,
-# because the CONDITION square asks the same predicate to route — one
-# implementation, so the square that dials and the square that branches can
-# never disagree. The ledger is its own key, NOT the visit counters: those
-# key the lead ids (uuid5 run:node:visit) and must stay monotonic for the
-# run's life. Resetting them at midnight would re-derive yesterday's id, the
-# primary key would absorb it as a lease retry, and the first call of the new
-# day would silently never be placed (the 967a86df scar, from the other side).
+# The ledger and the predicate live in outreach/ceiling.py, not here: a plan
+# routes on the same question through `run.max_calls_reached`, so one
+# implementation answers both and they can never disagree. The word below is
+# this square's alone — what it leaves on its trail row (canon T26 outcome).
 MAX_CALLS_OUTCOME = "max_calls"
 
 
@@ -88,7 +85,7 @@ async def execute(
     # the patch is the same on every re-run of this visit and a lease retry
     # changes nothing. The wait after this square, if it listens for
     # call.completed, will hear nothing and leave by its alarm; the runbook
-    # shows the condition on max_calls_reached that routes past it.
+    # shows the condition on run.max_calls_reached that routes past it.
     ceiling = definition.exits.max_calls_per_day
     day = today_on(definition.exits)
     if max_calls_reached(run.context, definition.exits):

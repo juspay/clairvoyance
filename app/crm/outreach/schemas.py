@@ -144,7 +144,7 @@ class WorkflowExits(BaseModel):
     max_age_days: float = Field(7.0, gt=0)
     # Calls this run may place per CALENDAR DAY, over every call square and
     # every revisit (each visit mints its own lead since 967a86df). Counted
-    # from the run's own day-stamped ledger (nodes/context.py calls_today);
+    # from the run's own day-stamped ledger (outreach/ceiling.py calls_today);
     # buddy's per-lead re-dials (call_execution_config.max_retry) are a
     # separate layer and compose multiplicatively.
     #
