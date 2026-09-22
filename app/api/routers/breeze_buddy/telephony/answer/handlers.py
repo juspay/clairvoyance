@@ -69,6 +69,7 @@ from app.core.concurrency import spawn_background_task
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
     BB_NOISE_CANCELLATION_LEVEL,
+    BB_RECORDING_RETRY_DELAY_MS,
 )
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
@@ -644,17 +645,50 @@ async def _build_provider_response(
 # Plivo requires a 200–500ms gap between answering the call and issuing the
 # record API call, so the call is fully connected internally first. We keep
 # the 500ms — it just no longer happens on the answer's critical path.
+#
+# One retry after a further 500ms. The settle window is a guess about how
+# long Plivo needs to finish connecting the call internally, so a first
+# attempt that arrives too early is worth repeating once with more slack.
+#
+# The delay before EACH attempt, so the retry waits 500ms rather than
+# firing immediately after the failure.
 _RECORDING_SETTLE_SECONDS = 0.5
 
 
 async def _start_recording_after_delay(call_id: str, tag: str) -> None:
-    """Wait out Plivo's settle window, then start recording in a worker thread."""
+    """Wait out Plivo's settle window, then start recording in a worker thread.
+
+    Two attempts. The second waits ``BB_RECORDING_RETRY_DELAY_MS`` so the gap
+    can be tuned without a deploy; that config is read only once the first
+    attempt has failed.
+
+    ``start_call_recording`` collapses every failure into ``False`` — a call
+    that already hung up (404) is indistinguishable from a throttle (429) —
+    so the retry fires for both, and the 404 case can never succeed. Worth
+    revisiting once the error is classified.
+    """
     try:
         await asyncio.sleep(_RECORDING_SETTLE_SECONDS)
         with timed_phase("start_recording_background"):
-            recording_started = await start_call_recording(call_id)
-        if not recording_started:
-            logger.error(f"[{tag}] Recording failed to start for call: {call_id}")
+            if await start_call_recording(call_id):
+                return
+
+        retry_delay_s = max(0, await BB_RECORDING_RETRY_DELAY_MS()) / 1000.0
+        logger.bind(recording_attempt=1).warning(
+            f"[{tag}] Recording attempt 1/2 failed for call: {call_id}; "
+            f"retrying in {retry_delay_s:.3f}s"
+        )
+        await asyncio.sleep(retry_delay_s)
+        with timed_phase("start_recording_background"):
+            if await start_call_recording(call_id):
+                logger.bind(recording_attempt=2).info(
+                    f"[{tag}] Recording started on attempt 2/2 for call: {call_id}"
+                )
+                return
+
+        logger.bind(recording_attempt=2).error(
+            f"[{tag}] Recording failed to start for call: {call_id}"
+        )
     except Exception as e:
         # See recording.py for why this is opt(exception=...) and not exc_info=.
         logger.opt(exception=e).error(
