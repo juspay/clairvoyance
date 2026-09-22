@@ -18,6 +18,7 @@ from app.core.config.dynamic import (
     TRY_ON_RESULT_CACHE_TTL_SECONDS,
 )
 from app.core.logger import logger
+from app.services.breeze_buddy.try_on.client import try_on_attempts
 from app.services.redis.client import get_redis_service
 from app.services.redis.locks import _RELEASE_LUA
 
@@ -72,11 +73,16 @@ async def claim_try_on_request(session_id: str, request_id: str, token: str) -> 
     closed, like the IP limit.
 
     A running claim expires just after the longest a generation can take
-    (two provider attempts), so a crashed worker cannot block retries.
+    — every attempt the config allows, plus the garment download — so a
+    crashed worker cannot block retries. Read from the same config the
+    generator loops on: a claim that expired first would let a replay
+    start a second generation on an id already being worked.
     ``token`` marks this claim as the caller's, for the release below.
     """
     key = _claim_key(session_id, request_id)
-    running_ttl = 2 * await TRY_ON_GENERATION_TIMEOUT_SECONDS() + 60
+    running_ttl = (
+        await try_on_attempts() * await TRY_ON_GENERATION_TIMEOUT_SECONDS() + 60
+    )
     redis = await get_redis_service()
     if await redis.set(key, f"running:{token}", nx=True, ex=running_ttl):
         return "claimed"
