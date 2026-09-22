@@ -2,10 +2,10 @@ from decimal import Decimal
 
 import pytest
 
-from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
+from app.utils.transformation import (
     TEMPLATE_FUNCTION_REGISTRY,
 )
-from app.ai.voice.agents.breeze_buddy.template.transformation_function.utils import (
+from app.utils.transformation.utils import (
     to_number,
 )
 

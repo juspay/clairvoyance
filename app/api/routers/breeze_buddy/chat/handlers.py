@@ -51,9 +51,6 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue impor
     enqueue_conversation_evaluation,
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
-from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
-    TEMPLATE_FUNCTION_REGISTRY,
-)
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import CATALOG_VERSION_V2
 from app.api.routers.breeze_buddy.analytics.rbac import apply_hierarchical_filters
@@ -93,6 +90,9 @@ from app.services.redis.locks import (
     SESSION_LOCK_TTL_SECONDS,
     LockAcquireError,
     RedisLock,
+)
+from app.utils.transformation import (
+    TEMPLATE_FUNCTION_REGISTRY,
 )
 
 from . import cancel_bus

@@ -21,7 +21,7 @@ import app.crm.outreach.nodes.call as call_node
 from app.crm.outreach import playbook
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.plans import validate_definition
-from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition
+from app.crm.outreach.schemas import EnrollmentRun, Playbook, WorkflowDefinition
 
 FIXTURE = (
     Path(__file__).resolve().parents[2]
@@ -78,6 +78,13 @@ def _doc(**over: Any) -> Dict[str, Any]:
 
 def _definition(doc: Optional[Dict[str, Any]] = None) -> WorkflowDefinition:
     return WorkflowDefinition.model_validate(doc or _doc())
+
+
+def _transform(table: Dict[str, Any]) -> Dict[str, Any]:
+    """The `transform` table as the model normalizes it."""
+    return Playbook.model_validate(
+        {"transform": table, "lines": {}, "blocks": {}}
+    ).transform
 
 
 def _run(context: Optional[Dict[str, Any]] = None) -> EnrollmentRun:
@@ -474,3 +481,270 @@ def test_blocks_on_a_square_that_is_not_a_call_is_refused() -> None:
     assert any(
         "blocks belongs to a call" in p for p in validate_definition(doc)
     ), validate_definition(doc)
+
+
+# --- a hole may say how it READS ALOUD ----------------------------------------
+
+
+def test_a_plan_that_declares_nothing_renders_exactly_as_it_did() -> None:
+    """The whole feature is opt-in: no `transform`, no change to a line."""
+    assert (
+        playbook._fill("limit {current_limit} tak", {"current_limit": "50000"}, "l")
+        == "limit 50000 tak"
+    )
+
+
+def test_the_fact_a_hole_names_is_the_fact_a_when_compares() -> None:
+    """Only the SPOKEN words change. A line still spells the plain fact, so
+    catalog_laws checks the declared name and a `when` on
+    current_limit > 10000 still compares the number."""
+    assert playbook.holes_in("a {x} b {y}") == ["x", "y"]
+    d = _definition(
+        _doc(
+            playbook={
+                "transform": {"current_limit": ["indian_number_to_speech"]},
+                "lines": {"hook_plain": "limit {current_limit}"},
+                "blocks": {
+                    "hook_line": [{"say": "hook_plain"}],
+                    "walk": [{"say": "hook_plain"}],
+                },
+            }
+        )
+    )
+    assert playbook.line_holes(d) == ["current_limit"]
+
+
+def test_a_value_a_function_cannot_read_keeps_its_own_words() -> None:
+    """Fail OPEN, unlike a hole with no value — they are not the same
+    failure. A missing hole leaves the sentence BROKEN; a transform that
+    could not read one value leaves it complete and merely unpolished.
+    NodeParked is a PERMANENT defect park, so parking here would kill one
+    customer's journey outright, for ever, over how a number sounds."""
+    assert (
+        playbook._fill(
+            "limit {current_limit} hai",
+            {"current_limit": "abc"},
+            "l",
+            _transform({"current_limit": ["indian_number_to_speech"]}),
+        )
+        == "limit abc hai"
+    )
+
+
+def test_publish_refuses_a_function_whose_arguments_are_missing() -> None:
+    """trim_words(value, words) with no params would raise on every value
+    of every run, and the plan would simply never speak it."""
+    d = _definition(
+        _doc(
+            playbook={
+                "transform": {"address": ["trim_words"]},
+                "lines": {"hook_plain": "ghar {address}"},
+                "blocks": {
+                    "hook_line": [{"say": "hook_plain"}],
+                    "walk": [{"say": "hook_plain"}],
+                },
+            }
+        )
+    )
+    problems = playbook.laws(d)
+    assert any("needs 'words'" in p for p in problems), problems
+
+
+def test_a_fact_says_how_it_reads_once_for_the_whole_plan() -> None:
+    """A credit limit named in ten lines is ONE decision about how money is
+    spoken, not ten — and every line keeps the plain {current_limit} its
+    author wrote."""
+    book = Playbook.model_validate(
+        {
+            "transform": {
+                "current_limit": ["to_number", "indian_number_to_speech"],
+                "pnr": "digits_to_speech",
+            },
+            "lines": {
+                "a": "credit line {current_limit} tak approved hai",
+                "b": "limit {current_limit} hai, PNR {pnr}",
+            },
+            "blocks": {},
+        }
+    )
+    facts = {"current_limit": "50000", "pnr": "7A"}
+    assert (
+        playbook._fill(book.lines["a"], facts, "a", book.transform)
+        == "credit line 50 thousand rupees tak approved hai"
+    )
+    assert (
+        playbook._fill(book.lines["b"], facts, "b", book.transform)
+        == "limit 50 thousand rupees hai, PNR seven ए"
+    )
+
+
+def test_publish_refuses_an_unknown_built_in_in_the_transform_table() -> None:
+    d = _definition(
+        _doc(
+            playbook={
+                "transform": {"current_limit": ["indian_number_to_speach"]},
+                "lines": {"hook_plain": "limit {current_limit}"},
+                "blocks": {
+                    "hook_line": [{"say": "hook_plain"}],
+                    "walk": [{"say": "hook_plain"}],
+                },
+            }
+        )
+    )
+    problems = playbook.laws(d)
+    assert any(
+        "transform" in p and "is not a built-in" in p for p in problems
+    ), problems
+
+
+def test_publish_refuses_a_transform_key_no_line_spells() -> None:
+    """The half a typo is likeliest to hit, and the only half that fails
+    SILENTLY: the hole still resolves and the number is read raw."""
+    d = _definition(
+        _doc(
+            playbook={
+                "transform": {"curent_limit": ["to_number", "indian_number_to_speech"]},
+                "lines": {"hook_plain": "limit {current_limit}"},
+                "blocks": {
+                    "hook_line": [{"say": "hook_plain"}],
+                    "walk": [{"say": "hook_plain"}],
+                },
+            }
+        )
+    )
+    assert any("no line spells" in p for p in playbook.laws(d)), playbook.laws(d)
+
+
+def test_publish_refuses_a_function_whose_subject_is_a_list() -> None:
+    """format_array reads an array; a hole's value is a scalar by the time
+    any function sees it, so naming it could only ever be a no-op."""
+    d = _definition(
+        _doc(
+            playbook={
+                "transform": {"pax": ["format_array"]},
+                "lines": {"hook_plain": "saath me {pax}"},
+                "blocks": {
+                    "hook_line": [{"say": "hook_plain"}],
+                    "walk": [{"say": "hook_plain"}],
+                },
+            }
+        )
+    )
+    assert any("reads a LIST" in p for p in playbook.laws(d)), playbook.laws(d)
+
+
+def test_a_transform_may_not_empty_a_hole_that_had_a_value() -> None:
+    """extract_10_digit_mobile("NA") is "" — and "OTP  par aayega" is the
+    gap-in-a-sentence this function exists to prevent, arriving by a
+    different road than an unanswered hole."""
+    assert (
+        playbook._fill(
+            "OTP {mob} par aayega",
+            {"mob": "NA"},
+            "l",
+            _transform({"mob": ["extract_10_digit_mobile"]}),
+        )
+        == "OTP NA par aayega"
+    )
+
+
+def test_a_fact_may_give_its_functions_arguments() -> None:
+    """The same spelling a buddy template's expected_payload_schema uses,
+    so a merchant learns it once. One params table serves the pipeline:
+    string_trim takes no keywords and must not die on trim_words' `words`."""
+    book = Playbook.model_validate(
+        {
+            "transform": {
+                "address": {
+                    "function": ["string_trim", "trim_words"],
+                    "params": {"words": ["India"]},
+                }
+            },
+            "lines": {},
+            "blocks": {},
+        }
+    )
+    assert (
+        playbook._fill(
+            "ghar {address}",
+            {"address": "  123 MG Road, Bangalore, India  "},
+            "l",
+            book.transform,
+        )
+        == "ghar 123 MG Road, Bangalore"
+    )
+
+
+def test_publish_refuses_a_params_key_no_function_takes() -> None:
+    """Otherwise the typo is dropped in silence and the word stays in."""
+    d = _definition(
+        _doc(
+            playbook={
+                "transform": {
+                    "address": {
+                        "function": "trim_words",
+                        "params": {"wrods": ["India"]},
+                    }
+                },
+                "lines": {"hook_plain": "ghar {address}"},
+                "blocks": {
+                    "hook_line": [{"say": "hook_plain"}],
+                    "walk": [{"say": "hook_plain"}],
+                },
+            }
+        )
+    )
+    problems = playbook.laws(d)
+    assert any("no function it names takes 'wrods'" in p for p in problems), problems
+
+
+def test_publish_refuses_a_params_key_named_after_the_subject() -> None:
+    """The value is passed positionally, so a params key named after the
+    function's own first parameter would be passed a SECOND time by keyword
+    — "multiple values for argument", swallowed by the fail-open path, and
+    the fact renders raw for ever. Eight of the eleven call theirs `value`,
+    so a copy-pasted table is enough to hit it."""
+    d = _definition(
+        _doc(
+            playbook={
+                "transform": {
+                    "pnr": {"function": "digits_to_speech", "params": {"value": "x"}}
+                },
+                "lines": {"hook_plain": "PNR {pnr}"},
+                "blocks": {
+                    "hook_line": [{"say": "hook_plain"}],
+                    "walk": [{"say": "hook_plain"}],
+                },
+            }
+        )
+    )
+    assert any("takes 'value'" in p for p in playbook.laws(d)), playbook.laws(d)
+
+
+def test_the_subject_is_never_passed_twice() -> None:
+    """And if such a table is already stored, the render survives it."""
+    assert (
+        playbook._fill(
+            "PNR {pnr}",
+            {"pnr": "7A9"},
+            "l",
+            _transform(
+                {"pnr": {"function": "digits_to_speech", "params": {"value": "x"}}}
+            ),
+        )
+        == "PNR seven ए nine"
+    )
+
+
+def test_a_function_that_cannot_render_says_so(caplog) -> None:
+    """Publish cannot reach a stored version row, so a built-in renamed or
+    given a new argument would leave every published plan naming it
+    silently raw. Names only, never the value."""
+    with caplog.at_level("WARNING"):
+        out = playbook._fill(
+            "limit {x}",
+            {"x": "abc"},
+            "l",
+            _transform({"x": ["indian_number_to_speech"]}),
+        )
+    assert out == "limit abc"
