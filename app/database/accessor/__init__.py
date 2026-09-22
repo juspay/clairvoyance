@@ -32,6 +32,7 @@ from .breeze_buddy.credentials import (
     update_credential,
 )
 from .breeze_buddy.lead_call_tracker import (
+    abort_queued_leads_by_enrollment,
     acquire_lock_on_lead_by_id,
     append_metadata_field,
     create_lead_call_tracker,
@@ -131,6 +132,7 @@ __all__ = [
     "get_lead_call_trackers_count",
     "get_leads_by_status_and_time_before",
     "handle_lead_abort",
+    "abort_queued_leads_by_enrollment",
     "create_credential",
     "get_credential_by_id",
     "get_credentials_by_merchant",

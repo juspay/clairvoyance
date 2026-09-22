@@ -163,6 +163,14 @@ class WaitWindow(BaseModel):
     opens: str = Field(pattern=_HH_MM)
     closes: str = Field(pattern=_HH_MM)
     timezone: str = Field(min_length=1)
+    # The morning offset (ruled 22 Sep 2026, docs/crm/runbooks/morning-offset.md):
+    # the first `offset_minutes` after `opens` belong to the runs the window
+    # held overnight. They wake at the opening as always and their calls go
+    # to the dialler at once; every timer this window governs that is SET
+    # during those minutes — a customer entering at 09:20, a held run's gap
+    # after its morning call — is pushed by the offset, so the day's live
+    # customers do not queue behind the pile. 0 = no reserved period.
+    offset_minutes: int = Field(0, ge=0)
 
     @model_validator(mode="after")
     def _a_window_that_opens(self) -> "WaitWindow":
@@ -173,6 +181,13 @@ class WaitWindow(BaseModel):
         except (ZoneInfoNotFoundError, ValueError):
             raise ValueError(f"window: unknown timezone {self.timezone!r}")
         return self
+
+
+# The report a call writes about itself when it ends (breeze_buddy's
+# telephony mirror). An awaiting call square always listens for it — it is
+# put first in the square's topics at parse time, so the entry consumer and
+# the walker read a call square exactly as they read a listening wait.
+CALL_REPORT_TOPIC = "call.completed"
 
 
 class WorkflowNode(BaseModel):
@@ -251,6 +266,39 @@ class WorkflowNode(BaseModel):
     # philosophy, where a blank names the fact it wants). A send names its
     # blocks on the right of `variables`, an action inside `args`.
     blocks: List[str] = Field(default_factory=list)
+    # call only (the overnight drain, 21 Sep 2026): the square queues its
+    # lead and then WAITS for that call's own report (call.completed,
+    # matched on the lead id) before taking its edge, so a run never has
+    # more than one call queued and the next timer counts from the call's
+    # end, not from the insert. OFF unless the plan says `"await": true`
+    # (ruled 22 Sep 2026): a default cannot change what published plans
+    # do — a plan whose NEXT square listens for call.completed would
+    # otherwise see its report eaten by the call square. `await_minutes`
+    # is the backstop: a
+    # report that never comes (dispatcher down, number unavailable) ends
+    # the wait, the queued lead is aborted, and the run takes its edge.
+    # An awaiting square may also list the merchant's `topics`: a letter on
+    # one aborts the queued call and follows that topic's labelled arrow
+    # (the customer acted; the plan re-decides on the new event).
+    await_: bool = Field(False, alias="await")
+    await_minutes: float = Field(1440, gt=0)
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _an_awaiting_call_hears_its_own_report(self) -> "WorkflowNode":
+        """A call square with `await` listens for its own report first, and
+        branches on the letter's NAME: the report takes the square's plain
+        edge, a merchant topic it lists takes that topic's labelled arrow.
+        Written into the node at parse time so nothing downstream special-
+        cases the word — the consumer and the walker see a listening
+        square with topics and key $topic."""
+        if self.type == "call" and self.await_:
+            self.topics = [CALL_REPORT_TOPIC] + [
+                t for t in self.topics if t != CALL_REPORT_TOPIC
+            ]
+            self.key = "$topic"
+        return self
 
     @model_validator(mode="before")
     @classmethod

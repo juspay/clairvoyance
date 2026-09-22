@@ -297,7 +297,7 @@ def _wire(
         calls.append(("cancel", args))
         return True
 
-    async def resume_run_by_id(*args: Any) -> bool:
+    async def resume_run_by_id(*args: Any, **kwargs: Any) -> bool:
         calls.append(("resume", args))
         return True
 

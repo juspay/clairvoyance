@@ -74,9 +74,31 @@ def alarm(node: WorkflowNode, now: datetime, run_ends_at: datetime) -> datetime:
     just because the hours are open. Publish refuses a wait with none of
     minutes, window or topics."""
     if node.minutes:
-        wake = now + timedelta(minutes=node.minutes)
+        minutes = node.minutes
+        if node.window and in_reserved_period(now, node.window):
+            # The morning offset: a timer SET inside the window's reserved
+            # minutes after the opening runs the offset longer, so the
+            # runs the window held overnight get the lines first. The
+            # window's own hold still applies after, if the longer timer
+            # ends past the hours.
+            minutes += node.window.offset_minutes
+        wake = now + timedelta(minutes=minutes)
     elif node.topics:
         wake = max(run_ends_at, now) + _PAST_THE_END
     else:
         wake = now
     return opens_at(wake, node.window) if node.window else wake
+
+
+def in_reserved_period(at: datetime, window: WaitWindow) -> bool:
+    """PURE: does `at` fall in the window's reserved minutes — from today's
+    opening to opening + offset_minutes, on the window's clock? A window
+    with no offset has none. `at` must be aware."""
+    if not window.offset_minutes:
+        return False
+    if at.tzinfo is None:
+        raise ValueError("in_reserved_period needs an aware datetime")
+    zone = ZoneInfo(window.timezone)
+    local = at.astimezone(zone)
+    opening = datetime.combine(local.date(), _clock(window.opens), tzinfo=zone)
+    return opening <= local < opening + timedelta(minutes=window.offset_minutes)
