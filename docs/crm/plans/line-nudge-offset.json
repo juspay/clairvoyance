@@ -1,0 +1,204 @@
+{
+  "_comment": "The lending journey with the morning offset (22 Sep 2026; docs/crm/runbooks/morning-offset.md). One word does it: `held_runs_first_minutes` on the timers' window. The runs the window held overnight wake at 09:00 as always and their calls reach the dialler at once; every timer set in the first 90 minutes after the opening — a customer entering at 09:20, a held run's gap after its morning call — runs 90 minutes longer, so the day's live customers queue behind the pile instead of beside it, and after 10:30 nothing is added. The window's own hold still applies after the offset; a timer set at night gets no offset — that is the pile. The dialler's calling hours must contain the window.",
+  "entry": {
+    "topic": "LINE_INITIATED",
+    "key": "customer_id",
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "nodes": [
+    {
+      "id": "is-credit-line",
+      "type": "condition",
+      "rules": [
+        {
+          "on": "yes",
+          "if": [
+            {
+              "field": "context.products",
+              "op": "not_exists"
+            },
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quiet-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "09:00",
+        "closes": "21:00",
+        "timezone": "Asia/Kolkata",
+        "held_runs_first_minutes": 90
+      },
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    },
+    {
+      "id": "call-1",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "gap-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "09:00",
+        "closes": "21:00",
+        "timezone": "Asia/Kolkata",
+        "held_runs_first_minutes": 90
+      },
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    },
+    {
+      "id": "call-2",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "listen",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    }
+  ],
+  "edges": [
+    [
+      "is-credit-line",
+      "quiet-30m",
+      "yes"
+    ],
+    [
+      "is-credit-line",
+      "listen",
+      "else"
+    ],
+    [
+      "quiet-30m",
+      "call-1",
+      "timeout"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "call-1",
+      "gap-30m"
+    ],
+    [
+      "gap-30m",
+      "call-2",
+      "timeout"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "call-2",
+      "listen"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ]
+  ],
+  "goals": [
+    {
+      "topics": [
+        "LINE_ACTIVE",
+        "LINE_HARD_OFFER_REJECTED",
+        "LINE_KYC_REJECTED"
+      ],
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 30
+  },
+  "on_publish": "migrate",
+  "purpose_key": "utility.loan.checkout_nudge"
+}

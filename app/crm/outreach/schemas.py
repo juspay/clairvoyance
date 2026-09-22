@@ -163,6 +163,14 @@ class WaitWindow(BaseModel):
     opens: str = Field(pattern=_HH_MM)
     closes: str = Field(pattern=_HH_MM)
     timezone: str = Field(min_length=1)
+    # The morning offset (ruled 22 Sep 2026, docs/crm/runbooks/morning-offset.md):
+    # the first `held_runs_first_minutes` after `opens` belong to the runs the window
+    # held overnight. They wake at the opening as always and their calls go
+    # to the dialler at once; every timer this window governs that is SET
+    # during those minutes — a customer entering at 09:20, a held run's gap
+    # after its morning call — is pushed by the offset, so the day's live
+    # customers do not queue behind the pile. 0 = no reserved period.
+    held_runs_first_minutes: int = Field(0, ge=0)
 
     @model_validator(mode="after")
     def _a_window_that_opens(self) -> "WaitWindow":
