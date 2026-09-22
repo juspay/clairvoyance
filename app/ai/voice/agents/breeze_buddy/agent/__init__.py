@@ -1465,6 +1465,7 @@ class Agent:
             pipeline,
             self.conversation_id,
             is_daily_mode=self.is_daily_mode,
+            metrics_collector=self.metrics_collector,
         )
 
         if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
