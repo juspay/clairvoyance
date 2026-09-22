@@ -503,6 +503,14 @@ def _positive_float(env_var: str, default: float) -> float:
 # -----------------------------------------------------------------------------
 CRM_ROLE = os.environ.get("CRM_ROLE", "api").lower()
 
+# Ceiling on a single log MESSAGE, in bytes. Vector DISCARDS a line over its
+# max_line_bytes (32 KB by default) rather than trimming it, so an oversized
+# line never reaches the log store; truncating here keeps the line and its
+# fields. Keep it under whatever the collector is configured for, minus the
+# JSON envelope (~1.7 KB) and escaping — raise both together.
+LOG_MAX_MESSAGE_BYTES = _positive_int("LOG_MAX_MESSAGE_BYTES", 24576)
+
+
 CRM_WORKER_INTERVAL = _positive_float("CRM_WORKER_INTERVAL", 1.0)
 CRM_WORKER_BATCH = _positive_int("CRM_WORKER_BATCH", 100)
 CRM_WORKER_HEARTBEAT = _positive_float("CRM_WORKER_HEARTBEAT", 60.0)
