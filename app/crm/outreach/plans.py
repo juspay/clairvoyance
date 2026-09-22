@@ -24,7 +24,7 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
-from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
+from app.crm.outreach.nodes import NODE_TYPES, awaits, branches, is_wait, listens
 from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
@@ -175,7 +175,17 @@ def validate_definition(
     for src, arrows in definition.outgoing().items():
         labels = [on for _, on in arrows]
         node = nodes_by_id.get(src)
-        if node is not None and branches(node):
+        if node is not None and awaits(node):
+            # A waiting call (22 Sep 2026) takes its ONE plain edge when the
+            # event it names lands or its backstop fires. It listens for
+            # nothing else, so it has no labelled arrows.
+            if labels.count(None) != 1 or len(labels) != 1:
+                problems.append(
+                    f"call {src} waits for {node.event_name}, so it has exactly "
+                    "one plain edge (taken when the call ends) and no labelled "
+                    "arrows"
+                )
+        elif node is not None and branches(node):
             if None in labels:
                 problems.append(f"every edge out of {node.type} {src} needs an on")
             if len(set(labels)) != len(labels):

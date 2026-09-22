@@ -8,7 +8,7 @@ mints its own lead.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
@@ -20,7 +20,12 @@ from app.crm.outreach.nodes.context import (
     run_facts,
 )
 from app.crm.outreach.nodes.spec import NodeParked
-from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
+from app.crm.outreach.schemas import (
+    CALL_REPORT_TOPIC,
+    EnrollmentRun,
+    WorkflowDefinition,
+    WorkflowNode,
+)
 from app.database.accessor import (
     create_lead_call_tracker,
     get_call_execution_config_by_template_id,
@@ -30,11 +35,57 @@ from app.database.accessor import (
 )
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 
+# The report a call writes about itself when it ends (breeze_buddy/crm_mirror
+# — source telephony). A call square that names it in `event_name` listens
+# for it, matched on the lead id it queued, and takes its edge when it lands.
+CALL_COMPLETED = CALL_REPORT_TOPIC
+
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
+    problems: List[str] = []
     if not node.template_id:
-        return [f"call node {node.id} needs a template_id"]
-    return []
+        problems.append(f"call node {node.id} needs a template_id")
+    if node.event_name:
+        if node.event_name != CALL_COMPLETED:
+            # The one event a call square can wait for is its own report:
+            # it is the only letter matched on the lead the square queued.
+            problems.append(
+                f"call node {node.id}: event_name is {CALL_COMPLETED!r} — the "
+                "call's own report is the one event a call square waits for"
+            )
+        if node.match is not None:
+            problems.append(
+                f"call node {node.id}: the call's own report is matched on the "
+                "lead the square queued, never on `match`"
+            )
+    elif node.topics or node.key:
+        problems.append(
+            f"call node {node.id}: only a call that waits for its report "
+            f"(event_name: {CALL_COMPLETED}) listens"
+        )
+    return problems
+
+
+def awaiting_key(node_id: str) -> str:
+    """Where a waiting call square keeps the lead it is waiting on. Under
+    the `lead_` prefix so run_facts filters it and it never reaches a
+    template; present exactly while the square waits, cleared when it
+    moves — so a lease retry re-enters the wait instead of queuing again."""
+    return f"lead_awaiting_{node_id}"
+
+
+def report_outcome(context: Dict[str, Any], node_id: str) -> Optional[str]:
+    """PURE: the outcome the call report left under this square's facts
+    (entry.py files a heard letter's scalars as context.facts.<square>),
+    or None when no report has been heard."""
+    facts = context.get("facts")
+    if not isinstance(facts, dict):
+        return None
+    mine = facts.get(node_id)
+    if not isinstance(mine, dict):
+        return None
+    outcome = mine.get("outcome")
+    return str(outcome) if outcome not in (None, "") else None
 
 
 def _visits_key(node_id: str) -> str:
@@ -158,6 +209,8 @@ async def execute(
         f"lead_{node.id}": lead_id,
         _visits_key(node.id): visit,
     }
+    if node.event_name:
+        written[awaiting_key(node.id)] = lead_id
     if chosen:
         written[playbook_key(node.id)] = chosen
     return written

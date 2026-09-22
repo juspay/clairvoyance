@@ -175,6 +175,14 @@ class WaitWindow(BaseModel):
         return self
 
 
+# The report a call writes about itself when it ends (breeze_buddy's
+# telephony mirror). A call square that names it in `event_name` waits for
+# it — it becomes the square's one topic at parse time, so the entry
+# consumer and the walker read the square exactly as they read a listening
+# wait.
+CALL_REPORT_TOPIC = "call.completed"
+
+
 class WorkflowNode(BaseModel):
     """One square of the board. Vocabulary is code, not CHECKs:
     wait · send (channel + template, via connectivity) ·
@@ -251,6 +259,29 @@ class WorkflowNode(BaseModel):
     # philosophy, where a blank names the fact it wants). A send names its
     # blocks on the right of `variables`, an action inside `args`.
     blocks: List[str] = Field(default_factory=list)
+    # call only (22 Sep 2026): the event the square waits for after it
+    # queues its lead. `"event_name": "call.completed"` — the call's own
+    # report, matched on the lead id it queued — holds the token on the
+    # square until the call ends, so a run never has two calls queued and
+    # the next timer counts from the call's END, not from the insert. None
+    # (the default) is today's square: queue and move on at once — a
+    # default cannot change what published plans do. `await_minutes` is the
+    # backstop: a report that never comes (dispatcher down, number
+    # unavailable) ends the wait and the run takes its edge.
+    event_name: Optional[str] = None
+    await_minutes: float = Field(1440, gt=0)
+
+    @model_validator(mode="after")
+    def _a_waiting_call_hears_the_event_it_names(self) -> "WorkflowNode":
+        """A call square with `event_name` listens for that one event and
+        branches on the letter's NAME. Written into the node at parse
+        time so nothing downstream special-cases the word — the consumer
+        and the walker see a listening square with topics and key
+        $topic."""
+        if self.type == "call" and self.event_name:
+            self.topics = [self.event_name]
+            self.key = "$topic"
+        return self
 
     @model_validator(mode="before")
     @classmethod

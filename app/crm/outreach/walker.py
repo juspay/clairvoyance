@@ -37,7 +37,8 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
+from app.crm.outreach.nodes import NODE_TYPES, awaits, branches, is_wait
+from app.crm.outreach.nodes.call import awaiting_key, report_outcome
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     dispatch_id,
@@ -355,14 +356,45 @@ async def _advance(
 
         execute = NODE_TYPES[node.type].execute
         dispatched: Optional[str] = None
-        if execute is not None:  # a wait's action IS the alarm
+        resolved: Optional[str] = None  # a waiting call's own outcome
+        if awaits(node) and context.get(awaiting_key(node.id)):
+            # Standing on the call square, waiting for its call (22 Sep
+            # 2026): the lead was queued on an earlier visit — NEVER queued
+            # again — and this visit is the report or the backstop.
+            dispatched = str(context[awaiting_key(node.id)])
+            resolved = _resolve_awaiting_call(node, context)
+        elif execute is not None:  # a wait's action IS the alarm
             patch = await execute(run, node, definition)
             context.update(patch)
             dispatched = dispatch_id(patch, node.id)
+            if awaits(node) and patch.get(awaiting_key(node.id)):
+                # Queued; now WAIT for that call's own report. The token
+                # stays on this square (trap 1: its own id, no row closes,
+                # the arrival kept) with the backstop as its alarm — in the
+                # SAME write that records the queued lead, so a crash
+                # between them re-enters the wait, never a second queue.
+                wake = datetime.now(timezone.utc) + timedelta(
+                    minutes=node.await_minutes
+                )
+                if not await enrollment_accessor.advance_run(
+                    str(run.id),
+                    node.id,
+                    wake,
+                    context,
+                    lease,
+                    node_arrived_at=None if first else arrived_at,
+                    steps=as_rows(walked),
+                ):
+                    _deferred(run, f"await on {node.id}")
+                return
 
         next_id = pick_next(node, outgoing.get(current_id, []), context)
         outcome: Optional[str] = None
-        if branches(node):
+        if resolved is not None:
+            outcome = resolved
+            context = without_reply(context, node.id)
+            context.pop(awaiting_key(node.id), None)
+        elif branches(node):
             # The answer that resolved this square IS its outcome (canon
             # T26) — a reply, a condition's rule label, a split's arm, or
             # the timeout when the alarm won. Read BEFORE the clear below,
@@ -460,6 +492,17 @@ async def _advance(
     )
 
 
+def _resolve_awaiting_call(node: WorkflowNode, context: Dict[str, Any]) -> str:
+    """PURE: what ended a waiting call square's wait, as the outcome its
+    step records (22 Sep 2026): its own report — the call's outcome
+    (NO_ANSWER, BUSY, INTERESTED …) — or the backstop (no reply): the call
+    was never placed in the time the square allowed."""
+    answer = context.get(reply_key(node.id))
+    if answer is None:
+        return TIMEOUT
+    return report_outcome(context, node.id) or str(answer)
+
+
 def goal_since(run: EnrollmentRun) -> datetime:
     """PURE: the moment "after the run began" is measured from — the
     founding letter's own time (entered_event_at, stamped by entry.py:
@@ -487,6 +530,10 @@ def pick_next(
     arrow = the end."""
     if not branches(node):
         return arrows[0][0] if arrows else None
+    if awaits(node):
+        # A waiting call has one plain edge, taken when the call ends or
+        # the backstop fires (publish refuses any other arrow on it).
+        return next((dst for dst, on in arrows if on is None), None)
     answer = context.get(reply_key(node.id))
     wanted = TIMEOUT if answer is None else answer
     for dst, on in arrows:
