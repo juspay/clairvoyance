@@ -14,29 +14,35 @@ publish copies it into the version row: a journey that started on script v3
 keeps saying v3, and a wording fix reaches open runs only with
 `on_publish: migrate`.
 
-Two rules hold the shape, and both are one sentence:
+Three rules hold the shape, and each is one sentence:
 
   1. Every piece of text lives in `lines`, once. A block names lines and
      never holds a sentence.
   2. `say` is a name, or an ordered list of names.
+  3. `transform` says how a FACT renders, once for the whole plan.
 
-Nothing here is new vocabulary. `when` is the where-grammar over the
-condition square's field grammar; first-match-wins with a mandatory default
-is that square's `else`; a line with {holes} is the send node's blank law.
+Its vocabulary is the system's own: `when` is the where-grammar over the
+condition square's field grammar and first-match-wins with a mandatory
+default is that square's `else`; a line with {holes} is the send node's
+blank law; and `transform` names the built-ins a buddy template's
+expected_payload_schema already names.
 
 A line fills from FACTS only, never from another line — no chains, no
 cycles, always total.
 """
 
+import inspect
 import re
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from app.core.logger import logger
 from app.crm.identity.contracts import CustomerFacts
 from app.crm.outreach import predicates
 from app.crm.outreach.nodes.context import is_bookkeeping
 from app.crm.outreach.nodes.spec import NodeParked
-from app.crm.outreach.schemas import PlaybookBlock, WorkflowDefinition
+from app.crm.outreach.schemas import PlaybookBlock, Transform, WorkflowDefinition
 from app.crm.shared.predicate import matches
+from app.utils.transformation import TEMPLATE_FUNCTION_REGISTRY
 
 #: Keys the call square writes into the lead payload itself — a block of the
 #: same name would overwrite one, silently.
@@ -123,6 +129,52 @@ def laws(definition: WorkflowDefinition) -> List[str]:
     problems: List[str] = []
     node_ids = [node.id for node in definition.nodes]
 
+    known = ", ".join(sorted(TEMPLATE_FUNCTION_REGISTRY))
+    spelled = {hole for text in pb.lines.values() for hole in holes_in(text)}
+    # The half a typo fails SILENTLY on: the hole still resolves and the
+    # number is read raw, which is what `transform` exists to stop.
+    for fact in sorted(set(pb.transform) - spelled):
+        problems.append(
+            f"playbook transform {fact!r}: no line spells {{{fact}}} — a fact "
+            "says how it reads where it is READ"
+        )
+
+    for fact, says in sorted(pb.transform.items()):
+        for fn in says.function:
+            func = TEMPLATE_FUNCTION_REGISTRY.get(fn)
+            if func is None:
+                problems.append(
+                    f"playbook transform {fact!r}: {fn!r} is not a built-in — "
+                    f"one of {known}"
+                )
+                continue
+            if fn in _LIST_ONLY:
+                problems.append(
+                    f"playbook transform {fact!r}: {fn!r} reads a LIST, and a "
+                    "hole is always one value — declare the list on the "
+                    "catalog field with an item_format instead"
+                )
+                continue
+            # Unsupplied, it would raise on every value of every run.
+            for missing in _missing_arguments(func, says.params):
+                problems.append(
+                    f"playbook transform {fact!r}: {fn!r} needs {missing!r} — "
+                    f'give it in params, e.g. "params": {{"{missing}": ...}}'
+                )
+        # A params key no function in the pipeline declares is a typo that
+        # would otherwise be dropped in silence.
+        taken = {
+            name
+            for fn in says.function
+            if (parameters := _parameters(TEMPLATE_FUNCTION_REGISTRY.get(fn)))
+            for name in list(parameters)[1:]
+        }
+        for spare in sorted(set(says.params) - taken):
+            problems.append(
+                f"playbook transform {fact!r}: no function it names takes "
+                f"{spare!r} — {', '.join(says.function) or 'none named'}"
+            )
+
     for name in sorted(pb.blocks):
         if is_bookkeeping(name):
             problems.append(
@@ -202,6 +254,56 @@ def laws(definition: WorkflowDefinition) -> List[str]:
     return problems
 
 
+#: Built-ins whose subject is an ARRAY — a hole's value is always a scalar,
+#: so naming one could only ever be a no-op.
+_LIST_ONLY = ("format_array",)
+
+
+def _parameters(func: Any) -> Optional[Any]:
+    """The built-in's parameters, or None when the signature cannot be read
+    (a C builtin, a patched __signature__) — the laws below then refuse
+    nothing, because they refuse only what they can prove wrong."""
+    try:
+        return inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return None
+
+
+def _accepted(func: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """PURE: the subset of one `params` table this function declares.
+
+    The table serves the whole pipeline, so ["string_trim", "trim_words"]
+    with {"words": [...]} must not die on string_trim, which takes none."""
+    if not params:
+        return {}
+    parameters = _parameters(func)
+    if parameters is None:
+        return {}
+    # [1:] skips the SUBJECT — the value the hole passes positionally. A
+    # params key named after it (eight of the eleven call theirs `value`)
+    # would otherwise be passed a second time by keyword, and the call dies
+    # on "multiple values for argument".
+    beyond_the_value = list(parameters)[1:]
+    return {k: v for k, v in params.items() if k in beyond_the_value}
+
+
+def _missing_arguments(func: Any, params: Dict[str, Any]) -> List[str]:
+    """PURE: the arguments this built-in needs beyond the value, and the
+    plan did not give it — trim_words' `words` with no params."""
+    parameters = _parameters(func)
+    if parameters is None:
+        return []
+    beyond_the_value = list(parameters.values())[1:]
+    return [
+        p.name
+        for p in beyond_the_value
+        if p.default is inspect.Parameter.empty
+        and p.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        and p.name not in params
+    ]
+
+
 def _pick(rows: List[PlaybookBlock], lookup: Any) -> PlaybookBlock:
     """PURE: the first row whose `when` ALL holds. The last row has none, so
     this is total — publish refuses a block that could fall off the end."""
@@ -211,7 +313,12 @@ def _pick(rows: List[PlaybookBlock], lookup: Any) -> PlaybookBlock:
     return rows[-1]
 
 
-def _fill(text: str, facts: Dict[str, Any], line: str) -> str:
+def _fill(
+    text: str,
+    facts: Dict[str, Any],
+    line: str,
+    transform: Optional[Dict[str, Transform]] = None,
+) -> str:
     """PURE: every hole answered, or the run parks NAMING the hole.
 
     The agent's substitution is one pass over a flat dict, so a hole left in
@@ -230,7 +337,35 @@ def _fill(text: str, facts: Dict[str, Any], line: str) -> str:
                 f"playbook line {line!r}: {{{match.group(1)}}} has no value on "
                 "this run"
             )
-        return str(value)
+        rendered = value
+        says = (transform or {}).get(match.group(1))
+        params = says.params if says else {}
+        for name in says.function if says else []:
+            try:
+                func = TEMPLATE_FUNCTION_REGISTRY[name]
+                rendered = func(rendered, **_accepted(func, params))
+            except Exception as e:
+                # Fail OPEN: a missing hole leaves the sentence broken, but
+                # a function that could not read one value leaves it
+                # complete and merely unrendered — and NodeParked is a
+                # PERMANENT park, so it would end that customer's journey
+                # over how a number looks.
+                #
+                # But SAY so. Publish cannot reach a stored version row, so
+                # a built-in renamed or given a new argument would leave
+                # every published plan naming it silently raw, for every
+                # merchant, for ever. Names only, never the value — the rule
+                # the three buddy call sites of this registry already keep.
+                logger.warning(
+                    f"playbook line {line!r}: {name} could not render "
+                    f"{{{match.group(1)}}} ({type(e).__name__}); "
+                    "left as it arrived"
+                )
+                return str(value)
+        # Nor may a transform EMPTY a hole that had a value:
+        # extract_10_digit_mobile("NA") is "", and "OTP  par aayega" is the
+        # gap this function exists to prevent.
+        return str(rendered) if str(rendered).strip() else str(value)
 
     return HOLE.sub(one, text)
 
@@ -269,7 +404,7 @@ def resolve(
         row = _pick(rows, lookup)
         said = names_said(row.say)
         chosen[name] = said[0] if isinstance(row.say, str) else ",".join(said)
-        rendered = [_fill(pb.lines[line], facts, line) for line in said]
+        rendered = [_fill(pb.lines[line], facts, line, pb.transform) for line in said]
         out[name] = (
             rendered[0]
             if isinstance(row.say, str)

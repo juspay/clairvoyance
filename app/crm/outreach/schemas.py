@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Literal, NamedTuple, Optional, Tuple, Union
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.crm.shared.predicate import Condition, from_equality_map
 
@@ -396,6 +396,23 @@ class PlaybookBlock(BaseModel):
         return self
 
 
+class Transform(BaseModel):
+    """How one fact is rendered wherever a line spells it: the built-ins it
+    passes through, and their arguments.
+
+    ``params`` is ONE table for the pipeline, each function handed only the
+    keywords it declares — the same shape a buddy template's
+    expected_payload_schema uses, so a merchant learns it once."""
+
+    function: List[str] = Field(default_factory=list)
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("function", mode="before")
+    @classmethod
+    def _one_or_many(cls, raw: Any) -> Any:
+        return [raw] if isinstance(raw, str) else raw
+
+
 class Playbook(BaseModel):
     """The plan fills the agent's holes.
 
@@ -405,7 +422,7 @@ class Playbook(BaseModel):
     finished. The agent never picks; its template is edited only to change
     how the agent behaves, never what it says.
 
-    Two rules hold the shape together:
+    Three rules hold the shape together:
 
       1. Every piece of text lives in `lines`, ONCE. A block never contains
          a sentence, it names one — so rewording a step changes every walk
@@ -414,6 +431,10 @@ class Playbook(BaseModel):
       2. `say` is a name, or an ordered list of names. One name renders as
          that line's text; a list renders one "- name: text" per line, in
          order.
+      3. `transform` says how a FACT renders, ONCE for the whole plan — a
+         credit limit named in ten lines is one decision about how money is
+         written, not ten, and every line keeps the plain {current_limit}
+         its author wrote.
 
     It lives in the plan document, so publish copies it into the version
     row: a journey that started on script v3 keeps saying v3, and a wording
@@ -422,6 +443,22 @@ class Playbook(BaseModel):
 
     lines: Dict[str, str] = Field(default_factory=dict)
     blocks: Dict[str, List[PlaybookBlock]] = Field(default_factory=dict)
+    # fact -> how it renders wherever a line spells it, once for the whole
+    # plan. The RENDERED TEXT only: `when` rows and the lead payload read
+    # the fact itself, so a plan still branches on current_limit > 10000
+    # while a line reads "50 thousand rupees".
+    transform: Dict[str, Transform] = Field(default_factory=dict)
+
+    @field_validator("transform", mode="before")
+    @classmethod
+    def _shorthand(cls, raw: Any) -> Any:
+        """A name or a pipeline is the common case, written bare."""
+        if not isinstance(raw, dict):
+            return raw
+        return {
+            k: {"function": v} if isinstance(v, (str, list)) else v
+            for k, v in raw.items()
+        }
 
 
 class WorkflowDefinition(BaseModel):

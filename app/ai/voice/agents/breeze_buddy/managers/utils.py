@@ -4,9 +4,6 @@ import base64
 import json
 from typing import Optional
 
-from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
-    TEMPLATE_FUNCTION_REGISTRY,
-)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
     TemplateModel,
@@ -22,6 +19,9 @@ from app.ai.voice.llm.realtime.gemini.opening_line import generate_opening_line_
 from app.core.config.dynamic import LEAD_GREETING_CACHE_TTL_SECONDS
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
+from app.utils.transformation import (
+    TEMPLATE_FUNCTION_REGISTRY,
+)
 
 
 def _resolve_greeting_text(

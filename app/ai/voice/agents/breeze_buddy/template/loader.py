@@ -6,9 +6,6 @@ This module provides functionality to load templates from the database.
 
 from typing import Dict, Optional, Tuple
 
-from app.ai.voice.agents.breeze_buddy.template.transformation_function import (
-    TEMPLATE_FUNCTION_REGISTRY,
-)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     FlowMode,
     TemplateModel,
@@ -20,6 +17,9 @@ from app.database.accessor.breeze_buddy.credentials import (
 )
 from app.database.accessor.breeze_buddy.template import (
     get_template_by_id,
+)
+from app.utils.transformation import (
+    TEMPLATE_FUNCTION_REGISTRY,
 )
 
 
