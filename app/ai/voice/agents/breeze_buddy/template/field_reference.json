@@ -1228,7 +1228,7 @@
       ]
     },
     "features": {
-      "description": "Optional flavor features → on/off. OPT-IN by contract: every feature is OFF unless turned on here, so enabling a flavor never silently starts extra behaviour on an existing merchant. Commerce/ucp: 'upsell' streams a complementary ProductGrid after a successful add_to_cart — one extra LLM call plus a catalog search per add, run after the cart component is already on the wire so the shopper never waits on it.",
+      "description": "Optional flavor features → on/off. OPT-IN by contract: every feature is OFF unless turned on here, so enabling a flavor never silently starts extra behaviour on an existing merchant. Commerce/ucp: 'upsell' streams a complementary ProductGrid after a successful add_to_cart — one extra LLM call plus a catalog search per add, run after the cart component is already on the wire so the shopper never waits on it. 'try_on' offers virtual try-on on eligible products; each generated image costs the merchant credits.",
       "example": {
         "upsell": true
       }

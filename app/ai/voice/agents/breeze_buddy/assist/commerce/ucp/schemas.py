@@ -516,7 +516,7 @@ class ProductDetailP(BaseModel):
         # Signed after validation: HttpUrl may normalise the URL, and the
         # widget sends back the serialised string.
         self.try_on_image_token = (
-            sign_try_on_image(str(self.images[0].src))
+            sign_try_on_image(str(self.images[0].src), title=self.title)
             if self.try_on_eligible and self.images
             else None
         )

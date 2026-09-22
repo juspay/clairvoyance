@@ -29,7 +29,7 @@ from asyncpg.exceptions import UniqueViolationError
 from fastapi import HTTPException, Request, UploadFile, status
 
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.try_on_policy import (
-    is_signed_try_on_image,
+    verify_try_on_image,
 )
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     CLIENT_CONTEXT_KEY,
@@ -277,7 +277,6 @@ async def _surface_wire(
         enable_text_input=surface.enable_text_input,
         response_reveal=surface.response_reveal,
         voice_enabled=_template_voice_enabled(template),
-        try_on_enabled=_template_try_on_enabled(template),
         catalog_active=catalog_active,
         ui_flavors=ui_flavors,
         flavor=_template_flavor(template),
@@ -1430,9 +1429,9 @@ async def try_on_widget_handler(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # The session response carries `try_on_enabled` so the widget can hide
-    # the affordance; THIS is the gate, because a browser is not a thing to
-    # trust with the merchant's credits.
+    # The widget hides the affordance from the session's `flavor` block;
+    # THIS is the gate, because a browser is not a thing to trust with the
+    # merchant's credits.
     template = await get_template_by_id_cached(cfg.template_id)
     if not _template_try_on_enabled(template):
         raise HTTPException(
@@ -1473,8 +1472,10 @@ async def try_on_widget_handler(
         )
 
     # Only an image the server itself offered try-on for. Without this, a
-    # client could spend the merchant's credits on any Shopify image.
-    if not is_signed_try_on_image(garment_image_url, garment_image_token):
+    # client could spend the merchant's credits on any Shopify image. The
+    # token also carries the product title the model is told to use.
+    product_title = verify_try_on_image(garment_image_url, garment_image_token)
+    if product_title is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This product image cannot be tried on.",
@@ -1552,6 +1553,7 @@ async def try_on_widget_handler(
             garment_image_url=garment_image_url,
             product_id=product_id,
             request_id=request_id,
+            product_title=product_title,
         )
     except Exception as exc:
         # Nothing was charged: the deduction below is the only charge, and

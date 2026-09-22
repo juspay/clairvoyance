@@ -360,27 +360,56 @@ async def TRY_ON_RESULT_CACHE_TTL_SECONDS() -> int:
 
 
 async def TRY_ON_GENERATION_TIMEOUT_SECONDS() -> int:
-    """Timeout for one provider call. Observed runs land near 15s. An
-    empty reply is retried once, so a request can wait up to twice this."""
+    """Timeout for one provider call. Observed runs land near 15s. A request
+    can wait up to ``TRY_ON_MAX_ATTEMPTS`` times this, plus the garment
+    download."""
     return await get_config("TRY_ON_GENERATION_TIMEOUT_SECONDS", 120, int)
 
 
 async def TRY_ON_MODEL() -> str:
     """Image-capable Gemini model that generates the try-on, served from the
-    Vertex global endpoint. Switchable without a deploy."""
-    return await get_config("TRY_ON_MODEL", "gemini-2.5-flash-image", str)
+    Vertex global endpoint. Switchable without a deploy.
+
+    2.5-flash-image cannot move a garment from the model in a product photo
+    onto the shopper: it returns one of the two photos unchanged. 3.1 can.
+    """
+    return await get_config("TRY_ON_MODEL", "gemini-3.1-flash-image", str)
+
+
+async def TRY_ON_MAX_ATTEMPTS() -> int:
+    """Calls to the model per try-on that config ASKS for.
+
+    An empty reply and a safety refusal are both retried: neither is
+    deterministic, and nothing is billed until an image exists. Each
+    attempt has its own ``TRY_ON_GENERATION_TIMEOUT_SECONDS``, so what a
+    request may actually spend is capped by the widget's own timeout —
+    see ``try_on_attempts``, which every caller reads instead of this.
+    """
+    return await get_config("TRY_ON_MAX_ATTEMPTS", 2, int)
 
 
 async def TRY_ON_INSTRUCTION() -> str:
     """The instruction sent after the shopper photo (Image 1) and the garment
     (Image 2). It must keep naming them by those numbers: the labels that
-    introduce each image stay in code, next to the parts they describe."""
+    introduce each image stay in code, next to the parts they describe.
+
+    ``{product}`` becomes the quoted product title. A product photo often
+    shows a model in a whole outfit, and without the name the model copies
+    all of it.
+    """
     return await get_config(
         "TRY_ON_INSTRUCTION",
-        "Generate a single photorealistic image of the person from Image 1 "
-        "wearing the garment from Image 2. The person's facial features, skin "
-        "tone, hair, and body proportions must match Image 1 exactly. The "
-        "garment must fit naturally and look realistic.",
+        "Image 2 is the product photo for {product}. It may be a marketing "
+        "layout with text panels, and may show a model wearing other clothes "
+        "and holding props. Use ONLY that product from Image 2, and ignore "
+        "the model, all text, labels, panels and everything else in it.\n"
+        "Generate one photorealistic image of the person from Image 1 wearing "
+        "that product, worn the normal way for it. It replaces the garment of "
+        "the same kind the person already wears; it is never worn over it. "
+        "Keep the person's face, hair, skin tone, body, pose and background "
+        "from Image 1, and keep the clothing on the other parts of the body "
+        "exactly as it is. The output is a plain photo of that person only: "
+        "no text, no panels, no layout, and never the model from Image 2.",
         str,
     )
 

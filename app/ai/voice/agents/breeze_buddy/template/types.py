@@ -1505,7 +1505,8 @@ class FlavorProtocolConfig(BaseModel):
             "merchant. Commerce/ucp: 'upsell' streams a complementary "
             "ProductGrid after a successful add_to_cart (one extra LLM "
             "call + catalog search per add, run after the cart is already "
-            "on the wire)."
+            "on the wire); 'try_on' offers virtual try-on on eligible "
+            "products (each generated image costs the merchant credits)."
         ),
     )
 

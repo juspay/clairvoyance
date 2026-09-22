@@ -221,6 +221,19 @@ async def test_flavor_rides_the_block_unchanged():
     assert block_ucp.features == {"upsell": True, "show_viewed_product": False}
 
 
+async def test_try_on_rides_the_flavor_block_not_its_own_field():
+    """The widget reads try-on from `flavor.ucp.features.try_on`. The old
+    `try_on_enabled` field is gone, so the two cannot disagree."""
+    block = await _surface_wire(
+        _surface(),
+        _template_with_flavor({"try_on": True}),
+        catalog_active="v2",
+        ui_flavors=["commerce"],
+    )
+    assert block.flavor["ucp"].features == {"try_on": True}
+    assert "try_on_enabled" not in block.model_dump()
+
+
 async def test_no_flavor_block_is_an_empty_map_not_an_error():
     """`configurations.flavor` is optional, and features are opt-in — a
     template that never mentions one reads as 'everything off'."""
