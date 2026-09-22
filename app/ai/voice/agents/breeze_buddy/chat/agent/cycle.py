@@ -62,6 +62,9 @@ from app.ai.voice.agents.breeze_buddy.chat.steps.labels import (
     summarize_step_result,
 )
 from app.ai.voice.agents.breeze_buddy.chat.tools.annotations import is_read_only
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    CLIENT_TOOL_EXPIRY_SECS,
+)
 from app.ai.voice.agents.breeze_buddy.chat.ui.healer import (
     HealerContext,
     make_healer_fn,
@@ -716,13 +719,15 @@ class CycleLoopMixin:
                 else []
             )
 
-            # HITL partition: approval-gated calls do NOT execute now — the
-            # turn ends after the ungated siblings finish, and each gated
-            # call waits for its decision on the approval endpoint. Node-aware
-            # (see _partition_gated_calls): a per-node function shadows a
-            # same-named gated global, so it stays UNGATED — matching voice.
+            # Gate partition: calls that cannot run here do NOT execute now —
+            # the turn ends after the ungated siblings finish, and each gated
+            # call waits for its answer on its own endpoint. Two reasons to be
+            # here: an approval needs a human decision, or a client tool needs
+            # the shopper's browser. Node-aware for approvals (see
+            # _partition_gated_calls): a per-node function shadows a same-named
+            # gated global, so it stays UNGATED — matching voice.
             gated_calls, ungated_calls = _partition_gated_calls(
-                tool_calls, self._approval_map, node
+                tool_calls, self._approval_map, node, self._client_tools
             )
 
             if self._suppress_extra_prose and any(
@@ -961,6 +966,33 @@ class CycleLoopMixin:
                 # the decision arrives on POST .../session/{id}/approval.
                 pending_ids: List[str] = []
                 for call in gated_calls:
+                    if call.function_name in self._client_tools:
+                        # Browser-executed. No argument injection: a client
+                        # tool takes none, and session state is not something
+                        # the page can be asked about.
+                        row = await insert_tool_approval(
+                            session_id=self.session_id,
+                            tool_call_id=call.tool_call_id,
+                            function_name=call.function_name,
+                            arguments={},
+                            prompt=None,
+                            expiry_secs=CLIENT_TOOL_EXPIRY_SECS,
+                        )
+                        pending_ids.append(call.tool_call_id)
+                        # A distinct event because the widget must not draw an
+                        # approve/reject card for a page read — it has to run
+                        # the tool and answer. Same row underneath.
+                        yield SSEEvent(
+                            event="client_tool_requested",
+                            data={
+                                "tool_call_id": call.tool_call_id,
+                                "name": call.function_name,
+                                "expires_at": (
+                                    row.expires_at.isoformat() if row else None
+                                ),
+                            },
+                        )
+                        continue
                     approval_cfg = self._approval_map[call.function_name]
                     # Inject NOW so the persisted row holds exactly the
                     # arguments that will run on approval (idempotency hash

@@ -488,6 +488,12 @@
         }
       ]
     },
+    "client_tools": {
+      "description": "Engine tools the SHOPPER'S BROWSER executes instead of the server, by name. Today: 'get_current_page_product', which reports the URL of the page they have open so the agent can find that item in the catalogue by matching it. The list is the switch — a tool nobody can execute must not be in the schema, so there is no separate on/off flag to drift out of step with it. Empty (the default) means the agent never sees them. Naming one has a cost worth knowing: the agent's turn STOPS while the browser answers, so a turn that uses it spends an extra LLM round trip.",
+      "example": [
+        "get_current_page_product"
+      ]
+    },
     "flavor": {
       "description": "Protocol dialect → which platform connectors serve it and which optional flavor features are on. Keyed exactly the way the flavor packages are laid out on disk (assist/<flavor>/<protocol>/ + assist/<flavor>/connectors/<name>/), so config and code read the same. Absent, or a protocol left unset, means connectors self-select on the payload and every optional feature is OFF. The engine never interprets the keys — a flavor resolves its own protocol block by name. Fields documented under FlavorProtocolConfig.",
       "example": {

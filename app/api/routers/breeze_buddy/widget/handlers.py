@@ -39,6 +39,9 @@ from app.ai.voice.agents.breeze_buddy.chat.client_context import (
 from app.ai.voice.agents.breeze_buddy.chat.custom_components import (
     resolve_custom_components,
 )
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    enabled_client_tools,
+)
 from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     negotiate_catalog,
     resolve_session_catalog_version,
@@ -63,6 +66,7 @@ from app.api.routers.breeze_buddy.chat.handlers import (
     load_chat_session_or_404,
     send_chat_message_handler,
     serve_session_intent,
+    submit_chat_client_tool_handler,
     validate_template_for_chat,
 )
 from app.api.routers.breeze_buddy.widget_common import (
@@ -124,6 +128,7 @@ from app.schemas.breeze_buddy.chat import (
     GreetingTileWire,
     QuickReplyWire,
     SendChatMessageRequest,
+    SubmitClientToolResultRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
     WidgetChannel,
@@ -717,19 +722,20 @@ async def transcribe_widget_audio_handler(
 # ---------------------------------------------------------------------------
 
 
-async def approve_widget_tool_handler(
+async def _assert_widget_resume_allowed(
     session_id: str,
-    req: ApproveToolRequest,
     request: Request,
     ctx: WidgetSessionContext,
-):
-    """Decide a pending HITL tool approval on the widget surface.
+) -> None:
+    """Gate order for resuming a turn that stopped on a gated call.
 
-    Same gate order as ``send_widget_message_handler`` (config-active 401
-    → IP limit → ownership → 410 ENDED → 409 channel!=CHAT), then
-    delegates to the shared chat approval handler. The channel 409
-    carries ``detail.code="voice_live"`` so the SDK can distinguish it
-    from ``already_decided`` / ``lock_contended``.
+    Same order as ``send_widget_message_handler`` (config-active 401 → IP
+    limit → ownership → 410 ENDED → 409 channel!=CHAT). Shared by the two
+    things that can answer a gate — a human decision and a client tool's
+    result — because the authorisation question is identical: may this
+    caller drive THIS session's turn right now? The channel 409 carries
+    ``detail.code="voice_live"`` so the SDK can distinguish it from
+    ``already_decided`` / ``lock_contended``.
     """
     cfg = await get_widget_config_by_id(ctx.widget_config_id)
     if cfg is None or not cfg.active:
@@ -771,7 +777,31 @@ async def approve_widget_tool_handler(
             },
         )
 
+
+async def approve_widget_tool_handler(
+    session_id: str,
+    req: ApproveToolRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Decide a pending HITL tool approval on the widget surface."""
+    await _assert_widget_resume_allowed(session_id, request, ctx)
     return await approve_chat_tool_handler(session_id, req, access_check=None)
+
+
+async def submit_widget_client_tool_handler(
+    session_id: str,
+    req: SubmitClientToolResultRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+):
+    """Hand back a client tool's result on the widget surface.
+
+    Same gate as an approval — the embed is answering a call the agent made
+    against its own page, so the authorisation question is unchanged.
+    """
+    await _assert_widget_resume_allowed(session_id, request, ctx)
+    return await submit_chat_client_tool_handler(session_id, req, access_check=None)
 
 
 # ---------------------------------------------------------------------------
@@ -1330,7 +1360,18 @@ async def get_widget_session_state_handler(
 
     # Unexpired pending HITL approvals so the embed can repaint approval
     # cards after a reload (lazy expiry — the accessor filters expires_at).
-    pending_approvals = await list_pending_tool_approvals(session_id)
+    #
+    # Client-tool rows share this table but are not decisions, so they are
+    # excluded: an approve/reject card for a page read is nonsense to the
+    # shopper, and nothing they could answer. A call the reload interrupted
+    # is simply left to expire — the agent is told the read failed and
+    # replies without the page, which is the same outcome as a closed tab.
+    client_tool_names = enabled_client_tools(getattr(template, "configurations", None))
+    pending_approvals = [
+        row
+        for row in await list_pending_tool_approvals(session_id)
+        if row.function_name not in client_tool_names
+    ]
 
     # The persisted (negotiated-at-create) catalog version is the truth on
     # resume; the flavor list is re-derived from the template so a config

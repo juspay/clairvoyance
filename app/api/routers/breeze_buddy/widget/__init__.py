@@ -48,6 +48,7 @@ from app.schemas.breeze_buddy.chat import (
     CreateWidgetSessionResponse,
     EndChatSessionResponse,
     SendChatMessageRequest,
+    SubmitClientToolResultRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
     WidgetIntentRequest,
@@ -67,6 +68,7 @@ from .handlers import (
     get_widget_session_state_handler,
     send_widget_intent_handler,
     send_widget_message_handler,
+    submit_widget_client_tool_handler,
     transcribe_widget_audio_handler,
     try_on_widget_handler,
     update_widget_context_handler,
@@ -125,6 +127,11 @@ async def widget_cancel_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/approval")
 async def widget_approval_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/client-tool")
+async def widget_client_tool_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -320,6 +327,28 @@ async def approve_widget_tool(
     ``lock_contended`` | ``voice_live``.
     """
     return await approve_widget_tool_handler(session_id, req, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/client-tool",
+    summary="Return a client tool's result (streams the resumed turn)",
+)
+async def submit_widget_client_tool(
+    session_id: str,
+    req: SubmitClientToolResultRequest,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+):
+    """Hand back what the browser produced for a call the agent made against
+    the page the shopper has open.
+
+    Streams the resumed turn as SSE (same shape as ``/message``). 409s carry
+    the same machine-readable ``detail.code`` set as ``/approval``:
+    ``already_decided`` | ``lock_contended`` | ``voice_live`` — a call whose
+    row already expired reads as ``already_decided``, and the agent will have
+    been told the read timed out.
+    """
+    return await submit_widget_client_tool_handler(session_id, req, request, ctx)
 
 
 @router.post(

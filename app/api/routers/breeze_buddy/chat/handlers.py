@@ -86,6 +86,7 @@ from app.schemas.breeze_buddy.chat import (
     GreetingMessage,
     ListChatSessionsResponse,
     SendChatMessageRequest,
+    SubmitClientToolResultRequest,
     ToolApprovalStatus,
 )
 from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
@@ -915,7 +916,55 @@ async def approve_chat_tool_handler(
     access_check: Optional[Callable[[ChatSession], None]] = None,
 ) -> StreamingResponse:
     """Apply a HITL decision to a pending tool approval and stream the
-    resumed turn (same SSE shape as ``/message``).
+    resumed turn (same SSE shape as ``/message``)."""
+    return await _resume_gated_call(
+        session_id,
+        tool_call_id=req.tool_call_id,
+        approved=req.approved,
+        reason=req.reason,
+        result=None,
+        access_check=access_check,
+    )
+
+
+async def submit_chat_client_tool_handler(
+    session_id: str,
+    req: SubmitClientToolResultRequest,
+    *,
+    access_check: Optional[Callable[[ChatSession], None]] = None,
+) -> StreamingResponse:
+    """Hand back what the browser produced for a pending client-tool call and
+    stream the resumed turn.
+
+    The same gate as an approval, answered differently: there is no decision to
+    make, because the call has already run — in the shopper's browser. So it
+    claims the row the same way (PENDING-only, expiry still applies) and
+    resumes down the no-execution path with the payload standing in for the
+    result the server would otherwise have computed.
+
+    Nothing here trusts the payload beyond its size, which the schema caps: it
+    reaches the LLM as tool output, which is untrusted input by construction.
+    """
+    return await _resume_gated_call(
+        session_id,
+        tool_call_id=req.tool_call_id,
+        approved=True,
+        reason=None,
+        result=req.result,
+        access_check=access_check,
+    )
+
+
+async def _resume_gated_call(
+    session_id: str,
+    *,
+    tool_call_id: str,
+    approved: bool,
+    reason: Optional[str],
+    result: Optional[Dict[str, Any]],
+    access_check: Optional[Callable[[ChatSession], None]] = None,
+) -> StreamingResponse:
+    """Resume a turn that ended on a gated call, whatever answered it.
 
     Order is load-bearing (see plan review):
     1. Atomically claim the target row (only a PENDING row can be decided;
@@ -972,14 +1021,14 @@ async def approve_chat_tool_handler(
         # synthetic deny/timeout result + sibling sweep persisted under the
         # lock). The SAME claim the voice bridge uses — see claim_tool_approval.
         claim = await claim_tool_approval(
-            session_id, req.tool_call_id, req.approved, req.reason
+            session_id, tool_call_id, approved, reason, result=result
         )
         if claim.outcome == "not_found":
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
                     f"No approval request with tool_call_id "
-                    f"'{req.tool_call_id}' for this session"
+                    f"'{tool_call_id}' for this session"
                 ),
             )
         if claim.outcome == "already_decided":

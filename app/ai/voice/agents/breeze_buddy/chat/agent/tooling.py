@@ -37,6 +37,9 @@ from app.ai.voice.agents.breeze_buddy.chat.steps.verification import (
     verification_error_envelope,
 )
 from app.ai.voice.agents.breeze_buddy.chat.tools.annotations import is_read_only
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    CLIENT_TOOL_BUILDERS,
+)
 from app.ai.voice.agents.breeze_buddy.chat.tools.result_annotators import (
     run_result_annotators,
 )
@@ -45,6 +48,7 @@ from app.ai.voice.agents.breeze_buddy.chat.ui.binding import (
     resolve_show_op,
 )
 from app.ai.voice.agents.breeze_buddy.chat.ui.render_ui_tool import (
+    RENDER_UI_TOOL_NAME,
     build_render_ui_schema,
     build_revise_plan_schema,
     render_ui_components,
@@ -64,6 +68,10 @@ from app.core.logger import logger
 
 if TYPE_CHECKING:
     from app.ai.voice.agents.breeze_buddy.chat.agent.core import ChatAgent
+
+
+# render_ui components that would draw the page's product a second time.
+_PRODUCT_CARD_COMPONENTS = frozenset({"ProductCard", "ProductGrid"})
 
 
 class ToolDispatchMixin:
@@ -179,6 +187,13 @@ class ToolDispatchMixin:
         if self._plan_enforcement:
             global_funcs.append(build_revise_plan_schema(self._revise_plan_handler))
 
+        # Browser-executed tools. Published like any other global function —
+        # the LLM cannot tell the difference and should not have to. What
+        # makes them different happens later, at the gate in cycle.py, which
+        # ends the turn instead of dispatching them.
+        for name in sorted(self._client_tools):
+            global_funcs.append(CLIENT_TOOL_BUILDERS[name]())
+
         # Aggregate per-tool context-retention policy across every MCP server
         # the template declares. Used by llm_driver to compact stale
         # tool_result blocks in the messages array before each LLM call —
@@ -207,6 +222,43 @@ class ToolDispatchMixin:
             tool_projection=tool_projection or None,
         )
 
+    def _page_product_refusal(
+        self: "ChatAgent", call: FunctionCallFromLLM
+    ) -> Optional[Dict[str, Any]]:
+        """Refuse a search or a second product card once the page's product
+        is already on screen.
+
+        Code, not prompt: told five ways not to, the model still searched by
+        the product's name — and on a store with ten same-titled products the
+        search returned a different one, which it then drew as a second card.
+
+        The searches refused are the template's ``force_after`` tools — the
+        ones whose result forces a card. Soft, so the step rail reports ok and
+        the forced render step does not arm; the model writes its reply.
+        """
+        if not self._page_product_shown:
+            return None
+        name = call.function_name
+        blocked = name in self._render_ui_force_after
+        if name == RENDER_UI_TOOL_NAME:
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            blocked = args.get("component") in _PRODUCT_CARD_COMPONENTS
+        if not blocked:
+            return None
+        logger.info(
+            f"ChatAgent {self.session_id}: {name!r} refused — the page's "
+            "product card is already shown"
+        )
+        return {
+            "status": "error",
+            "soft": True,
+            "error": (
+                "not executed — this product's card is already shown, drawn "
+                "from its exact id. Do not search for it or render another "
+                "card; write your reply."
+            ),
+        }
+
     async def _dispatch_tool_call(
         self: "ChatAgent",
         call: FunctionCallFromLLM,
@@ -229,6 +281,9 @@ class ToolDispatchMixin:
         :func:`inject_tool_args` (template-declared session-state fills).
         When omitted, the LLM-provided ``call.arguments`` are used as-is.
         """
+        refusal = self._page_product_refusal(call)
+        if refusal is not None:
+            return refusal, None
         candidates: List[FlowsFunctionSchema] = [
             *(
                 fn
