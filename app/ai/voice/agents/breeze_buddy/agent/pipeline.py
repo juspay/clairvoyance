@@ -52,6 +52,7 @@ from app.ai.voice.agents.breeze_buddy.processors import (
 )
 from app.ai.voice.agents.breeze_buddy.processors.metrics_collector_processor import (
     MetricsCollectorProcessor,
+    TimelineObserver,
 )
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -72,7 +73,9 @@ from app.core.config.static import (
 from app.core.logger import logger
 
 
-def get_observers() -> list[Any]:
+def get_observers(
+    metrics_collector: Optional[MetricsCollectorProcessor] = None,
+) -> list[Any]:
     """Get pipeline observers for dev environment.
 
     Note: pipecat's ``UserBotLatencyObserver`` is intentionally not attached.
@@ -84,6 +87,13 @@ def get_observers() -> list[Any]:
     signal. See TODO.md §2 for follow-up.
     """
     observers: list[Any] = [MetricsLogObserver()]
+
+    # Reports the two timeline moments the collector cannot see from its
+    # position at the end of the pipeline: the final transcript (folded into
+    # history by the user aggregator) and the LLM's first token (buffered into
+    # sentences by TTS). An observer reads every link without being wired in.
+    if metrics_collector is not None:
+        observers.append(TimelineObserver(metrics_collector))
 
     if ENVIRONMENT.lower() == "dev":
         observers.extend(
@@ -573,6 +583,7 @@ async def create_pipeline_task(
     pipeline: Pipeline,
     conversation_id: str,
     is_daily_mode: bool = False,
+    metrics_collector: Optional[MetricsCollectorProcessor] = None,
 ) -> PipelineTask:
     """Create and configure the pipeline task.
 
@@ -580,6 +591,7 @@ async def create_pipeline_task(
         pipeline: The built pipeline
         conversation_id: Unique conversation identifier
         is_daily_mode: When True, configures RTVIObserver params for real-time event emission
+        metrics_collector: The call's collector, so the timeline observer can report into it
 
     Returns:
         Configured PipelineTask
@@ -616,7 +628,7 @@ async def create_pipeline_task(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        "observers": get_observers(),
+        "observers": get_observers(metrics_collector),
         "enable_rtvi": emit_daily_events,
         "rtvi_observer_params": rtvi_params,
     }
