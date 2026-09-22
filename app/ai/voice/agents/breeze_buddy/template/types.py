@@ -61,6 +61,7 @@ class STTProvider(str, Enum):
     OPENAI = "openai"
     GOOGLE = "google"
     ELEVENLABS = "elevenlabs"
+    ASSEMBLYAI = "assemblyai"
 
 
 class SonioxSTTConfig(BaseModel):
@@ -220,6 +221,129 @@ class ElevenLabsSTTConfig(BaseModel):
     )
 
 
+class AssemblyAISTTConfig(BaseModel):
+    """AssemblyAI Universal Streaming (v3) STT settings.
+
+    ``voice_focus`` is not in pipecat 1.1.0 and is out of scope.
+    ``language_codes`` is not either, so the builder appends it itself.
+
+    Note on languages: Universal-3.5 Pro is multilingual BY DEFAULT and
+    code-switches mid-sentence across 18 languages, so Hinglish works with no
+    language setting at all. AssemblyAI's ``language_codes`` only narrows that
+    set for accuracy, and passing a single code makes the session MONOLINGUAL
+    -- the failure mode that forced English into Devanagari on ElevenLabs.
+    """
+
+    model: str = Field(
+        "universal-3-5-pro",
+        description="AssemblyAI speech model. Universal-3.5 Pro Streaming is "
+        "the only streaming model with native mid-sentence code switching, and "
+        "the only one supporting AssemblyAI-side turn detection — so "
+        "turn_detection='stt_native' requires it. pipecat 1.1.0 knows the same "
+        "model as 'u3-rt-pro'; either spelling (and their -* variants) is "
+        "accepted and normalised to AssemblyAI's documented name.",
+    )
+    language_codes: Optional[List[str]] = Field(
+        None,
+        max_length=10,
+        description="ISO-639-1 codes to steer the model toward, e.g. "
+        "['hi', 'en'] for Hinglish. Max 10 (pipecat's cap; AssemblyAI lists 18 languages). The model code-switches natively "
+        "without this; the list narrows the candidates, which matters on "
+        "8 kHz telephony. A SINGLE code makes the session monolingual.",
+    )
+    keyterms_prompt: Optional[
+        List[Annotated[str, StringConstraints(max_length=50)]]
+    ] = Field(
+        None,
+        max_length=100,
+        description="Domain vocabulary to bias transcription toward. "
+        "AssemblyAI caps this at 100 terms of 50 characters each; over "
+        "either limit it rejects the websocket at connect, which on the "
+        "voice path is a call with no transcript at all. Use proper nouns "
+        "and jargon only -- their docs say common English words are "
+        "redundant. Mutually exclusive with ``prompt``.",
+    )
+    prompt: Optional[str] = Field(
+        None,
+        max_length=1750,
+        description="Free-text context sentence for the call. AssemblyAI caps "
+        "it at 1750 characters. Mutually exclusive with ``keyterms_prompt`` "
+        "-- AssemblyAI rejects a request carrying both.",
+    )
+    end_of_turn_confidence_threshold: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Confidence required to call a turn finished. Raise it for "
+        "fewer premature turn endings (callers cut off mid-sentence).",
+    )
+    min_turn_silence: Optional[int] = Field(
+        100,
+        ge=50,
+        le=10000,
+        description="Silence (ms) before a speculative end-of-turn check. "
+        "Defaults to AssemblyAI's own recommendation for voice agents; "
+        "pipecat leaves it unset, which applies a dictation-tuned default.",
+    )
+    max_turn_silence: Optional[int] = Field(
+        1000,
+        ge=50,
+        le=10000,
+        description="Maximum silence (ms) before the turn is forced to end. "
+        "Defaults to AssemblyAI's own recommendation for voice agents. "
+        "IGNORED under turn_detection='smart_turn': pipecat forces it equal "
+        "to min_turn_silence there (with a WARNING), because the local VAD "
+        "owns the turn boundary in that mode.",
+    )
+    formatted_finals: Optional[bool] = Field(
+        None,
+        description="Apply punctuation and casing to final transcripts.",
+    )
+    format_turns: Optional[bool] = Field(
+        None,
+        description="Format transcript turns. Not used by Universal-3.5 Pro.",
+    )
+    language_detection: Optional[bool] = Field(
+        None,
+        description="Report the detected language alongside transcripts.",
+    )
+    speaker_labels: Optional[bool] = Field(
+        None,
+        description="Enable speaker diarization.",
+    )
+    vad_threshold: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="AssemblyAI-side VAD confidence for classifying a frame as "
+        "silence. Universal-3.5 Pro only.",
+    )
+    word_finalization_max_wait_time: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Maximum wait (ms) for a word to be finalized.",
+    )
+    domain: Optional[str] = Field(
+        None,
+        description="Specialized recognition mode, e.g. 'medical-v1'.",
+    )
+
+    @model_validator(mode="after")
+    def _reject_prompt_with_keyterms(self) -> "AssemblyAISTTConfig":
+        """AssemblyAI rejects both together; fail at parse, not at connect.
+
+        pipecat raises ValueError in the service constructor, which on the
+        voice path surfaces as a call that dies at startup with no transcript.
+        Catching it here names the field instead.
+        """
+        if self.prompt is not None and self.keyterms_prompt is not None:
+            raise ValueError(
+                "assemblyai: prompt and keyterms_prompt cannot both be set — "
+                "keyterms are appended to the default prompt automatically"
+            )
+        return self
+
+
 class SmartTurnConfig(BaseModel):
     """SmartTurn ML turn-detection settings.
 
@@ -333,6 +457,7 @@ class STTConfiguration(BaseModel):
     deepgram: Optional[DeepgramSTTConfig] = None
     sarvam: Optional[SarvamSTTConfig] = None
     elevenlabs: Optional[ElevenLabsSTTConfig] = None
+    assemblyai: Optional[AssemblyAISTTConfig] = None
 
     # SmartTurn ML config — only used when turn_detection='smart_turn'
     smart_turn: Optional[SmartTurnConfig] = None

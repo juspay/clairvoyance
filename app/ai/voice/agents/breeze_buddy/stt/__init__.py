@@ -13,6 +13,7 @@ from pipecat.services.elevenlabs.stt import CommitStrategy
 from pipecat.transcriptions.language import Language
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    AssemblyAISTTConfig,
     DeepgramSTTConfig,
     ElevenLabsSTTConfig,
     SonioxSTTConfig,
@@ -21,10 +22,12 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TurnDetectionMode,
 )
 from app.ai.voice.stt import (
+    AssemblyAIConfig,
     DeepgramConfig,
     ElevenLabsConfig,
     SarvamConfig,
     SonioxConfig,
+    build_assemblyai_stt,
     build_deepgram_stt,
     build_elevenlabs_stt,
     build_google_stt,
@@ -43,6 +46,7 @@ from app.core.config.dynamic import (
     BB_SARVAM_STT_VAD_SIGNALS,
 )
 from app.core.config.static import (
+    ASSEMBLYAI_API_KEY,
     BREEZE_BUDDY_SONIOX_CONTEXT,
     BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS,
     BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
@@ -196,6 +200,58 @@ async def create_stt_from_config(config: STTConfiguration):
             )
         )
 
+    if config.provider == STTProvider.ASSEMBLYAI:
+        if not ASSEMBLYAI_API_KEY:
+            raise ValueError("ASSEMBLYAI_API_KEY is required for assemblyai STT")
+
+        aai = config.assemblyai or AssemblyAISTTConfig()
+
+        # Who ends a turn. SMART_TURN is the exception, not STT_NATIVE: it is
+        # the only mode the pipeline auto-creates a Silero VAD for, and
+        # vad_force_turn_endpoint=True is reachable ONLY through that VAD.
+        # TIMEOUT gets no VAD and BREEZE_BUDDY_ENABLE_VAD defaults False, so
+        # forcing it here would leave the caller talking to a bot that never
+        # receives a final transcript.
+        vad_force_turn_endpoint = config.turn_detection == TurnDetectionMode.SMART_TURN
+
+        # pipecat raises ValueError when AssemblyAI-side endpointing is asked
+        # of a non-u3-pro model. Catch it here, where the message can name the
+        # template field, instead of at connect where it kills the call.
+        # Accept both names for the same family: AssemblyAI documents
+        # "universal-3-5-pro", pipecat 1.1.0 hardcodes "u3-rt-pro" (the
+        # builder translates between them). pipecat 1.8.1's is_u3_pro_model
+        # matches both plus their -* variants.
+        if not vad_force_turn_endpoint and not aai.model.startswith(
+            ("universal-3-5-pro", "u3-rt-pro")
+        ):
+            raise ValueError(
+                f"assemblyai: turn_detection={config.turn_detection.value} needs "
+                f"AssemblyAI-side endpointing, which requires Universal-3.5 Pro; "
+                f"got model={aai.model!r}. Set model='universal-3-5-pro' or use "
+                f"turn_detection='smart_turn'."
+            )
+
+        return build_assemblyai_stt(
+            AssemblyAIConfig(
+                api_key=ASSEMBLYAI_API_KEY,
+                model=aai.model,
+                language_codes=aai.language_codes,
+                vad_force_turn_endpoint=vad_force_turn_endpoint,
+                keyterms_prompt=aai.keyterms_prompt,
+                prompt=aai.prompt,
+                end_of_turn_confidence_threshold=aai.end_of_turn_confidence_threshold,
+                min_turn_silence=aai.min_turn_silence,
+                max_turn_silence=aai.max_turn_silence,
+                formatted_finals=aai.formatted_finals,
+                format_turns=aai.format_turns,
+                language_detection=aai.language_detection,
+                speaker_labels=aai.speaker_labels,
+                vad_threshold=aai.vad_threshold,
+                word_finalization_max_wait_time=aai.word_finalization_max_wait_time,
+                domain=aai.domain,
+            )
+        )
+
     if config.provider == STTProvider.OPENAI:
         if not OPENAI_STT_API_KEY:
             raise ValueError("OPENAI_STT_API_KEY is required for openai STT")
@@ -288,6 +344,7 @@ async def get_stt_service(
         "openai": STTProvider.OPENAI,
         "google": STTProvider.GOOGLE,
         "elevenlabs": STTProvider.ELEVENLABS,
+        "assemblyai": STTProvider.ASSEMBLYAI,
     }
     provider = provider_map.get(BREEZE_BUDDY_STT_SERVICE, STTProvider.GOOGLE)
 
