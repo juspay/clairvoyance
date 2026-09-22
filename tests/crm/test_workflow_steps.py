@@ -18,7 +18,6 @@ committed.
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -32,7 +31,7 @@ from app.crm.outreach.db.queries.enrollment import (
     cancel_run_query,
     exit_run_query,
 )
-from app.crm.outreach.nodes.context import CUT_SHORT_BY_KEY
+from app.crm.outreach.nodes.context import CUT_SHORT_BY_KEY, OUTCOME_KEY
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     RunStep,
@@ -787,3 +786,51 @@ def test_the_id_comes_from_this_visits_patch_not_the_run_context(
 
     ((row,),) = (writes.flushes[0]["steps"],)
     assert row["dispatch_id"] == fresh
+
+
+# --- phase 20: a capped call square walks on and says why -------------------
+
+
+def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The REAL call word, not a double: at the plan's ceiling it reaches no
+    accessor, so it can run under the walker as it is. The token takes the
+    plain arrow; the row says `max_calls` with nothing dispatched; the trail
+    word is popped before the context write and NOTHING is persisted."""
+    board = {
+        **_BOARD,
+        "nodes": [
+            {"id": "ring", "type": "call", "template_id": "t-1"},
+            {"id": "settle", "type": "wait", "minutes": 1440},
+        ],
+        "edges": [["ring", "settle"]],
+        "exits": {"max_calls_per_day": 1, "timezone": "Asia/Kolkata"},
+    }
+    from app.crm.outreach.ceiling import CALLS_TODAY_KEY, today_on
+    from app.crm.outreach.schemas import WorkflowExits
+
+    today = today_on(WorkflowExits(max_calls_per_day=1, timezone="Asia/Kolkata"))
+    writes = _Writes(board)
+    _walk(
+        monkeypatch,
+        writes,
+        _run(
+            node="ring",
+            context={"lead_visits_ring": 1, CALLS_TODAY_KEY: {"day": today, "n": 1}},
+        ),
+    )
+
+    ((verb, args),) = writes.calls
+    assert verb == "advance" and args[1] == "settle"
+    persisted = args[3]
+    assert "max_calls_reached" not in persisted, "the answer is computed, never stored"
+    assert OUTCOME_KEY not in persisted
+    assert persisted["lead_visits_ring"] == 1, "the id counter is untouched"
+    assert persisted[CALLS_TODAY_KEY]["n"] == 1, "the ledger means calls PLACED"
+
+    ((row,),) = (writes.flushes[0]["steps"],)
+    assert row["node_type"] == "call"
+    assert row["outcome"] == "max_calls"
+    assert row["dispatch_id"] is None
+    assert row["next_node"] == "settle"

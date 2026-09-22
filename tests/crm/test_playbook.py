@@ -483,6 +483,54 @@ def test_blocks_on_a_square_that_is_not_a_call_is_refused() -> None:
     ), validate_definition(doc)
 
 
+def test_a_playbook_when_may_name_every_field_a_condition_may() -> None:
+    """One FIELD grammar, one vocabulary. A `when` reaches the engine's
+    derived run facts through the same lens a condition uses, so an author
+    never has to learn which words work in which square."""
+    from app.crm.outreach import ceiling, playbook, predicates
+    from app.crm.outreach.schemas import WorkflowDefinition
+
+    exits = {"max_calls_per_day": 2, "timezone": "Asia/Kolkata"}
+    definition = WorkflowDefinition.model_validate(
+        {
+            "entry": {"topic": "t"},
+            "goals": [{"topics": ["g"]}],
+            "nodes": [{"id": "ring", "type": "call", "template_id": "t-1"}],
+            "edges": [],
+            "exits": exits,
+            "playbook": {
+                "lines": {"spent": "we have called enough today", "fresh": "hello"},
+                "blocks": {
+                    "hook": [
+                        {
+                            "when": [
+                                {
+                                    "field": "run.max_calls_reached",
+                                    "op": "is",
+                                    "value": True,
+                                }
+                            ],
+                            "say": "spent",
+                        },
+                        {"say": "fresh"},
+                    ]
+                },
+            },
+        }
+    )
+    day = ceiling.today_on(definition.exits)
+
+    def hook(placed: int) -> str:
+        lens = predicates.RunLens(
+            {ceiling.CALLS_TODAY_KEY: {"day": day, "n": placed}}, definition.exits
+        )
+        rendered, _ = playbook.resolve(definition, ["hook"], {}, {}, None, lens)
+        return rendered["hook"]
+
+    assert hook(2) == "we have called enough today"
+    assert hook(1) == "hello"
+
+
 # --- a hole may say how it READS ALOUD ----------------------------------------
 
 

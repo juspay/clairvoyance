@@ -8,7 +8,10 @@ are the same list ``entry.py`` filters a merge against. A second copy of
 either would let a walker key reach a customer's message.
 
 Leaf inside the package: imports the schemas and nothing else from
-outreach, so a word module may import it without a cycle.
+outreach, so a word module may import it without a cycle. A concern that
+merely READS the context is not this file's — the call ceiling's ledger key
+is named in the bookkeeping list below (that part IS this file's question),
+while the predicate over it lives in ``outreach/ceiling.py``.
 """
 
 from typing import Any, Dict, Optional
@@ -31,6 +34,8 @@ _BOOKKEEPING_KEYS = (
     "cut_short_by",  # entry.py: the letter that re-armed the run (canon T26)
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
+    "_outcome",  # OUTCOME_KEY: a square's word for the trail, popped by the walker
+    "calls_today",  # ceiling.CALLS_TODAY_KEY (pinned by test); the call ledger
 )
 # The letter that woke a run in place, left for the flush that follows
 # (canon T26): the walker reads it when it closes the square — recording it
@@ -44,6 +49,15 @@ CUT_SHORT_BY_KEY = "cut_short_by"
 # LEAVES, and the action then executes as its own square, so "the current
 # square's facts" would never be the latest stage's.
 LATEST_LETTER_KEY = "latest_letter"
+# How a PLAIN square was left, when it has something to say (phase 20): a
+# call square at the plan's ceiling returns it in its patch, the walker pops
+# it BEFORE the context write and records it as the step's outcome (canon
+# T26). Never persisted, never a fact — it is in the bookkeeping list so a
+# leak could not reach a template either. A branching square never uses it:
+# its answer already rides reply_<node>.
+OUTCOME_KEY = "_outcome"
+
+
 # The bookkeeping keys whose value is the ID OF WHAT THIS SQUARE HANDED
 # TO A DISPATCHER — a call's lead, a send's manifest row. Neither verb
 # contacts anyone itself; canon T26 keeps the receipt in one column.
