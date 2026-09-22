@@ -5,10 +5,14 @@ import re
 from typing import Any, Dict, List, Mapping, Optional
 
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.services.openai.llm import OpenAILLMService
 
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
-from app.ai.voice.llm import LLMConfiguration, LLMProvider, LLMSdk
+from app.ai.voice.llm import (
+    LLMConfiguration,
+    LLMProvider,
+    LLMSdk,
+    OpenAITextLLMService,
+)
 from app.ai.voice.llm._pools import get_openai_httpx_client
 from app.schemas.breeze_buddy.conversation_analysis import TopicExtractionResult
 from app.services.live_config.store import get_config
@@ -147,7 +151,9 @@ async def _request_llm(
     )
     # AzureLLMService subclasses OpenAILLMService, so Azure evaluations share
     # this pool too, on purpose: without it each one leaks its own client.
-    if isinstance(llm, OpenAILLMService):
+    # The /v1/responses service (Bedrock hosts) is not an OpenAILLMService but
+    # carries the same AsyncOpenAI client, so it must share the pool as well.
+    if isinstance(llm, OpenAITextLLMService):
         llm._client = llm._client.with_options(
             max_retries=0, http_client=get_openai_httpx_client()
         )

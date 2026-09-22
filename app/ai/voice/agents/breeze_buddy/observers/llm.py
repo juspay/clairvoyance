@@ -14,6 +14,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
 
 from app.core.logger import logger
 
@@ -33,6 +34,10 @@ async def call_llm(
     """
     if isinstance(llm_service, BaseOpenAILLMService):
         return await _call_openai(
+            llm_service, transcript_text, system_prompt, tools, observer_name
+        )
+    if isinstance(llm_service, OpenAIResponsesHttpLLMService):
+        return await _call_openai_responses(
             llm_service, transcript_text, system_prompt, tools, observer_name
         )
     if isinstance(llm_service, AnthropicLLMService):
@@ -79,6 +84,42 @@ async def _call_openai(
     for tool_call in message.tool_calls:
         args = json.loads(tool_call.function.arguments)
         return tool_call.function.name, args
+    return None, None
+
+
+async def _call_openai_responses(
+    svc: OpenAIResponsesHttpLLMService,
+    transcript_text: str,
+    system_prompt: str,
+    tools: List[FunctionSchema],
+    observer_name: str,
+) -> ToolCallResult:
+    """Mirror OpenAIResponsesHttpLLMService._process_context minus the frame layer.
+
+    The /v1/responses surface (Bedrock) reports a tool call as an ``output``
+    item of type ``function_call`` with ``name`` + JSON ``arguments``.
+    """
+    context = LLMContext()
+    context.add_message({"role": "user", "content": transcript_text})
+    context.set_tools(ToolsSchema(standard_tools=tools))
+
+    adapter = svc.get_llm_adapter()
+    invocation_params = adapter.get_llm_invocation_params(
+        context, system_instruction=system_prompt
+    )
+    params = svc._build_response_params(invocation_params)
+    params["stream"] = False
+    # The main pipeline's tool_choice (settings.extra, e.g. "required") is
+    # for the conversation; an observer must be free to call nothing.
+    params["tool_choice"] = "auto"
+
+    response = await svc._client.responses.create(**params)
+
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) == "function_call":
+            return item.name, json.loads(item.arguments or "{}")
+
+    logger.info(f"Observer {observer_name} no function_call in response")
     return None, None
 
 
