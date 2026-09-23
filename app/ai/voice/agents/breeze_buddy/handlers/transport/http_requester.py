@@ -20,11 +20,10 @@ is kept and returned to the caller — the LLM never sees intermediate events.
 
 import asyncio
 import base64
-import ipaddress
 import json
 from collections.abc import Awaitable
 from typing import Any, Callable, Dict, Optional, Tuple
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import aiohttp
 from pydantic import SecretStr
@@ -38,25 +37,24 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     HttpRequestConfig,
 )
 from app.core.config.static import (
-    ENVIRONMENT,
     HTTP_REQUEST_BLOCKED_CONTENT_TYPES,
     HTTP_REQUEST_MAX_REDIRECTS,
     HTTP_REQUEST_MAX_RESPONSE_BYTES,
 )
 from app.core.logger import logger
+from app.core.network import guarded_stream
 
 
 class HttpRequestExecutor:
-    """Executes HTTP requests with authentication, retry, and error handling"""
+    """Executes HTTP requests with authentication, retry, and error handling.
 
-    def __init__(self, session: aiohttp.ClientSession):
-        """
-        Initialize executor with aiohttp session.
-
-        Args:
-            session: Shared aiohttp.ClientSession (with proxy support from context)
-        """
-        self.session = session
+    Holds no session. The request itself belongs to app.core.network, which
+    owns the session and the proxy so that neither this class nor its callers
+    can put a credential, a default header or a proxy of their own onto a
+    request the guard has not judged. What is left here is what is genuinely
+    this class's: resolving the template, shaping the response for the LLM,
+    and deciding what to retry.
+    """
 
     async def execute(
         self,
@@ -93,7 +91,10 @@ class HttpRequestExecutor:
             None if fire_and_forget=True
             Tuple[int, str] (status_code, response_body) if fire_and_forget=False
             For SSE responses, response_body is the JSON of the last event's data.
-            Returns (0, "") on failure when fire_and_forget=False
+            A status of 0 means no response was read, and the string says
+            why: what egress refused, what the response was rejected for
+            (blocked content type, or over the size cap), the text of an
+            unexpected exception, or "" when the attempts simply ran out.
 
         Raises:
             Does not raise exceptions - logs errors instead
@@ -122,149 +123,59 @@ class HttpRequestExecutor:
             # Build full URL with query params
             url = self._build_url_with_params(resolved_url, resolved_query_params)
 
-            # SSRF Protection: Validate the resolved URL before making the request
-            self._validate_resolved_url(url)
+            # ssrf_safe_request replaces pre-loop check: double-resolved, mis-raised.
 
             # Execute with retry
+            # A transient refusal is kept so that if every attempt is refused
+            # the model hears why, rather than an empty string.
+            refusal = ""
+
             for attempt in range(1, config.max_retries + 1):
                 try:
                     logger.info(
                         f"HTTP {config.method.value} request to {url} (attempt {attempt}/{config.max_retries})"
                     )
 
-                    async with self.session.request(
-                        method=config.method.value,
-                        url=url,
+                    # guarded_stream revalidates every redirect hop (PT-07) and
+                    # hands back either the live response — which this executor
+                    # needs, since SSE is read event by event and the size cap
+                    # has to stop a body mid-transfer — or a refusal it has
+                    # already logged and worded safely for the model.
+                    async with guarded_stream(
+                        config.method.value,
+                        url,
                         headers=headers,
                         json=resolved_body if resolved_body else None,
-                        timeout=aiohttp.ClientTimeout(total=config.timeout),
+                        timeout_seconds=config.timeout,
                         max_redirects=HTTP_REQUEST_MAX_REDIRECTS,
-                        allow_redirects=HTTP_REQUEST_MAX_REDIRECTS > 0,
-                    ) as response:
-                        status = response.status
-
-                        # Security Check 1: Validate Content-Type header
-                        content_type = response.headers.get("Content-Type", "").lower()
-                        for blocked_type in HTTP_REQUEST_BLOCKED_CONTENT_TYPES:
-                            if blocked_type in content_type:
-                                error_msg = (
-                                    f"Blocked content type '{content_type}' - "
-                                    f"download of executables/scripts is not allowed"
-                                )
-                                logger.error(f"HTTP {config.method.value}: {error_msg}")
+                        subject=f"HTTP {config.method.value}",
+                    ) as attempted:
+                        if attempted.response is None:
+                            # A policy refusal will refuse identically next
+                            # time; only a transient one is worth another go.
+                            if not attempted.may_retry:
                                 if fire_and_forget:
                                     return None
-                                return (0, error_msg)
-
-                        # SSE branch: stream events when the server opts in
-                        # with text/event-stream and the caller supplied a
-                        # per-event callback. Only on 2xx — error bodies fall
-                        # through to the bulk read path below.
-                        is_sse = "text/event-stream" in content_type
-                        if (
-                            is_sse
-                            and on_sse_event is not None
-                            and not fire_and_forget
-                            and 200 <= status < 300
-                        ):
-                            concatenated = await self._consume_sse_stream(
-                                response=response,
+                                return (0, attempted.refusal)
+                            refusal = attempted.refusal
+                        else:
+                            # Reached the server, so whatever a previous attempt
+                            # was refused for is no longer what happened.
+                            refusal = ""
+                            outcome = await self._read_response(
+                                attempted.response,
+                                config=config,
+                                fire_and_forget=fire_and_forget,
                                 on_sse_event=on_sse_event,
                             )
-                            logger.info(
-                                f"HTTP {config.method.value} SSE stream complete: "
-                                f"total_data_bytes={len(concatenated)}"
-                            )
-                            return (status, concatenated)
-
-                        # Security Check 2: Validate Content-Length header
-                        content_length = response.headers.get("Content-Length")
-                        if content_length:
-                            try:
-                                length = int(content_length)
-                                if length > HTTP_REQUEST_MAX_RESPONSE_BYTES:
-                                    error_msg = (
-                                        f"Response too large: {length} bytes exceeds "
-                                        f"max allowed {HTTP_REQUEST_MAX_RESPONSE_BYTES} bytes"
-                                    )
-                                    logger.error(
-                                        f"HTTP {config.method.value}: {error_msg}"
-                                    )
-                                    if fire_and_forget:
-                                        return None
-                                    return (0, error_msg)
-                            except ValueError:
-                                pass  # Invalid Content-Length, will check actual size below
-
-                        # Read response to EOF with a size limit. NB: a single
-                        # StreamReader.read(n) can return a PARTIAL body on
-                        # slow/chunked upstreams (observed: 3KB of a 20KB
-                        # long-poll response, truncating the JSON) — so
-                        # accumulate chunks until EOF.
-                        body_chunks = []
-                        bytes_read = 0
-                        while True:
-                            chunk = await response.content.read(65536)
-                            if not chunk:
-                                break
-                            bytes_read += len(chunk)
-                            if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
-                                break
-                            body_chunks.append(chunk)
-                        response_bytes = b"".join(body_chunks)
-                        if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
-                            error_msg = (
-                                f"Response exceeded max size of "
-                                f"{HTTP_REQUEST_MAX_RESPONSE_BYTES} bytes"
-                            )
-                            logger.error(f"HTTP {config.method.value}: {error_msg}")
-                            if fire_and_forget:
-                                return None
-                            return (0, error_msg)
-
-                        # Decode response text
-                        response_text = response_bytes.decode("utf-8", errors="replace")
-
-                        logger.info(
-                            f"HTTP {config.method.value} response: status={status}, "
-                            f"body_preview={response_text[:200]}"
-                        )
-
-                        # Success
-                        if 200 <= status < 300:
-                            logger.info(f"HTTP {config.method.value} request succeeded")
-                            if fire_and_forget:
-                                return None
-                            return (status, response_text)
-
-                        # Non-success status code
-                        logger.warning(
-                            f"HTTP {config.method.value} returned non-success status {status}: {response_text[:500]}"
-                        )
-
-                        # Don't retry on 4xx client errors (except 429 rate limit)
-                        if 400 <= status < 500 and status != 429:
-                            logger.error(
-                                f"HTTP {config.method.value} client error {status}, not retrying"
-                            )
-                            if fire_and_forget:
-                                return None
-                            return (status, response_text)
+                            if outcome is not None:
+                                if fire_and_forget:
+                                    return None
+                                return outcome
 
                 except asyncio.TimeoutError:
                     logger.warning(
                         f"HTTP {config.method.value} timeout after {config.timeout}s (attempt {attempt})"
-                    )
-                except aiohttp.TooManyRedirects:
-                    logger.error(
-                        f"HTTP {config.method.value} exceeded max redirects "
-                        f"({HTTP_REQUEST_MAX_REDIRECTS}), not retrying"
-                    )
-                    if fire_and_forget:
-                        return None
-                    return (
-                        0,
-                        f"Too many redirects (max: {HTTP_REQUEST_MAX_REDIRECTS})",
                     )
                 except aiohttp.ClientError as e:
                     logger.warning(
@@ -288,7 +199,7 @@ class HttpRequestExecutor:
             )
             if fire_and_forget:
                 return None
-            return (0, "")
+            return (0, refusal)
 
         except Exception as e:
             logger.error(
@@ -298,6 +209,121 @@ class HttpRequestExecutor:
             if fire_and_forget:
                 return None
             return (0, str(e))
+
+    async def _read_response(
+        self,
+        response: aiohttp.ClientResponse,
+        *,
+        config: HttpRequestConfig,
+        fire_and_forget: bool,
+        on_sse_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
+    ) -> Optional[Tuple[int, str]]:
+        """What one live response means — or None to try again.
+
+        Returns the ``(status, body)`` the caller should report. None means
+        this attempt failed in a way another attempt could fix (a 5xx, or a
+        429), and says nothing about how many attempts there are: that is
+        ``execute``'s business, and keeping the two apart is the only reason
+        every branch below can simply return what it found.
+        """
+        status = response.status
+
+        # Security Check 1: Validate Content-Type header
+        content_type = response.headers.get("Content-Type", "").lower()
+        for blocked_type in HTTP_REQUEST_BLOCKED_CONTENT_TYPES:
+            if blocked_type in content_type:
+                error_msg = (
+                    f"Blocked content type '{content_type}' - "
+                    f"download of executables/scripts is not allowed"
+                )
+                logger.error(f"HTTP {config.method.value}: {error_msg}")
+                return (0, error_msg)
+
+        # SSE branch: stream events when the server opts in with
+        # text/event-stream and the caller supplied a per-event callback. Only
+        # on 2xx — error bodies fall through to the bulk read path below.
+        is_sse = "text/event-stream" in content_type
+        if (
+            is_sse
+            and on_sse_event is not None
+            and not fire_and_forget
+            and 200 <= status < 300
+        ):
+            concatenated = await self._consume_sse_stream(
+                response=response,
+                on_sse_event=on_sse_event,
+            )
+            logger.info(
+                f"HTTP {config.method.value} SSE stream complete: "
+                f"total_data_bytes={len(concatenated)}"
+            )
+            return (status, concatenated)
+
+        # Security Check 2: Validate Content-Length header
+        content_length = response.headers.get("Content-Length")
+        if content_length:
+            try:
+                length = int(content_length)
+                if length > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                    error_msg = (
+                        f"Response too large: {length} bytes exceeds "
+                        f"max allowed {HTTP_REQUEST_MAX_RESPONSE_BYTES} bytes"
+                    )
+                    logger.error(f"HTTP {config.method.value}: {error_msg}")
+                    return (0, error_msg)
+            except ValueError:
+                pass  # Invalid Content-Length, will check actual size below
+
+        # Read response to EOF with a size limit. NB: a single
+        # StreamReader.read(n) can return a PARTIAL body on slow/chunked
+        # upstreams (observed: 3KB of a 20KB long-poll response, truncating
+        # the JSON) — so accumulate chunks until EOF.
+        body_chunks = []
+        bytes_read = 0
+        while True:
+            chunk = await response.content.read(65536)
+            if not chunk:
+                break
+            bytes_read += len(chunk)
+            if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+                break
+            body_chunks.append(chunk)
+        response_bytes = b"".join(body_chunks)
+        if bytes_read > HTTP_REQUEST_MAX_RESPONSE_BYTES:
+            error_msg = (
+                f"Response exceeded max size of "
+                f"{HTTP_REQUEST_MAX_RESPONSE_BYTES} bytes"
+            )
+            logger.error(f"HTTP {config.method.value}: {error_msg}")
+            return (0, error_msg)
+
+        # Decode response text
+        response_text = response_bytes.decode("utf-8", errors="replace")
+
+        logger.info(
+            f"HTTP {config.method.value} response: status={status}, "
+            f"body_preview={response_text[:200]}"
+        )
+
+        # Success
+        if 200 <= status < 300:
+            logger.info(f"HTTP {config.method.value} request succeeded")
+            return (status, response_text)
+
+        # Non-success status code
+        logger.warning(
+            f"HTTP {config.method.value} returned non-success status {status}: {response_text[:500]}"
+        )
+
+        # Don't retry on 4xx client errors (except 429 rate limit)
+        if 400 <= status < 500 and status != 429:
+            logger.error(
+                f"HTTP {config.method.value} client error {status}, not retrying"
+            )
+            return (status, response_text)
+
+        # 5xx or 429 — worth another attempt.
+        return None
 
     @staticmethod
     async def _consume_sse_stream(
@@ -468,87 +494,6 @@ class HttpRequestExecutor:
         query_string = urlencode(clean_params, doseq=True)
         separator = "&" if "?" in url else "?"
         return f"{url}{separator}{query_string}"
-
-    @staticmethod
-    def _validate_resolved_url(url: str) -> None:
-        """
-        Validate resolved URL to prevent SSRF attacks.
-
-        This runs AFTER template variable substitution, validating the actual URL
-        that will be used for the HTTP request.
-
-        Security checks:
-        - HTTPS only (no HTTP)
-        - Block localhost in production
-        - Block private IP ranges (RFC1918, loopback, link-local)
-
-        Args:
-            url: Fully resolved URL (no template variables)
-
-        Raises:
-            ValueError: If URL fails security validation
-        """
-        # Parse URL
-        try:
-            parsed = urlparse(url)
-        except Exception as e:
-            raise ValueError(f"Invalid URL format: {e}")
-
-        # Check 1: HTTPS only
-        if parsed.scheme != "https":
-            raise ValueError(
-                f"Only HTTPS URLs are allowed for security. Got scheme: {parsed.scheme}"
-            )
-
-        # Check 2: Must have hostname
-        if not parsed.hostname:
-            raise ValueError("URL must have a valid hostname")
-
-        hostname = parsed.hostname.lower()
-
-        # Check 3: Block localhost (production only)
-        is_production = ENVIRONMENT.lower() in ("production", "prod")
-        if is_production:
-            localhost_patterns = ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
-            if hostname in localhost_patterns:
-                raise ValueError(
-                    f"Requests to localhost are not allowed in production: {hostname}"
-                )
-
-        # Check 4: Block private/reserved IP addresses
-        # Try to parse as IP address
-        try:
-            ip = ipaddress.ip_address(hostname)
-
-            # Block loopback (127.0.0.0/8, ::1)
-            if ip.is_loopback:
-                raise ValueError(
-                    f"Requests to loopback addresses are not allowed: {ip}"
-                )
-
-            # Block private IPs (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
-            if ip.is_private:
-                raise ValueError(
-                    f"Requests to private IP addresses are not allowed: {ip}"
-                )
-
-            # Block link-local (169.254.0.0/16, fe80::/10)
-            if ip.is_link_local:
-                raise ValueError(
-                    f"Requests to link-local addresses are not allowed: {ip}"
-                )
-
-            # Block all non-global IPs (comprehensive check)
-            if not ip.is_global:
-                raise ValueError(
-                    f"Requests to non-global IP addresses are not allowed: {ip}"
-                )
-
-        except ValueError as ip_error:
-            # If it's already a validation error we raised, re-raise it
-            if "not allowed" in str(ip_error):
-                raise
-            # Otherwise, hostname is not an IP - it's a domain name, which is allowed
 
     def _resolve_template_json_safe(
         self, template_str: str, resolved_fields: dict

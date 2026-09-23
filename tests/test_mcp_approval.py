@@ -14,6 +14,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
+import pytest
+
+import app.core.network.egress as _egress_module
 from app.ai.voice.agents.breeze_buddy.mcp import (
     _gate_mcp_handler,
     _mcp_approval_timeout_secs,
@@ -29,6 +32,26 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     StateReducer,
     ToolArgInjection,
 )
+
+
+@pytest.fixture(autouse=True)
+def _bypass_ssrf_egress(monkeypatch):
+    """These tests use placeholder MCP hostnames to exercise approval-map /
+    tool-loading logic. SSRF egress validation (tested separately in
+    tests/test_ssrf_egress.py) would otherwise reject the unresolvable host.
+
+    Stubbed at the resolver rather than at whatever the mcp module happens to
+    import: the guard is reached through a different name each time it is
+    tidied, and DNS is the one seam under all of them.
+    """
+
+    async def _resolves_public(hostname: str, port: int):
+        # A genuinely global address. 203.0.113.x (TEST-NET-3) reads as
+        # non-global to ipaddress and the guard refuses it — invisible while
+        # the stub replaced the whole validator instead of just DNS.
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(_egress_module, "_resolve_host", _resolves_public)
 
 
 class _FakeManager:

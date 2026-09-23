@@ -5,7 +5,7 @@ Simplified module for uploading audio files to GCS
 
 from typing import BinaryIO, Optional
 
-from app.core.config.static import GCS_BUCKET
+from app.core.config.static import GCS_BUCKET, RECORDING_STORAGE_HOST
 from app.core.logger import logger
 
 from .client import get_gcs_bucket
@@ -153,7 +153,7 @@ def upload_file_to_gcs(
 
         if success:
             if GCS_BUCKET == "atoms-sdk":
-                gcs_url = f"https://sdk.beta.breezesdk.store/{destination_path}"
+                gcs_url = f"https://{RECORDING_STORAGE_HOST}/{destination_path}"
                 return gcs_url
         return None
 

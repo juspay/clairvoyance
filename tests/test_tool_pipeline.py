@@ -12,6 +12,7 @@ from datetime import timedelta
 import pytest
 from mcp.client.session_group import StreamableHttpParameters
 
+import app.core.network.httpx_request as httpx_mod
 from app.ai.voice.agents.breeze_buddy import mcp as mcp_mod
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.response_transform import (
     TRANSFORM_REGISTRY,
@@ -39,6 +40,25 @@ def _append_z(value, args):
 
 def _boom(value, args):
     raise ValueError("boom")
+
+
+@pytest.fixture(autouse=True)
+def _bypass_ssrf_egress(monkeypatch):
+    """These tests drive the response pipeline through a placeholder MCP host.
+
+    The handler validates egress at call time, which would reject `http://x/mcp`
+    before any of the projection/transform behaviour under test here runs. The
+    guard itself is covered in tests/test_ssrf_egress.py, including a case
+    asserting this handler refuses a rebinding host.
+
+    Patched inside app.core.network.httpx_request, which is where the handler's
+    validate-pin-post sequence now lives.
+    """
+
+    async def _ok(url, *args, **kwargs):
+        return ["203.0.113.10"]
+
+    monkeypatch.setattr(httpx_mod, "validate_egress_url", _ok)
 
 
 @pytest.fixture(autouse=True)
@@ -239,7 +259,9 @@ class _FakeAsyncClient:
     async def __aexit__(self, *exc):
         return False
 
-    async def post(self, url, json=None, headers=None):
+    async def post(self, url, json=None, headers=None, **kwargs):
+        # `extensions` carries the SNI name when the request is pinned
+        # to a validated address.
         return self._resp
 
 
@@ -251,7 +273,7 @@ def _server_params():
 
 def _patch_httpx(monkeypatch, resp: _FakeResp):
     monkeypatch.setattr(
-        mcp_mod.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(resp)
+        httpx_mod.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(resp)
     )
 
 

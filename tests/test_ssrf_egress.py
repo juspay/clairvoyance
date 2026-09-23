@@ -1,6 +1,6 @@
 """SSRF egress guard (PT-03/05/07/11).
 
-Covers the shared ``app.core.security.ssrf`` validator: scheme enforcement,
+Covers the shared ``app.core.network`` validator: scheme enforcement,
 IP-literal blocking, DNS-name resolution + validation (the bypass the pentest
 flagged), and the redirect-following helper's per-hop revalidation.
 """
@@ -13,9 +13,9 @@ from typing import cast
 import aiohttp
 import pytest
 
-from app.core.security import ssrf
-from app.core.security.ssrf import (
+from app.core.network import (
     SSRFError,
+    egress as ssrf,
     host_matches_allowlist,
     ip_block_reason,
     ssrf_safe_request,
@@ -262,6 +262,42 @@ async def test_caller_supplied_allow_redirects_does_not_explode():
 
 
 # ── the call-time guard on the direct-HTTP MCP handler ──────────────────────
+async def test_direct_http_mcp_handler_revalidates_at_call_time(monkeypatch):
+    """_build_server_params validates at flow-BUILD time; this runs per call.
+
+    The gap: this handler attaches tenant credentials and posts with httpx, so
+    a name public when the flow was built but internal by call time would
+    reach an internal service with credentials on it.
+    """
+    from mcp.client.session_group import StreamableHttpParameters
+
+    from app.ai.voice.agents.breeze_buddy.mcp import _create_direct_http_tool_handler
+
+    def resolves_internal(host, port, *a, **k):
+        return [(socket.AF_INET, None, None, "", ("169.254.169.254", 0))]
+
+    monkeypatch.setattr(ssrf.socket, "getaddrinfo", resolves_internal)
+
+    def must_not_be_called(*a, **k):  # pragma: no cover - asserts absence
+        raise AssertionError("httpx client was constructed for a blocked host")
+
+    import app.ai.voice.agents.breeze_buddy.mcp as mcp_mod
+    import app.core.network.httpx_request as httpx_mod
+
+    monkeypatch.setattr(httpx_mod.httpx, "AsyncClient", must_not_be_called)
+
+    handler = _create_direct_http_tool_handler(
+        StreamableHttpParameters(
+            url="https://rebound.example/mcp",
+            headers={"Authorization": "Bearer tenant-secret"},
+        ),
+        "some_tool",
+    )
+    result = await handler({}, None)
+    assert result["status"] == "error"
+    assert "egress policy" in result["data"]
+
+
 # ── a rejection must not become the leak ──────────────────────────────────
 def test_redact_url_strips_query_and_userinfo():
     """Destination URLs are not safe to log: tenants authenticate receivers

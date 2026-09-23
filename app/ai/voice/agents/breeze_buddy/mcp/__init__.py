@@ -8,7 +8,6 @@ import uuid
 from datetime import timedelta
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
-import httpx
 from mcp.client.session_group import StreamableHttpParameters
 from pipecat.services.llm_service import (
     FunctionCallParams,
@@ -48,6 +47,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ToolUiHint,
 )
 from app.core.logger import logger
+from app.core.network import guarded_post_json, precheck_egress_url
 
 # --- HITL approval for MCP tools -------------------------------------------
 # Watchdog budget for a gated MCP tool: approval wait + the handler's dispatch
@@ -274,14 +274,27 @@ def _create_direct_http_tool_handler(
             server_params.timeout.total_seconds() if server_params.timeout else 30.0
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout_s) as client:
-                resp = await client.post(server_params.url, json=body, headers=headers)
+            # Validates, pins to a checked address and posts. Validation runs
+            # before the credential headers above reach the wire for a URL that
+            # fails — see app/core/network.
+            resp, refused = await guarded_post_json(
+                server_params.url,
+                json=body,
+                headers=headers,
+                timeout=timeout_s,
+                subject=f"[BUDDY_MCP] direct {tool_name!r}",
+            )
         except Exception as e:
             logger.warning(f"[BUDDY_MCP] direct {tool_name!r} transport failed: {e}")
             return cast(
                 FlowResult,
                 {"status": "error", "data": f"MCP transport error: {e}"},
             )
+
+        if resp is None:
+            # Refused. The guard logged the reason, which names the resolved
+            # address, and worded what is safe for the model to be told.
+            return cast(FlowResult, {"status": "error", "data": refused})
 
         # Surface HTTP-level failures as structured envelopes before
         # attempting to parse JSON. Without this branch, a 502 with an
@@ -543,17 +556,39 @@ def _build_auth_headers(
     return {}
 
 
-def _build_server_params(
+async def _build_server_params(
     server: McpServerConfig,
     template_vars: Dict[str, Any],
+    *,
+    rechecked_at_use: Optional[bool] = None,
 ) -> StreamableHttpParameters:
     """Resolve a server config + template_vars into StreamableHttpParameters.
 
     Shared by the voice loader (per-call clients) and the chat session pool
     (per-turn persistent clients). Substitutes ``{variable}`` placeholders in
     the URL and auth fields from ``template_vars``.
+
+    SECURITY: the resolved URL gets decrypted tenant credentials attached, so
+    it MUST pass the SSRF egress guard first (https-only, no internal/
+    metadata targets) before any credential header is built (PT-03).
     """
     resolved_url = _resolve_placeholders(server.url, template_vars)
+    # Whether anything checks this URL again before it is used decides what a
+    # resolver blip costs here. By default that is what the tool_schemas
+    # routing below settles: declared schemas go to the direct handler, which
+    # re-checks and pins on every call, so a blip is worth tolerating; without
+    # them the URL goes to pipecat's MCPClient, which never looks again, so
+    # this is the only check it gets and a blip has to refuse. A caller that
+    # routes on something other than tool_schemas — the pre-check always uses
+    # the direct handler — says so instead of being guessed at.
+    # Either way a real refusal raises, before any credential header is built.
+    if rechecked_at_use is None:
+        rechecked_at_use = server.tool_schemas is not None
+    await precheck_egress_url(
+        resolved_url,
+        subject=f"[BUDDY_MCP] {server.name or '<unnamed>'!r}",
+        rechecked_later=rechecked_at_use,
+    )
     if resolved_url != server.url:
         # Don't log the resolved URL — it can contain customer-identifying
         # values (e.g. shop subdomain). Operators can correlate via the
@@ -595,7 +630,7 @@ async def _load_server_tools(
 
     Each tool handler creates a fresh MCPClient per invocation for thread safety.
     """
-    server_params = _build_server_params(server, template_vars)
+    server_params = await _build_server_params(server, template_vars)
     # Prefer the stable name; fall back to the raw template URL (with
     # placeholders) rather than the resolved URL to avoid logging
     # customer-identifying substitutions.
@@ -810,7 +845,7 @@ async def get_mcp_global_functions_cached(
             continue
 
         try:
-            server_params = _build_server_params(server, template_vars)
+            server_params = await _build_server_params(server, template_vars)
         except Exception as e:
             logger.error(
                 f"[BUDDY_MCP] chat: failed to build server params for "

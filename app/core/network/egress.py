@@ -1,14 +1,20 @@
 """
-Shared SSRF-safe egress validation for all outbound HTTP sinks.
+Where a request is allowed to go, and which address it must use.
 
-Every place the platform fetches an operator/tenant/LLM-influenced URL must run
-it through :func:`validate_egress_url` BEFORE the request, and must re-validate
-every redirect hop (or disable redirects). The validator resolves the hostname
+The policy half of the package: this module decides, and the transport modules
+next door act on the decision. :func:`validate_egress_url` resolves the hostname
 and rejects the request if any resolved address is loopback, private, link-local
 (includes the 169.254.169.254 cloud-metadata address), multicast, reserved, or
 otherwise non-global — closing the "DNS name resolving to an internal address"
-bypass, and narrowing the DNS-rebinding window by checking the exact addresses
-resolved.
+bypass — and hands back the exact addresses it approved, which is what narrows
+the DNS-rebinding window: the caller connects to one of those rather than
+resolving the name a second time.
+
+Nothing here issues a request, and no caller outside this package should be
+calling this module directly to build one. Applying the policy per hop, pinning
+to an approved address and keeping the Host header and TLS name honest is what
+``aiohttp_request`` and ``httpx_request`` are for; a caller that hand-rolls it
+is how the checks drifted apart in the first place.
 
 Design notes:
 - Resolution runs off the event loop (``asyncio.to_thread``, getaddrinfo is
@@ -16,24 +22,25 @@ Design notes:
   defeating mixed good/bad record rebinding.
 - ``SSRF_ALLOW_PRIVATE_EGRESS=true`` is a local-dev-only escape hatch, off by
   default regardless of ENVIRONMENT.
-- ``validate_egress_url``/``ip_block_reason``/``host_matches_allowlist`` are
-  client-agnostic; only ``ssrf_safe_request`` binds to aiohttp — an httpx or
-  requests caller should call ``validate_egress_url`` per hop itself, with
-  redirects disabled.
+- Everything here is client-agnostic — no aiohttp or httpx types cross this
+  module's boundary — which is what lets both transports share one policy.
 """
 
 import asyncio
 import ipaddress
 import socket
-from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, List, Optional, Sequence
-from urllib.parse import urljoin, urlparse
+from typing import Any, List, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 from yarl import URL
 
 from app.core.config.static import SSRF_ALLOW_PRIVATE_EGRESS
 from app.core.logger import logger
+from app.core.network.errors import (
+    EgressResolutionError,
+    SSRFError,
+)
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 # 301/302/303 rewrite to a bodyless GET; only 307/308 preserve method and body.
@@ -50,20 +57,6 @@ _SAFE_REDIRECT_HEADERS = frozenset(
 
 # Local-dev escape hatch; off by default regardless of ENVIRONMENT.
 _ALLOW_PRIVATE_EGRESS = SSRF_ALLOW_PRIVATE_EGRESS
-
-
-class SSRFError(ValueError):
-    """Raised when a URL fails SSRF egress validation."""
-
-
-class EgressResolutionError(SSRFError):
-    """The host could not be resolved — a transient failure, not a refusal.
-
-    Subclasses SSRFError so fail-closed callers are unchanged, but a caller
-    with a retry loop should catch this FIRST: a resolver hiccup is worth
-    retrying, unlike a blocked address, and conflating the two makes a DNS
-    outage look like a policy refusal.
-    """
 
 
 def redact_url(url: str) -> str:
@@ -85,6 +78,35 @@ def redact_url(url: str) -> str:
         return redacted.geturl() + ("?REDACTED" if parts.query else "")
     except Exception:  # pragma: no cover - defensive; logging must not break
         return "<unparseable url>"
+
+
+async def precheck_egress_url(url: str, *, subject: str, rechecked_later: bool) -> None:
+    """Validate ``url`` before anything is built for it.
+
+    A policy refusal always raises: a URL that must never be reached must not
+    have credentials assembled for it, whatever happens afterwards.
+
+    ``rechecked_later`` says whether a real gate runs at use time. When it
+    does, a resolution failure only logs — it is transient, and abandoning the
+    work over a blip costs more than the blip is worth. When it does NOT, this
+    call IS the policy, and a resolution failure has to refuse: an attacker
+    who runs the authoritative nameserver can answer SERVFAIL here and an
+    internal address at connect, and a tolerated failure would hand them the
+    request and whatever credentials were built after it. Fail closed.
+
+    ``subject`` names the caller in the log line. Callers that are themselves
+    the connection want :func:`validate_egress_url`, which raises either way
+    and hands back the addresses to connect to.
+    """
+    try:
+        await validate_egress_url(url)
+    except EgressResolutionError as exc:
+        if not rechecked_later:
+            raise
+        logger.warning(
+            f"{subject} did not resolve at pre-check; kept and re-checked at "
+            f"use time: {exc}"
+        )
 
 
 def ip_block_reason(ip_str: str) -> Optional[str]:
@@ -322,7 +344,7 @@ def _with_total(
     return aiohttp.ClientTimeout(total=total, **carried)
 
 
-def _pinned_targets(url: str, ips: List[str]) -> List[tuple]:
+def pinned_targets(url: str, ips: List[str]) -> List[tuple]:
     """(url, host_header, tls_name) per validated address, in order.
 
     aiohttp resolves the name again at connect time, and that second answer is
@@ -345,177 +367,3 @@ def _pinned_targets(url: str, ips: List[str]) -> List[tuple]:
         pass
     authority = host if parts.explicit_port is None else f"{host}:{parts.port}"
     return [(str(parts.with_host(ip)), authority, host) for ip in ips]
-
-
-@asynccontextmanager
-async def ssrf_safe_request(
-    session: aiohttp.ClientSession,
-    method: str,
-    url: str,
-    *,
-    auth: Optional[aiohttp.BasicAuth] = None,
-    allowed_host_suffixes: Optional[Sequence[str]] = None,
-    allow_http: bool = False,
-    max_redirects: int = 3,
-    same_origin_only: bool = False,
-    **kwargs: Any,
-) -> AsyncIterator[aiohttp.ClientResponse]:
-    """Issue an aiohttp request with SSRF validation on every hop.
-
-    Redirects are followed manually so each hop is re-validated (aiohttp's own
-    redirect following would skip the check). Behaviour:
-
-    - Every hop goes through :func:`validate_egress_url`, blocking an
-      internal/metadata target at any point in the chain.
-    - ``allowed_host_suffixes``: the initial host must be on the allow-list
-      (hard gate); a redirect leaving it drops ``auth`` but may still follow
-      to e.g. a public CDN.
-    - ``same_origin_only`` restricts redirects to the same host (plus an
-      http->https upgrade) — what makes following a redirect safe at all for
-      a request whose body is a signed webhook payload.
-    - Redirect method/body follow the browser rule, not a raw replay:
-      301/302/303 rewrite to GET and drop the body; only 307/308 preserve
-      both.
-    - Exhausting ``max_redirects`` raises rather than returning the final 3xx.
-
-    The yielded response must be consumed inside the ``async with`` block.
-    """
-    # Redirects always drive here; caller-supplied allow_redirects would collide.
-    if kwargs.pop("allow_redirects", None) is not None:
-        logger.warning(
-            "ssrf_safe_request: ignoring caller-supplied allow_redirects; "
-            "redirects are followed manually so every hop can be revalidated"
-        )
-
-    # One deadline for the whole chain, not per hop, else each hop gets a fresh budget.
-    caller_timeout = kwargs.get("timeout")
-    total_budget = _total_timeout_seconds(caller_timeout)
-    if total_budget is None:
-        total_budget = _total_timeout_seconds(getattr(session, "timeout", None))
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + total_budget if total_budget is not None else None
-
-    current = url
-    cur_method = method
-    credentials_dropped = False
-    for hop in range(max_redirects + 1):
-        validated = await validate_egress_url(current, allow_http=allow_http)
-
-        send_auth = auth
-        drop_credentials = False
-        if allowed_host_suffixes is not None and not host_matches_allowlist(
-            current, list(allowed_host_suffixes)
-        ):
-            if hop == 0:
-                raise SSRFError(
-                    "Refusing request: initial host not on allow-list: "
-                    f"{redact_url(current)}"
-                )
-            send_auth = None  # off-allow-list redirect target — never send creds
-            drop_credentials = True
-
-        # ORIGINAL url compared here, not the previous hop; A->B->B re-attaches else.
-        # http upgrade is not a departure: checksum header is outside the allow-list.
-        if not credentials_dropped and not is_same_origin(url, current):
-            credentials_dropped = True
-
-        if credentials_dropped:
-            send_auth = None
-            drop_credentials = True
-
-        # Header-borne creds (bearer token, cookie) dropped on the same hops as auth.
-        send_kwargs = kwargs
-        if drop_credentials:
-            send_kwargs = _without_credential_headers(kwargs, current)
-
-        # Body drops on the same hops creds do; 307/308 would else replay it off-host.
-        if credentials_dropped:
-            send_kwargs = {
-                k: v
-                for k, v in send_kwargs.items()
-                if k not in _BODY_KWARGS and k not in _CREDENTIAL_KWARGS
-            }
-
-        if deadline is not None:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                # Same exception a request would raise: retryable, unlike SSRFError.
-                raise asyncio.TimeoutError(
-                    f"Redirect chain exceeded the {total_budget:g}s budget "
-                    f"after {hop} hop(s) fetching {redact_url(url)}"
-                )
-            # Only `total` shrinks per hop; connect/sock_read/... are the caller's.
-            # aiohttp does not merge a request timeout with the session's, so
-            # falling back to None here silently dropped the session's connect,
-            # sock_read and sock_connect.
-            base = (
-                caller_timeout
-                if isinstance(caller_timeout, aiohttp.ClientTimeout)
-                else getattr(session, "timeout", None)
-            )
-            if not isinstance(base, aiohttp.ClientTimeout):
-                base = None
-            send_kwargs = dict(send_kwargs)
-            send_kwargs["timeout"] = _with_total(base, remaining)
-
-        # Connect to an address that was actually checked, not to the name.
-        response = None
-        last_error: Optional[BaseException] = None
-        for target, host_header, tls_name in _pinned_targets(current, validated):
-            attempt_kwargs = send_kwargs
-            if host_header is not None:
-                attempt_kwargs = dict(send_kwargs)
-                headers = dict(attempt_kwargs.get("headers") or {})
-                headers.setdefault("Host", host_header)
-                attempt_kwargs["headers"] = headers
-                if URL(current).scheme == "https":
-                    attempt_kwargs.setdefault("server_hostname", tls_name)
-            try:
-                response = await session.request(
-                    cur_method,
-                    target,
-                    auth=send_auth,
-                    allow_redirects=False,
-                    **attempt_kwargs,
-                )
-                break
-            except aiohttp.ClientConnectorError as exc:
-                # This address is unreachable; the others were validated too.
-                last_error = exc
-        if response is None:
-            raise last_error or aiohttp.ClientError(f"could not reach {hop}")
-        location = response.headers.get("Location")
-        if response.status in _REDIRECT_STATUSES and location:
-            if hop >= max_redirects:
-                response.release()
-                raise SSRFError(
-                    f"Too many redirects while fetching {redact_url(url)!r} "
-                    f"(limit {max_redirects})"
-                )
-            response.release()
-            target = urljoin(current, location)
-            if same_origin_only and not is_same_origin(current, target):
-                raise SSRFError(
-                    f"Refusing to follow an off-origin redirect: "
-                    f"{redact_url(current)} -> {redact_url(target)}"
-                )
-            current = target
-            # The Location carries its own query; re-sending `params` appended
-            # the caller's to it (?token=S&token=S on a same-origin hop).
-            kwargs = {k: v for k, v in kwargs.items() if k != "params"}
-            if response.status in _REWRITE_TO_GET and cur_method.upper() not in (
-                "GET",
-                "HEAD",
-            ):
-                # Repeating the original method/payload would re-POST off-host.
-                cur_method = "GET"
-                kwargs = {k: v for k, v in kwargs.items() if k not in _BODY_KWARGS}
-            continue
-
-        try:
-            yield response
-        finally:
-            response.release()
-        return
-
-    raise SSRFError(f"Too many redirects while fetching {url!r}")

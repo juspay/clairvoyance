@@ -112,11 +112,7 @@ async def service_callback(context: TemplateContext, args):
                 f"with outcome {outcome}"
             )
             try:
-                success = await send_webhook_with_retry(
-                    context.aiohttp_session,
-                    webhook_url,
-                    summary_data,
-                )
+                success = await send_webhook_with_retry(webhook_url, summary_data)
                 if not success:
                     logger.error(
                         f"Failed to send call summary webhook after all retries for call {context.call_sid}. "
