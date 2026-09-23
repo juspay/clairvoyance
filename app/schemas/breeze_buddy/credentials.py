@@ -37,6 +37,14 @@ class CreateCredentialRequest(BaseModel):
         description="Credential value. For api_key: {'key': '...'}, bearer_token: {'token': '...'}, basic_auth: {'username': '...', 'password': '...'}, custom: any key-value pairs"
     )
     description: Optional[str] = None
+    provider: Optional[str] = Field(
+        default=None,
+        description="The provider ACCOUNT this row holds, for a template's "
+        "llm/stt/tts `credential_id` (e.g. 'elevenlabs', 'azure_openai', "
+        "'deepgram'). The value then carries what that provider needs "
+        "(`api_key`; Azure also `endpoint`; Vertex `credentials_json` + "
+        "`project_id`). NULL = a placeholder credential, as before.",
+    )
 
 
 class UpdateCredentialRequest(BaseModel):
@@ -50,6 +58,7 @@ class UpdateCredentialRequest(BaseModel):
     )
     description: Optional[str] = None
     is_active: Optional[bool] = None
+    provider: Optional[str] = None
 
 
 class Credential(BaseModel):
@@ -66,5 +75,6 @@ class Credential(BaseModel):
     is_encrypted: bool = False
     description: Optional[str] = None
     is_active: bool = True
+    provider: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

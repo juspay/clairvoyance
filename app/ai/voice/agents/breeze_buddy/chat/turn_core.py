@@ -42,6 +42,9 @@ from app.ai.voice.agents.breeze_buddy.chat.llm.gemini.adapter_patch import (
 )
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
+from app.ai.voice.agents.breeze_buddy.provider_credentials import (
+    accounts_for_template,
+)
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
@@ -275,7 +278,11 @@ async def run_chat_turn(
     template_vars = await build_render_template_vars(template, persisted_template_vars)
 
     if llm is None:
-        llm = await get_llm_service(resolve_llm_configuration(template), pooled=True)
+        llm = await get_llm_service(
+            resolve_llm_configuration(template),
+            pooled=True,
+            accounts=accounts_for_template(template),
+        )
     # Chat-only adapter swap — voice keeps the stock service (see
     # ensure_chat_gemini_adapter). Applied to injected instances too;
     # idempotent and a no-op for non-Gemini services.
@@ -369,7 +376,11 @@ async def run_chat_approval_continuation(
     )
     template_vars = await build_render_template_vars(template, persisted_template_vars)
     if llm is None:
-        llm = await get_llm_service(resolve_llm_configuration(template), pooled=True)
+        llm = await get_llm_service(
+            resolve_llm_configuration(template),
+            pooled=True,
+            accounts=accounts_for_template(template),
+        )
     # Chat-only adapter swap — voice keeps the stock service (see
     # ensure_chat_gemini_adapter). Applied to injected instances too;
     # idempotent and a no-op for non-Gemini services.

@@ -105,6 +105,7 @@ async def create_credential(
     value: Dict[str, Any],
     description: Optional[str] = None,
     merchant_id: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> Optional[Credential]:
     """Create a new credential with optional KMS encryption."""
     logger.info(
@@ -127,6 +128,7 @@ async def create_credential(
             is_encrypted=is_encrypted,
             description=description,
             merchant_id=merchant_id,
+            provider=provider,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -149,15 +151,19 @@ async def get_credential_by_id(
     credential_id: str,
     mask: bool = True,
     raise_errors: bool = False,
+    placeholder_only: bool = False,
 ) -> Optional[Credential]:
     """Get a credential by ID.
 
     With raise_errors=True, a query failure re-raises instead of folding into
     None — for callers that treat None as terminal ("row gone") and must not
     read a transient outage as that. None still means "no such row" either way.
+    ``placeholder_only`` reads only a row with no `provider` (see the query).
     """
     try:
-        query_text, values = get_credential_by_id_query(credential_id)
+        query_text, values = get_credential_by_id_query(
+            credential_id, placeholder_only=placeholder_only
+        )
         result = await run_parameterized_query(query_text, values)
         return decode_single_credential(result, mask=mask)
     except Exception as e:
@@ -245,9 +251,16 @@ async def update_credential(
     value: Optional[Dict[str, Any]] = None,
     description: Optional[str] = None,
     is_active: Optional[bool] = None,
+    provider: Optional[str] = None,
+    unless_named_by_a_template: bool = False,
 ) -> Optional[Credential]:
     """
     Update a credential. Handles value encryption and masked field preservation.
+
+    ``unless_named_by_a_template``: the statement refuses while a template
+    names this row as its provider account — CredentialInUseError, so the
+    handler answers 409 and the row is left as it was (atomic with the
+    write, no check-then-update window).
     """
     logger.info(f"Updating credential {credential_id}")
 
@@ -285,6 +298,8 @@ async def update_credential(
             is_encrypted=is_encrypted,
             description=description,
             is_active=is_active,
+            provider=provider,
+            unless_named_by_a_template=unless_named_by_a_template,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -293,11 +308,14 @@ async def update_credential(
             logger.info(f"Credential {credential_id} updated successfully")
             return credential
 
+        if unless_named_by_a_template:
+            # The row exists (read above); the statement refused: in use.
+            raise CredentialInUseError(credential_id)
         logger.error(f"Failed to update credential {credential_id}")
         return None
 
-    except ValueError:
-        # Re-raise validation errors
+    except (ValueError, CredentialInUseError):
+        # Re-raise validation errors and the refusal
         raise
     except Exception as e:
         logger.error(f"Error updating credential {credential_id}: {e}", exc_info=True)
@@ -327,9 +345,16 @@ async def delete_credential(credential_id: str) -> bool:
             log.info("Credential deleted successfully")
             return True
 
+        # 0 rows: gone, or refused because a template names it as its
+        # provider account (the statement's own guard). Tell them apart.
+        if await get_credential_by_id(credential_id, mask=True) is not None:
+            log.warning("Credential is named by a template and was not deleted")
+            raise CredentialInUseError(credential_id)
         log.warning("Credential not found for deletion")
         return False
 
+    except CredentialInUseError:
+        raise
     except asyncpg.ForeignKeyViolationError as exc:
         log.warning("Credential is still in use and was not deleted")
         raise CredentialInUseError(credential_id) from exc

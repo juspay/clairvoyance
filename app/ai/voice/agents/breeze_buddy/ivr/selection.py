@@ -25,6 +25,7 @@ from fastapi import WebSocket
 from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import (
     release_inbound_channel,
 )
+from app.ai.voice.agents.breeze_buddy.provider_credentials import Accounts
 from app.ai.voice.agents.breeze_buddy.services.call_redirect import redirect_call
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     check_inbound_policy,
@@ -501,6 +502,7 @@ async def prepare_ivr_menu_audio(
     provider: str,
     ivr_greeting: Optional[str] = None,
     voice_config: Optional[TTSConfig] = None,
+    accounts: Optional[Accounts] = None,
 ) -> Optional[bytes]:
     """
     Prepare IVR menu audio - from cache or generate new.
@@ -543,7 +545,9 @@ async def prepare_ivr_menu_audio(
                 f"[IVR] Cache MISS - generating menu audio for: {ivr_greeting!r}"
             )
 
-            mulaw_data = await _generate_tts_audio_mulaw(ivr_greeting, voice_config)
+            mulaw_data = await _generate_tts_audio_mulaw(
+                ivr_greeting, voice_config, accounts
+            )
 
             if mulaw_data:
                 await redis.setex(
@@ -567,6 +571,7 @@ async def prepare_goodbye_audio(
     provider: str,
     ivr_goodbye: Optional[str] = None,
     voice_config: Optional[TTSConfig] = None,
+    accounts: Optional[Accounts] = None,
 ) -> Optional[bytes]:
     """
     Get cached goodbye audio or generate it.
@@ -599,7 +604,9 @@ async def prepare_goodbye_audio(
         else:
             # Generate
             logger.info(f"[IVR] Generating goodbye audio: {goodbye_text!r}")
-            mulaw_data = await _generate_tts_audio_mulaw(goodbye_text, voice_config)
+            mulaw_data = await _generate_tts_audio_mulaw(
+                goodbye_text, voice_config, accounts
+            )
 
             if mulaw_data:
                 await redis.setex(
@@ -621,6 +628,7 @@ async def prepare_block_audio(
     block_message: str,
     provider: str,
     voice_config: Optional[TTSConfig] = None,
+    accounts: Optional[Accounts] = None,
 ) -> Optional[bytes]:
     """
     Get cached block message audio or generate and cache it.
@@ -650,7 +658,9 @@ async def prepare_block_audio(
             mulaw_data = base64.b64decode(cached)
         else:
             logger.info(f"[IVR] Generating block audio: {block_message!r}")
-            mulaw_data = await _generate_tts_audio_mulaw(block_message, voice_config)
+            mulaw_data = await _generate_tts_audio_mulaw(
+                block_message, voice_config, accounts
+            )
 
             if mulaw_data:
                 await redis.setex(
@@ -671,7 +681,9 @@ async def prepare_block_audio(
 
 
 async def _generate_tts_audio_mulaw(
-    text: str, voice_config: Optional[TTSConfig] = None
+    text: str,
+    voice_config: Optional[TTSConfig] = None,
+    accounts: Optional[Accounts] = None,
 ) -> Optional[bytes]:
     """
     Generate TTS audio using the voice configuration.
@@ -684,7 +696,9 @@ async def _generate_tts_audio_mulaw(
         Audio bytes in mulaw format, or None if failed
     """
     try:
-        mulaw_data = await generate_audio(text=text, voice_config=voice_config)
+        mulaw_data = await generate_audio(
+            text=text, voice_config=voice_config, accounts=accounts
+        )
         logger.info(f"[IVR] Generated TTS audio: {len(mulaw_data)} bytes mulaw")
         return mulaw_data
     except Exception as e:

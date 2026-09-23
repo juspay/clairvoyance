@@ -41,7 +41,7 @@ def _patch_common(monkeypatch, *, superseded=None, agent_events=None):
     async def _vars(template, persisted):
         return {}
 
-    async def _llm(cfg, pooled=False):
+    async def _llm(cfg, pooled=False, accounts=None):
         return object()
 
     async def _resolve(session_id, only_expired=False):

@@ -54,6 +54,7 @@ from app.ai.voice.agents.breeze_buddy.processors.metrics_collector_processor imp
     MetricsCollectorProcessor,
     TimelineObserver,
 )
+from app.ai.voice.agents.breeze_buddy.provider_credentials import Accounts
 from app.ai.voice.agents.breeze_buddy.stt import get_stt_service
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
@@ -121,12 +122,15 @@ def generate_conversation_id(payload: Optional[dict]) -> str:
 async def create_services(
     configurations: Optional[ConfigurationModel],
     include_llm: bool = True,
+    accounts: Optional[Accounts] = None,
 ) -> tuple[Optional[Any], Optional[Any], Optional[Any]]:
     """Create STT, LLM, and TTS services.
 
     Args:
         configurations: Template configuration model
         include_llm: When False, skip LLM creation (stream mode). LLM will be None.
+        accounts: the call's account resolver (provider_credentials.Accounts,
+            the call's tenant). None = environment accounts only.
 
     Returns:
         Tuple of (stt_service, llm_service_or_None, tts_service). For realtime
@@ -142,7 +146,7 @@ async def create_services(
         # pipeline can wire the realtime service directly between transport
         # input/output and the context aggregators.
         assert llm_config is not None  # narrowed by is_realtime
-        realtime_llm = await get_realtime_llm_service(llm_config)
+        realtime_llm = await get_realtime_llm_service(llm_config, accounts=accounts)
         logger.info(
             "[REALTIME] Skipping separate STT and TTS service creation; "
             "realtime LLM handles audio natively"
@@ -155,7 +159,9 @@ async def create_services(
         logger.info(
             f"Using template STT configuration: provider={stt_configuration.provider.value}"
         )
-        stt = await get_stt_service(stt_configuration=stt_configuration)
+        stt = await get_stt_service(
+            stt_configuration=stt_configuration, accounts=accounts
+        )
     else:
         # Legacy path: build from scattered fields
         stt_language = getattr(configurations, "stt_language", None)
@@ -167,11 +173,13 @@ async def create_services(
         if soniox_context:
             logger.info("Using Soniox context from template")
         stt = await get_stt_service(
-            language_hints=stt_language, soniox_context=soniox_context
+            language_hints=stt_language,
+            soniox_context=soniox_context,
+            accounts=accounts,
         )
 
     if include_llm:
-        llm = await get_llm_service(llm_config)
+        llm = await get_llm_service(llm_config, accounts=accounts)
     else:
         llm = None
         logger.info("[STREAM] Skipping LLM service creation")
@@ -184,7 +192,7 @@ async def create_services(
         template_voice_config, voice_config_overrides
     )
     logger.info(f"Resolved voice config: provider={voice_config.provider.value}")
-    tts = await get_tts_service(voice_config)
+    tts = await get_tts_service(voice_config, accounts=accounts)
 
     return stt, llm, tts
 

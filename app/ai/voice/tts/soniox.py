@@ -94,6 +94,7 @@ async def _generate_soniox_audio(
     model: Optional[str] = None,
     language: Optional[str] = None,
     sample_rate: int = 16000,
+    api_key: Optional[str] = None,
 ) -> bytes:
     """One-shot synth via Soniox WebSocket for greeting prep.
 
@@ -104,7 +105,8 @@ async def _generate_soniox_audio(
     Returns 16-bit little-endian PCM mono at the requested ``sample_rate``,
     matching ``convert_to_mulaw`` expectations for downstream telephony use.
     """
-    if not SONIOX_API_KEY:
+    api_key = api_key or SONIOX_API_KEY
+    if not api_key:
         raise ValueError("SONIOX_API_KEY is required for Soniox TTS")
 
     voice = voice or "Priya"
@@ -124,7 +126,7 @@ async def _generate_soniox_audio(
     soniox_lang = language_to_soniox_tts_language(lang_enum) or "en"
 
     config_msg = {
-        "api_key": SONIOX_API_KEY,
+        "api_key": api_key,
         "stream_id": "greeting",
         "model": model,
         "voice": voice,

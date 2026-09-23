@@ -88,6 +88,7 @@ async def _generate_sarvam_audio(
     language: str | None = None,
     speed: float | None = None,
     pitch: float | None = None,
+    api_key: str | None = None,
 ) -> bytes:
     """Synthesize audio using Sarvam TTS API.
 
@@ -99,7 +100,8 @@ async def _generate_sarvam_audio(
         speed: Optional pace override.
         pitch: Optional pitch override.
     """
-    if not SARVAM_API_KEY:
+    api_key = api_key or SARVAM_API_KEY
+    if not api_key:
         raise ValueError("SARVAM_API_KEY is required for Sara voice")
 
     defaults = await BB_VOICE_PROVIDER_DEFAULTS("sarvam")
@@ -112,7 +114,7 @@ async def _generate_sarvam_audio(
 
     url = "https://api.sarvam.ai/text-to-speech"
     headers = {
-        "api-subscription-key": SARVAM_API_KEY,
+        "api-subscription-key": api_key,
         "Content-Type": "application/json",
     }
 

@@ -76,6 +76,7 @@ async def _generate_elevenlabs_audio(
     stability: float | None = None,
     similarity_boost: float | None = None,
     language: Language | None = None,
+    api_key: str | None = None,
 ) -> bytes:
     """Synthesize audio using ElevenLabs TTS API.
 
@@ -97,14 +98,14 @@ async def _generate_elevenlabs_audio(
     """
     # Select API key and base URL based on residency preference
     if use_indian_residency:
-        api_key = ELEVENLABS_INDIAN_RESIDENCY_API_KEY
+        api_key = api_key or ELEVENLABS_INDIAN_RESIDENCY_API_KEY
         base_url = "https://api.in.residency.elevenlabs.io"
         if not api_key:
             raise ValueError(
                 "ELEVENLABS_INDIAN_RESIDENCY_API_KEY is required when use_indian_residency is True"
             )
     else:
-        api_key = ELEVENLABS_API_KEY
+        api_key = api_key or ELEVENLABS_API_KEY
         base_url = "https://api.elevenlabs.io"
         if not api_key:
             raise ValueError("ELEVENLABS_API_KEY is required for Rhea voice")

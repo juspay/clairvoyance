@@ -11,6 +11,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     spawn_realtime_opening_line_regeneration,
 )
+from app.ai.voice.agents.breeze_buddy.provider_credentials import Accounts
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.utils.secrets import mask_template_secrets
 from app.core.concurrency import spawn_background_task
@@ -92,6 +93,22 @@ async def rollback_template_handler(
     require_admin_or_reseller_owner(
         current_user, template.reseller_id, operation="rollback template"
     )
+    # The save-time check, on the snapshot about to become the head: a
+    # version that names a provider account since deleted, deactivated or
+    # re-labelled is refused here (422), never restored to fail every call.
+    found = await get_template_version(
+        template_id, body.version, template.reseller_id, template.merchant_id
+    )
+    if found is not None:
+        snapshot, _ = found
+        problems = await Accounts(template.reseller_id, template.merchant_id).problems(
+            getattr(snapshot, "configurations", None)
+        )
+        if problems:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"provider_credentials": problems},
+            )
     try:
         new_head = await rollback_template_to_version(
             template_id,

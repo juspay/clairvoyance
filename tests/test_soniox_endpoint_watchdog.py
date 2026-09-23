@@ -35,6 +35,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.stt.soniox import service as soniox_service_module
 from app.ai.voice.stt.soniox.service import SonioxSTTServiceWithEndpointDelay
+from app.core.config import static
 
 
 class FakeWebSocket:
@@ -207,7 +208,7 @@ async def test_template_finalize_after_secs_flows_to_service(monkeypatch):
     endpoint-delay floor is raised, not honored (env default delay = 500ms)."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "SONIOX_API_KEY", "test-key")
+    monkeypatch.setattr(static, "SONIOX_API_KEY", "test-key")
 
     svc = await create_stt_from_config(
         STTConfiguration(
@@ -498,7 +499,7 @@ async def test_template_vad_force_turn_endpoint_flows_to_service(monkeypatch):
     over a true env (opt-out), True must win over a false env (opt-in)."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "SONIOX_API_KEY", "test-key")
+    monkeypatch.setattr(static, "SONIOX_API_KEY", "test-key")
     monkeypatch.setattr(bb_stt, "BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT", False)
 
     svc_on = await create_stt_from_config(
