@@ -271,6 +271,41 @@ async def raise_inbound_capacity_rejected(
     )
 
 
+async def raise_call_limit_unavailable(error: str) -> None:
+    """
+    P0 — a merchant that HAS a per-customer call rule (ADR 0025) cannot have
+    it evaluated, so its customer dials are being deferred, not placed (it
+    fails CLOSED).
+
+    Raised for capped merchants only (their stored rule is unreadable, or
+    Redis failed during their check), throttled to one page per window:
+    without it their calls stop silently and the backlog dials hours late.
+    """
+    await _send(
+        alert_name="call_limit_unavailable",
+        throttle_seconds=_THROTTLE_P0,
+        title="[P0] Breeze Buddy: per-customer call limit unavailable",
+        fields=[
+            {"name": "Error", "value": error[:500]},
+            {
+                "name": "Effect",
+                "value": (
+                    "Customer calls for the affected merchant(s) are deferred "
+                    "every 30s and not dialled until the rule can be read."
+                ),
+            },
+            {
+                "name": "Action",
+                "value": (
+                    "Check that Redis is reachable and the merchant's rule "
+                    "reads back from GET /merchant/{id}/call-limits; re-save "
+                    "it with PUT if it does not."
+                ),
+            },
+        ],
+    )
+
+
 async def raise_orphan_webhook(call_id: str, source: str) -> None:
     """
     P1 — telephony webhook arrived for a ``call_id`` that has no

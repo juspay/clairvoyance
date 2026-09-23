@@ -411,6 +411,9 @@ def test_cart_recovery_fallback_is_the_cart_board_with_the_call_outcome_branch()
         ("wa-fallback", "NO_ANSWER"),
         ("wa-fallback", "BUSY"),
         ("wa-fallback", "EARLY_HANGUP"),
+        # The merchant's per-customer rule refused the dial (ADR 0025): the
+        # customer was not reached, so WhatsApp takes over like a no-answer.
+        ("wa-fallback", "CALL_LIMIT_REACHED"),
         ("wait-1d", "else"),
     }
     assert ["wa-fallback", "wait-1d"] in doc["edges"]

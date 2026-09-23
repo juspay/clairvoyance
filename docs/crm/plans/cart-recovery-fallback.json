@@ -118,6 +118,11 @@
     ],
     [
       "after-call",
+      "wa-fallback",
+      "CALL_LIMIT_REACHED"
+    ],
+    [
+      "after-call",
       "wait-1d",
       "else"
     ],

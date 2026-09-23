@@ -218,7 +218,10 @@ alternative endings are recorded under Decisions §4.)
 
 ## Decisions
 
-1. **Placement vs the corpus — OPEN, needs Swaroop's ruling before merge.**
+1. **Placement vs the corpus — RULED 24 Sep 2026 by ADR 0025** (per-customer
+   call limits): the per-run ceiling stays the plan's own runaway bound, and
+   per-customer frequency is the merchant's `{max_calls, window_hours}` rule
+   enforced at the dial (outcome `CALL_LIMIT_REACHED`). The original question:
    `modules/05-outreach` and `design/execution-ledger.md:119` say contact caps
    are permission's (ADR 0018), and the interim frequency cap must not be built.
    This phase reads `max_calls_per_day` as the plan's OWN runaway ceiling — a

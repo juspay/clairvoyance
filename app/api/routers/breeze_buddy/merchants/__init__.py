@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, Query
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.merchants import (
+    CallLimitsResponse,
+    CallLimitsUpdate,
     MerchantCreate,
     MerchantListResponse,
     MerchantResponse,
@@ -23,6 +25,8 @@ from .handlers import (
     delete_merchant_handler,
     get_all_merchants_handler,
     get_merchant_by_merchant_identifier_handler,
+    get_merchant_call_limits_handler,
+    set_merchant_call_limits_handler,
     update_merchant_handler,
 )
 
@@ -195,3 +199,49 @@ async def delete_merchant(
         500: If there's an error deleting the merchant
     """
     return await delete_merchant_handler(merchant_id, current_user)
+
+
+@router.get("/merchant/{merchant_id}/call-limits", response_model=CallLimitsResponse)
+async def get_merchant_call_limits(
+    merchant_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Get the merchant's per-customer call rules (ADR 0025).
+
+    Each rule is ``{max_calls, window_hours}``: at most ``max_calls`` dials to
+    one customer in any rolling ``window_hours``, across every plan, campaign
+    and API push. ``call_limits: null`` means no rule.
+
+    **RBAC rules:** same as ``GET /merchant/{merchant_id}``.
+
+    Raises:
+        403: If user doesn't have access
+        404: If merchant entity not found
+    """
+    return await get_merchant_call_limits_handler(merchant_id, current_user)
+
+
+@router.put("/merchant/{merchant_id}/call-limits", response_model=CallLimitsResponse)
+async def set_merchant_call_limits(
+    merchant_id: str,
+    body: CallLimitsUpdate,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Replace the merchant's per-customer call rules (ADR 0025).
+
+    Body: ``{"call_limits": [{"max_calls": 3, "window_hours": 48}]}``. One
+    rule for now; ``max_calls >= 1``, ``window_hours`` 1-168. Send ``null``
+    or ``[]`` to remove the rule. A dial over the rule ends the lead with
+    outcome ``CALL_LIMIT_REACHED``.
+
+    **RBAC rules:** same as ``PUT /merchant/{merchant_id}`` — admin, or the
+    reseller that owns the merchant.
+
+    Raises:
+        403: If user doesn't have permission to update
+        404: If merchant entity not found
+        422: If the rule is out of bounds
+    """
+    return await set_merchant_call_limits_handler(merchant_id, body, current_user)

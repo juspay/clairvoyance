@@ -8,12 +8,18 @@ from typing import Optional
 import asyncpg
 from fastapi import HTTPException
 
+from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
+    CallLimitUnavailable,
+    call_limits_changed,
+)
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.core.logger import logger
 from app.core.security.scope import resolve_merchant_ids
 from app.database.accessor.breeze_buddy import merchants as merchant_accessors
 from app.schemas import UserInfo, UserRole
 from app.schemas.breeze_buddy.merchants import (
+    CallLimitsResponse,
+    CallLimitsUpdate,
     MerchantCreate,
     MerchantListResponse,
     MerchantResponse,
@@ -335,4 +341,69 @@ async def delete_merchant_handler(
         raise
     except Exception as e:
         logger.error(f"Error deleting merchant entity {merchant_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def get_merchant_call_limits_handler(
+    merchant_id: str, current_user: UserInfo
+) -> CallLimitsResponse:
+    """A merchant's per-customer call rules (ADR 0025). Same view scope as
+    GET /merchant/{merchant_id}."""
+    try:
+        # Check view access BEFORE DB fetch to avoid leaking resource existence
+        await _check_merchant_view_access(current_user, merchant_id)
+        limits = await merchant_accessors.get_merchant_call_limits(merchant_id)
+        if limits is None:
+            raise HTTPException(status_code=404, detail="Merchant entity not found")
+        return limits
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching call limits for merchant {merchant_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def set_merchant_call_limits_handler(
+    merchant_id: str, body: CallLimitsUpdate, current_user: UserInfo
+) -> CallLimitsResponse:
+    """Replace a merchant's per-customer call rules. Same write scope as
+    PUT /merchant/{merchant_id}: admin, or the reseller that owns it."""
+    try:
+        merchant = await merchant_accessors.get_merchant_by_merchant_identifier(
+            merchant_id
+        )
+        if not merchant:
+            raise HTTPException(status_code=404, detail="Merchant entity not found")
+        _check_update_access(current_user, merchant.reseller_id)
+
+        updated = await merchant_accessors.set_merchant_call_limits(
+            merchant_id, body.call_limits
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Merchant entity not found")
+        # This pod reloads the rules on its next dial; every other pod within
+        # call_limiter.CALL_LIMITS_VERSION_CHECK_SECONDS (the bumped version).
+        try:
+            await call_limits_changed()
+        except CallLimitUnavailable as e:
+            logger.error(
+                f"Call limits for merchant {merchant_id} saved but dispatchers "
+                f"were not notified: {e}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Call limits saved, but dispatchers could not be notified; "
+                    "retry the request"
+                ),
+            )
+        logger.info(
+            f"User {current_user.username} set call limits for merchant "
+            f"{merchant_id}: {[rule.model_dump() for rule in updated.call_limits or []]}"
+        )
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating call limits for merchant {merchant_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

@@ -418,6 +418,10 @@ class DispatchHarness:
         self.deferred: List[tuple[str, int]] = []
         self.released_numbers: List[str] = []
         self.released_locks: List[str] = []
+        # The merchant's per-customer call rules (ADR 0025) the worker reads;
+        # None = the merchant has no rule, so the dial path is unchanged.
+        self.call_limits: Optional[tuple] = None
+        self.call_limit_reads: List[str] = []
         self.completions: List[Dict[str, Any]] = []
         # Toggle behaviours.
         # ``pre_check_result`` is a convenience bool: True -> PROCEED,
@@ -622,6 +626,10 @@ class DispatchHarness:
     def get_voice_provider(self, provider, session, telephony_config):
         return self.call_recorder
 
+    async def merchant_call_limits(self, merchant_id: str) -> Optional[tuple]:
+        self.call_limit_reads.append(merchant_id)
+        return self.call_limits
+
 
 @pytest.fixture
 def harness(monkeypatch, fake_redis) -> DispatchHarness:
@@ -708,6 +716,7 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
         h.apply_playground_overrides,
     )
     monkeypatch.setattr(worker_mod, "get_voice_provider", h.get_voice_provider)
+    monkeypatch.setattr(worker_mod, "merchant_call_limits", h.merchant_call_limits)
 
     return h
 
