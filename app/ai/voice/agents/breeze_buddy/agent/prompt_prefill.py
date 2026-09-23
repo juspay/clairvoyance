@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, NamedTuple, Optional, cast
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.processors.aggregators.llm_context import (
@@ -50,9 +50,11 @@ from pipecat.processors.aggregators.llm_context import (
     LLMContext,
     LLMContextMessage,
 )
+from pipecat.services.aws.llm import AWSBedrockLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 from pipecat_flows.types import FlowsDirectFunctionWrapper, FlowsFunctionSchema
 
+from app.ai.voice.llm import is_openai_model
 from app.ai.voice.llm.types import LLMConfiguration, LLMProvider
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
@@ -90,14 +92,25 @@ def spawn_prefill(
         skip: Optional[str] = None
         if llm_config.realtime is not None:
             skip = "realtime LLM has no chat.completions prefix to warm"
-        elif llm_config.provider not in (None, LLMProvider.AZURE, LLMProvider.OPENAI):
+        elif llm_config.provider not in (
+            None,
+            LLMProvider.AZURE,
+            LLMProvider.OPENAI,
+            LLMProvider.AWS_BEDROCK,
+        ):
             # .value is absent when a hand-forced config carries a raw string
             provider = getattr(llm_config.provider, "value", llm_config.provider)
             skip = f"provider '{provider}' has no automatic prefix cache"
-        elif not isinstance(llm_service, BaseOpenAILLMService):
+        elif llm_config.provider == LLMProvider.AWS_BEDROCK and not is_openai_model(
+            llm_config.model or ""
+        ):
+            # Only GPT models cache the prefix automatically on Bedrock; the
+            # others need explicit cache points, which this service never sends.
+            skip = f"bedrock model '{llm_config.model}' has no automatic prefix cache"
+        elif not isinstance(llm_service, (BaseOpenAILLMService, AWSBedrockLLMService)):
             skip = (
-                f"service {type(llm_service).__name__} is not an Azure/OpenAI "
-                "text-LLM service"
+                f"service {type(llm_service).__name__} is not an "
+                "Azure/OpenAI/Bedrock text-LLM service"
             )
         if skip is not None:
             logger.info(f"prefill: skipped ({skip})")
@@ -154,7 +167,6 @@ async def prefill_system_prompt(
     """
     started = time.monotonic()
     try:
-        adapter = llm_service.get_llm_adapter()
         # Same conversion pipecat_flows' adapter.format_functions performs
         # (to_function_schema → ToolsSchema; empty → NOT_GIVEN, which the LLM
         # adapter and the OpenAI SDK both collapse to "no tools key") —
@@ -172,30 +184,11 @@ async def prefill_system_prompt(
             messages=cast(List[LLMContextMessage], messages),
             tools=tools,
         )
-        invocation = adapter.get_llm_invocation_params(
-            context,
-            system_instruction=llm_service._settings.system_instruction,
-            convert_developer_to_user=not llm_service.supports_developer_role,
-        )
-        params = llm_service.build_chat_completion_params(invocation)
-        # Non-streaming one-shot; drop the streaming-only usage option and the
-        # settings' completion budget in favor of the prefill's own (above).
-        params["stream"] = False
-        params.pop("stream_options", None)
-        params.pop("max_tokens", None)
-        params["max_completion_tokens"] = _PREFILL_MAX_COMPLETION_TOKENS
-        # Strict gateways (breeze/sglang) 400 prefix-only requests — see the
-        # constant's comment. Appended after parity is locked in, so it can
-        # never contaminate the warmed prefix.
-        params["messages"] = [
-            *params["messages"],
-            {"role": "user", "content": _PREFILL_SYNTHETIC_USER_TURN},
-        ]
-
-        response = await asyncio.wait_for(
-            llm_service._client.chat.completions.create(**params),
-            timeout=_PREFILL_TIMEOUT_SECS,
-        )
+        if isinstance(llm_service, AWSBedrockLLMService):
+            request = _bedrock_prefill(llm_service, context)
+        else:
+            request = _chat_prefill(llm_service, context)
+        usage = await asyncio.wait_for(request, timeout=_PREFILL_TIMEOUT_SECS)
     except Exception as exc:  # noqa: BLE001 — prefill is best-effort by design
         logger.opt(exception=exc).warning(
             f"prefill: failed ({type(exc).__name__}: {str(exc)[:160]}) — "
@@ -203,18 +196,108 @@ async def prefill_system_prompt(
         )
         return
 
+    write_note = (
+        f" cache_write={usage.cache_write}" if usage.cache_write is not None else ""
+    )
+    logger.info(
+        f"prefill: warmed model={usage.model} "
+        f"ms={round((time.monotonic() - started) * 1000)} "
+        f"prompt={usage.prompt} cached={usage.cached}{write_note}"
+    )
+
+
+class _PrefillUsage(NamedTuple):
+    model: str
+    prompt: Any
+    cached: Any
+    cache_write: Any
+
+
+async def _chat_prefill(llm_service: Any, context: LLMContext) -> _PrefillUsage:
+    """The /chat/completions parity request (see module docstring)."""
+    adapter = llm_service.get_llm_adapter()
+    invocation = adapter.get_llm_invocation_params(
+        context,
+        system_instruction=llm_service._settings.system_instruction,
+        convert_developer_to_user=not llm_service.supports_developer_role,
+    )
+    params = llm_service.build_chat_completion_params(invocation)
+    # Non-streaming one-shot; drop the streaming-only usage option and the
+    # settings' completion budget in favor of the prefill's own (above).
+    params["stream"] = False
+    params.pop("stream_options", None)
+    params.pop("max_tokens", None)
+    params["max_completion_tokens"] = _PREFILL_MAX_COMPLETION_TOKENS
+    # Strict gateways (breeze/sglang) 400 prefix-only requests — see the
+    # constant's comment. Appended after parity is locked in, so it can
+    # never contaminate the warmed prefix.
+    params["messages"] = [
+        *params["messages"],
+        {"role": "user", "content": _PREFILL_SYNTHETIC_USER_TURN},
+    ]
+    response = await llm_service._client.chat.completions.create(**params)
+
     usage = getattr(response, "usage", None)
     details = getattr(usage, "prompt_tokens_details", None)
     # Newer Azure model families (GPT-5.6+) can bill cache writes separately
     # from discounted reads — surface the write count when the provider
     # reports it (absent on gpt-4.1/4o today).
-    cache_write = getattr(details, "cache_write_tokens", None)
-    write_note = f" cache_write={cache_write}" if cache_write is not None else ""
-    logger.info(
-        f"prefill: warmed model={params['model']} "
-        f"ms={round((time.monotonic() - started) * 1000)} "
-        f"prompt={getattr(usage, 'prompt_tokens', '?')} "
-        f"cached={getattr(details, 'cached_tokens', None)}{write_note}"
+    return _PrefillUsage(
+        model=params["model"],
+        prompt=getattr(usage, "prompt_tokens", "?"),
+        cached=getattr(details, "cached_tokens", None),
+        cache_write=getattr(details, "cache_write_tokens", None),
+    )
+
+
+async def _bedrock_prefill(
+    llm_service: AWSBedrockLLMService, context: LLMContext
+) -> _PrefillUsage:
+    """The Converse parity request. Bedrock caches the prompt prefix
+    (system + tools + messages) automatically, so the request mirrors the
+    service's own streaming call shape. The write becomes readable a few
+    seconds later: turn 1 benefits when the greeting outlasts that, and
+    every later call sharing the prefix benefits regardless."""
+    adapter = llm_service.get_llm_adapter()
+    invocation = adapter.get_llm_invocation_params(
+        context, system_instruction=llm_service._settings.system_instruction
+    )
+    # Converse wants alternating roles: the adapter converts any second system
+    # or task message to the user role, so the synthetic turn joins that
+    # message as one more block instead of following it as a second user turn.
+    messages = [dict(m) for m in invocation["messages"]]
+    synthetic = {"text": _PREFILL_SYNTHETIC_USER_TURN}
+    if messages and messages[-1]["role"] == "user":
+        messages[-1]["content"] = [*messages[-1]["content"], synthetic]
+    else:
+        messages.append({"role": "user", "content": [synthetic]})
+    params: Dict[str, Any] = {
+        "modelId": str(llm_service._settings.model),
+        "messages": messages,
+        "inferenceConfig": {
+            **llm_service._build_inference_config(),
+            "maxTokens": _PREFILL_MAX_COMPLETION_TOKENS,
+        },
+        "additionalModelRequestFields": (
+            llm_service._settings.additional_model_request_fields
+        ),
+    }
+    if invocation["system"]:
+        params["system"] = invocation["system"]
+    if invocation["tools"]:
+        params["toolConfig"] = {"tools": invocation["tools"]}
+
+    async with llm_service._aws_session.client(
+        service_name="bedrock-runtime", **llm_service._aws_params
+    ) as client:
+        response = await client.converse(**params)
+
+    usage = response.get("usage") or {}
+    return _PrefillUsage(
+        model=params["modelId"],
+        prompt=usage.get("inputTokens", "?"),
+        cached=usage.get("cacheReadInputTokens"),
+        cache_write=usage.get("cacheWriteInputTokens"),
     )
 
 

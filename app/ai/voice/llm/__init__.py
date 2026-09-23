@@ -8,6 +8,7 @@ from __future__ import annotations
 
 # Export all builder functions, config classes, and types
 from .azure import AzureConfig, build_azure_llm
+from .bedrock import BedrockConfig, build_bedrock_llm, is_openai_model
 from .claude_vertex import ClaudeVertexConfig, build_claude_vertex_llm
 from .openai import OpenAIConfig, build_openai_llm
 from .types import (
@@ -40,4 +41,8 @@ __all__ = [
     # OpenAI
     "OpenAIConfig",
     "build_openai_llm",
+    # AWS Bedrock
+    "BedrockConfig",
+    "build_bedrock_llm",
+    "is_openai_model",
 ]
