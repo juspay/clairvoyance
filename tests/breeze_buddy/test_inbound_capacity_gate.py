@@ -827,7 +827,6 @@ async def test_answer_handler_admits_and_rejects_at_the_real_call_site(monkeypat
     )
     monkeypatch.setattr(ans_mod, "_build_provider_response", fake_response)
     monkeypatch.setattr(ans_mod, "spawn_background_task", lambda *a, **k: None)
-    monkeypatch.setattr(ans_mod, "_kickoff_plivo_recording", lambda *a, **k: None)
 
     class _Request:
         method = "POST"

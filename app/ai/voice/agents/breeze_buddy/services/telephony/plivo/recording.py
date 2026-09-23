@@ -1,13 +1,14 @@
 """
-Plivo recording functionality
+Plivo call recording: the ``<Record>`` element for the answer XML, and the
+download of the finished recording.
 """
 
-import asyncio
+from html import escape as html_escape
 from io import BytesIO
 from typing import Optional
+from urllib.parse import quote
 
 import aiohttp
-import plivo
 
 from app.core.config.static import (
     APP_BASE_URL,
@@ -19,52 +20,31 @@ from app.core.logger import logger
 from app.core.transport.http_client import get_proxy_config
 
 
-def _start_call_recording_blocking(call_uuid: str) -> bool:
+def _recording_callback_url(call_uuid: str) -> str:
+    """Where Plivo POSTs the finished session recording.
+
+    ``call_uuid`` rides in the query string: the ``<Record>`` callback's
+    documented params (RecordUrl, RecordingID, ...) do not promise CallUUID.
     """
-    Blocking implementation — DO NOT call this from an ``async def``.
+    return (
+        f"{APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/details"
+        f"?call_uuid={quote(call_uuid, safe='')}"
+    )
 
-    ``plivo.RestClient`` is a synchronous HTTP client. It has no ``await``
-    and cannot have one; while it waits ~166ms for Plivo's API, a single-
-    worker uvicorn process is completely frozen — no other call, callback,
-    or background task can run. Reach it only via ``start_call_recording``.
+
+def plivo_record_xml(call_uuid: str) -> str:
+    """``<Record>`` element that records the whole call in the background.
+
+    ``recordSession="true"`` returns immediately, so it must come BEFORE
+    ``<Stream>`` (which holds the call via keepCallAlive). ``maxLength`` is
+    set explicitly because the element defaults to 60s.
     """
-    try:
-        client = plivo.RestClient(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
-
-        logger.info(f"Starting recording for Plivo call: {call_uuid}")
-
-        # Start recording the call with callback URL
-        callback_url = f"{APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/details"
-        response = client.calls.record(
-            call_uuid=call_uuid,
-            callback_url=callback_url,
-            callback_method="POST",
-            time_limit=PLIVO_RECORDING_TIME_LIMIT,
-        )
-
-        logger.info(f"Plivo recording started successfully: {response}")
-        return True
-
-    except Exception as e:
-        # logger.opt(exception=...) rather than exc_info=: loguru has no
-        # exc_info kwarg — it would be consumed as a str.format argument,
-        # dropping the traceback and raising KeyError whenever the Plivo
-        # error text contains braces (a JSON body, for instance).
-        logger.opt(exception=e).error(f"Error starting Plivo recording: {e}")
-        return False
-
-
-async def start_call_recording(call_uuid: str) -> bool:
-    """
-    Start recording an active call via Plivo API, off the event loop.
-
-    Args:
-        call_uuid: The Plivo call UUID
-
-    Returns:
-        bool: True if recording started successfully, False otherwise
-    """
-    return await asyncio.to_thread(_start_call_recording_blocking, call_uuid)
+    callback_url = html_escape(_recording_callback_url(call_uuid))
+    return (
+        f'<Record recordSession="true" recordChannelType="mono" '
+        f'maxLength="{PLIVO_RECORDING_TIME_LIMIT}" '
+        f'callbackUrl="{callback_url}" callbackMethod="POST"/>'
+    )
 
 
 async def download_call_recording(
