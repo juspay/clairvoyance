@@ -92,7 +92,6 @@ async def analyze_topics(
     model = evaluation.get("model")
 
     started_at = time.monotonic()
-    logger.info(f"Topic evaluation {source_id} started")
     topics: List[Dict[str, Any]] = []
     for attempt in range(1, _ANALYSIS_MAX_ATTEMPTS + 1):
         attempt_started_at = time.monotonic()
@@ -114,7 +113,7 @@ async def analyze_topics(
                 detail = f"timeout after {_ANALYSIS_TIMEOUT_SECONDS}s"
             else:
                 detail = f"{type(exc).__name__}: {exc}"
-            logger.warning(
+            logger.bind(attempt=attempt, failure_class=failure, model=model).warning(
                 f"Topic evaluation {source_id} attempt "
                 f"{attempt}/{_ANALYSIS_MAX_ATTEMPTS} failed after "
                 f"{time.monotonic() - attempt_started_at:.1f}s: "
@@ -137,7 +136,13 @@ async def analyze_topics(
 
             error = f"{failure} after {attempt} attempt(s): {detail}"
             await save_topic_failure(context, evaluation, error)
-            logger.error(
+            logger.bind(
+                outcome="failed",
+                failure_class=failure,
+                attempts=attempt,
+                duration_ms=round((time.monotonic() - started_at) * 1000),
+                model=model,
+            ).error(
                 f"Topic evaluation {source_id} {error}: FAILED row saved "
                 f"(model={model})"
             )
@@ -165,7 +170,13 @@ async def analyze_topics(
     )
     if labels:
         await add_discovered_topics(str(context["template_id"]), labels)
-    logger.info(
+    logger.bind(
+        outcome="saved",
+        attempts=attempt,
+        duration_ms=round((time.monotonic() - started_at) * 1000),
+        topic_count=len(topics),
+        model=model,
+    ).info(
         f"Topic evaluation {source_id} completed in "
         f"{time.monotonic() - started_at:.1f}s with {len(topics)} topics"
     )

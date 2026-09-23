@@ -6,6 +6,11 @@ from typing import Any, Dict, List
 
 from app.core.config.dynamic import BB_ANALYSIS_CONSUMER_COUNT
 from app.core.logger import logger
+from app.core.logger.context import (
+    clear_log_context,
+    set_log_context,
+    update_log_context,
+)
 from app.database.accessor.breeze_buddy.chat_session import (
     get_chat_session_by_id,
     list_chat_messages_for_session,
@@ -22,7 +27,11 @@ from app.schemas.breeze_buddy.conversation_analysis import (
     EvaluationType,
 )
 
-from .queue import dequeue_conversation_evaluation, requeue_conversation_evaluation
+from .queue import (
+    LOG_COMPONENT,
+    dequeue_conversation_evaluation,
+    requeue_conversation_evaluation,
+)
 from .topics.evaluator import (
     ModelUnavailableError,
     analyze_topics,
@@ -38,6 +47,9 @@ _consumer_tasks: List[asyncio.Task] = []
 
 _consecutive_failures: int = 0
 _paused_until: float = 0.0
+
+# Evaluations running on this pod right now, for each job's started line.
+_in_flight: int = 0
 
 
 def _enabled(metadata: Dict[str, Any], key: str) -> bool:
@@ -125,6 +137,8 @@ def _in_outage() -> bool:
 async def _consume_queue(recovery_lock: asyncio.Lock) -> None:
     """Take jobs off the Redis queue and evaluate them, one at a time."""
     while True:
+        # The previous job's ids must not leak onto this one's lines.
+        clear_log_context()
         job = None
         try:
             if _in_outage():
@@ -151,13 +165,21 @@ async def _consume_queue(recovery_lock: asyncio.Lock) -> None:
             raise
         except Exception as exc:
             where = f" for {job.source_id} (template {job.template_id})" if job else ""
-            logger.error(f"Conversation analysis queue consumer failed{where}: {exc}")
+            logger.bind(component=LOG_COMPONENT).error(
+                f"Conversation analysis queue consumer failed{where}: {exc}"
+            )
             await asyncio.sleep(1)
 
 
 async def _evaluate(job: ConversationEvaluationJob) -> None:
-    global _consecutive_failures, _paused_until
+    global _consecutive_failures, _paused_until, _in_flight
 
+    set_log_context(
+        component=LOG_COMPONENT,
+        source_id=job.source_id,
+        template_id=str(job.template_id),
+        channel=job.channel.value,
+    )
     evaluations = await get_enabled_evaluations(str(job.template_id))
     if not evaluations:
         return
@@ -165,56 +187,74 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
     context = await get_analysis_context(job)
     if context is None:
         return
+    update_log_context(merchant_id=context.get("merchant_id"))
 
-    model_answered = False
-    for evaluation in evaluations:
-        try:
-            evaluation_type = EvaluationType(evaluation.get("evaluation_type"))
-        except ValueError:
-            logger.warning(
-                f"Ignoring unsupported evaluation type for template "
-                f"{job.template_id}: {evaluation.get('evaluation_type')}"
-            )
-            continue
-        if evaluation_type is not EvaluationType.TOPIC:
-            continue
+    _in_flight += 1
+    try:
+        logger.bind(
+            in_flight=_in_flight,
+            consumers=len(_consumer_tasks),
+            queue_wait_s=round(time.time() - job.enqueued_at, 1),
+            deliveries=job.deliveries,
+            transcript_turns=len(context["transcript"]),
+        ).info(f"Topic evaluation {job.source_id} started")
 
-        try:
-            if await analyze_topics(context, evaluation):
-                model_answered = True
-        except ModelUnavailableError as exc:
-            now = time.monotonic()
-            if now >= _paused_until:
-                _consecutive_failures += 1
-                backoff = _FIRST_PAUSE_SECONDS * 2 ** (_consecutive_failures - 1)
-                _paused_until = now + min(
-                    max(backoff, exc.retry_after or 0), _MAX_PAUSE_SECONDS
+        model_answered = False
+        for evaluation in evaluations:
+            try:
+                evaluation_type = EvaluationType(evaluation.get("evaluation_type"))
+            except ValueError:
+                logger.warning(
+                    f"Ignoring unsupported evaluation type for template "
+                    f"{job.template_id}: {evaluation.get('evaluation_type')}"
                 )
-            job.deliveries += 1
-            if job.deliveries >= _MAX_DELIVERIES:
-                await save_topic_failure(
-                    context,
-                    evaluation,
-                    f"MODEL_UNAVAILABLE after {job.deliveries} deliveries: {exc}",
-                )
-                logger.error(
-                    f"Topic evaluation {job.source_id} gave up after "
-                    f"{job.deliveries} deliveries: FAILED row saved"
+                continue
+            if evaluation_type is not EvaluationType.TOPIC:
+                continue
+
+            try:
+                if await analyze_topics(context, evaluation):
+                    model_answered = True
+            except ModelUnavailableError as exc:
+                now = time.monotonic()
+                if now >= _paused_until:
+                    _consecutive_failures += 1
+                    backoff = _FIRST_PAUSE_SECONDS * 2 ** (_consecutive_failures - 1)
+                    _paused_until = now + min(
+                        max(backoff, exc.retry_after or 0), _MAX_PAUSE_SECONDS
+                    )
+                job.deliveries += 1
+                if job.deliveries >= _MAX_DELIVERIES:
+                    await save_topic_failure(
+                        context,
+                        evaluation,
+                        f"MODEL_UNAVAILABLE after {job.deliveries} deliveries: {exc}",
+                    )
+                    logger.bind(outcome="gave_up", deliveries=job.deliveries).error(
+                        f"Topic evaluation {job.source_id} gave up after "
+                        f"{job.deliveries} deliveries: FAILED row saved"
+                    )
+                    return
+                await requeue_conversation_evaluation(job)
+                logger.bind(
+                    outcome="requeued",
+                    deliveries=job.deliveries,
+                    paused_for_s=round(_paused_until - now),
+                    consecutive_failures=_consecutive_failures,
+                ).error(
+                    f"Topic evaluation {job.source_id} MODEL_UNAVAILABLE ({exc}): "
+                    f"job re-queued (delivery {job.deliveries}), all consumers paused for "
+                    f"{_paused_until - now:.0f}s "
+                    f"(failure #{_consecutive_failures} in a row)"
                 )
                 return
-            await requeue_conversation_evaluation(job)
-            logger.error(
-                f"Topic evaluation {job.source_id} MODEL_UNAVAILABLE ({exc}): "
-                f"job re-queued (delivery {job.deliveries}), all consumers paused for "
-                f"{_paused_until - now:.0f}s "
-                f"(failure #{_consecutive_failures} in a row)"
-            )
-            return
 
-    if model_answered and _consecutive_failures:
-        logger.info("Topic evaluation resumed after the model recovered")
-        _consecutive_failures = 0
-        _paused_until = 0.0
+        if model_answered and _consecutive_failures:
+            logger.info("Topic evaluation resumed after the model recovered")
+            _consecutive_failures = 0
+            _paused_until = 0.0
+    finally:
+        _in_flight -= 1
 
 
 async def start_analysis_worker() -> None:

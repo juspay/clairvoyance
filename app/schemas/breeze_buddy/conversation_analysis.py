@@ -1,10 +1,11 @@
 """Models for post-conversation evaluations."""
 
+import time
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from app.ai.voice.llm import LLMProvider, LLMSdk
 
@@ -23,6 +24,8 @@ class ConversationEvaluationJob(BaseModel):
     channel: ConversationChannel
     template_id: UUID
     deliveries: int = 0
+    # Epoch seconds, so the worker can log how long a job sat in the queue.
+    enqueued_at: float = Field(default_factory=time.time)
 
 
 class ConversationTopic(BaseModel):
@@ -44,6 +47,14 @@ class TopicCatalogResponse(BaseModel):
     template_id: UUID
     enabled: bool
     topics: List[str] = Field(default_factory=list)
+
+
+class TopicCatalogChangeRequest(BaseModel):
+    topics: List[
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+        ]
+    ] = Field(min_length=1, max_length=100)
 
 
 class UpdateTopicConfigurationRequest(BaseModel):

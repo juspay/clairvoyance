@@ -11,6 +11,9 @@ from app.services.redis import get_redis_service
 
 CONVERSATION_EVALUATION_QUEUE = "conversation-evaluation:pending"
 
+#: Every topic-evaluation log line carries this, so one filter finds them all.
+LOG_COMPONENT = "buddy.topics"
+
 
 async def has_enabled_evaluations(template_id: str) -> bool:
     from app.database.accessor.breeze_buddy.evaluation_config import (
@@ -35,7 +38,16 @@ async def enqueue_conversation_evaluation(
         )
         redis = await get_redis_service()
         client: Any = cast(Any, await redis.get_client())
-        await client.rpush(CONVERSATION_EVALUATION_QUEUE, job.model_dump_json())
+        queue_depth = await client.rpush(
+            CONVERSATION_EVALUATION_QUEUE, job.model_dump_json()
+        )
+        logger.bind(
+            component=LOG_COMPONENT,
+            source_id=source_id,
+            template_id=template_id,
+            channel=channel.value,
+            queue_depth=queue_depth,
+        ).info(f"Topic evaluation {source_id} enqueued")
     except Exception as exc:
         logger.error(
             f"Failed to enqueue conversation evaluation "

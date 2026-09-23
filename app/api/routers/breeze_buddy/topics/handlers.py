@@ -7,13 +7,16 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.extr
 )
 from app.api.routers.breeze_buddy.templates.rbac import validate_template_access
 from app.database.accessor.breeze_buddy.evaluation_config import (
+    add_discovered_topics,
     get_evaluation_config,
+    remove_topics,
     set_evaluation_enabled,
     update_evaluation_configuration,
 )
 from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.conversation_analysis import (
+    TopicCatalogChangeRequest,
     TopicCatalogResponse,
     TopicConfigurationResponse,
     TopicEvaluationSettingsRequest,
@@ -55,6 +58,39 @@ async def get_topic_catalog_handler(
 ) -> TopicCatalogResponse:
     await _validate_topic_access(template_id, current_user)
     config = await get_evaluation_config(str(template_id))
+    return _evaluation_catalog_response(str(template_id), config)
+
+
+async def add_topics_handler(
+    template_id: str,
+    request: TopicCatalogChangeRequest,
+    current_user: UserInfo,
+) -> TopicCatalogResponse:
+    await _validate_topic_access(template_id, current_user)
+    # Same dedupe as the worker's auto-discovery: a label already in the
+    # catalog, in any case, is not added twice.
+    labels = list({label.lower(): label for label in request.topics}.values())
+    config = await add_discovered_topics(str(template_id), labels)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Topic evaluation config not found for this agent",
+        )
+    return _evaluation_catalog_response(str(template_id), config)
+
+
+async def remove_topics_handler(
+    template_id: str,
+    request: TopicCatalogChangeRequest,
+    current_user: UserInfo,
+) -> TopicCatalogResponse:
+    await _validate_topic_access(template_id, current_user)
+    config = await remove_topics(str(template_id), request.topics)
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Topic evaluation config not found for this agent",
+        )
     return _evaluation_catalog_response(str(template_id), config)
 
 
