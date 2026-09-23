@@ -5,6 +5,11 @@
    over https — in dev exactly as in production. (An earlier draft of this
    branch admitted plain-http loopback outside production; review removed
    it, and this test pins the unconditional posture.)
+
+   The validator itself moved: HttpRequestExecutor._validate_resolved_url was
+   replaced by the shared app.core.security.ssrf guard, which additionally
+   RESOLVES the host, so a DNS name pointing at an internal address is caught
+   too. The posture these tests pin is unchanged — only where it lives.
 2. ``retry_until`` re-issues a request verbatim, so ``HttpRequestConfig``
    refuses it on any mutating method at load time; polls run with no
    transport retries and a failed poll keeps the last good body.
@@ -23,14 +28,22 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     RetryUntilConfig,
 )
 
-import app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester as hr
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_handler import (
     _poll_until_ready,
 )
 
 # isort: on
 
-_validate = hr.HttpRequestExecutor._validate_resolved_url
+import app.core.security.ssrf as ssrf_mod
+from app.core.security.ssrf import SSRFError, validate_egress_url
+
+
+@pytest.fixture(autouse=True)
+def _no_private_egress(monkeypatch):
+    """Pin the local-dev escape hatch off: a developer with
+    SSRF_ALLOW_PRIVATE_EGRESS=true would otherwise invert every assertion here.
+    """
+    monkeypatch.setattr(ssrf_mod, "_ALLOW_PRIVATE_EGRESS", False)
 
 
 # ---------------------------------------------------------------------------
@@ -48,27 +61,34 @@ _validate = hr.HttpRequestExecutor._validate_resolved_url
         "http://example.com/x",
     ],
 )
-def test_plain_http_is_refused_in_every_environment(monkeypatch, env, url):
-    monkeypatch.setattr(hr, "ENVIRONMENT", env)
-    with pytest.raises(ValueError, match="Only HTTPS"):
-        _validate(url)
+async def test_plain_http_is_refused_in_every_environment(monkeypatch, env, url):
+    # ENVIRONMENT is set only to prove it is not consulted: the guard refuses
+    # plain http on its own, whatever the deployment calls itself.
+    monkeypatch.setenv("ENVIRONMENT", env)
+    with pytest.raises(SSRFError, match="scheme"):
+        await validate_egress_url(url)
 
 
 @pytest.mark.parametrize("env", ["dev", "production"])
-def test_loopback_and_private_targets_blocked_over_https_too(monkeypatch, env):
-    monkeypatch.setattr(hr, "ENVIRONMENT", env)
-    # production refuses by hostname first ("localhost ... not allowed"),
-    # dev by address class ("loopback") — refused either way.
-    with pytest.raises(ValueError, match="not allowed"):
-        _validate("https://127.0.0.1/x")
-    with pytest.raises(ValueError, match="not allowed"):
-        _validate("https://[::1]/x")
+async def test_loopback_and_private_targets_blocked_over_https_too(monkeypatch, env):
+    monkeypatch.setenv("ENVIRONMENT", env)
+    for blocked in (
+        "https://127.0.0.1/x",
+        "https://[::1]/x",
+        "https://192.168.1.1/x",
+        "https://169.254.169.254/latest/meta-data",
+    ):
+        with pytest.raises(SSRFError):
+            await validate_egress_url(blocked)
 
-    with pytest.raises(ValueError, match="private"):
-        _validate("https://192.168.1.1/x")
-    with pytest.raises(ValueError):
-        _validate("https://169.254.169.254/latest/meta-data")
-    _validate("https://api.example.com/v1")  # public https is always fine
+
+async def test_public_https_is_always_fine(monkeypatch):
+    # Resolution is stubbed so the suite never depends on DNS or the network.
+    async def _public(hostname: str, port: int):
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(ssrf_mod, "_resolve_host", _public)
+    assert await validate_egress_url("https://api.example.com/v1")
 
 
 # ---------------------------------------------------------------------------

@@ -106,11 +106,21 @@ async def _fetch_mcp_response(
     if not isinstance(arguments, dict):
         return None, "mcp_arguments did not resolve to an object"
 
-    server_params = _build_server_params(server, context)
+    # _build_server_params runs the shared SSRF egress guard on the resolved URL
+    # before it attaches any decrypted credential header, so awaiting it here is
+    # the validation — the separate pre-flight check this replaces called a
+    # method that no longer exists. SSRFError subclasses ValueError, so a
+    # rejected destination still degrades into a reason for _apply_default
+    # rather than propagating out of the pre-check.
     try:
-        HttpRequestExecutor._validate_resolved_url(server_params.url)
+        server_params = await _build_server_params(server, context)
     except ValueError as e:
-        return None, f"MCP server URL rejected: {e}"
+        # The reason is logged, not returned: this string becomes a pre-check
+        # failure reason, which rides out to the merchant's webhook as
+        # failureReason, and an SSRFError names the address the host resolved
+        # to.
+        logger.error(f"Pre-check '{pre_check.name}': MCP server URL rejected: {e}")
+        return None, "MCP server URL rejected by egress policy"
 
     handler = _create_direct_http_tool_handler(
         server_params,

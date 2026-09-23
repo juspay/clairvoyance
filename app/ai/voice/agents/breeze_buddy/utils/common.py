@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple, cast
+from urllib.parse import urlparse
 
 from pipecat.frames.frames import OutputAudioRawFrame
 from pydub import AudioSegment
@@ -14,6 +15,12 @@ from app.ai.voice.llm.types import RealtimeLLMProvider
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
+from app.core.security.ssrf import (
+    SSRFError,
+    redact_url,
+    ssrf_safe_request,
+    validate_egress_url,
+)
 from app.services.redis.client import get_redis_service
 
 
@@ -156,6 +163,27 @@ async def send_webhook_with_retry(
     Returns:
         bool: True if successful, False if all attempts failed
     """
+    # SSRF: the webhook URL comes from lead payloads (reporting_webhook_url) and
+    # is dereferenced here — possibly long after it was accepted. Validate at
+    # delivery time so a URL that resolves to an internal/metadata address (or
+    # rebound DNS) is rejected with zero network attempts (PT-11).
+    #
+    # allow_http=True deliberately: PT-11 is about the resolved *address*, not
+    # the scheme, and this path had no scheme restriction before. Defaulting to
+    # https-only here would silently drop outcome webhooks for every tenant
+    # still posting to an http endpoint. Plaintext delivery is logged instead.
+    try:
+        await validate_egress_url(url, allow_http=True)
+    except SSRFError as exc:
+        logger.error(f"Webhook URL failed SSRF validation, not sending: {exc}")
+        return False
+
+    if urlparse(url).scheme == "http":
+        logger.warning(
+            f"Reporting webhook delivered over plaintext http: {redact_url(url)} — the "
+            "signed payload is readable in transit; migrate this tenant to https"
+        )
+
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
     signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
     headers = {"Content-Type": "application/json"}
@@ -164,8 +192,24 @@ async def send_webhook_with_retry(
 
     for attempt in range(1, max_retries + 1):
         try:
-            logger.info(f"Webhook attempt {attempt}/{max_retries} to {url}")
-            async with session.post(url, json=data, headers=headers) as response:
+            logger.info(f"Webhook attempt {attempt}/{max_retries} to {redact_url(url)}")
+            # same_origin_only: the danger in following a redirect here is that
+            # the signed lead payload gets re-sent to a host the tenant never
+            # configured — not the redirect itself. A redirect that stays on
+            # their own host cannot do that, and refusing those instead breaks
+            # every endpoint that answers /hook with a 301 to /hook/ or upgrades
+            # http to https, which is most of them. Off-origin is still refused,
+            # and every hop is still validated.
+            async with ssrf_safe_request(
+                session,
+                "POST",
+                url,
+                json=data,
+                headers=headers,
+                allow_http=True,
+                max_redirects=2,
+                same_origin_only=True,
+            ) as response:
                 if response.status == 200:
                     logger.info(f"Webhook succeeded on attempt {attempt}")
                     return True
@@ -174,6 +218,11 @@ async def send_webhook_with_retry(
                     logger.warning(
                         f"Webhook attempt {attempt} failed. Status: {response.status}, Body: {response_text}"
                     )
+        except SSRFError as e:
+            # Egress was refused — retrying re-sends the signed payload at the
+            # same blocked target, so stop here rather than burning the budget.
+            logger.error(f"Webhook blocked by egress guard, not retrying: {e}")
+            return False
         except Exception as e:
             logger.error(f"Webhook attempt {attempt} error: {e}", exc_info=True)
 
@@ -181,7 +230,7 @@ async def send_webhook_with_retry(
         if attempt < max_retries:
             logger.info(f"Retrying webhook (attempt {attempt + 1}/{max_retries})...")
 
-    logger.error(f"All {max_retries} webhook attempts failed for {url}")
+    logger.error(f"All {max_retries} webhook attempts failed for {redact_url(url)}")
     return False
 
 

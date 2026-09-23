@@ -20,11 +20,10 @@ is kept and returned to the caller — the LLM never sees intermediate events.
 
 import asyncio
 import base64
-import ipaddress
 import json
 from collections.abc import Awaitable
 from typing import Any, Callable, Dict, Optional, Tuple
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import aiohttp
 from pydantic import SecretStr
@@ -38,12 +37,21 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     HttpRequestConfig,
 )
 from app.core.config.static import (
-    ENVIRONMENT,
     HTTP_REQUEST_BLOCKED_CONTENT_TYPES,
     HTTP_REQUEST_MAX_REDIRECTS,
     HTTP_REQUEST_MAX_RESPONSE_BYTES,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import (
+    EgressResolutionError,
+    SSRFError,
+    ssrf_safe_request,
+)
+
+# What a caller (and therefore the LLM, and therefore the person on the call)
+# is told when egress is refused. Deliberately says nothing about why: the
+# detail is logged instead.
+EGRESS_REFUSAL = "Request blocked by egress policy"
 
 
 class HttpRequestExecutor:
@@ -122,8 +130,12 @@ class HttpRequestExecutor:
             # Build full URL with query params
             url = self._build_url_with_params(resolved_url, resolved_query_params)
 
-            # SSRF Protection: Validate the resolved URL before making the request
-            self._validate_resolved_url(url)
+            # SSRF protection lives in ssrf_safe_request below: hop 0 is the
+            # same check this used to run here, and running it here as well
+            # resolved the host twice per request AND put the raise outside the
+            # `except SSRFError` handler — so a routine policy block surfaced as
+            # an unexpected error with a stack trace, and the handler written
+            # for it was unreachable for the initial URL.
 
             # Execute with retry
             for attempt in range(1, config.max_retries + 1):
@@ -132,14 +144,17 @@ class HttpRequestExecutor:
                         f"HTTP {config.method.value} request to {url} (attempt {attempt}/{config.max_retries})"
                     )
 
-                    async with self.session.request(
-                        method=config.method.value,
-                        url=url,
+                    # ssrf_safe_request re-validates every redirect hop so a
+                    # public host can't 302 the request to an internal/metadata
+                    # target (PT-07).
+                    async with ssrf_safe_request(
+                        self.session,
+                        config.method.value,
+                        url,
                         headers=headers,
                         json=resolved_body if resolved_body else None,
                         timeout=aiohttp.ClientTimeout(total=config.timeout),
                         max_redirects=HTTP_REQUEST_MAX_REDIRECTS,
-                        allow_redirects=HTTP_REQUEST_MAX_REDIRECTS > 0,
                     ) as response:
                         status = response.status
 
@@ -255,17 +270,40 @@ class HttpRequestExecutor:
                     logger.warning(
                         f"HTTP {config.method.value} timeout after {config.timeout}s (attempt {attempt})"
                     )
-                except aiohttp.TooManyRedirects:
+                except EgressResolutionError as e:
+                    # Caught BEFORE SSRFError, which it subclasses. A resolver
+                    # hiccup is transient and the retry loop is the right
+                    # answer; before the egress guard existed this surfaced as
+                    # an aiohttp.ClientConnectorError and was retried the same
+                    # way. Falling through to the refusal branch would end the
+                    # request on the first attempt and tell the model that
+                    # policy blocked it.
+                    logger.warning(
+                        f"HTTP {config.method.value} could not resolve host: {e} "
+                        f"(attempt {attempt})"
+                    )
+                except SSRFError as e:
+                    # A security rejection must abort, not retry. SSRFError is
+                    # not an aiohttp.ClientError, so without this branch it fell
+                    # into the generic handler below and the request body was
+                    # replayed up to max_retries times at a blocked target.
+                    # This also replaces the old aiohttp.TooManyRedirects
+                    # branch: ssrf_safe_request follows redirects itself and
+                    # raises SSRFError when the hop budget is exhausted, so
+                    # aiohttp never raises that exception here any more.
                     logger.error(
-                        f"HTTP {config.method.value} exceeded max redirects "
-                        f"({HTTP_REQUEST_MAX_REDIRECTS}), not retrying"
+                        f"HTTP {config.method.value} blocked by egress guard, "
+                        f"not retrying: {e}"
                     )
                     if fire_and_forget:
                         return None
-                    return (
-                        0,
-                        f"Too many redirects (max: {HTTP_REQUEST_MAX_REDIRECTS})",
-                    )
+                    # The reason is in the log above and nowhere else: it names
+                    # the address the host resolved to, and this string is tool
+                    # output the model reads out. Handing it back would let a
+                    # caller probe hostnames and learn the internal network from
+                    # the refusals — the guard answering the question it exists
+                    # to refuse.
+                    return (0, EGRESS_REFUSAL)
                 except aiohttp.ClientError as e:
                     logger.warning(
                         f"HTTP {config.method.value} client error: {e} (attempt {attempt})"
@@ -468,87 +506,6 @@ class HttpRequestExecutor:
         query_string = urlencode(clean_params, doseq=True)
         separator = "&" if "?" in url else "?"
         return f"{url}{separator}{query_string}"
-
-    @staticmethod
-    def _validate_resolved_url(url: str) -> None:
-        """
-        Validate resolved URL to prevent SSRF attacks.
-
-        This runs AFTER template variable substitution, validating the actual URL
-        that will be used for the HTTP request.
-
-        Security checks:
-        - HTTPS only (no HTTP)
-        - Block localhost in production
-        - Block private IP ranges (RFC1918, loopback, link-local)
-
-        Args:
-            url: Fully resolved URL (no template variables)
-
-        Raises:
-            ValueError: If URL fails security validation
-        """
-        # Parse URL
-        try:
-            parsed = urlparse(url)
-        except Exception as e:
-            raise ValueError(f"Invalid URL format: {e}")
-
-        # Check 1: HTTPS only
-        if parsed.scheme != "https":
-            raise ValueError(
-                f"Only HTTPS URLs are allowed for security. Got scheme: {parsed.scheme}"
-            )
-
-        # Check 2: Must have hostname
-        if not parsed.hostname:
-            raise ValueError("URL must have a valid hostname")
-
-        hostname = parsed.hostname.lower()
-
-        # Check 3: Block localhost (production only)
-        is_production = ENVIRONMENT.lower() in ("production", "prod")
-        if is_production:
-            localhost_patterns = ["localhost", "127.0.0.1", "::1", "0.0.0.0"]
-            if hostname in localhost_patterns:
-                raise ValueError(
-                    f"Requests to localhost are not allowed in production: {hostname}"
-                )
-
-        # Check 4: Block private/reserved IP addresses
-        # Try to parse as IP address
-        try:
-            ip = ipaddress.ip_address(hostname)
-
-            # Block loopback (127.0.0.0/8, ::1)
-            if ip.is_loopback:
-                raise ValueError(
-                    f"Requests to loopback addresses are not allowed: {ip}"
-                )
-
-            # Block private IPs (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
-            if ip.is_private:
-                raise ValueError(
-                    f"Requests to private IP addresses are not allowed: {ip}"
-                )
-
-            # Block link-local (169.254.0.0/16, fe80::/10)
-            if ip.is_link_local:
-                raise ValueError(
-                    f"Requests to link-local addresses are not allowed: {ip}"
-                )
-
-            # Block all non-global IPs (comprehensive check)
-            if not ip.is_global:
-                raise ValueError(
-                    f"Requests to non-global IP addresses are not allowed: {ip}"
-                )
-
-        except ValueError as ip_error:
-            # If it's already a validation error we raised, re-raise it
-            if "not allowed" in str(ip_error):
-                raise
-            # Otherwise, hostname is not an IP - it's a domain name, which is allowed
 
     def _resolve_template_json_safe(
         self, template_str: str, resolved_fields: dict
