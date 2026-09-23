@@ -53,6 +53,7 @@ from app.crm.outreach.schemas import (
 )
 from app.crm.outreach.steps import as_rows, closing
 from app.crm.record.contracts import (
+    CALL_REPORT_SOURCES,
     RawEvent,
     canonical_path,
     derive_for,
@@ -316,15 +317,7 @@ async def _wake_on_reply(
             run.merchant_id,
             str(run.id),
             node.id,
-            {
-                reply_key(node.id): answer,
-                LATEST_LETTER_KEY: node.id,
-                # The letter that beat the alarm (canon T26): left for the
-                # flush that follows, which records it as this square's
-                # cut_short_by and reads the visit as arrived_by = letter.
-                # A pointer into crm_event_raw, never a photocopy.
-                CUT_SHORT_BY_KEY: str(event.id),
-            },
+            _reply_patch(node, event, answer),
             facts,
         )
     # The run may be standing on a square that listens to NOTHING: the
@@ -340,6 +333,12 @@ async def _wake_on_reply(
     # is ignored here too.
     current = next((n for n in definition.nodes if n.id == run.current_node), None)
     if current is None or listens(current):
+        return
+    if event.source in CALL_REPORT_SOURCES:
+        # A report answers its own square or nothing (Swaroop, 23 Sep 2026):
+        # a late report finding the run parked on the NEXT call square would
+        # otherwise write its outcome at the top level and un-park the run —
+        # the leak _reply_patch closes, through the other door.
         return
     if any(
         listens(n)
@@ -358,6 +357,25 @@ async def _wake_on_reply(
             # flattens into template variables (canon T26).
             cut_short_by=str(event.id),
         )
+
+
+def _reply_patch(node: WorkflowNode, event: RawEvent, answer: str) -> Dict[str, str]:
+    """PURE: what a heard letter writes on the run — its answer, the
+    pointer to the letter that beat the alarm (canon T26: left for the
+    flush that follows, which records it as this square's cut_short_by
+    and reads the visit as arrived_by = letter; a pointer into
+    crm_event_raw, never a photocopy), and, when the letter is the
+    producer's word, the pointer that makes its facts the latest
+    (latest_letter). Our own call reports (a call finished) answer their
+    square and keep their facts under it (facts.<square>, readable as
+    facts_<square>_<key>), but never take the pointer: they carry none of
+    the merchant's facts, so a follow-up call after a quiet customer would
+    be built from the founding letter alone — the offers the merchant sent
+    before the first call gone from the second (seen live 16 Sep 2026)."""
+    patch = {reply_key(node.id): answer, CUT_SHORT_BY_KEY: str(event.id)}
+    if event.source not in CALL_REPORT_SOURCES:
+        patch[LATEST_LETTER_KEY] = node.id
+    return patch
 
 
 def _is_about(node: WorkflowNode, event: RawEvent, run: EnrollmentRun) -> bool:
