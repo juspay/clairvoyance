@@ -42,6 +42,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     IvrOption,
 )
 from app.ai.voice.agents.breeze_buddy.tts import resolve_voice_config
+from app.ai.voice.agents.breeze_buddy.utils.call_duration import (
+    mark_max_duration_end,
+    max_call_duration_seconds,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import track_error
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
@@ -169,8 +173,14 @@ class IvrWalker:
             self._add_turn("assistant", self.greeting_text)
 
         call_ended_by = "agent"
+        # IVR runs outside Agent.run()'s max-duration timer, so cap it here.
+        max_seconds = max_call_duration_seconds(self.agent.configurations)
         try:
-            call_ended_by = await self._walk(flow)
+            call_ended_by = await asyncio.wait_for(self._walk(flow), max_seconds)
+        except asyncio.TimeoutError:
+            logger.info(f"[IVR] Max call duration ({int(max_seconds)}s) reached")
+            mark_max_duration_end(self.lead, max_seconds)
+            call_ended_by = "system"
         except Exception as e:
             logger.error(f"[IVR] Walker error: {e}", exc_info=True)
             track_error(self.errors, f"IVR walker error: {e}")

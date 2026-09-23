@@ -5,6 +5,7 @@ Domain-specific Redis operations for managing transfer state.
 """
 
 import json
+import time
 from typing import Any, Dict, Optional
 
 from app.core.logger import logger
@@ -18,6 +19,7 @@ async def set_transfer_flag(
     transfer_number: Optional[str] = None,
     customer_phone_number: Optional[str] = None,
     ttl_seconds: int = 7200,  # 2 hours
+    max_call_end_at: Optional[float] = None,
 ) -> bool:
     """
     Set transfer flag in Redis with reseller/merchant context.
@@ -43,6 +45,7 @@ async def set_transfer_flag(
             "merchant_id": merchant_id,
             "transfer_number": transfer_number,
             "customer_phone_number": customer_phone_number,
+            "max_call_end_at": max_call_end_at,
         }
     )
 
@@ -58,6 +61,17 @@ async def set_transfer_flag(
         logger.error(f"[TRANSFER REDIS] Failed to set flag for call {call_sid}")
 
     return success
+
+
+def transfer_time_limit(max_call_end_at: Optional[float], floor: int) -> Optional[int]:
+    """Seconds a transfer may last before the call's max-duration deadline.
+
+    None when the call has no deadline. Clamped to [floor, 14400] — 14400 is
+    Plivo's default call limit, so an over-long template cap never exceeds it.
+    """
+    if max_call_end_at is None:
+        return None
+    return min(14400, max(floor, int(max_call_end_at - time.time())))
 
 
 async def get_transfer_flag(call_sid: str) -> Optional[Dict[str, Any]]:
