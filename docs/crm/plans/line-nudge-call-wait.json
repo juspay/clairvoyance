@@ -1,0 +1,263 @@
+{
+  "_comment": "The lending journey where a wait square after each call waits for THAT call's report and branches on its OUTCOME (22-23 Sep 2026; docs/crm/runbooks/after-call.md). The call square is today's: it queues its lead and moves on at once. `after-call-1` listens for `call.completed` matched on the lead the call square queued (`match`: the report's `lead_id` against the run's `lead_call-1`), with `key: outcome` so the arrows are the call template's outcome words: NOT_INTERESTED, CANCEL and CONFIRM go straight to `listen` (no more calls; the merchant's next letter decides), `else` (NO_ANSWER, BUSY, anything the template says that is not drawn) takes the gap, `timeout` is a report that never came in `minutes`. After call-2 every road is `listen`. So a run never has two calls queued, the gap counts from the call's END, and a customer who said no is not called again. The report answers its square and keeps its facts under it (`facts_after-call-1_outcome`) but never becomes the run's latest letter: call-2 speaks the merchant's facts, not call-1's outcome. `after-call` listens for nothing else: a merchant letter that lands between queueing the call and its report is not seen by that run (its facts are not kept; goals still end the run). The merchant's next letter is heard on the gap, where the ladder starts over on it.",
+  "entry": {
+    "topic": "LINE_INITIATED",
+    "key": "customer_id",
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "nodes": [
+    {
+      "id": "is-credit-line",
+      "type": "condition",
+      "rules": [
+        {
+          "on": "yes",
+          "if": [
+            {
+              "field": "context.products",
+              "op": "not_exists"
+            },
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quiet-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "09:00",
+        "closes": "21:00",
+        "timezone": "Asia/Kolkata"
+      },
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    },
+    {
+      "id": "call-1",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "after-call-1",
+      "type": "wait",
+      "topics": [
+        "call.completed"
+      ],
+      "key": "outcome",
+      "minutes": 1440,
+      "match": {
+        "payload": "lead_id",
+        "run": "lead_call-1"
+      }
+    },
+    {
+      "id": "gap-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "09:00",
+        "closes": "21:00",
+        "timezone": "Asia/Kolkata"
+      },
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    },
+    {
+      "id": "call-2",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "after-call-2",
+      "type": "wait",
+      "topics": [
+        "call.completed"
+      ],
+      "key": "outcome",
+      "minutes": 1440,
+      "match": {
+        "payload": "lead_id",
+        "run": "lead_call-2"
+      }
+    },
+    {
+      "id": "listen",
+      "type": "wait",
+      "topics": [
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "match": {
+        "run": "customer_id",
+        "payload": "customer_id"
+      }
+    }
+  ],
+  "edges": [
+    [
+      "is-credit-line",
+      "quiet-30m",
+      "yes"
+    ],
+    [
+      "is-credit-line",
+      "listen",
+      "else"
+    ],
+    [
+      "quiet-30m",
+      "call-1",
+      "timeout"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "call-1",
+      "after-call-1"
+    ],
+    [
+      "after-call-1",
+      "listen",
+      "NOT_INTERESTED"
+    ],
+    [
+      "after-call-1",
+      "listen",
+      "CANCEL"
+    ],
+    [
+      "after-call-1",
+      "listen",
+      "CONFIRM"
+    ],
+    [
+      "after-call-1",
+      "gap-30m",
+      "else"
+    ],
+    [
+      "after-call-1",
+      "gap-30m",
+      "timeout"
+    ],
+    [
+      "gap-30m",
+      "call-2",
+      "timeout"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "gap-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "call-2",
+      "after-call-2"
+    ],
+    [
+      "after-call-2",
+      "listen",
+      "else"
+    ],
+    [
+      "after-call-2",
+      "listen",
+      "timeout"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ]
+  ],
+  "goals": [
+    {
+      "topics": [
+        "LINE_ACTIVE",
+        "LINE_HARD_OFFER_REJECTED",
+        "LINE_KYC_REJECTED"
+      ],
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 30
+  },
+  "on_publish": "migrate",
+  "purpose_key": "utility.loan.checkout_nudge"
+}
