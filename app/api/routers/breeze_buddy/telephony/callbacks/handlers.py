@@ -194,9 +194,16 @@ async def handle_callback_details_post(
         call_sid = form.get("CallSid")
         provider_recording_url = form.get("RecordingUrl")
     elif provider_lower == "plivo":
-        # Plivo sends callback data as JSON string in 'response' field
+        # <Record recordSession> callback (answer XML): flat form fields.
+        # call_uuid comes from the query string we put on callbackUrl, since
+        # CallUUID is not among the documented Record callback params.
         response_data = form.get("response")
-        if response_data:
+        if form.get("RecordUrl"):
+            call_sid = form.get("CallUUID") or request.query_params.get("call_uuid")
+            provider_recording_url = form.get("RecordUrl")
+        # Record-API callback (JSON string in 'response'): calls answered
+        # before the switch to <Record> still report here.
+        elif response_data:
             try:
                 response_str = (
                     str(response_data)

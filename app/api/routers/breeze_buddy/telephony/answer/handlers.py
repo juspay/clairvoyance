@@ -62,14 +62,13 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
     admit_plivo_inbound_call,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
-    start_call_recording,
+    plivo_record_xml,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
 from app.core.concurrency import spawn_background_task
 from app.core.config.dynamic import (
     BB_NOISE_CANCELLATION_ENABLED,
     BB_NOISE_CANCELLATION_LEVEL,
-    BB_RECORDING_RETRY_DELAY_MS,
 )
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
@@ -310,8 +309,8 @@ def _build_websocket_url(
 # ---------------------------------------------------------------------------
 
 
-async def _build_plivo_stream_xml(ws_url: str) -> str:
-    """Build Plivo XML response with Stream element for WebSocket connection."""
+async def _build_plivo_stream_xml(ws_url: str, call_id: str) -> str:
+    """Build Plivo XML response: session recording, then the WebSocket stream."""
     noise_cancellation_enabled = await BB_NOISE_CANCELLATION_ENABLED()
     noise_cancellation_level = await BB_NOISE_CANCELLATION_LEVEL()
     noise_cancellation_attr = (
@@ -334,6 +333,7 @@ async def _build_plivo_stream_xml(ws_url: str) -> str:
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+    {plivo_record_xml(call_id)}
     <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
         {ws_url_escaped}
     </Stream>
@@ -387,9 +387,9 @@ def _build_json_response(ws_url: str) -> Response:
     )
 
 
-async def _build_xml_response(ws_url: str) -> HTMLResponse:
+async def _build_xml_response(ws_url: str, call_id: str) -> HTMLResponse:
     """Build Plivo XML response."""
-    xml = await _build_plivo_stream_xml(ws_url)
+    xml = await _build_plivo_stream_xml(ws_url, call_id)
     return HTMLResponse(content=xml, media_type="application/xml")
 
 
@@ -538,7 +538,7 @@ async def _build_provider_response(
     async def make_response(ws_url: str) -> Response:
         if provider == "exotel":
             return _build_json_response(ws_url)
-        return await _build_xml_response(ws_url)
+        return await _build_xml_response(ws_url, call_id)
 
     # ── Pod allocation (1-pod-1-call isolation) ──────────────────────────
     # Attempt to allocate a dedicated pod via Smart Router. This runs for
@@ -640,75 +640,6 @@ async def _build_provider_response(
         pod_ws_url=pod_ws_url,
     )
     return await make_response(ws_url)
-
-
-# Plivo requires a 200–500ms gap between answering the call and issuing the
-# record API call, so the call is fully connected internally first. We keep
-# the 500ms — it just no longer happens on the answer's critical path.
-#
-# One retry after a further 500ms. The settle window is a guess about how
-# long Plivo needs to finish connecting the call internally, so a first
-# attempt that arrives too early is worth repeating once with more slack.
-#
-# The delay before EACH attempt, so the retry waits 500ms rather than
-# firing immediately after the failure.
-_RECORDING_SETTLE_SECONDS = 0.5
-
-
-async def _start_recording_after_delay(call_id: str, tag: str) -> None:
-    """Wait out Plivo's settle window, then start recording in a worker thread.
-
-    Two attempts. The second waits ``BB_RECORDING_RETRY_DELAY_MS`` so the gap
-    can be tuned without a deploy; that config is read only once the first
-    attempt has failed.
-
-    ``start_call_recording`` collapses every failure into ``False`` — a call
-    that already hung up (404) is indistinguishable from a throttle (429) —
-    so the retry fires for both, and the 404 case can never succeed. Worth
-    revisiting once the error is classified.
-    """
-    try:
-        await asyncio.sleep(_RECORDING_SETTLE_SECONDS)
-        with timed_phase("start_recording_background"):
-            if await start_call_recording(call_id):
-                return
-
-        retry_delay_s = max(0, await BB_RECORDING_RETRY_DELAY_MS()) / 1000.0
-        logger.bind(recording_attempt=1).warning(
-            f"[{tag}] Recording attempt 1/2 failed for call: {call_id}; "
-            f"retrying in {retry_delay_s:.3f}s"
-        )
-        await asyncio.sleep(retry_delay_s)
-        with timed_phase("start_recording_background"):
-            if await start_call_recording(call_id):
-                logger.bind(recording_attempt=2).info(
-                    f"[{tag}] Recording started on attempt 2/2 for call: {call_id}"
-                )
-                return
-
-        logger.bind(recording_attempt=2).error(
-            f"[{tag}] Recording failed to start for call: {call_id}"
-        )
-    except Exception as e:
-        # See recording.py for why this is opt(exception=...) and not exc_info=.
-        logger.opt(exception=e).error(
-            f"[{tag}] Failed to start Plivo recording for call: {call_id} - {e}"
-        )
-
-
-def _kickoff_plivo_recording(call_id: str, tag: str) -> None:
-    """
-    Start call recording without making the answer response wait for it.
-
-    Returns instantly. Recording is not needed to build the XML we owe Plivo,
-    so it has no business sitting on the critical path — every millisecond
-    spent here is a millisecond the provider waits before connecting audio,
-    and past its answer-URL timeout it retries, creating a duplicate lead.
-    """
-    spawn_background_task(
-        _start_recording_after_delay(call_id, tag),
-        name=f"plivo-recording:{call_id}",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -937,10 +868,6 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
     if not call_id:
         logger.error(f"[{tag}] Missing call ID")
         return _error_response(provider, "Missing call identifier", 400)
-
-    # Plivo-specific: start recording — fire-and-forget, off the critical path.
-    if provider == "plivo":
-        _kickoff_plivo_recording(call_id, tag)
 
     # Resolve templates
     with timed_phase("resolve_call_templates"):

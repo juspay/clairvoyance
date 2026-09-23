@@ -645,17 +645,6 @@ async def BB_STRIP_EMOJIS_FROM_TTS() -> bool:
     return await get_config("BB_STRIP_EMOJIS_FROM_TTS", True, bool)
 
 
-async def BB_RECORDING_RETRY_DELAY_MS() -> int:
-    """Delay before the second (final) Plivo record-API attempt, in ms.
-
-    The first attempt's wait is Plivo's fixed 200-500ms settle window and
-    stays in code. This one is the tuning knob against real behaviour under
-    load, so it should not need a deploy. Read only after the first attempt
-    has already failed, so the happy path costs no config lookup.
-    """
-    return await get_config("BB_RECORDING_RETRY_DELAY_MS", 500, int)
-
-
 async def SHOPS_FOR_TEMPLATE_FLOW() -> list[str]:
     """Returns SHOPS_FOR_TEMPLATE_FLOW from Redis as a list of shop identifiers"""
     config_value = await get_config("SHOPS_FOR_TEMPLATE_FLOW", "", str)
