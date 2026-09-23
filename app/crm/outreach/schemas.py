@@ -862,7 +862,8 @@ class ReportCustomers(BaseModel):
     customer's journey through the plan, so these read as customers.
 
     ``reached`` = at least one ANSWERED call (placed, finished, outcome
-    not NO_ANSWER / BUSY / a carrier failure). The before/after split is
+    not NO_ANSWER / a carrier failure; BUSY — a picked-up line with no
+    input — counts, ruled 24 Sep 2026). The before/after split is
     decided per run by time: the run's first answered call against its
     exited_at — "after" says a conversation preceded the end, never that
     it caused it.
@@ -936,11 +937,12 @@ class WorkflowReport(BaseModel):
 class WorkflowCallSummary(BaseModel):
     """The plan's calls over a window of its runs' entered_at: every lead
     its runs placed — stamped leads and their retries, the same set the
-    report folds. connected = someone spoke, judged by the lead store's one
-    answered definition (placed, finished, outcome not NO_ANSWER / BUSY /
-    NUMBER_UNAVAILABLE / FAILED); answered adds BUSY, an answered line
-    where nobody spoke. reached_runs / contacted_runs count runs the same
-    way the report does."""
+    report folds. connected = the line was picked up, judged by the lead
+    store's one answered definition (placed, finished, outcome not
+    NO_ANSWER / NUMBER_UNAVAILABLE / FAILED — BUSY counts since 24 Sep
+    2026); answered is the same count, kept on the wire for the console.
+    reached_runs / contacted_runs count runs the same way the report
+    does."""
 
     placed: int
     connected: int

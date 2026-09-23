@@ -208,7 +208,7 @@ def test_the_report_and_the_calls_summary_fold_the_same_lead_set() -> None:
         assert "UNION ALL" in sql and "FROM mine" in sql
     # the one answered definition: the count, the moment, and the stats
     # rows' own `spoke` column
-    answered = "'NO_ANSWER', 'BUSY', 'NUMBER_UNAVAILABLE', 'FAILED'"
+    answered = "'NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED'"
     assert facts_sql.count(answered) == 2 and stats_sql.count(answered) == 1
     assert ") AS spoke" in stats_sql and "GROUP BY 1, 2, 3" in stats_sql
 
@@ -229,6 +229,7 @@ def test_the_call_summary_counts_spoken_and_answered_apart() -> None:
                 },
                 {
                     "outcome": "BUSY",
+                    "spoke": True,  # a picked-up line (24 Sep 2026)
                     "calls": 2,
                     "runs": 2,
                     "talk_seconds": 20,
@@ -247,16 +248,16 @@ def test_the_call_summary_counts_spoken_and_answered_apart() -> None:
                 },
             ],
             "contacted": 6,
-            "reached": 3,
+            "reached": 5,
         }
     )
-    assert (summary.placed, summary.connected, summary.answered) == (10, 3, 5)
+    assert (summary.placed, summary.connected, summary.answered) == (10, 5, 5)
     assert summary.by_outcome == {"INTERESTED": 3, "BUSY": 2, "NO_ANSWER": 5}
     assert summary.talk_seconds_avg == 80.0  # 320 s over 4 timed calls
     assert summary.attempts_avg == 1.2
     assert (summary.contacted_runs, summary.reached_runs, summary.cost_total) == (
         6,
-        3,
+        5,
         7.0,
     )
     empty = analytics.summarize_calls({"outcomes": [], "contacted": 0, "reached": 0})
@@ -596,7 +597,7 @@ def test_the_report_reads_are_windowed_on_entered_at_and_tenant_first() -> None:
     assert values == ["m1", ["a", "b"], [T0, T0], [None, T0]]
     assert 'min("call_initiated_time")' in text and "GROUP BY 1, 2" in text
     # one definition of answered, used for the count and the moment alike
-    assert text.count("'NO_ANSWER', 'BUSY', 'NUMBER_UNAVAILABLE', 'FAILED'") == 2
+    assert text.count("'NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED'") == 2
 
 
 def test_a_run_is_staged_by_whether_anyone_spoke_before_it_ended() -> None:
@@ -672,16 +673,17 @@ def test_calls_are_grouped_by_template_as_well_as_outcome() -> None:
 def test_who_spoke_is_the_lead_stores_word_not_a_second_python_rule() -> None:
     """A plan whose calls all FAILED, or hit NUMBER_UNAVAILABLE: nobody
     spoke, nobody answered — the row's `spoke` decides, never a Python set
-    that forgot two outcomes. BUSY is answered but not connected."""
+    that forgot two outcomes. BUSY is a picked-up line (24 Sep 2026): the
+    store marks it spoke, and answered is connected, not spoke-plus-BUSY."""
     rows = [
         {"template": "t", "outcome": "FAILED", "spoke": False, "calls": 3},
         {"template": "t", "outcome": "NUMBER_UNAVAILABLE", "spoke": False, "calls": 2},
-        {"template": "t", "outcome": "BUSY", "spoke": False, "calls": 4},
+        {"template": "t", "outcome": "BUSY", "spoke": True, "calls": 4},
         {"template": "t", "outcome": "INTERESTED", "spoke": True, "calls": 1},
     ]
-    s = analytics.summarize_calls({"outcomes": rows, "contacted": 5, "reached": 1})
-    assert (s.placed, s.connected, s.answered) == (10, 1, 5)
-    assert s.by_template[0].connected == 1
+    s = analytics.summarize_calls({"outcomes": rows, "contacted": 5, "reached": 5})
+    assert (s.placed, s.connected, s.answered) == (10, 5, 5)
+    assert s.by_template[0].connected == 5
 
 
 def test_the_window_is_bounded_and_defaults_to_the_last_day() -> None:
