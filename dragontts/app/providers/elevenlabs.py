@@ -51,6 +51,7 @@ from app.audio.atempo import (
 )
 from app.audio.format import apply_presence_boost
 from app.audio.hygiene import clean_utterance
+from app.audio.level import soften_end
 from app.core.config import PROVIDER_DEFAULTS, settings
 from app.core.logging import logger
 from app.providers import elevenlabs_pool
@@ -509,6 +510,10 @@ class ElevenLabsProvider(BaseTTSProvider):
                     f"pads, capped sub-floor pauses, gated noise)"
                 )
             audio = cleaned
+        if variant == "clean_tempo":
+            # Let the final syllable go instead of stopping dead (not in the
+            # cache key: clear the cache for cached sentences to pick it up).
+            audio = soften_end(audio, sample_rate)
         # v3_conversational only: tempo 1.0 never spawns ffmpeg. On a stretch
         # failure the unstretched clip is served AND cached under the
         # tempo-keyed entry — consistent while ffmpeg is broken, and the error
