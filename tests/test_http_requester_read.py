@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from typing import List
 
+import pytest
+
 # isort: off
 # template.types must load before the transport modules (reversing the
 # order trips a circular import — see test_response_transform.py).
@@ -19,6 +21,24 @@ from app.ai.voice.agents.breeze_buddy.template.types import HttpRequestConfig
 import app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester as hr
 
 # isort: on
+
+import app.core.security.ssrf as ssrf_mod
+
+
+@pytest.fixture(autouse=True)
+def _stub_egress_resolution(monkeypatch):
+    """The egress guard resolves the host before the request goes out.
+
+    These tests drive a fake session to pin how the BODY is read, and must not
+    depend on DNS or the network to do it. Resolution is stubbed to a public
+    address; what the guard does with the answer is covered in
+    tests/test_ssrf_egress.py.
+    """
+
+    async def _public(hostname: str, port: int):
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(ssrf_mod, "_resolve_host", _public)
 
 
 class _Content:
@@ -46,12 +66,19 @@ class _Response:
     async def __aexit__(self, *exc) -> bool:
         return False
 
+    def release(self) -> None:
+        # ssrf_safe_request releases each response it drives.
+        pass
+
 
 class _Session:
     def __init__(self, chunks: List[bytes]) -> None:
         self.response = _Response(chunks)
 
-    def request(self, **kwargs) -> _Response:
+    async def request(self, *args, **kwargs) -> _Response:
+        # The executor now goes through ssrf_safe_request, which AWAITS
+        # session.request(method, url, ...) — method and url positional —
+        # rather than using it as an async context manager.
         return self.response
 
 

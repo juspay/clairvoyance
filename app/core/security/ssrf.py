@@ -1,0 +1,521 @@
+"""
+Shared SSRF-safe egress validation for all outbound HTTP sinks.
+
+Every place the platform fetches an operator/tenant/LLM-influenced URL must run
+it through :func:`validate_egress_url` BEFORE the request, and must re-validate
+every redirect hop (or disable redirects). The validator resolves the hostname
+and rejects the request if *any* resolved address is loopback, private
+(RFC1918 / IPv6 ULA), link-local (includes the 169.254.169.254 cloud-metadata
+address), multicast, reserved, or otherwise non-global. Resolving here — rather
+than trusting a bare IP-literal check — closes the "DNS name that resolves to an
+internal address" bypass and, because we validate the exact addresses that were
+resolved, narrows the DNS-rebinding window.
+
+Design notes:
+- Resolution runs off the event loop via ``asyncio.to_thread`` (getaddrinfo is
+  blocking). If *every* A/AAAA record must be public for the request to proceed,
+  a single poisoned record fails the whole request (fail closed) — this defeats
+  mixed good/bad record rebinding tricks.
+- ``SSRF_ALLOW_PRIVATE_EGRESS=true`` relaxes the private/loopback checks for
+  local development only. It defaults to false so production is secure by
+  default, regardless of ENVIRONMENT.
+- The validation half (``validate_egress_url``, ``ip_block_reason``,
+  ``host_matches_allowlist``) is client-agnostic and can guard any HTTP library.
+  Only ``ssrf_safe_request`` binds to aiohttp; a caller using httpx or requests
+  should call ``validate_egress_url`` per hop with redirects disabled and, where
+  credentials are attached, a host allow-list.
+"""
+
+import asyncio
+import ipaddress
+import socket
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, List, Optional, Sequence
+from urllib.parse import urljoin, urlparse
+
+import aiohttp
+
+from app.core.config.static import SSRF_ALLOW_PRIVATE_EGRESS
+from app.core.logger import logger
+
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+# 301/302/303 turn the follow-up request into a bodyless GET; 307/308 are the
+# two that promise to preserve method and body.
+_REWRITE_TO_GET = frozenset({301, 302, 303})
+_BODY_KWARGS = frozenset({"json", "data", "content"})
+
+# Headers that may survive a credential-dropping redirect hop. Everything else a
+# caller supplied is withheld, because auth material is not confined to a known
+# set of names (``Authorization`` and ``Cookie`` but also ``X-Api-Key``,
+# ``X-Auth-Token``, provider-specific header credentials, ...). An allow-list
+# fails closed; a deny-list would leak any header we forgot to enumerate.
+_SAFE_REDIRECT_HEADERS = frozenset(
+    {"accept", "accept-encoding", "accept-language", "content-type", "user-agent"}
+)
+
+# Local-dev escape hatch: allow egress to private/loopback ranges. Off by
+# default so the secure posture does not depend on ENVIRONMENT being set right.
+_ALLOW_PRIVATE_EGRESS = SSRF_ALLOW_PRIVATE_EGRESS
+
+
+class SSRFError(ValueError):
+    """Raised when a URL fails SSRF egress validation."""
+
+
+class EgressResolutionError(SSRFError):
+    """The host could not be resolved — a transient failure, not a refusal.
+
+    Subclasses SSRFError so every caller that fails closed on egress problems
+    keeps doing so untouched. Callers with a retry loop should catch this
+    FIRST: a resolver hiccup (EAI_AGAIN, a restarting sidecar) is worth
+    retrying, whereas a blocked address never is, and collapsing the two makes
+    a short DNS outage look to the model like policy refused the request.
+    """
+
+
+def redact_url(url: str) -> str:
+    """Return ``url`` with its query string and userinfo removed.
+
+    A destination URL is not safe to log: tenants routinely authenticate a
+    receiver with a shared secret in the query string (``?token=…``) or with
+    HTTP Basic userinfo (``https://user:pass@host/…``). Scheme, host, port and
+    path are kept, which is what an operator actually needs to diagnose a
+    rejection. Never raises — this is used to build error messages and log
+    lines, and must not become a second failure mode.
+    """
+    try:
+        parts = urlparse(url)
+        netloc = parts.hostname or ""
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
+        if parts.username:
+            netloc = f"REDACTED@{netloc}"
+        redacted = parts._replace(netloc=netloc, query="", fragment="")
+        return redacted.geturl() + ("?REDACTED" if parts.query else "")
+    except Exception:  # pragma: no cover - defensive; logging must not break
+        return "<unparseable url>"
+
+
+def ip_block_reason(ip_str: str) -> Optional[str]:
+    """Return a human reason if the IP must not be reached, else None.
+
+    Blocks loopback, private (RFC1918 + IPv6 ULA), link-local (which includes
+    the 169.254.169.254 / fe80:: cloud-metadata addresses), multicast,
+    reserved, unspecified, and any address that is not globally routable.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        # Not an IP — caller resolves names before reaching here.
+        return f"not an IP address: {ip_str!r}"
+
+    if _ALLOW_PRIVATE_EGRESS:
+        return None
+
+    # IPv4-mapped IPv6 (e.g. ::ffff:169.254.169.254) — unwrap and re-check.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        return ip_block_reason(str(mapped))
+
+    if ip.is_loopback:
+        return f"loopback address {ip}"
+    if ip.is_link_local:
+        return f"link-local address {ip} (includes cloud metadata)"
+    if ip.is_private:
+        return f"private address {ip}"
+    if ip.is_multicast:
+        return f"multicast address {ip}"
+    if ip.is_reserved:
+        return f"reserved address {ip}"
+    if ip.is_unspecified:
+        return f"unspecified address {ip}"
+    if not ip.is_global:
+        return f"non-global address {ip}"
+    return None
+
+
+async def _resolve_host(hostname: str, port: int) -> List[str]:
+    """Resolve a hostname to all its IP addresses (off the event loop)."""
+
+    def _lookup() -> List[str]:
+        infos = socket.getaddrinfo(hostname, port or None, proto=socket.IPPROTO_TCP)
+        return [str(info[4][0]) for info in infos]
+
+    return await asyncio.to_thread(_lookup)
+
+
+async def validate_egress_url(url: str, *, allow_http: bool = False) -> List[str]:
+    """Validate a URL is safe for server-side egress; return its resolved IPs.
+
+    Args:
+        url: Fully resolved URL (no template placeholders left).
+        allow_http: Permit plain http:// (default: https only). Only set this
+            for providers that genuinely require http.
+
+    Returns:
+        The list of resolved IP strings (all validated as public).
+
+    Raises:
+        SSRFError: If the scheme is disallowed, the host is missing, resolution
+            fails, or any resolved address is non-public.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception as exc:  # pragma: no cover - urlparse rarely raises
+        raise SSRFError(f"Invalid URL: {exc}") from exc
+
+    scheme = (parsed.scheme or "").lower()
+    allowed_schemes = ("http", "https") if allow_http else ("https",)
+    if scheme not in allowed_schemes:
+        raise SSRFError(f"Disallowed URL scheme {scheme!r}; allowed: {allowed_schemes}")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise SSRFError("URL has no hostname")
+
+    # urlparse defers port parsing to attribute access, and a malformed or
+    # out-of-range port raises a bare ValueError there. SSRFError subclasses
+    # ValueError but not the reverse, so letting it escape would slip past every
+    # `except SSRFError` handler: the HTTP executor would log it as an
+    # unexpected error and RETRY it, and it would leave the MCP tool handler
+    # entirely. Convert it here, where the refusal belongs.
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise SSRFError(f"Invalid port in URL: {exc}") from exc
+
+    # If the host is already an IP literal, validate it directly. The block
+    # decision must live OUTSIDE this try/except: SSRFError subclasses
+    # ValueError, so raising it inside would be swallowed by `except ValueError`
+    # and the literal would fall through to resolution (a fragile, dead fast
+    # path). Only the literal-detection call may raise the ValueError we catch.
+    is_ip_literal = False
+    try:
+        ipaddress.ip_address(hostname)
+        is_ip_literal = True
+    except ValueError:
+        pass  # Not a literal — resolve it below.
+
+    if is_ip_literal:
+        reason = ip_block_reason(hostname)
+        if reason:
+            raise SSRFError(f"Blocked egress to {reason}")
+        return [hostname]
+
+    try:
+        resolved = await _resolve_host(hostname, port or 0)
+    except (socket.gaierror, OSError) as exc:
+        raise EgressResolutionError(
+            f"Could not resolve host {hostname!r}: {exc}"
+        ) from exc
+
+    if not resolved:
+        raise EgressResolutionError(f"Host {hostname!r} resolved to no addresses")
+
+    for ip_str in resolved:
+        reason = ip_block_reason(ip_str)
+        if reason:
+            logger.warning(f"SSRF egress blocked: {hostname!r} resolved to {reason}")
+            raise SSRFError(f"Blocked egress to {hostname!r} — resolves to {reason}")
+
+    return resolved
+
+
+def host_matches_allowlist(url: str, allowed_suffixes: List[str]) -> bool:
+    """True if the URL host equals or is a subdomain of an allow-listed suffix.
+
+    Used to gate attaching provider/tenant credentials to an outbound URL: never
+    send secrets to a host that is not on the allow-list.
+    """
+    try:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+    except Exception:
+        return False
+    if not host:
+        return False
+    for suffix in allowed_suffixes:
+        s = suffix.lower().lstrip(".").rstrip(".")
+        if not s:
+            continue
+        if host == s or host.endswith("." + s):
+            return True
+    return False
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _effective_port(parts: Any) -> Optional[int]:
+    """The port a URL actually reaches, filling in the scheme's default.
+
+    ``urlparse`` leaves ``port`` as None when the URL does not spell one out,
+    so a bare comparison treats ``https://h`` and ``https://h:8443`` as equal
+    on one side and unequal on the other depending on how they were written.
+    """
+    return parts.port if parts.port is not None else _DEFAULT_PORTS.get(parts.scheme)
+
+
+def is_same_origin(previous: str, target: str) -> bool:
+    """True if ``target`` is the same origin as ``previous``.
+
+    Same host and port, and the same scheme or the one scheme change that is
+    not a downgrade (http -> https, and only between their default ports).
+    Used to follow a redirect that stays on the destination the caller already
+    chose, while refusing one that moves the request somewhere they did not.
+    """
+    a, b = urlparse(previous), urlparse(target)
+    if (a.hostname or "").lower() != (b.hostname or "").lower():
+        return False
+    if a.scheme == b.scheme:
+        return _effective_port(a) == _effective_port(b)
+    # A scheme upgrade only counts as the same origin on the default ports;
+    # http://h:8080 -> https://h:9443 is a different service on one machine.
+    return (
+        a.scheme == "http"
+        and b.scheme == "https"
+        and _effective_port(a) == 80
+        and _effective_port(b) == 443
+    )
+
+
+def _without_credential_headers(kwargs: dict, target: str) -> dict:
+    """Return ``kwargs`` with caller headers reduced to :data:`_SAFE_REDIRECT_HEADERS`.
+
+    Used on redirect hops that leave the allow-list or change host, so header
+    credentials cannot follow the request to a host the caller never chose.
+    """
+    headers = kwargs.get("headers")
+    if not headers:
+        return kwargs
+    kept = {
+        k: v for k, v in dict(headers).items() if k.lower() in _SAFE_REDIRECT_HEADERS
+    }
+    dropped = sorted(set(dict(headers)) - set(kept))
+    if dropped:
+        logger.warning(
+            f"ssrf_safe_request: withholding {dropped} on cross-host redirect "
+            f"to {urlparse(target).hostname!r}"
+        )
+    return {**kwargs, "headers": kept}
+
+
+def _total_timeout_seconds(candidate: Any) -> Optional[float]:
+    """The ``total`` budget a caller asked for, or None if they asked for none.
+
+    Accepts what aiohttp accepts in a ``timeout=`` slot: a ClientTimeout, or a
+    bare number (older callers). Anything else — including ClientTimeout with
+    total=None, which means "no overall limit" — yields None.
+    """
+    if candidate is None:
+        return None
+    total = getattr(candidate, "total", candidate)
+    if isinstance(total, (int, float)) and total > 0:
+        return float(total)
+    return None
+
+
+def _with_total(
+    base: Optional[aiohttp.ClientTimeout], total: float
+) -> aiohttp.ClientTimeout:
+    """Copy ``base`` with a new ``total``, keeping every other field.
+
+    ClientTimeout is a dataclass in some aiohttp releases and an attrs class in
+    others, so neither ``dataclasses.replace`` nor ``attr.evolve`` is portable
+    across the versions this repo may resolve. Copying the fields the installed
+    version actually declares is.
+    """
+    if base is None:
+        return aiohttp.ClientTimeout(total=total)
+    carried = {
+        name: getattr(base, name)
+        for name in ("connect", "sock_read", "sock_connect", "ceil_threshold")
+        if hasattr(base, name)
+    }
+    return aiohttp.ClientTimeout(total=total, **carried)
+
+
+@asynccontextmanager
+async def ssrf_safe_request(
+    session: aiohttp.ClientSession,
+    method: str,
+    url: str,
+    *,
+    auth: Optional[aiohttp.BasicAuth] = None,
+    allowed_host_suffixes: Optional[Sequence[str]] = None,
+    allow_http: bool = False,
+    max_redirects: int = 3,
+    same_origin_only: bool = False,
+    **kwargs: Any,
+) -> AsyncIterator[aiohttp.ClientResponse]:
+    """Issue an aiohttp request with SSRF validation on every hop.
+
+    Redirects are followed manually so each hop is re-validated (aiohttp's own
+    redirect following would skip the check). Behaviour:
+
+    - Every hop (initial + each redirect target) is passed through
+      :func:`validate_egress_url`, so an internal/metadata target is blocked at
+      any point in the chain.
+    - When ``allowed_host_suffixes`` is given, the *initial* host must be on the
+      allow-list (hard gate). On a redirect that leaves the allow-list, ``auth``
+      is stripped so credentials never travel to a non-allow-listed host, but
+      the (credential-free) fetch may still follow to e.g. a public CDN.
+
+    - ``same_origin_only`` restricts redirects to the same host (allowing only
+      an http -> https scheme upgrade). For a request whose BODY is the point —
+      a signed webhook — this is what makes following a redirect safe at all:
+      the payload can reach the destination the caller chose, and nowhere else.
+    - Redirect method/body semantics follow the browser rule rather than
+      replaying the original request: 301/302/303 rewrite a non-GET/HEAD method
+      to GET and drop the body, and only 307/308 preserve both. Replaying a POST
+      body onto a redirect target is how a signed payload ends up somewhere the
+      caller never addressed.
+    - Exhausting ``max_redirects`` raises, rather than handing back the final
+      3xx as though it were the answer.
+
+    The yielded response must be consumed inside the ``async with`` block.
+    """
+    # This function always drives redirects itself, so a caller-supplied
+    # allow_redirects would both collide with the explicit argument below
+    # (TypeError: multiple values) and ask for something it cannot have.
+    if kwargs.pop("allow_redirects", None) is not None:
+        logger.warning(
+            "ssrf_safe_request: ignoring caller-supplied allow_redirects; "
+            "redirects are followed manually so every hop can be revalidated"
+        )
+
+    # ONE deadline for the whole chain, not one per hop.
+    #
+    # aiohttp's own redirect following happens inside a single session.request()
+    # call, so ``ClientTimeout(total=N)`` covers the entire journey — that is
+    # what ``total`` means. Following redirects by hand turns one call into up
+    # to ``max_redirects + 1`` calls, and passing the caller's timeout into each
+    # of them hands out a fresh full budget per hop: a caller asking for 10s
+    # could wait 40s across four hops, with a retry loop on top multiplying it
+    # again. The caller cannot even predict the ceiling, because the number of
+    # hops is the remote server's choice.
+    #
+    # So: fix a deadline once, and give every hop only what is left. A caller
+    # who supplied no timeout falls back to the session's own default (aiohttp
+    # ships total=300s), which is the budget the recording downloads run under.
+    caller_timeout = kwargs.get("timeout")
+    total_budget = _total_timeout_seconds(caller_timeout)
+    if total_budget is None:
+        total_budget = _total_timeout_seconds(getattr(session, "timeout", None))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + total_budget if total_budget is not None else None
+
+    current = url
+    cur_method = method
+    credentials_dropped = False
+    for hop in range(max_redirects + 1):
+        await validate_egress_url(current, allow_http=allow_http)
+
+        send_auth = auth
+        drop_credentials = False
+        if allowed_host_suffixes is not None and not host_matches_allowlist(
+            current, list(allowed_host_suffixes)
+        ):
+            if hop == 0:
+                raise SSRFError(
+                    "Refusing request: initial host not on allow-list: "
+                    f"{redact_url(current)}"
+                )
+            send_auth = None  # off-allow-list redirect target — never send creds
+            drop_credentials = True
+
+        # Credentials may only reach the destination the CALLER chose.
+        #
+        # Comparing against the PREVIOUS hop is not enough. On a chain
+        # A -> B -> B the hop that leaves A correctly drops them, and the next
+        # hop then compares B against B, sees no change, and re-attaches the
+        # caller's auth and headers to B — a host they never named. An
+        # attacker-controlled host only has to redirect once more, even to a
+        # relative path on itself. So the comparison is against the ORIGINAL
+        # url, and once dropped the decision latches for the rest of the chain.
+        # An http -> https upgrade on the same host is NOT a departure: it is
+        # the same server on safer transport, and treating it as one would
+        # strip the reporting webhook's `checksum` header (not in
+        # _SAFE_REDIRECT_HEADERS), delivering unsigned payloads to every tenant
+        # whose endpoint upgrades.
+        if not credentials_dropped and not is_same_origin(url, current):
+            credentials_dropped = True
+
+        if credentials_dropped:
+            send_auth = None
+            drop_credentials = True
+
+        # Header-borne credentials must be withheld on the same hops that drop
+        # ``auth``; otherwise a bearer token or session cookie passed via
+        # ``headers`` still reaches an attacker-controlled redirect target.
+        send_kwargs = kwargs
+        if drop_credentials:
+            send_kwargs = _without_credential_headers(kwargs, current)
+
+        # The BODY is credential-bearing too. 301/302/303 drop it by the spec
+        # rule below, but 307/308 preserve it — so without this a 307 replays
+        # the caller's payload (lead fields, and anything a template carries in
+        # the body rather than a header) to a host they never addressed, which
+        # is the thing this module's docstring says must not happen.
+        if credentials_dropped:
+            send_kwargs = {
+                k: v for k, v in send_kwargs.items() if k not in _BODY_KWARGS
+            }
+
+        if deadline is not None:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                # Budget gone. Raise the same exception a single overrunning
+                # request would, so callers keep their existing handling: a
+                # timeout is a transient failure worth retrying, unlike an
+                # SSRFError, which must abort.
+                raise asyncio.TimeoutError(
+                    f"Redirect chain exceeded the {total_budget:g}s budget "
+                    f"after {hop} hop(s) fetching {redact_url(url)}"
+                )
+            # Keep every other field the caller set (connect, sock_read, ...);
+            # only the overall budget shrinks as the chain progresses.
+            base = (
+                caller_timeout
+                if isinstance(caller_timeout, aiohttp.ClientTimeout)
+                else None
+            )
+            send_kwargs = dict(send_kwargs)
+            send_kwargs["timeout"] = _with_total(base, remaining)
+
+        response = await session.request(
+            cur_method, current, auth=send_auth, allow_redirects=False, **send_kwargs
+        )
+        location = response.headers.get("Location")
+        if response.status in _REDIRECT_STATUSES and location:
+            if hop >= max_redirects:
+                response.release()
+                raise SSRFError(
+                    f"Too many redirects while fetching {redact_url(url)!r} "
+                    f"(limit {max_redirects})"
+                )
+            response.release()
+            target = urljoin(current, location)
+            if same_origin_only and not is_same_origin(current, target):
+                raise SSRFError(
+                    f"Refusing to follow an off-origin redirect: "
+                    f"{redact_url(current)} -> {redact_url(target)}"
+                )
+            current = target
+            if response.status in _REWRITE_TO_GET and cur_method.upper() not in (
+                "GET",
+                "HEAD",
+            ):
+                # 301/302/303: the redirected request is a GET with no body.
+                # Repeating the original method and payload would re-POST it to
+                # a host the caller never addressed.
+                cur_method = "GET"
+                kwargs = {k: v for k, v in kwargs.items() if k not in _BODY_KWARGS}
+            continue
+
+        try:
+            yield response
+        finally:
+            response.release()
+        return
+
+    raise SSRFError(f"Too many redirects while fetching {url!r}")
