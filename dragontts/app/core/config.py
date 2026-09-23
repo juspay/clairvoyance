@@ -238,6 +238,24 @@ class Settings(BaseSettings):
     # ~+100 ms per clip) — safer for data, audibly softer edges.
     elevenlabs_hygiene_content_factor: float = 0.15
     elevenlabs_hygiene_content_abs_floor: float = 200.0
+    # ---- eleven_v3_conversational_clean_tempo_v2 only (app/audio/join.py) ----
+    # v2 = the _clean_tempo chain tuned so separately generated / cached
+    # sentences join like one speaker, each ending on a 90 ms release
+    # (app/audio/level.py soften_end). _clean_tempo itself is unchanged; a
+    # template opts in by model id, and v2 has its own cache entries.
+    # Tail kept after each sentence: 240 ms -> ~195 ms between sentences at
+    # tempo 1.09 with the end release fading the tail out (the spacing chosen
+    # by listening). _clean_tempo's 120 ms left ~85 ms: a rushed, broken join.
+    elevenlabs_v2_hygiene_tail_ms: int = 240
+    # One loudness per sentence (±6 dB, never clips; brief spikes on short
+    # fillers pressed down locally, ≤6 dB). Sentence-to-sentence jumps
+    # measured 2.46 -> 0.47 dB median, 6.42 -> 1.27 dB p90. -16 dBFS because
+    # v3 clips carry ~13-15 dB of peak over their speech level.
+    elevenlabs_v2_level_target_dbfs: float = -16.0
+    elevenlabs_v2_level_max_gain_db: float = 6.0
+    # Per-voice timbre (spectral tilt) target {"<voice_id>": dB}; off unless
+    # listed (measured effect small: most tilt difference is the words).
+    elevenlabs_v2_timbre_targets_db: dict[str, float] = {}
     # The BASE eleven_v3_conversational model speaks ElevenLabs' own pcm_8000
     # directly: tempo 1 = served unaltered, tempo != 1 = atempo only (no
     # hygiene, no resample). When False, the base model instead runs the

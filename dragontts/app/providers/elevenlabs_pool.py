@@ -87,13 +87,20 @@ def is_elevenlabs_v3_conversational(model_id: str | None) -> bool:
 #                   at synth time and the cache stores that end result.
 #   _clean_tempo  : full-band native rate + hygiene + end release + atempo.
 _V3CONV = "eleven_v3_conversational"
-_V3CONV_SUFFIXES = ("_clean_tempo", "_tempo")  # longest first for stripping
+_V3CONV_SUFFIXES = (
+    # _clean_tempo_v2: _clean_tempo + end release, longer sentence tail and one
+    # loudness per sentence, so cached sentences join like one speaker
+    # (app/audio/join.py, app/audio/level.py).
+    "_clean_tempo_v2",
+    "_clean_tempo",
+    "_tempo",
+)  # longest first for stripping
 
 
 def v3_conversational_variant(model_id: str | None) -> str | None:
     """Pipeline variant of a v3-conversational model id: "base", "tempo",
-    "clean_tempo" — or None when the model is not v3-conversational at all
-    (plain eleven_v3 / flash / v2)."""
+    "clean_tempo", "clean_tempo_v2" — or None when the model is not
+    v3-conversational at all (plain eleven_v3 / flash / v2)."""
     m = (model_id or "").strip().lower()
     if not m.startswith(_V3CONV):
         return None

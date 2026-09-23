@@ -42,6 +42,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
+from app.audio import join
 from app.audio.atempo import (
     ATEMPO_MAX,
     ATEMPO_MIN,
@@ -490,14 +491,18 @@ class ElevenLabsProvider(BaseTTSProvider):
         # path is knob-disabled (then it runs the full-band chain instead).
         # base and _tempo at tempo != 1 stay untouched except for atempo.
         if settings.elevenlabs_utterance_hygiene_enabled and (
-            variant in ("clean_tempo", None)
+            variant in ("clean_tempo", "clean_tempo_v2", None)
             or (variant == "base" and sample_rate != 8000)
         ):
             cleaned = clean_utterance(
                 audio,
                 sample_rate,
                 lead_ms=settings.elevenlabs_hygiene_lead_ms,
-                tail_ms=settings.elevenlabs_hygiene_tail_ms,
+                tail_ms=(
+                    settings.elevenlabs_v2_hygiene_tail_ms
+                    if variant == "clean_tempo_v2"
+                    else settings.elevenlabs_hygiene_tail_ms
+                ),
                 max_pause_ms=settings.elevenlabs_hygiene_max_pause_ms,
                 gate_floor=settings.elevenlabs_hygiene_gate_floor,
                 content_factor=settings.elevenlabs_hygiene_content_factor,
@@ -510,10 +515,12 @@ class ElevenLabsProvider(BaseTTSProvider):
                     f"pads, capped sub-floor pauses, gated noise)"
                 )
             audio = cleaned
-        if variant == "clean_tempo":
+        if variant in ("clean_tempo", "clean_tempo_v2"):
             # Let the final syllable go instead of stopping dead (not in the
             # cache key: clear the cache for cached sentences to pick it up).
             audio = soften_end(audio, sample_rate)
+        if variant == "clean_tempo_v2":
+            audio = self._v2_join_chain(audio, sample_rate, voice_id)
         # v3_conversational only: tempo 1.0 never spawns ffmpeg. On a stretch
         # failure the unstretched clip is served AND cached under the
         # tempo-keyed entry — consistent while ffmpeg is broken, and the error
@@ -538,6 +545,22 @@ class ElevenLabsProvider(BaseTTSProvider):
             container="raw",
             encoding="pcm_s16le",
             sample_rate=sample_rate,
+        )
+
+    @staticmethod
+    def _v2_join_chain(audio: bytes, sample_rate: int, voice_id: str) -> bytes:
+        """_clean_tempo_v2 only: make separately generated / cached sentences
+        join like one speaker — an optional per-voice timbre match and one
+        loudness per sentence. Static per clip (no pitch or timing edits);
+        runs after the end release, before atempo and caching."""
+        timbre_target = settings.elevenlabs_v2_timbre_targets_db.get(voice_id)
+        if timbre_target is not None:
+            audio = join.match_tilt(audio, sample_rate, target_db=timbre_target)
+        return join.even_level(
+            audio,
+            sample_rate,
+            target_dbfs=settings.elevenlabs_v2_level_target_dbfs,
+            max_gain_db=settings.elevenlabs_v2_level_max_gain_db,
         )
 
     async def stream_synth(
