@@ -198,7 +198,9 @@ class Settings(BaseSettings):
     # Max server-silence gap (seconds) after audio starts that ends an ElevenLabs
     # WS utterance (ElevenLabs delays is_final ~20s). Lower = faster stream
     # close/turn-end; raise if long utterances ever truncate at a >N s pause.
-    elevenlabs_stream_idle_timeout: float = 0.8
+    # 2.0 (was 0.8): v3 pauses 0.33-0.6 s mid-clip, and 0.8 cut greetings short
+    # ("…Kammari Meena से"). Env: ELEVENLABS_STREAM_IDLE_TIMEOUT.
+    elevenlabs_stream_idle_timeout: float = 2.0
     # Warm ElevenLabs Text-to-Dialogue sockets for eleven_v3 models (v3 exists
     # ONLY there — the classic text-to-speech endpoint 404s for it). Sized
     # separately from the classic pool: each TTD socket carries a permanent

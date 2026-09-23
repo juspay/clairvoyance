@@ -225,3 +225,37 @@ async def test_off_grid_verdict_reaches_the_warning(logs):
         await pool.aclose()
 
     assert "OFF-GRID" in _warnings(logs)[0]
+
+
+# -- idle timeout: 2 s (was 0.8 s, which cut v3 greetings mid-sentence) -----
+
+
+def test_idle_timeout_defaults_to_2s():
+    from app.core.config import Settings
+
+    assert Settings(_env_file=None).elevenlabs_stream_idle_timeout == 2.0
+
+
+def test_idle_timeout_is_set_from_env(monkeypatch):
+    from app.core.config import Settings
+
+    monkeypatch.setenv("ELEVENLABS_STREAM_IDLE_TIMEOUT", "1.5")
+    assert Settings(_env_file=None).elevenlabs_stream_idle_timeout == 1.5
+
+
+@pytest.mark.parametrize(
+    "model, rate",
+    [
+        (V3_MODEL, 8000),  # eleven_v3: Text-to-Dialogue socket
+        ("eleven_v3_conversational_clean_tempo", 8000),  # Luna's model
+        ("eleven_flash_v2_5", None),  # classic text-to-speech socket
+    ],
+)
+def test_every_elevenlabs_pool_uses_the_setting(monkeypatch, model, rate):
+    from app.core.config import settings
+    from app.providers.elevenlabs import ElevenLabsProvider
+
+    monkeypatch.setattr(settings, "elevenlabs_stream_idle_timeout", 1.25)
+    provider = ElevenLabsProvider(api_key="k", base_url=BASE)
+    pool = provider._get_pool(VOICE, model, False, "hi", rate)
+    assert pool is not None and pool._idle_timeout == 1.25

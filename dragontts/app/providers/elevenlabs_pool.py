@@ -85,7 +85,7 @@ def is_elevenlabs_v3_conversational(model_id: str | None) -> bool:
 #   _tempo        : full-band native rate + atempo, no hygiene; the custom
 #                   anti-aliased downsample to the caller's rate happens once
 #                   at synth time and the cache stores that end result.
-#   _clean_tempo  : full-band native rate + hygiene + atempo.
+#   _clean_tempo  : full-band native rate + hygiene + end release + atempo.
 _V3CONV = "eleven_v3_conversational"
 _V3CONV_SUFFIXES = ("_clean_tempo", "_tempo")  # longest first for stripping
 
