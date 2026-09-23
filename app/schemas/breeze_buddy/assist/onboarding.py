@@ -66,6 +66,26 @@ class AssistOnboardingStreamRequest(BaseModel):
     )
     allowed_origins: List[str] = Field(..., max_length=20)
     provider: Literal["google"] = "google"
+    site_fields: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description=(
+            "The vertical's own editable fields, already read and confirmed, "
+            "from ``POST /assist/research``. Supplied means the agent is built "
+            "from exactly these — the same fields the merchant edits afterwards "
+            "in the template studio."
+        ),
+    )
+    website_context: Optional[str] = Field(
+        None,
+        max_length=60000,
+        description=(
+            "Site context already read and confirmed by the caller, from "
+            "``POST /assist/research``. Supplied means the site is NOT read "
+            "again: a merchant who approved one reading must get an agent "
+            "built from that reading and not from a second one taken a "
+            "minute later. Omitted means read it now."
+        ),
+    )
     bot_brand_name: Optional[str] = Field(None, min_length=1, max_length=255)
     is_active: bool = True
     platform: Optional[OnboardingPlatform] = Field(

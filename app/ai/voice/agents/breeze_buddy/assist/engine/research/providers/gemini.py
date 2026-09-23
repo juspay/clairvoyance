@@ -81,18 +81,37 @@ async def scrape_website_with_gemini(
     config = GenerateContentConfig(**generation_params)
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    response = await asyncio.wait_for(
-        client.aio.models.generate_content(
-            model=model,
-            contents=_build_contents(normalized_prompt, normalized_url),
-            config=config,
-        ),
-        timeout=timeout_seconds,
-    )
+    contents = _build_contents(normalized_prompt, normalized_url)
 
-    generated_text = (getattr(response, "text", "") or "").strip()
+    # Ask twice before giving up. An empty reply here is not a refusal and not
+    # an error — measured on two identical runs against one live store, the
+    # same model answered with nothing and then with 619 characters. Failing an
+    # entire onboarding on one coin toss is the wrong trade, and a retry is one
+    # call against a stage that already costs seconds.
+    generated_text = ""
+    response = None
+    for attempt in (1, 2):
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(
+                model=model, contents=contents, config=config
+            ),
+            timeout=timeout_seconds,
+        )
+        generated_text = (getattr(response, "text", "") or "").strip()
+        if generated_text:
+            break
+        logger.warning(
+            "Gemini returned nothing for a website read",
+            model=model,
+            url=normalized_url,
+            attempt=attempt,
+            finish_reason=str(_finish_reason(response)),
+            **_token_counts(response),
+        )
     if not generated_text:
-        raise WebsiteScrapingUpstreamError("Gemini returned an empty response")
+        raise WebsiteScrapingUpstreamError(
+            f"Gemini returned an empty response twice (model={model})"
+        )
 
     url_context_metadata = _extract_url_context_metadata(response)
     logger.info(
@@ -188,6 +207,25 @@ def _extract_url_context_metadata(response: Any) -> List[Dict[str, str]]:
             }
         )
     return retrieved
+
+
+def _finish_reason(response: Any) -> Any:
+    """Why the model stopped, when it stopped without saying anything."""
+    candidates = getattr(response, "candidates", None) or []
+    return getattr(candidates[0], "finish_reason", None) if candidates else None
+
+
+def _token_counts(response: Any) -> Dict[str, Any]:
+    """What it spent. A prompt count no larger than the prompt itself means the
+    URL was never fetched, which is a different failure from a refusal and is
+    invisible without this."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return {}
+    return {
+        "prompt_tokens": getattr(usage, "prompt_token_count", None),
+        "output_tokens": getattr(usage, "candidates_token_count", None),
+    }
 
 
 def _hash_text(value: str) -> str:

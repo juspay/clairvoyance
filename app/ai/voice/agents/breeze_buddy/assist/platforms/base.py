@@ -10,10 +10,20 @@ needs, how a host app maps to a tenant, how a blueprint must look.
 
 from __future__ import annotations
 
-from typing import FrozenSet, List, Mapping, Optional, Protocol, Sequence, Tuple
+from dataclasses import dataclass
+from typing import (
+    FrozenSet,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+)
 from urllib.parse import urlsplit
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
+    BrandLook,
     InstallMethod,
     MirrorPolicy,
     ResearchDelta,
@@ -24,6 +34,23 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
     ToolBinding,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import LegacyMarkers
+
+
+@dataclass(frozen=True)
+class KnownDocument:
+    """A document a platform already knows the address, and often the text, of.
+
+    ``body`` empty means the platform named the document but would not produce
+    it — the researcher fetches ``url`` itself. ``display_url`` is the same
+    document on the merchant's own domain, for showing a person an address
+    they recognise rather than a vendor's host.
+    """
+
+    kind: str
+    title: str
+    url: str
+    body: Optional[str] = None
+    display_url: Optional[str] = None
 
 
 class PlatformAdapter(Protocol):
@@ -48,6 +75,18 @@ class PlatformAdapter(Protocol):
     async def research(
         self, profile: SiteProfile, budget_seconds: float
     ) -> ResearchDelta: ...
+
+    async def brand(self, profile: SiteProfile) -> Optional[BrandLook]: ...
+
+    def stock_colors(self) -> Tuple[str, ...]: ...
+
+    async def known_documents(
+        self, profile: SiteProfile
+    ) -> Tuple[KnownDocument, ...]: ...
+
+    def slot_profile(self) -> str: ...
+
+    def known_fields(self, profile: SiteProfile) -> Mapping[str, str]: ...
 
     def legacy_section_markers(self) -> LegacyMarkers: ...
 
@@ -133,6 +172,56 @@ class GenericAdapter:
     ) -> ResearchDelta:
         return ResearchDelta()
 
+    def slot_profile(self) -> str:
+        """Which set of sections an assistant for this kind of site is built from.
+
+        A site nobody recognises gets the neutral set, which assumes only that
+        a business has customers. An adapter that knows better says so, and the
+        name is resolved outside the engine — the engine must not know that a
+        vertical exists, let alone which one this is.
+        """
+        return "generic"
+
+    def known_fields(self, profile: SiteProfile) -> Mapping[str, str]:
+        """Field values the platform knows without anyone reading anything.
+
+        A hosted storefront's basket lives at a fixed path, so hoping a
+        researcher stumbles across it is worse than asking the adapter that
+        already knows. Only ever fills a field research left empty.
+        """
+        return {}
+
+    async def known_documents(
+        self, profile: SiteProfile
+    ) -> Tuple["KnownDocument", ...]:
+        """Documents this platform can hand over without being asked twice.
+
+        A shortcut, never a substitute. Where a platform publishes a store's
+        policies through an API, one call replaces a search — but measured on
+        three live stores, one of them returned a single policy in full and
+        three empty ones. So this contributes what it has and the researcher
+        reads the rest; a caller that treated an answer here as the answer
+        would ship those three blank and never notice.
+        """
+        return ()
+
+    async def brand(self, profile: SiteProfile) -> Optional[BrandLook]:
+        """The platform's own record of how this merchant looks.
+
+        Authoritative where a platform keeps one, because the merchant set it
+        themselves. A plain website keeps none, so the engine reads the page.
+        """
+        return None
+
+    def stock_colors(self) -> Tuple[str, ...]:
+        """Colours belonging to the platform rather than to any merchant.
+
+        A stock theme's palette and a vendor's own badge both read as confident
+        brand colours to anything measuring pixels or stylesheets. Naming them
+        here is how the engine tells a merchant's identity from its host's.
+        """
+        return ()
+
     def legacy_section_markers(self) -> LegacyMarkers:
         return {}
 
@@ -167,4 +256,4 @@ class GenericAdapter:
         return "snippet"
 
 
-__all__ = ["GenericAdapter", "PlatformAdapter"]
+__all__ = ["GenericAdapter", "KnownDocument", "PlatformAdapter"]

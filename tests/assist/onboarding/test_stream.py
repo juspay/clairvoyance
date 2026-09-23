@@ -180,7 +180,7 @@ def test_first_onboarding_creates_template_and_widget(monkeypatch) -> None:
     monkeypatch.setattr(service, "get_template_in_scope", template_in_scope)
     monkeypatch.setattr(
         service,
-        "scrape_website",
+        "_read_site",
         AsyncMock(
             return_value=WebsiteScrapingResult(
                 text="Sells premium sneakers.",
@@ -256,7 +256,7 @@ def test_existing_widget_updates_its_referenced_template(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         service,
-        "scrape_website",
+        "_read_site",
         AsyncMock(
             return_value=WebsiteScrapingResult(
                 text="Fresh context",
@@ -321,7 +321,7 @@ def test_orphan_template_is_recovered_when_widget_is_missing(monkeypatch) -> Non
     monkeypatch.setattr(service, "get_template_in_scope", template_in_scope)
     monkeypatch.setattr(
         service,
-        "scrape_website",
+        "_read_site",
         AsyncMock(
             return_value=WebsiteScrapingResult(
                 text="Fresh context",

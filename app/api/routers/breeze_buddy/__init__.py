@@ -10,6 +10,12 @@ from app.api.routers.breeze_buddy.analytics import router as analytics_router
 from app.api.routers.breeze_buddy.assist.blueprint import (
     router as assist_blueprint_router,
 )
+from app.api.routers.breeze_buddy.assist.brand import (
+    router as assist_brand_router,
+)
+from app.api.routers.breeze_buddy.assist.fields import (
+    router as assist_fields_router,
+)
 from app.api.routers.breeze_buddy.assist.onboarding import (
     router as assist_onboarding_router,
 )
@@ -125,6 +131,9 @@ router.include_router(assist_onboarding_router, prefix="", tags=["assist-onboard
 router.include_router(assist_blueprint_router, prefix="", tags=["assist-onboarding"])
 # Recognise a site before anything is built for it.
 router.include_router(assist_probe_router, prefix="", tags=["assist-onboarding"])
+# How that site looks, so the agent can look like it.
+router.include_router(assist_brand_router, prefix="", tags=["assist-onboarding"])
+router.include_router(assist_fields_router, prefix="", tags=["assist-onboarding"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])

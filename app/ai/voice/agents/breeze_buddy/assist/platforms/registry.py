@@ -7,7 +7,7 @@ they never import an adapter module, and they never name a platform.
 
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, Iterable, Optional, Sequence, Tuple
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import Signal
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import LegacyMarkers
@@ -62,6 +62,27 @@ def probe_markers() -> Tuple[str, ...]:
     """Every inline-script substring some platform treats as its fingerprint."""
     markers = [marker for adapter in PLATFORMS for marker in adapter.probe_markers()]
     return tuple(dict.fromkeys(markers))
+
+
+def stock_colors() -> Tuple[str, ...]:
+    """Every colour any platform claims as its own rather than a merchant's."""
+    values = [value for adapter in PLATFORMS for value in adapter.stock_colors()]
+    return tuple(dict.fromkeys(value.lower() for value in values))
+
+
+def for_template(server_names: Iterable[str]) -> PlatformAdapter:
+    """Which adapter built this agent, from the MCP servers it carries.
+
+    A built template no longer remembers the URL it came from, and re-probing
+    a merchant's site to answer "which platform is this" would spend a network
+    round trip on a question the template already answers: the servers bound
+    to it belong to exactly one adapter.
+    """
+    wanted = {str(name) for name in server_names}
+    for adapter in PLATFORMS:
+        if wanted & set(adapter.mcp_server_names()):
+            return adapter
+    return generic
 
 
 def score_all(signals: Sequence[Signal]) -> Dict[str, float]:
@@ -122,6 +143,7 @@ __all__ = [
     "classify",
     "for_host_app",
     "for_request",
+    "for_template",
     "foreign_mcp_server_names",
     "foreign_payload_keys",
     "foreign_tool_config_keys",
@@ -130,4 +152,5 @@ __all__ = [
     "probe_markers",
     "resolve",
     "score_all",
+    "stock_colors",
 ]

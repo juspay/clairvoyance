@@ -39,9 +39,37 @@ def shared_core(prompt: str, skeleton: SkeletonSpec) -> str:
     return op
 
 
+def replace_vertical_section(prompt: str, skeleton: SkeletonSpec, section: str) -> str:
+    """Swap the merchant-specific help section for ``section``.
+
+    The blueprint ships one written for whatever store it was cut from, and
+    the heading is a merchant field — a shoe shop's deciding question is not a
+    rug shop's. Located exactly as ``shared_core`` locates it for hashing, so
+    the section the fleet table normalises away is the section replaced here.
+
+    Returns the prompt untouched when the skeleton declares no such section or
+    the blueprint does not contain one: a missing section is a blueprint that
+    never had merchant help, not an error.
+    """
+    if not skeleton.vertical_section_end or not section.strip():
+        return prompt
+    end = prompt.find(skeleton.vertical_section_end)
+    if end < 0:
+        return prompt
+    start = prompt.rfind("\n### ", 0, end)
+    if start < 0:
+        return prompt
+    return prompt[: start + 1] + section.rstrip("\n") + "\n" + prompt[end:]
+
+
 def core_hash(prompt: str, skeleton: SkeletonSpec) -> str:
     """Short, stable fingerprint of ``shared_core`` (what the fleet table shows)."""
     return hashlib.sha256(shared_core(prompt, skeleton).encode()).hexdigest()[:12]
 
 
-__all__ = ["core_hash", "shared_core", "split_prompt"]
+__all__ = [
+    "core_hash",
+    "replace_vertical_section",
+    "shared_core",
+    "split_prompt",
+]

@@ -598,8 +598,29 @@ async def GEMINI_TTS_MODEL() -> str:
 
 
 async def GEMINI_SCRAPER_MODEL() -> str:
-    """Returns the Gemini model used for website scraping."""
-    return await get_config("GEMINI_SCRAPER_MODEL", "gemini-2.5-flash-lite", str)
+    """The model used to read a website into context.
+
+    Not a lite model, and not by preference — measured 2026-09-10 against a
+    live store with url_context and google_search enabled. On the 2.5 models
+    the prompt stayed at 32 tokens, the size of the prompt alone: the URL was
+    never actually fetched, so the "website context" was written from the
+    model's own knowledge and search results rather than from the merchant's
+    page. Only 3.6-flash pulled the page in (359 prompt tokens). The lite
+    model also returned an empty response outright on one of two identical
+    runs, which failed a whole onboarding.
+    """
+    return await get_config("GEMINI_SCRAPER_MODEL", "gemini-3.6-flash", str)
+
+
+async def GEMINI_RESEARCH_MODEL() -> str:
+    """The model that drives the assist research loop.
+
+    Deliberately not the scraper's model. The scraper answers one question in
+    one call, which a lite model does well; the researcher has to look at eight
+    identical failures and decide to change tactic, which is the judgement a
+    lite model does worst.
+    """
+    return await get_config("GEMINI_RESEARCH_MODEL", "gemini-3.6-flash", str)
 
 
 async def BB_VOICE_PROVIDER_DEFAULTS(provider: str) -> dict:

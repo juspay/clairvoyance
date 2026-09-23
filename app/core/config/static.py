@@ -26,6 +26,10 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# Brand-look extraction for Assist onboarding (renders a merchant's page and
+# reads its computed styles). Optional: without it the engine falls back to the
+# platform's own brand block and then to quantising the logo.
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
 
 # Pipecat Agent Configuration
 DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")

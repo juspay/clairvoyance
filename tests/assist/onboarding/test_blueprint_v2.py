@@ -317,7 +317,7 @@ def _wire_first_onboarding(monkeypatch, scrape) -> None:
         service, "get_widget_config_by_reseller_merchant", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(service, "get_template_in_scope", template_in_scope)
-    monkeypatch.setattr(service, "scrape_website", scrape)
+    monkeypatch.setattr(service, "_read_site", scrape)
     monkeypatch.setattr(service, "create_template", create_template_mock)
     monkeypatch.setattr(service, "create_widget_config", create_widget_mock)
     monkeypatch.setattr(service, "invalidate_template", AsyncMock())
