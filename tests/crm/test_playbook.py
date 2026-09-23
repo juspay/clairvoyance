@@ -618,11 +618,11 @@ def test_a_fact_says_how_it_reads_once_for_the_whole_plan() -> None:
     facts = {"current_limit": "50000", "pnr": "7A"}
     assert (
         playbook._fill(book.lines["a"], facts, "a", book.transform)
-        == "credit line 50 thousand rupees tak approved hai"
+        == "credit line fifty thousand rupees tak approved hai"
     )
     assert (
         playbook._fill(book.lines["b"], facts, "b", book.transform)
-        == "limit 50 thousand rupees hai, PNR seven ए"
+        == "limit fifty thousand rupees hai, PNR seven ए"
     )
 
 

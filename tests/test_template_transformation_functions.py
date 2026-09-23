@@ -103,12 +103,26 @@ def test_to_number_is_registered() -> None:
     assert TEMPLATE_FUNCTION_REGISTRY["to_number"] is to_number
 
 
+@pytest.mark.parametrize(
+    ("amount", "spoken"),
+    [
+        (11000, "eleven thousand rupees"),
+        (22500, "twenty two thousand five hundred rupees"),
+        (125000, "one lakh twenty five thousand rupees"),
+        (10000000, "one crore rupees"),
+        (0, "zero rupees"),
+    ],
+)
+def test_indian_number_to_speech_speaks_words(amount: int, spoken: str) -> None:
+    assert TEMPLATE_FUNCTION_REGISTRY["indian_number_to_speech"](amount) == spoken
+
+
 def test_to_number_chains_with_indian_number_to_speech() -> None:
     value = "960.00"
     for function_name in ("to_number", "indian_number_to_speech"):
         value = TEMPLATE_FUNCTION_REGISTRY[function_name](value)
 
-    assert value == "9 hundred 60 rupees"
+    assert value == "nine hundred and sixty rupees"
 
 
 def test_scale_by_exponent_output_chains_to_speech() -> None:
@@ -129,4 +143,4 @@ def test_scale_by_exponent_output_chains_to_speech() -> None:
     assert value["amount"] == "1,585.90"
     assert numeric_amount == 1585.9
     assert type(numeric_amount) is float
-    assert spoken_amount == "1 thousand 5 hundred 86 rupees"
+    assert spoken_amount == "one thousand five hundred and eighty six rupees"

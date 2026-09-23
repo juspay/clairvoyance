@@ -2,31 +2,18 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from num2words import num2words
+
 
 def indian_number_to_speech(number: int | float) -> str:
+    """Rupee amount in spoken Indian-English words, lakh/crore grouping:
+    22500 -> "twenty two thousand five hundred rupees". num2words' commas
+    and hyphens are dropped so TTS reads one even phrase."""
     number = round(number)
     if number <= 0:
-        return "0 rupees"
-    parts = []
-    crore = number // 10_000_000
-    number %= 10_000_000
-    lakh = number // 100_000
-    number %= 100_000
-    thousand = number // 1_000
-    number %= 1_000
-    hundred = number // 100
-    number %= 100
-    if crore:
-        parts.append(f"{crore} crore")
-    if lakh:
-        parts.append(f"{lakh} lakh")
-    if thousand:
-        parts.append(f"{thousand} thousand")
-    if hundred:
-        parts.append(f"{hundred} hundred")
-    if number:
-        parts.append(str(number))
-    return " ".join(parts) + " rupees"
+        return "zero rupees"
+    words = num2words(number, lang="en_IN")
+    return " ".join(words.replace(",", " ").replace("-", " ").split()) + " rupees"
 
 
 def string_to_lowercase(value: str) -> str:
