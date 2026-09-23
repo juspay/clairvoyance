@@ -199,7 +199,7 @@ async def _pick_complement_queries(
     # `.aio` (the service union also covers Anthropic/OpenAI engines —
     # those templates simply skip the upsell rather than growing three
     # provider one-shot paths for a decoration).
-    client: Any = service._client
+    client: Any = getattr(service, "_client", None)
     if not isinstance(model, str) or not hasattr(client, "aio"):
         return []
 

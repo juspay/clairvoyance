@@ -12,6 +12,7 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.anthropic.llm import AnthropicLLMService
+from pipecat.services.aws.llm import AWSBedrockLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
@@ -41,6 +42,10 @@ async def call_llm(
         )
     if isinstance(llm_service, GoogleLLMService):
         return await _call_google(
+            llm_service, transcript_text, system_prompt, tools, observer_name
+        )
+    if isinstance(llm_service, AWSBedrockLLMService):
+        return await _call_bedrock(
             llm_service, transcript_text, system_prompt, tools, observer_name
         )
     raise TypeError(f"Unsupported LLM service type: {type(llm_service).__name__}")
@@ -159,4 +164,47 @@ async def _call_google(
                 return part.function_call.name, part.function_call.args or {}
 
     logger.info(f"Observer {observer_name} no function_call in response")
+    return None, None
+
+
+async def _call_bedrock(
+    svc: AWSBedrockLLMService,
+    transcript_text: str,
+    system_prompt: str,
+    tools: List[FunctionSchema],
+    observer_name: str,
+) -> ToolCallResult:
+    """Mirror AWSBedrockLLMService._process_context minus the frame layer."""
+    context = LLMContext()
+    context.add_message({"role": "user", "content": transcript_text})
+    context.set_tools(ToolsSchema(standard_tools=tools))
+
+    adapter = svc.get_llm_adapter()
+    invocation_params = adapter.get_llm_invocation_params(
+        context,
+        system_instruction=system_prompt,
+    )
+
+    params: dict[str, Any] = {
+        "modelId": str(svc._settings.model),
+        "messages": invocation_params["messages"],
+        "toolConfig": {"tools": invocation_params["tools"], "toolChoice": {"auto": {}}},
+        "additionalModelRequestFields": svc._settings.additional_model_request_fields,
+    }
+    if invocation_params["system"]:
+        params["system"] = invocation_params["system"]
+    inference_config = svc._build_inference_config()
+    if inference_config:
+        params["inferenceConfig"] = inference_config
+
+    async with svc._aws_session.client(
+        service_name="bedrock-runtime", **svc._aws_params
+    ) as client:
+        response = await client.converse(**params)
+
+    for block in response["output"]["message"]["content"]:
+        if "toolUse" in block:
+            return block["toolUse"]["name"], block["toolUse"].get("input") or {}
+
+    logger.info(f"Observer {observer_name} no toolUse block in response")
     return None, None

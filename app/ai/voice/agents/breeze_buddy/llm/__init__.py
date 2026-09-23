@@ -7,18 +7,21 @@ Dispatch logic:
   - No config or provider == AZURE  -> build_azure_llm (env defaults, template overrides)
   - provider == GOOGLE_VERTEX + sdk == ANTHROPIC -> build_claude_vertex_llm (template-only params)
   - provider == GOOGLE_VERTEX + sdk is None/GOOGLE -> build_vertex_llm (template-only params)
+  - provider == AWS_BEDROCK -> build_bedrock_llm (template-only params)
 """
 
 from __future__ import annotations
 
 from typing import Union
 
+from pipecat.services.aws.llm import AWSBedrockLLMService
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.vertex.llm import GoogleVertexLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 
 from app.ai.voice.llm import (
     AzureConfig,
+    BedrockConfig,
     ClaudeVertexConfig,
     LLMConfiguration,
     LLMProvider,
@@ -26,9 +29,11 @@ from app.ai.voice.llm import (
     OpenAIConfig,
     VertexConfig,
     build_azure_llm,
+    build_bedrock_llm,
     build_claude_vertex_llm,
     build_openai_llm,
     build_vertex_llm,
+    is_openai_model,
 )
 from app.ai.voice.llm.claude_vertex import VertexAnthropicLLMService
 from app.core.config.dynamic import (
@@ -318,6 +323,70 @@ async def _resolve_claude_vertex(
     )
 
 
+async def _resolve_bedrock(llm_config: LLMConfiguration) -> AWSBedrockLLMService:
+    """Build AWS Bedrock LLM — all params required from template config."""
+    if not llm_config.model:
+        raise ValueError(
+            "model is required in LLMConfiguration for aws_bedrock provider"
+        )
+    if not llm_config.region:
+        raise ValueError(
+            "region is required in LLMConfiguration for aws_bedrock provider"
+        )
+    if not llm_config.max_tokens:
+        raise ValueError(
+            "max_tokens is required in LLMConfiguration for aws_bedrock provider"
+        )
+    openai_model = is_openai_model(llm_config.model)
+
+    api_key = None
+    if llm_config.api_key_name:
+        api_key = await get_config(llm_config.api_key_name, "", str)
+        if not api_key:
+            raise ValueError(
+                f"API key not found for config key: {llm_config.api_key_name}"
+            )
+
+    reasoning_effort = None
+    thinking_budget_tokens = None
+    if llm_config.thinking:
+        if llm_config.thinking.enabled:
+            reasoning_effort = llm_config.thinking.reasoning_effort
+            thinking_budget_tokens = llm_config.thinking.budget_tokens
+        elif openai_model:
+            # GPT models reason by default; other vendors reject the field.
+            reasoning_effort = "none"
+    if (
+        openai_model
+        and llm_config.temperature not in (None, 1)
+        and reasoning_effort != "none"
+    ):
+        # Only the default (1) is accepted while reasoning is on; anything
+        # else is rejected per turn and the voice path would degrade to
+        # silence instead of failing here.
+        raise ValueError(
+            "temperature other than 1 on OpenAI models on aws_bedrock requires "
+            "thinking.reasoning_effort='none' (or thinking.enabled=false)"
+        )
+
+    return build_bedrock_llm(
+        BedrockConfig(
+            model=llm_config.model,
+            region=llm_config.region,
+            max_tokens=llm_config.max_tokens,
+            api_key=api_key,
+            temperature=llm_config.temperature,
+            reasoning_effort=reasoning_effort,
+            thinking_budget_tokens=thinking_budget_tokens,
+            function_call_timeout_secs=(
+                llm_config.function_call_timeout_secs
+                if llm_config.function_call_timeout_secs
+                else 10.0
+            ),
+        )
+    )
+
+
 async def get_llm_service(
     llm_config: LLMConfiguration | None = None,
     *,
@@ -327,6 +396,7 @@ async def get_llm_service(
     GoogleVertexLLMService,
     VertexAnthropicLLMService,
     OpenAILLMService,
+    AWSBedrockLLMService,
 ]:
     """Get LLM service instance based on configuration.
 
@@ -334,6 +404,7 @@ async def get_llm_service(
       - No config / provider == AZURE  -> Azure (env defaults + template overrides)
       - provider == GOOGLE_VERTEX, sdk == ANTHROPIC -> Claude on Vertex (all from template)
       - provider == GOOGLE_VERTEX, sdk is None/GOOGLE -> Gemini on Vertex (all from template)
+      - provider == AWS_BEDROCK -> Bedrock Converse (all from template)
 
     Args:
         llm_config: Optional template-level LLM configuration.
@@ -372,6 +443,10 @@ async def get_llm_service(
 
         _dispatch_log("Using Gemini on Vertex AI (Google SDK)")
         return await _resolve_vertex(llm_config)
+
+    if llm_config.provider == LLMProvider.AWS_BEDROCK:
+        _dispatch_log("Using AWS Bedrock LLM provider")
+        return await _resolve_bedrock(llm_config)
 
     # Fallback — shouldn't happen with the enum, but be safe
     logger.warning(

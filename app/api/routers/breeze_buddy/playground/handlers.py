@@ -20,6 +20,8 @@ from app.ai.voice.agents.breeze_buddy.utils.language_utils.language_detector imp
 from app.ai.voice.llm.types import (
     AzureLLMPlaygroundConfig,
     AzureThinkingPlaygroundConfig,
+    BedrockLLMPlaygroundConfig,
+    BedrockThinkingPlaygroundConfig,
     LLMProvider,
     LLMSdk,
     VertexClaudeThinkingPlaygroundConfig,
@@ -118,6 +120,7 @@ async def get_configuration_options_handler():
         LLMProvider.GOOGLE_VERTEX.value: _voice_config_fields(
             VertexLLMPlaygroundConfig
         ),
+        LLMProvider.AWS_BEDROCK.value: _voice_config_fields(BedrockLLMPlaygroundConfig),
     }
 
     # Thinking fields keyed by provider (azure) or provider__sdk (google_vertex)
@@ -128,6 +131,9 @@ async def get_configuration_options_handler():
         ),
         f"{LLMProvider.GOOGLE_VERTEX.value}__{LLMSdk.ANTHROPIC.value}": _voice_config_fields(
             VertexClaudeThinkingPlaygroundConfig
+        ),
+        LLMProvider.AWS_BEDROCK.value: _voice_config_fields(
+            BedrockThinkingPlaygroundConfig
         ),
     }
 

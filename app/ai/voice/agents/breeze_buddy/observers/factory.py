@@ -11,7 +11,11 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ObserverConfig,
     TemplateModel,
 )
-from app.ai.voice.llm.types import LLMConfiguration
+from app.ai.voice.llm.types import (
+    LLMConfiguration,
+    LLMProvider,
+    ThinkingConfiguration,
+)
 from app.core.logger import logger
 
 from .observer import RealtimeObserver
@@ -26,22 +30,43 @@ def merge_llm_config(
     Inherits provider, model, and connection details from base.
     Only temperature (0.1) and max_tokens (256) have observer-specific
     defaults — observers need low temperature for precision and fewer
-    tokens since they only make tool calls.
+    tokens since they only make tool calls. Bedrock gets no temperature
+    default: its GPT models reject the field.
+
+    ``thinking`` reaches an observer only when the observer asks for it, or
+    on Bedrock, where it must be sent as disabled: those GPT models reason by
+    default, which burns the 256-token budget before the tool call and makes
+    any temperature override a hard error. Every other provider keeps the
+    long-standing behaviour of no reasoning on observers — inheriting the
+    template's effort would pair it with the 0.1 temperature default, which
+    reasoning models reject.
     """
     observer_llm = override or LLMConfiguration()
+    provider = observer_llm.provider or base.provider
+    if observer_llm.temperature is not None:
+        temperature = observer_llm.temperature
+    elif provider == LLMProvider.AWS_BEDROCK:
+        temperature = None
+    else:
+        temperature = 0.1
+    if observer_llm.thinking is not None:
+        thinking = observer_llm.thinking
+    elif provider == LLMProvider.AWS_BEDROCK:
+        thinking = ThinkingConfiguration(enabled=False)
+    else:
+        thinking = None
     return LLMConfiguration(
-        provider=observer_llm.provider or base.provider,
+        provider=provider,
         sdk=observer_llm.sdk or base.sdk,
         model=observer_llm.model or base.model,
         region=observer_llm.region or base.region,
         endpoint=observer_llm.endpoint or base.endpoint,
         api_key_name=observer_llm.api_key_name or base.api_key_name,
-        temperature=(
-            observer_llm.temperature if observer_llm.temperature is not None else 0.1
-        ),
+        temperature=temperature,
         max_tokens=(
             observer_llm.max_tokens if observer_llm.max_tokens is not None else 256
         ),
+        thinking=thinking,
     )
 
 

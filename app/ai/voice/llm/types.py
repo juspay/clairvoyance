@@ -17,6 +17,7 @@ class LLMProvider(str, Enum):
     AZURE = "azure"
     GOOGLE_VERTEX = "google_vertex"
     OPENAI = "openai"
+    AWS_BEDROCK = "aws_bedrock"
 
 
 class RealtimeLLMProvider(str, Enum):
@@ -131,6 +132,9 @@ class ThinkingConfiguration(BaseModel):
       - Gemini (Google): Uses ``thinking_budget`` (token count) or
         ``thinking_level`` (named level) to control thinking. Thinking content
         is visible via LLMThought frames.
+      - AWS Bedrock (Converse): ``reasoning_effort`` for GPT models,
+        ``budget_tokens`` for Claude models. ``enabled=false`` sends
+        ``effort="none"`` on GPT models only (they reason by default).
     """
 
     enabled: bool = Field(False, description="Whether thinking/reasoning is enabled")
@@ -208,6 +212,25 @@ class VertexClaudeThinkingPlaygroundConfig(BaseModel):
     )
 
 
+class BedrockLLMPlaygroundConfig(BaseModel):
+    """User-facing AWS Bedrock LLM fields for playground configuration."""
+
+    model: Optional[str] = Field(None, description="e.g. in.openai.gpt-5.6-luna")
+    region: Optional[str] = Field(None, description="e.g. ap-south-1")
+    api_key_name: Optional[str] = Field(
+        None, description="Config key name for the Bedrock API key"
+    )
+    max_tokens: Optional[int] = Field(None, ge=1, description="Max completion tokens")
+
+
+class BedrockThinkingPlaygroundConfig(BaseModel):
+    """Thinking fields for AWS Bedrock."""
+
+    reasoning_effort: Optional[str] = Field(
+        None, description="none / minimal / low / medium / high / xhigh"
+    )
+
+
 class LLMConfiguration(BaseModel):
     """LLM configuration for template-level customization.
 
@@ -237,7 +260,8 @@ class LLMConfiguration(BaseModel):
         None, description="Provider-specific model name override"
     )
     region: Optional[str] = Field(
-        None, description="Provider region / location (e.g. asia-south1)"
+        None,
+        description="Provider region / location (e.g. asia-south1, ap-south-1)",
     )
     endpoint: Optional[str] = Field(
         None,
@@ -248,7 +272,9 @@ class LLMConfiguration(BaseModel):
     api_key_name: Optional[str] = Field(
         None,
         description="Dynamic config key name to resolve the API key at runtime "
-        "(required when a custom endpoint is provided for Azure or OpenAI)",
+        "(required when a custom endpoint is provided for Azure or OpenAI; for "
+        "AWS Bedrock, the Bedrock API key — omit to use the pod's AWS "
+        "credential chain)",
     )
     temperature: Optional[float] = Field(
         None, ge=0.0, le=2.0, description="Sampling temperature"
@@ -291,8 +317,8 @@ class LLMConfiguration(BaseModel):
         "request (max_completion_tokens=16, non-streaming) carrying the exact "
         "rendered system prefix + tools, to warm the provider's automatic "
         "prompt cache before the first real inference. Only meaningful for "
-        "Azure/OpenAI text LLMs (those cache by exact token prefix, >=1024 "
-        "tokens) — silently inert elsewhere: ignored on realtime and on "
+        "Azure/OpenAI/Bedrock text LLMs (those cache by exact token prefix, "
+        ">=1024 tokens) — silently inert elsewhere: ignored on realtime and on "
         "providers without a chat.completions prefix cache (the runtime gate "
         "logs a per-call skip). The win is turn-1 TTFT: turns 2+ already hit "
         "the cache. Costs one extra full-price input billing per call — and "
