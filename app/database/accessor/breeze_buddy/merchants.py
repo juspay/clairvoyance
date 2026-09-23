@@ -6,7 +6,8 @@ using queries from queries.breeze_buddy.merchants and
 decoders from decoder.breeze_buddy.merchants.
 """
 
-from typing import List, Optional, Tuple
+import json
+from typing import Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.database import db_connection
@@ -17,7 +18,11 @@ from app.database.accessor.breeze_buddy.wallets import (
     get_wallet_for_update_on_conn,
     update_wallet_reseller_id_on_conn,
 )
-from app.database.decoder.breeze_buddy.merchants import decode_merchant
+from app.database.decoder.breeze_buddy.merchants import (
+    decode_call_limits,
+    decode_call_limits_row,
+    decode_merchant,
+)
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.merchants import (
     check_merchant_identifier_exists_query,
@@ -25,13 +30,20 @@ from app.database.queries.breeze_buddy.merchants import (
     delete_merchant_query,
     get_all_merchants_query,
     get_merchant_by_merchant_identifier_query,
+    get_merchant_call_limits_query,
     get_merchant_s2s_token_query,
     get_merchants_by_ids_query,
     get_merchants_by_reseller_query,
+    get_merchants_with_call_limits_query,
+    set_merchant_call_limits_query,
     set_merchant_s2s_token_query,
     update_merchant_query,
 )
-from app.schemas.breeze_buddy.merchants import MerchantResponse
+from app.schemas.breeze_buddy.merchants import (
+    CallLimit,
+    CallLimitsResponse,
+    MerchantResponse,
+)
 
 
 async def check_merchant_identifier_exists(merchant_id: str) -> bool:
@@ -438,3 +450,76 @@ async def get_merchant_s2s_token(merchant_id: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Error reading S2S token for merchant {merchant_id}: {e}")
         raise
+
+
+async def get_merchant_call_limits(merchant_id: str) -> Optional[CallLimitsResponse]:
+    """A merchant's per-customer call rules (ADR 0025), or None if no such
+    merchant. ``call_limits`` inside is None when the merchant has no rule.
+
+    Raises on a DB error or an unreadable stored value — callers on the dial
+    path treat that as "cannot tell" and fail closed.
+    """
+    query, values = get_merchant_call_limits_query(merchant_id)
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return decode_call_limits_row(row) if row else None
+    except Exception as e:
+        logger.error(f"Error reading call limits for merchant {merchant_id}: {e}")
+        raise
+
+
+async def set_merchant_call_limits(
+    merchant_id: str, call_limits: Optional[List[CallLimit]]
+) -> Optional[CallLimitsResponse]:
+    """Replace a merchant's per-customer call rules; None (or []) clears them.
+
+    Returns the stored rules, or None if no such merchant.
+    """
+    call_limits_json = (
+        json.dumps([rule.model_dump() for rule in call_limits]) if call_limits else None
+    )
+    query, values = set_merchant_call_limits_query(merchant_id, call_limits_json)
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        if not row:
+            return None
+        logger.info(f"Updated call limits for merchant {merchant_id}")
+        return decode_call_limits_row(row)
+    except Exception as e:
+        logger.error(f"Error updating call limits for merchant {merchant_id}: {e}")
+        raise
+
+
+async def get_merchants_with_call_limits() -> (
+    Tuple[Dict[str, List[CallLimit]], List[str]]
+):
+    """Every merchant's per-customer call rules, in one read (ADR 0025).
+
+    Returns ``(rules, unreadable)``: ``rules`` maps merchant_id to its rules
+    for every merchant that has one; ``unreadable`` lists merchants whose
+    stored value cannot be understood — decoded row by row, so one corrupt
+    row fails closed for ITS merchant only, never for every merchant.
+
+    Raises on a DB error (the caller fails closed).
+    """
+    query, values = get_merchants_with_call_limits_query()
+    try:
+        result = await run_parameterized_query(query, values)
+    except Exception as e:
+        logger.error(f"Error reading merchants' call limits: {e}")
+        raise
+    rules: Dict[str, List[CallLimit]] = {}
+    unreadable: List[str] = []
+    for row in result or []:
+        merchant_id = row["merchant_id"]
+        try:
+            decoded = decode_call_limits(row["call_limits"])
+        except Exception as e:
+            logger.error(f"Unreadable call limits for merchant {merchant_id}: {e}")
+            unreadable.append(merchant_id)
+            continue
+        if decoded:
+            rules[merchant_id] = decoded
+    return rules, unreadable

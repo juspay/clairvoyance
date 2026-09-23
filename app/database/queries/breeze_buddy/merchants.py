@@ -325,3 +325,43 @@ def get_merchant_s2s_token_query(merchant_id: str) -> Tuple[str, List[Any]]:
         WHERE merchant_id = $1
     """
     return query, [merchant_id]
+
+
+def get_merchant_call_limits_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """Generate query to read a merchant's per-customer call rules (ADR 0025)."""
+    query = f"""
+        SELECT merchant_id, call_limits
+        FROM {MERCHANTS_TABLE}
+        WHERE merchant_id = $1
+    """
+    return query, [merchant_id]
+
+
+def set_merchant_call_limits_query(
+    merchant_id: str, call_limits_json: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """Generate query to replace a merchant's per-customer call rules.
+
+    ``call_limits_json`` is the serialized list, or None to clear the rule.
+    """
+    query = f"""
+        UPDATE {MERCHANTS_TABLE}
+        SET call_limits = $1::jsonb, updated_at = $2
+        WHERE merchant_id = $3
+        RETURNING merchant_id, call_limits
+    """
+    return query, [call_limits_json, datetime.now(timezone.utc), merchant_id]
+
+
+def get_merchants_with_call_limits_query() -> Tuple[str, List[Any]]:
+    """Generate query to read every merchant that HAS a per-customer call rule.
+
+    Merchants without a rule never appear, so the dispatch side learns "no
+    rule" from absence and never reads their rows.
+    """
+    query = f"""
+        SELECT merchant_id, call_limits
+        FROM {MERCHANTS_TABLE}
+        WHERE call_limits IS NOT NULL
+    """
+    return query, []

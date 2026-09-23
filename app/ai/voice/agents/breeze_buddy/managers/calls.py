@@ -38,6 +38,11 @@ from app.ai.voice.agents.breeze_buddy.managers.pre_checks import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_release_pod,
 )
+from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
+    CALL_LIMIT_OUTCOME,
+    CallLimitVerdict,
+    describe_call_limit,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
 )
@@ -282,6 +287,77 @@ async def _run_pre_checks_for_lead(
             )
 
     return PreCheckDecision.ABORT, 0
+
+
+async def finish_lead_call_limit_reached(
+    lead: LeadCallTracker, verdict: CallLimitVerdict, session
+) -> bool:
+    """End a lead the merchant's per-customer call rule refused (ADR 0025).
+
+    Terminal, never a deferral: a later dial would ring for a reason that
+    has gone stale (yesterday's cart) and leave a listening plan square
+    waiting for its alarm. The shape is PRECHECK_FAILED's — FINISHED with
+    the outcome, the reporting webhook fired — and the finished-lead tap
+    mirrors ``call.completed`` with the outcome, so a plan routes on it.
+
+    Returns False — and reports nothing — when the terminal write did not
+    land: the lead is still BACKLOG, the next dispatch refuses it again and
+    retries the write, so a webhook sent now would be sent twice.
+    """
+    rule = verdict.rule
+    rule_meta = (
+        {"max_calls": rule.max_calls, "window_hours": rule.window_hours} if rule else {}
+    )
+    # Seed from what is already on the row: update_lead_call_completion_details
+    # REPLACES meta_data (see _run_pre_checks_for_lead), so anything not
+    # carried here — a playground lead's overrides, a pre-check trail — is lost.
+    meta_data: dict[str, Any] = {
+        **(lead.metaData or {}),
+        "call_limit": {**rule_meta, "calls_in_window": verdict.count},
+    }
+    finished = await update_lead_call_completion_details(
+        id=lead.id,
+        status=LeadCallStatus.FINISHED,
+        outcome=CALL_LIMIT_OUTCOME,
+        meta_data=meta_data,
+        call_end_time=datetime.now(timezone.utc),
+    )
+    if finished is None:
+        logger.error(
+            f"Lead {lead.id}: {CALL_LIMIT_OUTCOME} write did not land; not "
+            "reporting it — the next dispatch refuses the lead again"
+        )
+        return False
+    logger.bind(
+        lead_id=str(lead.id),
+        lead_skip="call_limit_reached",
+        merchant_id=lead.merchant_id,
+        calls_in_window=verdict.count,
+        **rule_meta,
+    ).info(
+        f"Lead {lead.id} finished {CALL_LIMIT_OUTCOME}: merchant "
+        f"{lead.merchant_id} allows {describe_call_limit(rule) if rule else 'no more calls'}"
+    )
+
+    reporting_webhook_url = (
+        lead.payload.get("reporting_webhook_url") if lead.payload else None
+    )
+    if reporting_webhook_url:
+        webhook_data = {
+            "outcome": CALL_LIMIT_OUTCOME,
+            "attemptCount": lead.attempt_count + 1,
+            "failureReason": (
+                f"Call limit reached: {describe_call_limit(rule)}"
+                if rule
+                else "Call limit reached"
+            ),
+            "orderId": lead.request_id,
+        }
+        try:
+            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+        except Exception as e:
+            logger.error(f"Error sending call-limit webhook for lead {lead.id}: {e}")
+    return True
 
 
 async def _get_available_number(

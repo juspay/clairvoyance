@@ -32,6 +32,7 @@ from app.ai.voice.agents.breeze_buddy.crm_mirror import (
     mirror_to_crm,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    raise_call_limit_unavailable,
     raise_no_telephony_number,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
@@ -55,14 +56,21 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _is_within_calling_hours,
     _release_number,
     _run_pre_checks_for_lead,
+    finish_lead_call_limit_reached,
 )
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     prepare_and_store_initial_greeting,
 )
 from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
+    CALL_LIMIT_UNAVAILABLE_REASON,
+    CallLimitUnavailable,
+    merchant_call_limits,
+    peek_call_limit,
     peek_outbound_rate_limit_and_alert,
+    record_call_limit,
     record_outbound_call_attempt,
+    unrecord_call_limit,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
@@ -174,6 +182,11 @@ async def _prewarm_initial_greeting_with_retry(
             )
         if attempt < _GREETING_PREWARM_ATTEMPTS:
             await asyncio.sleep(_GREETING_PREWARM_RETRY_PAUSE_S)
+
+
+# How long a lead waits when the merchant's call rule can't be evaluated
+# (Redis down, rule unreadable). Short: it is a transient, not a verdict.
+CALL_LIMIT_UNAVAILABLE_DEFER_S = 30
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +484,49 @@ class Worker:
                     )
                     return
 
+            # The merchant's per-customer call rule (ADR 0025) — PEEK, before
+            # a channel token is held, so a customer already at the limit
+            # burns no capacity. Every customer dial is asked: workflow call
+            # squares, push-API leads, campaigns and the agent's own re-dials.
+            # Inactive templates are NOT exempt (unlike the hourly limiter): a
+            # customer limit that changes with the calling template is not a
+            # customer limit. Nor are test or playground dials:
+            # TELEPHONY_TEST and is_playground are fields the merchant sends
+            # on its own push, and both still ring the real customer number —
+            # an exemption keyed on them would let the merchant this cap
+            # constrains switch it off. The cap protects the phone, so every
+            # PSTN dial to it counts; a merchant testing on its own phone
+            # counts against its own cap.
+            call_limits = None
+            call_limit_member = None
+            if (
+                locked.execution_mode
+                in (ExecutionMode.TELEPHONY, ExecutionMode.TELEPHONY_TEST)
+                and locked.merchant_id
+                and isinstance(customer_phone, str)
+                and customer_phone
+            ):
+                try:
+                    call_limits = await merchant_call_limits(locked.merchant_id)
+                    if call_limits:
+                        verdict = await peek_call_limit(
+                            merchant_id=locked.merchant_id,
+                            phone=customer_phone,
+                            lead_id=str(locked.id),
+                            rules=call_limits,
+                        )
+                        if not verdict.allowed:
+                            await finish_lead_call_limit_reached(
+                                locked, verdict, session
+                            )
+                            lock_released = await self._release(locked.id)
+                            return
+                except CallLimitUnavailable as e:
+                    lock_released = await self._defer_call_limit_unavailable(
+                        locked.id, e
+                    )
+                    return
+
             number = await _get_available_number(config, template)
             if not number:
                 # Permanent / semi-permanent failure: misconfigured template
@@ -598,6 +654,41 @@ class Worker:
                     await _release_number(number.id, number.provider)
                     raise
 
+            # The merchant's per-customer rule — the authoritative RECORD,
+            # atomic with its count. The LAST step before the phone rings:
+            # after the greeting pre-warm (up to ~60s on Gemini Live), so a
+            # worker stopped or killed mid-pre-warm never leaves an entry for
+            # a dial that did not happen. Still after the hourly limiter's
+            # record: an hourly deferral never lands in the merchant's window,
+            # while a refusal here is terminal, so the hourly bucket's extra
+            # entry happens at most once per lead. Every record counts (ADR
+            # 0025 §3) — except one the provider says it did not place, which
+            # is taken back below.
+            if call_limits and locked.merchant_id:
+                try:
+                    verdict = await record_call_limit(
+                        merchant_id=locked.merchant_id,
+                        phone=customer_mobile,
+                        lead_id=str(locked.id),
+                        rules=call_limits,
+                    )
+                except CallLimitUnavailable as e:
+                    await release_channel_token(number.id, token)
+                    await _release_number(number.id, number.provider)
+                    lock_released = await self._defer_call_limit_unavailable(
+                        locked.id, e
+                    )
+                    return
+                if not verdict.allowed:
+                    # Lost the race to another worker dialling the same
+                    # customer, or the window filled since the peek.
+                    await release_channel_token(number.id, token)
+                    await _release_number(number.id, number.provider)
+                    await finish_lead_call_limit_reached(locked, verdict, session)
+                    lock_released = await self._release(locked.id)
+                    return
+                call_limit_member = verdict.member
+
             try:
                 call = await call_provider.make_call_async(
                     customer_mobile,
@@ -612,6 +703,10 @@ class Worker:
                     f"Worker {self._uuid}: provider.make_call failed for "
                     f"lead {locked.id}: {e}"
                 )
+                # Raised before any provider reply: nothing was placed.
+                await self._unrecord_call_limit(
+                    locked, customer_mobile, call_limit_member
+                )
                 await release_channel_token(number.id, token)
                 await _release_number(number.id, number.provider)
                 # Backoff retry. Use defer_seconds derived from attempt_count.
@@ -624,6 +719,14 @@ class Worker:
                     f"Worker {self._uuid}: provider.make_call returned no SID "
                     f"for lead {locked.id}: {call}"
                 )
+                if call is None:
+                    # Every adapter maps its own failure (4xx/5xx/429, a
+                    # client error) to None: the provider did not place the
+                    # call, so this dial never rang. A reply WITHOUT a SID
+                    # (Exotel's empty 2xx) may have rung — its count stays.
+                    await self._unrecord_call_limit(
+                        locked, customer_mobile, call_limit_member
+                    )
                 await release_channel_token(number.id, token)
                 await _release_number(number.id, number.provider)
                 lock_released = await self._defer_and_release(locked.id, 10)
@@ -702,6 +805,39 @@ class Worker:
         except Exception as e:  # noqa: BLE001
             logger.error(f"release_lock failed for {lead_id}: {e}")
         return True
+
+    async def _unrecord_call_limit(
+        self, lead: Any, phone: str, member: Optional[str]
+    ) -> None:
+        """Take back this dial's call-limit entry (best effort) when the
+        provider says the call was not placed."""
+        if member and lead.merchant_id:
+            await unrecord_call_limit(
+                merchant_id=lead.merchant_id, phone=phone, member=member
+            )
+
+    async def _defer_call_limit_unavailable(
+        self, lead_id: str, error: CallLimitUnavailable
+    ) -> bool:
+        """Fail CLOSED on the merchant's call rule (ADR 0025 §6): when it
+        cannot be read or evaluated, do not dial — defer briefly and ask
+        again. A transient, not a verdict: the lead stays BACKLOG. Costs
+        nothing extra, since the queue and the channel tokens live in the
+        same Redis; when it is down nothing dials anyway. A throttled P0
+        fires only for a merchant KNOWN to have a rule (its rule unreadable,
+        its own check failed) — its customer calls stop until someone acts.
+        When the rules themselves could not be read, nothing is known about
+        the merchant, so it defers and logs without paging."""
+        logger.bind(lead_id=lead_id, lead_skip=CALL_LIMIT_UNAVAILABLE_REASON).warning(
+            f"Worker {self._uuid}: call limit unavailable for lead {lead_id} "
+            f"({error}); deferring {CALL_LIMIT_UNAVAILABLE_DEFER_S}s"
+        )
+        if error.capped:
+            try:
+                await raise_call_limit_unavailable(str(error))
+            except Exception as alert_exc:  # noqa: BLE001 — never blocks
+                logger.warning(f"call-limit unavailable alert failed: {alert_exc}")
+        return await self._defer_and_release(lead_id, CALL_LIMIT_UNAVAILABLE_DEFER_S)
 
     async def _defer_and_release(self, lead_id: str, defer_seconds: int) -> bool:
         """Defer next_attempt_at in DB, ZADD onto the schedule, release lock.

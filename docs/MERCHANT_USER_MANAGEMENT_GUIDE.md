@@ -52,6 +52,19 @@ All endpoints are under the prefix `/agent/voice/breeze-buddy`.
 | **Merchants (admin shortcut)** | `/merchants` | GET | Admin only |
 | | `/merchant` | POST | Admin only |
 | | `/merchant/{id}` | GET/PUT/DELETE | Admin only |
+| **Per-customer call limit** (ADR 0025) | `/merchant/{id}/call-limits` | GET | All roles (scoped) |
+| | `/merchant/{id}/call-limits` | PUT | Admin / Reseller (own only) |
+
+> **Per-customer call limit.** `PUT /merchant/{id}/call-limits` with
+> `{"call_limits": [{"max_calls": 3, "window_hours": 48}]}` caps the dials to
+> one customer at 3 in any rolling 48 hours, across every template, plan,
+> campaign and API push (the agent's own re-dials included). One rule for
+> now; `max_calls >= 1`, `window_hours` 1-168; `null` or `[]` removes it. A
+> dial over the limit ends the lead with outcome `CALL_LIMIT_REACHED` and the
+> reporting webhook fires. Takes effect within 10 seconds on every pod.
+> Merchants without a limit cost the dialler nothing: each pod keeps a
+> registry of only the merchants that have one, re-read from the DB only
+> when a limit is changed.
 
 > **⚠️ Admin accounts cannot be deleted by anyone** — including admins themselves.
 

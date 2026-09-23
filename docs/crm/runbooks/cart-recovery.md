@@ -118,7 +118,7 @@ The variant is the same board with one listening square after the call
  "match": {"payload": "enrollment_id", "run": "id"}}
 ```
 
-with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` → `wa-fallback`
+with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` / `CALL_LIMIT_REACHED` → `wa-fallback`
 (a second template, `cart_recovery_2`) and `else` → `wait-1d`.
 
 - **Where the outcome comes from.** Every lead the walker places carries
@@ -138,8 +138,21 @@ with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` → `wa-fallback`
   `timeout` arrow — so a connected call still keeps the day of listening
   and an order inside it counts as recovered. The words buddy's
   dispatcher writes itself: `NO_ANSWER`, `BUSY`, `EARLY_HANGUP`,
-  `BLACKLISTED`, `PRECHECK_FAILED`, `ABORT`/`ABORTED`, `TRANSFERRED`,
-  `UNKNOWN`.
+  `BLACKLISTED`, `PRECHECK_FAILED`, `CALL_LIMIT_REACHED`,
+  `ABORT`/`ABORTED`, `TRANSFERRED`, `UNKNOWN`.
+- **`CALL_LIMIT_REACHED` — the merchant's per-customer limit refused the
+  dial** (ADR 0025). The merchant's rule (`PUT /merchant/{id}/call-limits`,
+  e.g. `{"max_calls": 3, "window_hours": 48}`) bounds the dials to one
+  customer in any rolling 48 hours, whichever plan, campaign or API push
+  they come from, the agent's own re-dials included. Over it, the lead ends
+  with this outcome before the phone rings, the reporting webhook fires,
+  and `call.completed` carries it to the listening square — nothing is
+  deferred, so route it (the fallback board sends it to `wa-fallback`: the
+  customer was not reached). It composes with `max_retry`: under a rule of
+  2 in 24h, a template's third ring ends the retry ladder with this word.
+  The window is rolling: a customer called at 19:00 yesterday is callable
+  at 19:00 today, not at midnight. Unrelated to `max_calls_per_day`, which
+  bounds one run's own calls.
 - **An arrow back to a call square IS another call.** Since 10 Sep 2026
   every visit to a call square mints its own lead (`lead_visits_<square>`
   keys the id), so `after-call --NO_ANSWER--> rescue-call` rings again on
