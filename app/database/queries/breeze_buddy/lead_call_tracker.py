@@ -250,14 +250,16 @@ def get_leads_by_request_id_query(request_id: str) -> Tuple[str, List[Any]]:
 
 _PRODUCTION = "\"execution_mode\" IN ('TELEPHONY', 'HOLD_TRANSFER')"
 
-# An answered call: placed, finished, and someone spoke. BUSY is an answered
-# line where nobody did; NO_ANSWER is every carrier failure; the last two are
-# the dialler's own refusals. The one definition, spelled once — the report,
-# the calls summary and "reached" all read it.
+# An answered call: placed, finished, and the line was picked up. BUSY counts
+# — in Buddy it is the no-input timeout, a call the customer answered and
+# said nothing on, not the carrier's busy tone (ruled 24 Sep 2026). NO_ANSWER
+# is every carrier failure; the last two are the dialler's own refusals. The
+# one definition, spelled once — the report, the calls summary and "reached"
+# all read it.
 _ANSWERED = (
     '"call_initiated_time" IS NOT NULL AND "status" = \'FINISHED\' '
     "AND COALESCE(\"outcome\", '') NOT IN "
-    "('NO_ANSWER', 'BUSY', 'NUMBER_UNAVAILABLE', 'FAILED')"
+    "('NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED')"
 )
 
 # A run's retry lead, as the lead store itself knows it: the dispatcher mints a

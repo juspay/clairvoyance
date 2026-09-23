@@ -121,10 +121,11 @@ def summarize_calls(stats: Dict[str, Any]) -> WorkflowCallSummary:
     so the totals are the sum of the cards and the two can never disagree —
     which a second query for the same numbers could not promise.
 
-    Who spoke is not decided here: each row carries ``spoke``, the lead
-    store's one answered definition judged per row, so ``connected`` (spoke)
-    and ``answered`` (spoke, or BUSY — picked up, nobody spoke) can never
-    drift from ``reached_runs``, which the same definition counts."""
+    Who answered is not decided here: each row carries ``spoke``, the lead
+    store's one answered definition judged per row (BUSY included since 24
+    Sep 2026 — a picked-up line), so ``connected`` and ``answered`` are the
+    same count and can never drift from ``reached_runs``, which the same
+    definition counts. Both names stay on the wire for the console."""
     by_outcome: Dict[str, int] = {}
     placed = connected = answered = timed = attempts = 0
     talk = 0.0
@@ -159,7 +160,6 @@ def summarize_calls(stats: Dict[str, Any]) -> WorkflowCallSummary:
         placed += calls
         if spoke:
             connected += calls
-        if spoke or outcome == "BUSY":
             answered += calls
         timed += int(row.get("timed_calls") or 0)
         talk += float(row.get("talk_seconds") or 0)
