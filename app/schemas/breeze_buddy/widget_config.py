@@ -27,7 +27,26 @@ class WidgetAppearance(BaseModel):
     setting (hide the launcher text), not an absence.
     """
 
+    # Base palette the SDK starts from ("light" | "dark"); the colour
+    # fields below override individual surfaces on top of it. Snippet-only
+    # until now, which meant a storefront that reads its look from this row
+    # could not be dark at all.
+    theme: Optional[str] = Field(None, max_length=16)
     primary_color: Optional[str] = Field(None, max_length=64)
+    # The other three surfaces the SDK themes, same contract as
+    # primary_color: any CSS colour, applied to --surface-color,
+    # --text-color and --user-bubble-bg. They lived only in the console's
+    # browser-local draft until now, which meant a merchant's panel colours
+    # did not survive a different machine — and never reached a storefront
+    # that reads its look from this row.
+    surface_color: Optional[str] = Field(None, max_length=64)
+    text_color: Optional[str] = Field(None, max_length=64)
+    user_bubble_color: Optional[str] = Field(None, max_length=64)
+    # Hairlines, card edges and dividers (--border-color). The console
+    # exposes no field for it, so it reaches a storefront only through this
+    # row or a hosted theme.css — which is exactly why it went untested for
+    # so long. The console's PUT carries it through rather than owning it.
+    border_color: Optional[str] = Field(None, max_length=64)
     header_title: Optional[str] = Field(None, max_length=120)
     launcher_label: Optional[str] = Field(None, max_length=60)
     header_logo_url: Optional[str] = Field(None, max_length=2048)

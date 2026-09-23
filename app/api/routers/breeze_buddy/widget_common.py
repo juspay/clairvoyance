@@ -28,8 +28,13 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, Response, status
 
+from app.core.config.static import (
+    WIDGET_CONSOLE_ORIGINS,
+    WIDGET_CONSOLE_RATE_LIMIT_PER_HOUR,
+)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.widget_config import (
+    get_widget_config_by_id,
     get_widget_config_by_public_key,
 )
 from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
@@ -117,10 +122,18 @@ async def _enforce_widget_ip_limit(
     floodgates — widget endpoints are anonymous + LLM-cost-amplifying;
     fail-open here is genuinely worse than a brief 503.
     """
+    # The console previewing an agent is not a shopper on a storefront, and
+    # must not spend the budget that bounds them: iterating on a greeting
+    # means a dozen reloads a minute, each one a session. It is counted in
+    # its own bucket, against its own cap — not waved through. These
+    # endpoints cost LLM calls and Origin is a browser control, so an
+    # exemption here would be a free-traffic hole for anyone who knows a
+    # public widget key.
+    console = is_console_origin(request)
     decision = await check_rate_limit(
-        bucket=bucket,
+        bucket=f"console_{bucket}" if console else bucket,
         identifier=f"{widget_config_id}:{client_ip(request)}",
-        limit=limit,
+        limit=WIDGET_CONSOLE_RATE_LIMIT_PER_HOUR if console else limit,
         window_seconds=_RATE_WINDOW_SECONDS,
         prefix=_RATE_LIMIT_PREFIX,
         fail_closed=True,
@@ -137,11 +150,53 @@ async def _enforce_widget_ip_limit(
     )
 
 
+def is_console_origin(request: Request) -> bool:
+    """Is this our own console asking, rather than a merchant's storefront?
+
+    Our console is the one place an operator looks at their own agent before
+    anyone else can, so it is exempt from the two rules written for anonymous
+    visitors: the site allow-list, and the active flag. See
+    ``WIDGET_CONSOLE_ORIGINS`` for what that exemption is and is not worth.
+    """
+    origin = _caller_origin(request)
+    return bool(origin) and origin.rstrip("/") in WIDGET_CONSOLE_ORIGINS
+
+
+async def resolve_session_widget_config(
+    *, request: Request, widget_config_id: str
+) -> WidgetConfigResponse:
+    """The widget config a session token names, under the same preview rule
+    as the door that minted the token.
+
+    ``create_widget_session`` has let the console past the active flag since
+    the preview existed — a merchant's first look at their agent comes before
+    they have ever unpaused it. Every session-BOUND route then re-read the
+    row and applied the flag again on its own, so the console got a session
+    and a 401 on its first word: "Your chat session expired", on a session
+    one second old. The rule lives here now, and both doors read it.
+
+    401 rather than 404 for a stale row: the caller holds a token naming a
+    widget_config that is gone, and the useful instruction is "abandon this
+    token", not "this widget does not exist".
+    """
+    cfg = await get_widget_config_by_id(widget_config_id)
+    if cfg is None or (not cfg.active and not is_console_origin(request)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Widget configuration not found or inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return cfg
+
+
 def enforce_widget_origin(*, request: Request, cfg: WidgetConfigResponse) -> None:
     """403 unless the caller's Origin (or Referer-derived origin) is in the
     row's ``allowed_origins``. Empty list = deny-all. Shared by the
     key-resolved session path and the shop-resolved storefront-config path
     so the two doors can never drift on origin policy.
+
+    Our own console is always permitted: a merchant should not have to add us
+    to their production allow-list to look at their own agent.
     """
     origin = _caller_origin(request)
     if origin is None:
@@ -149,6 +204,8 @@ def enforce_widget_origin(*, request: Request, cfg: WidgetConfigResponse) -> Non
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Origin required for widget routes",
         )
+    if origin.rstrip("/") in WIDGET_CONSOLE_ORIGINS:
+        return
     if not cfg.allowed_origins or origin not in cfg.allowed_origins:
         logger.warning(
             f"widget: origin {origin!r} not in allowed_origins for "
@@ -190,7 +247,16 @@ async def resolve_widget_config_for_request(
           ``rate_bucket`` is over ``rate_limit``.
     """
     cfg = await get_widget_config_by_public_key(public_widget_key)
-    if cfg is None or not cfg.active:
+    # A paused widget still previews for us. Pausing is how a merchant stops
+    # serving shoppers, and the moment they most want to look at their agent
+    # is before they have ever unpaused it.
+    preview = cfg is not None and not cfg.active and is_console_origin(request)
+    if cfg is not None and preview:
+        logger.info(
+            "widget: console preview session for an inactive widget_config "
+            f"(id={cfg.id})"
+        )
+    if cfg is None or (not cfg.active and not preview):
         # Don't differentiate "unknown" from "inactive" to the caller —
         # both are 404 with no detail. The log carries the prefix for
         # operators debugging a misconfigured embed.
