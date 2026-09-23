@@ -16,6 +16,7 @@ from typing import Union
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.vertex.llm import GoogleVertexLLMService
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
 
 from app.ai.voice.llm import (
     AzureConfig,
@@ -28,7 +29,9 @@ from app.ai.voice.llm import (
     build_azure_llm,
     build_claude_vertex_llm,
     build_openai_llm,
+    build_openai_responses_llm,
     build_vertex_llm,
+    uses_responses_surface,
 )
 from app.ai.voice.llm.claude_vertex import VertexAnthropicLLMService
 from app.core.config.dynamic import (
@@ -121,13 +124,19 @@ async def _resolve_azure(
     )
 
 
-async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMService:
+async def _resolve_openai(
+    llm_config: LLMConfiguration | None,
+) -> OpenAILLMService | OpenAIResponsesHttpLLMService:
     """Build direct OpenAI LLM.
 
     When ``endpoint`` is set, the request is routed to an OpenAI-compatible
     gateway (e.g. Juspay Grid) instead of api.openai.com. A custom endpoint
     requires an explicit ``api_key_name`` so we never leak the default OpenAI
     key to a third-party gateway.
+
+    Bedrock endpoints use ``/v1/responses`` regardless of the thinking
+    setting (see ``uses_responses_surface``); all others use
+    ``/chat/completions``.
     """
     # base_url: template override (custom gateway) or stock OpenAI default.
     base_url = llm_config.endpoint if llm_config and llm_config.endpoint else None
@@ -147,11 +156,15 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
         api_key = OPENAI_API_KEY
 
     model = llm_config.model if llm_config and llm_config.model else OPENAI_MODEL
-    temperature = (
-        llm_config.temperature
-        if llm_config and llm_config.temperature is not None
-        else await OPENAI_TEMPERATURE()
-    )
+    responses_surface = uses_responses_surface(base_url)
+    if llm_config and llm_config.temperature is not None:
+        temperature = llm_config.temperature
+    elif responses_surface:
+        # Reasoning models on /v1/responses accept only temperature=1;
+        # never inject the dynamic default there.
+        temperature = None
+    else:
+        temperature = await OPENAI_TEMPERATURE()
     max_tokens = (
         llm_config.max_tokens
         if llm_config and llm_config.max_tokens
@@ -170,7 +183,13 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
         # reasoning uses reasoning_effort above, not chat_template_kwargs).
         disable_thinking = bool(llm_config.endpoint and not llm_config.thinking.enabled)
 
-    return build_openai_llm(
+    builder = build_openai_responses_llm if responses_surface else build_openai_llm
+    logger.info(
+        f"OpenAI surface: {'/v1/responses' if responses_surface else '/chat/completions'}"
+        f" (endpoint={base_url or 'default'})"
+    )
+
+    return builder(
         OpenAIConfig(
             api_key=api_key,
             base_url=base_url,
@@ -327,6 +346,7 @@ async def get_llm_service(
     GoogleVertexLLMService,
     VertexAnthropicLLMService,
     OpenAILLMService,
+    OpenAIResponsesHttpLLMService,
 ]:
     """Get LLM service instance based on configuration.
 
@@ -334,6 +354,7 @@ async def get_llm_service(
       - No config / provider == AZURE  -> Azure (env defaults + template overrides)
       - provider == GOOGLE_VERTEX, sdk == ANTHROPIC -> Claude on Vertex (all from template)
       - provider == GOOGLE_VERTEX, sdk is None/GOOGLE -> Gemini on Vertex (all from template)
+      - provider == OPENAI -> /chat/completions, or /v1/responses on Bedrock
 
     Args:
         llm_config: Optional template-level LLM configuration.

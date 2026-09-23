@@ -23,6 +23,10 @@ prefix length). The failure mode of any mismatch is only a cache miss
 (visible as turn-1 ``cache_read`` = 0 in the metrics), never a correctness
 issue.
 
+On the ``/v1/responses`` surface (Bedrock) the same contract holds through
+the service's ``_build_response_params``: one non-streaming ``responses.create``
+with ``max_output_tokens=16`` and the synthetic user turn appended to ``input``.
+
 Scope: Azure/OpenAI text-LLM services only (Gemini chat caches explicitly
 via chat/llm/gemini/prompt_cache.py; Vertex Claude via
 ``enable_prompt_caching``). The flag is deliberately not validated at
@@ -51,6 +55,7 @@ from pipecat.processors.aggregators.llm_context import (
     LLMContextMessage,
 )
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
 from pipecat_flows.types import FlowsDirectFunctionWrapper, FlowsFunctionSchema
 
 from app.ai.voice.llm.types import LLMConfiguration, LLMProvider
@@ -94,7 +99,9 @@ def spawn_prefill(
             # .value is absent when a hand-forced config carries a raw string
             provider = getattr(llm_config.provider, "value", llm_config.provider)
             skip = f"provider '{provider}' has no automatic prefix cache"
-        elif not isinstance(llm_service, BaseOpenAILLMService):
+        elif not isinstance(
+            llm_service, (BaseOpenAILLMService, OpenAIResponsesHttpLLMService)
+        ):
             skip = (
                 f"service {type(llm_service).__name__} is not an Azure/OpenAI "
                 "text-LLM service"
@@ -154,7 +161,6 @@ async def prefill_system_prompt(
     """
     started = time.monotonic()
     try:
-        adapter = llm_service.get_llm_adapter()
         # Same conversion pipecat_flows' adapter.format_functions performs
         # (to_function_schema → ToolsSchema; empty → NOT_GIVEN, which the LLM
         # adapter and the OpenAI SDK both collapse to "no tools key") —
@@ -172,30 +178,13 @@ async def prefill_system_prompt(
             messages=cast(List[LLMContextMessage], messages),
             tools=tools,
         )
-        invocation = adapter.get_llm_invocation_params(
-            context,
-            system_instruction=llm_service._settings.system_instruction,
-            convert_developer_to_user=not llm_service.supports_developer_role,
-        )
-        params = llm_service.build_chat_completion_params(invocation)
-        # Non-streaming one-shot; drop the streaming-only usage option and the
-        # settings' completion budget in favor of the prefill's own (above).
-        params["stream"] = False
-        params.pop("stream_options", None)
-        params.pop("max_tokens", None)
-        params["max_completion_tokens"] = _PREFILL_MAX_COMPLETION_TOKENS
-        # Strict gateways (breeze/sglang) 400 prefix-only requests — see the
-        # constant's comment. Appended after parity is locked in, so it can
-        # never contaminate the warmed prefix.
-        params["messages"] = [
-            *params["messages"],
-            {"role": "user", "content": _PREFILL_SYNTHETIC_USER_TURN},
-        ]
-
-        response = await asyncio.wait_for(
-            llm_service._client.chat.completions.create(**params),
-            timeout=_PREFILL_TIMEOUT_SECS,
-        )
+        if isinstance(llm_service, OpenAIResponsesHttpLLMService):
+            params = _responses_prefill_params(llm_service, context)
+            request = llm_service._client.responses.create(**params)
+        else:
+            params = _chat_prefill_params(llm_service, context)
+            request = llm_service._client.chat.completions.create(**params)
+        response = await asyncio.wait_for(request, timeout=_PREFILL_TIMEOUT_SECS)
     except Exception as exc:  # noqa: BLE001 — prefill is best-effort by design
         logger.opt(exception=exc).warning(
             f"prefill: failed ({type(exc).__name__}: {str(exc)[:160]}) — "
@@ -204,7 +193,14 @@ async def prefill_system_prompt(
         return
 
     usage = getattr(response, "usage", None)
-    details = getattr(usage, "prompt_tokens_details", None)
+    # chat reports prompt_tokens/prompt_tokens_details; responses reports
+    # input_tokens/input_tokens_details.
+    prompt_tokens = getattr(usage, "prompt_tokens", None)
+    if prompt_tokens is None:
+        prompt_tokens = getattr(usage, "input_tokens", "?")
+    details = getattr(usage, "prompt_tokens_details", None) or getattr(
+        usage, "input_tokens_details", None
+    )
     # Newer Azure model families (GPT-5.6+) can bill cache writes separately
     # from discounted reads — surface the write count when the provider
     # reports it (absent on gpt-4.1/4o today).
@@ -213,9 +209,52 @@ async def prefill_system_prompt(
     logger.info(
         f"prefill: warmed model={params['model']} "
         f"ms={round((time.monotonic() - started) * 1000)} "
-        f"prompt={getattr(usage, 'prompt_tokens', '?')} "
+        f"prompt={prompt_tokens} "
         f"cached={getattr(details, 'cached_tokens', None)}{write_note}"
     )
+
+
+def _chat_prefill_params(llm_service: Any, context: LLMContext) -> Dict[str, Any]:
+    """The /chat/completions parity request (see module docstring)."""
+    adapter = llm_service.get_llm_adapter()
+    invocation = adapter.get_llm_invocation_params(
+        context,
+        system_instruction=llm_service._settings.system_instruction,
+        convert_developer_to_user=not llm_service.supports_developer_role,
+    )
+    params = llm_service.build_chat_completion_params(invocation)
+    # Non-streaming one-shot; drop the streaming-only usage option and the
+    # settings' completion budget in favor of the prefill's own (above).
+    params["stream"] = False
+    params.pop("stream_options", None)
+    params.pop("max_tokens", None)
+    params["max_completion_tokens"] = _PREFILL_MAX_COMPLETION_TOKENS
+    # Strict gateways (breeze/sglang) 400 prefix-only requests — see the
+    # constant's comment. Appended after parity is locked in, so it can
+    # never contaminate the warmed prefix.
+    params["messages"] = [
+        *params["messages"],
+        {"role": "user", "content": _PREFILL_SYNTHETIC_USER_TURN},
+    ]
+    return params
+
+
+def _responses_prefill_params(
+    llm_service: OpenAIResponsesHttpLLMService, context: LLMContext
+) -> Dict[str, Any]:
+    """The /v1/responses parity request (see module docstring)."""
+    adapter = llm_service.get_llm_adapter()
+    invocation = adapter.get_llm_invocation_params(
+        context, system_instruction=llm_service._settings.system_instruction
+    )
+    params = llm_service._build_response_params(invocation)
+    params["stream"] = False
+    params["max_output_tokens"] = _PREFILL_MAX_COMPLETION_TOKENS
+    params["input"] = [
+        *params["input"],
+        {"role": "user", "content": _PREFILL_SYNTHETIC_USER_TURN},
+    ]
+    return params
 
 
 def _function_entries(

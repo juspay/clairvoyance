@@ -11,6 +11,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ObserverConfig,
     TemplateModel,
 )
+from app.ai.voice.llm import uses_responses_surface
 from app.ai.voice.llm.types import LLMConfiguration
 from app.core.logger import logger
 
@@ -26,19 +27,26 @@ def merge_llm_config(
     Inherits provider, model, and connection details from base.
     Only temperature (0.1) and max_tokens (256) have observer-specific
     defaults — observers need low temperature for precision and fewer
-    tokens since they only make tool calls.
+    tokens since they only make tool calls. On the /v1/responses surface
+    (Bedrock) reasoning models reject ``temperature`` outright, so no
+    default is injected there — same rule as ``_resolve_openai``.
     """
     observer_llm = override or LLMConfiguration()
+    endpoint = observer_llm.endpoint or base.endpoint
+    if observer_llm.temperature is not None:
+        temperature = observer_llm.temperature
+    elif uses_responses_surface(endpoint):
+        temperature = None
+    else:
+        temperature = 0.1
     return LLMConfiguration(
         provider=observer_llm.provider or base.provider,
         sdk=observer_llm.sdk or base.sdk,
         model=observer_llm.model or base.model,
         region=observer_llm.region or base.region,
-        endpoint=observer_llm.endpoint or base.endpoint,
+        endpoint=endpoint,
         api_key_name=observer_llm.api_key_name or base.api_key_name,
-        temperature=(
-            observer_llm.temperature if observer_llm.temperature is not None else 0.1
-        ),
+        temperature=temperature,
         max_tokens=(
             observer_llm.max_tokens if observer_llm.max_tokens is not None else 256
         ),

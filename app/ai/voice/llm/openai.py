@@ -4,18 +4,34 @@ Plain construction for now (stock pipecat behavior). An optional ``base_url``
 lets us point the stock pipecat OpenAI client at any OpenAI-compatible
 endpoint (e.g. the Juspay Grid LLM gateway) without a bespoke service class —
 pipecat passes it straight through to the AsyncOpenAI client.
+
+``build_openai_llm`` targets ``/chat/completions`` (the default).
+``build_openai_responses_llm`` targets ``/v1/responses``, which Bedrock
+requires for function tools with reasoning; ``uses_responses_surface`` picks.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
 
 from app.core.logger import logger
 
-__all__ = ["OpenAIConfig", "build_openai_llm"]
+__all__ = [
+    "OpenAIConfig",
+    "OpenAITextLLMService",
+    "build_openai_llm",
+    "build_openai_responses_llm",
+    "uses_responses_surface",
+]
+
+# Either text-LLM service the OpenAI provider path can return. They are
+# unrelated pipecat classes, so type-dispatching consumers must handle both.
+OpenAITextLLMService = OpenAILLMService | OpenAIResponsesHttpLLMService
 
 
 @dataclass
@@ -32,6 +48,19 @@ class OpenAIConfig:
     extra_body: Optional[Dict[str, Any]] = None
     disable_thinking: bool = False
     function_call_timeout_secs: float = 10.0
+
+
+def uses_responses_surface(base_url: Optional[str]) -> bool:
+    """True when ``base_url`` is a Bedrock endpoint, which must use ``/v1/responses``.
+
+    Bedrock's ``/chat/completions`` rejects function tools unless
+    ``reasoning_effort`` is exactly ``"none"``. Every other endpoint keeps
+    ``/chat/completions``.
+    """
+    if not base_url:
+        return False
+    host = (urlparse(base_url).hostname or "").lower()
+    return "bedrock" in host
 
 
 def build_openai_llm(config: OpenAIConfig) -> OpenAILLMService:
@@ -104,3 +133,50 @@ def build_openai_llm(config: OpenAIConfig) -> OpenAILLMService:
         service.supports_developer_role = False
 
     return service
+
+
+def build_openai_responses_llm(
+    config: OpenAIConfig,
+) -> OpenAIResponsesHttpLLMService:
+    """Create an OpenAI LLM service targeting ``/v1/responses``.
+
+    Bedrock rules: reasoning is the nested ``reasoning.effort`` object and
+    ``disable_thinking`` maps to ``effort="none"`` (no ``chat_template_kwargs``);
+    ``temperature`` is sent only when set (reasoning models accept only 1);
+    ``extra_body`` stays in the SDK's ``extra_body`` kwarg; ``tool_choice``
+    passes through.
+
+    Args:
+        config: model + auth + sampling parameters.
+    """
+    logger.info(
+        f"Building OpenAI Responses LLM service with model={config.model}, "
+        f"base_url={config.base_url or 'default'}, "
+        f"reasoning_effort={config.reasoning_effort}, "
+        f"tool_choice={config.tool_choice}, "
+        f"disable_thinking={config.disable_thinking}"
+    )
+
+    extra: dict[str, Any] = {}
+    if config.reasoning_effort:
+        extra["reasoning"] = {"effort": config.reasoning_effort}
+    elif config.disable_thinking:
+        extra["reasoning"] = {"effort": "none"}
+    if config.tool_choice:
+        extra["tool_choice"] = config.tool_choice
+    if config.extra_body:
+        extra["extra_body"] = dict(config.extra_body)
+
+    settings_kwargs: dict[str, Any] = {"model": config.model, "extra": extra}
+    if config.temperature is not None:
+        settings_kwargs["temperature"] = config.temperature
+    if config.max_tokens is not None:
+        # Becomes max_output_tokens; reasoning tokens share this budget.
+        settings_kwargs["max_completion_tokens"] = config.max_tokens
+
+    return OpenAIResponsesHttpLLMService(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        settings=OpenAIResponsesHttpLLMService.Settings(**settings_kwargs),
+        function_call_timeout_secs=config.function_call_timeout_secs,
+    )
