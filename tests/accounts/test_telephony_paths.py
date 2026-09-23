@@ -7,10 +7,13 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
 import pytest
+from yarl import URL
 
 import app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account as plivo_account
 import app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo as plivo_mod
 import app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording as recording
+import app.core.network.aiohttp_request as net_mod
+import app.core.network.egress as egress_mod
 from app.ai.voice.agents.breeze_buddy.accounts import AccountRefused, PlivoAccount
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
     lead_plivo_account,
@@ -87,14 +90,39 @@ def test_the_mpc_callback_always_answers_the_waiting_bot(
 
 @pytest.fixture
 def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
-    """aiohttp.ClientSession, faked: each GET's (url, auth), answered 200."""
+    """Each request's (url, auth), answered 200.
+
+    The download goes through app.core.network now, so the seam is that
+    package's session factory rather than aiohttp.ClientSession here, and the
+    resolver is stubbed because the guard looks the host up before connecting.
+    The request is pinned to the validated address, so the url recorded is the
+    address with the real host in the Host header — assert on auth and on the
+    Host header, not on the url's hostname.
+    """
     seen: List[Tuple[str, Any]] = []
+
+    class Content:
+        """The body is read in chunks now, so the cap can stop mid-transfer."""
+
+        def __init__(self) -> None:
+            self._left = b"mp3"
+
+        async def read(self, _n: int) -> bytes:
+            out, self._left = self._left, b""
+            return out
 
     class Response:
         status = 200
+        headers: dict = {}
+
+        def __init__(self) -> None:
+            self.content = Content()
 
         async def read(self) -> bytes:
             return b"mp3"
+
+        def release(self) -> None:
+            return None
 
         async def __aenter__(self) -> "Response":
             return self
@@ -103,7 +131,17 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
             return None
 
     class Session:
-        def get(self, url: str, auth: Any = None, proxy: Any = None) -> Response:
+        timeout = None
+
+        async def request(
+            self, method: str, url: str, auth: Any = None, **kw: Any
+        ) -> Response:
+            # The guard pins to the validated address and carries the real
+            # host in the Host header. Put it back so the assertion below can
+            # still be about the URL the caller asked for.
+            host = (kw.get("headers") or {}).get("Host")
+            if host:
+                url = str(URL(url).with_host(host))
             seen.append((url, auth))
             return Response()
 
@@ -113,7 +151,11 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
         async def __aexit__(self, *_a: Any) -> None:
             return None
 
-    monkeypatch.setattr(recording.aiohttp, "ClientSession", Session)
+    async def _resolves_public(hostname: str, port: int) -> List[str]:
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(net_mod, "create_aiohttp_session", lambda **kw: Session())
+    monkeypatch.setattr(egress_mod, "_resolve_host", _resolves_public)
     return seen
 
 

@@ -62,7 +62,7 @@ def limiter(harness, monkeypatch):
     async def _alert(error):
         state.alerts.append(error)
 
-    async def _webhook(session, url, data):
+    async def _webhook(url, data, max_retries=3):
         state.webhooks.append((url, data))
         return True
 

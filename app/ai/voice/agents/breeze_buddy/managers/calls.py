@@ -70,7 +70,6 @@ from app.core.config.static import (
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
 from app.core.logger import logger
-from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     create_lead_call_tracker,
@@ -150,7 +149,6 @@ async def _run_pre_checks_for_lead(
     config: CallExecutionConfig,
     lead: LeadCallTracker,
     template: Optional[TemplateModel],
-    session,
 ) -> Tuple[PreCheckDecision, int]:
     """
     Run pre-checks for a lead and handle failure cases.
@@ -176,7 +174,6 @@ async def _run_pre_checks_for_lead(
         pre_checks=config.pre_checks,
         lead=lead,
         template=template,
-        session=session,
     )
 
     if pre_check_result.should_proceed:
@@ -289,7 +286,7 @@ async def _run_pre_checks_for_lead(
             "orderId": lead.request_id,
         }
         try:
-            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+            await send_webhook_with_retry(reporting_webhook_url, webhook_data)
         except Exception as e:
             logger.error(
                 f"Error sending pre-check failure webhook for lead {lead.id}: {e}"
@@ -299,7 +296,7 @@ async def _run_pre_checks_for_lead(
 
 
 async def finish_lead_call_limit_reached(
-    lead: LeadCallTracker, verdict: CallLimitVerdict, session
+    lead: LeadCallTracker, verdict: CallLimitVerdict
 ) -> bool:
     """End a lead the merchant's per-customer call rule refused (ADR 0025).
 
@@ -363,7 +360,7 @@ async def finish_lead_call_limit_reached(
             "orderId": lead.request_id,
         }
         try:
-            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+            await send_webhook_with_retry(reporting_webhook_url, webhook_data)
         except Exception as e:
             logger.error(f"Error sending call-limit webhook for lead {lead.id}: {e}")
     return True
@@ -669,18 +666,17 @@ async def _retry_call(
             }
 
             try:
-                async with create_aiohttp_session() as session:
-                    success = await send_webhook_with_retry(
-                        session, reporting_webhook_url, summary_data, max_retries=3
+                success = await send_webhook_with_retry(
+                    reporting_webhook_url, summary_data, max_retries=3
+                )
+                if success:
+                    logger.info(
+                        f"Successfully sent call summary webhook on no_answer (attempt {lead.attempt_count + 1}, isLastAttempt: {is_last_attempt})."
                     )
-                    if success:
-                        logger.info(
-                            f"Successfully sent call summary webhook on no_answer (attempt {lead.attempt_count + 1}, isLastAttempt: {is_last_attempt})."
-                        )
-                    else:
-                        logger.error(
-                            "Failed to send call summary webhook on no_answer after all retries."
-                        )
+                else:
+                    logger.error(
+                        "Failed to send call summary webhook on no_answer after all retries."
+                    )
             except Exception as e:
                 logger.error(f"Error sending webhook on no_answer: {e}")
 

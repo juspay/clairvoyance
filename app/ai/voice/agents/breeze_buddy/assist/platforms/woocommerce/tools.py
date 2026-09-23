@@ -17,7 +17,7 @@ from app.ai.voice.agents.breeze_buddy.assist.platforms.woocommerce.store_api imp
 )
 from app.ai.voice.agents.breeze_buddy.mcp.server import ToolError
 from app.core.logger import logger
-from app.core.security.ssrf import SSRFError
+from app.core.network import SSRFError
 
 _TOOLS = {
     "search_catalog": catalog.search_catalog,

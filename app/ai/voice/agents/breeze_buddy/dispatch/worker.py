@@ -475,7 +475,7 @@ class Worker:
                 )
 
             pre_check_decision, pre_check_defer = await _run_pre_checks_for_lead(
-                config, locked, template, session
+                config, locked, template
             )
             if pre_check_decision is PreCheckDecision.ABORT:
                 # _run_pre_checks_for_lead already set status to FINISHED on
@@ -548,9 +548,7 @@ class Worker:
                             rules=call_limits,
                         )
                         if not verdict.allowed:
-                            await finish_lead_call_limit_reached(
-                                locked, verdict, session
-                            )
+                            await finish_lead_call_limit_reached(locked, verdict)
                             lock_released = await self._release(locked.id)
                             return
                 except CallLimitUnavailable as e:
@@ -742,7 +740,7 @@ class Worker:
                     # Lost the race to another worker dialling the same
                     # customer, or the window filled since the peek.
                     await _return_capacity(number, token)
-                    await finish_lead_call_limit_reached(locked, verdict, session)
+                    await finish_lead_call_limit_reached(locked, verdict)
                     lock_released = await self._release(locked.id)
                     return
                 call_limit_member = verdict.member

@@ -53,6 +53,13 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 # GCS Configuration
 GCS_CREDENTIALS_JSON = os.environ.get("GCS_CREDENTIALS_JSON", "")
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "atoms-sdk")
+# The public host a stored recording is served back from: the uploader builds
+# that URL, and a deployment serving them from anywhere else sets this rather
+# than editing code. The telephony download path no longer needs to recognise
+# it — reachability is not gated on a hostname there, only credentials are.
+RECORDING_STORAGE_HOST = os.environ.get(
+    "RECORDING_STORAGE_HOST", "sdk.beta.breezesdk.store"
+)
 
 # TTS Voice Catalog — preview storage (GCS only). Separate from GCS_BUCKET
 # above (which is the recordings bucket) so previews can live in their own.
@@ -410,7 +417,7 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
 
 # JWT Authentication Configuration
-# Local-dev escape hatch for the SSRF egress guard (app/core/security/ssrf.py):
+# Local-dev escape hatch for the SSRF egress guard (app/core/network/):
 # when true, egress to private/loopback ranges is permitted. Defaults to false
 # so the secure posture never depends on ENVIRONMENT being set correctly.
 SSRF_ALLOW_PRIVATE_EGRESS = os.environ.get(

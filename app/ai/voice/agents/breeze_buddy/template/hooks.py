@@ -352,7 +352,7 @@ class ExternalHTTPHook(Hook):
         Execute HTTP request with simple value resolution.
 
         Args:
-            context: Handler context with bot state access (includes aiohttp_session)
+            context: Handler context with bot state access
             args: Function arguments from LLM
             function_name: Name of the function that triggered this hook
             hook_config: Complete hook configuration - this hook extracts http_request
@@ -365,12 +365,6 @@ class ExternalHTTPHook(Hook):
         if not http_request:
             logger.error(
                 f"ExternalHTTPHook requires http_request config for function '{function_name}'"
-            )
-            return
-
-        if not context.aiohttp_session:
-            logger.error(
-                f"No aiohttp_session available in context for function '{function_name}'"
             )
             return
 
@@ -400,7 +394,7 @@ class ExternalHTTPHook(Hook):
         )
 
         # Create executor
-        executor = HttpRequestExecutor(session=context.aiohttp_session)
+        executor = HttpRequestExecutor()
 
         logger.info(
             f"Executing HTTP {http_request.method.value} request to {http_request.url} "
