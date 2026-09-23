@@ -117,6 +117,11 @@ async def list_credentials_endpoint(
         None,
         description="With reseller_id: also include that merchant's own rows.",
     ),
+    provider: Optional[str] = Query(
+        None,
+        description="Only provider accounts for this service (e.g. 'elevenlabs'): "
+        "the rows a template's credential_id may name.",
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -165,7 +170,9 @@ async def list_credentials_endpoint(
             detail=f"Access denied to merchant {merchant_id}",
         )
 
-    return await list_credentials_handler(reseller_id, current_user, merchant_id)
+    return await list_credentials_handler(
+        reseller_id, current_user, merchant_id, provider
+    )
 
 
 @router.get("/credentials/{credential_id}", response_model=Credential)

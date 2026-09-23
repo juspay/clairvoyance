@@ -1,8 +1,16 @@
 """TTS service utilities for Breeze Buddy voice agent."""
 
+from typing import Optional
+
 from pipecat.services.cartesia.tts import GenerationConfig
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.agents.breeze_buddy.provider_credentials import (
+    Accounts,
+    GcpAccount,
+    KeyAccount,
+    unwrap_dragontts,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     TTSConfig,
@@ -41,25 +49,16 @@ from app.ai.voice.tts.sarvam import _generate_sarvam_audio
 from app.ai.voice.tts.soniox import _generate_soniox_audio
 from app.core.config.dynamic import (
     BB_AGGREGATE_SENTENCES,
-    BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY,
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
     BB_STRIP_EMOJIS_FROM_TTS,
     BB_TTS_SERVICE,
     BB_VOICE_PROVIDER_DEFAULTS,
     DRAGONTTS_URL,
 )
-from app.core.config.static import (
-    CARTESIA_API_KEY,
-    ELEVENLABS_API_KEY,
-    ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
-    ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
-    GOOGLE_CREDENTIALS_JSON,
-    SARVAM_API_KEY,
-    SONIOX_API_KEY,
-)
 from app.core.logger import logger
 
 _VOICE_CONFIG_FIELDS = (
+    "credential_id",
     "voice_id",
     "model",
     "language",
@@ -117,7 +116,11 @@ async def resolve_voice_config(
         val = getattr(effective_config, field, None)
         merged[field] = val if val is not None else defaults.get(field)
 
-    return TTSConfig(provider=effective_config.provider, **merged)
+    # A DragonTTS voice WITH an account is the nested provider's voice: the
+    # unwrap happens once, here, after the merge — so whichever config won
+    # (override, template, payload) is the one whose account is checked
+    # against the provider that really synthesizes (review, 24 Sep 2026).
+    return unwrap_dragontts(TTSConfig(provider=effective_config.provider, **merged))
 
 
 def _parse_language(code: str | None, fallback: Language = Language.EN) -> Language:
@@ -133,9 +136,21 @@ def _parse_language(code: str | None, fallback: Language = Language.EN) -> Langu
         return fallback
 
 
-async def get_tts_service(voice_config: TTSConfig):
-    """Build a TTS service from a resolved TTSConfig."""
+async def get_tts_service(
+    voice_config: TTSConfig,
+    accounts: Optional[Accounts] = None,
+):
+    """Build a TTS service from a resolved TTSConfig.
+
+    ``accounts`` is the call's account resolver (provider_credentials): the
+    voice's own row when it names one, else the environment's key. A voice
+    with an account is synthesized by its provider directly — never through
+    the DragonTTS proxy, which holds its own keys and would bill its own
+    account (resolve_voice_config already unwrapped such a voice).
+    """
+    voice_config = unwrap_dragontts(voice_config)
     provider = voice_config.provider.value
+    resolver = accounts or Accounts()
 
     # Emoji stripping applies to EVERY provider/flow, DragonTTS included.
     # pipecat runs these filters only on the string sent to the TTS provider
@@ -154,8 +169,9 @@ async def get_tts_service(voice_config: TTSConfig):
     # is "0", so enable_tts_caching templates fall through to their upstream
     # provider directly (graceful — calls work, just uncached). Legacy
     # provider="dragontts" is intentionally not health-gated.
-    if provider == "dragontts" or (
-        voice_config.enable_tts_caching is True and await is_dragontts_healthy()
+    if not voice_config.credential_id and (
+        provider == "dragontts"
+        or (voice_config.enable_tts_caching is True and await is_dragontts_healthy())
     ):
         if provider == "dragontts":
             # Legacy: model already carries "<provider>:<model>".
@@ -204,30 +220,23 @@ async def get_tts_service(voice_config: TTSConfig):
         f"enable_ssml_parsing={voice_config.enable_ssml_parsing}, stability={voice_config.stability}, similarity_boost={voice_config.similarity_boost}"
     )
 
+    # The voice's account: key and host together (provider_credentials).
+    account = await resolver.get(voice_config)
+
     if provider == "elevenlabs":
-        use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
-        if use_indian_residency and not ELEVENLABS_INDIAN_RESIDENCY_API_KEY:
-            raise ValueError(
-                "ELEVENLABS_INDIAN_RESIDENCY_API_KEY is required when BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY is True"
-            )
-        if not use_indian_residency and not ELEVENLABS_API_KEY:
-            raise ValueError("ELEVENLABS_API_KEY is not set")
+        # The account carries the cluster it lives on — the deployment's
+        # (BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY, India by default), for a
+        # row's key and the env key alike (ruled 24 Sep 2026).
+        assert isinstance(account, KeyAccount)
+        api_key = account.api_key
+        url = account.endpoint or "wss://api.elevenlabs.io"
 
         aggregate = await BB_AGGREGATE_SENTENCES("elevenlabs")
 
         return build_elevenlabs_tts(
             ElevenLabsConfig(
-                api_key=(
-                    ELEVENLABS_INDIAN_RESIDENCY_API_KEY
-                    if use_indian_residency
-                    else ELEVENLABS_API_KEY
-                )
-                or "",
-                url=(
-                    ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL
-                    if use_indian_residency
-                    else "wss://api.elevenlabs.io"
-                ),
+                api_key=api_key,
+                url=url,
                 voice_id=voice_config.voice_id or "",
                 model=voice_config.model or "eleven_flash_v2_5",
                 speed=voice_config.speed or 1.0,
@@ -241,8 +250,8 @@ async def get_tts_service(voice_config: TTSConfig):
         )
 
     elif provider == "cartesia":
-        if not CARTESIA_API_KEY:
-            raise ValueError("CARTESIA_API_KEY is required for Cartesia TTS")
+        assert isinstance(account, KeyAccount)
+        api_key = account.api_key
 
         aggregate = await BB_AGGREGATE_SENTENCES("cartesia")
 
@@ -254,7 +263,7 @@ async def get_tts_service(voice_config: TTSConfig):
 
         return build_cartesia_tts(
             CartesiaConfig(
-                api_key=CARTESIA_API_KEY,
+                api_key=api_key,
                 voice_id=voice_config.voice_id or "",
                 model=voice_config.model or "sonic-3.5",
                 language=_parse_language(voice_config.language),
@@ -265,14 +274,14 @@ async def get_tts_service(voice_config: TTSConfig):
         )
 
     elif provider == "sarvam":
-        if not SARVAM_API_KEY:
-            raise ValueError("SARVAM_API_KEY is required for Sarvam TTS")
+        assert isinstance(account, KeyAccount)
+        api_key = account.api_key
 
         enable_preprocessing = await BB_SARVAM_TTS_ENABLE_PREPROCESSING()
 
         return build_sarvam_tts(
             SarvamTTSConfig(
-                api_key=SARVAM_API_KEY,
+                api_key=api_key,
                 model=voice_config.model or "bulbul:v3",
                 voice_id=voice_config.voice_id or "shreya",
                 language_code=voice_config.language or "en-IN",
@@ -284,8 +293,8 @@ async def get_tts_service(voice_config: TTSConfig):
         )
 
     elif provider == "gemini":
-        if not GOOGLE_CREDENTIALS_JSON:
-            raise ValueError("GOOGLE_CREDENTIALS_JSON is required for Gemini TTS")
+        assert isinstance(account, GcpAccount)
+        credentials_json = account.credentials_json
 
         return await build_gemini_tts(
             GeminiConfig(
@@ -293,14 +302,14 @@ async def get_tts_service(voice_config: TTSConfig):
                 model=voice_config.model,  # None → build_gemini_tts resolves via BB_GEMINI_TTS_MODEL()
                 language=_parse_language(voice_config.language, Language.EN_IN),
                 style_prompt=getattr(voice_config, "style_prompt", None),
-                credentials=GOOGLE_CREDENTIALS_JSON,
+                credentials=credentials_json,
                 text_filters=text_filters,
             )
         )
 
     elif provider == "google":
-        if not GOOGLE_CREDENTIALS_JSON:
-            raise ValueError("GOOGLE_CREDENTIALS_JSON is required for Google TTS")
+        assert isinstance(account, GcpAccount)
+        credentials_json = account.credentials_json
 
         # Chirp 3 HD: the voice name (e.g. en-IN-Chirp3-HD-Despina) encodes both
         # the model and locale, so there is no model field. Language should match
@@ -309,20 +318,20 @@ async def get_tts_service(voice_config: TTSConfig):
             GoogleConfig(
                 voice_id=voice_config.voice_id or "en-IN-Chirp3-HD-Despina",
                 language=_parse_language(voice_config.language, Language.EN_IN),
-                credentials=GOOGLE_CREDENTIALS_JSON,
+                credentials=credentials_json,
                 text_filters=text_filters,
             )
         )
 
     elif provider == "soniox":
-        if not SONIOX_API_KEY:
-            raise ValueError("SONIOX_API_KEY is required for Soniox TTS")
+        assert isinstance(account, KeyAccount)
+        api_key = account.api_key
 
         aggregate = await BB_AGGREGATE_SENTENCES("soniox")
 
         return build_soniox_tts(
             SonioxTTSConfig(
-                api_key=SONIOX_API_KEY,
+                api_key=api_key,
                 voice=voice_config.voice_id or "Priya",
                 model=voice_config.model or "tts-rt-v1",
                 language=_parse_language(voice_config.language, Language.EN),
@@ -339,6 +348,7 @@ async def generate_audio(
     text: str,
     voice_config: TTSConfig | None = None,
     configurations: ConfigurationModel | None = None,
+    accounts: Optional[Accounts] = None,
 ) -> bytes:
     """Synthesize text to audio bytes using the resolved voice configuration.
 
@@ -374,10 +384,13 @@ async def generate_audio(
     # upstream with enable_tts_caching on AND DragonTTS healthy (synthesize
     # model "<provider>:<model>"). When DragonTTS is down, enable_tts_caching
     # greetings synthesize via the upstream directly.
-    if provider == "dragontts" or (
-        provider != "dragontts"
-        and resolved.enable_tts_caching is True
-        and await is_dragontts_healthy()
+    if not resolved.credential_id and (
+        provider == "dragontts"
+        or (
+            provider != "dragontts"
+            and resolved.enable_tts_caching is True
+            and await is_dragontts_healthy()
+        )
     ):
         if provider != "dragontts":
             if not resolved.model:
@@ -390,6 +403,13 @@ async def generate_audio(
             )
         return await _generate_dragontts_audio(text=text, resolved=resolved)
 
+    # The voice's account — a row's or the environment's — key and host
+    # together (provider_credentials.Accounts), the same answer the live
+    # path gets for the same voice.
+    account = await (accounts or Accounts()).get(resolved)
+    account_key = getattr(account, "api_key", None)
+    account_credentials_json = getattr(account, "credentials_json", None)
+
     if provider == "sarvam":
         audio_data = await _generate_sarvam_audio(
             text=text,
@@ -398,10 +418,14 @@ async def generate_audio(
             language=resolved.language,
             speed=resolved.speed,
             pitch=resolved.pitch,
+            api_key=account_key,
         )
         input_format = "raw"
     elif provider == "elevenlabs":
-        use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
+        # The account's host decides the cluster, as on the live path.
+        use_indian_residency = (
+            getattr(account, "endpoint", None) or ""
+        ) != "wss://api.elevenlabs.io"
         audio_data = await _generate_elevenlabs_audio(
             text=text,
             voice_id=resolved.voice_id,
@@ -413,6 +437,7 @@ async def generate_audio(
             language=(
                 _parse_language(resolved.language) if resolved.language else None
             ),
+            api_key=account_key,
         )
         input_format = "ulaw"
     elif provider == "cartesia":
@@ -420,6 +445,7 @@ async def generate_audio(
             text=text,
             voice_id=resolved.voice_id,
             model=resolved.model,
+            api_key=account_key,
         )
         input_format = "raw"
     elif provider == "gemini":
@@ -429,6 +455,7 @@ async def generate_audio(
             model=resolved.model,
             language=resolved.language,
             style_prompt=getattr(resolved, "style_prompt", None),
+            credentials_json=account_credentials_json,
         )
         # _generate_gemini_audio already downsamples to 16 kHz PCM
         input_format = "raw"
@@ -437,6 +464,7 @@ async def generate_audio(
             text=text,
             voice_id=resolved.voice_id,
             language=resolved.language,
+            credentials_json=account_credentials_json,
         )
         # _generate_google_audio already downsamples to 16 kHz PCM
         input_format = "raw"
@@ -446,6 +474,7 @@ async def generate_audio(
             voice=resolved.voice_id,
             model=resolved.model,
             language=resolved.language,
+            api_key=account_key,
         )
         input_format = "raw"
     else:

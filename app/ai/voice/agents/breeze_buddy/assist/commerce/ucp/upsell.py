@@ -41,6 +41,9 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from app.ai.voice.agents.breeze_buddy.provider_credentials import (
+    accounts_for_template,
+)
 from app.core.logger import logger
 
 # Overall wall-clock budget for the whole followup (LLM pick + search +
@@ -193,7 +196,13 @@ async def _pick_complement_queries(
     )
     from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 
-    service = await get_llm_service(resolve_llm_configuration(template), pooled=True)
+    # The template's own LLM account (provider_credentials), like every
+    # other turn this template speaks: None = today's env keys.
+    service = await get_llm_service(
+        resolve_llm_configuration(template),
+        pooled=True,
+        accounts=accounts_for_template(template),
+    )
     model = service._settings.model
     # Gemini-only micro-call: the google-genai client is the one with
     # `.aio` (the service union also covers Anthropic/OpenAI engines —

@@ -26,6 +26,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.stt import AssemblyAIConfig, build_assemblyai_stt
 from app.ai.voice.stt.assemblyai import AssemblyAISTTServiceWithLanguageCodes
+from app.core.config import static
 
 
 def _params(svc, sample_rate: int = 8000) -> dict[str, str]:
@@ -112,7 +113,7 @@ async def test_turn_detection_maps_to_endpoint_mode(monkeypatch, mode, expected)
     it gets no VAD, BREEZE_BUDDY_ENABLE_VAD defaults False, and without that
     frame AssemblyAI is never told to close a turn -- no final transcript for
     the whole call."""
-    monkeypatch.setattr(bb_stt_mod, "ASSEMBLYAI_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(provider=STTProvider.ASSEMBLYAI, turn_detection=mode)
     )
@@ -123,7 +124,7 @@ async def test_turn_detection_maps_to_endpoint_mode(monkeypatch, mode, expected)
 async def test_assemblyai_endpointing_requires_the_pro_model(monkeypatch):
     """pipecat raises ValueError for vad_force_turn_endpoint=False on a
     non-u3-pro model. Rejecting it here names the template field instead."""
-    monkeypatch.setattr(bb_stt_mod, "ASSEMBLYAI_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
     with pytest.raises(ValueError, match="Universal-3.5 Pro"):
         await create_stt_from_config(
             STTConfiguration(
@@ -136,7 +137,7 @@ async def test_assemblyai_endpointing_requires_the_pro_model(monkeypatch):
 
 async def test_non_pro_model_is_fine_under_smart_turn(monkeypatch):
     """The coupling only applies to AssemblyAI-side endpointing."""
-    monkeypatch.setattr(bb_stt_mod, "ASSEMBLYAI_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ASSEMBLYAI,
@@ -148,14 +149,14 @@ async def test_non_pro_model_is_fine_under_smart_turn(monkeypatch):
 
 
 async def test_missing_api_key_raises(monkeypatch):
-    monkeypatch.setattr(bb_stt_mod, "ASSEMBLYAI_API_KEY", "")
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "")
     with pytest.raises(ValueError, match="ASSEMBLYAI_API_KEY"):
         await create_stt_from_config(STTConfiguration(provider=STTProvider.ASSEMBLYAI))
 
 
 async def test_legacy_env_provider_map_routes_assemblyai(monkeypatch):
     monkeypatch.setattr(bb_stt_mod, "BREEZE_BUDDY_STT_SERVICE", "assemblyai")
-    monkeypatch.setattr(bb_stt_mod, "ASSEMBLYAI_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
     svc = await bb_stt_mod.get_stt_service()
     assert isinstance(svc, AssemblyAISTTService)
 
@@ -231,7 +232,7 @@ async def test_voice_agent_tuning_survives_the_template_path(monkeypatch):
     """Regression: AssemblyAISTTConfig's defaults feed AssemblyAIConfig, so a
     None on the template model silently overrides the builder's 100/1000 and
     the recommended tuning never reaches the wire."""
-    monkeypatch.setattr(bb_stt_mod, "ASSEMBLYAI_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(provider=STTProvider.ASSEMBLYAI)
     )
@@ -285,7 +286,7 @@ def test_language_codes_capped_at_ten():
 
 
 async def test_language_codes_flow_from_template(monkeypatch):
-    monkeypatch.setattr(bb_stt_mod, "ASSEMBLYAI_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ASSEMBLYAI,

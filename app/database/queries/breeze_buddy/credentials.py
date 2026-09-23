@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
 CREDENTIALS_TABLE = "credentials"
+TEMPLATE_TABLE = "template"  # the same word queries/breeze_buddy/template.py owns
 
 
 def insert_credential_query(
@@ -17,13 +18,15 @@ def insert_credential_query(
     is_encrypted: bool,
     description: Optional[str],
     merchant_id: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Generate query to insert a credential record."""
     text = f"""
         INSERT INTO "{CREDENTIALS_TABLE}"
         ("id", "reseller_id", "merchant_id", "name", "credential_type", "value",
-         "is_encrypted", "description", "is_active", "created_at", "updated_at")
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10)
+         "is_encrypted", "description", "is_active", "created_at", "updated_at",
+         "provider")
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10, $11)
         RETURNING *;
     """
     values = [
@@ -37,14 +40,41 @@ def insert_credential_query(
         description,
         datetime.now(),
         datetime.now(),
+        provider,
     ]
     return text, values
 
 
-def get_credential_by_id_query(credential_id: str) -> Tuple[str, List[Any]]:
-    """Generate query to get a credential by ID."""
-    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" WHERE "id" = $1;'
+def get_credential_by_id_query(
+    credential_id: str, placeholder_only: bool = False
+) -> Tuple[str, List[Any]]:
+    """Generate query to get a credential by ID. ``placeholder_only`` reads
+    only a row with no `provider` — a {name} placeholder / hook credential,
+    never a provider ACCOUNT (an LLM / STT / TTS key a template names by
+    credential_id): the pre-check context asks with it, so an account's key
+    can never be pulled into a hook's variables."""
+    where = ' AND "provider" IS NULL' if placeholder_only else ""
+    text = f'SELECT * FROM "{CREDENTIALS_TABLE}" WHERE "id" = $1{where};'
     return text, [credential_id]
+
+
+# A template names a provider account by credential_id inside its
+# configurations jsonb — a reference no FK can see. This is the in-use guard,
+# exact (jsonb_path_exists, never LIKE over text: an uppercase or hyphen-less
+# spelling, or the id inside prompt text, must not fool it) and ATOMIC — the
+# same statement that deletes or strands the row asks it, so no window exists
+# between a check and the write. $1::text is the uuid's one canonical spelling.
+_NAMED_BY_A_TEMPLATE = f"""
+    EXISTS (
+        SELECT 1 FROM "{TEMPLATE_TABLE}"
+        WHERE "configurations" IS NOT NULL
+          AND jsonb_path_exists(
+                "configurations",
+                '$.** ? (@.credential_id == $id)',
+                jsonb_build_object('id', $1::text)
+              )
+    )
+"""
 
 
 def get_credentials_by_merchant_query(
@@ -68,6 +98,7 @@ def get_credentials_by_merchant_query(
                    OR ("reseller_id" = $1
                        AND ("merchant_id" IS NULL OR "merchant_id" = $2)))
             AND "is_active" = TRUE
+            AND "provider" IS NULL
             ORDER BY "reseller_id" NULLS FIRST, "merchant_id" NULLS FIRST, "name" ASC;
         """
         return text, [reseller_id, merchant_id]
@@ -77,6 +108,7 @@ def get_credentials_by_merchant_query(
             WHERE ("reseller_id" = $1 OR "reseller_id" IS NULL)
             AND "merchant_id" IS NULL
             AND "is_active" = TRUE
+            AND "provider" IS NULL
             ORDER BY "reseller_id" NULLS FIRST, "name" ASC;
         """
         return text, [reseller_id]
@@ -84,6 +116,7 @@ def get_credentials_by_merchant_query(
         text = f"""
             SELECT * FROM "{CREDENTIALS_TABLE}"
             WHERE "reseller_id" IS NULL AND "is_active" = TRUE
+            AND "provider" IS NULL
             ORDER BY "name" ASC;
         """
         return text, []
@@ -135,11 +168,23 @@ def update_credential_query(
     is_encrypted: Optional[bool] = None,
     description: Optional[str] = None,
     is_active: Optional[bool] = None,
+    provider: Optional[str] = None,
+    unless_named_by_a_template: bool = False,
 ) -> Tuple[str, List[Any]]:
-    """Generate query to update a credential. Only updates provided fields."""
+    """Generate query to update a credential. Only updates provided fields.
+
+    ``unless_named_by_a_template``: the edit would strand every template
+    that names this row as its provider account (switching it off,
+    re-labelling its provider), so the statement itself refuses while one
+    does — 0 rows back, which the accessor reports as "in use"."""
     updates = []
     values: List[Any] = []
     param_count = 1
+
+    if provider is not None:
+        updates.append(f'"provider" = ${param_count}')
+        values.append(provider)
+        param_count += 1
 
     if name is not None:
         updates.append(f'"name" = ${param_count}')
@@ -177,11 +222,14 @@ def update_credential_query(
     param_count += 1
 
     values.append(credential_id)
+    guard = ""
+    if unless_named_by_a_template:
+        guard = f" AND NOT {_NAMED_BY_A_TEMPLATE.replace('$1', f'${param_count}')}"
 
     text = f"""
         UPDATE "{CREDENTIALS_TABLE}"
         SET {', '.join(updates)}
-        WHERE "id" = ${param_count}
+        WHERE "id" = ${param_count}{guard}
         RETURNING *;
     """
 
@@ -189,6 +237,12 @@ def update_credential_query(
 
 
 def delete_credential_query(credential_id: str) -> Tuple[str, List[Any]]:
-    """Generate query to delete a credential by ID."""
-    text = f'DELETE FROM "{CREDENTIALS_TABLE}" WHERE "id" = $1 RETURNING *;'
+    """Delete a credential by ID — unless a template names it as its provider
+    account, in the same statement (see _NAMED_BY_A_TEMPLATE). 0 rows back
+    means either no such row or a row in use; the accessor tells them apart."""
+    text = f"""
+        DELETE FROM "{CREDENTIALS_TABLE}"
+        WHERE "id" = $1 AND NOT {_NAMED_BY_A_TEMPLATE}
+        RETURNING *;
+    """
     return text, [credential_id]

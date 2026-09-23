@@ -4,6 +4,9 @@ import base64
 import json
 from typing import Optional
 
+from app.ai.voice.agents.breeze_buddy.provider_credentials import (
+    accounts_for_template,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
     TemplateModel,
@@ -202,6 +205,7 @@ async def prepare_and_store_initial_greeting(
                 text=resolved_greeting,
                 voice_config=voice_config,
                 configurations=template.configurations,
+                accounts=accounts_for_template(template),
             )
 
             # Store audio and text as single JSON object in Redis (temporary, deleted after use)
@@ -236,6 +240,7 @@ async def prepare_and_store_initial_greeting(
                 text=initial_greeting,
                 voice_config=template.configurations.tts_configuration,
                 configurations=template.configurations,
+                accounts=accounts_for_template(template),
             )
             await redis.set(
                 key=template_audio_key,
@@ -317,7 +322,9 @@ async def ensure_realtime_opening_line_cached(
             )
 
     try:
-        mulaw_audio = await generate_opening_line_mulaw(initial_greeting, realtime)
+        mulaw_audio = await generate_opening_line_mulaw(
+            initial_greeting, realtime, accounts=accounts_for_template(template)
+        )
         if not mulaw_audio:
             logger.warning(
                 f"opening-line: no audio generated for template {template.id}; "

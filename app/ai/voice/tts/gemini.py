@@ -78,6 +78,7 @@ async def _generate_gemini_audio(
     model: str | None = None,
     language: str | None = None,
     style_prompt: str | None = None,
+    credentials_json: str | None = None,
 ) -> bytes:
     """Synthesize audio via the Gemini TTS streaming API.
 
@@ -99,7 +100,7 @@ async def _generate_gemini_audio(
     Raises:
         ValueError: If GOOGLE_CREDENTIALS_JSON is not set.
     """
-    credentials_json = GOOGLE_CREDENTIALS_JSON
+    credentials_json = credentials_json or GOOGLE_CREDENTIALS_JSON
     if not credentials_json:
         raise ValueError(
             "GOOGLE_CREDENTIALS_JSON is required for Gemini TTS pre-synthesis"

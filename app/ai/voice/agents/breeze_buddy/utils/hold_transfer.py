@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, cast
 from openai.types.chat import ChatCompletionMessageParam
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
 
-from app.ai.voice.agents.breeze_buddy.llm import _resolve_azure
+from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service
 
@@ -84,7 +84,7 @@ async def summarize_transcription(
         return None
 
     try:
-        llm = await _resolve_azure(None)
+        llm = await get_llm_service(None)
 
         conversation_text = "\n".join(
             f"{m['role']}: {m['content']}" for m in transcription if m.get("content")

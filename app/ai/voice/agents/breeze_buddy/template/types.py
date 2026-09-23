@@ -14,11 +14,12 @@ from pydantic import (
     StringConstraints,
     ValidationInfo,
     field_serializer,
+    field_validator,
     model_validator,
 )
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
-from app.ai.voice.llm.types import LLMConfiguration
+from app.ai.voice.llm.types import LLMConfiguration, _canonical_credential_id
 from app.core.deprecation import format_template_ref, log_deprecated_fields
 from app.core.logger import logger
 
@@ -427,9 +428,19 @@ class STTConfiguration(BaseModel):
         {"provider": "soniox"}
     """
 
+    _canonical_credential_id = field_validator("credential_id")(
+        _canonical_credential_id
+    )
+
     provider: STTProvider = Field(
         STTProvider.SONIOX,
         description="STT provider to use for this template.",
+    )
+    credential_id: Optional[str] = Field(
+        None,
+        description="The provider ACCOUNT this template's STT runs on: a "
+        "credentials-table row whose `provider` equals this block's provider, "
+        "in the template's tenant. Unset = the env key, as today.",
     )
     language: Optional[str | list[str]] = Field(
         None,
@@ -629,9 +640,21 @@ class TTSConfig(BaseModel):
         }
     """
 
+    _canonical_credential_id = field_validator("credential_id")(
+        _canonical_credential_id
+    )
+
     provider: TTSProvider = Field(
         ...,
         description="TTS provider (elevenlabs, cartesia, sarvam, gemini, google, soniox, dragontts)",
+    )
+    credential_id: Optional[str] = Field(
+        None,
+        description="The provider ACCOUNT this voice runs on: a credentials-table "
+        "row whose `provider` equals this block's provider, in the template's "
+        "tenant. Unset = the env key, as today. A voice with an account is "
+        "synthesized by the provider directly, never through the DragonTTS "
+        "proxy (which holds its own keys).",
     )
     voice_id: Optional[str] = Field(None, description="Provider-specific voice ID")
     model: Optional[str] = Field(

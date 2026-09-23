@@ -5,10 +5,55 @@ Defines provider enums and configuration models used across all voice agents.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any, Dict, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# A cloud region NAME (asia-south1, ap-south-1, us-central1). The Vertex and
+# Anthropic SDKs build the HOST from it (`{region}-aiplatform.googleapis.com`),
+# so a value with a dot or a slash would send the bearer token to another host
+# (review, 24 Sep 2026). Bedrock's botocore checks its own; this covers all.
+REGION_RE = re.compile(r"^[a-z0-9-]{1,63}$")
+
+
+def _canonical_credential_id(value: Optional[str]) -> Optional[str]:
+    """A credential_id in the one spelling the credentials table uses (lower
+    case, hyphenated), so an exact match downstream — the in-use guard in
+    SQL — can never miss an uppercase or hyphen-less spelling."""
+    if value is None or value == "":
+        return None
+    try:
+        return str(UUID(str(value)))
+    except ValueError as e:
+        raise ValueError(f"credential_id {value!r} is not a UUID") from e
+
+
+def _no_endpoint_beside_an_account(block: Any) -> Any:
+    """The endpoint law (review, 24 Sep 2026): a block that names an account
+    takes its endpoint FROM the row. An `endpoint` written beside
+    `credential_id` would send the row's key wherever the block points — a
+    shared row plus a merchant's own URL is a key exfiltration — so the
+    pair is refused wherever the block is parsed."""
+    if getattr(block, "credential_id", None) and getattr(block, "endpoint", None):
+        raise ValueError(
+            "endpoint belongs to the account row, not the block — drop it "
+            "here; the credential's endpoint is used"
+        )
+    return block
+
+
+def _region_is_a_name(value: Optional[str]) -> Optional[str]:
+    if value is None or value == "":
+        return value
+    if not REGION_RE.match(value):
+        raise ValueError(
+            f"region {value!r} is not a region name (lowercase letters, digits "
+            "and hyphens only, e.g. asia-south1)"
+        )
+    return value
 
 
 class LLMProvider(str, Enum):
@@ -44,6 +89,13 @@ class RealtimeConfig(BaseModel):
     is what enables realtime mode — there is no separate boolean flag.
     Currently supported only with template ``mode == 'direct'``.
     """
+
+    _canonical_credential_id = field_validator("credential_id")(
+        _canonical_credential_id
+    )
+    _no_endpoint_beside_an_account = model_validator(mode="after")(
+        _no_endpoint_beside_an_account
+    )
 
     provider: RealtimeLLMProvider = Field(
         ..., description="Which realtime provider to use."
@@ -104,6 +156,13 @@ class RealtimeConfig(BaseModel):
         "2025-04-01-preview&deployment=my-realtime-deployment'). "
         "Falls back to AZURE_OPENAI_REALTIME_ENDPOINT in dynamic config "
         "when unset.",
+    )
+    credential_id: Optional[str] = Field(
+        None,
+        description="The provider ACCOUNT the realtime session runs on: a "
+        "credentials-table row whose `provider` matches (openai -> "
+        "openai_realtime, xai -> xai_realtime, azure -> azure_openai_realtime, "
+        "gemini -> gemini). Unset = the global dynamic-config / env key.",
     )
 
 
@@ -183,6 +242,8 @@ class AzureThinkingPlaygroundConfig(BaseModel):
 class VertexLLMPlaygroundConfig(BaseModel):
     """User-facing Google Vertex LLM fields for playground configuration (Gemini and Claude)."""
 
+    _region_is_a_name = field_validator("region")(_region_is_a_name)
+
     model: Optional[str] = Field(
         None, description="e.g. gemini-2.0-flash or claude-3-5-sonnet"
     )
@@ -215,6 +276,8 @@ class VertexClaudeThinkingPlaygroundConfig(BaseModel):
 class BedrockLLMPlaygroundConfig(BaseModel):
     """User-facing AWS Bedrock LLM fields for playground configuration."""
 
+    _region_is_a_name = field_validator("region")(_region_is_a_name)
+
     model: Optional[str] = Field(None, description="e.g. in.openai.gpt-5.6-luna")
     region: Optional[str] = Field(None, description="e.g. ap-south-1")
     api_key_name: Optional[str] = Field(
@@ -246,6 +309,15 @@ class LLMConfiguration(BaseModel):
     deferred to a follow-up PR.
     """
 
+    _canonical_credential_id = field_validator("credential_id")(
+        _canonical_credential_id
+    )
+    _no_endpoint_beside_an_account = model_validator(mode="after")(
+        _no_endpoint_beside_an_account
+    )
+
+    _region_is_a_name = field_validator("region")(_region_is_a_name)
+
     provider: Optional[LLMProvider] = Field(
         None,
         description="Text-LLM provider. When unset, defaults to Azure inside "
@@ -274,7 +346,16 @@ class LLMConfiguration(BaseModel):
         description="Dynamic config key name to resolve the API key at runtime "
         "(required when a custom endpoint is provided for Azure or OpenAI; for "
         "AWS Bedrock, the Bedrock API key — omit to use the pod's AWS "
-        "credential chain)",
+        "credential chain). Superseded by ``credential_id`` for Azure / OpenAI "
+        "/ Vertex; kept so published plans keep working.",
+    )
+    credential_id: Optional[str] = Field(
+        None,
+        description="The provider ACCOUNT this template's text LLM runs on: a "
+        "credentials-table row whose `provider` matches this block's provider "
+        "(azure -> azure_openai, openai -> openai, google_vertex -> "
+        "google_vertex), in the template's tenant. Wins over api_key_name and "
+        "the env default. Unset = today's keys.",
     )
     temperature: Optional[float] = Field(
         None, ge=0.0, le=2.0, description="Sampling temperature"

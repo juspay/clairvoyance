@@ -32,6 +32,7 @@ from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     _send_audio,
     prepare_ivr_menu_audio,
 )
+from app.ai.voice.agents.breeze_buddy.provider_credentials import Accounts
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.hooks import HookRegistry
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -101,6 +102,7 @@ class IvrWalker:
         self.errors = agent.errors
         self.context = TemplateContext(agent)
         self.voice_config: Any = None
+        self.accounts: Optional[Accounts] = None
         # Opening-node fallback: when the initial node has no prompt of its own
         # it speaks the configured initial_greeting (already played once at call
         # start by send_initial_greeting). Captured here so it can be re-spoken
@@ -144,6 +146,20 @@ class IvrWalker:
             else None
         )
         self.voice_config = await resolve_voice_config(tts_cfg)
+        # The call's account resolver (provider_credentials): the lead's
+        # tenant. A row that stopped serving since the template was saved
+        # (deactivated, re-provided) ends the call the way any IVR error
+        # does — with an outcome and a closed socket, never a bare raise.
+        self.accounts = Accounts(
+            reseller_id=self.lead.reseller_id, merchant_id=self.lead.merchant_id
+        )
+        try:
+            await self.accounts.get(self.voice_config)
+        except ValueError as e:
+            logger.error(f"[IVR] provider account refused: {e}")
+            self.lead.outcome = IVR_ERROR_OUTCOME
+            await self._finalize_and_close(call_ended_by="system")
+            return
 
         # Parse + validate the menu tree.
         try:
@@ -393,7 +409,9 @@ class IvrWalker:
         """
         if not text:
             return 0.0
-        audio = await prepare_ivr_menu_audio(self.provider, text, self.voice_config)
+        audio = await prepare_ivr_menu_audio(
+            self.provider, text, self.voice_config, accounts=self.accounts
+        )
         if not audio:
             logger.warning(f"[IVR] Failed to synthesise audio for: {text!r}")
             return 0.0
