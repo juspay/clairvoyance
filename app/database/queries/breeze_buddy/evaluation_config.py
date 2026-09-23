@@ -93,7 +93,7 @@ def add_discovered_topics_query(
     template_id: str,
     labels: List[str],
 ) -> Tuple[str, List[Any]]:
-    query = """
+    query = f"""
         UPDATE evaluation_config config
         SET topics = config.topics || ARRAY(
             SELECT label
@@ -106,5 +106,28 @@ def add_discovered_topics_query(
         )
         WHERE config.template_id = $1::uuid
           AND config.evaluation_type = 'TOPIC'
+        RETURNING {_CONFIG_COLUMNS}
+    """
+    return query, [template_id, labels]
+
+
+def remove_topics_query(
+    template_id: str,
+    labels: List[str],
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        UPDATE evaluation_config config
+        SET topics = ARRAY(
+            SELECT existing.label
+            FROM unnest(config.topics) WITH ORDINALITY AS existing(label, position)
+            WHERE lower(btrim(existing.label)) <> ALL(
+                SELECT lower(btrim(removed.label))
+                FROM unnest($2::text[]) AS removed(label)
+            )
+            ORDER BY existing.position
+        )
+        WHERE config.template_id = $1::uuid
+          AND config.evaluation_type = 'TOPIC'
+        RETURNING {_CONFIG_COLUMNS}
     """
     return query, [template_id, labels]

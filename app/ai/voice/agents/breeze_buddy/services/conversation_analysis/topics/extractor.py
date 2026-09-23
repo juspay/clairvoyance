@@ -10,6 +10,7 @@ from pipecat.services.openai.llm import OpenAILLMService
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.llm import LLMConfiguration, LLMProvider, LLMSdk
 from app.ai.voice.llm._pools import get_openai_httpx_client
+from app.core.logger import logger
 from app.schemas.breeze_buddy.conversation_analysis import TopicExtractionResult
 from app.services.live_config.store import get_config
 
@@ -298,11 +299,17 @@ async def extract_topics(
         json.dumps(approved_catalog, ensure_ascii=False),
     )
     raw_topics = await _request_llm(prompt, formatted, runtime)
-    return validate_topic_evidence(
-        normalize_topics(
-            raw_topics,
-            max_topics=max_topics,
-            existing_topics=approved_catalog,
-        ),
-        transcript,
+    topics = normalize_topics(
+        raw_topics,
+        max_topics=max_topics,
+        existing_topics=approved_catalog,
     )
+    grounded = validate_topic_evidence(topics, transcript)
+    # A topic whose phrase is not in the customer's own words is dropped here;
+    # a high drop rate means the prompt or model paraphrases.
+    logger.bind(
+        model_topic_count=len(topics),
+        grounded_topic_count=len(grounded),
+        ungrounded_topic_count=len(topics) - len(grounded),
+    ).info(f"Topic extraction kept {len(grounded)} of {len(topics)} topics")
+    return grounded

@@ -9,6 +9,7 @@ from app.database.queries.breeze_buddy.evaluation_config import (
     get_evaluation_config_query,
     has_enabled_evaluations_query,
     initialize_evaluation_config_query,
+    remove_topics_query,
     set_evaluation_enabled_query,
     update_evaluation_configuration_query,
 )
@@ -55,6 +56,17 @@ async def update_evaluation_configuration(
     return dict(rows[0]) if rows else None
 
 
-async def add_discovered_topics(template_id: str, labels: List[str]) -> None:
+async def add_discovered_topics(
+    template_id: str, labels: List[str]
+) -> Optional[Dict[str, Any]]:
     query, values = add_discovered_topics_query(template_id, labels)
-    await run_parameterized_query(query, values)
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None
+
+
+async def remove_topics(
+    template_id: str, labels: List[str]
+) -> Optional[Dict[str, Any]]:
+    query, values = remove_topics_query(template_id, labels)
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None

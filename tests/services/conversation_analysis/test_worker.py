@@ -184,7 +184,7 @@ async def test_queue_job_is_evaluated(
         template_id=TEMPLATE_ID,
     )
     client = SimpleNamespace(
-        rpush=AsyncMock(),
+        rpush=AsyncMock(return_value=1),
         blpop=AsyncMock(
             return_value=(queue.CONVERSATION_EVALUATION_QUEUE, job.model_dump_json())
         ),
@@ -205,7 +205,10 @@ async def test_queue_job_is_evaluated(
     assert await queue.dequeue_conversation_evaluation() == job
     queued = client.rpush.await_args.args
     assert queued[0] == queue.CONVERSATION_EVALUATION_QUEUE
-    assert ConversationEvaluationJob.model_validate_json(queued[1]) == job
+    # enqueued_at is stamped at enqueue, so it is the one field that differs.
+    assert ConversationEvaluationJob.model_validate_json(queued[1]).model_dump(
+        exclude={"enqueued_at"}
+    ) == job.model_dump(exclude={"enqueued_at"})
 
     evaluation = {
         "id": "00000000-0000-0000-0000-000000000010",
