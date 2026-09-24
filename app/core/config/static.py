@@ -922,6 +922,44 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+
+# Origins that are OUR console rather than a merchant's storefront.
+#
+# A widget normally runs only on the sites its owner named, and only while it
+# is active — both right, and both also in the way of the operator who wants
+# to look at their own agent before launching it. These origins are exempt
+# from each: a page served from here is a page we built, so it may open a
+# preview session against a widget that is paused and against an origin the
+# merchant never listed.
+#
+# Origin is a browser control, not an authentication boundary — a non-browser
+# client can claim any origin it likes. What this exempts is therefore worth
+# stating plainly: someone who already knows a public widget key could use it
+# against a paused widget by claiming to be the console. The key is public by
+# design (it ships in every embed snippet), so the exposure is "a paused agent
+# can still be talked to", not "someone else's data".
+WIDGET_CONSOLE_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get(
+        "WIDGET_CONSOLE_ORIGINS",
+        "https://breezebuddy.ai,https://buddy.breezelabs.app,"
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
+# Preview traffic from the console gets its OWN per-IP hourly budget instead
+# of spending the merchant's. A merchant iterating on their greeting reloads
+# the preview a dozen times in a minute, and every reload opens a session —
+# billed, before this, against the same cap that is meant to bound anonymous
+# shoppers on their storefront. It is a separate BUCKET rather than an
+# exemption on purpose: these endpoints cost LLM calls, Origin is spoofable
+# (see WIDGET_CONSOLE_ORIGINS above), and "generous cap on its own counter"
+# is the version of this that cannot be turned into free traffic.
+WIDGET_CONSOLE_RATE_LIMIT_PER_HOUR = int(
+    os.environ.get("WIDGET_CONSOLE_RATE_LIMIT_PER_HOUR", "300")
+)
+
 # Template `custom` global functions execute author-supplied python_code. An
 # in-process interpreter sandbox is NOT a security boundary, so this feature is
 # OFF by default and must be explicitly enabled per-deployment (and only when
