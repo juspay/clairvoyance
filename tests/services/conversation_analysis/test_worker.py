@@ -103,6 +103,34 @@ async def test_prompt_replacement_preserves_json_braces(
     assert llm_config.api_key_name == "GRID_API_KEY"
 
 
+async def test_max_topics_caps_only_grounded_topics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    topics = [
+        {"type": "emi_bounce", "label": "emi bounce", "phrase": "EMI bounced"},
+        {"type": "callback", "label": "callback", "phrase": "please call me back"},
+        {"type": "downpayment", "label": "downpayment", "phrase": "down payment"},
+    ]
+    evidence = {
+        "topics": [{**t, "evidence_turns": [n]} for t, n in zip(topics, (0, 0, 1))]
+    }
+    llm = SimpleNamespace(run_inference=AsyncMock(return_value=json.dumps(evidence)))
+    monkeypatch.setattr(extractor, "get_config", AsyncMock(return_value="https://g"))
+    monkeypatch.setattr(extractor, "get_llm_service", AsyncMock(return_value=llm))
+
+    kept = await extractor.extract_topics(
+        [
+            {"role": "user", "content": "My EMI bounced twice"},
+            {"role": "user", "content": "How much down payment do I need?"},
+        ],
+        [],
+        {"model": "m", "system_prompt": "Extract", "settings": {"max_topics": 2}},
+    )
+
+    # "callback" was never said, so it must not take a slot from "downpayment".
+    assert [topic["type"] for topic in kept] == ["emi_bounce", "downpayment"]
+
+
 async def test_non_list_transcript_is_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

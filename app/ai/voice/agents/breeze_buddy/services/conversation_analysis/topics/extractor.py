@@ -190,7 +190,6 @@ def topic_labels_to_catalog(labels: Optional[List[str]]) -> List[Dict[str, str]]
 
 def normalize_topics(
     raw: Dict[str, Any],
-    max_topics: Optional[int],
     existing_topics: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     parsed = TopicExtractionResult.model_validate(raw)
@@ -227,8 +226,6 @@ def normalize_topics(
                 "evidence_turns": sorted(set(topic.evidence_turns)),
             }
         )
-        if max_topics is not None and len(normalized) >= max_topics:
-            break
     return normalized
 
 
@@ -299,17 +296,17 @@ async def extract_topics(
         json.dumps(approved_catalog, ensure_ascii=False),
     )
     raw_topics = await _request_llm(prompt, formatted, runtime)
-    topics = normalize_topics(
-        raw_topics,
-        max_topics=max_topics,
-        existing_topics=approved_catalog,
-    )
+    topics = normalize_topics(raw_topics, existing_topics=approved_catalog)
     grounded = validate_topic_evidence(topics, transcript)
+    # Cap only after grounding: capping first let an ungrounded topic take a
+    # slot and push out a grounded one behind it.
+    kept = grounded if max_topics is None else grounded[:max_topics]
     # A topic whose phrase is not in the customer's own words is dropped here;
     # a high drop rate means the prompt or model paraphrases.
     logger.bind(
         model_topic_count=len(topics),
         grounded_topic_count=len(grounded),
         ungrounded_topic_count=len(topics) - len(grounded),
-    ).info(f"Topic extraction kept {len(grounded)} of {len(topics)} topics")
-    return grounded
+        capped_topic_count=len(grounded) - len(kept),
+    ).info(f"Topic extraction kept {len(kept)} of {len(topics)} topics")
+    return kept
