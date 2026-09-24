@@ -57,9 +57,12 @@ def routed(monkeypatch):
         calls["direct_context"] = context
         return "DIRECT_SSE"
 
-    async def _agent(session_id, req, access_check=None, internal=False):
+    async def _agent(
+        session_id, req, access_check=None, internal=False, internal_prompt=False
+    ):
         calls["agent_turn"] = req.content
         calls["internal"] = internal
+        calls["internal_prompt"] = internal_prompt
         return "AGENT_SSE"
 
     monkeypatch.setattr(ch, "get_template_by_id_cached", _get_template)
@@ -191,3 +194,24 @@ async def test_client_intent_gets_typed_422(routed):
     assert exc.value.status_code == 422
     detail = exc.value.detail
     assert isinstance(detail, dict) and detail["code"] == "client_side_intent"
+
+
+def _show_page_product() -> Dict[str, Any]:
+    return {
+        "intent": "show_page_product",
+        "component_id": "page-product",
+        "payload": {"product_id": "gid://shopify/Product/1", "title": "Shoe"},
+    }
+
+
+async def test_show_page_product_routes_agent_turn_with_internal_prompt(routed):
+    """The real policy: AGENT_TURN, and the HALF-internal flag reaches
+    send_chat_message_handler — `internal` must stay False, or the answer
+    (the card) would be hidden and lost on resume."""
+    result = await ch.serve_session_intent(_session(), "s1", _show_page_product())
+    assert result == "AGENT_SSE"
+    assert routed["internal_prompt"] is True
+    assert routed["internal"] is False
+    assert "gid://shopify/Product/1" in routed["agent_turn"]
+    # Client-supplied page text never reaches the instruction.
+    assert "Shoe" not in routed["agent_turn"]

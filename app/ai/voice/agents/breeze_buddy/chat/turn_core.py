@@ -171,6 +171,7 @@ async def run_chat_turn(
     llm: Optional[Any] = None,
     context_placement: Optional[str] = None,
     internal: bool = False,
+    internal_prompt: bool = False,
 ) -> AsyncIterator[SSEEvent]:
     """Drive one chat-brain turn for ``session_id`` and yield its SSE events.
 
@@ -231,7 +232,7 @@ async def run_chat_turn(
     # the sweep — they carry no user decision; the still-pending calls
     # replay this turn as repaired synthetic errors (in-memory only) and
     # stay claimable on the approval endpoint.
-    if not internal:
+    if not (internal or internal_prompt):
         superseded = await resolve_dangling_approvals(session_id, only_expired=False)
         for row in superseded:
             yield SSEEvent(
@@ -297,6 +298,7 @@ async def run_chat_turn(
         history=history,
         current_node=session.current_node,
         internal=internal,
+        internal_prompt=internal_prompt,
     ):
         yield event
 

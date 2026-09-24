@@ -212,7 +212,9 @@ async def test_internal_turn_tool_cycle_row_demotes_prose(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def _run_turn_capture(monkeypatch, *, internal: bool):
+async def _run_turn_capture(
+    monkeypatch, *, internal: bool = False, internal_prompt: bool = False
+):
     rows = _record_db(monkeypatch)
 
     async def _prepare_tools(self):
@@ -245,6 +247,7 @@ async def _run_turn_capture(monkeypatch, *, internal: bool):
             history=[],
             current_node=None,
             internal=internal,
+            internal_prompt=internal_prompt,
         )
     ]
     return rows, events
@@ -270,11 +273,49 @@ async def test_normal_turn_user_row_visible_and_committed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# internal_prompt — hidden instruction, ordinary answer
+#
+# show_page_product: the widget asks on the shopper's behalf when the panel
+# opens on a product page. The instruction must never replay (they never
+# wrote it), but the card the agent renders is an ordinary answer and MUST
+# survive resume — that is the whole difference from `internal`.
+# ---------------------------------------------------------------------------
+
+
+async def test_internal_prompt_user_row_internal_and_no_user_committed(monkeypatch):
+    rows, events = await _run_turn_capture(monkeypatch, internal_prompt=True)
+    assert all(ev.event != "user_committed" for ev in events)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["content"] is None
+    assert len(_internal_blocks(row)) == 1
+    assert not _visible_text_blocks(row)
+
+
+async def test_internal_prompt_answer_row_stays_visible(monkeypatch):
+    """The answer is the shopper's: prose visible, ui_blocks persisted."""
+    _patch_stream(monkeypatch, [[("text", "Here is that shirt.")]])
+    rows = _record_db(monkeypatch)
+    agent = _make_agent()
+    agent._internal_prompt = True
+    context = LLMContext(
+        messages=[{"role": "user", "content": "[Page context] show it"}]
+    )
+    [ev async for ev in agent._cycle_loop(context, dict(_NODE), _PREP)]
+
+    assert len(rows) == 1
+    assert rows[0]["content"] == "Here is that shirt."
+    assert len(_visible_text_blocks(rows[0])) == 1
+
+
+# ---------------------------------------------------------------------------
 # run_chat_turn — internal turns must not supersede pending approvals
 # ---------------------------------------------------------------------------
 
 
-async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]:
+async def _drive_run_chat_turn(
+    monkeypatch, *, internal: bool = False, internal_prompt: bool = False
+) -> Dict[str, Any]:
     """Run run_chat_turn end-to-end with every collaborator stubbed,
     recording the supersede-call count and the internal flag the agent
     receives."""
@@ -282,7 +323,11 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
 
     from app.schemas.breeze_buddy.chat import ChatSessionStatus
 
-    calls: Dict[str, Any] = {"supersede": 0, "agent_internal": None}
+    calls: Dict[str, Any] = {
+        "supersede": 0,
+        "agent_internal": None,
+        "agent_internal_prompt": None,
+    }
 
     async def _get_session(_sid):
         return SimpleNamespace(
@@ -318,8 +363,17 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
     async def _get_llm(_config, pooled=True):
         return object()
 
-    async def _run_turn(self, *, user_content, history, current_node, internal=False):
+    async def _run_turn(
+        self,
+        *,
+        user_content,
+        history,
+        current_node,
+        internal=False,
+        internal_prompt=False,
+    ):
         calls["agent_internal"] = internal
+        calls["agent_internal_prompt"] = internal_prompt
         return
         yield  # pragma: no cover — makes this an async generator
 
@@ -336,7 +390,10 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
     [
         ev
         async for ev in turn_core.run_chat_turn(
-            session_id="s1", user_content="x", internal=internal
+            session_id="s1",
+            user_content="x",
+            internal=internal,
+            internal_prompt=internal_prompt,
         )
     ]
     return calls
@@ -351,4 +408,13 @@ async def test_internal_run_chat_turn_skips_approval_supersede(monkeypatch):
 async def test_normal_run_chat_turn_still_supersedes(monkeypatch):
     calls = await _drive_run_chat_turn(monkeypatch, internal=False)
     assert calls["supersede"] == 1
+    assert calls["agent_internal"] is False
+
+
+async def test_internal_prompt_run_chat_turn_skips_approval_supersede(monkeypatch):
+    """A page-context turn is not the shopper moving on, so pending
+    approvals stay claimable — same reasoning as `internal`."""
+    calls = await _drive_run_chat_turn(monkeypatch, internal_prompt=True)
+    assert calls["supersede"] == 0
+    assert calls["agent_internal_prompt"] is True
     assert calls["agent_internal"] is False
