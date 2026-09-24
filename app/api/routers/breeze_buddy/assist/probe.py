@@ -38,9 +38,9 @@ from app.services.redis.rate_limit import check_rate_limit
 
 router = APIRouter()
 
-# An outbound fetch on someone else's infrastructure, so the same gate as the
-# other route that spends platform resources on a caller's behalf.
-_PROBE_ROLES = [UserRole.ADMIN, UserRole.RESELLER]
+# Merchants set up their own store from the console, so they may probe it too
+# (naming their own merchant), as with /assist/preview and research.
+_PROBE_ROLES = [UserRole.ADMIN, UserRole.RESELLER, UserRole.MERCHANT]
 # Per caller, not per IP: these are authenticated operators, and the cap is
 # here to stop a script pointing us at a list of hosts, not to ration normal
 # onboarding (which probes a site once or twice).
@@ -61,6 +61,11 @@ async def probe_website(
     deployment cannot make a guarded outbound request at all.
     """
     require_role(current_user, _PROBE_ROLES)
+    if current_user.role == UserRole.MERCHANT and not body.merchant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="merchant_id is required for a merchant login",
+        )
     validate_reseller_access(current_user, reseller_id=body.reseller_id)
     if body.merchant_id:
         validate_merchant_access(current_user, merchant_id=body.merchant_id)

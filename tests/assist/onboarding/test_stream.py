@@ -24,6 +24,12 @@ from app.schemas.breeze_buddy.assist.onboarding import AssistOnboardingStreamReq
 from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
 
 
+@pytest.fixture(autouse=True)
+def _no_brand_look(monkeypatch) -> None:
+    """The brand step reads the live site; these tests are about the rest."""
+    monkeypatch.setattr(service, "detect_look", AsyncMock(return_value=None))
+
+
 def _request(**overrides) -> AssistOnboardingStreamRequest:
     body = {
         "reseller_id": "BB_SHOPIFY",

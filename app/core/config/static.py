@@ -26,6 +26,9 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# Firecrawl renders a store page to read its brand colours during Assist
+# onboarding. Unset = that source is skipped, never called unauthenticated.
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
 
 # Pipecat Agent Configuration
 DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")

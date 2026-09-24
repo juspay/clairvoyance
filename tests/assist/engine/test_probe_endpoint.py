@@ -111,8 +111,18 @@ def test_a_partner_may_not_probe_for_another_reseller(probe_site) -> None:
     probe_site.assert_not_awaited()
 
 
-def test_a_merchant_may_not_spend_an_outbound_fetch(probe_site) -> None:
+def test_a_merchant_may_probe_its_own_store(probe_site) -> None:
+    assert _post(MERCHANT, merchant_id="9b1086-18.myshopify.com").status_code == 200
+
+
+def test_a_merchant_must_name_its_merchant(probe_site) -> None:
     response = _post(MERCHANT)
+    assert response.status_code == 403
+    probe_site.assert_not_awaited()
+
+
+def test_a_merchant_may_not_probe_for_another_merchant(probe_site) -> None:
+    response = _post(MERCHANT, merchant_id="someone-else.myshopify.com")
     assert response.status_code == 403
     probe_site.assert_not_awaited()
 

@@ -6,6 +6,7 @@ import asyncio
 import copy
 import re
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional, cast
@@ -14,9 +15,13 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist.engine.classify import classify_profile
 from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
     normalize_merchant_domain,
 )
+from app.ai.voice.agents.breeze_buddy.assist.engine.models import BrandLook
+from app.ai.voice.agents.breeze_buddy.assist.engine.probe import probe_site
+from app.ai.voice.agents.breeze_buddy.assist.engine.research import brand as brand_lane
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingConfigurationError,
     WebsiteScrapingUpstreamError,
@@ -64,7 +69,10 @@ from app.schemas.breeze_buddy.assist.onboarding import (
     OnboardingPlatform,
     OnboardingVertical,
 )
-from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
+from app.schemas.breeze_buddy.widget_config import (
+    WidgetAppearance,
+    WidgetConfigResponse,
+)
 
 BRAND_IDENTITY_MARKER = BRAND_MARKER
 # The skeleton every live Assist template runs on (plan §3.1); drift from it
@@ -73,6 +81,8 @@ EXPECTED_BLUEPRINT_MODEL = "gemini-3.6-flash"
 
 _PUBLIC_KEY_NBYTES = 32
 _SCRAPE_TIMEOUT_SECONDS = 18
+# A rendered brand read takes 15-40 s; past this the widget keeps its defaults.
+_BRAND_TIMEOUT_SECONDS = 45
 
 
 @dataclass
@@ -317,6 +327,90 @@ async def _update_template(template: TemplateModel) -> TemplateModel:
             True,
         )
     return updated
+
+
+async def read_look(
+    website_url: str,
+    adapter: Optional[PlatformAdapter] = None,
+    *,
+    budget_seconds: Optional[float] = None,
+) -> BrandLook:
+    """The site's brand colours and logo, read now and saved nowhere.
+
+    Without ``adapter`` the platform is worked out from the home page. With
+    ``budget_seconds`` the read is done by then, dropping the slow rendered
+    source rather than the whole look. Raises what the fetch raises
+    (``UnsafeUrlError``, ``FetchFailedError``, ``EgressNotGuardedError``): the
+    caller decides whether that is fatal.
+    """
+    deadline = time.monotonic() + budget_seconds if budget_seconds is not None else None
+    profile = await probe_site(website_url)
+    if adapter is None:
+        adapter = registry.resolve(classify_profile(profile).adapter_id)
+    return await brand_lane.resolve(
+        profile.final_url or website_url,
+        profile,
+        platform_look=await adapter.brand(profile),
+        stock_colors=adapter.stock_colors(),
+        deadline=deadline,
+    )
+
+
+async def detect_look(
+    website_url: str, adapter: PlatformAdapter
+) -> Optional[BrandLook]:
+    """The site's brand look, or None when nothing could be read. Never raises:
+    the look is cosmetic, so onboarding goes on without it."""
+    try:
+        # Started before the site read, so it is done before onboarding's
+        # wait for it (the same budget, begun later) runs out.
+        return await read_look(
+            website_url, adapter, budget_seconds=_BRAND_TIMEOUT_SECONDS
+        )
+    except Exception as exc:
+        logger.info(f"Assist onboarding brand look skipped: {exc}")
+        return None
+
+
+def starting_appearance(
+    look: Optional[BrandLook], existing: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """The widget appearance with the detected look filled in, or None when
+    there is nothing to change.
+
+    Only fills keys the merchant has not set, so a re-onboard never
+    overwrites their own choices.
+    """
+    if look is None:
+        return None
+    detected = {
+        "primary_color": look.color("primary"),
+        "header_logo_url": look.logo_url,
+    }
+    fill: Dict[str, Any] = {}
+    for key, value in detected.items():
+        if not value or existing.get(key):
+            continue
+        try:
+            WidgetAppearance.model_validate({key: value})
+        except ValidationError:
+            continue
+        fill[key] = value
+    return {**existing, **fill} if fill else None
+
+
+def _brand_summary(
+    look: Optional[BrandLook], appearance: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    if look is None:
+        return {"status": "skipped"}
+    return {
+        "status": "applied" if appearance else "unchanged",
+        "primary_color": look.color("primary"),
+        "logo_url": look.logo_url,
+        "sources": look.sources,
+        "warnings": look.warnings,
+    }
 
 
 async def _create_widget(
@@ -575,6 +669,7 @@ async def stream_assist_onboarding(
     vertical = verticals.for_request(body.vertical or adapter.vertical)
     created_template_id: Optional[str] = None
     step = "checking_widget"
+    brand_task: Optional[asyncio.Task[Optional[BrandLook]]] = None
     try:
         yield _progress(step, "running")
         widget = await get_widget_config_by_reseller_merchant(
@@ -625,6 +720,9 @@ async def stream_assist_onboarding(
         _validate_default_template(default_template, adapter, vertical)
         yield _progress(step, "done", platform=adapter.id, vertical=vertical.id)
 
+        # Runs alongside the site read; only its result is awaited later.
+        brand_task = asyncio.create_task(detect_look(body.website_url, adapter))
+
         step = "scraping_website"
         yield _progress(step, "running", provider=body.provider)
         website_context = vertical.unpersonalized_context()
@@ -667,6 +765,25 @@ async def stream_assist_onboarding(
             }
             yield _progress(step, "done", provider=result.provider, personalized=True)
 
+        step = "reading_brand"
+        yield _progress(step, "running")
+        try:
+            look = await asyncio.wait_for(brand_task, _BRAND_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.info("Assist onboarding brand look timed out; using defaults")
+            look = None
+        existing_appearance: Dict[str, Any] = {}
+        if widget is not None:
+            # Read again: the merchant may have changed the look while the site
+            # was read, and the whole appearance is written back below.
+            fresh = await get_widget_config_by_reseller_merchant(
+                body.reseller_id, body.merchant_id
+            )
+            existing_appearance = (fresh or widget).appearance or {}
+        appearance = starting_appearance(look, existing_appearance)
+        personalization["brand"] = _brand_summary(look, appearance)
+        yield _progress(step, "done", applied=appearance is not None)
+
         step = "building_template"
         yield _progress(step, "running")
         template_id = (
@@ -693,7 +810,9 @@ async def stream_assist_onboarding(
 
         if widget is None:
             try:
-                persisted_widget = await _create_widget(body, persisted_template.id)
+                persisted_widget = await _create_widget(
+                    body, persisted_template.id, appearance=appearance
+                )
             except Exception:
                 if created_template_id:
                     try:
@@ -705,7 +824,9 @@ async def stream_assist_onboarding(
                         )
                 raise
         else:
-            persisted_widget = await _update_widget(widget, body, persisted_template.id)
+            persisted_widget = await _update_widget(
+                widget, body, persisted_template.id, appearance=appearance
+            )
 
         try:
             await invalidate_template(persisted_template.id)
@@ -779,6 +900,9 @@ async def stream_assist_onboarding(
             retryable=True,
         )
         yield SSEEvent(event="error", data=error.model_dump(mode="json"))
+    finally:
+        if brand_task is not None and not brand_task.done():
+            brand_task.cancel()
 
 
 __all__ = [
@@ -788,6 +912,9 @@ __all__ = [
     "SHOP_DOMAIN_PLACEHOLDER",
     "blueprint_shape_warnings",
     "build_merchant_template",
+    "detect_look",
+    "read_look",
     "onboard_assist_bare",
+    "starting_appearance",
     "stream_assist_onboarding",
 ]
