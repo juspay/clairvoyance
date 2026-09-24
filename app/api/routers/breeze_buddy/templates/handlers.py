@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
     emit_template_updated_alert,
 )
@@ -77,6 +78,22 @@ def _validate_static_realtime_greeting(configurations) -> None:
                 "pre-generated once per template in the call's Live voice; "
                 "personalise it in the conversation instead."
             ),
+        )
+
+
+async def refuse_bad_provider_accounts(
+    configurations: Any, reseller_id: Optional[str], merchant_id: Optional[str]
+) -> None:
+    """The provider-account law at template save — one check for create,
+    replace (here) and rollback (version/handlers.py imports it), so the
+    three 422s can never drift apart: each block naming a `credential_id`
+    must resolve to a row that exists, is active, is this tenant's, names
+    the block's provider and carries its shape."""
+    found = await Accounts(reseller_id, merchant_id).problems(configurations)
+    if found:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"provider_credentials": found},
         )
 
 
@@ -158,6 +175,15 @@ async def create_template_handler(
                 template_reseller_id=template_data.reseller_id,
                 template_merchant_id=template_data.merchant_id,
             )
+
+        # Provider accounts (credential_id on the llm / stt / tts blocks):
+        # every one must exist, be active, be this tenant's, name the block's
+        # provider and carry its fields — refused here, not on the first call.
+        await refuse_bad_provider_accounts(
+            template_data.configurations,
+            template_data.reseller_id,
+            template_data.merchant_id,
+        )
 
         # Create the template
         now = datetime.now(timezone.utc)
@@ -493,6 +519,10 @@ async def replace_template_handler(
                     template_reseller_id=reseller_id,
                     template_merchant_id=template_data.merchant_id,
                 )
+
+        await refuse_bad_provider_accounts(
+            template_data.configurations, reseller_id, template_data.merchant_id
+        )
 
         # Update the template
         now = datetime.now(timezone.utc)

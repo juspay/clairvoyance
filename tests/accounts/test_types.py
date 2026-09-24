@@ -30,7 +30,7 @@ def test_a_value_must_have_its_vendors_shape() -> None:
         "endpoint: Field required"
     ]
     assert shape_problems("azure_openai", {"api_key": "k", "endpoint": "x"}) == [
-        "endpoint: Value error, endpoint 'x' is not an https:// or wss:// URL"
+        "endpoint: Value error, endpoint 'x' is not a URL"
     ]
     assert shape_problems("google_vertex", {"credentials_json": "{}"}) == [
         "project_id: Field required"
@@ -47,9 +47,13 @@ def test_a_value_must_have_its_vendors_shape() -> None:
     assert shape_problems("google", {"credentials_json": "{}", "endpoint": "x"}) == [
         "endpoint: Extra inputs are not permitted"
     ]
+    # an ElevenLabs row is a key only: the deployment decides its host
+    assert shape_problems("elevenlabs", {"api_key": "k", "endpoint": "wss://x"}) == [
+        "endpoint: Extra inputs are not permitted"
+    ]
     # an endpoint is encrypted transport only, and Azure's is required
     assert shape_problems("openai", {"api_key": "k", "endpoint": "http://gw"}) == [
-        "endpoint: Value error, endpoint 'http://gw' is not an https:// or wss:// URL"
+        "endpoint: 'http://gw' is not an https:// or wss:// URL"
     ]
     assert shape_problems("azure_openai", {"api_key": "k", "endpoint": ""}) == [
         "endpoint: Value error, endpoint is empty"
