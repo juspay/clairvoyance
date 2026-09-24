@@ -49,6 +49,11 @@ from app.database.accessor import (
 )
 from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import InboundBlockAction, LeadCallStatus
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+)
 from app.services.redis.client import get_redis_service
 
 # Constants
@@ -301,6 +306,10 @@ async def _check_deferred_inbound_policy(
                 meta_data=meta_data,
                 call_end_time=datetime.now(timezone.utc),
                 expected_status=LeadCallStatus.PROCESSING,
+                call_outcome=CallOutcome(
+                    connection_status=ConnectionStatus.REJECTED,
+                    connection_reason=ConnectionReason.BLOCKED,
+                ),
             )
             if finished:
                 await release_inbound_channel(existing)

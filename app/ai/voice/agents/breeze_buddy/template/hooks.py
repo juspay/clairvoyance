@@ -33,6 +33,50 @@ from app.database.accessor.breeze_buddy.chat_session import (
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_completion_details,
 )
+from app.schemas.breeze_buddy.outcomes import (
+    OutcomeSource,
+    call_outcome_from_lead,
+    normalize_agent_outcome,
+)
+
+
+def _outcome_source(context: TemplateContext, function_name: str) -> OutcomeSource:
+    """Which part of the agent decided this outcome.
+
+    An observer marks ``metaData.observer_triggered`` with its own name and
+    fires this hook with that name as ``function_name`` (observers/utils.py
+    set_outcome); every other caller is an LLM function. IVR options never
+    come through here — the IVR walker persists its own outcomes.
+    """
+    meta = (context.lead.metaData if context.lead else None) or {}
+    if function_name and meta.get("observer_triggered") == function_name:
+        return OutcomeSource.OBSERVER
+    return OutcomeSource.LLM
+
+
+def _record_agent_outcome(
+    context: TemplateContext, outcome: Any, source: OutcomeSource
+) -> None:
+    """Set the lead's in-memory agent outcome (call outcome columns).
+
+    The agent's own word, taken BEFORE the legacy column's overrides: a
+    transfer is how the session ended (end_reason), not what the agent
+    decided. Mirrors the legacy observer guard — once an observer has set
+    the agent outcome (e.g. VOICEMAIL), a later LLM function does not
+    replace it.
+    """
+    lead = context.lead
+    agent_outcome = normalize_agent_outcome(outcome)
+    if lead is None or agent_outcome is None:
+        return
+    if (
+        lead.outcome_source == OutcomeSource.OBSERVER
+        and lead.agent_outcome
+        and source != OutcomeSource.OBSERVER
+    ):
+        return
+    lead.agent_outcome = agent_outcome
+    lead.outcome_source = source
 
 
 class Hook(ABC):
@@ -213,7 +257,12 @@ class UpdateOutcomeInDatabaseHook(Hook):
                 )
                 return
             try:
-                await update_chat_session_outcome(str(session_id), str(outcome))
+                await update_chat_session_outcome(
+                    str(session_id),
+                    str(outcome),
+                    agent_outcome=normalize_agent_outcome(outcome),
+                    outcome_source=OutcomeSource.LLM.value,
+                )
                 logger.info(
                     f"Persisted chat outcome '{outcome}' to session {session_id} "
                     f"(function: '{function_name}')"
@@ -227,6 +276,20 @@ class UpdateOutcomeInDatabaseHook(Hook):
 
         try:
             logger.debug(f"outcome '{outcome}' for lead {context.lead.id}")
+
+            # The agent's own word for the call outcome columns — recorded
+            # before the transfer / observer overrides below rewrite the
+            # legacy value. In-memory first, like the legacy outcome, so the
+            # completion write sees it even if this write lands late.
+            try:
+                _record_agent_outcome(
+                    context, outcome, _outcome_source(context, function_name)
+                )
+            except Exception as outcome_error:
+                logger.warning(
+                    f"Could not record agent outcome for lead {context.lead.id}: "
+                    f"{outcome_error}"
+                )
 
             # Initialize metadata with existing data
             meta_data = context.lead.metaData or {}
@@ -290,12 +353,25 @@ class UpdateOutcomeInDatabaseHook(Hook):
                 f"metadata: {meta_data}, via function '{function_name}'"
             )
 
+            # Carries every in-memory call outcome column, so the
+            # context.lead refresh below cannot drop one an ending path set
+            # before this write landed. Best-effort, like the capture above.
+            call_outcome = None
+            try:
+                call_outcome = call_outcome_from_lead(context.lead)
+            except Exception as outcome_error:
+                logger.warning(
+                    f"Could not build call outcome for lead {context.lead.id}: "
+                    f"{outcome_error}"
+                )
+
             updated_lead = await update_lead_call_completion_details(
                 id=context.lead.id,
                 status=None,
                 outcome=outcome,
                 meta_data=meta_data,
                 call_end_time=None,
+                call_outcome=call_outcome,
             )
 
             logger.debug(

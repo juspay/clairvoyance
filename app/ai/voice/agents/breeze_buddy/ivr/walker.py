@@ -51,6 +51,13 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_completion_details,
 )
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    EndReason,
+    OutcomeSource,
+    call_outcome_from_lead,
+    normalize_agent_outcome,
+)
 
 if TYPE_CHECKING:
     from app.ai.voice.agents.breeze_buddy.agent import Agent
@@ -133,6 +140,7 @@ class IvrWalker:
             )
             if self.lead is not None:
                 self.lead.outcome = IVR_ERROR_OUTCOME
+                self.lead.end_reason = EndReason.IVR_ERROR
             await self._finalize_and_close(call_ended_by="system")
             return
         template = self.agent.template
@@ -154,6 +162,7 @@ class IvrWalker:
             track_error(self.errors, msg)
             if self.lead is not None:
                 self.lead.outcome = IVR_ERROR_OUTCOME
+                self.lead.end_reason = EndReason.IVR_ERROR
             await self._finalize_and_close(call_ended_by="system")
             return
 
@@ -175,6 +184,8 @@ class IvrWalker:
             logger.error(f"[IVR] Walker error: {e}", exc_info=True)
             track_error(self.errors, f"IVR walker error: {e}")
             call_ended_by = "system"
+            if self.lead is not None:
+                self.lead.end_reason = EndReason.IVR_ERROR
         finally:
             await self._finalize_and_close(call_ended_by=call_ended_by)
 
@@ -192,7 +203,7 @@ class IvrWalker:
                     "aborting to prevent a loop"
                 )
                 track_error(self.errors, "IVR transition limit exceeded")
-                self._persist_outcome("IVR_LOOP_GUARD", {})
+                self._persist_system_error("IVR_LOOP_GUARD")
                 await self._play(DEFAULT_TIMEOUT_GOODBYE, wait=True)
                 return "system"
 
@@ -200,7 +211,7 @@ class IvrWalker:
             if node is None:
                 logger.error(f"[IVR] Node '{current}' not found in template")
                 track_error(self.errors, f"IVR node '{current}' not found")
-                self._persist_outcome("IVR_NODE_MISSING", {})
+                self._persist_system_error("IVR_NODE_MISSING")
                 return "system"
 
             self.context.record_node_entry(current)
@@ -222,7 +233,10 @@ class IvrWalker:
                 continue
 
             # Terminal (end / hangup / timeout): leave the node "open" so
-            # end_conversation's node_traversal finaliser closes it.
+            # end_conversation's node_traversal finaliser closes it. A hangup
+            # or an END option is read off call_ended_by; a timeout is not.
+            if kind == _TIMEOUT and self.lead is not None:
+                self.lead.end_reason = EndReason.IVR_NO_INPUT
             return "customer" if kind == _HANGUP else "agent"
 
     async def _run_node(
@@ -443,30 +457,63 @@ class IvrWalker:
     # ── persistence + hooks (fire-and-forget, mirrors flow/direct mode) ─────
 
     def _persist_outcome(
-        self, outcome: Optional[str], metadata: Dict[str, Any]
+        self,
+        outcome: Optional[str],
+        metadata: Dict[str, Any],
+        agent_decided: bool = True,
     ) -> None:
-        """Apply outcome/metadata in-memory now; flush to DB in the background."""
+        """Apply outcome/metadata in-memory now; flush to DB in the background.
+
+        An option's or a timeout's outcome is the IVR agent's decision and is
+        also recorded as the agent outcome; a walker system error
+        (``agent_decided=False``) touches only the legacy column.
+        """
         if not self.lead:
             return
         if outcome:
             self.lead.outcome = outcome
+            if agent_decided:
+                agent_outcome = normalize_agent_outcome(outcome)
+                if agent_outcome:
+                    self.lead.agent_outcome = agent_outcome
+                    self.lead.outcome_source = OutcomeSource.IVR
         if self.lead.metaData is None:
             self.lead.metaData = {}
         if metadata:
             self.lead.metaData.update(metadata)
 
         if self.lead.id:
+            # Snapshot at press time, like metaData. Best-effort: never lose
+            # the legacy flush over it.
+            call_outcome: Optional[CallOutcome] = None
+            try:
+                call_outcome = call_outcome_from_lead(self.lead)
+            except Exception as e:
+                logger.warning(f"[IVR] Could not build call outcome: {e}")
             # Non-blocking: never stall the menu on a DB write (same principle
             # as hook persistence in transition.py). Drained in _finalize_and_close
             # before the final write so it can't clobber the full-metaData finaliser.
             self._spawn(
                 self._flush_outcome(
-                    self.lead.id, self.lead.outcome, dict(self.lead.metaData)
+                    self.lead.id,
+                    self.lead.outcome,
+                    dict(self.lead.metaData),
+                    call_outcome,
                 )
             )
 
+    def _persist_system_error(self, outcome: str) -> None:
+        """A walker/template error: legacy outcome, IVR_ERROR end reason."""
+        if self.lead is not None:
+            self.lead.end_reason = EndReason.IVR_ERROR
+        self._persist_outcome(outcome, {}, agent_decided=False)
+
     async def _flush_outcome(
-        self, lead_id: str, outcome: Optional[str], meta_data: Dict[str, Any]
+        self,
+        lead_id: str,
+        outcome: Optional[str],
+        meta_data: Dict[str, Any],
+        call_outcome: Optional[CallOutcome] = None,
     ) -> None:
         try:
             await update_lead_call_completion_details(
@@ -475,6 +522,7 @@ class IvrWalker:
                 outcome=outcome,
                 meta_data=meta_data,
                 call_end_time=None,
+                call_outcome=call_outcome,
             )
             logger.debug(
                 f"[IVR] Persisted intermediate outcome '{outcome}' for {lead_id}"

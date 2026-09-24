@@ -85,6 +85,18 @@ async def BB_DISPATCH_ENABLED() -> bool:
     return await get_config("BB_DISPATCH_ENABLED", True, bool)
 
 
+async def CALL_OUTCOME_WRITES_ENABLED() -> bool:
+    """Write the call outcome columns beside the legacy outcome (default: off).
+
+    Migration 080 adds the columns; the code may deploy before it runs, so
+    writes stay off until an operator flips this after the migration. Off
+    means every write is exactly today's: no call outcome column is named in any
+    statement. Also the rollback switch for the whole call outcome write path. See
+    app/schemas/breeze_buddy/outcomes.py.
+    """
+    return await get_config("CALL_OUTCOME_WRITES_ENABLED", False, bool)
+
+
 #: The engine's own join budget, extractors/engine.py VARIABLE_MAX_CHARS.
 #: DUPLICATED here, not imported: app/core imports nothing from app.crm, and
 #: inverting that for one integer would put the base layer under a module

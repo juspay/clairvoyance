@@ -896,6 +896,7 @@ async def test_accessor_forwards_expected_status_to_the_query(monkeypatch):
         meta_data=None,
         call_end_time=None,
         expected_status=None,
+        call_outcome=None,
     ):
         seen["expected_status"] = expected_status
         return "SELECT 1", []

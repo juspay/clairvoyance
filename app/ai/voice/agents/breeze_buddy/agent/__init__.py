@@ -147,8 +147,16 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
+from app.schemas.breeze_buddy.outcomes import CallOutcome, EndReason
 
 DEFAULT_OUTCOME = "BUSY"
+
+# How an unexpected disconnect ended the session (the reasons come from this
+# module's own event handlers).
+_DISCONNECT_END_REASONS = {
+    "idle_timeout": EndReason.IDLE_TIMEOUT,
+    "client_disconnected": EndReason.CUSTOMER_HANGUP,
+}
 TTS_SPEAK_MAX_CHARS = 2000
 # Cap on a carousel/product-click `ui-action` message injected as a user turn
 # (mirrors TTS_SPEAK_MAX_CHARS). See docs/widget/VOICE_AS_CHAT.md (A2).
@@ -338,6 +346,7 @@ class Agent:
 
         if self.lead:
             self.lead.outcome = "BUSY"
+            self.lead.end_reason = EndReason.IDLE_TIMEOUT
             if self.lead.metaData is None:
                 self.lead.metaData = {}
             self.lead.metaData["call_ended_by"] = "system"
@@ -1299,6 +1308,9 @@ class Agent:
                                 call_id=self.call_sid,
                                 outcome="EARLY_HANGUP",
                                 call_end_time=datetime.now(timezone.utc),
+                                call_outcome=CallOutcome(
+                                    end_reason=EndReason.EARLY_HANGUP
+                                ),
                             )
                     return
 
@@ -1612,6 +1624,9 @@ class Agent:
         if self.lead:
             if self.lead.outcome is None:
                 self.lead.outcome = DEFAULT_OUTCOME
+            self.lead.end_reason = _DISCONNECT_END_REASONS.get(
+                reason, EndReason.PIPELINE_ERROR
+            )
 
             if self.lead.metaData is None:
                 self.lead.metaData = {}

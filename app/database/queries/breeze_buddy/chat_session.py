@@ -110,6 +110,8 @@ def end_chat_session_query(
 def update_chat_session_outcome_query(
     session_id: str,
     outcome: str,
+    agent_outcome: Optional[str] = None,
+    outcome_source: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Set the singular ``outcome`` on a chat_session WITHOUT ending it.
 
@@ -123,15 +125,28 @@ def update_chat_session_outcome_query(
     ``end_chat_session_query`` guard so a late fire-and-forget write (the hook
     is scheduled via ``asyncio.create_task``) can't overwrite a terminal
     session's state.
+
+    ``agent_outcome`` / ``outcome_source`` are the call outcome columns
+    (migration 080), written in the same statement when given; None (the
+    CALL_OUTCOME_WRITES_ENABLED flag off) leaves the statement exactly today's.
     """
+    values: List[Any] = [session_id, outcome]
+    outcome_sets = ""
+    for column, value in (
+        ("agent_outcome", agent_outcome),
+        ("outcome_source", outcome_source),
+    ):
+        if value is not None:
+            values.append(value)
+            outcome_sets += f"\n            {column} = ${len(values)},"
     query = f"""
         UPDATE {CHAT_SESSION_TABLE}
-        SET outcome = $2,
+        SET outcome = $2,{outcome_sets}
             last_activity_at = now()
         WHERE id = $1 AND status <> 'ENDED'
         RETURNING outcome
     """
-    return query, [session_id, outcome]
+    return query, values
 
 
 def list_idle_chat_sessions_query(
