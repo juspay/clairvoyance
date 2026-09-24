@@ -314,3 +314,51 @@ async def test_a_proxied_deployment_refuses_to_fetch(monkeypatch) -> None:
     monkeypatch.setattr(fetch, "get_proxy_config", lambda: "http://egress:3128")
     with pytest.raises(fetch.EgressNotGuardedError):
         await fetch.fetch_page("https://shop.example/")
+
+
+class _RedirectingSession(_RecordingSession):
+    """Answers the first request with a redirect to ``location``."""
+
+    location = ""
+
+    def get(self, url, **kwargs):
+        _RecordingSession.calls.append({"url": url, **kwargs})
+        if len(_RecordingSession.calls) == 1:
+            response = _FakeHTTPResponse(
+                url, status=302, headers={"location": _RedirectingSession.location}
+            )
+        else:
+            response = _FakeHTTPResponse(url)
+        return _FakeGet(response, _RecordingSession.calls)
+
+
+async def test_a_refused_hop_is_never_requested(monkeypatch) -> None:
+    # The caller's rule is asked before each hop is sent, so a redirect it
+    # refuses costs no request to that host at all.
+    _RecordingSession.calls = []
+    _RedirectingSession.location = "https://elsewhere.example/landing"
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _RedirectingSession)
+
+    with pytest.raises(fetch.UnsafeUrlError):
+        await fetch.fetch_page(
+            "https://shop.example/go",
+            allow_url=lambda url: url.startswith("https://shop.example/"),
+        )
+    assert [call["url"] for call in _RecordingSession.calls] == [
+        "https://shop.example/go"
+    ]
+
+
+async def test_an_allowed_hop_is_followed(monkeypatch) -> None:
+    _RecordingSession.calls = []
+    _RedirectingSession.location = "/landing"
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _RedirectingSession)
+
+    result = await fetch.fetch_page(
+        "https://shop.example/go",
+        allow_url=lambda url: url.startswith("https://shop.example/"),
+    )
+    assert result.final_url == "https://shop.example/landing"
+    assert len(_RecordingSession.calls) == 2
