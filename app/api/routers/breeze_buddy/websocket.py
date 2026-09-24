@@ -2,9 +2,6 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import handle_call_completion
-from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.security import (
-    plivo_websocket_signature_ok,
-)
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     is_caller_disconnected_error,
@@ -41,14 +38,6 @@ async def telephony_websocket_handler_v2(
     completion handlers (both call Smart Router's release endpoint).
     """
     logger.info(f"Handling v2 websocket for {template}")
-
-    # Only Plivo is in use: any other provider is rejected without a check.
-    if service_provider.lower() != "plivo" or not plivo_websocket_signature_ok(
-        websocket
-    ):
-        logger.warning(f"Rejected unsigned/forged {service_provider} media websocket")
-        await websocket.close(code=1008)
-        return
 
     async with create_aiohttp_session() as session:
         try:
