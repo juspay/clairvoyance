@@ -9,14 +9,18 @@ _CONFIG_COLUMNS = (
 )
 
 
-def get_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]]:
+def get_evaluation_config_query(
+    template_id: str,
+    evaluation_type: str,
+) -> Tuple[str, List[Any]]:
+    """The agent's own row for this type (no defaults fallback)."""
     query = f"""
         SELECT {_CONFIG_COLUMNS}
         FROM evaluation_config
         WHERE template_id = $1::uuid
-          AND evaluation_type = 'TOPIC'
+          AND evaluation_type = $2::evaluation_type
     """
-    return query, [template_id]
+    return query, [template_id, evaluation_type]
 
 
 def initialize_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]]:
@@ -63,30 +67,64 @@ def has_enabled_evaluations_query(template_id: str) -> Tuple[str, List[Any]]:
 
 def set_evaluation_enabled_query(
     template_id: str,
+    evaluation_type: str,
     enabled: bool,
 ) -> Tuple[str, List[Any]]:
+    """Flip the agent's existing row — never creates one.
+
+    No row (or a disabled row) means the agent does not run this
+    evaluation."""
     query = f"""
         UPDATE evaluation_config
-        SET enabled = $2::boolean
+        SET enabled = $3::boolean
         WHERE template_id = $1::uuid
-          AND evaluation_type = 'TOPIC'
+          AND evaluation_type = $2::evaluation_type
         RETURNING {_CONFIG_COLUMNS}
     """
-    return query, [template_id, enabled]
+    return query, [template_id, evaluation_type, enabled]
 
 
 def update_evaluation_configuration_query(
     template_id: str,
+    evaluation_type: str,
     patch: Dict[str, Any],
 ) -> Tuple[str, List[Any]]:
+    """Shallow JSONB merge on the agent's existing row — never creates one.
+
+    Each top-level key in the patch overwrites the stored one wholesale.
+    TOPIC sends partial patches; CONVERSATION_EVALS's validator requires
+    every key, so for it the merge amounts to a full replacement."""
     query = f"""
         UPDATE evaluation_config
-        SET configuration = configuration || $2::jsonb
+        SET configuration = configuration || $3::jsonb
         WHERE template_id = $1::uuid
-          AND evaluation_type = 'TOPIC'
+          AND evaluation_type = $2::evaluation_type
         RETURNING {_CONFIG_COLUMNS}
     """
-    return query, [template_id, json.dumps(patch)]
+    return query, [template_id, evaluation_type, json.dumps(patch)]
+
+
+def save_evaluation_configuration_query(
+    template_id: str,
+    evaluation_type: str,
+    configuration: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """Create-or-replace — the row's creation point (POST).
+
+    A missing row is born DISABLED: configuring an evaluation is not
+    consenting to run it, enable is a separate flip (and it never
+    creates). An existing row gets its configuration replaced wholesale
+    and keeps its enabled flag."""
+    query = f"""
+        INSERT INTO evaluation_config (
+            template_id, evaluation_type, enabled, configuration
+        )
+        VALUES ($1::uuid, $2::evaluation_type, false, $3::jsonb)
+        ON CONFLICT (template_id, evaluation_type)
+            DO UPDATE SET configuration = EXCLUDED.configuration
+        RETURNING {_CONFIG_COLUMNS}
+    """
+    return query, [template_id, evaluation_type, json.dumps(configuration)]
 
 
 def add_discovered_topics_query(

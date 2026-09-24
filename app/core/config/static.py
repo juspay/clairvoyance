@@ -746,6 +746,15 @@ LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_BASEURL = os.environ.get("LANGFUSE_BASEURL", "https://us.cloud.langfuse.com")
 
+# TypeSafe Jev (CONVERSATION_EVALS provider, conversation_evals/providers/typesafe.py).
+# Empty key = every CONVERSATION_EVALS evaluation fails with a logged error
+# (a deployment mistake should be loud); nothing else is affected.
+TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY", "")
+TYPESAFE_API_URL = os.environ.get(
+    "TYPESAFE_API_URL", "https://api.typesafe.ai/v1/systemone"
+)
+TYPESAFE_TIMEOUT_SECONDS = _positive_float("TYPESAFE_TIMEOUT_SECONDS", 30.0)
+
 BREEZE_BUDDY_SONIOX_MODEL = os.environ.get("BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-v4")
 BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
     "BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS", "en,hi"

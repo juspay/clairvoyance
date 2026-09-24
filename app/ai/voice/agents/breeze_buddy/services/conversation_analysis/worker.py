@@ -27,6 +27,7 @@ from app.schemas.breeze_buddy.conversation_analysis import (
     EvaluationType,
 )
 
+from .conversation_evals.evaluator import analyze_conversation_evals
 from .queue import (
     LOG_COMPONENT,
     dequeue_conversation_evaluation,
@@ -84,6 +85,14 @@ async def get_analysis_context(
             "template_id": template_id,
             "started_at": lead.call_initiated_time or lead.created_at,
             "transcript": transcript,
+            # CONVERSATION_EVALS engines project their own state from these
+            # three: contact-named keys and duplicate keys are dropped, the
+            # rest of the payload (script, order fields) is what the engine
+            # judges against — it does leave the process, to the engine's
+            # provider.
+            "payload": lead.payload,
+            "meta_data": metadata,
+            "recorded_outcome": lead.outcome,
         }
     else:
         session = await get_chat_session_by_id(job.source_id)
@@ -198,6 +207,22 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
             deliveries=job.deliveries,
             transcript_turns=len(context["transcript"]),
         ).info(f"Topic evaluation {job.source_id} started")
+
+        # CONVERSATION_EVALS runs first and only on the job's first delivery,
+        # independent of what the TOPIC pass does next. The only thing that
+        # redelivers a job is a TOPIC requeue, and that bumps deliveries, so
+        # the engine is paid exactly once per job whether TOPIC answers,
+        # gives up or raises. The adapter resolves the engine from the row,
+        # gates on channel, logs + skips on failure, and takes no part in
+        # the topics model-pause ladder (a job dequeued during a topics
+        # outage is held like any other: a delay, never a loss).
+        if job.deliveries == 0:
+            for evaluation in evaluations:
+                if (
+                    evaluation.get("evaluation_type")
+                    == EvaluationType.CONVERSATION_EVALS.value
+                ):
+                    await analyze_conversation_evals(context, evaluation, job.channel)
 
         model_answered = False
         for evaluation in evaluations:
