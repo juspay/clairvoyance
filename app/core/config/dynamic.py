@@ -602,6 +602,11 @@ async def GEMINI_SCRAPER_MODEL() -> str:
     return await get_config("GEMINI_SCRAPER_MODEL", "gemini-2.5-flash-lite", str)
 
 
+async def GEMINI_RESEARCH_MODEL() -> str:
+    """Returns the Gemini model that drives the assist research loop."""
+    return await get_config("GEMINI_RESEARCH_MODEL", "gemini-3.6-flash", str)
+
+
 async def BB_VOICE_PROVIDER_DEFAULTS(provider: str) -> dict:
     """Returns merged provider defaults: Redis overrides > hardcoded defaults.
 

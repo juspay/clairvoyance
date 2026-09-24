@@ -534,3 +534,13 @@ def test_every_link_pattern_stops_at_the_timeout(monkeypatch) -> None:
     started = time.monotonic()
     assert tools._first_matches(slow, "a" * 40 + "c", 10) == []
     assert time.monotonic() - started < 1.0
+
+
+async def test_a_redirected_page_is_found_by_the_address_asked_for(
+    monkeypatch,
+) -> None:
+    fake_fetch(monkeypatch, [], final_url="https://www.x.test/landing")
+    evidence = tools.Evidence(root="https://x.test")
+    await tools.read_pages(["https://x.test/go"], evidence)
+    assert evidence.resolve("https://x.test/go") == "https://www.x.test/landing"
+    assert evidence.resolve("https://x.test/never") == "https://x.test/never"

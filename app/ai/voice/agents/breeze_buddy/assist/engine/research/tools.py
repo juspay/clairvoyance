@@ -107,6 +107,8 @@ class Page:
     size_bytes: int
     truncated: bool = False
     error: str = ""
+    # The address asked for, when a redirect landed somewhere else.
+    requested_url: str = ""
 
     @property
     def ok(self) -> bool:
@@ -174,6 +176,15 @@ class Evidence:
 
     def readable(self) -> List[Page]:
         return [page for page in self.pages.values() if page.ok]
+
+    def resolve(self, url: str) -> str:
+        """The key a page is stored under, given the address asked for it."""
+        if url in self.pages:
+            return url
+        for page in self.pages.values():
+            if page.requested_url == url:
+                return page.url
+        return url
 
     def seen(self, url: str) -> bool:
         return url in self.requested
@@ -309,6 +320,7 @@ def _as_page(url: str, result: FetchResult) -> Page:
         text=result.body if is_text else "",
         size_bytes=result.size_bytes,
         truncated=result.truncated,
+        requested_url=url,
     )
 
 
