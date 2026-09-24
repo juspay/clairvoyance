@@ -130,8 +130,7 @@ async def create_services(
         configurations: Template configuration model
         include_llm: When False, skip LLM creation (stream mode). LLM will be None.
         accounts: the call's account resolver (accounts.Accounts, the call's
-            tenant) — the LLM and realtime factories read it (phase 3); STT
-            and TTS take it in phase 4. None = environment accounts only.
+            tenant): every factory reads it. None = environment accounts only.
 
     Returns:
         Tuple of (stt_service, llm_service_or_None, tts_service). For realtime
@@ -160,7 +159,9 @@ async def create_services(
         logger.info(
             f"Using template STT configuration: provider={stt_configuration.provider.value}"
         )
-        stt = await get_stt_service(stt_configuration=stt_configuration)
+        stt = await get_stt_service(
+            stt_configuration=stt_configuration, accounts=accounts
+        )
     else:
         # Legacy path: build from scattered fields
         stt_language = getattr(configurations, "stt_language", None)
@@ -172,7 +173,9 @@ async def create_services(
         if soniox_context:
             logger.info("Using Soniox context from template")
         stt = await get_stt_service(
-            language_hints=stt_language, soniox_context=soniox_context
+            language_hints=stt_language,
+            soniox_context=soniox_context,
+            accounts=accounts,
         )
 
     if include_llm:
@@ -189,7 +192,7 @@ async def create_services(
         template_voice_config, voice_config_overrides
     )
     logger.info(f"Resolved voice config: provider={voice_config.provider.value}")
-    tts = await get_tts_service(voice_config)
+    tts = await get_tts_service(voice_config, accounts=accounts)
 
     return stt, llm, tts
 

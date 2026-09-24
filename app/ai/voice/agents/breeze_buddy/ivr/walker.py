@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from fastapi import WebSocket
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
 )
@@ -101,6 +102,7 @@ class IvrWalker:
         self.errors = agent.errors
         self.context = TemplateContext(agent)
         self.voice_config: Any = None
+        self.accounts: Optional[Accounts] = None
         # Opening-node fallback: when the initial node has no prompt of its own
         # it speaks the configured initial_greeting (already played once at call
         # start by send_initial_greeting). Captured here so it can be re-spoken
@@ -137,13 +139,37 @@ class IvrWalker:
             return
         template = self.agent.template
 
-        # Resolve the voice once (template tts_configuration -> defaults).
+        # One account resolver per call — the agent's, from the lead's
+        # tenant, built here when the walker is the first to need it.
+        if self.agent.accounts is None:
+            self.agent.accounts = Accounts(
+                reseller_id=self.lead.reseller_id, merchant_id=self.lead.merchant_id
+            )
+        self.accounts = self.agent.accounts
+
+        # Resolve the voice once (template tts_configuration -> defaults) and
+        # check a voice that NAMES a row up front. Either can fail — a
+        # DragonTTS voice with an account and a malformed model, a row that
+        # stopped serving since the template was saved, the credential read
+        # itself — and every failure ends the call the way any IVR error
+        # does: outcome set, socket closed, never a bare raise (agent.run
+        # wraps this walker in a bare try/finally). A voice without an
+        # account (env keys, the DragonTTS proxy) is untouched: it
+        # synthesizes as it always did.
         tts_cfg = (
             self.agent.configurations.tts_configuration
             if self.agent.configurations
             else None
         )
-        self.voice_config = await resolve_voice_config(tts_cfg)
+        try:
+            self.voice_config = await resolve_voice_config(tts_cfg)
+            if self.voice_config.credential_id:
+                await self.accounts.get(self.voice_config)
+        except Exception as e:
+            logger.error(f"[IVR] voice refused before the menu: {e}")
+            self.lead.outcome = IVR_ERROR_OUTCOME
+            await self._finalize_and_close(call_ended_by="system")
+            return
 
         # Parse + validate the menu tree.
         try:
@@ -393,7 +419,9 @@ class IvrWalker:
         """
         if not text:
             return 0.0
-        audio = await prepare_ivr_menu_audio(self.provider, text, self.voice_config)
+        audio = await prepare_ivr_menu_audio(
+            self.provider, text, self.voice_config, accounts=self.accounts
+        )
         if not audio:
             logger.warning(f"[IVR] Failed to synthesise audio for: {text!r}")
             return 0.0

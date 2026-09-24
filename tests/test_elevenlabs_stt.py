@@ -31,6 +31,7 @@ from app.ai.voice.stt.elevenlabs import (
     ElevenLabsRealtimeSTTServiceWithSecondaryLanguages,
     resolve_languages,
 )
+from app.core.config import static
 
 # pipecat's own default host, asserted rather than inlined so a pipecat upgrade
 # that changes it fails loudly here instead of silently on a live call.
@@ -94,7 +95,7 @@ async def test_stt_native_maps_to_vad_commit_strategy(monkeypatch):
     leaves them null by default."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -115,7 +116,7 @@ async def test_smart_turn_maps_to_manual_commit_strategy(monkeypatch):
     VAD settings remain unset on the service (they only apply in VAD mode)."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -134,7 +135,7 @@ async def test_default_turn_detection_maps_to_vad_commit(monkeypatch):
     VAD, so a fully-unset config must still land on VAD commit."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(provider=STTProvider.ELEVENLABS)
     )
@@ -145,7 +146,7 @@ async def test_default_turn_detection_maps_to_vad_commit(monkeypatch):
 async def test_language_and_timestamps_flow_to_service(monkeypatch):
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -174,7 +175,7 @@ async def test_sample_rate_left_to_the_pipeline(monkeypatch):
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
     captured = {}
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
 
     def fake_build(config):
         captured["sample_rate"] = config.sample_rate
@@ -200,7 +201,7 @@ async def test_language_code_none_flows_auto_detect(monkeypatch):
     service settings as None (not be replaced by a fallback)."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -217,7 +218,7 @@ async def test_legacy_env_provider_map_routes_elevenlabs(monkeypatch):
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
     monkeypatch.setattr(bb_stt, "BREEZE_BUDDY_STT_SERVICE", "elevenlabs")
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await bb_stt.get_stt_service()
     assert isinstance(svc, ElevenLabsRealtimeSTTService)
     assert svc._commit_strategy == CommitStrategy.VAD
@@ -330,7 +331,7 @@ async def test_languages_flow_from_template_to_service(monkeypatch):
     """End-to-end: the template's ['hi','en'] lands on the built service."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -440,7 +441,7 @@ async def test_primary_injection_never_reaches_the_url(monkeypatch):
         return AsyncMock()
 
     monkeypatch.setattr(el_stt, "websocket_connect", fake_connect)
-    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
 
     svc = await create_stt_from_config(
         STTConfiguration(
@@ -466,7 +467,7 @@ async def test_timeout_mode_uses_vad_commit(monkeypatch):
     TIMEOUT gets no VAD (only SMART_TURN auto-creates one) and
     BREEZE_BUDDY_ENABLE_VAD defaults False — so MANUAL here means no final
     transcript for the entire call."""
-    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_STT_API_KEY", "test-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -622,8 +623,8 @@ async def test_configured_key_and_host_both_reach_the_service(monkeypatch):
     the wrong host is the same 401 as a wrong key — asserting one without the
     other would miss half the bug.
     """
-    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_STT_API_KEY", "residency-key")
-    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_STT_URL", RESIDENCY_HOST)
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "residency-key")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_URL", RESIDENCY_HOST)
 
     svc = await create_stt_from_config(
         STTConfiguration(provider=STTProvider.ELEVENLABS)
@@ -641,7 +642,7 @@ async def test_missing_residency_key_raises_at_build(monkeypatch):
     could not hear. A named ValueError at build time is a dead pod on deploy
     instead of a silently deaf customer call.
     """
-    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_STT_API_KEY", "")
+    monkeypatch.setattr(static, "ELEVENLABS_STT_API_KEY", "")
 
     with pytest.raises(ValueError, match="ELEVENLABS_STT_API_KEY"):
         await create_stt_from_config(STTConfiguration(provider=STTProvider.ELEVENLABS))

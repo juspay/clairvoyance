@@ -16,8 +16,6 @@ from pipecat.transcriptions.language import Language
 from app.core.config.static import (
     ELEVENLABS_BB_VOICE_ID,
     ELEVENLABS_MODEL_ID,
-    ELEVENLABS_TTS_API_KEY,
-    ELEVENLABS_TTS_URL,
 )
 from app.core.logger import logger
 
@@ -75,8 +73,11 @@ async def _generate_elevenlabs_audio(
     stability: float | None = None,
     similarity_boost: float | None = None,
     language: Language | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> bytes:
-    """Synthesize audio using ElevenLabs TTS API.
+    """Synthesize audio using ElevenLabs TTS API. ``api_key`` / ``base_url``:
+    the account the caller resolved (accounts.Accounts).
 
     Args:
         text: The text to synthesize
@@ -93,13 +94,10 @@ async def _generate_elevenlabs_audio(
     Returns:
         Audio bytes in ulaw_8000 format
     """
-    # One account for TTS, from the env. ELEVENLABS_TTS_URL is a bare host;
-    # this REST path needs https:// where the streaming path needs wss://,
-    # which is why the scheme is added at the call site, not stored.
-    api_key = ELEVENLABS_TTS_API_KEY
-    base_url = f"https://{ELEVENLABS_TTS_URL}"
-    if not api_key:
-        raise ValueError("ELEVENLABS_TTS_API_KEY is required for ElevenLabs TTS")
+    # The caller resolved the account (a row's key or the env's, on the
+    # deployment's host) and dials it as https:// on this REST path.
+    if not api_key or not base_url:
+        raise ValueError("an api_key and base_url are required for ElevenLabs TTS")
 
     # Use provided values or fall back to defaults
     final_voice_id = voice_id if voice_id else ELEVENLABS_BB_VOICE_ID
