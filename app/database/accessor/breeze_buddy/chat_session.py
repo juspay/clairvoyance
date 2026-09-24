@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.call_outcome import call_outcome_writes_enabled
 from app.database.decoder.breeze_buddy.chat_session import (
     decode_agent_session_state,
     decode_chat_message,
@@ -138,14 +139,23 @@ async def end_chat_session(
 async def update_chat_session_outcome(
     session_id: str,
     outcome: str,
+    agent_outcome: Optional[str] = None,
+    outcome_source: Optional[str] = None,
 ) -> Optional[str]:
     """Set the singular outcome on a chat_session WITHOUT ending it.
 
     Used by the chat-aware ``update_outcome_in_database`` hook so an assist /
     chat session records an outcome as soon as the LLM sets one. Returns the
     written outcome, or None if no row matched. Raises on DB error.
+
+    ``agent_outcome`` / ``outcome_source`` (call outcome columns) ride the same
+    statement only while CALL_OUTCOME_WRITES_ENABLED is on.
     """
-    query, values = update_chat_session_outcome_query(session_id, outcome)
+    if not await call_outcome_writes_enabled():
+        agent_outcome = outcome_source = None
+    query, values = update_chat_session_outcome_query(
+        session_id, outcome, agent_outcome, outcome_source
+    )
     try:
         result = await run_parameterized_query(query, values)
         if not result:

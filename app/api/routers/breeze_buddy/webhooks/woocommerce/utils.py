@@ -23,6 +23,11 @@ from app.database.accessor import (
     update_lead_call_completion_details,
 )
 from app.schemas import LeadCallStatus, UserInfo, UserRole
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+)
 
 # Supported topics (URL path segment).
 TOPIC_ORDER_CONFIRMATION = "order-confirmation"
@@ -170,6 +175,10 @@ async def abort_backlog_leads(
             outcome="ABORTED",
             meta_data={"reason": reason},
             call_end_time=datetime.now(timezone.utc),
+            call_outcome=CallOutcome(
+                connection_status=ConnectionStatus.NOT_DIALED,
+                connection_reason=ConnectionReason.ABORTED,
+            ),
         )
         await release_lock_on_lead_by_id(lead.id)
         aborted.append(lead.id)

@@ -341,6 +341,19 @@ class LeadCallTracker(BaseModel):
     # stamped by the walker after insert; the finished tap mirrors it so
     # the run can hear its own call's outcome (rollout phase 18).
     enrollment_id: Optional[str] = None
+    # Call outcome columns (migration 080; vocabulary in schemas/breeze_buddy/outcomes.py).
+    # Written beside the legacy ``outcome``, never instead of it.
+    connection_status: Optional[str] = None
+    connection_reason: Optional[str] = None
+    provider_status: Optional[str] = None
+    hangup_cause: Optional[str] = None
+    end_reason: Optional[str] = None
+    agent_outcome: Optional[str] = None
+    outcome_source: Optional[str] = None
+    eval_outcome: Optional[str] = None
+    eval_status: Optional[str] = None
+    eval_result_id: Optional[str] = None
+    backfilled_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
