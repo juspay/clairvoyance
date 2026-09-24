@@ -14,6 +14,7 @@ from typing import FrozenSet, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
+    BrandLook,
     InstallMethod,
     MirrorPolicy,
     ResearchDelta,
@@ -48,6 +49,10 @@ class PlatformAdapter(Protocol):
     async def research(
         self, profile: SiteProfile, budget_seconds: float
     ) -> ResearchDelta: ...
+
+    async def brand(self, profile: SiteProfile) -> Optional[BrandLook]: ...
+
+    def stock_colors(self) -> Tuple[str, ...]: ...
 
     def legacy_section_markers(self) -> LegacyMarkers: ...
 
@@ -132,6 +137,18 @@ class GenericAdapter:
         self, profile: SiteProfile, budget_seconds: float
     ) -> ResearchDelta:
         return ResearchDelta()
+
+    async def brand(self, profile: SiteProfile) -> Optional[BrandLook]:
+        """The brand colours and logo the platform keeps for this merchant.
+
+        A plain website keeps none, so the engine reads the page instead.
+        """
+        return None
+
+    def stock_colors(self) -> Tuple[str, ...]:
+        """Colours that belong to the platform (its badges, its buttons), not
+        to any merchant — the engine never offers these as a brand colour."""
+        return ()
 
     def legacy_section_markers(self) -> LegacyMarkers:
         return {}

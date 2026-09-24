@@ -1,4 +1,4 @@
-"""The engine's only door to the open web: one guarded GET.
+"""The engine's only door to the open web: one guarded GET (or JSON POST).
 
 Every stage that reads a merchant's site goes through :func:`fetch_page`, so
 the safety rules live in one file instead of once per fetcher.
@@ -18,6 +18,9 @@ the metadata service, a database on the VPC, or localhost. The rules:
   that reason; a public URL that bounces to ``127.0.0.1`` stops here.
 * **Bounded**: a byte cap, a per-hop timeout and a whole-fetch deadline, so a
   slow or endless response cannot hold a worker.
+* **A POST never follows a redirect.** It exists for a platform's public
+  read-only API; a redirect there is unexpected, and following one would mean
+  re-sending the body somewhere nobody chose.
 
 If the deployment routes egress through a proxy, this module refuses to fetch
 at all. The proxy receives the hostname and picks the destination itself, so
@@ -30,10 +33,12 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import socket
 import time
 from dataclasses import dataclass, field
 from typing import (
+    Any,
     AsyncIterator,
     Dict,
     List,
@@ -105,6 +110,8 @@ class FetchResult:
     # session material and identify nothing we need.
     cookie_names: List[str] = field(default_factory=list)
     body: str = ""
+    # Filled instead of ``body`` when the caller asked for bytes (an image).
+    raw: bytes = b""
     size_bytes: int = 0
     truncated: bool = False
     elapsed_seconds: float = 0.0
@@ -252,8 +259,15 @@ async def fetch_page(
     max_bytes: int = DEFAULT_MAX_BYTES,
     headers: Optional[Dict[str, str]] = None,
     max_redirects: int = MAX_REDIRECTS,
+    json_body: Optional[Mapping[str, Any]] = None,
+    decode: bool = True,
 ) -> FetchResult:
-    """GET ``url``, following redirects by hand so every hop is validated."""
+    """GET ``url``, following redirects by hand so every hop is validated.
+
+    With ``json_body`` it is a POST of that JSON instead, under the same guard
+    and caps, and a redirect is refused rather than followed. ``decode=False``
+    leaves ``body`` empty and returns the bytes in ``raw``.
+    """
     started = time.monotonic()
     target = normalize_probe_url(url)
     if get_proxy_config():
@@ -265,6 +279,10 @@ async def fetch_page(
     answers: Dict[Tuple[str, int], List[ResolveResult]] = {}
     redirects: List[str] = []
     request_headers = {**DEFAULT_HEADERS, **(headers or {})}
+    payload: Optional[str] = None
+    if json_body is not None:
+        payload = json.dumps(json_body)
+        request_headers["Content-Type"] = "application/json"
 
     # Always pinned: the connection may only go to an address this module
     # resolved and accepted.
@@ -291,12 +309,21 @@ async def fetch_page(
                 answers[(host, port)] = await resolve_public_addresses(host, port)
 
             try:
-                response = await session.get(
-                    target,
-                    headers=request_headers,
-                    allow_redirects=False,
-                    timeout=aiohttp.ClientTimeout(total=remaining),
-                )
+                if payload is None:
+                    response = await session.get(
+                        target,
+                        headers=request_headers,
+                        allow_redirects=False,
+                        timeout=aiohttp.ClientTimeout(total=remaining),
+                    )
+                else:
+                    response = await session.post(
+                        target,
+                        headers=request_headers,
+                        data=payload,
+                        allow_redirects=False,
+                        timeout=aiohttp.ClientTimeout(total=remaining),
+                    )
             except UnsafeUrlError:
                 raise
             except asyncio.TimeoutError as exc:
@@ -307,6 +334,8 @@ async def fetch_page(
             async with response:
                 location = response.headers.get("location")
                 if response.status in (301, 302, 303, 307, 308) and location:
+                    if payload is not None:
+                        raise FetchFailedError("the API answered with a redirect")
                     redirects.append(target)
                     target = normalize_probe_url(urljoin(target, location))
                     continue
@@ -320,7 +349,8 @@ async def fetch_page(
                     cookie_names=_cookie_names(
                         response.headers.getall("set-cookie", [])
                     ),
-                    body=_decode(raw, response.charset),
+                    body=_decode(raw, response.charset) if decode else "",
+                    raw=b"" if decode else raw,
                     size_bytes=len(raw),
                     truncated=truncated,
                     elapsed_seconds=round(time.monotonic() - started, 3),

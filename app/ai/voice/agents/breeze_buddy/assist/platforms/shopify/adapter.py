@@ -17,6 +17,7 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.classify.signals import (
     signal_matches,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
+    BrandLook,
     InstallMethod,
     MirrorPolicy,
     Signal,
@@ -30,6 +31,7 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import (
     platform_sections,
 )
 from app.ai.voice.agents.breeze_buddy.assist.platforms.base import GenericAdapter
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify import brand as _brand
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
     assist_tenant,
 )
@@ -119,6 +121,15 @@ class ShopifyAdapter(GenericAdapter):
 
     def store_name(self, merchant_domain: str) -> str:
         return merchant_domain.removesuffix(PERMANENT_DOMAIN_SUFFIX)
+
+    async def brand(self, profile: SiteProfile) -> Optional[BrandLook]:
+        # Only the validated permanent domain: the literal is page text anyone
+        # can write, and the request goes wherever it names.
+        host = _permanent_host(profile.inline_literals.get(SHOP_LITERAL))
+        return await _brand.brand_look(host) if host else None
+
+    def stock_colors(self) -> Tuple[str, ...]:
+        return _brand.STOCK_COLORS
 
     def legacy_section_markers(self) -> LegacyMarkers:
         return {LEGACY_SECTION_START: (self.id, LEGACY_SECTION_END)}
