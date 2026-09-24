@@ -108,6 +108,55 @@ class ResearchDelta(BaseModel):
     sources: List[str] = Field(default_factory=list)
 
 
+ColorRole = Literal["primary", "secondary", "accent", "background", "text", "link"]
+FontRole = Literal["heading", "body", "mono", "unknown"]
+
+
+class BrandColor(BaseModel):
+    """One colour, and where it came from.
+
+    ``role`` is the job the colour does, not a name someone gave it in a
+    stylesheet. ``source`` is what said so, because a colour nobody can trace
+    is a colour nobody can argue with.
+    """
+
+    role: Literal["primary", "secondary", "accent", "background", "text", "link"]
+    hex: str
+    source: str
+    confidence: float = 0.0
+
+
+class BrandFont(BaseModel):
+    family: str
+    role: FontRole = "unknown"
+    source: str = ""
+
+
+class BrandLook(BaseModel):
+    """Stage 3 lane A: how a site looks, so the assistant can look like it.
+
+    Every field is optional. A site that yields nothing is a site the operator
+    styles by hand, which is a worse outcome than a good guess but a much
+    better one than a confident wrong guess.
+    """
+
+    colors: List[BrandColor] = Field(default_factory=list)
+    fonts: List[BrandFont] = Field(default_factory=list)
+    logo_url: Optional[str] = None
+    color_scheme: Optional[Literal["light", "dark"]] = None
+    # Candidates we did not pick, kept so the console can offer them.
+    alternates: List[BrandColor] = Field(default_factory=list)
+    sources: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    fetched_at: Optional[datetime] = None
+
+    def color(self, role: str) -> Optional[str]:
+        for entry in self.colors:
+            if entry.role == role:
+                return entry.hex
+        return None
+
+
 class ToolBinding(BaseModel):
     kind: Literal["mcp", "function"]
     name: str
@@ -152,6 +201,11 @@ class MirrorPolicy(BaseModel):
 
 
 __all__ = [
+    "BrandColor",
+    "ColorRole",
+    "FontRole",
+    "BrandFont",
+    "BrandLook",
     "Classification",
     "InstallMethod",
     "MirrorPolicy",

@@ -105,6 +105,9 @@ class FetchResult:
     # session material and identify nothing we need.
     cookie_names: List[str] = field(default_factory=list)
     body: str = ""
+    # Set only when the caller asked for bytes. An image decoded as text is
+    # destroyed irrecoverably, so binary reads never go through ``body``.
+    raw: bytes = b""
     size_bytes: int = 0
     truncated: bool = False
     elapsed_seconds: float = 0.0
@@ -252,8 +255,14 @@ async def fetch_page(
     max_bytes: int = DEFAULT_MAX_BYTES,
     headers: Optional[Dict[str, str]] = None,
     max_redirects: int = MAX_REDIRECTS,
+    decode: bool = True,
 ) -> FetchResult:
-    """GET ``url``, following redirects by hand so every hop is validated."""
+    """GET ``url``, following redirects by hand so every hop is validated.
+
+    ``decode=False`` returns the bytes untouched in ``raw`` and leaves ``body``
+    empty — the only correct way to read an image, since decoding one as text
+    replaces every invalid sequence and cannot be undone.
+    """
     started = time.monotonic()
     target = normalize_probe_url(url)
     if get_proxy_config():
@@ -320,7 +329,8 @@ async def fetch_page(
                     cookie_names=_cookie_names(
                         response.headers.getall("set-cookie", [])
                     ),
-                    body=_decode(raw, response.charset),
+                    body=_decode(raw, response.charset) if decode else "",
+                    raw=b"" if decode else raw,
                     size_bytes=len(raw),
                     truncated=truncated,
                     elapsed_seconds=round(time.monotonic() - started, 3),

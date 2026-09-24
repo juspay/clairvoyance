@@ -149,7 +149,7 @@ def wired(monkeypatch):
         service, "delete_template_if_not_referenced", mocks["delete_template"]
     )
     monkeypatch.setattr(service, "invalidate_template", mocks["invalidate"])
-    monkeypatch.setattr(service, "scrape_website", mocks["scrape"])
+    monkeypatch.setattr(service, "_read_site", mocks["scrape"])
     return mocks
 
 

@@ -8,21 +8,39 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    cast,
+)
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.assist import profiles
 from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
     normalize_merchant_domain,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.probe import probe_site
+from app.ai.voice.agents.breeze_buddy.assist.engine.prompt_core import (
+    replace_vertical_section,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.research import (
+    agent as research_agent,
+    slots,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingConfigurationError,
     WebsiteScrapingUpstreamError,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.website import (
-    scrape_website,
+    WebsiteScrapingResult,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import (
     BRAND_MARKER,
@@ -72,7 +90,9 @@ BRAND_IDENTITY_MARKER = BRAND_MARKER
 EXPECTED_BLUEPRINT_MODEL = "gemini-3.6-flash"
 
 _PUBLIC_KEY_NBYTES = 32
-_SCRAPE_TIMEOUT_SECONDS = 18
+# The researcher reads real pages, so it is measured in tens of seconds
+# rather than one call's latency. Live runs finish in 50-90s.
+_SITE_READ_SECONDS = 150.0
 
 
 @dataclass
@@ -194,10 +214,32 @@ def build_merchant_template(
     _validate_default_template(default_template, adapter, vertical)
     assert isinstance(prompt, str)
 
-    brand_block = vertical.brand_block(
-        body.merchant_name, body.bot_brand_name or body.merchant_name, website_context
-    )
+    site_host = _site_host(body.website_url)
+    fields = dict(body.site_fields or {})
+    if fields:
+        # The fields the merchant edits in the studio, assembled by the
+        # studio's own rules. Onboarding and the studio now write the same
+        # prompt from the same names — anything else and the merchant meets
+        # two vocabularies for one agent.
+        brand_block = vertical.brand_block_from_fields(
+            fields,
+            assistant_name=body.merchant_name,
+            brand_name=body.bot_brand_name or body.merchant_name,
+            site_host=site_host,
+        )
+    else:
+        brand_block = vertical.brand_block(
+            body.merchant_name,
+            body.bot_brand_name or body.merchant_name,
+            website_context,
+        )
     prompt = prompt.replace(vertical.skeleton.brand_marker, brand_block, 1)
+    if fields:
+        section = vertical.vertical_section(fields)
+        if section:
+            # The blueprint ships help written for whatever store it was cut
+            # from; the question that decides the sale is this shop's.
+            prompt = replace_vertical_section(prompt, vertical.skeleton, section)
     prompt = resolve_platform_sections(
         prompt, {adapter.id}, registry.legacy_section_markers()
     )
@@ -218,6 +260,9 @@ def build_merchant_template(
         configurations.pop("mcp", None)
     for key in registry.foreign_tool_config_keys(adapter):
         configurations.pop(key, None)
+
+    if fields:
+        _apply_widget_values(configurations, vertical.widget_values(fields))
 
     expected_payload_schema = copy.deepcopy(
         default_template.expected_payload_schema or {}
@@ -567,6 +612,107 @@ async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardRespon
     )
 
 
+def _apply_widget_values(
+    configurations: Dict[str, Any], values: Mapping[str, object]
+) -> None:
+    """Whatever the vertical's fields imply, onto the blueprint's config.
+
+    The values arrive already config-shaped, so nothing here needs to know
+    what any of them mean. Only what the fields actually supplied is written:
+    a blueprint's default is a working one, and replacing it with an empty
+    string because a site said nothing is a downgrade dressed as
+    personalisation.
+    """
+    for key, value in values.items():
+        if isinstance(value, Mapping):
+            configurations[key] = _merged(configurations.get(key), value)
+        elif value not in (None, "", [], {}):
+            configurations[key] = value
+
+
+def _merged(existing: Any, incoming: Mapping[str, Any]) -> Dict[str, Any]:
+    """Nested values onto whatever the blueprint already had.
+
+    Lists union with the blueprint's rather than replacing it: a blueprint
+    lists URLs the agent is allowed to surface, and a merchant's additions are
+    additions.
+    """
+    out: Dict[str, Any] = dict(existing or {}) if isinstance(existing, Mapping) else {}
+    for key, value in incoming.items():
+        if isinstance(value, Mapping):
+            out[key] = _merged(out.get(key), value)
+        elif isinstance(value, list):
+            out[key] = list(dict.fromkeys([*value, *(out.get(key) or [])]))
+        elif value not in (None, "", [], {}):
+            out[key] = value
+    return out
+
+
+async def _read_site(
+    body: AssistOnboardingStreamRequest,
+    adapter: PlatformAdapter,
+    vertical: Vertical,
+) -> WebsiteScrapingResult:
+    """Read the merchant's site into the context a template is built from.
+
+    This used to be one model call asking a grounded model to describe a site.
+    Measured 2026-09-10, that call's prompt token count never rose above the
+    size of the prompt itself on the models it ran under — the page was never
+    actually fetched, and the "website context" every agent was built from was
+    the model's own knowledge of the brand. It also returned nothing at all on
+    one of two identical runs, which failed the onboarding outright.
+
+    The researcher fetches the pages itself through the guarded fetcher,
+    changes tactic when a site will not give up its words, and records each
+    fact with the address it was read on. Its findings are sorted into the
+    sections this vertical declares and rendered under the headings the
+    blueprint already uses, so what arrives here is the same kind of string as
+    before — traceable this time.
+
+    Raises ``WebsiteScrapingUpstreamError`` when nothing usable came back, so
+    the caller's policy is unchanged: fail rather than silently publish a
+    generic assistant, unless a human asked for that.
+    """
+    site = await probe_site(body.website_url)
+    supplied = await adapter.known_documents(site)
+    seeds = [
+        research_agent.Seed(
+            kind=document.kind,
+            title=document.title,
+            url=document.display_url or document.url,
+            text=document.body,
+        )
+        for document in supplied
+        if document.body
+    ]
+    outcome = await research_agent.research(
+        body.website_url,
+        guidance=vertical.research_prompt(),
+        seeds=seeds,
+        budget=research_agent.Budget(seconds=_SITE_READ_SECONDS),
+    )
+    profile = profiles.resolve(adapter.slot_profile())
+    filled = await slots.fill(outcome.evidence.notes, profile)
+    text = slots.render(filled, profile)
+    if not text:
+        raise WebsiteScrapingUpstreamError("nothing could be read from this site")
+    logger.info(
+        "assist onboarding read the site",
+        fields=filled.filled_count,
+        documents=len(outcome.evidence.readable()),
+        steps=outcome.steps_used,
+    )
+    return WebsiteScrapingResult(
+        text=text,
+        provider="research",
+        status="generated",
+        provider_response={"profile": filled.profile, "model": outcome.model},
+        url_context_metadata=[
+            {"retrieved_url": note.source_url} for note in outcome.evidence.notes[:20]
+        ],
+    )
+
+
 async def stream_assist_onboarding(
     body: AssistOnboardingStreamRequest,
 ) -> AsyncIterator[SSEEvent]:
@@ -633,19 +779,22 @@ async def stream_assist_onboarding(
             "status": "skipped_scrape_failed",
             "source": "none",
         }
+        supplied_context = (body.website_context or "").strip()
         try:
-            result = await scrape_website(
-                provider=body.provider,
-                provider_config={
-                    "prompt": vertical.research_prompt(),
-                    "temperature": 0.1,
-                    "max_output_tokens": 4096,
-                    "use_url_context": True,
-                    "use_google_search": True,
-                },
-                url=body.website_url,
-                timeout_seconds=_SCRAPE_TIMEOUT_SECONDS,
-            )
+            if supplied_context:
+                # The caller already read this site and showed it to a person
+                # who said yes. Reading it again would spend another minute to
+                # produce something subtly different from what they approved,
+                # which makes the confirmation a lie.
+                result = WebsiteScrapingResult(
+                    text=supplied_context,
+                    provider="confirmed",
+                    status="confirmed",
+                    provider_response={},
+                    url_context_metadata=[],
+                )
+            else:
+                result = await _read_site(body, adapter, vertical)
         except (WebsiteScrapingUpstreamError, asyncio.TimeoutError):
             # Policy is to fail without writing rather than publish a generic
             # assistant silently. ``allow_unpersonalized`` is the caller saying
