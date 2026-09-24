@@ -28,12 +28,12 @@ from typing import Optional
 from google import genai
 from google.genai import types as gt
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.llm.realtime.gemini.realtime import (
     DEFAULT_GEMINI_REALTIME_MODEL,
     DEFAULT_GEMINI_REALTIME_VOICE,
 )
 from app.ai.voice.llm.types import RealtimeConfig
-from app.core.config import static
 from app.core.logger import logger
 
 __all__ = ["generate_opening_line_mulaw"]
@@ -73,6 +73,7 @@ async def generate_opening_line_mulaw(
     text: str,
     realtime: RealtimeConfig,
     timeout_seconds: float = DEFAULT_GENERATION_TIMEOUT_SECONDS,
+    accounts: Optional[Accounts] = None,
 ) -> Optional[bytes]:
     """Speak ``text`` with the call's Live model/voice/language.
 
@@ -81,14 +82,22 @@ async def generate_opening_line_mulaw(
     """
     if not text or not text.strip():
         return None
-    if not static.GEMINI_API_KEY:
+    # The same account the live session will use (accounts):
+    # the block's row, else the environment's Gemini key.
+    try:
+        account = await (accounts or Accounts()).get(realtime)
+    except Exception as e:  # noqa: BLE001 - fail open to LLM-speaks-first
+        logger.warning(f"opening-line: no Gemini account ({e}); skipping generation")
+        return None
+    api_key = getattr(account, "api_key", None) or ""
+    if not api_key:
         logger.warning("opening-line: GEMINI_API_KEY unset; skipping generation")
         return None
     started = time.perf_counter()
     stats: dict = {"started_at": started}
     try:
         audio = await asyncio.wait_for(
-            _generate(text, realtime, stats), timeout=timeout_seconds
+            _generate(text, realtime, stats, api_key), timeout=timeout_seconds
         )
         if audio is not None:
             logger.info(
@@ -114,7 +123,7 @@ async def generate_opening_line_mulaw(
 
 
 async def _generate(
-    text: str, realtime: RealtimeConfig, stats: dict
+    text: str, realtime: RealtimeConfig, stats: dict, api_key: str
 ) -> Optional[bytes]:
     # Same resolution the realtime factory applies, so the pre-played line is
     # spoken by the exact voice the live session will use.
@@ -128,7 +137,7 @@ async def _generate(
     if realtime.language:
         speech_config.language_code = realtime.language
 
-    client = genai.Client(api_key=static.GEMINI_API_KEY)
+    client = genai.Client(api_key=api_key)
     config = gt.LiveConnectConfig(
         response_modalities=["AUDIO"],
         speech_config=speech_config,

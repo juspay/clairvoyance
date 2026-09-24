@@ -47,13 +47,25 @@ _failed_at: Dict[str, float] = {}
 _lock = asyncio.Lock()
 
 
-def _cache_key(model: str, system_instruction: Any, tools: Any) -> str:
+def _cache_key(
+    model: str, system_instruction: Any, tools: Any, scope: Any = None
+) -> str:
+    """``scope`` is the project + location the client is bound to: a
+    CachedContent name belongs to one GCP project, so two templates on two
+    Vertex accounts (accounts) must never share an entry."""
     payload = json.dumps(
-        {"m": model, "s": system_instruction, "t": tools},
+        {"m": model, "s": system_instruction, "t": tools, "p": scope},
         sort_keys=True,
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _client_scope(client: Any) -> Any:
+    api = getattr(client, "_api_client", None)
+    project = getattr(api, "project", None)
+    location = getattr(api, "location", None)
+    return [project, location] if project or location else None
 
 
 async def resolve_prompt_cache(
@@ -67,7 +79,7 @@ async def resolve_prompt_cache(
     caching is unavailable (recent failure / create error) — the caller
     then sends the full prefix as before, so this can only ever be a
     no-op, never a regression."""
-    key = _cache_key(model, system_instruction, tools)
+    key = _cache_key(model, system_instruction, tools, _client_scope(client))
     now = time.time()
     failed = _failed_at.get(key)
     if failed is not None and now - failed < _FAILURE_COOLDOWN_SECONDS:

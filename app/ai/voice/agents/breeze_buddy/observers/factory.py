@@ -6,6 +6,10 @@ Uses existing ``get_llm_service()`` for LLM service creation and existing
 
 from typing import Any, Dict, List, Optional
 
+from app.ai.voice.agents.breeze_buddy.accounts import (
+    Accounts,
+    accounts_for_template,
+)
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ObserverConfig,
@@ -43,6 +47,27 @@ def merge_llm_config(
     """
     observer_llm = override or LLMConfiguration()
     provider = observer_llm.provider or base.provider
+    # The account (accounts): the observer's own row when it
+    # names one; else the template's — only when the observer really is the
+    # same connection (same provider, no endpoint of its own), because an
+    # Azure key must never be sent to api.openai.com or to a private URL;
+    # else none, the environment's account.
+    same_connection = (
+        observer_llm.provider is None or observer_llm.provider == base.provider
+    ) and not observer_llm.endpoint
+    credential_id = observer_llm.credential_id or (
+        base.credential_id if same_connection else None
+    )
+    # An observer that runs on an account — its own row, or the one it
+    # inherits — takes its connection FROM that row: the base's gateway
+    # endpoint and named key never ride along (a block may not carry both
+    # an endpoint and a credential_id, and the row's key belongs to the
+    # row's host). Without an account, the base's connection is inherited
+    # as before.
+    endpoint = observer_llm.endpoint or (None if credential_id else base.endpoint)
+    api_key_name = observer_llm.api_key_name or (
+        None if credential_id else base.api_key_name
+    )
     if observer_llm.temperature is not None:
         temperature = observer_llm.temperature
     elif provider == LLMProvider.AWS_BEDROCK:
@@ -60,8 +85,9 @@ def merge_llm_config(
         sdk=observer_llm.sdk or base.sdk,
         model=observer_llm.model or base.model,
         region=observer_llm.region or base.region,
-        endpoint=observer_llm.endpoint or base.endpoint,
-        api_key_name=observer_llm.api_key_name or base.api_key_name,
+        endpoint=endpoint,
+        api_key_name=api_key_name,
+        credential_id=credential_id,
         temperature=temperature,
         max_tokens=(
             observer_llm.max_tokens if observer_llm.max_tokens is not None else 256
@@ -75,6 +101,7 @@ async def build_observers(
     template: Optional[TemplateModel],
     agent_context: Any,
     handler_map: Dict[str, Any],
+    accounts: Optional[Accounts] = None,
 ) -> List[RealtimeObserver]:
     """Build observer instances from template config."""
     template_llm = (
@@ -91,6 +118,9 @@ async def build_observers(
         template_llm = LLMConfiguration()
 
     observers: List[RealtimeObserver] = []
+    # The call's account resolver (accounts); merge_llm_config
+    # decided WHICH row each observer runs on, this resolves it.
+    resolver = accounts or (accounts_for_template(template) if template else None)
 
     for cfg in configs:
         if not getattr(cfg, "enabled", True):
@@ -98,7 +128,9 @@ async def build_observers(
             continue
         try:
             merged_config = merge_llm_config(cfg.llm, template_llm)
-            llm_service = await get_llm_service(merged_config, pooled=True)
+            llm_service = await get_llm_service(
+                merged_config, pooled=True, accounts=resolver
+            )
             observers.append(
                 RealtimeObserver(cfg, llm_service, agent_context, handler_map)
             )

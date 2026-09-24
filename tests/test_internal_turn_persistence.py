@@ -315,7 +315,7 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
     async def _render_vars(_template, _persisted):
         return {}
 
-    async def _get_llm(_config, pooled=True):
+    async def _get_llm(_config, pooled=True, accounts=None):
         return object()
 
     async def _run_turn(self, *, user_content, history, current_node, internal=False):

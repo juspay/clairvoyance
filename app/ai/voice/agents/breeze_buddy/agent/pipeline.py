@@ -42,6 +42,7 @@ from pipecat.turns.user_stop import (
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import setup_tracing
 from app.ai.voice.agents.breeze_buddy.processors import (
@@ -121,12 +122,16 @@ def generate_conversation_id(payload: Optional[dict]) -> str:
 async def create_services(
     configurations: Optional[ConfigurationModel],
     include_llm: bool = True,
+    accounts: Optional[Accounts] = None,
 ) -> tuple[Optional[Any], Optional[Any], Optional[Any]]:
     """Create STT, LLM, and TTS services.
 
     Args:
         configurations: Template configuration model
         include_llm: When False, skip LLM creation (stream mode). LLM will be None.
+        accounts: the call's account resolver (accounts.Accounts, the call's
+            tenant) — the LLM and realtime factories read it (phase 3); STT
+            and TTS take it in phase 4. None = environment accounts only.
 
     Returns:
         Tuple of (stt_service, llm_service_or_None, tts_service). For realtime
@@ -142,7 +147,7 @@ async def create_services(
         # pipeline can wire the realtime service directly between transport
         # input/output and the context aggregators.
         assert llm_config is not None  # narrowed by is_realtime
-        realtime_llm = await get_realtime_llm_service(llm_config)
+        realtime_llm = await get_realtime_llm_service(llm_config, accounts=accounts)
         logger.info(
             "[REALTIME] Skipping separate STT and TTS service creation; "
             "realtime LLM handles audio natively"
@@ -171,7 +176,7 @@ async def create_services(
         )
 
     if include_llm:
-        llm = await get_llm_service(llm_config)
+        llm = await get_llm_service(llm_config, accounts=accounts)
     else:
         llm = None
         logger.info("[STREAM] Skipping LLM service creation")

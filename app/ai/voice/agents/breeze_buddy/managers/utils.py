@@ -4,6 +4,7 @@ import base64
 import json
 from typing import Optional
 
+from app.ai.voice.agents.breeze_buddy.accounts import accounts_for_template
 from app.ai.voice.agents.breeze_buddy.template.types import (
     LEGACY_VOICE_TO_PROVIDER,
     TemplateModel,
@@ -317,7 +318,9 @@ async def ensure_realtime_opening_line_cached(
             )
 
     try:
-        mulaw_audio = await generate_opening_line_mulaw(initial_greeting, realtime)
+        mulaw_audio = await generate_opening_line_mulaw(
+            initial_greeting, realtime, accounts=accounts_for_template(template)
+        )
         if not mulaw_audio:
             logger.warning(
                 f"opening-line: no audio generated for template {template.id}; "

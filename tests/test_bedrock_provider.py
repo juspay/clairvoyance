@@ -8,6 +8,7 @@ import pytest
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.services.aws.llm import AWSBedrockLLMService
 
+import app.ai.voice.agents.breeze_buddy.accounts.llm as pc
 import app.ai.voice.agents.breeze_buddy.llm as resolver_mod
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.agents.breeze_buddy.observers.factory import merge_llm_config
@@ -47,7 +48,7 @@ async def test_resolver_routes_bedrock_and_requires_region(monkeypatch):
     async def fake_get_config(name, default, _type):
         return "key"
 
-    monkeypatch.setattr(resolver_mod, "get_config", fake_get_config)
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
     cfg = LLMConfiguration(
         provider=LLMProvider.AWS_BEDROCK,
         model="in.openai.gpt-5.6-luna",
@@ -164,7 +165,7 @@ async def test_observer_on_bedrock_gpt_resolves_with_reasoning_off(monkeypatch):
     async def fake_get_config(name, default, _type):
         return "key"
 
-    monkeypatch.setattr(resolver_mod, "get_config", fake_get_config)
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
     base = LLMConfiguration(
         provider=LLMProvider.AWS_BEDROCK,
         model="in.openai.gpt-5.6-luna",

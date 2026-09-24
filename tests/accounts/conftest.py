@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 import app.ai.voice.agents.breeze_buddy.accounts.resolve as resolve
+from app.core.config import static
 from app.schemas import Credential, CredentialType
 
 ROW = "0ec1c06d-b2e2-4b38-8c19-f9789b3482bf"
@@ -74,4 +75,4 @@ def env(monkeypatch: pytest.MonkeyPatch) -> None:
         "GOOGLE_CREDENTIALS_JSON": "{}",
         "GEMINI_API_KEY": "env-gem",
     }.items():
-        monkeypatch.setattr(resolve.static, name, value)
+        monkeypatch.setattr(static, name, value)

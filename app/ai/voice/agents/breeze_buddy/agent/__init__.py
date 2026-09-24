@@ -22,6 +22,7 @@ from pipecat.runner.utils import (
 )
 from pipecat_flows import FlowManager
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.agent.approval import (
     RTVI_APPROVAL_DECISION,
     RTVI_APPROVAL_REQUEST,
@@ -193,6 +194,9 @@ class Agent:
         # Template configuration
         self.flow_builder: Any = None
         self.template: Optional[TemplateModel] = None
+        # The provider accounts this CALL runs on (accounts):
+        # built once from the lead's tenant and kept across transfers.
+        self.accounts: Optional[Accounts] = None
         self.configurations: Optional[ConfigurationModel] = None
         self.flow_config: Optional[Dict[str, Any]] = None
         self.end_conversation_callbacks: List = []
@@ -803,6 +807,8 @@ class Agent:
         # Play block message if available (with caching)
         if block_message and self.ws and self.stream_sid:
             try:
+                # Platform-level audio on the platform's own keys: the
+                # template is not loaded yet at a block redirect.
                 audio = await prepare_block_audio(block_message, self.provider or "")
                 if audio:
                     await _send_audio(
@@ -1385,8 +1391,25 @@ class Agent:
         # mode="stream" (no LLM processor, no assistant aggregator, transcript
         # collector inserted, no user idle). All other wiring is identical.
         is_stream = self.is_stream_mode
+        # The call's account resolver (accounts): the CALL's
+        # tenant — the lead's — built once and kept across transfers, so a
+        # transfer target's template never resolves accounts against its
+        # own tenant. Lazy: a block without credential_id costs no read.
+        if self.accounts is None:
+            self.accounts = Accounts(
+                reseller_id=(
+                    self.lead.reseller_id
+                    if self.lead
+                    else getattr(self.template, "reseller_id", None)
+                ),
+                merchant_id=(
+                    self.lead.merchant_id
+                    if self.lead
+                    else getattr(self.template, "merchant_id", None)
+                ),
+            )
         stt, llm, tts = await create_services(
-            self.configurations, include_llm=not is_stream
+            self.configurations, include_llm=not is_stream, accounts=self.accounts
         )
         if not is_stream:
             assert llm is not None, "LLM is required in agent mode"
@@ -1558,6 +1581,7 @@ class Agent:
                     template=self.template,
                     agent_context=self,
                     handler_map=self.flow_builder.handler_map,
+                    accounts=self.accounts,
                 )
                 if observer_instances:
                     self._observer_manager = ObserverManager(

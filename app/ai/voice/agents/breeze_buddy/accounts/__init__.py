@@ -10,31 +10,32 @@ environment's. The vocabulary lives in code, never in a CHECK.
 
 This package is the door: every other module imports from here, never from
 the files inside. ``types.py`` = the shapes; ``rows.py`` = who may use a
-row; ``blocks.py`` = the template side of the vocabulary; ``resolve.py`` =
-the resolver and the environment's accounts.
+row; ``blocks.py`` = the template side (which block, which kind, the walk);
+``llm.py`` / ``stt.py`` / ``tts.py`` = each service's vendor words, its
+environment accounts and the host rule a row must obey on it;
+``resolve.py`` = the resolver, dispatching by kind.
 
 Phases (docs/PROVIDER_CREDENTIALS.md): (1) rows carry a provider; (2) a
-template block names an account, checked at save — this; (3) the LLM runs
-on it; (4) speech.
+template block names an account, checked at save; (3) the LLM runs on it;
+(4) speech.
 """
 
 from app.ai.voice.agents.breeze_buddy.accounts.blocks import (
-    AccountRefused,
     account_blocks,
     kind_of,
-    unwrap_dragontts,
     vendor_of,
 )
 from app.ai.voice.agents.breeze_buddy.accounts.resolve import (
     Accounts,
     accounts_for_template,
-    elevenlabs_host,
     env_account,
 )
 from app.ai.voice.agents.breeze_buddy.accounts.rows import in_tenant, refusal
+from app.ai.voice.agents.breeze_buddy.accounts.tts import unwrap_dragontts
 from app.ai.voice.agents.breeze_buddy.accounts.types import (
     SHAPES,
     Account,
+    AccountRefused,
     AccountShapeError,
     AzureAccount,
     BedrockAccount,
@@ -61,7 +62,6 @@ __all__ = [
     "account_blocks",
     "account_from_value",
     "accounts_for_template",
-    "elevenlabs_host",
     "env_account",
     "in_tenant",
     "kind_of",

@@ -137,6 +137,12 @@ SHAPES: Dict[str, Type[BaseModel]] = {
 }
 
 
+class AccountRefused(ValueError):
+    """The block names an account it may not use, one that cannot serve the
+    provider it names, or an environment that has no account for it. Fail
+    closed: no service is built on it."""
+
+
 class AccountShapeError(ValueError):
     """A row's value is not its vendor's shape; ``problems`` names each one."""
 

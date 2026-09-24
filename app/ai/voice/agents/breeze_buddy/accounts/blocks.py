@@ -1,52 +1,16 @@
 """The template side of the vocabulary: which service a block configures,
-which vendor its provider word names, and every block of a template that
-may name an account."""
+which vendor its provider word names (each service owns its words: llm.py,
+stt.py, tts.py), and every block of a template that may name an account."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Iterator, Optional, Tuple
 
-from app.ai.voice.agents.breeze_buddy.template.types import (
-    STTConfiguration,
-    TTSConfig,
-    TTSProvider,
-)
+from app.ai.voice.agents.breeze_buddy.accounts.llm import LLM_VENDOR, REALTIME_VENDOR
+from app.ai.voice.agents.breeze_buddy.accounts.stt import STT_VENDOR
+from app.ai.voice.agents.breeze_buddy.accounts.tts import TTS_VENDOR
+from app.ai.voice.agents.breeze_buddy.template.types import STTConfiguration, TTSConfig
 from app.ai.voice.llm.types import LLMConfiguration, RealtimeConfig
-
-# Which vendor each block's provider word names.
-LLM_VENDOR: Dict[str, str] = {
-    "azure": "azure_openai",
-    "openai": "openai",
-    "google_vertex": "google_vertex",
-    "aws_bedrock": "aws_bedrock",
-}
-REALTIME_VENDOR: Dict[str, str] = {
-    "openai": "openai_realtime",
-    "xai": "xai_realtime",
-    "azure": "azure_openai_realtime",
-    "gemini": "gemini",
-}
-# STT and TTS provider words already ARE the vendor names — except the
-# Google speech services and Gemini TTS, which all run on one service
-# account. DragonTTS is a proxy over a nested provider and is unwrapped
-# BEFORE a block reaches here (unwrap_dragontts).
-SPEECH_VENDOR: Dict[str, str] = {
-    "deepgram": "deepgram",
-    "soniox": "soniox",
-    "sarvam": "sarvam",
-    "assemblyai": "assemblyai",
-    "elevenlabs": "elevenlabs",
-    "cartesia": "cartesia",
-    "openai": "openai",
-    "google": "google",
-    "gemini": "google",
-}
-
-
-class AccountRefused(ValueError):
-    """The block names an account it may not use, one that cannot serve the
-    provider it names, or an environment that has no account for it. Fail
-    closed: no service is built on it."""
 
 
 def _word(value: Any) -> Optional[str]:
@@ -77,28 +41,9 @@ def vendor_of(block: Any) -> str:
         return LLM_VENDOR.get(word) or f"llm:{word}"
     if kind == "realtime":
         return REALTIME_VENDOR.get(str(word)) or f"realtime:{word}"
-    return SPEECH_VENDOR.get(str(word)) or f"{kind}:{word}"
-
-
-def unwrap_dragontts(voice: TTSConfig) -> TTSConfig:
-    """PURE: a DragonTTS voice WITH an account is synthesized by its nested
-    provider directly (the proxy holds its own keys and would bill its own
-    account), so the block becomes the nested provider's — once, here, and
-    the account is checked against the provider that really synthesizes.
-    A DragonTTS voice without an account is left alone: the proxy path."""
-    if _word(voice.provider) != TTSProvider.DRAGONTTS.value or not voice.credential_id:
-        return voice
-    nested, sep, model = (voice.model or "").partition(":")
-    if not sep or not nested or not model:
-        raise AccountRefused(
-            "dragontts with a credential_id requires model '<provider>:<model>' "
-            f"on the block, got {voice.model!r}"
-        )
-    try:
-        provider = TTSProvider(nested)
-    except ValueError as e:
-        raise AccountRefused(f"dragontts nests an unknown provider {nested!r}") from e
-    return voice.model_copy(update={"provider": provider, "model": model})
+    if kind == "stt":
+        return STT_VENDOR.get(str(word)) or f"stt:{word}"
+    return TTS_VENDOR.get(str(word)) or f"tts:{word}"
 
 
 def account_blocks(configurations: Any) -> Iterator[Tuple[str, Any]]:

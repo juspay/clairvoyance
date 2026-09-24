@@ -8,8 +8,13 @@ models.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
+from app.ai.voice.agents.breeze_buddy.accounts import (
+    Accounts,
+    AzureAccount,
+    KeyAccount,
+)
 from app.ai.voice.llm.realtime.azure_realtime import (
     AzureRealtimeConfig,
     build_azure_realtime_llm,
@@ -30,19 +35,15 @@ from app.ai.voice.llm.realtime.xai_realtime import (
     build_xai_realtime_llm,
 )
 from app.ai.voice.llm.types import LLMConfiguration, RealtimeLLMProvider
-from app.core.config import static
-from app.core.config.dynamic import (
-    AZURE_OPENAI_REALTIME_API_KEY,
-    AZURE_OPENAI_REALTIME_ENDPOINT,
-    OPENAI_REALTIME_API_KEY,
-    XAI_REALTIME_API_KEY,
-)
 from app.core.logger import logger
 
 __all__ = ["get_realtime_llm_service"]
 
 
-async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
+async def get_realtime_llm_service(
+    llm_config: LLMConfiguration,
+    accounts: Optional[Accounts] = None,
+) -> Any:
     """Build a realtime (speech-to-speech) LLM service from configuration.
 
     Args:
@@ -65,14 +66,13 @@ async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
             "get_realtime_llm_service called but llm_config.realtime is unset"
         )
     function_call_timeout = llm_config.function_call_timeout_secs or 10.0
+    # The account this session runs on — the block's row, else the
+    # environment's (accounts.Accounts): key and host together.
+    resolver = accounts or Accounts()
 
     if realtime.provider == RealtimeLLMProvider.OPENAI:
-        api_key = await OPENAI_REALTIME_API_KEY()
-        if not api_key:
-            raise ValueError(
-                "OPENAI_REALTIME_API_KEY must be set in Redis dynamic config "
-                "to use OpenAI Realtime"
-            )
+        account = await resolver.get(realtime, KeyAccount)
+        api_key = account.api_key
         openai_config = OpenAIRealtimeConfig(
             api_key=api_key,
             model=realtime.model or DEFAULT_OPENAI_REALTIME_MODEL,
@@ -86,12 +86,8 @@ async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
         return build_openai_realtime_llm(openai_config)
 
     if realtime.provider == RealtimeLLMProvider.XAI:
-        api_key = await XAI_REALTIME_API_KEY()
-        if not api_key:
-            raise ValueError(
-                "XAI_REALTIME_API_KEY must be set in Redis dynamic config "
-                "to use xAI Grok Realtime"
-            )
+        account = await resolver.get(realtime, KeyAccount)
+        api_key = account.api_key
         # Note: Grok Realtime currently has a fixed underlying model (no
         # model selector exposed by pipecat). ``realtime.model`` is accepted
         # for symmetry with other providers but ignored.
@@ -106,22 +102,11 @@ async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
         return build_xai_realtime_llm(xai_config)
 
     if realtime.provider == RealtimeLLMProvider.AZURE:
-        api_key = await AZURE_OPENAI_REALTIME_API_KEY()
-        if not api_key:
-            raise ValueError(
-                "AZURE_OPENAI_REALTIME_API_KEY must be set in Redis dynamic "
-                "config to use Azure Realtime"
-            )
-        # Endpoint can be overridden per-template (different deployments
-        # imply different underlying models on Azure); falls back to the
-        # global Redis-backed endpoint when the template doesn't set it.
-        base_url = realtime.endpoint or await AZURE_OPENAI_REALTIME_ENDPOINT()
-        if not base_url:
-            raise ValueError(
-                "Azure Realtime requires a WebSocket endpoint URL — set it "
-                "via llm_configurations.realtime.endpoint on the template or "
-                "via AZURE_OPENAI_REALTIME_ENDPOINT in Redis dynamic config"
-            )
+        account = await resolver.get(realtime, AzureAccount)
+        # The deployment is encoded in the endpoint, and the account carries
+        # it: a row's key only ever goes to the row's endpoint.
+        api_key = account.api_key
+        base_url = account.endpoint
         # Note: deployment name is encoded in base_url, so realtime.model is
         # accepted for symmetry but ignored. Deploy a different model by
         # changing the Azure deployment in the URL.
@@ -138,12 +123,8 @@ async def get_realtime_llm_service(llm_config: LLMConfiguration) -> Any:
         return build_azure_realtime_llm(azure_config)
 
     if realtime.provider == RealtimeLLMProvider.GEMINI:
-        api_key = static.GEMINI_API_KEY
-        if not api_key:
-            raise ValueError(
-                "GEMINI_API_KEY must be set in the environment "
-                "to use Gemini Live Realtime"
-            )
+        account = await resolver.get(realtime, KeyAccount)
+        api_key = account.api_key
         gemini_config = GeminiRealtimeConfig(
             api_key=api_key,
             model=realtime.model or DEFAULT_GEMINI_REALTIME_MODEL,
