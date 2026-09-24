@@ -1,4 +1,5 @@
-"""The playbook (modules/05-outreach §The playbook; canon T19 col 6) — PURE.
+"""The playbook (modules/05-outreach §The playbook; canon T19 col 6) — PURE,
+but for awaiting an async built-in (llm_call) while a line fills.
 
 The agent is an actor and its template is a script with holes in it. What
 fills them is decided HERE, from what the event said, and handed over
@@ -31,6 +32,7 @@ A line fills from FACTS only, never from another line — no chains, no
 cycles, always total.
 """
 
+import asyncio
 import inspect
 import re
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -313,20 +315,22 @@ def _pick(rows: List[PlaybookBlock], lookup: Any) -> PlaybookBlock:
     return rows[-1]
 
 
-def _fill(
+async def _fill(
     text: str,
     facts: Dict[str, Any],
     line: str,
     transform: Optional[Dict[str, Transform]] = None,
 ) -> str:
-    """PURE: every hole answered, or the run parks NAMING the hole.
+    """Every hole answered, or the run parks NAMING the hole. Each fact
+    renders ONCE per line, all facts at once: {brand} said three times is one
+    llm_call and one answer, and two llm_call facts cost one call's time.
 
     The agent's substitution is one pass over a flat dict, so a hole left in
     here is a hole the agent reads aloud — "आपने {product_name} के लिए" on a
     live call. It cannot catch it, so we must.
     """
 
-    def one(match: "re.Match[str]") -> str:
+    async def one(match: "re.Match[str]") -> str:
         value = facts.get(match.group(1))
         if (
             value is None
@@ -344,6 +348,8 @@ def _fill(
             try:
                 func = TEMPLATE_FUNCTION_REGISTRY[name]
                 rendered = func(rendered, **_accepted(func, params))
+                if inspect.isawaitable(rendered):  # llm_call
+                    rendered = await rendered
             except Exception as e:
                 # Fail OPEN: a missing hole leaves the sentence broken, but
                 # a function that could not read one value leaves it
@@ -367,10 +373,15 @@ def _fill(
         # gap this function exists to prevent.
         return str(rendered) if str(rendered).strip() else str(value)
 
-    return HOLE.sub(one, text)
+    firsts: Dict[str, "re.Match[str]"] = {}
+    for match in HOLE.finditer(text):
+        firsts.setdefault(match.group(1), match)
+    answers = await asyncio.gather(*(one(match) for match in firsts.values()))
+    spoken = dict(zip(firsts, answers))
+    return HOLE.sub(lambda match: spoken[match.group(1)], text)
 
 
-def resolve(
+async def resolve(
     definition: WorkflowDefinition,
     wanted: Iterable[str],
     facts: Dict[str, Any],
@@ -378,7 +389,7 @@ def resolve(
     customer: Optional[CustomerFacts],
     run: Optional[predicates.RunLens] = None,
 ) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """PURE: ONLY the blocks a node asked for — (rendered, chosen).
+    """ONLY the blocks a node asked for — (rendered, chosen).
 
     `rendered` is {block: text} for the payload. `chosen` is {block: line},
     the NAME of the row that won: the caller records it as playbook_<node>
@@ -408,7 +419,9 @@ def resolve(
         row = _pick(rows, lookup)
         said = names_said(row.say)
         chosen[name] = said[0] if isinstance(row.say, str) else ",".join(said)
-        rendered = [_fill(pb.lines[line], facts, line, pb.transform) for line in said]
+        rendered = [
+            await _fill(pb.lines[line], facts, line, pb.transform) for line in said
+        ]
         out[name] = (
             rendered[0]
             if isinstance(row.say, str)

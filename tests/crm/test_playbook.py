@@ -13,7 +13,7 @@ Every law below is proved by injecting exactly what it forbids.
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import pytest
 
@@ -30,6 +30,16 @@ FIXTURE = (
     / "plans"
     / "line-nudge-playbook.json"
 )
+
+
+def _resolve(*args: Any) -> Any:
+    """playbook.resolve is async (it awaits llm_call); these tests are sync."""
+    return asyncio.run(playbook.resolve(*args))
+
+
+def _fill(*args: Any) -> str:
+    return asyncio.run(playbook._fill(*args))
+
 
 _DOC: Dict[str, Any] = {
     "entry": {"topic": "OFFERED"},
@@ -112,10 +122,10 @@ def _run(context: Optional[Dict[str, Any]] = None) -> EnrollmentRun:
 
 def test_the_first_row_that_holds_wins_and_the_last_is_the_default() -> None:
     d = _definition()
-    free, _ = playbook.resolve(
+    free, _ = _resolve(
         d, ["hook_line"], {"no_cost": "yes", "product_name": "S24"}, {}, None
     )
-    plain, _ = playbook.resolve(
+    plain, _ = _resolve(
         d, ["hook_line"], {"no_cost": "no", "product_name": "S24"}, {}, None
     )
     assert free["hook_line"] == "aapne S24 ke liye checkout shuru kiya tha"
@@ -125,7 +135,7 @@ def test_the_first_row_that_holds_wins_and_the_last_is_the_default() -> None:
 def test_a_list_say_renders_one_step_per_line_in_order() -> None:
     """The ORDER section of the prompt, generated: a call agent reads them as
     steps and the name rides along, so it can say which step is done."""
-    out, _ = playbook.resolve(
+    out, _ = _resolve(
         _definition(),
         ["walk"],
         {"lender_name": "Fibe", "product_name": "S24"},
@@ -140,7 +150,7 @@ def test_a_list_say_renders_one_step_per_line_in_order() -> None:
 def test_only_the_blocks_asked_for_are_rendered() -> None:
     """A block nobody asks for is never evaluated, never in a payload, never
     in a log — the send node's own philosophy."""
-    out, _ = playbook.resolve(_definition(), ["hook_line"], {"no_cost": "no"}, {}, None)
+    out, _ = _resolve(_definition(), ["hook_line"], {"no_cost": "no"}, {}, None)
     assert set(out) == {"hook_line"}
 
 
@@ -148,7 +158,7 @@ def test_a_leftover_hole_parks_the_run_naming_it() -> None:
     """The agent's substitution is ONE pass, so a hole left here is spoken
     aloud. The run parks instead, with the hole named."""
     with pytest.raises(NodeParked, match=r"product_name"):
-        playbook.resolve(_definition(), ["hook_line"], {"no_cost": "yes"}, {}, None)
+        _resolve(_definition(), ["hook_line"], {"no_cost": "yes"}, {}, None)
 
 
 def test_a_line_fills_from_facts_never_from_another_line() -> None:
@@ -157,7 +167,7 @@ def test_a_line_fills_from_facts_never_from_another_line() -> None:
     doc = _doc()
     doc["playbook"]["lines"]["hook_plain"] = "see {hook_free}"
     with pytest.raises(NodeParked, match=r"hook_free"):
-        playbook.resolve(_definition(doc), ["hook_line"], {"no_cost": "no"}, {}, None)
+        _resolve(_definition(doc), ["hook_line"], {"no_cost": "no"}, {}, None)
 
 
 # --- the publish laws, each proved by injecting what it forbids ---------------
@@ -353,7 +363,7 @@ def test_the_playbook_fixture_publishes_and_renders() -> None:
     asked = [node.blocks for node in d.nodes if node.type == "call"]
     assert asked and all(a for a in asked), "every call square lists what it takes"
 
-    out, _ = playbook.resolve(
+    out, _ = _resolve(
         d,
         ["hook_line", "walk", "lender_notes"],
         {"sub_category": "Mobile", "offers": "Finnable: 9 months"},
@@ -487,7 +497,7 @@ def test_a_playbook_when_may_name_every_field_a_condition_may() -> None:
     """One FIELD grammar, one vocabulary. A `when` reaches the engine's
     derived run facts through the same lens a condition uses, so an author
     never has to learn which words work in which square."""
-    from app.crm.outreach import ceiling, playbook, predicates
+    from app.crm.outreach import ceiling, predicates
     from app.crm.outreach.schemas import WorkflowDefinition
 
     exits = {"max_calls_per_day": 2, "timezone": "Asia/Kolkata"}
@@ -524,7 +534,7 @@ def test_a_playbook_when_may_name_every_field_a_condition_may() -> None:
         lens = predicates.RunLens(
             {ceiling.CALLS_TODAY_KEY: {"day": day, "n": placed}}, definition.exits
         )
-        rendered, _ = playbook.resolve(definition, ["hook"], {}, {}, None, lens)
+        rendered, _ = _resolve(definition, ["hook"], {}, {}, None, lens)
         return rendered["hook"]
 
     assert hook(2) == "we have called enough today"
@@ -537,7 +547,7 @@ def test_a_playbook_when_may_name_every_field_a_condition_may() -> None:
 def test_a_plan_that_declares_nothing_renders_exactly_as_it_did() -> None:
     """The whole feature is opt-in: no `transform`, no change to a line."""
     assert (
-        playbook._fill("limit {current_limit} tak", {"current_limit": "50000"}, "l")
+        _fill("limit {current_limit} tak", {"current_limit": "50000"}, "l")
         == "limit 50000 tak"
     )
 
@@ -569,7 +579,7 @@ def test_a_value_a_function_cannot_read_keeps_its_own_words() -> None:
     NodeParked is a PERMANENT defect park, so parking here would kill one
     customer's journey outright, for ever, over how a number sounds."""
     assert (
-        playbook._fill(
+        _fill(
             "limit {current_limit} hai",
             {"current_limit": "abc"},
             "l",
@@ -617,11 +627,11 @@ def test_a_fact_says_how_it_reads_once_for_the_whole_plan() -> None:
     )
     facts = {"current_limit": "50000", "pnr": "7A"}
     assert (
-        playbook._fill(book.lines["a"], facts, "a", book.transform)
+        _fill(book.lines["a"], facts, "a", book.transform)
         == "credit line fifty thousand rupees tak approved hai"
     )
     assert (
-        playbook._fill(book.lines["b"], facts, "b", book.transform)
+        _fill(book.lines["b"], facts, "b", book.transform)
         == "limit fifty thousand rupees hai, PNR seven ए"
     )
 
@@ -686,7 +696,7 @@ def test_a_transform_may_not_empty_a_hole_that_had_a_value() -> None:
     gap-in-a-sentence this function exists to prevent, arriving by a
     different road than an unanswered hole."""
     assert (
-        playbook._fill(
+        _fill(
             "OTP {mob} par aayega",
             {"mob": "NA"},
             "l",
@@ -713,7 +723,7 @@ def test_a_fact_may_give_its_functions_arguments() -> None:
         }
     )
     assert (
-        playbook._fill(
+        _fill(
             "ghar {address}",
             {"address": "  123 MG Road, Bangalore, India  "},
             "l",
@@ -772,7 +782,7 @@ def test_publish_refuses_a_params_key_named_after_the_subject() -> None:
 def test_the_subject_is_never_passed_twice() -> None:
     """And if such a table is already stored, the render survives it."""
     assert (
-        playbook._fill(
+        _fill(
             "PNR {pnr}",
             {"pnr": "7A9"},
             "l",
@@ -789,7 +799,7 @@ def test_a_function_that_cannot_render_says_so(caplog) -> None:
     given a new argument would leave every published plan naming it
     silently raw. Names only, never the value."""
     with caplog.at_level("WARNING"):
-        out = playbook._fill(
+        out = _fill(
             "limit {x}",
             {"x": "abc"},
             "l",

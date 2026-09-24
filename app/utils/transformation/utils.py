@@ -1,8 +1,15 @@
+import asyncio
 import re
+from collections import OrderedDict
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Optional, Tuple
 
 from num2words import num2words
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.services.openai.llm import OpenAILLMService
+
+from app.core.logger import logger
+from app.services.live_config.store import get_config
 
 
 def indian_number_to_speech(number: int | float) -> str:
@@ -314,3 +321,92 @@ def to_number(value: Any = "") -> Any:
 
     result = float(number)
     return result if result not in (float("inf"), float("-inf")) else raw
+
+
+# llm_call: luna on the Bedrock OpenAI endpoint, hardcoded. The key is looked
+# up by name in dynamic config, as buddy does for a luna template.
+LLM_CALL_MODEL = "in.openai.gpt-5.6-luna"
+LLM_CALL_ENDPOINT = "https://bedrock-runtime.ap-south-1.amazonaws.com/openai/v1"
+LLM_CALL_API_KEY_NAME = "OPENAI_API_KEY"
+LLM_CALL_TIMEOUT_SECS = 10.0
+# A rewrite is read aloud inside a sentence; anything longer is a model gone
+# off-script, not a short value.
+LLM_CALL_MAX_CHARS = 1000
+# The same (prompt, value) across runs of a campaign is one model call.
+LLM_CALL_CACHE_SIZE = 50
+
+_llm_call_cache: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
+# ONE service (one HTTP client) per event loop and key, reused by every call.
+_llm_call_service: Optional[Tuple[Any, str, OpenAILLMService]] = None
+
+
+def _llm_call_llm(api_key: str) -> OpenAILLMService:
+    """The shared Pipecat OpenAI service; rebuilt only when the key or the
+    running event loop changes (an HTTP client belongs to its loop)."""
+    global _llm_call_service
+    loop = asyncio.get_running_loop()
+    if _llm_call_service is not None:
+        cached_loop, cached_key, service = _llm_call_service
+        if cached_loop is loop and cached_key == api_key:
+            return service
+    service = OpenAILLMService(
+        api_key=api_key,
+        base_url=LLM_CALL_ENDPOINT,
+        model=LLM_CALL_MODEL,
+        settings=OpenAILLMService.Settings(
+            temperature=0,
+            max_completion_tokens=200,
+            extra={
+                "reasoning_effort": "none",
+                "extra_body": {"prompt_cache_key": "crm-playbook-llm-call"},
+            },
+        ),
+    )
+    service.supports_developer_role = False
+    _llm_call_service = (loop, api_key, service)
+    return service
+
+
+async def llm_call(value: Any, prompt: str) -> Any:
+    """ASYNC: the value rewritten by the LLM as `prompt` asks ("only the
+    main product's short name"), or the value unchanged on any failure — a
+    line may read less polished, never go missing. Callers must await it."""
+    if not prompt or value is None or not str(value).strip():
+        return value
+    key = (prompt, str(value))
+    if key in _llm_call_cache:
+        _llm_call_cache.move_to_end(key)
+        return _llm_call_cache[key]
+    api_key = await get_config(LLM_CALL_API_KEY_NAME, "", str)
+    if not api_key:
+        logger.warning(f"llm_call skipped: no {LLM_CALL_API_KEY_NAME}")
+        return value
+    llm = _llm_call_llm(api_key)
+    # The author's prompt is the whole instruction (output rules included);
+    # the value goes alone as the user message.
+    try:
+        answer = await asyncio.wait_for(
+            llm.run_inference(
+                LLMContext(
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": str(value)},
+                    ]
+                )
+            ),
+            timeout=LLM_CALL_TIMEOUT_SECS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"llm_call timed out after {LLM_CALL_TIMEOUT_SECS}s")
+        return value
+    except Exception as e:  # noqa: BLE001 — fail-open, never lose the line
+        logger.warning(f"llm_call error: {type(e).__name__}: {e}")
+        return value
+    text = re.sub(r"\s+", " ", answer or "").strip().strip("\"'“”‘’`").strip()
+    if not text or len(text) > LLM_CALL_MAX_CHARS:
+        logger.warning("llm_call returned an empty or oversized answer")
+        return value
+    _llm_call_cache[key] = text
+    if len(_llm_call_cache) > LLM_CALL_CACHE_SIZE:
+        _llm_call_cache.popitem(last=False)
+    return text

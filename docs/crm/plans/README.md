@@ -65,3 +65,47 @@ two applications of one customer never move on each other's letters
 (phase 18). The stored document
 carries both the ladder and the board it produced; a document may not
 draw `nodes`/`edges`/`entry` beside its ladder.
+
+The playbook `transform` says how a FACT reads wherever a line spells it —
+once for the whole plan. `function` is a pipeline of the built-ins a buddy
+template's `expected_payload_schema` already names (`to_number`,
+`indian_number_to_speech`, `string_to_lowercase`, …); `params` is ONE table
+for it, each function handed only the keywords it declares, and publish
+refuses a missing argument or a key no function takes. It changes the
+SPOKEN text only: `when` rows and the lead payload keep the fact itself.
+
+`llm_call` puts an LLM rewrite anywhere in that pipeline —
+"only the main product's short name", "just the tenure numbers":
+
+```json
+"transform": {
+  "product_name": {
+    "function": ["llm_call"],
+    "params": { "prompt": "Return only the main product's short name (brand + product type). Skip add-ons, size, features, colour." }
+  },
+  "offers": {
+    "function": ["llm_call", "string_to_lowercase"],
+    "params": { "prompt": "Only the tenure numbers in words, like: three, six or nine" }
+  }
+}
+```
+
+- It is the one ASYNC function in `TEMPLATE_FUNCTION_REGISTRY`
+  (`app/utils/transformation/utils.py`): `await llm_call(value, prompt=...)`.
+  `prompt` is its only param. Luna is hardcoded: the Bedrock OpenAI
+  endpoint, model `in.openai.gpt-5.6-luna`, key `OPENAI_API_KEY` from
+  dynamic config, temperature 0, 200 max tokens, reasoning effort `none`, 10 s timeout. The
+  model sees the prompt and that ONE fact's value — never the rest of the
+  run, so do not point it at a phone number or other personal data.
+- It runs in the same pipeline as every built-in, in the order written;
+  `_fill` awaits whatever a function returns that is awaitable. It rewrites
+  the spoken words only — `when` rows still judge the fact itself. Publish
+  refuses it without a `prompt`, or with any other param.
+- It runs only for the holes of the CHOSEN lines: once per fact per line,
+  all facts at once, and answers are cached per (prompt, value), so a
+  campaign asks the same product once. One OpenAI client is reused. Any
+  error, a timeout, or an empty or over-1000-character answer returns the
+  value unchanged (and is not cached): a line may read less polished, never
+  go missing.
+- Buddy's own payload transforms (template loader, greeting, chat) call the
+  registry synchronously and cannot await it — use it in playbooks only.
