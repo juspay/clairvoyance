@@ -36,7 +36,12 @@ def _topic_counts(
         label = str(row.get("raw_label") or row["raw_topic_type"])
         count = counts.setdefault(
             key,
-            {"sources": set(), "first_seen_at": started_at, "label": label},
+            {
+                "sources": set(),
+                "first_seen_at": started_at,
+                "label": label,
+                "template_name": row["template_name"],
+            },
         )
         count["sources"].add(str(row["source_id"]))
         count["first_seen_at"] = min(count["first_seen_at"], started_at)
@@ -59,18 +64,21 @@ def _topic_counts(
 
 
 def _mapped_topic(
-    row: Dict[str, Any], counts: Dict[tuple[str, str], Dict[str, Any]]
+    row: Dict[str, Any],
+    counts: Dict[tuple[str, str], Dict[str, Any]],
+    top_topics: int,
 ) -> tuple[str, str, int, bool]:
     count = counts.get((str(row["template_id"]), str(row["raw_topic_type"])))
-    if count and count["rank"] <= 10:
+    if count and count["rank"] <= top_topics:
         return str(row["raw_topic_type"]), str(count["label"]), count["rank"], False
-    return "__other__", "Other", 11, True
+    return "__other__", "Other", top_topics + 1, True
 
 
 def _summary_rows(
     topic_rows: List[Dict[str, Any]],
     counts: Dict[tuple[str, str], Dict[str, Any]],
     current_start: date,
+    top_topics: int,
 ) -> List[Dict[str, Any]]:
     totals: Dict[tuple[str, str], set[str]] = {}
     grouped: Dict[tuple[str, str, str], Dict[str, Any]] = {}
@@ -79,7 +87,7 @@ def _summary_rows(
         template_id = str(row["template_id"])
         source_id = str(row["source_id"])
         totals.setdefault((period, template_id), set()).add(source_id)
-        topic_type, label, rank, is_other = _mapped_topic(row, counts)
+        topic_type, label, rank, is_other = _mapped_topic(row, counts, top_topics)
         summary = grouped.setdefault(
             (period, template_id, topic_type),
             {
@@ -127,6 +135,7 @@ def _trend_rows(
     topic_rows: List[Dict[str, Any]],
     counts: Dict[tuple[str, str], Dict[str, Any]],
     current_start: date,
+    top_topics: int,
 ) -> List[Dict[str, Any]]:
     grouped: Dict[tuple[str, datetime, str], Dict[str, Any]] = {}
     for row in topic_rows:
@@ -134,7 +143,7 @@ def _trend_rows(
         if started_at.date() < current_start:
             continue
         template_id = str(row["template_id"])
-        topic_type, label, _, _ = _mapped_topic(row, counts)
+        topic_type, label, _, _ = _mapped_topic(row, counts, top_topics)
         time_bucket = started_at.replace(hour=0, minute=0, second=0, microsecond=0)
         trend = grouped.setdefault(
             (template_id, time_bucket, topic_type),
@@ -165,15 +174,33 @@ def _trend_rows(
     )
 
 
-async def get_topic_dashboard(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def get_topic_dashboard(
+    filters: Dict[str, Any], top_topics: int
+) -> List[Dict[str, Any]]:
     query, values = get_topic_dashboard_rows_query(filters)
     rows = await run_parameterized_query(query, values)
     topic_rows = [dict(row) for row in rows or []]
     # ponytail: aggregate bounded dashboard rows here; move back to SQL if
     # production result volume makes transfer or memory cost material.
     counts = _topic_counts(topic_rows, filters["date_from"])
-    return _summary_rows(topic_rows, counts, filters["date_from"]) + _trend_rows(
-        topic_rows, counts, filters["date_from"]
+    # Every topic uncapped, so the UI can search past the top ones in "Other".
+    all_topics = [
+        {
+            "result_type": "topic",
+            "template_id": template_id,
+            "template_name": count["template_name"],
+            "topic_type": topic_type,
+            "label": count["label"],
+            "rank": count["rank"],
+            "conversation_count": len(count["sources"]),
+        }
+        for (template_id, topic_type), count in counts.items()
+    ]
+    all_topics.sort(key=lambda row: (row["template_id"], row["rank"]))
+    return (
+        _summary_rows(topic_rows, counts, filters["date_from"], top_topics)
+        + _trend_rows(topic_rows, counts, filters["date_from"], top_topics)
+        + all_topics
     )
 
 
