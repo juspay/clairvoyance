@@ -14,7 +14,6 @@ from app.core.config.dynamic import (
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
     BB_VOICE_PROVIDER_DEFAULTS,
 )
-from app.core.config.static import SARVAM_API_KEY
 from app.core.logger import logger
 
 __all__ = [
@@ -88,6 +87,7 @@ async def _generate_sarvam_audio(
     language: str | None = None,
     speed: float | None = None,
     pitch: float | None = None,
+    api_key: str | None = None,
 ) -> bytes:
     """Synthesize audio using Sarvam TTS API.
 
@@ -99,8 +99,8 @@ async def _generate_sarvam_audio(
         speed: Optional pace override.
         pitch: Optional pitch override.
     """
-    if not SARVAM_API_KEY:
-        raise ValueError("SARVAM_API_KEY is required for Sara voice")
+    if not api_key:
+        raise ValueError("an api_key is required for Sarvam TTS")
 
     defaults = await BB_VOICE_PROVIDER_DEFAULTS("sarvam")
     model = model or defaults.get("model", "bulbul:v2")
@@ -112,7 +112,7 @@ async def _generate_sarvam_audio(
 
     url = "https://api.sarvam.ai/text-to-speech"
     headers = {
-        "api-subscription-key": SARVAM_API_KEY,
+        "api-subscription-key": api_key,
         "Content-Type": "application/json",
     }
 

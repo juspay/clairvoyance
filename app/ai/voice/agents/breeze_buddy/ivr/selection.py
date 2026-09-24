@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import WebSocket
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import (
     release_inbound_channel,
 )
@@ -501,6 +502,7 @@ async def prepare_ivr_menu_audio(
     provider: str,
     ivr_greeting: Optional[str] = None,
     voice_config: Optional[TTSConfig] = None,
+    accounts: Optional[Accounts] = None,
 ) -> Optional[bytes]:
     """
     Prepare IVR menu audio - from cache or generate new.
@@ -524,8 +526,11 @@ async def prepare_ivr_menu_audio(
         redis = await get_redis_service()
 
         # Cache key includes voice provider+id so different configs get different audio
+        # The account is part of the voice: two templates with the same text
+        # and voice on different rows must not share one clip.
         voice_key = (
             f"{voice_config.provider.value}:{voice_config.voice_id}"
+            f":{voice_config.credential_id or 'env'}"
             if voice_config
             else "default"
         )
@@ -543,7 +548,9 @@ async def prepare_ivr_menu_audio(
                 f"[IVR] Cache MISS - generating menu audio for: {ivr_greeting!r}"
             )
 
-            mulaw_data = await _generate_tts_audio_mulaw(ivr_greeting, voice_config)
+            mulaw_data = await _generate_tts_audio_mulaw(
+                ivr_greeting, voice_config, accounts
+            )
 
             if mulaw_data:
                 await redis.setex(
@@ -584,8 +591,11 @@ async def prepare_goodbye_audio(
 
         goodbye_text = ivr_goodbye or IVR_DEFAULT_GOODBYE
 
+        # The account is part of the voice: two templates with the same text
+        # and voice on different rows must not share one clip.
         voice_key = (
             f"{voice_config.provider.value}:{voice_config.voice_id}"
+            f":{voice_config.credential_id or 'env'}"
             if voice_config
             else "default"
         )
@@ -636,8 +646,11 @@ async def prepare_block_audio(
     try:
         redis = await get_redis_service()
 
+        # The account is part of the voice: two templates with the same text
+        # and voice on different rows must not share one clip.
         voice_key = (
             f"{voice_config.provider.value}:{voice_config.voice_id}"
+            f":{voice_config.credential_id or 'env'}"
             if voice_config
             else "default"
         )
@@ -671,7 +684,9 @@ async def prepare_block_audio(
 
 
 async def _generate_tts_audio_mulaw(
-    text: str, voice_config: Optional[TTSConfig] = None
+    text: str,
+    voice_config: Optional[TTSConfig] = None,
+    accounts: Optional[Accounts] = None,
 ) -> Optional[bytes]:
     """
     Generate TTS audio using the voice configuration.
@@ -684,7 +699,9 @@ async def _generate_tts_audio_mulaw(
         Audio bytes in mulaw format, or None if failed
     """
     try:
-        mulaw_data = await generate_audio(text=text, voice_config=voice_config)
+        mulaw_data = await generate_audio(
+            text=text, voice_config=voice_config, accounts=accounts
+        )
         logger.info(f"[IVR] Generated TTS audio: {len(mulaw_data)} bytes mulaw")
         return mulaw_data
     except Exception as e:

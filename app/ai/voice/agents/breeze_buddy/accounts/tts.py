@@ -94,6 +94,9 @@ def row_account(vendor: str, account: Account, credential_id: str) -> Account:
     """The host a row can actually use on TTS: ElevenLabs — the deployment's
     TTS host decides, the row is the key."""
     if vendor == "elevenlabs":
-        assert isinstance(account, KeyOnlyAccount)
+        if not isinstance(account, KeyOnlyAccount):
+            raise AccountRefused(
+                f"credential {credential_id} is not an ElevenLabs key-only row"
+            )
         return KeyAccount(api_key=account.api_key, endpoint=elevenlabs_host())
     return account

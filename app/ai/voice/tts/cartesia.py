@@ -9,7 +9,6 @@ from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 
 from app.core.config.dynamic import BB_VOICE_PROVIDER_DEFAULTS
-from app.core.config.static import CARTESIA_API_KEY
 from app.core.logger import logger
 
 __all__ = ["CartesiaConfig", "build_cartesia_tts", "_generate_cartesia_audio"]
@@ -71,6 +70,7 @@ async def _generate_cartesia_audio(
     text: str,
     voice_id: str | None = None,
     model: str | None = None,
+    api_key: str | None = None,
 ) -> bytes:
     """Synthesize audio using Cartesia TTS API.
 
@@ -82,8 +82,8 @@ async def _generate_cartesia_audio(
     Returns:
         Audio bytes in raw PCM format (16-bit, 16kHz)
     """
-    if not CARTESIA_API_KEY:
-        raise ValueError("CARTESIA_API_KEY is required for Cartesia TTS")
+    if not api_key:
+        raise ValueError("an api_key is required for Cartesia TTS")
 
     # Use provided values or fall back to Redis/hardcoded defaults
     defaults = await BB_VOICE_PROVIDER_DEFAULTS("cartesia")
@@ -93,7 +93,7 @@ async def _generate_cartesia_audio(
 
     url = "https://api.cartesia.ai/tts/bytes"
     headers = {
-        "X-API-Key": CARTESIA_API_KEY,
+        "X-API-Key": api_key,
         "Cartesia-Version": "2024-06-10",
         "Content-Type": "application/json",
     }

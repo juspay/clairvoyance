@@ -216,9 +216,13 @@ async def resolve_call_templates(
         if ivr:
             ivr_greeting = ivr_greeting or ivr.greeting
             ivr_goodbye = ivr_goodbye or ivr.goodbye
+            # The shared menu is synthesized before a template is chosen, so
+            # it has no tenant: it plays on the environment's keys, and a
+            # row named by one template's voice stays out of the dump
+            # (docs/PROVIDER_CREDENTIALS.md, "not covered").
             if not ivr_voice_config_dict and ivr.tts_configuration:
                 ivr_voice_config_dict = ivr.tts_configuration.model_dump(
-                    exclude_none=True
+                    exclude_none=True, exclude={"credential_id"}
                 )
         # Backward compat: flat fields (already migrated into ivr_configuration by validator,
         # but check directly in case raw DB data hasn't been re-saved)
@@ -231,7 +235,9 @@ async def resolve_call_templates(
     if not ivr_voice_config_dict and first_template.configurations:
         vc = first_template.configurations.tts_configuration
         if vc:
-            ivr_voice_config_dict = vc.model_dump(exclude_none=True)
+            ivr_voice_config_dict = vc.model_dump(
+                exclude_none=True, exclude={"credential_id"}
+            )
 
     # Warn if IVR mode but no greeting configured
     if len(templates) > 1 and ivr_greeting is None:

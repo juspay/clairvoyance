@@ -75,7 +75,10 @@ def row_account(vendor: str, account: Account, credential_id: str) -> Account:
     cannot take an account that lives elsewhere. ElevenLabs: the deployment's
     STT host decides, the row is the key. OpenAI STT has no gateway."""
     if vendor == "elevenlabs":
-        assert isinstance(account, KeyOnlyAccount)
+        if not isinstance(account, KeyOnlyAccount):
+            raise AccountRefused(
+                f"credential {credential_id} is not an ElevenLabs key-only row"
+            )
         return KeyAccount(api_key=account.api_key, endpoint=elevenlabs_host())
     if vendor == "openai" and getattr(account, "endpoint", None):
         raise AccountRefused(

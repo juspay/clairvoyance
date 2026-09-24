@@ -120,12 +120,11 @@ when the block names one, else the environment's (`env_account`, the only
 place an env key is read for a call). It fails closed with
 `AccountRefused`. Where a service cannot use the account's host it refuses
 the row: an `openai` account with a gateway endpoint on an STT block. An
-ElevenLabs row brings only its key: it runs on the deployment's per-service
-host (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for Scribe),
-exactly as the environment's own key does. No flag.
+ElevenLabs row brings only its key and runs on the deployment's host for
+that service (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for
+Scribe), as the environment's own key does.
 
-From phase 3 the LLM honours the name; STT and TTS blocks are validated
-at save and still run on the environment's keys until phase 4.
+Every block's name is honoured by the engine (phases 3 and 4).
 
 ## What the engine does (phase 3: the LLM; phase 4: speech)
 
@@ -157,20 +156,45 @@ at save and still run on the environment's keys until phase 4.
 - **Gemini prompt cache.** A CachedContent belongs to one GCP project, so
   the chat prompt cache is keyed by the client's project and location as
   well — two Vertex accounts never share an entry.
-- **Phase 4 — speech.** *Not in this phase.* STT and TTS still read the
-  environment; the resolver is built and passed down but they do not ask
-  it yet.
+- **Phase 4 — speech.** STT (deepgram, soniox, sarvam, assemblyai, openai,
+  elevenlabs, google) and TTS (elevenlabs, cartesia, sarvam, soniox, gemini,
+  google) on the live path, the greeting and IVR pre-synthesis, and the
+  batch TTS helpers. Where a service cannot use the account's host it
+  refuses the row: an `openai` account with a gateway endpoint on an STT
+  block.
+- **ElevenLabs host.** One (url, key) pair per service in the environment,
+  no flag: `ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for
+  Scribe, both bare hosts. A row brings only its key and runs on that
+  host, on the live path (wss) and the pre-synthesis path (https) alike.
+- **DragonTTS.** A voice with an account is synthesized by its nested
+  provider directly (the proxy holds its own keys and would bill its own
+  account): `resolve_voice_config` unwraps `"model": "elevenlabs:…"` once,
+  after template, override and payload have been merged, and the row is
+  checked against the provider that really synthesizes. A DragonTTS voice
+  without an account is the proxy path, untouched.
+- **IVR.** The walker builds `Accounts` from the lead's tenant; a row that
+  stopped serving since the template was saved ends the call as any IVR
+  error does — with an outcome and a closed socket.
 
-## Rolling out phases 1 to 3
+## Rolling it out
 
 1. Deploy. `079_credentials_provider.sql` adds a nullable `provider` column
    and a partial index. No data moves; every template behaves as before.
 2. Create the account rows with `provider` and the value fields above.
-3. Copy the template, set `credential_id` on the LLM block, save: a bad id
-   is refused at save; the call runs on that account. STT and TTS follow in
-   phase 4.
+3. Copy the template, set `credential_id` on the blocks that should run on
+   the new account, save. A bad id is refused at save.
 
 ## Rolling back
 
 Old code ignores `credential_id` on a template and `provider` on a
 credential. Nothing to move.
+
+## Not covered
+
+- The inbound multi-template IVR menu (several templates behind one
+  number) synthesizes its menu with env keys: there is no single template
+  to take the account from.
+- The widget's one-shot transcription (`stt/transcribe.py`) reads env keys.
+- The block-redirect message played when a pre-check blocks a call:
+  platform audio on the platform's keys (the template is not loaded yet).
+- DragonTTS per-request keys (above).

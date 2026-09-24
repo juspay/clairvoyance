@@ -12,6 +12,11 @@ from typing import Optional
 from pipecat.services.elevenlabs.stt import CommitStrategy
 from pipecat.transcriptions.language import Language
 
+from app.ai.voice.agents.breeze_buddy.accounts import (
+    Accounts,
+    GcpAccount,
+    KeyAccount,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     AssemblyAISTTConfig,
     DeepgramSTTConfig,
@@ -46,7 +51,6 @@ from app.core.config.dynamic import (
     BB_SARVAM_STT_VAD_SIGNALS,
 )
 from app.core.config.static import (
-    ASSEMBLYAI_API_KEY,
     BREEZE_BUDDY_SONIOX_CONTEXT,
     BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS,
     BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
@@ -57,15 +61,8 @@ from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL,
     BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT,
     BREEZE_BUDDY_STT_SERVICE,
-    DEEPGRAM_API_KEY,
-    ELEVENLABS_STT_API_KEY,
-    ELEVENLABS_STT_URL,
-    GOOGLE_CREDENTIALS_JSON,
-    OPENAI_STT_API_KEY,
     OPENAI_STT_MODEL,
     SAMPLE_RATE,
-    SARVAM_API_KEY,
-    SONIOX_API_KEY,
 )
 from app.core.logger import logger
 
@@ -99,16 +96,23 @@ def _deepgram_language(language: str | list[str] | None) -> str:
     return language
 
 
-async def create_stt_from_config(config: STTConfiguration):
+async def create_stt_from_config(
+    config: STTConfiguration,
+    accounts: Optional[Accounts] = None,
+):
     """Create STT service from normalized STTConfiguration.
 
     Central routing: reads ``config.provider`` and casts the normalized
     config to the provider-specific builder config. All tuning params
     come from the template config with sensible defaults baked in.
+
+    ``accounts`` is the call's account resolver (accounts):
+    the block's own row when it names one, else the environment's key.
     """
+    resolver = accounts or Accounts()
     if config.provider == STTProvider.DEEPGRAM:
-        if not DEEPGRAM_API_KEY:
-            raise ValueError("DEEPGRAM_API_KEY is required for deepgram STT")
+        account = await resolver.get(config, KeyAccount)
+        api_key = account.api_key
 
         # All defaults are in DeepgramSTTConfig — no env/dynamic lookup needed
         dg = config.deepgram or DeepgramSTTConfig()
@@ -116,7 +120,7 @@ async def create_stt_from_config(config: STTConfiguration):
         logger.info("Using Deepgram Nova-3 STT service for Breeze Buddy")
         return build_deepgram_stt(
             DeepgramConfig(
-                api_key=DEEPGRAM_API_KEY,
+                api_key=api_key,
                 model=dg.model,
                 language=_deepgram_language(config.language),
                 auto_detect_language=dg.auto_detect_language,
@@ -132,8 +136,8 @@ async def create_stt_from_config(config: STTConfiguration):
         )
 
     if config.provider == STTProvider.SONIOX:
-        if not SONIOX_API_KEY:
-            raise ValueError("SONIOX_API_KEY is required for soniox STT")
+        account = await resolver.get(config, KeyAccount)
+        api_key = account.api_key
 
         sx = config.soniox
         effective_context = (
@@ -161,7 +165,7 @@ async def create_stt_from_config(config: STTConfiguration):
         )
         return build_soniox_stt(
             SonioxConfig(
-                api_key=SONIOX_API_KEY,
+                api_key=api_key,
                 model=effective_model,
                 vad_force_turn_endpoint=effective_vad_force,
                 language_hints=language or BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
@@ -178,8 +182,8 @@ async def create_stt_from_config(config: STTConfiguration):
         )
 
     if config.provider == STTProvider.SARVAM:
-        if not SARVAM_API_KEY:
-            raise ValueError("SARVAM_API_KEY is required for sarvam STT")
+        account = await resolver.get(config, KeyAccount)
+        api_key = account.api_key
 
         sv = config.sarvam
         bb_model = sv.model if sv and sv.model else await BB_SARVAM_STT_MODEL()
@@ -191,7 +195,7 @@ async def create_stt_from_config(config: STTConfiguration):
 
         return build_sarvam_stt(
             SarvamConfig(
-                api_key=SARVAM_API_KEY,
+                api_key=api_key,
                 model=bb_model,
                 sample_rate=SAMPLE_RATE,
                 language_code=bb_lang,
@@ -202,8 +206,8 @@ async def create_stt_from_config(config: STTConfiguration):
         )
 
     if config.provider == STTProvider.ASSEMBLYAI:
-        if not ASSEMBLYAI_API_KEY:
-            raise ValueError("ASSEMBLYAI_API_KEY is required for assemblyai STT")
+        account = await resolver.get(config, KeyAccount)
+        assemblyai_key = account.api_key
 
         aai = config.assemblyai or AssemblyAISTTConfig()
 
@@ -234,7 +238,7 @@ async def create_stt_from_config(config: STTConfiguration):
 
         return build_assemblyai_stt(
             AssemblyAIConfig(
-                api_key=ASSEMBLYAI_API_KEY,
+                api_key=assemblyai_key,
                 model=aai.model,
                 language_codes=aai.language_codes,
                 vad_force_turn_endpoint=vad_force_turn_endpoint,
@@ -254,25 +258,24 @@ async def create_stt_from_config(config: STTConfiguration):
         )
 
     if config.provider == STTProvider.OPENAI:
-        if not OPENAI_STT_API_KEY:
-            raise ValueError("OPENAI_STT_API_KEY is required for openai STT")
+        account = await resolver.get(config, KeyAccount)
+        api_key = account.api_key
         logger.info("Using OpenAI STT service for Breeze Buddy")
         return build_openai_stt(
-            api_key=OPENAI_STT_API_KEY,
+            api_key=api_key,
             model=OPENAI_STT_MODEL,
             language=Language.EN,
             temperature=0.0,
         )
 
     if config.provider == STTProvider.ELEVENLABS:
-        # Key and host are one pair: a key is only accepted by the account it
-        # belongs to, so they always travel together and both come from the
-        # env. Switching accounts is an env change, not a code path — which is
-        # why there is no flag here. Raise now rather than let an empty key
-        # reach the WebSocket: a build failure is a dead pod on deploy, an
-        # auth failure is a live call that cannot hear.
-        if not ELEVENLABS_STT_API_KEY:
-            raise ValueError("ELEVENLABS_STT_API_KEY is required for elevenlabs STT")
+        # Key and host are one pair: the account carries both (the row's key
+        # or the residency env key, always on the India-resident host —
+        # accounts.elevenlabs_host). pipecat builds ``wss://{base_url}/v1``
+        # itself, so it gets the bare host.
+        account = await resolver.get(config, KeyAccount)
+        api_key = account.api_key
+        base_url = str(account.endpoint).removeprefix("wss://")
 
         el = config.elevenlabs or ElevenLabsSTTConfig()
 
@@ -308,8 +311,8 @@ async def create_stt_from_config(config: STTConfiguration):
         )
         return build_elevenlabs_stt(
             ElevenLabsConfig(
-                api_key=ELEVENLABS_STT_API_KEY,
-                base_url=ELEVENLABS_STT_URL,
+                api_key=api_key,
+                base_url=base_url,
                 commit_strategy=commit_strategy,
                 model=el.model,
                 language_code=primary_language,
@@ -326,23 +329,26 @@ async def create_stt_from_config(config: STTConfiguration):
 
     # Default: Google
     logger.info("Using Google STT service for Breeze Buddy")
-    return build_google_stt(credentials_json=GOOGLE_CREDENTIALS_JSON)
+    account = await resolver.get(config, GcpAccount)
+    return build_google_stt(credentials_json=account.credentials_json)
 
 
 async def get_stt_service(
     language_hints: str | None = None,
     soniox_context: str | None = None,
     stt_configuration: Optional[STTConfiguration] = None,
+    accounts: Optional[Accounts] = None,
 ):
     """Returns an STT service instance.
 
     If ``stt_configuration`` is provided (from template), routes through
     :func:`create_stt_from_config`. Otherwise falls back to env-var-based
-    provider selection (legacy path).
+    provider selection (legacy path). ``accounts`` rides through to the
+    builder (the call's account resolver, see accounts).
     """
     # --- New path: template-level STTConfiguration ---
     if stt_configuration is not None:
-        return await create_stt_from_config(stt_configuration)
+        return await create_stt_from_config(stt_configuration, accounts=accounts)
 
     # --- Legacy path: env var BREEZE_BUDDY_STT_SERVICE ---
     provider_map = {

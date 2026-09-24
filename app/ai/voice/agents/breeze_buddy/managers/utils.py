@@ -203,6 +203,7 @@ async def prepare_and_store_initial_greeting(
                 text=resolved_greeting,
                 voice_config=voice_config,
                 configurations=template.configurations,
+                accounts=accounts_for_template(template),
             )
 
             # Store audio and text as single JSON object in Redis (temporary, deleted after use)
@@ -237,6 +238,7 @@ async def prepare_and_store_initial_greeting(
                 text=initial_greeting,
                 voice_config=template.configurations.tts_configuration,
                 configurations=template.configurations,
+                accounts=accounts_for_template(template),
             )
             await redis.set(
                 key=template_audio_key,

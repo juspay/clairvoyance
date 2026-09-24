@@ -23,7 +23,6 @@ from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 from websockets.asyncio.client import connect as websocket_connect
 
-from app.core.config.static import SONIOX_API_KEY
 from app.core.logger import logger
 
 __all__ = [
@@ -94,6 +93,7 @@ async def _generate_soniox_audio(
     model: Optional[str] = None,
     language: Optional[str] = None,
     sample_rate: int = 16000,
+    api_key: Optional[str] = None,
 ) -> bytes:
     """One-shot synth via Soniox WebSocket for greeting prep.
 
@@ -104,8 +104,8 @@ async def _generate_soniox_audio(
     Returns 16-bit little-endian PCM mono at the requested ``sample_rate``,
     matching ``convert_to_mulaw`` expectations for downstream telephony use.
     """
-    if not SONIOX_API_KEY:
-        raise ValueError("SONIOX_API_KEY is required for Soniox TTS")
+    if not api_key:
+        raise ValueError("an api_key is required for Soniox TTS")
 
     voice = voice or "Priya"
     model = model or "tts-rt-v1"
@@ -124,7 +124,7 @@ async def _generate_soniox_audio(
     soniox_lang = language_to_soniox_tts_language(lang_enum) or "en"
 
     config_msg = {
-        "api_key": SONIOX_API_KEY,
+        "api_key": api_key,
         "stream_id": "greeting",
         "model": model,
         "voice": voice,
