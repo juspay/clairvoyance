@@ -14,10 +14,10 @@ from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 
 from app.core.config.static import (
-    ELEVENLABS_API_KEY,
     ELEVENLABS_BB_VOICE_ID,
-    ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
     ELEVENLABS_MODEL_ID,
+    ELEVENLABS_TTS_API_KEY,
+    ELEVENLABS_TTS_URL,
 )
 from app.core.logger import logger
 
@@ -71,7 +71,6 @@ async def _generate_elevenlabs_audio(
     text: str,
     voice_id: str | None = None,
     model_id: str | None = None,
-    use_indian_residency: bool = True,
     speed: float | None = None,
     stability: float | None = None,
     similarity_boost: float | None = None,
@@ -83,7 +82,6 @@ async def _generate_elevenlabs_audio(
         text: The text to synthesize
         voice_id: Optional voice ID override. Falls back to ELEVENLABS_BB_VOICE_ID if None.
         model_id: Optional model ID override. Falls back to ELEVENLABS_MODEL_ID if None.
-        use_indian_residency: If True, uses Indian residency API endpoint and key.
                              If False, uses default global API endpoint and key.
                              Defaults to True.
         speed: Optional playback speed, so a pre-synthesized greeting matches the
@@ -95,19 +93,13 @@ async def _generate_elevenlabs_audio(
     Returns:
         Audio bytes in ulaw_8000 format
     """
-    # Select API key and base URL based on residency preference
-    if use_indian_residency:
-        api_key = ELEVENLABS_INDIAN_RESIDENCY_API_KEY
-        base_url = "https://api.in.residency.elevenlabs.io"
-        if not api_key:
-            raise ValueError(
-                "ELEVENLABS_INDIAN_RESIDENCY_API_KEY is required when use_indian_residency is True"
-            )
-    else:
-        api_key = ELEVENLABS_API_KEY
-        base_url = "https://api.elevenlabs.io"
-        if not api_key:
-            raise ValueError("ELEVENLABS_API_KEY is required for Rhea voice")
+    # One account for TTS, from the env. ELEVENLABS_TTS_URL is a bare host;
+    # this REST path needs https:// where the streaming path needs wss://,
+    # which is why the scheme is added at the call site, not stored.
+    api_key = ELEVENLABS_TTS_API_KEY
+    base_url = f"https://{ELEVENLABS_TTS_URL}"
+    if not api_key:
+        raise ValueError("ELEVENLABS_TTS_API_KEY is required for ElevenLabs TTS")
 
     # Use provided values or fall back to defaults
     final_voice_id = voice_id if voice_id else ELEVENLABS_BB_VOICE_ID
@@ -143,7 +135,7 @@ async def _generate_elevenlabs_audio(
     logger.info(
         f"Synthesizing greeting with ElevenLabs (ulaw_8000): {text[:50]}... "
         f"[voice_id={final_voice_id}, model_id={final_model_id}, "
-        f"indian_residency={use_indian_residency}, voice_settings={voice_settings}, "
+        f"base_url={base_url}, voice_settings={voice_settings}, "
         f"language_code={language_code}]"
     )
 

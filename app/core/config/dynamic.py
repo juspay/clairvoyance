@@ -777,11 +777,6 @@ async def BB_NOISE_CANCELLATION_LEVEL() -> int:
     return await get_config("BB_NOISE_CANCELLATION_LEVEL", 100, int)
 
 
-async def BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY() -> bool:
-    """Returns BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY from Redis"""
-    return await get_config("BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY", True, bool)
-
-
 # --- Breeze Buddy Transfer Configuration ---
 async def BB_TRANSFER_CONFERENCE_TIMEOUT() -> int:
     """Seconds to wait for agent to join conference"""
