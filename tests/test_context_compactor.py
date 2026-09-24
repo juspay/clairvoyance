@@ -2,10 +2,12 @@
 # Test indexes into result dicts whose return type pyrefly can't infer tightly.
 """Tests for the conversation-context compactor.
 
-The compactor rewrites stale ``tool_result`` blocks in an Anthropic ``messages``
-array to 1-line stubs. The contract is narrow but easy to get wrong on
-edge cases (mixed roles, multi-block messages, missing tool_use linkage),
-so the cases here cover both the happy paths and the don't-blow-up paths.
+The chat compactor rewrites stale ``tool_result`` blocks in an Anthropic
+``messages`` array to 1-line stubs. The voice compactor does the same for the
+``role:"developer"`` ``async_tool`` envelope pipecat's assistant aggregator
+stores for MCP tools. The contract is narrow but easy to get wrong on edge
+cases (mixed roles, missing tool_call linkage), so the cases here cover both
+the happy paths and the don't-blow-up paths.
 """
 
 from __future__ import annotations
@@ -455,3 +457,354 @@ def test_universal_session_retention_untouched():
     ]
     out = compact_tool_results_universal(messages, retention={}, recent_keep=1)
     assert all("[pruned" not in (m.get("content") or "") for m in out)
+
+
+# ---------------------------------------------------------------------------
+# Voice variant — role:"developer" async_tool envelope (MCP tools)
+# ---------------------------------------------------------------------------
+
+from app.ai.voice.agents.breeze_buddy.agent.context_compactor import (  # noqa: E402
+    CompactedAssistantAggregator,
+    CompactedContextAggregatorPair,
+    build_tool_context_maps,
+    compact_voice_tool_results,
+)
+
+
+def _async_tool_envelope(call_id: str, result: dict) -> dict:
+    """The role:'developer' message pipecat stores for an async MCP tool call."""
+    return {
+        "role": "developer",
+        "content": json.dumps(
+            {
+                "type": "async_tool",
+                "tool_call_id": call_id,
+                "status": "finished",
+                "description": "the result",
+                "result": json.dumps(result),
+            }
+        ),
+    }
+
+
+def _voice_exchange(call_id: str, tool: str, result: dict) -> list:
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": tool, "arguments": '{"query":"red"}'},
+                }
+            ],
+        },
+        _async_tool_envelope(call_id, result),
+    ]
+
+
+def test_voice_compacts_stale_async_tool_results_recent_keep_zero():
+    """With recent_keep=0 (the voice default), ALL async_tool results —
+    including the latest — are compacted to a stub."""
+    messages = [
+        {"role": "user", "content": "find shoes"},
+        *_voice_exchange("c1", "search_catalog", {"products": [{"id": "p1"}] * 40}),
+        {"role": "user", "content": "more"},
+        *_voice_exchange("c2", "search_catalog", {"products": [{"id": "p2"}]}),
+    ]
+    out = compact_voice_tool_results(
+        messages, retention={"search_catalog": "last_turn_only"}, recent_keep=0
+    )
+    # Unlike the chat compactor's recent_keep=1, BOTH results are stubbed.
+    dev = [m for m in out if m.get("role") == "developer"]
+    stale = next(m for m in dev if "c1" in m["content"])
+    fresh = next(m for m in dev if "c2" in m["content"])
+    assert "[pruned: search_catalog(" in json.loads(stale["content"])["result"]
+    assert "[pruned: search_catalog(" in json.loads(fresh["content"])["result"]
+
+
+def test_voice_projection_keeps_identity_paths():
+    result = {
+        "products": [
+            {"id": "p1", "url": "https://s/p1", "description": "x" * 500},
+            {"id": "p2", "url": "https://s/p2", "description": "y" * 500},
+        ]
+    }
+    messages = [
+        *_voice_exchange("c1", "search_catalog", result),
+        *_voice_exchange("c2", "search_catalog", {"products": []}),
+    ]
+    out = compact_voice_tool_results(
+        messages,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=0,
+        projection={"search_catalog": ["products[*].id", "products[*].url"]},
+    )
+    stale = json.loads(json.loads(out[1]["content"])["result"])
+    assert stale["products"] == [
+        {"id": "p1", "url": "https://s/p1"},
+        {"id": "p2", "url": "https://s/p2"},
+    ]
+    assert "_pruned" in stale
+
+
+def test_voice_session_tool_untouched():
+    messages = [
+        *_voice_exchange("c1", "get_cart", {"id": "cart1"}),
+        *_voice_exchange("c2", "get_cart", {"id": "cart1"}),
+    ]
+    out = compact_voice_tool_results(
+        messages,
+        retention={"get_cart": "session", "search_catalog": "last_turn_only"},
+        recent_keep=0,
+    )
+    assert all("[pruned" not in (m.get("content") or "") for m in out)
+
+
+def test_voice_non_async_developer_message_touched():
+    """A role:'developer' message that is NOT an async_tool envelope is left alone."""
+    messages = [
+        {"role": "developer", "content": json.dumps({"reasoning": "plain note"})},
+        *_voice_exchange("c1", "search_catalog", {"products": [{"id": "p1"}]}),
+        {"role": "user", "content": "ok"},
+    ]
+    out = compact_voice_tool_results(
+        messages, retention={"search_catalog": "last_turn_only"}, recent_keep=0
+    )
+    assert out[0]["content"] == json.dumps({"reasoning": "plain note"})
+    dev = next(m for m in out if m.get("role") == "developer" and "c1" in m["content"])
+    assert "[pruned: search_catalog" in json.loads(dev["content"])["result"]
+
+
+def test_voice_unknown_tool_defaults_to_no_compaction():
+    messages = [
+        *_voice_exchange("x1", "mystery_tool", {"big": "blob" * 200}),
+        *_voice_exchange("x2", "mystery_tool", {"big": "blob2" * 200}),
+    ]
+    out = compact_voice_tool_results(
+        messages, retention={"search_catalog": "last_turn_only"}, recent_keep=0
+    )
+    assert all("[pruned" not in (m.get("content") or "") for m in out)
+
+
+def test_voice_empty_retention_is_noop():
+    messages = [*_voice_exchange("c1", "search_catalog", {"products": []})]
+    out = compact_voice_tool_results(messages, retention=None, recent_keep=0)
+    assert out == messages
+
+
+def test_voice_does_not_mutate_input():
+    messages = [*_voice_exchange("c1", "search_catalog", {"products": [{"id": "p"}]})]
+    original = messages[1]["content"]
+    compact_voice_tool_results(
+        messages, retention={"search_catalog": "last_turn_only"}, recent_keep=0
+    )
+    assert messages[1]["content"] == original
+
+
+def test_build_tool_context_maps_from_config():
+    """Maps are pulled from the template's MCP server config (voice mirror of
+    chat tooling). A server with no fields yields empty maps (no-op)."""
+
+    class _Server:
+        tool_context_retention = {"search_catalog": "last_turn_only"}
+        tool_context_projection = {"search_catalog": ["products[*].id"]}
+
+    class _ServerEmpty:
+        tool_context_retention = None
+        tool_context_projection = None
+
+    class _Mcp:
+        servers = [_Server(), _ServerEmpty()]
+
+    class _Config:
+        mcp = _Mcp()
+
+    retention, projection = build_tool_context_maps(_Config())
+    assert retention == {"search_catalog": "last_turn_only"}
+    assert projection == {"search_catalog": ["products[*].id"]}
+
+    retention2, projection2 = build_tool_context_maps(None)
+    assert retention2 == {}
+    assert projection2 == {}
+
+
+def test_voice_projection_unwraps_status_data_envelope():
+    """MCP HTTP tool results are stored as ``{"status":"success","data":"<json>"}``
+    (mcp/__init__.py wraps them). The projection must unwrap that envelope so
+    ``products[*].title`` resolves against the real payload instead of stubbing.
+    This is the regression that made the voice agent reply 'I couldn't confirm'
+    despite search_catalog returning rich results."""
+    paylod = {
+        "products": [
+            {
+                "id": "p1",
+                "title": "Ayurvedic Medicine for Kidney",
+                "price": "999.00",
+                "description": "x" * 500,
+            },
+            {
+                "id": "p2",
+                "title": "GFR Powder",
+                "price": "699.00",
+                "description": "y" * 500,
+            },
+        ]
+    }
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "search_catalog",
+                        "arguments": '{"query":"kidney"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "developer",
+            "content": json.dumps(
+                {
+                    "type": "async_tool",
+                    "tool_call_id": "c1",
+                    "status": "finished",
+                    "description": "the result",
+                    "result": json.dumps(
+                        {"status": "success", "data": json.dumps(paylod)}
+                    ),
+                }
+            ),
+        },
+    ]
+    out = compact_voice_tool_results(
+        messages,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=0,
+        projection={
+            "search_catalog": [
+                "products[*].id",
+                "products[*].title",
+                "products[*].price",
+            ]
+        },
+    )
+    dev = [
+        m
+        for m in out
+        if isinstance(m, dict) and m.get("role") == "developer" and "c1" in m["content"]
+    ]
+    envelope = json.loads(dev[0]["content"])
+    # NOT a stub — the titles were projected through the envelope.
+    assert "[pruned: search_catalog" not in envelope["result"]
+    projected = json.loads(envelope["result"])
+    assert projected["products"] == [
+        {"id": "p1", "title": "Ayurvedic Medicine for Kidney", "price": "999.00"},
+        {"id": "p2", "title": "GFR Powder", "price": "699.00"},
+    ]
+    assert "_pruned" in projected
+    assert "description" not in projected["products"][0]
+
+
+def test_voice_projection_unwraps_object_data_and_plain_result():
+    """_unwrap_result handles both a JSON-string ``data`` and an object
+    ``data``, and passes through a non-envelope result unchanged."""
+    object_data = {
+        "role": "developer",
+        "content": json.dumps(
+            {
+                "type": "async_tool",
+                "tool_call_id": "c2",
+                "status": "finished",
+                "description": "the result",
+                "result": json.dumps(
+                    {"status": "success", "data": {"products": [{"id": "p9"}]}}
+                ),
+            }
+        ),
+    }
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search_catalog", "arguments": "{}"},
+                }
+            ],
+        },
+        object_data,
+    ]
+    out = compact_voice_tool_results(
+        messages,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=0,
+        projection={"search_catalog": ["products[*].id"]},
+    )
+    projected = json.loads(json.loads(out[1]["content"])["result"])
+    assert projected["products"] == [{"id": "p9"}]
+    assert "_pruned" in projected
+
+    plain = {
+        "role": "developer",
+        "content": json.dumps(
+            {
+                "type": "async_tool",
+                "tool_call_id": "c3",
+                "status": "finished",
+                "description": "the result",
+                "result": json.dumps({"products": [{"id": "p3"}]}),
+            }
+        ),
+    }
+    messages2 = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c3",
+                    "type": "function",
+                    "function": {"name": "search_catalog", "arguments": "{}"},
+                }
+            ],
+        },
+        plain,
+    ]
+    out2 = compact_voice_tool_results(
+        messages2,
+        retention={"search_catalog": "last_turn_only"},
+        recent_keep=0,
+        projection={"search_catalog": ["products[*].id"]},
+    )
+    projected2 = json.loads(json.loads(out2[1]["content"])["result"])
+    assert projected2["products"] == [{"id": "p3"}]
+    assert "_pruned" in projected2
+
+
+def test_pair_returns_compacting_assistant_shared_with_pipeline():
+    """CompactedContextAggregatorPair.assistant() yields the same compacting
+    instance the pipeline uses, so observer turn events keep firing."""
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    ctx = LLMContext()
+    pair = CompactedContextAggregatorPair(
+        ctx,
+        retention={"search_catalog": "last_turn_only"},
+        projection={"search_catalog": ["products[*].id"]},
+        recent_keep=0,
+    )
+    assistant = pair.assistant()
+    assert isinstance(assistant, CompactedAssistantAggregator)
+    assert pair.assistant() is assistant
+    assert pair.user() is not None
+    assert assistant._compact_retention == {"search_catalog": "last_turn_only"}
+    assert assistant._compact_projection == {"search_catalog": ["products[*].id"]}
+    assert assistant._compact_recent_keep == 0
