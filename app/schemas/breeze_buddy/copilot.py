@@ -31,6 +31,8 @@ class CopilotDateRangeSource(str, Enum):
 class CopilotRequestedDateRange(BaseModel):
     """Optional dashboard-provided date range for Copilot data reads."""
 
+    model_config = ConfigDict(extra="forbid")
+
     date_from: date
     date_to: date
 
@@ -49,6 +51,8 @@ class CopilotScopeRequest(BaseModel):
     The browser may request a merchant/template/date scope, but the resolver
     remains authoritative and returns the immutable CopilotScope.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     data_merchant_id: Optional[str] = Field(
         default=None,
@@ -141,8 +145,10 @@ class CopilotScope(BaseModel):
     capabilities: tuple[CopilotCapability, ...]
 
     def session_metadata(self) -> Dict[str, Dict[str, object]]:
-        """Return semantic scope metadata for the normal Assist chat session."""
-        return {COPILOT_SCOPE_METADATA_KEY: self.model_dump(mode="json")}
+        """Return redacted scope metadata for the normal Assist chat session."""
+        scope_payload = self.model_dump(mode="json", exclude={"actor"})
+        scope_payload["actor"] = {"user_id": self.actor.user_id}
+        return {COPILOT_SCOPE_METADATA_KEY: scope_payload}
 
 
 class CopilotResolvedScopeResponse(BaseModel):

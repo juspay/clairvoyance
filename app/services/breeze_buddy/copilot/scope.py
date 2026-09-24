@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from inspect import isawaitable
-from typing import Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.security.scope import resolve_merchant_ids
 from app.database.accessor.breeze_buddy.template import get_template_merchant_id
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.copilot import (
+    COPILOT_SCOPE_METADATA_KEY,
     DEFAULT_COPILOT_TIMEZONE,
     CopilotActorScope,
     CopilotCapability,
@@ -149,6 +150,8 @@ async def _load_template_merchant_id(
 async def _validate_data_template(
     data: CopilotDataScope,
     template_merchant_loader: TemplateMerchantLoader,
+    *,
+    status_code: int = 403,
 ) -> None:
     if not data.data_template_id:
         return
@@ -162,7 +165,7 @@ async def _validate_data_template(
             "unauthorized_template",
             "Selected Copilot data template was not found or does not belong "
             "to the selected merchant.",
-            status_code=403,
+            status_code=status_code,
         )
 
 
@@ -198,4 +201,100 @@ async def resolve_copilot_scope(
         data=data,
         date_window=date_window,
         capabilities=_PHASE_ONE_CAPABILITIES,
+    )
+
+
+def _load_persisted_data_scope(
+    metadata: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if not metadata:
+        return None
+
+    copilot_metadata = metadata.get(COPILOT_SCOPE_METADATA_KEY)
+    if copilot_metadata is None:
+        return None
+
+    if not isinstance(copilot_metadata, dict):
+        raise CopilotScopeError(
+            "invalid_persisted_scope",
+            "Stored Copilot scope is invalid.",
+            status_code=404,
+        )
+
+    data = copilot_metadata.get("data")
+    if not isinstance(data, dict):
+        raise CopilotScopeError(
+            "invalid_persisted_scope",
+            "Stored Copilot data scope is invalid.",
+            status_code=404,
+        )
+
+    return data
+
+
+async def validate_persisted_copilot_scope_access(
+    metadata: Optional[dict[str, Any]],
+    current_user: UserInfo,
+    *,
+    template_merchant_loader: Optional[TemplateMerchantLoader] = None,
+    merchant_scope_resolver: Optional[MerchantScopeResolver] = None,
+) -> None:
+    """Revalidate access to a stored Copilot data scope.
+
+    Normal Assist chat-session RBAC controls the runtime session. When a
+    session carries ``metadata.copilot``, future Copilot tools will also trust
+    that server-owned data scope, so every dashboard resume/message path must
+    confirm the current actor still has access to the persisted data merchant
+    and optional data template.
+    """
+    data_payload = _load_persisted_data_scope(metadata)
+    if data_payload is None:
+        return
+
+    data_merchant_id = data_payload.get("data_merchant_id")
+    if not isinstance(data_merchant_id, str) or not data_merchant_id.strip():
+        raise CopilotScopeError(
+            "invalid_persisted_scope",
+            "Stored Copilot data merchant is invalid.",
+            status_code=404,
+        )
+    data_merchant_id = data_merchant_id.strip()
+
+    data_template_id = data_payload.get("data_template_id")
+    if data_template_id is not None and not isinstance(data_template_id, str):
+        raise CopilotScopeError(
+            "invalid_persisted_scope",
+            "Stored Copilot data template is invalid.",
+            status_code=404,
+        )
+    if isinstance(data_template_id, str):
+        data_template_id = data_template_id.strip()
+        if not data_template_id:
+            raise CopilotScopeError(
+                "invalid_persisted_scope",
+                "Stored Copilot data template is invalid.",
+                status_code=404,
+            )
+
+    allowed_merchant_ids = await _resolve_allowed_merchant_ids(
+        current_user,
+        merchant_scope_resolver or resolve_merchant_ids,
+    )
+    if (
+        allowed_merchant_ids is not None
+        and data_merchant_id not in allowed_merchant_ids
+    ):
+        raise CopilotScopeError(
+            "unauthorized_merchant",
+            "Access denied to the stored Copilot data merchant.",
+            status_code=404,
+        )
+
+    await _validate_data_template(
+        CopilotDataScope(
+            data_merchant_id=data_merchant_id,
+            data_template_id=data_template_id,
+        ),
+        template_merchant_loader or get_template_merchant_id,
+        status_code=404,
     )
