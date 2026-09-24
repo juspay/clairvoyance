@@ -794,10 +794,36 @@ def test_the_id_comes_from_this_visits_patch_not_the_run_context(
 def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
     monkeypatch: pytest.MonkeyPatch, no_goal: None
 ) -> None:
-    """The REAL call word, not a double: at the plan's ceiling it reaches no
-    accessor, so it can run under the walker as it is. The token takes the
-    plain arrow; the row says `max_calls` with nothing dispatched; the trail
-    word is popped before the context write and NOTHING is persisted."""
+    """The REAL call word under the walker, its accessors doubled: at the
+    plan's ceiling it dials nothing and mints a lead born ABORTED. The token
+    takes the plain arrow; the row says `max_calls` with nothing dispatched;
+    the trail word is popped before the context write; the lead's name is
+    persisted, the ledger is not."""
+    import app.crm.outreach.nodes.call as call_node
+
+    minted: list = []
+
+    async def create(**kw: Any) -> Any:
+        minted.append(kw)
+        return type("L", (), {"id": kw["id"]})()
+
+    async def template(_id: str) -> Any:
+        return type(
+            "T",
+            (),
+            {"id": "t-1", "name": "ring", "reseller_id": "r1", "merchant_id": None},
+        )()
+
+    async def config(_id: str) -> Any:
+        return type("C", (), {"initial_offset": 0})()
+
+    async def stamp(_lead: str, _run: str) -> None:
+        return None
+
+    monkeypatch.setattr(call_node, "create_lead_call_tracker", create)
+    monkeypatch.setattr(call_node, "get_template_by_id", template)
+    monkeypatch.setattr(call_node, "get_call_execution_config_by_template_id", config)
+    monkeypatch.setattr(call_node, "update_lead_enrollment_id", stamp)
     board = {
         **_BOARD,
         "nodes": [
@@ -817,7 +843,11 @@ def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
         writes,
         _run(
             node="ring",
-            context={"lead_visits_ring": 1, CALLS_TODAY_KEY: {"day": today, "n": 1}},
+            context={
+                "phone": "+919876543210",
+                "lead_visits_ring": 1,
+                CALLS_TODAY_KEY: {"day": today, "n": 1},
+            },
         ),
     )
 
@@ -826,11 +856,15 @@ def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
     persisted = args[3]
     assert "max_calls_reached" not in persisted, "the answer is computed, never stored"
     assert OUTCOME_KEY not in persisted
-    assert persisted["lead_visits_ring"] == 1, "the id counter is untouched"
+    assert persisted["lead_visits_ring"] == 2, "the visit counted; its id is its own"
+    assert persisted["lead_ring"] == minted[0]["id"], "the aborted row is named"
+    assert minted[0]["outcome"] == "ABORTED"
     assert persisted[CALLS_TODAY_KEY]["n"] == 1, "the ledger means calls PLACED"
 
     ((row,),) = (writes.flushes[0]["steps"],)
     assert row["node_type"] == "call"
     assert row["outcome"] == "max_calls"
-    assert row["dispatch_id"] is None
+    assert (
+        row["dispatch_id"] == minted[0]["id"]
+    ), "the aborted row; `max_calls` says no call"
     assert row["next_node"] == "settle"

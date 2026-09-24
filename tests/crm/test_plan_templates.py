@@ -499,3 +499,29 @@ def test_the_retry_cart_board_bounds_its_own_loop(
         else set(predicates.fields_named(judge.rules))
     )
     assert "run.max_calls_reached" in named
+
+
+def test_the_call_wait_board_names_its_ceiling_and_lets_an_aborted_report_through() -> (
+    None
+):
+    """The example for the capped call square (25 Sep 2026): a board that
+    rings again names its ceiling and draws NO condition after the call
+    squares. Read off the document: each call square's one arrow lands on a
+    wait that listens for `call.completed` matched on THAT square's lead and
+    keyed on `outcome` — so the ABORTED report of a lead the capped square
+    minted resolves it by its `else` arrow, never its alarm."""
+    plan = WorkflowDefinition.model_validate(_load(LINE_CALL_WAIT))
+    assert plan.exits.max_calls_per_day and plan.exits.timezone
+    nodes = {n.id: n for n in plan.nodes}
+    outgoing = plan.outgoing()
+    calls = [n for n in plan.nodes if n.type == "call"]
+    assert calls, "the board rings"
+    for ring in calls:
+        ((after_id, _),) = outgoing[ring.id]
+        after = nodes[after_id]
+        assert after.type == "wait" and after.match is not None
+        assert after.match.run == f"lead_{ring.id}" and "call.completed" in after.topics
+        assert after.key == "outcome", "the report's word is the arrow"
+        assert "else" in {
+            on for _, on in outgoing[after_id]
+        }, f"{after_id}: ABORTED takes else"

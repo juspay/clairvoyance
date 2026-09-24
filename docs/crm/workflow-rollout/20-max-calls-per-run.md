@@ -52,9 +52,10 @@ alternative endings are recorded under Decisions §4.)
    wrote one (ADR 0023 §1), and §5's audit property — the immutable row
    answering *"what did this run execute"* — would depend on which code
    version read it. Nor is the bend safe in one direction: a capped call
-   square places **no lead**, so a board whose next square listens for
-   `call.completed` hears nothing and leaves by its timeout arrow. That is
-   a change of *meaning* for a run already walking.
+   square dials **nothing** (its lead is born ABORTED), so a board whose
+   next square listens for `call.completed` resolves on that report at
+   once (below, §6).
+   That is a change of *meaning* for a run already walking.
 
    So **a board is bounded only when its author writes the word** — the
    ceiling is a mechanism the plan opts into, not a policy the engine
@@ -156,12 +157,31 @@ alternative endings are recorded under Decisions §4.)
      `managers/calls.py`); a capped visit places no call, so nothing fires.
 
 6. **Two consequences the author must know.**
-   - **A listening wait after a capped call waits for a letter that never
-     comes.** `after-call` listening for `call.completed` hears nothing and
-     leaves by its alarm. Correct and safe, but a wasted window — put a
-     `condition` on `run.max_calls_reached` between the two and route past
-     it. `docs/crm/plans/cart-recovery-retry.json` is that shape, shipped as a
-     validated example.
+   - **A capped call square still mints its lead — born ABORTED — and the
+     wait after it hears that lead's report.** Before 25 Sep 2026 a capped
+     square minted no lead, so a wait matched on that square's own
+     `lead_<node>` and listening for `call.completed` could only hear the
+     previous visit's report — already consumed; it armed anyway and the
+     run slept its whole alarm: 591 Flipkart runs on `after-call-1`/`-2`, a
+     day each, on two live boards whose authors had drawn no condition.
+     Now the same insert runs with `status=FINISHED, outcome=ABORTED,
+     call_end_time=now`; the lead table says why no call went out, the
+     created-lead tap mirrors the report of a lead born terminal, and the
+     wait resolves on `ABORTED` — its `else` arrow on the live boards, or
+     an `ABORTED` arrow the author draws — the moment the consumer delivers
+     it. The ledger is untouched (it counts calls PLACED). Nothing else
+     changes: a placed call's wait, a wait on another square's lead, on the
+     run's own `id`, or on any other letter behave as before. One window is
+     accepted (ruling, 25 Sep 2026): the report is born at the insert, one
+     write before the walker moves the run onto the wait; a consumer poll
+     that falls between the two finds no run on the wait, spends the
+     report, and the wait then sleeps its alarm as it did before — rare
+     (measured locally: the walker's write led the report by 11–15 ms and
+     the poll by ~3 s), and bounded. `tests/crm/test_capped_call_report.py`
+     pins both orders. `docs/crm/plans/line-nudge-call-wait.json` is the
+     shape with no condition; `cart-recovery-retry.json` still shows the
+     `condition` on `run.max_calls_reached`, which a plan may prefer when
+     the capped road should go somewhere other than the wait's `else` arrow.
    - **The answer is about TODAY, read the moment it is asked.** Because it is
      computed rather than stored, a `condition` anywhere on the board reads the
      live ledger against the live ceiling — at 09:00 the next morning the

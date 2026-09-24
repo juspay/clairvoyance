@@ -23,13 +23,14 @@ from app.crm.outreach.ceiling import (
     today_on,
 )
 from app.crm.outreach.db import UniqueViolation
-from app.crm.outreach.nodes.call import MAX_CALLS_OUTCOME, execute
+from app.crm.outreach.nodes.call import ABORTED_OUTCOME, MAX_CALLS_OUTCOME, execute
 from app.crm.outreach.nodes.context import OUTCOME_KEY, is_bookkeeping, run_facts
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     WorkflowDefinition,
     WorkflowNode,
 )
+from app.schemas.breeze_buddy.core import LeadCallStatus
 
 _NODE = WorkflowNode(id="nudge-call", type="call", template_id="tpl-1")
 _DEFINITION = WorkflowDefinition(
@@ -65,10 +66,12 @@ def _install(
     inserted: List[str],
     *,
     existing: Optional[set] = None,
+    minted: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """The accessor as it really behaves: a duplicate primary key is caught
     broadly and returned as None, never as a UniqueViolation the caller can
-    see. `existing` is the set of ids already in the table."""
+    see. `existing` is the set of ids already in the table; `minted` gets
+    every insert's keyword arguments, so a test can read the row as born."""
     rows = existing if existing is not None else set()
 
     async def fake_get_lead(lead_id: str) -> Any:
@@ -79,6 +82,8 @@ def _install(
             return None  # the swallow — every failure looks like this
         rows.add(kw["id"])
         inserted.append(kw["id"])
+        if minted is not None:
+            minted.append(kw)
         return type("L", (), {"id": kw["id"]})()
 
     async def fake_template(_id: str) -> Any:
@@ -245,41 +250,33 @@ def _ledger(day: str, n: int) -> Dict[str, Any]:
     return {CALLS_TODAY_KEY: {"day": day, "n": n}}
 
 
-def _install_untouchable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every accessor the square could reach, wired to fail the test: at the
-    ceiling a visit must read and write nothing at all."""
-
-    async def untouchable(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("a capped visit must read and write nothing")
-
-    for name in (
-        "create_lead_call_tracker",
-        "get_lead_by_id",
-        "get_template_by_id",
-        "get_call_execution_config_by_template_id",
-        "update_lead_enrollment_id",
-    ):
-        monkeypatch.setattr(call_node, name, untouchable)
-
-
-async def test_at_todays_ceiling_the_square_places_no_call_and_touches_nothing(
+async def test_at_todays_ceiling_the_square_dials_nothing_and_mints_an_aborted_lead(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Two placed today, a ceiling of two: no template read, no insert, no
-    ledger write — only the fact and the trail word. And the same visit
-    re-run under a lost lease says exactly the same thing."""
-    _install_untouchable(monkeypatch)
+    """Two placed today, a ceiling of two: no call goes out, but the visit
+    leaves a lead born FINISHED/ABORTED — the row says why nothing was
+    dialled and its report names this visit — and the trail word. No
+    ledger write. And the same visit re-run under a lost lease says exactly
+    the same thing (the id is the visit's own; the swallow hands it back)."""
+    inserted: List[str] = []
+    minted: List[Dict[str, Any]] = []
+    _install(monkeypatch, inserted, minted=minted)
     plan = _capped(2)
     run = _run(_ledger(today_on(plan.exits), 2))
 
     first = await execute(run, _NODE, plan)
     again = await execute(run, _NODE, plan)
 
-    assert first == {OUTCOME_KEY: MAX_CALLS_OUTCOME}, "the trail word, and nothing else"
-    assert again == first
+    assert first[OUTCOME_KEY] == MAX_CALLS_OUTCOME, "the trail word rides out"
+    assert first["lead_nudge-call"] == _expected(str(run.id), "nudge-call", 1)
+    assert again == first, "a lease retry re-derives the same visit"
+    assert len(minted) == 1, "one row, minted once"
+    born = minted[0]
+    assert born["status"] == LeadCallStatus.FINISHED
+    assert born["outcome"] == ABORTED_OUTCOME
+    assert born["call_end_time"] is not None, "born terminal: ended when it began"
     assert CALLS_TODAY_KEY not in first, "a capped visit never touches the ledger"
     assert "max_calls_reached" not in first, "the answer is computed, never stored"
-    assert not any(key.startswith("lead_") for key in first)
 
 
 async def test_a_new_day_resets_the_count(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -349,14 +346,19 @@ async def test_the_ceiling_counts_every_call_square_of_the_run(
     plan = _capped(4, others + [_NODE])
     today = today_on(plan.exits)
 
-    _install_untouchable(monkeypatch)
-    capped = await execute(_run(_ledger(today, 4)), _NODE, plan)
-    assert capped == {OUTCOME_KEY: MAX_CALLS_OUTCOME}
-
     inserted: List[str] = []
-    _install(monkeypatch, inserted)
-    minted = await execute(_run(_ledger(today, 3)), _NODE, plan)
-    assert len(inserted) == 1 and "lead_nudge-call" in minted
+    born: List[Dict[str, Any]] = []
+    _install(monkeypatch, inserted, minted=born)
+    capped = await execute(_run(_ledger(today, 4)), _NODE, plan)
+    assert capped[OUTCOME_KEY] == MAX_CALLS_OUTCOME
+    assert born[-1]["outcome"] == ABORTED_OUTCOME and CALLS_TODAY_KEY not in capped
+
+    placed_rows: List[str] = []
+    placed_born: List[Dict[str, Any]] = []
+    _install(monkeypatch, placed_rows, minted=placed_born)
+    placed = await execute(_run(_ledger(today, 3)), _NODE, plan)
+    assert placed_born[-1]["status"] == LeadCallStatus.BACKLOG
+    assert "lead_nudge-call" in placed
 
 
 def test_the_day_is_read_on_the_plans_clock() -> None:
@@ -404,9 +406,12 @@ async def test_the_default_ceiling_binds_once_it_is_in_the_document(
     assert len(inserted) == 1, "the sixth call of the day still goes"
     assert patch[CALLS_TODAY_KEY] == {"day": today, "n": 6}
 
-    _install_untouchable(monkeypatch)
+    born: List[Dict[str, Any]] = []
+    _install(monkeypatch, inserted, minted=born)
     capped = await execute(_run(_ledger(today, 6)), _NODE, plan)
-    assert capped == {OUTCOME_KEY: MAX_CALLS_OUTCOME}, "the seventh does not"
+    assert capped[OUTCOME_KEY] == MAX_CALLS_OUTCOME, "the seventh does not"
+    assert born[-1]["status"] == LeadCallStatus.FINISHED, "it leaves an aborted row"
+    assert CALLS_TODAY_KEY not in capped
 
 
 async def test_taking_the_ceiling_away_frees_the_run_on_the_next_question(

@@ -1,5 +1,5 @@
 {
-  "_comment": "The lending journey where a wait square after each call waits for THAT call's report and branches on its OUTCOME (22-23 Sep 2026; docs/crm/runbooks/after-call.md). The call square is today's: it queues its lead and moves on at once. `after-call-1` listens for `call.completed` matched on the lead the call square queued (`match`: the report's `lead_id` against the run's `lead_call-1`), with `key: outcome` so the arrows are the call template's outcome words: NOT_INTERESTED, CANCEL and CONFIRM go straight to `listen` (no more calls; the merchant's next letter decides), `else` (NO_ANSWER, BUSY, anything the template says that is not drawn) takes the gap, `timeout` is a report that never came in `minutes`. After call-2 every road is `listen`. So a run never has two calls queued, the gap counts from the call's END, and a customer who said no is not called again. The report answers its square and keeps its facts under it (`facts_after-call-1_outcome`) but never becomes the run's latest letter: call-2 speaks the merchant's facts, not call-1's outcome. `after-call` listens for nothing else: a merchant letter that lands between queueing the call and its report is not seen by that run (its facts are not kept; goals still end the run). The merchant's next letter is heard on the gap, where the ladder starts over on it.",
+  "_comment": "The lending journey where a wait square after each call waits for THAT call's report and branches on its OUTCOME (22-23 Sep 2026; docs/crm/runbooks/after-call.md). The call square is today's: it queues its lead and moves on at once. `after-call-1` listens for `call.completed` matched on the lead the call square queued (`match`: the report's `lead_id` against the run's `lead_call-1`), with `key: outcome` so the arrows are the call template's outcome words: NOT_INTERESTED, CANCEL and CONFIRM go straight to `listen` (no more calls; the merchant's next letter decides), `else` (NO_ANSWER, BUSY, anything the template says that is not drawn) takes the gap, `timeout` is a report that never came in `minutes`. After call-2 every road is `listen`. So a run never has two calls queued, the gap counts from the call's END, and a customer who said no is not called again. The report answers its square and keeps its facts under it (`facts_after-call-1_outcome`) but never becomes the run's latest letter: call-2 speaks the merchant's facts, not call-1's outcome. `after-call` listens for nothing else: a merchant letter that lands between queueing the call and its report is not seen by that run (its facts are not kept; goals still end the run). The merchant's next letter is heard on the gap, where the ladder starts over on it. The board rings again, so it names its daily ceiling (`exits.max_calls_per_day`, phase 20) — and draws NO condition after the call squares: a capped call square dials nothing, its lead is born `ABORTED`, and `after-call-N` hears that lead's report, so the run takes the gap (`else`) at once instead of sleeping its whole alarm (25 Sep 2026).",
   "entry": {
     "topic": "LINE_INITIATED",
     "key": "customer_id",
@@ -256,7 +256,9 @@
     }
   ],
   "exits": {
-    "max_age_days": 30
+    "max_age_days": 30,
+    "max_calls_per_day": 6,
+    "timezone": "Asia/Kolkata"
   },
   "on_publish": "migrate",
   "purpose_key": "utility.loan.checkout_nudge"

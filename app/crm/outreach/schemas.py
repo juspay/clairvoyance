@@ -138,8 +138,9 @@ class WorkflowExits(BaseModel):
     # NOT defaulted, here or at the write path: definitions.py re-validates
     # the STORED document on every claim, so a default would cap runs in
     # flight under a version their author never capped (ADR 0023 §1/§5).
-    # Nor is it a safe bend — a capped square places no lead, so a wait
-    # listening for call.completed leaves by its timeout arrow instead.
+    # Nor is it a safe bend — a capped square dials nothing (its lead is
+    # born ABORTED), and the walker answers a wait listening for that
+    # call's report with ABORTED at once.
     # The bound is the author's word or nothing.
     max_calls_per_day: Optional[int] = Field(None, ge=1)
     # The clock the day is read on (IANA), REQUIRED whenever a ceiling is

@@ -167,8 +167,11 @@ with the arrows `NO_ANSWER` / `BUSY` / `EARLY_HANGUP` / `CALL_LIMIT_REACHED` →
   COMPUTED from the ledger whenever a rule asks for it. The count starts
   over at midnight on that clock — no sweep and no cron, because the run's
   ledger is stamped with the day it counted. Two things follow. A listening
-  wait right after it (`after-call`, 180 minutes on `call.completed` in that
-  plan) hears nothing and leaves by its alarm — put a `condition` on
+  wait right after it that is matched on that square's own lead
+  (`after-call-1` on `lead_call-1`, `call.completed`) hears the capped
+  square's own lead, born `ABORTED`, and resolves on that word by its
+  `else` arrow (25 Sep 2026; rollout phase 20 §6). A
+  wait on the run's own `id`, as in that plan, is not: put a `condition` on
   `run.max_calls_reached` between the two to route past it. Being
   computed, it can be judged anywhere on the board: at 09:00 the next
   morning it reads the fresh allowance, not last night's answer.
