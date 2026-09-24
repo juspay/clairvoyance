@@ -103,6 +103,44 @@ async def test_prompt_replacement_preserves_json_braces(
     assert llm_config.api_key_name == "GRID_API_KEY"
 
 
+async def test_agent_prompt_is_sent_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = SimpleNamespace(
+        run_inference=AsyncMock(return_value='{"customer_needs": [], "topics": []}')
+    )
+    monkeypatch.setattr(extractor, "get_config", AsyncMock(return_value="https://g"))
+    monkeypatch.setattr(extractor, "get_llm_service", AsyncMock(return_value=llm))
+    transcript = [
+        {"role": "system", "content": "You are Priya calling from SBI."},
+        {"role": "system", "content": "You are Priya calling from SBI."},
+        {"role": "user", "content": "How much down payment do I need?"},
+    ]
+
+    for include, expected_count in ((True, 1), (False, 0)):
+        await extractor.extract_topics(
+            transcript,
+            [],
+            {
+                "model": "m",
+                "system_prompt": "Classify topics.",
+                "settings": {"max_topics": 3, "include_agent_prompt": include},
+            },
+        )
+        prompt = llm.run_inference.await_args.kwargs["system_instruction"]
+        assert prompt.count("calling from SBI") == expected_count
+
+    assert (
+        extractor.resolve_topic_evaluation_configuration(
+            {
+                "model": "m",
+                "settings": {"max_topics": 3, "include_agent_prompt": "true"},
+            }
+        )["settings"]["include_agent_prompt"]
+        is False
+    )
+
+
 async def test_non_list_transcript_is_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

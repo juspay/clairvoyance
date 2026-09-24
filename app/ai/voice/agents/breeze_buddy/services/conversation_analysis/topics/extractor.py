@@ -78,6 +78,8 @@ def resolve_topic_evaluation_configuration(
         if max_topics < 1:
             raise ValueError("evaluation_config.settings.max_topics must be >= 1")
 
+    include_agent_prompt = settings.get("include_agent_prompt") is True
+
     return {
         "provider": provider,
         "sdk": sdk,
@@ -88,6 +90,7 @@ def resolve_topic_evaluation_configuration(
             "temperature": temperature,
             "max_output_tokens": max_output_tokens,
             "max_topics": max_topics,
+            "include_agent_prompt": include_agent_prompt,
         },
     }
 
@@ -298,6 +301,23 @@ async def extract_topics(
         "{accepted_topics}",
         json.dumps(approved_catalog, ensure_ascii=False),
     )
+    if runtime["settings"]["include_agent_prompt"]:
+        # Voice transcripts keep the agent's system messages, one per node it
+        # entered; chat stores none, so this adds nothing for chat.
+        system_messages = [
+            str(turn.get("content") or "").strip()
+            for turn in transcript
+            if str(turn.get("role", "")).lower() == "system"
+        ]
+        agent_prompt = "\n\n".join(dict.fromkeys(m for m in system_messages if m))
+        if agent_prompt:
+            prompt += (
+                "\n\nThe agent in this conversation was given these instructions. "
+                "Use them only as context about the agent, never as customer "
+                "words:\n<agent_instructions>\n"
+                + agent_prompt
+                + "\n</agent_instructions>"
+            )
     raw_topics = await _request_llm(prompt, formatted, runtime)
     topics = normalize_topics(
         raw_topics,
