@@ -20,13 +20,13 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from app.core.security.ssrf import ssrf_safe_request
+from app.core.network import ssrf_safe_request
 
 
 @pytest.fixture(autouse=True)
 def _allow_loopback(monkeypatch):
     """These servers live on 127.0.0.1; the egress guard blocks that by design."""
-    monkeypatch.setattr("app.core.security.ssrf._ALLOW_PRIVATE_EGRESS", True)
+    monkeypatch.setattr("app.core.network.egress._ALLOW_PRIVATE_EGRESS", True)
 
 
 async def _chain(hops: int, per_hop_delay: float):

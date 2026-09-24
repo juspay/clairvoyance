@@ -106,11 +106,20 @@ async def _fetch_mcp_response(
     if not isinstance(arguments, dict):
         return None, "mcp_arguments did not resolve to an object"
 
-    server_params = _build_server_params(server, context)
+    # _build_server_params runs the SSRF guard here (SSRFError subclasses ValueError).
+    # rechecked_at_use=True because this path always goes through the direct
+    # handler below, which validates and pins again on the call itself. Left to
+    # the tool_schemas default, a server declared without schemas would fail
+    # closed on a resolver blip — and a failed pre-check does not just drop
+    # tools, it abandons the call.
     try:
-        HttpRequestExecutor._validate_resolved_url(server_params.url)
+        server_params = await _build_server_params(
+            server, context, rechecked_at_use=True
+        )
     except ValueError as e:
-        return None, f"MCP server URL rejected: {e}"
+        # Logged, not returned: this string rides out to the merchant as failureReason.
+        logger.error(f"Pre-check '{pre_check.name}': MCP server URL rejected: {e}")
+        return None, "MCP server URL rejected by egress policy"
 
     handler = _create_direct_http_tool_handler(
         server_params,

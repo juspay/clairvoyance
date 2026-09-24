@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple, cast
+from urllib.parse import urlparse
 
 from pipecat.frames.frames import OutputAudioRawFrame
 from pydub import AudioSegment
@@ -13,6 +14,7 @@ from pydub import AudioSegment
 from app.ai.voice.llm.types import RealtimeLLMProvider
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
+from app.core.network import post_json_to_own_host, redact_url
 from app.core.security.sha import calculate_hmac_sha256
 from app.services.redis.client import get_redis_service
 
@@ -140,22 +142,34 @@ def convert_to_mulaw(audio_data: bytes, input_format: str = "raw") -> bytes:
         raise
 
 
-async def send_webhook_with_retry(
-    session, url: str, data: dict, max_retries: int = 3
-) -> bool:
-    """
-    Sends a webhook with retry logic up to max_retries attempts.
-    Returns True if any attempt succeeds (status 200), False otherwise.
+async def send_webhook_with_retry(url: str, data: dict, max_retries: int = 3) -> bool:
+    """Deliver a signed outcome to a merchant-configured URL.
+
+    Returns True only if the payload actually arrived: a destination that
+    redirects somewhere the merchant never configured, or in a way that would
+    discard the body, is reported as undelivered rather than as a success with
+    nothing in it.
 
     Args:
-        session: aiohttp session
-        url: webhook URL
-        data: payload data
-        max_retries: maximum number of attempts (default 3)
+        url: the merchant's endpoint, from the lead payload
+        data: the outcome to sign and send
+        max_retries: attempts for transient failures only
 
     Returns:
-        bool: True if successful, False if all attempts failed
+        bool: True if an attempt returned 200
     """
+    try:
+        scheme = urlparse(url).scheme
+    except ValueError as exc:
+        logger.error(f"Webhook URL is not parseable, not sending: {exc}")
+        return False
+
+    if scheme == "http":
+        logger.warning(
+            f"Reporting webhook delivered over plaintext http: {redact_url(url)} — the "
+            "signed payload is readable in transit; migrate this tenant to https"
+        )
+
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False)
     signature = calculate_hmac_sha256(payload, ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY)
     headers = {"Content-Type": "application/json"}
@@ -164,24 +178,26 @@ async def send_webhook_with_retry(
 
     for attempt in range(1, max_retries + 1):
         try:
-            logger.info(f"Webhook attempt {attempt}/{max_retries} to {url}")
-            async with session.post(url, json=data, headers=headers) as response:
-                if response.status == 200:
-                    logger.info(f"Webhook succeeded on attempt {attempt}")
-                    return True
-                else:
-                    response_text = await response.text()
-                    logger.warning(
-                        f"Webhook attempt {attempt} failed. Status: {response.status}, Body: {response_text}"
-                    )
+            logger.info(f"Webhook attempt {attempt}/{max_retries} to {redact_url(url)}")
+            status, may_retry = await post_json_to_own_host(
+                url, json=data, headers=headers, subject="Webhook"
+            )
+            if status == 200:
+                logger.info(f"Webhook succeeded on attempt {attempt}")
+                return True
+            if not may_retry:
+                # Refused, or a redirect that would arrive empty — and a 200 to
+                # that empty GET reads as success. The guard logged which; say
+                # undelivered so the URL gets fixed rather than retried.
+                return False
+            logger.warning(f"Webhook attempt {attempt} failed. Status: {status}")
         except Exception as e:
             logger.error(f"Webhook attempt {attempt} error: {e}", exc_info=True)
 
-        # Don't sleep after the last attempt
         if attempt < max_retries:
             logger.info(f"Retrying webhook (attempt {attempt + 1}/{max_retries})...")
 
-    logger.error(f"All {max_retries} webhook attempts failed for {url}")
+    logger.error(f"All {max_retries} webhook attempts failed for {redact_url(url)}")
     return False
 
 

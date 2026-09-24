@@ -430,7 +430,7 @@ class Worker:
                 )
 
             pre_check_decision, pre_check_defer = await _run_pre_checks_for_lead(
-                config, locked, template, session
+                config, locked, template
             )
             if pre_check_decision is PreCheckDecision.ABORT:
                 # _run_pre_checks_for_lead already set status to FINISHED on

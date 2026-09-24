@@ -19,8 +19,8 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-import app.core.security.ssrf as ssrf_mod
-from app.core.security.ssrf import SSRFError, is_same_origin, ssrf_safe_request
+import app.core.network.egress as ssrf_mod
+from app.core.network import SSRFError, is_same_origin, ssrf_safe_request
 
 SECRET_HEADER = "TENANT-SECRET"
 
@@ -260,7 +260,7 @@ async def test_the_connection_uses_the_address_that_was_validated():
     async def only_the_validator_knows(hostname: str, port: int):
         return ["127.0.0.1"]
 
-    import app.core.security.ssrf as mod
+    import app.core.network.egress as mod
 
     original = mod._resolve_host
     mod._resolve_host = only_the_validator_knows

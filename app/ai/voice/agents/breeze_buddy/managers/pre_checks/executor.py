@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-import aiohttp
-
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
     HttpRequestExecutor,
 )
@@ -274,7 +272,6 @@ async def run_pre_checks(
     pre_checks: List[PreCheckConfig],
     lead: LeadCallTracker,
     template: Optional[TemplateModel],
-    session: aiohttp.ClientSession,
 ) -> PreCheckResult:
     """
     Run all configured pre-checks for a lead.
@@ -286,7 +283,6 @@ async def run_pre_checks(
         pre_checks: List of pre-check configurations from call_execution_config
         lead: The lead being processed
         template: The template for this lead (provides secrets for placeholder resolution)
-        session: aiohttp session for making HTTP requests
 
     Returns:
         PreCheckResult with aggregated pass/fail and individual results
@@ -296,7 +292,7 @@ async def run_pre_checks(
 
     results: List[SinglePreCheckResult] = []
     exports: Dict[str, str] = {}
-    executor = HttpRequestExecutor(session)
+    executor = HttpRequestExecutor()
 
     for pre_check in pre_checks:
         if not pre_check.enabled:
