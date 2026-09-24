@@ -58,7 +58,8 @@ from app.core.config.static import (
     BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT,
     BREEZE_BUDDY_STT_SERVICE,
     DEEPGRAM_API_KEY,
-    ELEVENLABS_API_KEY,
+    ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
+    ELEVENLABS_INDIAN_RESIDENCY_BASE_URL,
     GOOGLE_CREDENTIALS_JSON,
     OPENAI_STT_API_KEY,
     OPENAI_STT_MODEL,
@@ -264,8 +265,16 @@ async def create_stt_from_config(config: STTConfiguration):
         )
 
     if config.provider == STTProvider.ELEVENLABS:
-        if not ELEVENLABS_API_KEY:
-            raise ValueError("ELEVENLABS_API_KEY is required for elevenlabs STT")
+        # Key and host are one pair: a key is only accepted by the account it
+        # belongs to, so they always travel together and both come from the
+        # env. Switching accounts is an env change, not a code path — which is
+        # why there is no flag here. Raise now rather than let an empty key
+        # reach the WebSocket: a build failure is a dead pod on deploy, an
+        # auth failure is a live call that cannot hear.
+        if not ELEVENLABS_INDIAN_RESIDENCY_API_KEY:
+            raise ValueError(
+                "ELEVENLABS_INDIAN_RESIDENCY_API_KEY is required for elevenlabs STT"
+            )
 
         el = config.elevenlabs or ElevenLabsSTTConfig()
 
@@ -301,7 +310,8 @@ async def create_stt_from_config(config: STTConfiguration):
         )
         return build_elevenlabs_stt(
             ElevenLabsConfig(
-                api_key=ELEVENLABS_API_KEY,
+                api_key=ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
+                base_url=ELEVENLABS_INDIAN_RESIDENCY_BASE_URL,
                 commit_strategy=commit_strategy,
                 model=el.model,
                 language_code=primary_language,

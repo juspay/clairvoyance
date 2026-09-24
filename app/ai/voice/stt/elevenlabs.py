@@ -287,6 +287,16 @@ class ElevenLabsConfig:
     """
 
     api_key: str
+    # Bare host, no scheme — pipecat builds ``wss://{base_url}/v1/...`` itself,
+    # so a value carrying ``wss://`` yields ``wss://wss://...`` and fails every
+    # handshake.
+    #
+    # Deliberately has NO default. A key is only accepted by the account it
+    # belongs to, so the host is never a detail the caller may skip: a default
+    # pointing at the worldwide host would let a caller pair a residency key
+    # with it and get a 401 on every call, with nothing red until a customer
+    # is on the line. Required here, that mistake is a TypeError at import.
+    base_url: str
     commit_strategy: CommitStrategy = CommitStrategy.MANUAL
     model: str = "scribe_v2_realtime"
     # Leave None so pipecat inherits the transport's rate (8 kHz telephony,
@@ -333,15 +343,17 @@ def build_elevenlabs_stt(
 
     logger.info(
         "Using ElevenLabs Scribe v2 Realtime STT (model={}, commit_strategy={}, "
-        "language={}, secondary_languages={}, sample_rate={})",
+        "language={}, secondary_languages={}, sample_rate={}, base_url={})",
         config.model,
         config.commit_strategy.value,
         config.language_code,
         config.secondary_languages,
         config.sample_rate,
+        config.base_url,
     )
     return ElevenLabsRealtimeSTTServiceWithSecondaryLanguages(
         api_key=config.api_key,
+        base_url=config.base_url,
         commit_strategy=config.commit_strategy,
         sample_rate=config.sample_rate,
         include_timestamps=config.include_timestamps,
