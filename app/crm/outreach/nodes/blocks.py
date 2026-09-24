@@ -3,7 +3,8 @@ playbook) — where a square asks for its blocks.
 
 Not in ``nodes/context.py``: that file is a leaf which imports the schemas
 and nothing else from outreach, and this needs the playbook and identity.
-Everything downstream of here is pure (outreach/playbook.py).
+Everything downstream of here is pure (outreach/playbook.py), but for
+awaiting an async built-in (llm_call) while a line fills.
 """
 
 from typing import Dict, Iterable, Tuple
@@ -45,7 +46,7 @@ async def blocks_for(
     customer = None
     if playbook.needs_customer(definition, wanted):
         customer = await customer_facts(run.merchant_id, str(run.customer_id))
-    return playbook.resolve(
+    return await playbook.resolve(
         definition,
         wanted,
         facts,

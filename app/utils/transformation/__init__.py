@@ -5,6 +5,7 @@ from .utils import (
     extract_10_digit_mobile,
     format_array,
     indian_number_to_speech,
+    llm_call,
     string_to_lowercase,
     string_to_uppercase,
     string_trim,
@@ -30,6 +31,8 @@ register_template_function("extract_10_digit_mobile", extract_10_digit_mobile)
 register_template_function("expand_shorthand", expand_shorthand)
 register_template_function("trim_words", trim_words)
 register_template_function("format_array", format_array)
+# ASYNC — awaited by the CRM playbook only (outreach/nodes/blocks.py).
+register_template_function("llm_call", llm_call)
 
 __all__ = [
     "TEMPLATE_FUNCTION_REGISTRY",
