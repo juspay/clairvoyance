@@ -13,6 +13,9 @@ from app.ai.voice.agents.breeze_buddy.managers.utils import (
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.utils.secrets import mask_template_secrets
+from app.api.routers.breeze_buddy.templates.handlers import (
+    refuse_bad_provider_accounts,
+)
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.template import get_template_by_id
@@ -92,6 +95,19 @@ async def rollback_template_handler(
     require_admin_or_reseller_owner(
         current_user, template.reseller_id, operation="rollback template"
     )
+    # The save-time check, on the snapshot about to become the head: a
+    # version that names a provider account since deleted, deactivated or
+    # re-labelled is refused here (422), never restored to fail every call.
+    found = await get_template_version(
+        template_id, body.version, template.reseller_id, template.merchant_id
+    )
+    if found is not None:
+        snapshot, _ = found
+        await refuse_bad_provider_accounts(
+            getattr(snapshot, "configurations", None),
+            template.reseller_id,
+            template.merchant_id,
+        )
     try:
         new_head = await rollback_template_to_version(
             template_id,

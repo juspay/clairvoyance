@@ -7,7 +7,7 @@ Imports nothing internal.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
@@ -25,12 +25,13 @@ def _key_present(value: str) -> str:
 
 
 def _endpoint_is_a_url(value: Optional[str]) -> Optional[str]:
-    """An account endpoint is encrypted transport only: a provider key must
-    never leave the pod in plain text."""
+    """The shape's own check: a URL. Encrypted transport is a law on credential
+    ROWS, applied where rows go through (account_from_value); a template's own
+    endpoint on the env path may be an internal http:// gateway."""
     if value is None or value == "":
         return None
-    if not value.startswith(("https://", "wss://")):
-        raise ValueError(f"endpoint {value!r} is not an https:// or wss:// URL")
+    if not value.startswith(("https://", "wss://", "http://", "ws://")):
+        raise ValueError(f"endpoint {value!r} is not a URL")
     return value
 
 
@@ -97,7 +98,21 @@ class VertexAccount(GcpAccount):
     project_id: str
 
 
-Account = Union[KeyAccount, AzureAccount, BedrockAccount, GcpAccount, VertexAccount]
+class KeyOnlyAccount(BaseModel):
+    """A key with no host of its own: the deployment decides the host
+    (ElevenLabs — one url per service in the environment). An ``endpoint``
+    on such a row is refused at the write rather than silently ignored."""
+
+    model_config = _EXACT_FIELDS
+
+    api_key: str
+
+    _key_present = field_validator("api_key")(_key_present)
+
+
+Account = Union[
+    KeyAccount, AzureAccount, BedrockAccount, GcpAccount, VertexAccount, KeyOnlyAccount
+]
 
 # vendor (a credential row's `provider`) -> the shape its value must have.
 SHAPES: Dict[str, Type[BaseModel]] = {
@@ -116,24 +131,52 @@ SHAPES: Dict[str, Type[BaseModel]] = {
     "soniox": KeyAccount,
     "sarvam": KeyAccount,
     "assemblyai": KeyAccount,
-    "elevenlabs": KeyAccount,  # host = the deployment's cluster (resolve.py)
+    "elevenlabs": KeyOnlyAccount,  # host = the deployment's, per service (resolve.py)
     "cartesia": KeyAccount,
     "google": GcpAccount,
 }
 
 
-def shape_problems(vendor: str, value: Any) -> List[str]:
-    """PURE: what a row's value lacks for its vendor, empty when complete.
-    The credential API asks this on create and update; the resolver asks
-    it again per call."""
+class AccountShapeError(ValueError):
+    """A row's value is not its vendor's shape; ``problems`` names each one."""
+
+    def __init__(self, problems: List[str]) -> None:
+        super().__init__("; ".join(problems))
+        self.problems = problems
+
+
+def account_from_value(vendor: str, value: Any) -> Account:
+    """PURE: the typed account a credential ROW's value is for its vendor —
+    one validation, plus the law on rows: a shared secret travels over
+    encrypted transport only. Raises AccountShapeError naming every problem
+    (unknown vendor, a missing or extra field, a bad or plain-text endpoint)."""
     shape = SHAPES.get(vendor)
     if shape is None:
-        return [f"unknown provider {vendor!r}; one of {', '.join(sorted(SHAPES))}"]
+        raise AccountShapeError(
+            [f"unknown provider {vendor!r}; one of {', '.join(sorted(SHAPES))}"]
+        )
     try:
-        shape.model_validate(value or {})
+        account = shape.model_validate(value or {})
     except ValidationError as e:
-        return [
-            f"{'.'.join(str(p) for p in err['loc']) or 'value'}: {err['msg']}"
-            for err in e.errors()
-        ]
+        raise AccountShapeError(
+            [
+                f"{'.'.join(str(p) for p in err['loc']) or 'value'}: {err['msg']}"
+                for err in e.errors()
+            ]
+        ) from e
+    endpoint = getattr(account, "endpoint", None)
+    if endpoint and not endpoint.startswith(("https://", "wss://")):
+        raise AccountShapeError(
+            [f"endpoint: {endpoint!r} is not an https:// or wss:// URL"]
+        )
+    return cast(Account, account)
+
+
+def shape_problems(vendor: str, value: Any) -> List[str]:
+    """PURE: what a row's value lacks for its vendor, empty when complete —
+    the credential API asks this on create and update."""
+    try:
+        account_from_value(vendor, value)
+    except AccountShapeError as e:
+        return e.problems
     return []

@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
     normalize_merchant_domain,
 )
@@ -294,6 +295,19 @@ async def _create_template(template: TemplateModel) -> TemplateModel:
 
 
 async def _update_template(template: TemplateModel) -> TemplateModel:
+    # The save-time provider-account check the templates API makes, so a
+    # block naming a row that cannot serve is refused here too, never first
+    # discovered on the widget's first turn.
+    problems = await Accounts(template.reseller_id, template.merchant_id).problems(
+        template.configurations
+    )
+    if problems:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PROVIDER_ACCOUNT_REFUSED",
+            "; ".join(problems),
+            False,
+        )
     updated = await replace_template(
         template_id=template.id,
         reseller_id=template.reseller_id,

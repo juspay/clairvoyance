@@ -35,14 +35,18 @@ before.
 | `azure_openai_realtime` | `api_key`, `endpoint` | |
 | `gemini` (realtime) | `api_key` | |
 | `deepgram`, `soniox`, `sarvam`, `assemblyai`, `cartesia` | `api_key` | |
-| `elevenlabs` | `api_key` — the host is the deployment's (phase 4) | |
+| `elevenlabs` | `api_key` — the host is the deployment's per-service one (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for Scribe) | |
 | `google` (Cloud STT, Chirp TTS, Gemini TTS) | `credentials_json` | |
 
 `credential_type` is `custom`. Scope is as for every credential: global (no
 reseller, admin-only), reseller-wide, or one merchant. Vocabulary lives in
 `accounts/types.py` (`SHAPES`), never in a CHECK. A value is exactly its
 provider's fields — an unknown key is refused, so a host cannot hide under
-another name — and an endpoint is `https://` or `wss://` only.
+another name — and an endpoint is `https://` or `wss://` only. An
+`elevenlabs` row is a key only: an `endpoint` on it is refused, since the
+deployment decides the host. These are laws on ROWS (shared secrets); a
+template's own `endpoint` with its `api_key_name` is the author's contract
+and is taken as written, as today.
 
 **Two listings.** `GET /credentials?provider=elevenlabs` is the account
 picker: the rows a template's `credential_id` may name for that service,
@@ -88,23 +92,55 @@ What phase 1 guarantees, on its own:
 
 ## On a template (phase 2)
 
-*Not in this phase.* A `credential_id` on `llm_configurations`,
-`llm_configurations.realtime`, `stt_configuration`, `tts_configuration`,
-each `tts_configuration_overrides.<provider>` entry and an observer's
-`llm` block, checked at save. Until phase 2 lands the word is not parsed.
+`credential_id` on `llm_configurations`, `llm_configurations.realtime`,
+`stt_configuration`, `tts_configuration`, each
+`tts_configuration_overrides.<provider>` entry, and an observer's `llm`
+block. A block without the word behaves exactly as today.
+
+```json
+"tts_configuration": {"provider": "elevenlabs", "voice_id": "…",
+                      "credential_id": "1c1d…"}
+```
+
+Three laws on the block, enforced wherever it is parsed (save, chat,
+playground): `credential_id` is stored in the one canonical spelling; an
+`endpoint` beside a `credential_id` is refused (the account's endpoint is
+used); a `region` is a name (`asia-south1`), never a host.
+
+**The same check at save.** `POST /templates`, `PUT /templates/{id}`, a
+version rollback and the Assist onboarding save run `Accounts.problems` on the document and answer 422
+with every bad reference, named by block: the row must exist, be active,
+sit in the template's tenant (its merchant, its reseller, or global), name
+the block's provider and carry that provider's shape; a DragonTTS block
+with an account must carry `model: "<provider>:<model>"`.
+
+**The resolver** (`accounts/resolve.py`): `Accounts(reseller, merchant)`
+resolves a block to a typed account that carries its host — the row's
+when the block names one, else the environment's (`env_account`, the only
+place an env key is read for a call). It fails closed with
+`AccountRefused`. Where a service cannot use the account's host it refuses
+the row: an `openai` account with a gateway endpoint on an STT block. An
+ElevenLabs row brings only its key: it runs on the deployment's per-service
+host (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for Scribe),
+exactly as the environment's own key does. No flag.
+
+Until phases 3 and 4 land, the engine does not ask the resolver: a
+template that names a row is validated at save and still runs on the
+environment's keys. Nothing on production names a row yet.
 
 ## What the engine does (phases 3 and 4)
 
 *Not in this phase.* Every call still reads its keys from the environment.
 
-## Rolling out phase 1
+## Rolling out phases 1 and 2
 
 1. Deploy. `079_credentials_provider.sql` adds a nullable `provider` column
    and a partial index. No data moves; every template behaves as before.
-2. Create the account rows with `provider` and the value fields above. They
-   are inert until a template names them (phase 2) and the engine honours
-   the name (phases 3–4).
+2. Create the account rows with `provider` and the value fields above.
+3. A template may now name them; a bad id is refused at save. The engine
+   honours the name from phase 3 (LLM) and phase 4 (STT, TTS).
 
 ## Rolling back
 
-Old code ignores `provider` on a credential. Nothing to move.
+Old code ignores `credential_id` on a template and `provider` on a
+credential. Nothing to move.
