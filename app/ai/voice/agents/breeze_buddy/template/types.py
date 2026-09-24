@@ -2246,6 +2246,23 @@ class ConfigurationModel(BaseModel):
             "cart_id/checkout_url, 'Review and checkout')."
         ),
     )
+    client_tools: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Engine tools the SHOPPER'S BROWSER executes instead of the "
+            "server, by name. Today: 'get_current_page_product', which reports "
+            "the URL of the page they have open so the agent can find that "
+            "item in the catalogue by matching it.\n\n"
+            "The list is the switch — a tool nobody can execute must not be "
+            "in the schema, so there is no separate on/off flag to drift out "
+            "of step with it. Empty (the default) = the agent never sees "
+            "them, and an embed that never answers a call costs nothing.\n\n"
+            "Naming one has a cost worth knowing: the agent's turn STOPS "
+            "while the browser answers, so a turn that uses it spends an "
+            "extra LLM round trip. Worth it when the answer depends on what "
+            "the shopper is looking at; not otherwise."
+        ),
+    )
     flavor: Optional[Dict[str, "FlavorProtocolConfig"]] = Field(
         None,
         description=(

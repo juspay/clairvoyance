@@ -5,11 +5,12 @@ Outcome reuses the voice outcome convention (free-form string), so
 analytics over voice + chat use the same field semantics.
 """
 
+import json
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
 
@@ -83,6 +84,14 @@ class ToolApproval(BaseModel):
     expires_at: datetime
 
 
+#: Cap on a client tool's returned payload.
+#:
+#: Sized for findings, not documents: identity plus a short list of what the
+#: page already shows fits in a fraction of this, while a page dumped verbatim
+#: does not — which is the line we want the widget to stay on.
+MAX_CLIENT_TOOL_RESULT_BYTES = 16 * 1024
+
+
 class ApproveToolRequest(BaseModel):
     """Body of ``POST .../session/{id}/approval`` (all three auth surfaces)."""
 
@@ -93,6 +102,44 @@ class ApproveToolRequest(BaseModel):
         max_length=500,
         description="Optional free-text reason shown to the LLM on denial.",
     )
+
+
+class SubmitClientToolResultRequest(BaseModel):
+    """Body of ``POST .../session/{id}/client-tool``.
+
+    The answer to a call the agent made against the shopper's browser. It
+    resumes the same gated turn an approval decision does — see
+    ``claim_tool_approval`` — so the id is the one the ``client_tool_requested``
+    event carried.
+    """
+
+    tool_call_id: str = Field(..., min_length=1, max_length=128)
+    result: Dict[str, Any] = Field(
+        ...,
+        description=(
+            "What the browser produced. Goes into the LLM context verbatim "
+            "as the tool result, so it should carry findings, never page "
+            "markup."
+        ),
+    )
+
+    @field_validator("result")
+    @classmethod
+    def _bounded(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        """Cap the payload.
+
+        This lands in the context window on every subsequent turn of the
+        session, and it arrives from a browser we do not control — a themed
+        page with a novel-length description, or a hostile embed, should cost
+        a 422 rather than the session's whole budget.
+        """
+        size = len(json.dumps(value, default=str).encode("utf-8"))
+        if size > MAX_CLIENT_TOOL_RESULT_BYTES:
+            raise ValueError(
+                f"client tool result is {size} bytes; the cap is "
+                f"{MAX_CLIENT_TOOL_RESULT_BYTES}. Summarise before returning."
+            )
+        return value
 
 
 class ChatSession(BaseModel):

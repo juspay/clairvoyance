@@ -98,6 +98,8 @@ async def claim_tool_approval(
     tool_call_id: str,
     approved: bool,
     reason: Optional[str],
+    *,
+    result: Optional[Dict[str, Any]] = None,
 ) -> ApprovalClaim:
     """Atomically claim a pending HITL decision (the load-bearing DB step).
 
@@ -107,6 +109,14 @@ async def claim_tool_approval(
     synthetic tool_result NOW so the history load sees a fully-answered batch;
     lazily expire other pending rows past their TTL; collect the still-pending
     sibling ids the resume turn must keep unanswered.
+
+    ``result`` is the CLIENT-TOOL path: the call already ran, in the shopper's
+    browser, so there is nothing for the resume turn to execute and the payload
+    stands in for the result the server would have computed. The row still
+    claims exactly like an approval — same PENDING-only guarantee, same expiry
+    rule — which is the point of reusing it. A payload that arrives after
+    ``expires_at`` is dropped in favour of the timeout result: the agent must
+    hear that the read failed, not act on a page the shopper has since left.
 
     Returns an :class:`ApprovalClaim`; the caller maps a non-``proceed``
     outcome to its transport (HTTP status vs RTVI event) and, on ``proceed``,
@@ -145,7 +155,10 @@ async def claim_tool_approval(
             ),
         )
 
-    effective_approved = approved and not is_expired
+    # Whether the RESUME turn still has work to do. A client tool's work is
+    # already done, so it takes the no-execution path with a real result
+    # instead of a synthetic one.
+    effective_approved = approved and not is_expired and result is None
     wire_status = WIRE_STATUS_BY_DB_STATUS[new_status]
     logger.info(
         f"[approval] session={session_id} tool_call_id={tool_call_id} "
@@ -154,7 +167,15 @@ async def claim_tool_approval(
     )
 
     synthetic_result: Optional[Dict[str, Any]] = None
-    if not effective_approved:
+    if result is not None and not is_expired:
+        synthetic_result = result
+        await insert_chat_message(
+            session_id=session_id,
+            role=ChatMessageRole.USER,
+            content=None,
+            content_blocks=tool_results_to_user_blocks([(tool_call_id, result)]),
+        )
+    elif not effective_approved:
         synthetic_result = (
             dict(EXPIRED_RESULT)
             if is_expired
