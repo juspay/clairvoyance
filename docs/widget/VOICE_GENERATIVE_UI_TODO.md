@@ -72,3 +72,21 @@ carousels/cards. Opt-in per template via `configurations.ui_catalog` + the
 
 Reference for the original design: the generative-UI-over-RTVI work (commit `344863e`) and
 `docs/widget/VOICE_AS_CHAT.md` (§A1).
+
+---
+
+## Related deferred fix — stream-mode `ui_op` aggregator flush (low severity)
+
+In the **widget stream-mode** bridge (`chat/voice_bridge.py` `_consume_events`), the `ui_op`
+branch emits the `ui-op` RTVI event **without** first flushing the `_SentenceAggregator` — unlike
+`function_call_started` / `function_approval_requested` / `turn_end`, which all `agg.flush()` before
+their boundary event. A `<ui_stream>` block is a hard turn boundary (the widget finalizes the open
+transcript bubble on `ui-op`), so if the prose immediately before the marker ends mid-sentence (no
+terminal punctuation/newline — e.g. a trailing colon, `"...best options:"`), that buffered tail gets
+prepended to the post-carousel prose and **leaks into the next bubble**.
+
+- **Severity:** low. The `<ui_stream>` marker is normally newline-led, so the aggregator is usually
+  empty at the boundary; the leak only shows on a mid-sentence cutover.
+- **Fix:** add `for chunk in agg.flush(): await self._speak(chunk, gen)` immediately before the
+  `_emit_rtvi(_RTVI_UI_OP, ...)` call, mirroring the other boundary branches. See the `TODO(voice-as-chat)`
+  comment at that site.
