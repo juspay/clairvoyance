@@ -43,6 +43,12 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 # this square's alone — what it leaves on its trail row (canon T26 outcome).
 MAX_CALLS_OUTCOME = "max_calls"
 
+# The outcome of the lead a capped visit mints: born FINISHED, never dialled.
+# Its report (call.completed — the created-lead tap fires it for a lead born
+# terminal) reaches the wait after this square the way every call's report
+# does, and the run walks on by that wait's own arrows.
+ABORTED_OUTCOME = "ABORTED"
+
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
     if not node.template_id:
@@ -79,13 +85,19 @@ async def execute(
     existing row is adopted. The accessor turns a duplicate key into None
     like every failure, so the square asks whether its own row is there.
     """
-    # The plan's daily ceiling, judged before anything is read or written
-    # (phase 20): at it, this square places no call and the run takes its
-    # normal arrow. The ledger is not touched — it counts calls PLACED — so
-    # the patch is the same on every re-run of this visit and a lease retry
-    # changes nothing. The wait after this square, if it listens for
-    # call.completed, will hear nothing and leave by its alarm; the runbook
-    # shows the condition on run.max_calls_reached that routes past it.
+    # The plan's daily ceiling, judged before anything is read (phase 20):
+    # at it, this square dials nothing — the lead it mints is born FINISHED
+    # with outcome ABORTED (25 Sep 2026), so the row says why no call was
+    # made, and the run takes its normal arrow. The ledger is not touched —
+    # it counts calls PLACED — so the patch is the same on every re-run of
+    # this visit and a lease retry changes nothing. A wait after this
+    # square that listens for this call's report hears the aborted lead's
+    # report and resolves on ABORTED; a plan may still route past it
+    # earlier with a condition on run.max_calls_reached. The report is
+    # born at the insert below, one write before the walker moves the run
+    # onto that wait: a consumer poll that falls between the two finds no
+    # run on the wait and the report is spent — rare, accepted (25 Sep
+    # 2026 ruling), and bounded by the wait's own alarm.
     ceiling = definition.exits.max_calls_per_day
     day = today_on(definition.exits)
     if max_calls_reached(run.context, definition.exits):
@@ -97,9 +109,7 @@ async def execute(
             f"walker: run {run.id} at max_calls_per_day={ceiling} on {day} "
             f"— call square {node.id} places no call"
         )
-        # The trail word only. No fact is written: a condition computes the
-        # same predicate (nodes/condition.py), so there is nothing to go stale.
-        return {OUTCOME_KEY: MAX_CALLS_OUTCOME}
+    capped = max_calls_reached(run.context, definition.exits)
 
     phone = run.context.get("phone")
     if not phone:
@@ -165,7 +175,9 @@ async def execute(
                 ),
             ),
             execution_mode=ExecutionMode.TELEPHONY,
-            status=LeadCallStatus.BACKLOG,
+            status=LeadCallStatus.FINISHED if capped else LeadCallStatus.BACKLOG,
+            outcome=ABORTED_OUTCOME if capped else None,
+            call_end_time=datetime.now(timezone.utc) if capped else None,
         )
     except UniqueViolation:
         # Same meaning as None, so it falls to the same lookup. The accessor
@@ -187,13 +199,22 @@ async def execute(
     await update_lead_enrollment_id(lead_id, str(run.id))
     # lead_id as a FIELD — the join to Buddy's dial line needs a column.
     logger.bind(lead_id=lead_id).info(
-        f"walker: run {run.id} pushed lead {lead_id} (node {node.id})"
+        f"walker: run {run.id} "
+        + (
+            f"minted aborted lead {lead_id} (node {node.id}, no call placed)"
+            if capped
+            else f"pushed lead {lead_id} (node {node.id})"
+        )
     )
     written: Dict[str, Any] = {
         f"lead_{node.id}": lead_id,
         _visits_key(node.id): visit,
     }
-    if ceiling is not None:
+    if capped:
+        # Not placed: the ledger counts calls PLACED and stays as it is. The
+        # trail word rides out; the walker pops it, it never reaches the context.
+        written[OUTCOME_KEY] = MAX_CALLS_OUTCOME
+    elif ceiling is not None:
         # Re-stamping with today's date IS the reset: a ledger carried over
         # from yesterday is replaced, never added to. Nothing else is written
         # — there is no cached "reached" flag to clear, because the predicate
