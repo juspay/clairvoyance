@@ -40,16 +40,15 @@ from websockets.asyncio.client import connect as websocket_connect
 
 from app.ai.voice.tts.soniox import SONIOX_TTS_SYNTH_TIMEOUT_SECS, SONIOX_TTS_WS_URL
 from app.core.config.dynamic import (
-    BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY,
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
     BB_SPEECH_PROVIDER_DEFAULTS,
     GEMINI_TTS_MODEL,
 )
 from app.core.config.static import (
     CARTESIA_API_KEY,
-    ELEVENLABS_API_KEY,
-    ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
     ELEVENLABS_MODEL_ID,
+    ELEVENLABS_TTS_API_KEY,
+    ELEVENLABS_TTS_URL,
     GOOGLE_CREDENTIALS_JSON,
     SARVAM_API_KEY,
     SONIOX_API_KEY,
@@ -117,7 +116,6 @@ async def resolve_preview_config(
     }
     if provider == "elevenlabs":
         cfg["model"] = model or ELEVENLABS_MODEL_ID
-        cfg["indian_residency"] = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
         cfg["voice_settings"] = {"stability": 0.5, "similarity_boost": 0.75}
     elif provider == "cartesia":
         # Static-dict fallback only — deliberately skips BB_VOICE_PROVIDER_DEFAULTS'
@@ -274,23 +272,15 @@ async def _synthesize_cartesia_pcm(config: dict) -> tuple[bytes, int]:
 
 
 async def _synthesize_elevenlabs_pcm(config: dict) -> tuple[bytes, int]:
-    """Mirrors `_generate_elevenlabs_audio`'s auth/residency split, requesting
-    pcm_16000 instead of ulaw_8000. Residency comes pre-resolved in the
-    config so synthesis matches what was hashed."""
-    if config["indian_residency"]:
-        api_key = ELEVENLABS_INDIAN_RESIDENCY_API_KEY
-        base_url = "https://api.in.residency.elevenlabs.io"
-        if not api_key:
-            raise ValueError(
-                "ELEVENLABS_INDIAN_RESIDENCY_API_KEY is required when use_indian_residency is True"
-            )
-    else:
-        api_key = ELEVENLABS_API_KEY
-        base_url = "https://api.elevenlabs.io"
-        if not api_key:
-            raise ValueError(
-                "ELEVENLABS_API_KEY is required for ElevenLabs preview synthesis"
-            )
+    """Mirrors `_generate_elevenlabs_audio`'s auth, requesting pcm_16000
+    instead of ulaw_8000. Both read the same ELEVENLABS_TTS_* pair, so a
+    preview is synthesized by the same account that will speak on a call."""
+    api_key = ELEVENLABS_TTS_API_KEY
+    base_url = f"https://{ELEVENLABS_TTS_URL}"
+    if not api_key:
+        raise ValueError(
+            "ELEVENLABS_TTS_API_KEY is required for ElevenLabs preview synthesis"
+        )
 
     url = f"{base_url}/v1/text-to-speech/{config['voice_id']}?output_format=pcm_16000"
     # Intentional divergence from the mirrored helper: it sets
@@ -311,7 +301,7 @@ async def _synthesize_elevenlabs_pcm(config: dict) -> tuple[bytes, int]:
     logger.info(
         f"Synthesizing preview with ElevenLabs (pcm_16000) "
         f"[voice_id={config['voice_id']}, model_id={config['model']}, "
-        f"indian_residency={config['indian_residency']}]"
+        f"base_url={base_url}]"
     )
 
     async with httpx.AsyncClient() as client:

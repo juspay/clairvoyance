@@ -85,11 +85,25 @@ AIC_VOICE_FOCUS_MODEL_PATH = os.environ.get(
     "/app/models/voice/aic/quail_vf_2_1_l_16khz.aicmodel",
 )
 
-# TTS Configuration
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-ELEVENLABS_INDIAN_RESIDENCY_API_KEY = os.environ.get(
-    "ELEVENLABS_INDIAN_RESIDENCY_API_KEY"
+# ElevenLabs — one (url, key) pair per service.
+#
+# URLs are BARE HOSTS, no scheme: the same host is dialled as wss:// by the TTS
+# stream, https:// by the TTS REST path, and scheme-less by pipecat's STT
+# service (which builds wss://{base_url}/v1/... itself). Storing a scheme here
+# would serve one caller and break the other two.
+#
+# STT and TTS are kept separate so a key can be scoped to its own endpoint and
+# rotated without touching the other service. Today both point at the same
+# India-residency account; a key is only ever accepted by the account it
+# belongs to, so a url and its key always move together.
+ELEVENLABS_STT_URL = os.environ.get(
+    "ELEVENLABS_STT_URL", "api.in.residency.elevenlabs.io"
 )
+ELEVENLABS_STT_API_KEY = os.environ.get("ELEVENLABS_STT_API_KEY")
+ELEVENLABS_TTS_URL = os.environ.get(
+    "ELEVENLABS_TTS_URL", "api.in.residency.elevenlabs.io"
+)
+ELEVENLABS_TTS_API_KEY = os.environ.get("ELEVENLABS_TTS_API_KEY")
 ELEVENLABS_VOICE_ID = os.environ.get(
     "ELEVENLABS_VOICE_ID", "bQQWtYx9EodAqMdkrNAc"
 )  # bQQWtYx9EodAqMdkrNAc
@@ -101,16 +115,6 @@ ELEVENLABS_VOICE_SPEED = float(os.environ.get("ELEVENLABS_VOICE_SPEED", 1.15))
 ELEVENLABS_TTS_SPEED = float(os.environ.get("ELEVENLABS_TTS_SPEED", "1.10"))
 ELEVENLABS_BB_VOICE_ID = os.environ.get(
     "ELEVENLABS_BB_VOICE_ID", "fG9s0SXJb213f4UxVHyG"
-)
-ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL = os.environ.get(
-    "ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL", "wss://api.in.residency.elevenlabs.io"
-)
-# Same host as ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL, without the scheme:
-# pipecat's STT service builds ``wss://{base_url}/v1/...`` itself, so it takes
-# a bare host while the TTS websocket URL above is used verbatim. Keep the two
-# pointing at the same host.
-ELEVENLABS_INDIAN_RESIDENCY_BASE_URL = os.environ.get(
-    "ELEVENLABS_INDIAN_RESIDENCY_BASE_URL", "api.in.residency.elevenlabs.io"
 )
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")

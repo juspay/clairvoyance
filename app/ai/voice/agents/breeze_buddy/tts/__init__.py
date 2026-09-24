@@ -41,7 +41,6 @@ from app.ai.voice.tts.sarvam import _generate_sarvam_audio
 from app.ai.voice.tts.soniox import _generate_soniox_audio
 from app.core.config.dynamic import (
     BB_AGGREGATE_SENTENCES,
-    BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY,
     BB_SARVAM_TTS_ENABLE_PREPROCESSING,
     BB_STRIP_EMOJIS_FROM_TTS,
     BB_TTS_SERVICE,
@@ -50,9 +49,8 @@ from app.core.config.dynamic import (
 )
 from app.core.config.static import (
     CARTESIA_API_KEY,
-    ELEVENLABS_API_KEY,
-    ELEVENLABS_INDIAN_RESIDENCY_API_KEY,
-    ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
+    ELEVENLABS_TTS_API_KEY,
+    ELEVENLABS_TTS_URL,
     GOOGLE_CREDENTIALS_JSON,
     SARVAM_API_KEY,
     SONIOX_API_KEY,
@@ -205,29 +203,19 @@ async def get_tts_service(voice_config: TTSConfig):
     )
 
     if provider == "elevenlabs":
-        use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
-        if use_indian_residency and not ELEVENLABS_INDIAN_RESIDENCY_API_KEY:
-            raise ValueError(
-                "ELEVENLABS_INDIAN_RESIDENCY_API_KEY is required when BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY is True"
-            )
-        if not use_indian_residency and not ELEVENLABS_API_KEY:
-            raise ValueError("ELEVENLABS_API_KEY is not set")
+        # One account per service, chosen entirely by env: the key is only
+        # accepted by the account its url points at, so the two are read
+        # together and never branch on a flag.
+        if not ELEVENLABS_TTS_API_KEY:
+            raise ValueError("ELEVENLABS_TTS_API_KEY is not set")
 
         aggregate = await BB_AGGREGATE_SENTENCES("elevenlabs")
 
         return build_elevenlabs_tts(
             ElevenLabsConfig(
-                api_key=(
-                    ELEVENLABS_INDIAN_RESIDENCY_API_KEY
-                    if use_indian_residency
-                    else ELEVENLABS_API_KEY
-                )
-                or "",
-                url=(
-                    ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL
-                    if use_indian_residency
-                    else "wss://api.elevenlabs.io"
-                ),
+                api_key=ELEVENLABS_TTS_API_KEY,
+                # ELEVENLABS_TTS_URL is a bare host; the stream needs wss://.
+                url=f"wss://{ELEVENLABS_TTS_URL}",
                 voice_id=voice_config.voice_id or "",
                 model=voice_config.model or "eleven_flash_v2_5",
                 speed=voice_config.speed or 1.0,
@@ -401,12 +389,10 @@ async def generate_audio(
         )
         input_format = "raw"
     elif provider == "elevenlabs":
-        use_indian_residency = await BB_ENABLE_ELEVENLABS_INDIAN_RESIDENCY()
         audio_data = await _generate_elevenlabs_audio(
             text=text,
             voice_id=resolved.voice_id,
             model_id=resolved.model,
-            use_indian_residency=use_indian_residency,
             speed=resolved.speed,
             stability=resolved.stability,
             similarity_boost=resolved.similarity_boost,
