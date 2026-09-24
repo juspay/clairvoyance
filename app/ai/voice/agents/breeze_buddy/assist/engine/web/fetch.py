@@ -1,4 +1,4 @@
-"""The engine's only door to the open web: one guarded GET.
+"""The engine's only door to the open web: one guarded GET (or JSON POST).
 
 Every stage that reads a merchant's site goes through :func:`fetch_page`, so
 the safety rules live in one file instead of once per fetcher.
@@ -18,6 +18,9 @@ the metadata service, a database on the VPC, or localhost. The rules:
   that reason; a public URL that bounces to ``127.0.0.1`` stops here.
 * **Bounded**: a byte cap, a per-hop timeout and a whole-fetch deadline, so a
   slow or endless response cannot hold a worker.
+* **A POST never follows a redirect.** It exists for a platform's public
+  read-only API; a redirect there is unexpected, and following one would mean
+  re-sending the body somewhere nobody chose.
 
 If the deployment routes egress through a proxy, this module refuses to fetch
 at all. The proxy receives the hostname and picks the destination itself, so
@@ -29,11 +32,14 @@ outcome; quietly downgrading the guard is not.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import ipaddress
+import json
 import socket
 import time
 from dataclasses import dataclass, field
 from typing import (
+    Any,
     AsyncIterator,
     Dict,
     List,
@@ -252,8 +258,13 @@ async def fetch_page(
     max_bytes: int = DEFAULT_MAX_BYTES,
     headers: Optional[Dict[str, str]] = None,
     max_redirects: int = MAX_REDIRECTS,
+    json_body: Optional[Mapping[str, Any]] = None,
 ) -> FetchResult:
-    """GET ``url``, following redirects by hand so every hop is validated."""
+    """GET ``url``, following redirects by hand so every hop is validated.
+
+    With ``json_body`` it is a POST of that JSON instead, under the same guard
+    and caps, and a redirect is refused rather than followed.
+    """
     started = time.monotonic()
     target = normalize_probe_url(url)
     if get_proxy_config():
@@ -265,6 +276,10 @@ async def fetch_page(
     answers: Dict[Tuple[str, int], List[ResolveResult]] = {}
     redirects: List[str] = []
     request_headers = {**DEFAULT_HEADERS, **(headers or {})}
+    payload: Optional[str] = None
+    if json_body is not None:
+        payload = json.dumps(json_body)
+        request_headers["Content-Type"] = "application/json"
 
     # Always pinned: the connection may only go to an address this module
     # resolved and accepted.
@@ -291,12 +306,21 @@ async def fetch_page(
                 answers[(host, port)] = await resolve_public_addresses(host, port)
 
             try:
-                response = await session.get(
-                    target,
-                    headers=request_headers,
-                    allow_redirects=False,
-                    timeout=aiohttp.ClientTimeout(total=remaining),
-                )
+                if payload is None:
+                    response = await session.get(
+                        target,
+                        headers=request_headers,
+                        allow_redirects=False,
+                        timeout=aiohttp.ClientTimeout(total=remaining),
+                    )
+                else:
+                    response = await session.post(
+                        target,
+                        headers=request_headers,
+                        data=payload,
+                        allow_redirects=False,
+                        timeout=aiohttp.ClientTimeout(total=remaining),
+                    )
             except UnsafeUrlError:
                 raise
             except asyncio.TimeoutError as exc:
@@ -307,11 +331,18 @@ async def fetch_page(
             async with response:
                 location = response.headers.get("location")
                 if response.status in (301, 302, 303, 307, 308) and location:
+                    if payload is not None:
+                        raise FetchFailedError("the API answered with a redirect")
                     redirects.append(target)
                     target = normalize_probe_url(urljoin(target, location))
                     continue
 
-                raw, truncated = await _read_capped(response.content, max_bytes)
+                try:
+                    raw, truncated = await _read_capped(response.content, max_bytes)
+                except asyncio.TimeoutError as exc:
+                    raise FetchFailedError("timed out reading the site") from exc
+                except aiohttp.ClientError as exc:
+                    raise FetchFailedError(f"could not read the site: {exc}") from exc
                 return FetchResult(
                     url=url,
                     final_url=str(response.url),
@@ -320,7 +351,10 @@ async def fetch_page(
                     cookie_names=_cookie_names(
                         response.headers.getall("set-cookie", [])
                     ),
-                    body=_decode(raw, response.charset),
+                    # JSON is UTF-8 (RFC 8259); only pages name a charset.
+                    body=_decode(
+                        raw, None if json_body is not None else _charset_of(response)
+                    ),
                     size_bytes=len(raw),
                     truncated=truncated,
                     elapsed_seconds=round(time.monotonic() - started, 3),
@@ -380,13 +414,83 @@ def _cookie_names(values: Sequence[str]) -> List[str]:
     return list(dict.fromkeys(names))
 
 
+# The charset comes from the page's own header. Only these codecs are used:
+# some others (``punycode``, ``idna``) are pure Python and super-linear, so a
+# hostile header could hold the event loop for minutes decoding one page.
+_DECODABLE_CHARSETS = frozenset(
+    codecs.lookup(name).name
+    for name in (
+        "utf-8",
+        "utf-16",
+        "utf-16-le",
+        "utf-16-be",
+        "utf-32",
+        "ascii",
+        "latin-1",
+        *(f"iso8859-{n}" for n in (2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16)),
+        *(
+            f"cp{n}"
+            for n in (874, 1250, 1251, 1252, 1253, 1254, 1255, 1256, 1257, 1258)
+        ),
+        "iso8859-11",
+        "tis-620",
+        "koi8-r",
+        "koi8-u",
+        "mac-roman",
+        "shift_jis",
+        "cp932",
+        "euc_jp",
+        "iso2022_jp",
+        "gb2312",
+        "gbk",
+        "gb18030",
+        "big5",
+        "big5hkscs",
+        "euc_kr",
+        "cp949",
+        "iso2022_kr",
+    )
+)
+
+
+# A real Content-Type is a few dozen characters; a longer one is not parsed.
+_MAX_CONTENT_TYPE_CHARS = 256
+
+
+def _charset_of(response: aiohttp.ClientResponse) -> Optional[str]:
+    """The charset the response names, or None when its header is odd.
+
+    aiohttp parses Content-Type with the stdlib email parser on the event
+    loop: a crafted header can raise (IndexError, RecursionError), yield a
+    tuple, or take half a second at 8 KB.
+    """
+    if len(response.headers.get("Content-Type", "")) > _MAX_CONTENT_TYPE_CHARS:
+        return None
+    try:
+        charset = response.charset
+    except Exception:
+        return None
+    return charset if isinstance(charset, str) else None
+
+
+def _decodable(charset: Optional[str]) -> Optional[str]:
+    if not isinstance(charset, str):
+        return None
+    try:
+        name = codecs.lookup(charset.strip()).name
+    except (LookupError, ValueError):  # ValueError: a NUL in the header's charset
+        return None
+    return name if name in _DECODABLE_CHARSETS else None
+
+
 def _decode(raw: bytes, charset: Optional[str]) -> str:
-    for encoding in (charset, "utf-8"):
+    """Decode with the page's charset if it is a known web charset, else UTF-8."""
+    for encoding in (_decodable(charset), "utf-8"):
         if not encoding:
             continue
         try:
             return raw.decode(encoding)
-        except (LookupError, UnicodeDecodeError):
+        except UnicodeError:
             continue
     return raw.decode("utf-8", errors="replace")
 

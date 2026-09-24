@@ -29,7 +29,13 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import (
     LegacyMarkers,
     platform_sections,
 )
-from app.ai.voice.agents.breeze_buddy.assist.platforms.base import GenericAdapter
+from app.ai.voice.agents.breeze_buddy.assist.platforms.base import (
+    GenericAdapter,
+    KnownDocument,
+)
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.documents import (
+    known_documents as _policy_documents,
+)
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.tenancy import (
     assist_tenant,
 )
@@ -169,6 +175,20 @@ class ShopifyAdapter(GenericAdapter):
         if identity.permanent_host:
             origins.append(f"https://{identity.permanent_host}")
         return list(dict.fromkeys(origins))
+
+    async def known_documents(self, profile: SiteProfile) -> Tuple[KnownDocument, ...]:
+        """The store's published policies, from the storefront API.
+
+        Asked of the validated permanent domain when the page declares one
+        (a custom domain can sit in front of it), else of the host the probe
+        already fetched. Never of the raw page literal: that is page text, and
+        page text chooses no destinations.
+        """
+        shown = (urlsplit(profile.final_url or profile.url).hostname or "").lower()
+        host = _permanent_host(profile.inline_literals.get(SHOP_LITERAL)) or shown
+        if not host:
+            return ()
+        return await _policy_documents(host, shown or None)
 
     def mirror_policy(self) -> MirrorPolicy:
         return MirrorPolicy(
