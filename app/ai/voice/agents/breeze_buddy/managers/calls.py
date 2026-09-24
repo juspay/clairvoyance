@@ -13,7 +13,7 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
@@ -119,12 +119,14 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     return config
 
 
-def _is_within_calling_hours(config: CallExecutionConfig) -> bool:
+def _is_within_calling_hours(
+    config: CallExecutionConfig, now: Optional[datetime] = None
+) -> bool:
     """
     Checks if the current time is within the allowed calling hours.
     """
     IST = timezone(timedelta(hours=5, minutes=30))
-    current_time = datetime.now(IST).time()
+    current_time = (now or datetime.now(timezone.utc)).astimezone(IST).time()
 
     if config.call_start_time <= config.call_end_time:
         # Normal case (e.g., 09:00–17:00)
@@ -135,6 +137,27 @@ def _is_within_calling_hours(config: CallExecutionConfig) -> bool:
             current_time >= config.call_start_time
             or current_time <= config.call_end_time
         )
+
+
+def _window_park_time(config: CallExecutionConfig, day: date) -> datetime:
+    """The window start on ``day`` (IST)."""
+    IST = timezone(timedelta(hours=5, minutes=30))
+    return datetime.combine(day, config.call_start_time, IST)
+
+
+def _calling_window_park_time(
+    config: CallExecutionConfig, now: Optional[datetime] = None
+) -> datetime:
+    """
+    The next ``call_start_time`` (IST) after ``now``. Returns an exact
+    instant; ``dispatch.calling_window`` matches parked leads on it.
+    """
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = (now or datetime.now(timezone.utc)).astimezone(IST)
+    park_at = _window_park_time(config, now_ist.date())
+    if park_at <= now_ist:
+        park_at = _window_park_time(config, now_ist.date() + timedelta(days=1))
+    return park_at
 
 
 async def _run_pre_checks_for_lead(

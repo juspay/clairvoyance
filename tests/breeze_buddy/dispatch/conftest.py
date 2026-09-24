@@ -554,7 +554,9 @@ class DispatchHarness:
     ) -> Optional[CallExecutionConfig]:
         return self.config
 
-    def _is_within_calling_hours(self, config: CallExecutionConfig) -> bool:
+    def _is_within_calling_hours(
+        self, config: CallExecutionConfig, now: Optional[datetime] = None
+    ) -> bool:
         return True
 
     async def _run_pre_checks_for_lead(

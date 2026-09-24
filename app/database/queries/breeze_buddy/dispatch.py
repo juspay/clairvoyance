@@ -126,3 +126,46 @@ def update_lead_next_attempt_at_query(
         RETURNING *;
     """
     return text, [lead_id, next_attempt_at]
+
+
+def park_lead_until_and_release_lock_query(
+    lead_id: str, park_until: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Release the lock and park the lead until ``park_until``, keeping any
+    later schedule already on the row.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "is_locked" = FALSE,
+            "next_attempt_at" = GREATEST(COALESCE("next_attempt_at", NOW()), $2),
+            "updated_at" = NOW()
+        WHERE "id" = $1
+        RETURNING *;
+    """
+    return text, [lead_id, park_until]
+
+
+def wake_window_parked_leads_query(
+    template_id: str,
+    parked_at: List[datetime],
+    wake_at: datetime,
+) -> Tuple[str, List[Any]]:
+    """
+    Move a template's parked leads (at exactly one of ``parked_at``) to
+    ``wake_at``. Skips locked leads, leads already due, and leads already
+    at ``wake_at``.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "next_attempt_at" = $2, "updated_at" = NOW()
+        WHERE "template_id" = $1
+          AND "status" = 'BACKLOG'
+          AND "is_locked" = FALSE
+          AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+          AND "next_attempt_at" = ANY($3::timestamptz[])
+          AND "next_attempt_at" > NOW()
+          AND "next_attempt_at" <> $2
+        RETURNING "id", "next_attempt_at";
+    """
+    return text, [template_id, wake_at, parked_at]
