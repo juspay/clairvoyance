@@ -12,13 +12,20 @@ Dispatch logic:
 
 from __future__ import annotations
 
-from typing import Union
+from typing import Optional, Union
 
 from pipecat.services.aws.llm import AWSBedrockLLMService
 from pipecat.services.azure.llm import AzureLLMService
 from pipecat.services.google.vertex.llm import GoogleVertexLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 
+from app.ai.voice.agents.breeze_buddy.accounts import (
+    Accounts,
+    AzureAccount,
+    BedrockAccount,
+    KeyAccount,
+    VertexAccount,
+)
 from app.ai.voice.llm import (
     AzureConfig,
     BedrockConfig,
@@ -39,52 +46,32 @@ from app.ai.voice.llm.claude_vertex import VertexAnthropicLLMService
 from app.core.config.dynamic import (
     BREEZE_BUDDY_AZURE_MAX_COMPLETION_TOKENS,
     BREEZE_BUDDY_AZURE_TEMPERATURE,
-    GOOGLE_VERTEX_CREDENTIALS_JSON,
-    GOOGLE_VERTEX_PROJECT_ID,
     OPENAI_MAX_COMPLETION_TOKENS,
     OPENAI_TEMPERATURE,
 )
 from app.core.config.static import (
     AZURE_BREEZE_BUDDY_OPENAI_MODEL,
-    AZURE_OPENAI_API_KEY,
-    AZURE_OPENAI_ENDPOINT,
-    OPENAI_API_KEY,
     OPENAI_MODEL,
 )
 from app.core.logger import logger
-from app.services.live_config.store import get_config
 
 
 async def _resolve_azure(
-    llm_config: LLMConfiguration | None, *, pooled: bool = False
+    llm_config: LLMConfiguration | None,
+    account: AzureAccount,
+    *,
+    pooled: bool = False,
 ) -> AzureLLMService:
-    """Build Azure LLM, using dynamic config as fallback for template overrides.
+    """Build Azure LLM on the account the resolver handed us: its key on
+    its endpoint, whether that account came from a credential row or from
+    the environment (accounts.Accounts).
 
     ``pooled=True`` is reserved for chat mode (long-lived process, multiple
     turns). Voice runs each call in its own subprocess and gets nothing
     from connection sharing — keep voice on the stock pipecat service.
     """
-    # Endpoint: template override or env default
-    endpoint = (
-        llm_config.endpoint
-        if llm_config and llm_config.endpoint
-        else AZURE_OPENAI_ENDPOINT
-    )
-
-    # API key: resolve from named config key or use env default
-    if llm_config and llm_config.endpoint and not llm_config.api_key_name:
-        raise ValueError(
-            "api_key_name is required when a custom endpoint is provided for Azure"
-        )
-
-    if llm_config and llm_config.api_key_name:
-        api_key = await get_config(llm_config.api_key_name, "", str)
-        if not api_key:
-            raise ValueError(
-                f"API key not found for config key: {llm_config.api_key_name}"
-            )
-    else:
-        api_key = AZURE_OPENAI_API_KEY
+    endpoint = account.endpoint
+    api_key = account.api_key
 
     model = (
         llm_config.model
@@ -126,30 +113,17 @@ async def _resolve_azure(
     )
 
 
-async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMService:
-    """Build direct OpenAI LLM.
-
-    When ``endpoint`` is set, the request is routed to an OpenAI-compatible
-    gateway (e.g. Juspay Grid) instead of api.openai.com. A custom endpoint
-    requires an explicit ``api_key_name`` so we never leak the default OpenAI
-    key to a third-party gateway.
+async def _resolve_openai(
+    llm_config: LLMConfiguration | None,
+    account: KeyAccount,
+) -> OpenAILLMService:
+    """Build direct OpenAI LLM on the account the resolver handed us. The
+    account's endpoint, when it has one, is an OpenAI-compatible gateway
+    (e.g. Juspay Grid) instead of api.openai.com — its key never travels
+    to any other host (accounts.Accounts).
     """
-    # base_url: template override (custom gateway) or stock OpenAI default.
-    base_url = llm_config.endpoint if llm_config and llm_config.endpoint else None
-
-    if llm_config and llm_config.endpoint and not llm_config.api_key_name:
-        raise ValueError(
-            "api_key_name is required when a custom endpoint is provided for OpenAI"
-        )
-
-    if llm_config and llm_config.api_key_name:
-        api_key = await get_config(llm_config.api_key_name, "", str)
-        if not api_key:
-            raise ValueError(
-                f"API key not found for config key: {llm_config.api_key_name}"
-            )
-    else:
-        api_key = OPENAI_API_KEY
+    base_url = account.endpoint
+    api_key = account.api_key
 
     model = llm_config.model if llm_config and llm_config.model else OPENAI_MODEL
     temperature = (
@@ -195,19 +169,14 @@ async def _resolve_openai(llm_config: LLMConfiguration | None) -> OpenAILLMServi
     )
 
 
-async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMService:
-    """Build Vertex (Gemini) LLM — all params required from template config."""
-    credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
-    project_id = await GOOGLE_VERTEX_PROJECT_ID()
-
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_VERTEX_CREDENTIALS_JSON is required for google_vertex provider"
-        )
-    if not project_id:
-        raise ValueError(
-            "GOOGLE_VERTEX_PROJECT_ID is required for google_vertex provider"
-        )
+async def _resolve_vertex(
+    llm_config: LLMConfiguration,
+    account: VertexAccount,
+) -> GoogleVertexLLMService:
+    """Build Vertex (Gemini) LLM — all params required from template config,
+    the service account from the resolver (accounts.Accounts)."""
+    credentials_json = account.credentials_json
+    project_id = account.project_id
     if not llm_config.model:
         raise ValueError(
             "model is required in LLMConfiguration for google_vertex provider"
@@ -260,16 +229,16 @@ async def _resolve_vertex(llm_config: LLMConfiguration) -> GoogleVertexLLMServic
 
 
 async def _resolve_claude_vertex(
-    llm_config: LLMConfiguration, *, pooled: bool = False
+    llm_config: LLMConfiguration,
+    account: VertexAccount,
+    *,
+    pooled: bool = False,
 ) -> VertexAnthropicLLMService:
-    """Build Claude on Vertex AI — all params required from template config."""
-    credentials_json = await GOOGLE_VERTEX_CREDENTIALS_JSON()
-    project_id = await GOOGLE_VERTEX_PROJECT_ID()
+    """Build Claude on Vertex AI — all params required from template config,
+    the service account from the resolver (accounts.Accounts)."""
+    credentials_json = account.credentials_json
+    project_id = account.project_id
 
-    if not credentials_json:
-        raise ValueError(
-            "GOOGLE_VERTEX_CREDENTIALS_JSON is required for claude_vertex provider"
-        )
     if not project_id:
         raise ValueError(
             "GOOGLE_VERTEX_PROJECT_ID is required for claude_vertex provider"
@@ -323,8 +292,14 @@ async def _resolve_claude_vertex(
     )
 
 
-async def _resolve_bedrock(llm_config: LLMConfiguration) -> AWSBedrockLLMService:
-    """Build AWS Bedrock LLM — all params required from template config."""
+async def _resolve_bedrock(
+    llm_config: LLMConfiguration,
+    account: BedrockAccount,
+) -> AWSBedrockLLMService:
+    """Build AWS Bedrock LLM — all params required from template config.
+    The bearer token is the account's (accounts.Accounts: a
+    row's key, a named dynamic-config key, or none — the pod's AWS
+    credential chain). Region and model stay the block's."""
     if not llm_config.model:
         raise ValueError(
             "model is required in LLMConfiguration for aws_bedrock provider"
@@ -339,13 +314,7 @@ async def _resolve_bedrock(llm_config: LLMConfiguration) -> AWSBedrockLLMService
         )
     openai_model = is_openai_model(llm_config.model)
 
-    api_key = None
-    if llm_config.api_key_name:
-        api_key = await get_config(llm_config.api_key_name, "", str)
-        if not api_key:
-            raise ValueError(
-                f"API key not found for config key: {llm_config.api_key_name}"
-            )
+    api_key = account.api_key
 
     reasoning_effort = None
     thinking_budget_tokens = None
@@ -391,6 +360,7 @@ async def get_llm_service(
     llm_config: LLMConfiguration | None = None,
     *,
     pooled: bool = False,
+    accounts: Optional[Accounts] = None,
 ) -> Union[
     AzureLLMService,
     GoogleVertexLLMService,
@@ -412,6 +382,11 @@ async def get_llm_service(
             calls. Today Azure (HTTP/2 httpx pool) and Claude on Vertex
             (AsyncAnthropicVertex client + OAuth token cache) honour it;
             Gemini Vertex ignores it (still per-call).
+        accounts: the call's account resolver (accounts.Accounts,
+            built from the call's tenant). It answers with the block's own
+            row when it names one, else the environment's account. None =
+            an untenanted resolver: environment accounts only, plus global
+            rows.
 
     Returns:
         Configured LLM service instance.
@@ -423,6 +398,8 @@ async def get_llm_service(
     # provider-selection trace so follow-up turns don't spam INFO.
     # Voice (pooled=False) keeps INFO for once-per-call setup.
     _dispatch_log = logger.debug if pooled else logger.info
+    resolver = accounts or Accounts()
+    block = llm_config or LLMConfiguration()
 
     if (
         not llm_config
@@ -430,26 +407,31 @@ async def get_llm_service(
         or llm_config.provider == LLMProvider.AZURE
     ):
         _dispatch_log("Using Azure LLM provider")
-        return await _resolve_azure(llm_config, pooled=pooled)
+        account = await resolver.get(block, AzureAccount)
+        return await _resolve_azure(llm_config, account, pooled=pooled)
 
     if llm_config.provider == LLMProvider.OPENAI:
         _dispatch_log("Using OpenAI LLM provider")
-        return await _resolve_openai(llm_config)
+        account = await resolver.get(block, KeyAccount)
+        return await _resolve_openai(llm_config, account)
 
     if llm_config.provider == LLMProvider.GOOGLE_VERTEX:
+        account = await resolver.get(block, VertexAccount)
         if llm_config.sdk == LLMSdk.ANTHROPIC:
             _dispatch_log("Using Claude on Vertex AI (Anthropic SDK)")
-            return await _resolve_claude_vertex(llm_config, pooled=pooled)
+            return await _resolve_claude_vertex(llm_config, account, pooled=pooled)
 
         _dispatch_log("Using Gemini on Vertex AI (Google SDK)")
-        return await _resolve_vertex(llm_config)
+        return await _resolve_vertex(llm_config, account)
 
     if llm_config.provider == LLMProvider.AWS_BEDROCK:
         _dispatch_log("Using AWS Bedrock LLM provider")
-        return await _resolve_bedrock(llm_config)
+        account = await resolver.get(block, BedrockAccount)
+        return await _resolve_bedrock(llm_config, account)
 
     # Fallback — shouldn't happen with the enum, but be safe
     logger.warning(
         f"Unknown LLM provider '{llm_config.provider}', falling back to Azure"
     )
-    return await _resolve_azure(llm_config, pooled=pooled)
+    account = await resolver.get(block, AzureAccount)
+    return await _resolve_azure(llm_config, account, pooled=pooled)

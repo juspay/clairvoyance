@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 import pytest
 
-import app.ai.voice.agents.breeze_buddy.accounts.resolve as resolve
+import app.ai.voice.agents.breeze_buddy.accounts.llm as llm_accounts
 from app.ai.voice.agents.breeze_buddy.accounts import AccountRefused, Accounts
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
@@ -16,6 +16,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TTSConfig,
 )
 from app.ai.voice.llm.types import LLMConfiguration
+from app.core.config import static
 from tests.accounts.conftest import ROW, ROW2, ROW3, Store, cred
 
 
@@ -132,7 +133,7 @@ def test_without_a_row_the_environment_answers_with_the_same_rules(
     async def get_config(name: str, default: Any, kind: Any) -> str:
         return {"GW_KEY": "named"}.get(name, "")
 
-    monkeypatch.setattr(resolve, "get_config", get_config)
+    monkeypatch.setattr(llm_accounts, "get_config", get_config)
     gw = resolved(
         accounts.get(
             LLMConfiguration(
@@ -154,7 +155,7 @@ def test_without_a_row_the_environment_answers_with_the_same_rules(
     )
     assert (plain.api_key, plain.endpoint) == ("named", "http://10.0.0.5:8002/v1")
     # a missing env key is AccountRefused, never pydantic's error
-    monkeypatch.setattr(resolve.static, "AZURE_OPENAI_API_KEY", "")
+    monkeypatch.setattr(static, "AZURE_OPENAI_API_KEY", "")
     with pytest.raises(AccountRefused, match="AZURE_OPENAI_API_KEY is required"):
         resolved(Accounts("r-1", "m-1").get(LLMConfiguration()))
     assert (

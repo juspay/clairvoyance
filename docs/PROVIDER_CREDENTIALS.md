@@ -124,21 +124,51 @@ ElevenLabs row brings only its key: it runs on the deployment's per-service
 host (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for Scribe),
 exactly as the environment's own key does. No flag.
 
-Until phases 3 and 4 land, the engine does not ask the resolver: a
-template that names a row is validated at save and still runs on the
-environment's keys. Nothing on production names a row yet.
+From phase 3 the LLM honours the name; STT and TTS blocks are validated
+at save and still run on the environment's keys until phase 4.
 
-## What the engine does (phases 3 and 4)
+## What the engine does (phase 3: the LLM; phase 4: speech)
 
-*Not in this phase.* Every call still reads its keys from the environment.
+- **One resolver per call.** `Accounts` is built at each entry point from
+  the **call's** tenant — the lead's for a voice call (kept across
+  transfers, so a transfer target's template never resolves accounts
+  against its own tenant), the template's for chat, the greeting job and
+  the upsell follow-up. Each block is resolved lazily, once: a chat turn
+  reads at most the LLM row.
+- **Typed accounts that carry their host.** A row resolves to a
+  `KeyAccount(api_key, endpoint)`, `AzureAccount`, `VertexAccount`,
+  `GcpAccount` or `BedrockAccount`; so does the environment when the block
+  names no row. Every factory reads the key and the host from that object
+  and never touches an environment variable itself — a key never travels
+  apart from its host.
+- **Fail closed.** `AccountRefused` and no service is built: a call on the
+  wrong account, or on another tenant's account, is never placed.
+- **Phase 3 — the LLM.** `get_llm_service` (Azure, OpenAI and gateways,
+  Gemini and Claude on Vertex, Bedrock: the row's key is the bearer token,
+  region and model stay on the block), the realtime factory (OpenAI, xAI,
+  Azure, Gemini Live), the Gemini opening line, chat turns and the upsell
+  follow-up (the template's tenant). Hold-transfer summaries are a
+  platform job with no template in hand: they run on the environment's
+  Azure account, as before. `api_key_name` (a named dynamic-config
+  key) is honoured inside `env_account`, superseded by `credential_id`.
+- **Observers** run on their own row when they name one, else on the
+  conversation's account only when they are the same connection (same
+  provider, no endpoint of their own), else on the environment's.
+- **Gemini prompt cache.** A CachedContent belongs to one GCP project, so
+  the chat prompt cache is keyed by the client's project and location as
+  well — two Vertex accounts never share an entry.
+- **Phase 4 — speech.** *Not in this phase.* STT and TTS still read the
+  environment; the resolver is built and passed down but they do not ask
+  it yet.
 
-## Rolling out phases 1 and 2
+## Rolling out phases 1 to 3
 
 1. Deploy. `079_credentials_provider.sql` adds a nullable `provider` column
    and a partial index. No data moves; every template behaves as before.
 2. Create the account rows with `provider` and the value fields above.
-3. A template may now name them; a bad id is refused at save. The engine
-   honours the name from phase 3 (LLM) and phase 4 (STT, TTS).
+3. Copy the template, set `credential_id` on the LLM block, save: a bad id
+   is refused at save; the call runs on that account. STT and TTS follow in
+   phase 4.
 
 ## Rolling back
 
