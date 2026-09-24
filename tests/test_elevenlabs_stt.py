@@ -32,6 +32,11 @@ from app.ai.voice.stt.elevenlabs import (
     resolve_languages,
 )
 
+# pipecat's own default host, asserted rather than inlined so a pipecat upgrade
+# that changes it fails loudly here instead of silently on a live call.
+GLOBAL_HOST = "api.elevenlabs.io"
+RESIDENCY_HOST = "api.in.residency.elevenlabs.io"
+
 
 def test_elevenlabs_provider_enum_value():
     assert STTProvider.ELEVENLABS.value == "elevenlabs"
@@ -89,7 +94,7 @@ async def test_stt_native_maps_to_vad_commit_strategy(monkeypatch):
     leaves them null by default."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -110,7 +115,7 @@ async def test_smart_turn_maps_to_manual_commit_strategy(monkeypatch):
     VAD settings remain unset on the service (they only apply in VAD mode)."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -129,7 +134,7 @@ async def test_default_turn_detection_maps_to_vad_commit(monkeypatch):
     VAD, so a fully-unset config must still land on VAD commit."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(provider=STTProvider.ELEVENLABS)
     )
@@ -140,7 +145,7 @@ async def test_default_turn_detection_maps_to_vad_commit(monkeypatch):
 async def test_language_and_timestamps_flow_to_service(monkeypatch):
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -169,7 +174,7 @@ async def test_sample_rate_left_to_the_pipeline(monkeypatch):
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
     captured = {}
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
 
     def fake_build(config):
         captured["sample_rate"] = config.sample_rate
@@ -190,20 +195,12 @@ async def test_sample_rate_left_to_the_pipeline(monkeypatch):
     assert svc._init_sample_rate is None
 
 
-async def test_missing_api_key_raises(monkeypatch):
-    import app.ai.voice.agents.breeze_buddy.stt as bb_stt
-
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "")
-    with pytest.raises(ValueError, match="ELEVENLABS_API_KEY"):
-        await create_stt_from_config(STTConfiguration(provider=STTProvider.ELEVENLABS))
-
-
 async def test_language_code_none_flows_auto_detect(monkeypatch):
     """language_code=None is the auto-detect default; it must reach the
     service settings as None (not be replaced by a fallback)."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -220,7 +217,7 @@ async def test_legacy_env_provider_map_routes_elevenlabs(monkeypatch):
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
     monkeypatch.setattr(bb_stt, "BREEZE_BUDDY_STT_SERVICE", "elevenlabs")
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await bb_stt.get_stt_service()
     assert isinstance(svc, ElevenLabsRealtimeSTTService)
     assert svc._commit_strategy == CommitStrategy.VAD
@@ -280,6 +277,7 @@ async def test_secondary_languages_reach_the_url(monkeypatch):
     svc = build_elevenlabs_stt(
         ElevenLabsConfig(
             api_key="test-key",
+            base_url=GLOBAL_HOST,
             commit_strategy=CommitStrategy.VAD,
             language_code="hi",
             secondary_languages=["en"],
@@ -316,6 +314,7 @@ async def test_no_secondary_languages_leaves_url_untouched(monkeypatch):
     svc = build_elevenlabs_stt(
         ElevenLabsConfig(
             api_key="test-key",
+            base_url=GLOBAL_HOST,
             commit_strategy=CommitStrategy.VAD,
             language_code="hi",
         )
@@ -331,7 +330,7 @@ async def test_languages_flow_from_template_to_service(monkeypatch):
     """End-to-end: the template's ['hi','en'] lands on the built service."""
     import app.ai.voice.agents.breeze_buddy.stt as bb_stt
 
-    monkeypatch.setattr(bb_stt, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -363,6 +362,7 @@ async def test_malformed_secondary_language_cannot_inject_params(monkeypatch):
     svc = build_elevenlabs_stt(
         ElevenLabsConfig(
             api_key="test-key",
+            base_url=GLOBAL_HOST,
             commit_strategy=CommitStrategy.VAD,
             language_code="hi",
             secondary_languages=["en&enable_logging=true", "ta"],
@@ -383,10 +383,18 @@ def test_requires_vad_analyzer_only_under_manual_commit():
     """MANUAL commit fires only on VADUserStoppedSpeakingFrame — without a VAD
     upstream the service never produces a final, so the pipeline must warn."""
     manual = build_elevenlabs_stt(
-        ElevenLabsConfig(api_key="k", commit_strategy=CommitStrategy.MANUAL)
+        ElevenLabsConfig(
+            api_key="k",
+            base_url=GLOBAL_HOST,
+            commit_strategy=CommitStrategy.MANUAL,
+        )
     )
     vad = build_elevenlabs_stt(
-        ElevenLabsConfig(api_key="k", commit_strategy=CommitStrategy.VAD)
+        ElevenLabsConfig(
+            api_key="k",
+            base_url=GLOBAL_HOST,
+            commit_strategy=CommitStrategy.VAD,
+        )
     )
     assert manual.requires_vad_analyzer is True
     assert vad.requires_vad_analyzer is False
@@ -432,7 +440,7 @@ async def test_primary_injection_never_reaches_the_url(monkeypatch):
         return AsyncMock()
 
     monkeypatch.setattr(el_stt, "websocket_connect", fake_connect)
-    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
 
     svc = await create_stt_from_config(
         STTConfiguration(
@@ -458,7 +466,7 @@ async def test_timeout_mode_uses_vad_commit(monkeypatch):
     TIMEOUT gets no VAD (only SMART_TURN auto-creates one) and
     BREEZE_BUDDY_ENABLE_VAD defaults False — so MANUAL here means no final
     transcript for the entire call."""
-    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_API_KEY", "test-key")
+    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "test-key")
     svc = await create_stt_from_config(
         STTConfiguration(
             provider=STTProvider.ELEVENLABS,
@@ -491,6 +499,7 @@ async def test_enable_logging_false_reaches_the_wire(monkeypatch):
     svc = build_elevenlabs_stt(
         ElevenLabsConfig(
             api_key="test-key",
+            base_url=GLOBAL_HOST,
             commit_strategy=CommitStrategy.VAD,
             language_code="hi",
             enable_logging=False,
@@ -533,6 +542,7 @@ async def test_concurrent_connects_do_not_poison_settings(monkeypatch):
     svc = build_elevenlabs_stt(
         ElevenLabsConfig(
             api_key="test-key",
+            base_url=GLOBAL_HOST,
             commit_strategy=CommitStrategy.VAD,
             language_code="hi",
             secondary_languages=["en"],
@@ -566,6 +576,7 @@ async def test_repeated_reconnects_never_accumulate(monkeypatch):
     svc = build_elevenlabs_stt(
         ElevenLabsConfig(
             api_key="test-key",
+            base_url=GLOBAL_HOST,
             commit_strategy=CommitStrategy.VAD,
             language_code="hi",
             secondary_languages=["en"],
@@ -578,3 +589,94 @@ async def test_repeated_reconnects_never_accumulate(monkeypatch):
 
     assert svc._settings.language == "hi"
     assert all(u.count("secondary_languages=en") == 1 for u in urls)
+
+
+# ── The account: key and host always travel together ──────────────────────
+#
+# The bug these cover: STT sent ELEVENLABS_API_KEY to api.elevenlabs.io while
+# TTS had long used the India-residency key and host. On a residency-
+# provisioned account that is an auth failure on every call, while TTS kept
+# working — the bot spoke and never heard a word. Switching accounts is now an
+# env change, so there is no flag to get wrong: whatever key is configured is
+# sent to whatever host is configured, and the two are read from one place.
+
+
+def test_residency_base_url_is_a_bare_host():
+    """ELEVENLABS_INDIAN_RESIDENCY_BASE_URL must carry NO scheme.
+
+    pipecat builds ``wss://{base_url}/v1/...``, so ``wss://api.in...`` here
+    produces ``wss://wss://api.in...`` and fails the handshake on every call.
+    Its sibling ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL, used verbatim by
+    TTS, keeps the scheme — this pins the difference so the two are not mixed.
+    """
+    from app.core.config.static import (
+        ELEVENLABS_INDIAN_RESIDENCY_BASE_URL,
+        ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL,
+    )
+
+    assert "://" not in ELEVENLABS_INDIAN_RESIDENCY_BASE_URL
+    assert ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL.endswith(
+        ELEVENLABS_INDIAN_RESIDENCY_BASE_URL
+    ), "the STT host and the TTS websocket URL must point at the same host"
+
+
+async def test_configured_key_and_host_both_reach_the_service(monkeypatch):
+    """Both halves come from the env, and both must arrive.
+
+    A key is only accepted by the account it belongs to, so a correct key at
+    the wrong host is the same 401 as a wrong key — asserting one without the
+    other would miss half the bug.
+    """
+    monkeypatch.setattr(
+        bb_stt_mod, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "residency-key"
+    )
+    monkeypatch.setattr(
+        bb_stt_mod, "ELEVENLABS_INDIAN_RESIDENCY_BASE_URL", RESIDENCY_HOST
+    )
+
+    svc = await create_stt_from_config(
+        STTConfiguration(provider=STTProvider.ELEVENLABS)
+    )
+
+    assert isinstance(svc, ElevenLabsRealtimeSTTService)
+    assert svc._api_key == "residency-key"
+    assert svc._base_url == RESIDENCY_HOST
+
+
+async def test_missing_residency_key_raises_at_build(monkeypatch):
+    """Fail at build, not at the WebSocket handshake.
+
+    An empty key used to reach the socket and 401 there — a live call that
+    could not hear. A named ValueError at build time is a dead pod on deploy
+    instead of a silently deaf customer call.
+    """
+    monkeypatch.setattr(bb_stt_mod, "ELEVENLABS_INDIAN_RESIDENCY_API_KEY", "")
+
+    with pytest.raises(ValueError, match="ELEVENLABS_INDIAN_RESIDENCY_API_KEY"):
+        await create_stt_from_config(STTConfiguration(provider=STTProvider.ELEVENLABS))
+
+
+def test_config_base_url_reaches_the_service_verbatim():
+    """Whatever host the config names is the host the service dials.
+
+    The builder must not substitute, normalise or drop it: pipecat renders it
+    straight into ``wss://{base_url}/v1/...``, so any silent rewrite here is a
+    connection to the wrong account, which is a 401 rather than an error the
+    caller can see.
+    """
+    svc = build_elevenlabs_stt(ElevenLabsConfig(api_key="k", base_url=GLOBAL_HOST))
+    assert svc._base_url == GLOBAL_HOST
+
+    svc = build_elevenlabs_stt(ElevenLabsConfig(api_key="k", base_url=RESIDENCY_HOST))
+    assert svc._base_url == RESIDENCY_HOST
+
+
+def test_config_requires_an_explicit_base_url():
+    """base_url has no default, so a caller cannot forget the host.
+
+    This is the regression guard for the original bug: STT built a config
+    without naming a host, inherited the worldwide one, and sent it a
+    residency key. With no default that config will not construct.
+    """
+    with pytest.raises(TypeError):
+        ElevenLabsConfig(api_key="k")  # type: ignore[call-arg]

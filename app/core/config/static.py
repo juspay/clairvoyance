@@ -105,6 +105,13 @@ ELEVENLABS_BB_VOICE_ID = os.environ.get(
 ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL = os.environ.get(
     "ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL", "wss://api.in.residency.elevenlabs.io"
 )
+# Same host as ELEVENLABS_INDIAN_RESIDENCY_WEBSOCKET_URL, without the scheme:
+# pipecat's STT service builds ``wss://{base_url}/v1/...`` itself, so it takes
+# a bare host while the TTS websocket URL above is used verbatim. Keep the two
+# pointing at the same host.
+ELEVENLABS_INDIAN_RESIDENCY_BASE_URL = os.environ.get(
+    "ELEVENLABS_INDIAN_RESIDENCY_BASE_URL", "api.in.residency.elevenlabs.io"
+)
 GOOGLE_BRET_VOICE = os.environ.get("GOOGLE_BRET_VOICE", "en-IN-Chirp3-HD-Sadaltager")
 GOOGLE_MIA_VOICE = os.environ.get("GOOGLE_MIA_VOICE", "en-IN-Chirp3-HD-Despina")
 
