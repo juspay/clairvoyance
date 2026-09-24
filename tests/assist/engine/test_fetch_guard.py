@@ -7,7 +7,7 @@ the reason ``POST /assist/probe`` can exist at all.
 from __future__ import annotations
 
 import socket
-from typing import AsyncIterator, List, Optional, Tuple
+from typing import Any, AsyncIterator, List, Optional, Tuple, cast
 
 import pytest
 
@@ -313,4 +313,109 @@ async def test_a_proxied_deployment_refuses_to_fetch(monkeypatch) -> None:
     _pinned_ok(monkeypatch)
     monkeypatch.setattr(fetch, "get_proxy_config", lambda: "http://egress:3128")
     with pytest.raises(fetch.EgressNotGuardedError):
+        await fetch.fetch_page("https://shop.example/")
+
+
+class _RedirectingSession(_RecordingSession):
+    """Answers the first request with a redirect to ``location``."""
+
+    location = ""
+
+    def get(self, url, **kwargs):
+        _RecordingSession.calls.append({"url": url, **kwargs})
+        if len(_RecordingSession.calls) == 1:
+            response = _FakeHTTPResponse(
+                url, status=302, headers={"location": _RedirectingSession.location}
+            )
+        else:
+            response = _FakeHTTPResponse(url)
+        return _FakeGet(response, _RecordingSession.calls)
+
+
+async def test_a_refused_hop_is_never_requested(monkeypatch) -> None:
+    # The caller's rule is asked before each hop is sent, so a redirect it
+    # refuses costs no request to that host at all.
+    _RecordingSession.calls = []
+    _RedirectingSession.location = "https://elsewhere.example/landing"
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _RedirectingSession)
+
+    with pytest.raises(fetch.UnsafeUrlError):
+        await fetch.fetch_page(
+            "https://shop.example/go",
+            allow_url=lambda url: url.startswith("https://shop.example/"),
+        )
+    assert [call["url"] for call in _RecordingSession.calls] == [
+        "https://shop.example/go"
+    ]
+
+
+# ── decoding the body ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("charset", ["punycode", "idna", "PUNYCODE ", "utf-8\x00"])
+def test_a_charset_off_the_list_is_read_as_utf8(charset) -> None:
+    # punycode is pure Python and super-linear: 160 KB took 3.6 s to decode.
+    assert fetch._decode(b"-" + b"9" * 400_000, charset).startswith("-999")
+
+
+@pytest.mark.parametrize(
+    "text, charset",
+    [
+        ("café", "ISO-8859-1"),
+        ("привет", "windows-1251"),
+        ("日本", "Shift_JIS"),
+        ("①㈱", "cp932"),
+        ("香港", "Big5-HKSCS"),
+        ("안녕", "cp949"),
+    ],
+)
+def test_a_real_web_charset_is_honoured(text, charset) -> None:
+    assert fetch._decode(text.encode(charset), charset) == text
+
+
+def test_a_hostile_content_type_names_no_charset() -> None:
+    from aiohttp import helpers
+
+    headers = [
+        "application/json; a*",
+        "text/html; c=" + "(" * 200,
+        "(;charset*;",
+        "text/html" + ";" * 8000,
+    ]
+    for header in headers:
+
+        class _Response:
+            def __init__(self, value: str) -> None:
+                self.headers = {"Content-Type": value}
+
+            @property
+            def charset(self):
+                return helpers.parse_content_type(self.headers["Content-Type"])[1].get(
+                    "charset"
+                )
+
+        assert fetch._charset_of(cast(Any, _Response(header))) is None
+
+
+class _BrokenStream(_FakeStream):
+    """A body that fails partway, as a bad gzip or short body does."""
+
+    async def iter_chunked(self, n: int) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+        raise fetch.aiohttp.ClientPayloadError("bad gzip")
+
+
+class _BrokenBodySession(_RecordingSession):
+    def get(self, url, **kwargs):
+        response = _FakeHTTPResponse(url)
+        response.content = _BrokenStream([b"<html>"])
+        return _FakeGet(response, _RecordingSession.calls)
+
+
+async def test_a_broken_body_is_a_fetch_failure(monkeypatch) -> None:
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _BrokenBodySession)
+    with pytest.raises(fetch.FetchFailedError):
         await fetch.fetch_page("https://shop.example/")

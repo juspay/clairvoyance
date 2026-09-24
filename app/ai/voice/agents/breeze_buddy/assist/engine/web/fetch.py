@@ -18,6 +18,8 @@ the metadata service, a database on the VPC, or localhost. The rules:
   that reason; a public URL that bounces to ``127.0.0.1`` stops here.
 * **Bounded**: a byte cap, a per-hop timeout and a whole-fetch deadline, so a
   slow or endless response cannot hold a worker.
+* **Decoded safely**: the charset a page names is used only if it is a common
+  web one, and a malformed Content-Type is ignored rather than parsed.
 
 If the deployment routes egress through a proxy, this module refuses to fetch
 at all. The proxy receives the hostname and picks the destination itself, so
@@ -29,12 +31,14 @@ outcome; quietly downgrading the guard is not.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import ipaddress
 import socket
 import time
 from dataclasses import dataclass, field
 from typing import (
     AsyncIterator,
+    Callable,
     Dict,
     List,
     Mapping,
@@ -252,8 +256,13 @@ async def fetch_page(
     max_bytes: int = DEFAULT_MAX_BYTES,
     headers: Optional[Dict[str, str]] = None,
     max_redirects: int = MAX_REDIRECTS,
+    allow_url: Optional[Callable[[str], bool]] = None,
 ) -> FetchResult:
-    """GET ``url``, following redirects by hand so every hop is validated."""
+    """GET ``url``, following redirects by hand so every hop is validated.
+
+    ``allow_url``, when given, is asked before every hop is requested; a hop it
+    refuses raises ``UnsafeUrlError`` without being sent.
+    """
     started = time.monotonic()
     target = normalize_probe_url(url)
     if get_proxy_config():
@@ -284,6 +293,8 @@ async def fetch_page(
             remaining = timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise FetchFailedError("timed out reading the site")
+            if allow_url is not None and not allow_url(target):
+                raise UnsafeUrlError("url not allowed by the caller")
             parts = urlsplit(target)
             host = (parts.hostname or "").lower()
             port = parts.port or 443
@@ -311,7 +322,12 @@ async def fetch_page(
                     target = normalize_probe_url(urljoin(target, location))
                     continue
 
-                raw, truncated = await _read_capped(response.content, max_bytes)
+                try:
+                    raw, truncated = await _read_capped(response.content, max_bytes)
+                except asyncio.TimeoutError as exc:
+                    raise FetchFailedError("timed out reading the site") from exc
+                except aiohttp.ClientError as exc:
+                    raise FetchFailedError(f"could not read the site: {exc}") from exc
                 return FetchResult(
                     url=url,
                     final_url=str(response.url),
@@ -320,7 +336,7 @@ async def fetch_page(
                     cookie_names=_cookie_names(
                         response.headers.getall("set-cookie", [])
                     ),
-                    body=_decode(raw, response.charset),
+                    body=_decode(raw, _charset_of(response)),
                     size_bytes=len(raw),
                     truncated=truncated,
                     elapsed_seconds=round(time.monotonic() - started, 3),
@@ -380,14 +396,51 @@ def _cookie_names(values: Sequence[str]) -> List[str]:
     return list(dict.fromkeys(names))
 
 
+# Charsets a page may name that are used as-is; anything else is read as UTF-8.
+# Some codecs (punycode, idna) are pure Python and super-linear, so a hostile
+# header could otherwise hold the event loop for minutes decoding one page.
+_WEB_CHARSETS = frozenset(
+    codecs.lookup(name).name
+    for name in (
+        ("utf-8", "utf-16", "utf-16-le", "utf-16-be", "ascii", "latin-1", "koi8-r")
+        + tuple(f"iso8859-{n}" for n in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15))
+        + tuple(f"cp{n}" for n in (874, 932, 949, 1250, 1251, 1252, 1253, 1254))
+        + tuple(f"cp{n}" for n in (1255, 1256, 1257, 1258))
+        + ("shift_jis", "euc_jp", "iso2022_jp", "euc_kr")
+        + ("gb2312", "gbk", "gb18030", "big5", "big5hkscs")
+    )
+)
+# A real Content-Type is a few dozen characters; a longer one is not parsed.
+_MAX_CONTENT_TYPE_CHARS = 256
+
+
+def _charset_of(response: aiohttp.ClientResponse) -> Optional[str]:
+    """The charset the response names, or None when its header is odd.
+
+    aiohttp parses Content-Type on the event loop: a crafted header can raise,
+    come back as a tuple, or take half a second at 8 KB.
+    """
+    if len(response.headers.get("Content-Type", "")) > _MAX_CONTENT_TYPE_CHARS:
+        return None
+    try:
+        charset = response.charset
+    except Exception:
+        return None
+    return charset if isinstance(charset, str) else None
+
+
 def _decode(raw: bytes, charset: Optional[str]) -> str:
-    for encoding in (charset, "utf-8"):
-        if not encoding:
-            continue
+    """Decode with the page's charset if it is a known web charset, else UTF-8."""
+    try:
+        # ValueError: a NUL in the header's charset.
+        name = codecs.lookup(charset.strip()).name if charset else None
+    except (LookupError, ValueError):
+        name = None
+    if name is not None and name in _WEB_CHARSETS:
         try:
-            return raw.decode(encoding)
-        except (LookupError, UnicodeDecodeError):
-            continue
+            return raw.decode(name)
+        except UnicodeError:
+            pass
     return raw.decode("utf-8", errors="replace")
 
 
