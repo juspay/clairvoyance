@@ -367,7 +367,11 @@ async def get_topic_dashboard_analytics(
     filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
 ) -> Dict[str, Any]:
     _validate_topic_filters(filters)
-    rows = await get_topic_dashboard(filters)
+    # limit is how many topics stay apart before the rest fold into Other. Past
+    # 25, which includes the unset page-size default of 50, it is the old 10.
+    limit = options.get("limit", 50)
+    top_topics = limit if limit <= 25 else 10
+    rows = await get_topic_dashboard(filters, top_topics)
 
     return {
         "type": "topic-dashboard",
@@ -390,6 +394,18 @@ async def get_topic_dashboard_analytics(
         "trends": _format_topic_trend_rows(
             [row for row in rows if row["result_type"] == "trend"], "day"
         ),
+        "all_topics": [
+            {
+                "template_id": row["template_id"],
+                "template_name": row["template_name"],
+                "topic_type": row["topic_type"],
+                "label": row["label"],
+                "rank": row["rank"],
+                "conversation_count": row["conversation_count"],
+            }
+            for row in rows
+            if row["result_type"] == "topic"
+        ],
     }
 
 

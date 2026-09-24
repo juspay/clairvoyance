@@ -25,7 +25,10 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics impo
 )
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
 from app.ai.voice.llm._pools import get_openai_httpx_client
-from app.api.routers.breeze_buddy.analytics.handlers import _validate_topic_filters
+from app.api.routers.breeze_buddy.analytics.handlers import (
+    _validate_topic_filters,
+    get_topic_dashboard_analytics,
+)
 from app.database.accessor.breeze_buddy.analytics import evaluation_result
 from app.database.queries.breeze_buddy.analytics.evaluation_result import (
     get_topic_dashboard_rows_query,
@@ -40,7 +43,8 @@ from app.database.queries.breeze_buddy.evaluation_result import (
     save_evaluation_failure_query,
     save_evaluation_results_query,
 )
-from app.schemas import LeadCallStatus
+from app.schemas import LeadCallStatus, UserInfo, UserRole
+from app.schemas.breeze_buddy.analytics import AnalyticsOptions
 from app.schemas.breeze_buddy.chat import ChatSessionStatus
 from app.schemas.breeze_buddy.conversation_analysis import (
     ConversationChannel,
@@ -560,7 +564,7 @@ async def test_topic_dashboard_aggregates_rows_after_fetch(
     )
 
     dashboard = await evaluation_result.get_topic_dashboard(
-        {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}
+        {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}, top_topics=10
     )
 
     other = next(
@@ -570,6 +574,66 @@ async def test_topic_dashboard_aggregates_rows_after_fetch(
     )
     assert other["underlying_topic_count"] == 2
     assert other["conversation_count"] == 1
+
+    all_topics = [row for row in dashboard if row["result_type"] == "topic"]
+    assert len(all_topics) == 12
+    assert [row["rank"] for row in all_topics] == list(range(1, 13))
+    hidden_in_other = next(r for r in all_topics if r["topic_type"] == "topic_11")
+    assert hidden_in_other["label"] == "Topic 11"
+    assert hidden_in_other["conversation_count"] == 1
+
+    dashboard = await evaluation_result.get_topic_dashboard(
+        {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}, top_topics=25
+    )
+    summary = [row for row in dashboard if row["result_type"] == "summary"]
+    assert len(summary) == 12
+    assert not any(row["is_other"] for row in summary)
+
+
+async def test_topic_dashboard_limit_picks_named_topics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    rows = [
+        {
+            "source_id": f"source-{index}",
+            "template_id": TEMPLATE_ID,
+            "template_name": "Agent",
+            "started_at": started_at,
+            "raw_topic_type": f"topic_{index:02d}",
+            "raw_label": f"Topic {index:02d}",
+        }
+        for index in range(30)
+    ]
+    monkeypatch.setattr(
+        evaluation_result,
+        "run_parameterized_query",
+        AsyncMock(return_value=rows),
+    )
+    admin = UserInfo(id="admin", username="admin", role=UserRole.ADMIN)
+    filters = {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}
+
+    # The route hands the handler request.options.model_dump().
+    for limit, named in [(None, 10), (10, 10), (20, 20), (25, 25), (1000, 10)]:
+        options = AnalyticsOptions() if limit is None else AnalyticsOptions(limit=limit)
+        dashboard = await get_topic_dashboard_analytics(
+            filters, options.model_dump(), admin
+        )
+        summary = dashboard["summary"]
+        assert len([row for row in summary if not row["is_other"]]) == named
+        assert [row["is_other"] for row in summary].count(True) == 1
+        assert len(dashboard["all_topics"]) == 30
+
+    # Ranked last, so inside Other at every limit, and still whole for search.
+    folded = next(t for t in dashboard["all_topics"] if t["topic_type"] == "topic_29")
+    assert folded == {
+        "template_id": TEMPLATE_ID,
+        "template_name": "Agent",
+        "topic_type": "topic_29",
+        "label": "Topic 29",
+        "rank": 30,
+        "conversation_count": 1,
+    }
 
 
 def test_topic_filter_normalizes_template_alias() -> None:
