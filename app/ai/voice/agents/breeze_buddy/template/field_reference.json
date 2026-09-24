@@ -200,6 +200,10 @@
         "max_retries": 2
       }
     },
+    "max_call_duration_minutes": {
+      "description": "Hard cap on a voice call's length, in minutes. If the call is still live after this long, the system ends it (call_ended_by='system', call_end_reason='max_call_duration_exceeded'); an outcome already set on the lead is kept, otherwise it defaults to BUSY. Default 30 when omitted; values below 5 are rejected. One budget per call — it spans agent-to-agent transfers. Never fires mid-handoff: a human transfer being dialled or a hold & consult in progress is waited out first. After a Plivo warm transfer, the remaining budget caps the customer's call with the human agent too (min 60s left; up to 5 min over for dial-first MPC transfers, whose provider minimum is 300s). Voice only (chat is unaffected).",
+      "example": 30
+    },
     "noise_filter": {
       "description": "Processes incoming audio before VAD and STT. New configurations use provider='aic' with model='noise_cancellation' or model='voice_focus'. Existing configurations using type='aic' or type='aic_voice_focus' remain supported without being rewritten.",
       "example": {

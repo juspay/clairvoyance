@@ -117,6 +117,9 @@ from app.ai.voice.agents.breeze_buddy.utils.agent_transfer import (
     PendingAgentTransfer,
     TransportRebuildContext,
 )
+from app.ai.voice.agents.breeze_buddy.utils.call_duration import (
+    enforce_max_call_duration,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     track_error,
 )
@@ -215,6 +218,12 @@ class Agent:
         # Post-greeting idle detection
         self._post_greeting_task: Optional[asyncio.Task] = None
         self._user_spoke: bool = False
+
+        # Max call duration cap (utils/call_duration.py)
+        self._max_duration_task: Optional[asyncio.Task] = None
+        self.handoff_depth: int = 0
+        self._between_generations: bool = False
+        self.max_call_end_at: Optional[float] = None
 
         # Transcription gate processor (always present in pipeline)
         self.speech_gate: Any = None
@@ -1354,6 +1363,10 @@ class Agent:
                 await IvrWalker(self).run()
                 return
 
+            self._max_duration_task = asyncio.create_task(
+                enforce_max_call_duration(self)
+            )
+
             # One connection, N pipeline generations. Each generation is the
             # same cold-start build path; a connect_to_agent transfer ends the
             # current pipeline task (without hanging up) and loops back here.
@@ -1362,8 +1375,11 @@ class Agent:
                 if not self.pending_transfer or self.conversation_ended:
                     break
                 transfer = self.pending_transfer
+                self._between_generations = True  # until the next task exists
                 self.pending_transfer = None
                 await apply_transfer(self, transfer)
+                if self.conversation_ended:  # ended mid-rebuild: nothing to run
+                    break
 
             # The Agent owns the ONE real teardown at true call end — per-generation
             # teardown is suppressed so transfers never drop the connection.
@@ -1377,6 +1393,8 @@ class Agent:
             elif self.is_daily_mode and self._daily_client is not None:
                 await force_teardown_daily_client(self._daily_client)
         finally:
+            if self._max_duration_task:
+                self._max_duration_task.cancel()
             clear_log_context()
 
     async def _run_generation(self) -> None:
@@ -1490,6 +1508,7 @@ class Agent:
             is_daily_mode=self.is_daily_mode,
             metrics_collector=self.metrics_collector,
         )
+        self._between_generations = False
 
         if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:
             self._rtvi_processor = self.task.rtvi

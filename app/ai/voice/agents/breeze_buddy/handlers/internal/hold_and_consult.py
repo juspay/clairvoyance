@@ -23,6 +23,7 @@ from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import (
     HoldTransferConfig,
 )
+from app.ai.voice.agents.breeze_buddy.utils.call_duration import during_handoff
 from app.ai.voice.agents.breeze_buddy.utils.common import validate_payload
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     subscribe_and_wait,
@@ -43,6 +44,7 @@ from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
 _CHANNEL_PREFIX = "hold_transfer:result"
 
 
+@during_handoff  # max-call-duration cap never drops a caller on hold
 async def hold_and_consult(
     context: TemplateContext,
     args: Dict[str, Any],
