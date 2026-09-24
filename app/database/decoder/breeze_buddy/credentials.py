@@ -55,6 +55,7 @@ def decode_credential(
         is_encrypted=row["is_encrypted"],
         description=row["description"],
         is_active=row["is_active"],
+        provider=row["provider"] if "provider" in row.keys() else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

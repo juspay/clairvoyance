@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from app.ai.voice.agents.breeze_buddy.accounts import in_tenant
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
     HttpRequestExecutor,
 )
@@ -112,7 +113,23 @@ async def _build_resolution_context(
     # 1. Credentials from credentials table (by credential_id)
     if credential_id:
         try:
-            credential = await get_credential_by_id(credential_id, mask=False)
+            # A placeholder row only (provider IS NULL, in SQL): an LLM / STT
+            # / TTS account's key never reaches a hook's context.
+            credential = await get_credential_by_id(
+                credential_id, mask=False, placeholder_only=True
+            )
+            # Tenancy, fail closed: a pre-check may name only a row its own
+            # template's reseller / merchant may use (global rows are
+            # everyone's). Another tenant's secret never reaches the context.
+            if credential is not None and not in_tenant(
+                credential,
+                getattr(template, "reseller_id", None) or lead.reseller_id,
+                getattr(template, "merchant_id", None) or lead.merchant_id,
+            ):
+                logger.warning(
+                    f"Credential {credential_id} belongs to another tenant — ignored"
+                )
+                credential = None
             if credential and credential.is_active and credential.value:
                 context.update(credential.value)
                 logger.info(
