@@ -16,6 +16,9 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.api.routers.breeze_buddy.credentials.rbac import (
+    require_credential_write_scope,
+)
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.database.accessor.breeze_buddy.merchants import (
     get_merchant_by_merchant_identifier,
@@ -57,39 +60,20 @@ async def create_credential_endpoint(
 
     Values are encrypted at rest when CREDENTIAL_ENCRYPTION_KEY is configured.
     """
-    # Only admins can create global credentials
-    if req.reseller_id is None and current_user.role != "admin":
+    # A merchant row always sits under its reseller (DB CHECK says the same).
+    if req.merchant_id and not req.reseller_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin users can create global credentials",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="merchant_id requires reseller_id",
         )
-
-    # Non-admin: validate merchant access
-    if req.reseller_id and current_user.role != "admin":
-        if (
-            req.reseller_id not in current_user.reseller_ids
-            and "*" not in current_user.reseller_ids
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to reseller {req.reseller_id}",
-            )
+    # The write gate, by role and scope (see credentials/rbac.py): global =
+    # admin; reseller-wide = a reseller-level role holding that reseller;
+    # merchant row = that merchant in the caller's scope.
+    require_credential_write_scope(
+        current_user, req.reseller_id, req.merchant_id, "create"
+    )
 
     if req.merchant_id:
-        # A merchant row always sits under its reseller (DB CHECK says the same).
-        if not req.reseller_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="merchant_id requires reseller_id",
-            )
-        if current_user.role != "admin" and (
-            req.merchant_id not in current_user.merchant_ids
-            and "*" not in current_user.merchant_ids
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to merchant {req.merchant_id}",
-            )
         # The merchant must actually belong to this reseller: a user may hold
         # access to both ids independently, and a row scoped to the wrong
         # reseller would never resolve for the merchant's real one.
@@ -216,27 +200,19 @@ async def update_credential_endpoint(
     - Send '******' for value fields you want to keep unchanged
     - New values will be re-encrypted if CREDENTIAL_ENCRYPTION_KEY is configured
     - Admin: can update any credential
-    - Merchant user: can only update their own merchant's credentials (not global)
+    - Reseller user: reseller-wide rows and merchant rows of their reseller
+    - Merchant user: only their own merchant's rows (never reseller-wide or global)
     """
-    # Fetch credential first to check authorization
+    # Fetch credential first to check authorization (tenant-scoped read)
     credential = await get_credential_handler(credential_id, current_user)
 
-    # RBAC check: non-admin users cannot update global credentials
-    if current_user.role != "admin":
-        if credential.reseller_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only admin users can update global credentials",
-            )
-        # Check reseller access
-        if (
-            credential.reseller_id not in current_user.reseller_ids
-            and "*" not in current_user.reseller_ids
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to credential for reseller {credential.reseller_id}",
-            )
+    # The write gate, by role and scope: a global row is admin's; a
+    # reseller-wide row needs a reseller-level role holding that reseller; a
+    # merchant row needs that merchant in the caller's scope. The row decides
+    # where a template's conversations go, so this is checked on the route.
+    require_credential_write_scope(
+        current_user, credential.reseller_id, credential.merchant_id, "update"
+    )
 
     return await update_credential_handler(credential_id, req, current_user)
 
