@@ -752,6 +752,44 @@ def get_daily_summary_stats_query(
     return text, [start_date, end_date]
 
 
+def get_daily_summary_merchant_outcomes_query(
+    start_date: datetime,
+    end_date: datetime,
+    top_merchants: int,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query for the per-merchant block of the daily Slack summary.
+
+    Returns one row per (merchant_id, outcome) for the ``top_merchants``
+    merchants by call volume in [start_date, end_date) — a few dozen rows at
+    most, never the calls themselves — plus ``all_calls`` (every merchant) so
+    the caller can show the remainder. Outcomes are free-form per template, so
+    they are returned as-is and ranked by the caller.
+    """
+    text = f"""
+        WITH per_outcome AS (
+            SELECT merchant_id, outcome, COUNT(*) AS calls
+            FROM "{LEAD_CALL_TRACKER_TABLE}"
+            WHERE "call_initiated_time" >= $1
+              AND "call_initiated_time" < $2
+            GROUP BY merchant_id, outcome
+        ),
+        top_merchants AS (
+            SELECT merchant_id, SUM(calls) AS merchant_calls
+            FROM per_outcome
+            GROUP BY merchant_id
+            ORDER BY merchant_calls DESC
+            LIMIT $3
+        )
+        SELECT p.merchant_id, p.outcome, p.calls, t.merchant_calls,
+               (SELECT SUM(calls) FROM per_outcome) AS all_calls
+        FROM per_outcome p
+        JOIN top_merchants t ON t.merchant_id IS NOT DISTINCT FROM p.merchant_id
+        ORDER BY t.merchant_calls DESC, p.merchant_id, p.calls DESC;
+    """
+    return text, [start_date, end_date, top_merchants]
+
+
 def update_langfuse_scores_query(
     call_id: str, langfuse_scores: Dict[str, Any]
 ) -> Tuple[str, List[Any]]:

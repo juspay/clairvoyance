@@ -19,6 +19,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     defer_lead_next_attempt_and_release_lock_query,
     get_call_facts_by_runs_query,
     get_call_stats_by_runs_query,
+    get_daily_summary_merchant_outcomes_query,
     get_daily_summary_stats_query,
     get_lead_by_call_id_query,
     get_lead_by_id_query,
@@ -754,6 +755,32 @@ async def get_daily_summary_stats(
     except Exception as e:
         logger.error(f"Error getting daily summary stats: {e}", exc_info=True)
         return None
+
+
+async def get_daily_summary_merchant_outcomes(
+    start_date: datetime,
+    end_date: datetime,
+    top_merchants: int,
+) -> List[asyncpg.Record]:
+    """
+    Get (merchant_id, outcome, calls, merchant_calls, all_calls) rows for the
+    top merchants by volume, for the daily Slack summary. Empty list on failure.
+    """
+    logger.info("Getting daily summary merchant outcomes")
+
+    try:
+        query_text, values = get_daily_summary_merchant_outcomes_query(
+            start_date=start_date,
+            end_date=end_date,
+            top_merchants=top_merchants,
+        )
+        result = await run_parameterized_query(query_text, values)
+        return result if result else []
+    except Exception as e:
+        logger.error(
+            f"Error getting daily summary merchant outcomes: {e}", exc_info=True
+        )
+        return []
 
 
 async def update_langfuse_scores(
