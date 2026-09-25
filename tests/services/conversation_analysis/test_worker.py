@@ -162,6 +162,7 @@ async def test_non_list_transcript_is_ignored(
                 created_at=now,
                 status=LeadCallStatus.FINISHED,
                 outcome=None,
+                payload=None,
                 metaData={"transcription": {"role": "user"}},
             )
         ),
