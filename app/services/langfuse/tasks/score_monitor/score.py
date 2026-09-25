@@ -17,8 +17,7 @@ from app.core.config.dynamic import (
 from app.core.config.static import LANGFUSE_BASEURL
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
-    get_all_lead_call_trackers,
-    get_lead_based_analytics,
+    get_daily_summary_stats,
     get_lead_by_call_id,
     update_langfuse_scores,
 )
@@ -419,49 +418,28 @@ class ScoreMonitor:
             now = datetime.now(timezone.utc)
             start_time = now - timedelta(hours=24)
 
-            # Fetch all call trackers for the last 24 hours
-            call_trackers = await get_all_lead_call_trackers(
+            # Counted in SQL (one row back): loading every call tracker of the
+            # day into memory OOM-killed the pod once volume passed ~100k calls
+            counts = await get_daily_summary_stats(
                 start_date=start_time,
                 end_date=now,
             )
 
-            if not call_trackers:
-                logger.info("No call trackers found for the last 24 hours")
+            if not counts:
+                logger.info("No daily summary stats available for the last 24 hours")
                 return default_stats
 
-            # Initialize counters for call-based metrics
-            calls_attempted = 0  # FINISHED status
-            calls_no_answer = 0
-            calls_confirm = 0
-            calls_cancel = 0
-            calls_address_updated = 0
-            calls_busy = 0
-            provider_counts = default_stats["provider_split"].copy()
-
-            # Process each call tracker for call-based stats
-            for tracker, calling_provider in call_trackers:
-                # Count attempted calls (FINISHED status)
-                if tracker.status and tracker.status.value == "FINISHED":
-                    calls_attempted += 1
-
-                # Count by outcome
-                outcome_value = tracker.outcome if tracker.outcome else None
-                if outcome_value == "NO_ANSWER":
-                    calls_no_answer += 1
-                elif outcome_value == "CONFIRM":
-                    calls_confirm += 1
-                elif outcome_value == "CANCEL":
-                    calls_cancel += 1
-                elif outcome_value == "ADDRESS_UPDATED":
-                    calls_address_updated += 1
-                elif outcome_value == "BUSY":
-                    calls_busy += 1
-
-                # Count by provider
-                if calling_provider:
-                    provider_upper = calling_provider.upper()
-                    if provider_upper in provider_counts:
-                        provider_counts[provider_upper] += 1
+            calls_attempted = counts["calls_attempted"]  # FINISHED status
+            calls_no_answer = counts["calls_no_answer"]
+            calls_confirm = counts["calls_confirm"]
+            calls_cancel = counts["calls_cancel"]
+            calls_address_updated = counts["calls_address_updated"]
+            calls_busy = counts["calls_busy"]
+            provider_counts = {
+                "TWILIO": counts["provider_twilio"],
+                "EXOTEL": counts["provider_exotel"],
+                "PLIVO": counts["provider_plivo"],
+            }
 
             # Calculate call-based derived metrics
             calls_picked = calls_attempted - calls_no_answer
@@ -477,30 +455,13 @@ class ScoreMonitor:
                 (calls_busy / calls_picked * 100) if calls_picked > 0 else 0.0
             )
 
-            # Get lead-based analytics
-            lead_data = await get_lead_based_analytics(
-                start_date=start_time,
-                end_date=now,
-            )
-
-            # Calculate lead-based metrics
-            total_leads = len(lead_data) if lead_data else 0
-            leads_picked = 0
-            leads_confirmed = 0
-            leads_cancelled = 0
-            leads_address_updated = 0
-
-            if lead_data:
-                for lead in lead_data:
-                    # Lead is "picked" if finished_calls > no_answer_calls
-                    if lead["finished_calls"] > lead["no_answer_calls"]:
-                        leads_picked += 1
-                    if lead["confirmed_calls"] > 0:
-                        leads_confirmed += 1
-                    if lead["cancelled_calls"] > 0:
-                        leads_cancelled += 1
-                    if lead["address_update_calls"] > 0:
-                        leads_address_updated += 1
+            # Lead-based metrics (per request_id); a lead is "picked" if
+            # finished_calls > no_answer_calls
+            total_leads = counts["total_leads"]
+            leads_picked = counts["leads_picked"]
+            leads_confirmed = counts["leads_confirmed"]
+            leads_cancelled = counts["leads_cancelled"]
+            leads_address_updated = counts["leads_address_updated"]
 
             # A lead is "successful" if it has CONFIRM, CANCEL, or ADDRESS_UPDATED
             leads_successful = leads_confirmed + leads_cancelled + leads_address_updated

@@ -629,67 +629,6 @@ def update_lead_call_completion_details_query(
     return text, values
 
 
-def get_all_lead_call_trackers_query(
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None,
-    outcome: Optional[str] = None,
-    request_id: Optional[str] = None,
-    shop_name: Optional[str] = None,
-    limit: Optional[int] = None,
-    offset: Optional[int] = None,
-) -> Tuple[str, List[Any]]:
-    """
-    Generate query to get all lead call trackers within a date range with optional filters and pagination.
-    """
-    text = f"""
-        SELECT
-            lct.*,
-            ou.provider as calling_provider
-        FROM
-            "{LEAD_CALL_TRACKER_TABLE}" lct
-        LEFT JOIN
-            "{TELEPHONY_NUMBER_TABLE}" ou ON lct.telephony_number_id = ou.id
-    """
-    values: List[Any] = []
-    conditions = []
-
-    if start_date:
-        values.append(start_date)
-        conditions.append(f'lct."call_initiated_time" >= ${len(values)}')
-
-    if end_date:
-        values.append(end_date)
-        conditions.append(f'lct."call_initiated_time" < ${len(values)}')
-
-    if outcome:
-        values.append(outcome)
-        conditions.append(f"outcome = ${len(values)}")
-
-    if request_id:
-        values.append(f"%{request_id}%")
-        conditions.append(f"lct.request_id LIKE ${len(values)}")
-
-    if shop_name:
-        values.append(f"%{shop_name}%")
-        conditions.append(f"payload->>'shop_name' LIKE ${len(values)}")
-
-    if conditions:
-        text += " WHERE " + " AND ".join(conditions)
-
-    text += ' ORDER BY lct."created_at" DESC'
-
-    if limit is not None:
-        values.append(limit)
-        text += f" LIMIT ${len(values)}"
-
-    if offset is not None:
-        values.append(offset)
-        text += f" OFFSET ${len(values)}"
-
-    text += ";"
-    return text, values
-
-
 def get_leads_by_status_and_time_before_query(
     status: LeadCallStatus, time: datetime, include_locked: bool = False
 ) -> Tuple[str, List[Any]]:
@@ -754,43 +693,63 @@ def get_lead_call_trackers_count_query(
     return text, values
 
 
-def get_lead_based_analytics_query(
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None,
+def get_daily_summary_stats_query(
+    start_date: datetime,
+    end_date: datetime,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to get per-lead call data.
-    Returns one row per request_id with call counts. Aggregation done in Python.
+    Generate query for the Langfuse daily Slack summary counts.
+
+    Returns exactly one row: call-based counts, provider split, and lead-based
+    counts (per request_id) for calls initiated in [start_date, end_date).
+    Aggregating in SQL keeps memory flat regardless of call volume — loading
+    the full rows for a day (~150k+) OOM-killed the pod running the summary.
     """
-    values: List[Any] = []
-    conditions = []
-
-    if start_date:
-        values.append(start_date)
-        conditions.append(f'"call_initiated_time" >= ${len(values)}')
-
-    if end_date:
-        values.append(end_date)
-        conditions.append(f'"call_initiated_time" < ${len(values)}')
-
-    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-
     text = f"""
-        SELECT
-            request_id AS order_id,
-            COUNT(*) AS total_calls,
-            COUNT(*) FILTER (WHERE status = 'FINISHED') AS finished_calls,
-            COUNT(*) FILTER (WHERE outcome = 'CONFIRM') AS confirmed_calls,
-            COUNT(*) FILTER (WHERE outcome = 'CANCEL') AS cancelled_calls,
-            COUNT(*) FILTER (WHERE outcome = 'ABORT') AS aborted_calls,
-            COUNT(*) FILTER (WHERE outcome = 'ADDRESS_UPDATED') AS address_update_calls,
-            COUNT(*) FILTER (WHERE outcome = 'BUSY') AS busy_calls,
-            COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') AS no_answer_calls
-        FROM "{LEAD_CALL_TRACKER_TABLE}"
-        {where_clause}
-        GROUP BY request_id;
+        WITH window_calls AS (
+            SELECT lct.request_id, lct.status, lct.outcome,
+                   UPPER(ou.provider::text) AS provider
+            FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+            LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou
+                ON lct.telephony_number_id = ou.id
+            WHERE lct."call_initiated_time" >= $1
+              AND lct."call_initiated_time" < $2
+        ),
+        per_lead AS (
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'FINISHED') AS finished_calls,
+                COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') AS no_answer_calls,
+                COUNT(*) FILTER (WHERE outcome = 'CONFIRM') AS confirmed_calls,
+                COUNT(*) FILTER (WHERE outcome = 'CANCEL') AS cancelled_calls,
+                COUNT(*) FILTER (WHERE outcome = 'ADDRESS_UPDATED') AS address_update_calls
+            FROM window_calls
+            GROUP BY request_id
+        ),
+        call_stats AS (
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'FINISHED') AS calls_attempted,
+                COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') AS calls_no_answer,
+                COUNT(*) FILTER (WHERE outcome = 'CONFIRM') AS calls_confirm,
+                COUNT(*) FILTER (WHERE outcome = 'CANCEL') AS calls_cancel,
+                COUNT(*) FILTER (WHERE outcome = 'ADDRESS_UPDATED') AS calls_address_updated,
+                COUNT(*) FILTER (WHERE outcome = 'BUSY') AS calls_busy,
+                COUNT(*) FILTER (WHERE provider = 'TWILIO') AS provider_twilio,
+                COUNT(*) FILTER (WHERE provider = 'EXOTEL') AS provider_exotel,
+                COUNT(*) FILTER (WHERE provider = 'PLIVO') AS provider_plivo
+            FROM window_calls
+        ),
+        lead_stats AS (
+            SELECT
+                COUNT(*) AS total_leads,
+                COUNT(*) FILTER (WHERE finished_calls > no_answer_calls) AS leads_picked,
+                COUNT(*) FILTER (WHERE confirmed_calls > 0) AS leads_confirmed,
+                COUNT(*) FILTER (WHERE cancelled_calls > 0) AS leads_cancelled,
+                COUNT(*) FILTER (WHERE address_update_calls > 0) AS leads_address_updated
+            FROM per_lead
+        )
+        SELECT * FROM call_stats CROSS JOIN lead_stats;
     """
-    return text, values
+    return text, [start_date, end_date]
 
 
 def update_langfuse_scores_query(
