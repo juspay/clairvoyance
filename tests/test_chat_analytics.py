@@ -63,6 +63,28 @@ def test_list_query_admin_no_filters_has_no_where():
     assert "AS preview" in query
 
 
+def test_list_query_enriches_only_the_page():
+    """message_count / preview must sit OUTSIDE the LIMIT/OFFSET subquery.
+
+    Postgres computes the SELECT list before OFFSET discards rows, so the
+    subqueries next to LIMIT/OFFSET ran for every skipped row of a deep page.
+    """
+    query, _ = list_chat_sessions_query({"template_id": "tid"}, limit=100, offset=99900)
+    # The CTE ends where the outer SELECT starts reading from it (p.*).
+    cte = query[query.index("WITH page AS") : query.index("p.id, p.template_id")]
+    assert "LIMIT $2 OFFSET $3" in cte
+    assert "chat_message" not in cte
+    assert "AS message_count" in query and "AS preview" in query
+    # No second LIMIT/OFFSET after the page is picked.
+    assert "OFFSET" not in query.split("FROM page p", 1)[1]
+
+
+def test_list_query_order_has_id_tiebreaker():
+    query, _ = list_chat_sessions_query({}, limit=20, offset=0)
+    assert "ORDER BY cs.last_activity_at DESC, cs.id DESC" in query
+    assert "ORDER BY p.last_activity_at DESC, p.id DESC" in query
+
+
 def test_list_query_all_filters_placeholder_order():
     dt1 = datetime(2026, 5, 1, tzinfo=timezone.utc)
     dt2 = datetime(2026, 6, 1, tzinfo=timezone.utc)
