@@ -51,6 +51,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
 )
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _acquire_number,
+    _calling_window_park_time,
     _get_available_number,
     _get_lead_config,
     _is_within_calling_hours,
@@ -98,6 +99,9 @@ from app.database.accessor import (
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_details,
+)
+from app.database.accessor.breeze_buddy.dispatch import (
+    park_lead_until_and_release_lock,
 )
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.services.redis import get_redis_service
@@ -420,11 +424,12 @@ class Worker:
                 lock_released = await self._release(locked.id)
                 return
 
-            if not _is_within_calling_hours(config):
-                # Defer until window opens — we approximate by deferring 5 min
-                # and letting the reconciler/promoter re-pick. Cheaper than
-                # computing the exact next window here.
-                lock_released = await self._defer_and_release(locked.id, 300)
+            now = datetime.now(timezone.utc)  # one read for both checks
+            if not _is_within_calling_hours(config, now):
+                # Park until the calling window opens.
+                lock_released = await self._park_and_release(
+                    locked.id, _calling_window_park_time(config, now)
+                )
                 return
 
             # id-only resolution: leads always carry the template_id they
@@ -857,7 +862,26 @@ class Worker:
             )
         except Exception as e:  # noqa: BLE001
             logger.error(f"defer_lead_next_attempt_and_release_lock failed: {e}")
+        return await self._mirror_deferral(
+            lead_id,
+            deferred,
+            datetime.now(timezone.utc) + timedelta(seconds=defer_seconds),
+        )
 
+    async def _park_and_release(self, lead_id: str, park_until: datetime) -> bool:
+        """Park the lead until ``park_until``, ZADD, release the lock."""
+        parked = None
+        try:
+            parked = await park_lead_until_and_release_lock(lead_id, park_until)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"park_lead_until_and_release_lock failed: {e}")
+        return await self._mirror_deferral(lead_id, parked, park_until)
+
+    async def _mirror_deferral(
+        self, lead_id: str, deferred: Any, fallback_at: datetime
+    ) -> bool:
+        """Mirror a DB deferral onto the schedule ZSET, or unlock if it
+        did not take effect."""
         if deferred is None:
             # DB defer didn't take effect (accessor returned None or raised).
             # Fall back to a plain unlock and let reconcile_backlog_to_zset
@@ -869,11 +893,9 @@ class Worker:
             return True
 
         # DB defer succeeded — mirror the DB-authoritative timestamp in Redis.
-        # Fall back to now+defer_seconds only if the DB column was somehow
+        # Fall back to the intended time only if the DB column was somehow
         # NULL (shouldn't happen post-defer, but defensive).
-        next_at = deferred.next_attempt_at or (
-            datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
-        )
+        next_at = deferred.next_attempt_at or fallback_at
         await schedule_lead(lead_id, next_at)
         return True
 

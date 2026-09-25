@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from datetime import datetime
-from typing import Any, Optional, cast
+from typing import Any, Optional, Sequence, Tuple, cast
 
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import SCHEDULE_ZSET
 from app.core.config.static import BB_DISPATCH_QPS_JITTER_MS
@@ -79,6 +79,39 @@ async def schedule_lead(
     except Exception as e:  # noqa: BLE001 — best-effort; reconciler heals
         logger.error(f"schedule_lead: ZADD failed for {lead_id} (score={score}): {e}")
         return False
+
+
+# Leads per ZADD in ``schedule_leads``.
+SCHEDULE_BATCH_SIZE = 1000
+
+
+async def schedule_leads(
+    items: Sequence[Tuple[str, datetime]],
+    jitter_ms: Optional[int] = None,
+) -> int:
+    """
+    ZADD many leads onto the schedule in batches. Best-effort like
+    ``schedule_lead``: a failed batch is logged and skipped. Returns the
+    number of leads written.
+    """
+    written = 0
+    for i in range(0, len(items), SCHEDULE_BATCH_SIZE):
+        batch = items[i : i + SCHEDULE_BATCH_SIZE]
+        mapping = {
+            lead_id: _apply_jitter(_to_unix_ms(when), jitter_ms)
+            for lead_id, when in batch
+        }
+        try:
+            redis = await get_redis_service()
+            client: Any = cast(Any, await redis.get_client())
+            await client.zadd(SCHEDULE_ZSET, mapping)
+            written += len(mapping)
+        except Exception as e:  # noqa: BLE001 — best-effort; DB is authoritative
+            logger.error(
+                f"schedule_leads: ZADD failed for a batch of {len(mapping)} "
+                f"leads: {e}"
+            )
+    return written
 
 
 async def cancel_scheduled_lead(lead_id: str) -> bool:
