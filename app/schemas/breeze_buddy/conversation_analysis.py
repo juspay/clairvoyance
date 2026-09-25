@@ -84,7 +84,7 @@ class UpdateTopicConfigurationRequest(BaseModel):
 
 
 class TopicConfigurationResponse(BaseModel):
-    template_id: UUID
+    template_id: str
     provider: LLMProvider
     sdk: Optional[LLMSdk] = None
     model: str

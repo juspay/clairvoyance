@@ -113,7 +113,7 @@ async def _resolve_azure(
     )
 
 
-async def _resolve_openai(
+async def resolve_openai(
     llm_config: LLMConfiguration | None,
     account: KeyAccount,
 ) -> OpenAILLMService:
@@ -413,7 +413,7 @@ async def get_llm_service(
     if llm_config.provider == LLMProvider.OPENAI:
         _dispatch_log("Using OpenAI LLM provider")
         account = await resolver.get(block, KeyAccount)
-        return await _resolve_openai(llm_config, account)
+        return await resolve_openai(llm_config, account)
 
     if llm_config.provider == LLMProvider.GOOGLE_VERTEX:
         account = await resolver.get(block, VertexAccount)
