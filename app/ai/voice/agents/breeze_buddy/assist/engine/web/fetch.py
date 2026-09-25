@@ -35,6 +35,7 @@ import time
 from dataclasses import dataclass, field
 from typing import (
     AsyncIterator,
+    Callable,
     Dict,
     List,
     Mapping,
@@ -252,8 +253,13 @@ async def fetch_page(
     max_bytes: int = DEFAULT_MAX_BYTES,
     headers: Optional[Dict[str, str]] = None,
     max_redirects: int = MAX_REDIRECTS,
+    allow_url: Optional[Callable[[str], bool]] = None,
 ) -> FetchResult:
-    """GET ``url``, following redirects by hand so every hop is validated."""
+    """GET ``url``, following redirects by hand so every hop is validated.
+
+    ``allow_url``, when given, is asked before every hop is requested; a hop it
+    refuses raises ``UnsafeUrlError`` without being sent.
+    """
     started = time.monotonic()
     target = normalize_probe_url(url)
     if get_proxy_config():
@@ -284,6 +290,8 @@ async def fetch_page(
             remaining = timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise FetchFailedError("timed out reading the site")
+            if allow_url is not None and not allow_url(target):
+                raise UnsafeUrlError("redirected off-site")
             parts = urlsplit(target)
             host = (parts.hostname or "").lower()
             port = parts.port or 443

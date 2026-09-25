@@ -1,4 +1,4 @@
-"""Schemas for provider-neutral website scraping."""
+"""Schemas for website scraping and for store research."""
 
 from typing import Any, Dict, List, Optional
 
@@ -29,3 +29,9 @@ class WebsiteScrapingResponse(BaseModel):
     result: WebsiteScrapingResult
     provider_response: Dict[str, Any]
     error: Optional[str] = None
+
+
+class SiteResearchRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=2048)
+    reseller_id: str = Field(..., min_length=1, max_length=255)
+    merchant_id: Optional[str] = Field(None, max_length=255)

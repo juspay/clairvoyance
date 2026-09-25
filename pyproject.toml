@@ -43,6 +43,9 @@ dependencies = [
     "tiktoken>=0.13.0",
     "restrictedpython>=8.4",
     "num2words>=0.5.14",
+    # Assist research runs its own patterns over hostile page text; ``regex``
+    # gives them a hard timeout, which stdlib ``re`` cannot.
+    "regex>=2025.9.1",
 ]
 
 [project.optional-dependencies]
