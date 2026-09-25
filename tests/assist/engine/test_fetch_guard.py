@@ -7,7 +7,7 @@ the reason ``POST /assist/probe`` can exist at all.
 from __future__ import annotations
 
 import socket
-from typing import AsyncIterator, List, Optional, Tuple
+from typing import Any, AsyncIterator, List, Optional, Tuple, cast
 
 import pytest
 
@@ -314,3 +314,156 @@ async def test_a_proxied_deployment_refuses_to_fetch(monkeypatch) -> None:
     monkeypatch.setattr(fetch, "get_proxy_config", lambda: "http://egress:3128")
     with pytest.raises(fetch.EgressNotGuardedError):
         await fetch.fetch_page("https://shop.example/")
+
+
+# ── decoding the body ────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("charset", ["punycode", "idna", "PUNYCODE "])
+def test_a_slow_codec_named_by_the_page_is_not_used(charset) -> None:
+    # A hostile Content-Type could otherwise hold the event loop for minutes:
+    # the punycode codec is pure Python and super-linear (160 KB took 3.6 s).
+    import time
+
+    started = time.monotonic()
+    text = fetch._decode(b"-" + b"9" * 400_000, charset)
+    assert time.monotonic() - started < 0.5
+    assert text.startswith("-999")
+
+
+def test_a_real_web_charset_is_still_honoured() -> None:
+    assert fetch._decode("café".encode("latin-1"), "ISO-8859-1") == "café"
+    assert fetch._decode("日本".encode("shift_jis"), "Shift_JIS") == "日本"
+    assert fetch._decode("привет".encode("cp1251"), "windows-1251") == "привет"
+
+
+def test_an_unknown_or_missing_charset_falls_back_to_utf8() -> None:
+    assert fetch._decode("ok ✓".encode(), "no-such-charset") == "ok ✓"
+    assert fetch._decode("ok ✓".encode(), None) == "ok ✓"
+    assert fetch._decode("ok ✓".encode(), "utf-8\x00") == "ok ✓"
+    assert fetch._decode(b"\xff\xfeok", "utf-8") == "��ok"
+
+
+class _PostingSession(_RecordingSession):
+    """Records POSTs; answers with ``status`` (a redirect when 302)."""
+
+    status = 200
+
+    def post(self, url, **kwargs):
+        _RecordingSession.calls.append({"url": url, "method": "POST", **kwargs})
+        headers = {"location": "https://elsewhere.example/"}
+        response = _FakeHTTPResponse(
+            url, status=_PostingSession.status, headers=headers
+        )
+        return _FakeGet(response, _RecordingSession.calls)
+
+
+async def test_a_json_body_is_sent_as_a_post(monkeypatch) -> None:
+    _RecordingSession.calls = []
+    _PostingSession.status = 200
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _PostingSession)
+
+    await fetch.fetch_page("https://shop.example/api", json_body={"query": "{ q }"})
+
+    call = _RecordingSession.calls[0]
+    assert call["method"] == "POST"
+    assert call["data"] == '{"query": "{ q }"}'
+    assert call["headers"]["Content-Type"] == "application/json"
+    assert call["allow_redirects"] is False
+
+
+async def test_a_post_never_follows_a_redirect(monkeypatch) -> None:
+    _RecordingSession.calls = []
+    _PostingSession.status = 302
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _PostingSession)
+
+    with pytest.raises(fetch.FetchFailedError):
+        await fetch.fetch_page("https://shop.example/api", json_body={"q": 1})
+    assert len(_RecordingSession.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "text, charset",
+    [
+        ("สวัสดี", "TIS-620"),
+        ("①㈱", "cp932"),
+        ("香港", "Big5-HKSCS"),
+        ("안녕", "cp949"),
+    ],
+)
+def test_regional_web_charsets_are_honoured(text, charset) -> None:
+    assert fetch._decode(text.encode(charset), charset) == text
+
+
+class _BrokenStream(_FakeStream):
+    """A body that fails partway, as a bad gzip or short body does."""
+
+    async def iter_chunked(self, n: int) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+        raise fetch.aiohttp.ClientPayloadError("bad gzip")
+
+
+class _BrokenBodySession(_RecordingSession):
+    def get(self, url, **kwargs):
+        response = _FakeHTTPResponse(url)
+        response.content = _BrokenStream([b"<html>"])
+        return _FakeGet(response, _RecordingSession.calls)
+
+
+async def test_a_broken_body_is_a_fetch_failure(monkeypatch) -> None:
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _BrokenBodySession)
+    with pytest.raises(fetch.FetchFailedError):
+        await fetch.fetch_page("https://shop.example/")
+
+
+class _Charset:
+    """A response whose Content-Type aiohttp may fail to parse."""
+
+    def __init__(self, content_type: str, charset: object) -> None:
+        self.headers = {"Content-Type": content_type}
+        self._charset = charset
+
+    @property
+    def charset(self):
+        if isinstance(self._charset, BaseException):
+            raise self._charset
+        return self._charset
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _Charset("application/json; a*", IndexError("string index out of range")),
+        _Charset("text/html; c=" + "(" * 200, RecursionError()),
+        _Charset("(;charset*;", (None, None, "")),
+        _Charset("text/html" + ";" * 8000, "utf-8"),
+    ],
+)
+def test_a_content_type_the_parser_chokes_on_names_no_charset(response) -> None:
+    assert fetch._charset_of(response) is None
+
+
+def test_a_plain_content_type_names_its_charset() -> None:
+    assert (
+        fetch._charset_of(cast(Any, _Charset("text/html; charset=utf-8", "utf-8")))
+        == "utf-8"
+    )
+
+
+def test_the_real_parser_on_hostile_headers_names_no_charset() -> None:
+    from aiohttp import helpers
+
+    for header in ("application/json; a*", "text/html; c=" + "(" * 200, "(;charset*;"):
+
+        class _Real:
+            headers = {"Content-Type": header}
+
+            @property
+            def charset(self):
+                return helpers.parse_content_type(header)[1].get("charset")
+
+        assert fetch._charset_of(cast(Any, _Real())) is None

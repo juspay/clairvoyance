@@ -10,6 +10,7 @@ needs, how a host app maps to a tenant, how a blueprint must look.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import FrozenSet, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlsplit
 
@@ -24,6 +25,23 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
     ToolBinding,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import LegacyMarkers
+
+
+@dataclass(frozen=True)
+class KnownDocument:
+    """A document a platform already knows the address, and often the text, of.
+
+    ``body`` empty means the platform named the document but did not produce
+    it; the researcher fetches ``url`` itself. ``display_url`` is the same
+    document on the merchant's own domain, for showing a person an address
+    they recognise.
+    """
+
+    kind: str
+    title: str
+    url: str
+    body: Optional[str] = None
+    display_url: Optional[str] = None
 
 
 class PlatformAdapter(Protocol):
@@ -48,6 +66,10 @@ class PlatformAdapter(Protocol):
     async def research(
         self, profile: SiteProfile, budget_seconds: float
     ) -> ResearchDelta: ...
+
+    async def known_documents(
+        self, profile: SiteProfile
+    ) -> Tuple[KnownDocument, ...]: ...
 
     def legacy_section_markers(self) -> LegacyMarkers: ...
 
@@ -133,6 +155,14 @@ class GenericAdapter:
     ) -> ResearchDelta:
         return ResearchDelta()
 
+    async def known_documents(self, profile: SiteProfile) -> Tuple[KnownDocument, ...]:
+        """Documents this platform can hand over without a search.
+
+        A shortcut, never a substitute: the researcher still reads whatever
+        comes back empty. A plain website has none.
+        """
+        return ()
+
     def legacy_section_markers(self) -> LegacyMarkers:
         return {}
 
@@ -167,4 +197,4 @@ class GenericAdapter:
         return "snippet"
 
 
-__all__ = ["GenericAdapter", "PlatformAdapter"]
+__all__ = ["GenericAdapter", "KnownDocument", "PlatformAdapter"]
