@@ -13,7 +13,7 @@ def get_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]]:
     query = f"""
         SELECT {_CONFIG_COLUMNS}
         FROM evaluation_config
-        WHERE template_id = $1::uuid
+        WHERE template_id IS NOT DISTINCT FROM NULLIF($1, 'default')::uuid
           AND evaluation_type = 'TOPIC'
     """
     return query, [template_id]
@@ -82,7 +82,7 @@ def update_evaluation_configuration_query(
     query = f"""
         UPDATE evaluation_config
         SET configuration = configuration || $2::jsonb
-        WHERE template_id = $1::uuid
+        WHERE template_id IS NOT DISTINCT FROM NULLIF($1, 'default')::uuid
           AND evaluation_type = 'TOPIC'
         RETURNING {_CONFIG_COLUMNS}
     """
