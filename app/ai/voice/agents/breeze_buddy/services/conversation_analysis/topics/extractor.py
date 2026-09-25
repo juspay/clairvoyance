@@ -128,7 +128,7 @@ async def _request_llm(
     api_key_name = None
     if runtime["provider"] == LLMProvider.OPENAI.value:
         endpoint = (await get_config("LITELLM_BASE_URL", "", str)).strip()
-        api_key_name = "GRID_API_KEY"
+        api_key_name = "GRID_TOPICS_API_KEY"
         if not endpoint:
             endpoint = (await get_config("OPENAI_GATEWAY_BASE_URL", "", str)).strip()
             api_key_name = "OPENAI_GATEWAY_API_KEY"

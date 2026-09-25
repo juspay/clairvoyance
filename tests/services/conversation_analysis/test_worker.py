@@ -104,7 +104,7 @@ async def test_prompt_replacement_preserves_json_braces(
     llm_config = llm_call.args[0]
     assert llm_config.model == "minimaxai/minimax-m2"
     assert llm_config.endpoint == "https://grid.example/v1"
-    assert llm_config.api_key_name == "GRID_API_KEY"
+    assert llm_config.api_key_name == "GRID_TOPICS_API_KEY"
 
 
 async def test_agent_prompt_is_sent_only_when_enabled(
