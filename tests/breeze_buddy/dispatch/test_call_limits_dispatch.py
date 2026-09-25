@@ -26,6 +26,11 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
 )
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.merchants import CallLimit
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+)
 from tests.breeze_buddy.dispatch.conftest import make_lead
 
 RULE = CallLimit(max_calls=2, window_hours=48)
@@ -204,6 +209,11 @@ async def test_a_refused_record_releases_the_channel_and_ends_the_lead(
     assert await channel_tokens_available(harness.number.id) == 1
     assert harness.released_numbers == [harness.number.id]
     assert harness.completions[-1]["outcome"] == "CALL_LIMIT_REACHED"
+    # Call outcome columns: never dialled, over the merchant's cap.
+    assert harness.completions[-1]["call_outcome"] == CallOutcome(
+        connection_status=ConnectionStatus.NOT_DIALED,
+        connection_reason=ConnectionReason.CALL_LIMIT,
+    )
 
 
 async def test_a_call_the_provider_did_not_place_is_taken_back(

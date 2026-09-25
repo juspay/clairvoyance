@@ -93,6 +93,14 @@ from app.schemas import (
     TelephonyNumber,
     TelephonyNumberStatus,
 )
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+    EndReason,
+    completed_call_outcome,
+    connection_from_provider_status,
+)
 from app.services.gcp.storage.storage import upload_file_to_gcs
 from app.services.redis.client import get_redis_service
 
@@ -262,6 +270,10 @@ async def _run_pre_checks_for_lead(
         outcome="PRECHECK_FAILED",
         meta_data=meta_data,
         call_end_time=datetime.now(timezone.utc),
+        call_outcome=CallOutcome(
+            connection_status=ConnectionStatus.NOT_DIALED,
+            connection_reason=ConnectionReason.PRECHECK_FAILED,
+        ),
     )
 
     # Send webhook for pre-check failure
@@ -321,6 +333,10 @@ async def finish_lead_call_limit_reached(
         outcome=CALL_LIMIT_OUTCOME,
         meta_data=meta_data,
         call_end_time=datetime.now(timezone.utc),
+        call_outcome=CallOutcome(
+            connection_status=ConnectionStatus.NOT_DIALED,
+            connection_reason=ConnectionReason.CALL_LIMIT,
+        ),
     )
     if finished is None:
         logger.error(
@@ -759,12 +775,24 @@ async def reconcile_stuck_processing_leads():
             # mid-call outcome hook recorded.
             cleanup_meta = dict(locked_lead.metaData or {})
             cleanup_meta["cleanup"] = "stuck_processing_timeout"
+            # An outcome proves a pipeline ran (so the call was answered) and
+            # died before finalising; without one, no signal says whether
+            # anyone picked up.
+            pipeline_ran = bool(locked_lead.outcome)
             await update_lead_call_completion_details(
                 id=locked_lead.id,
                 status=LeadCallStatus.FINISHED,
                 outcome=locked_lead.outcome or "UNKNOWN",
                 meta_data=cleanup_meta,
                 call_end_time=datetime.now(timezone.utc),
+                call_outcome=CallOutcome(
+                    connection_status=(
+                        ConnectionStatus.ANSWERED
+                        if pipeline_ran
+                        else ConnectionStatus.UNKNOWN
+                    ),
+                    end_reason=EndReason.PIPELINE_ERROR if pipeline_ran else None,
+                ),
             )
 
             # ``locked_lead`` is the pre-update snapshot: the lock was taken
@@ -795,9 +823,14 @@ async def handle_call_completion(
     outcome: str | None = None,
     call_end_time: datetime | None = None,
     meta_data: dict | None = None,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Handles call completion events.
+
+    ``call_outcome`` carries the call outcome columns (connection, end
+    reason, agent outcome) beside the legacy ``outcome``, which is written
+    exactly as before.
     """
     logger.info(f"Call completed for call_id: {call_id} with outcome: {outcome}")
 
@@ -861,6 +894,7 @@ async def handle_call_completion(
         outcome=outcome,
         meta_data=meta_data,
         call_end_time=call_end_time,
+        call_outcome=completed_call_outcome(call_outcome, bool(is_transfer)),
     )
 
     # call.completed is mirrored to the CRM inside
@@ -884,13 +918,21 @@ async def handle_call_completion(
     return updated_lead
 
 
-async def handle_unanswered_calls(call_id: str):
+async def handle_unanswered_calls(
+    call_id: str,
+    provider_status: Optional[str] = None,
+    hangup_cause: Optional[str] = None,
+):
     """
     Handles unanswered call events.
 
     This is called when a call fails to connect (no-answer, busy, failed).
     It releases the allocated pod (if pod isolation is enabled), cleans up
     resources, and schedules a retry if configured.
+
+    The legacy outcome is NO_ANSWER for every carrier status; the call
+    outcome columns keep what the carrier actually said (``provider_status``,
+    ``hangup_cause``) and map it to a connection status.
     """
     logger.info(f"Handling unanswered call for call_id: {call_id}")
 
@@ -941,12 +983,21 @@ async def handle_unanswered_calls(call_id: str):
     if not config and lead.template not in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
         return
 
+    connection_status, connection_reason = connection_from_provider_status(
+        provider_status
+    )
     await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome="NO_ANSWER",
         meta_data={},
         call_end_time=datetime.now(timezone.utc),
+        call_outcome=CallOutcome(
+            connection_status=connection_status or ConnectionStatus.NO_ANSWER,
+            connection_reason=connection_reason,
+            provider_status=provider_status,
+            hangup_cause=hangup_cause,
+        ),
     )
 
     # call.completed is mirrored to the CRM inside
@@ -1030,12 +1081,19 @@ async def reconcile_completed_call(call_id: str) -> None:
         # reaper does — 30s sooner rather than ten minutes later.
         cleanup_meta = dict(claimed.metaData or {})
         cleanup_meta["cleanup"] = "completed_no_pipeline"
+        # The carrier said completed — the far end picked up — but no
+        # pipeline ever closed the row.
         await update_lead_call_completion_details(
             id=claimed.id,
             status=LeadCallStatus.FINISHED,
             outcome=claimed.outcome or "UNKNOWN",
             meta_data=cleanup_meta,
             call_end_time=datetime.now(timezone.utc),
+            call_outcome=CallOutcome(
+                connection_status=ConnectionStatus.ANSWERED,
+                provider_status="completed",
+                end_reason=EndReason.PIPELINE_NOT_STARTED,
+            ),
         )
 
         await _release_call_resources(claimed)

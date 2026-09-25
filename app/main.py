@@ -20,6 +20,10 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
     stop_promoter,
     stop_workers,
 )
+from app.ai.voice.agents.breeze_buddy.managers.call_outcome_coverage import (
+    CALL_OUTCOME_COVERAGE_INTERVAL_SECONDS,
+    report_call_outcome_coverage,
+)
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     reconcile_stuck_processing_leads,
 )
@@ -176,6 +180,15 @@ async def lifespan(_app: FastAPI):
                 name="chat_session_idle_cleanup",
                 func=end_idle_chat_sessions,
                 interval_seconds=CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
+            )
+
+            # Call outcome columns: daily coverage / consistency report to
+            # Slack while they are written beside the legacy outcome. A no-op
+            # while CALL_OUTCOME_WRITES_ENABLED is off.
+            _background_scheduler.register_task(
+                name="call_outcome_coverage",
+                func=report_call_outcome_coverage,
+                interval_seconds=CALL_OUTCOME_COVERAGE_INTERVAL_SECONDS,
             )
 
             # Knowledge base ingestion sweeper. Uploads kick processing
