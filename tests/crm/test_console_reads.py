@@ -574,6 +574,81 @@ def test_two_agents_fold_into_the_plan_wide_table() -> None:
     assert "GROUP BY 1, 2" in get_call_facts_by_runs_query("m1", ["a"], [T0], [None])[0]
 
 
+def test_the_calls_chart_counts_every_finished_call_with_its_outcomes() -> None:
+    """Every FINISHED call is on the chart, placed or not — a call the
+    dialler refused (CALL_LIMIT_REACHED) too — but one still queued or on
+    the line is not. calls_per_customer stays the placed-only count
+    (customers called twice or more is about calls that rang)."""
+    endings = [_ending(1), _ending(2), _ending(3), _ending(4)]
+
+    def row(template, placed, finished, outcomes, leads=None):
+        return {
+            **_fact(placed, template=template)[0],
+            "leads": finished if leads is None else leads,
+            "finished": finished,
+            "outcomes": outcomes,
+        }
+
+    facts = {
+        # 4 finished: 3 rang, 1 refused by the per-customer cap
+        "r1": [
+            row("nudge", 3, 4, {"NO_ANSWER": 2, "BUSY": 1, "CALL_LIMIT_REACHED": 1})
+        ],
+        # 4 finished across two agents, plus one still queued (not counted);
+        # the jsonb as asyncpg returns it (text)
+        "r2": [
+            row("nudge", 2, 2, '{"NO_ANSWER": 2}'),
+            row("hindi", 2, 2, '{"INTERESTED": 1, "BUSY": 1}', leads=3),
+        ],
+        # 1 finished; its second call is still on the line (not counted)
+        "r3": [row("nudge", 2, 1, {"BUSY": 1}, leads=2)],
+        # r4: never minted a call
+    }
+    r = analytics.build_report(endings, facts)
+
+    bars = [(b.calls, b.runs, b.outcomes) for b in r.customers.call_histogram]
+    assert bars == [
+        (0, 1, {}),
+        (1, 1, {"BUSY": 1}),
+        (
+            4,
+            2,
+            {
+                "NO_ANSWER": 4,
+                "BUSY": 2,
+                "CALL_LIMIT_REACHED": 1,
+                "INTERESTED": 1,
+            },
+        ),
+    ]
+    # a bar's outcomes are exactly its calls × runs
+    for b in r.customers.call_histogram:
+        assert sum(b.outcomes.values()) == b.calls * b.runs
+    # the placed-only histogram is unchanged: 3, 4, 2 and 0 calls rang
+    assert r.customers.calls_per_customer == {"0": 1, "2": 1, "3": 1, "4": 1}
+    # one agent's card counts only its own calls
+    by = {t.template: t for t in r.by_template}
+    assert [(b.calls, b.runs) for b in by["nudge"].call_histogram] == [
+        (1, 1),
+        (2, 1),
+        (4, 1),
+    ]
+    assert by["hindi"].call_histogram[0].outcomes == {"INTERESTED": 1, "BUSY": 1}
+
+
+def test_an_unreadable_outcome_breakdown_is_no_breakdown() -> None:
+    facts = {"r1": [{**_fact(1)[0], "finished": 1, "outcomes": "not json"}]}
+    r = analytics.build_report([_ending(1)], facts)
+    assert [(b.calls, b.outcomes) for b in r.customers.call_histogram] == [(1, {})]
+
+
+def test_the_facts_read_counts_only_finished_calls_for_the_chart() -> None:
+    text, _ = get_call_facts_by_runs_query("m1", ["a"], [T0], [None])
+    assert "jsonb_object_agg(outcome, n)" in text
+    assert "WHERE \"status\" = 'FINISHED'" in text
+    assert "AS finished" in text and "LEFT JOIN outcomes" in text
+
+
 def test_a_run_that_re_entered_is_one_customer_twice() -> None:
     endings = [
         RunEnding("r1", "same", "waiting", None, None),

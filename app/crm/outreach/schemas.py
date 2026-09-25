@@ -858,6 +858,16 @@ class ReportReach(BaseModel):
 REACH_STAGES = ("never_dialled", "dialled_no_answer", "spoke")
 
 
+class ReportCallBar(BaseModel):
+    """One bar of the calls-per-customer chart: the runs with exactly
+    ``calls`` FINISHED call leads (placed or not), and how they ended
+    (outcome → leads). The outcomes sum to calls × runs."""
+
+    calls: int
+    runs: int
+    outcomes: Dict[str, int] = Field(default_factory=dict)
+
+
 class ReportCustomers(BaseModel):
     """Customer level: one row per run that ENTERED the window. A run is a
     customer's journey through the plan, so these read as customers.
@@ -894,6 +904,11 @@ class ReportCustomers(BaseModel):
     open: int
     by_reach: Dict[str, ReportReach] = Field(default_factory=dict)
     open_by_square: Dict[str, int] = Field(default_factory=dict)
+    # The calls-per-customer chart: every FINISHED call lead, placed or not,
+    # so a call the dialler refused (CALL_LIMIT_REACHED) is on it; one still
+    # queued or on the line is not. calls_per_customer above stays
+    # placed-only — "customers called twice or more" is about calls that rang.
+    call_histogram: List[ReportCallBar] = Field(default_factory=list)
 
 
 class ReportCalls(BaseModel):
@@ -922,6 +937,7 @@ class ReportTemplate(BaseModel):
     calls: ReportCalls
     reached: int
     calls_per_customer: Dict[str, int]
+    call_histogram: List[ReportCallBar] = Field(default_factory=list)
 
 
 class WorkflowReport(BaseModel):
