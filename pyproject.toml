@@ -43,6 +43,8 @@ dependencies = [
     "tiktoken>=0.13.0",
     "restrictedpython>=8.4",
     "num2words>=0.5.14",
+    # Assist onboarding reads a store logo's colours (engine/research/brand.py).
+    "pillow>=11.0.0",
 ]
 
 [project.optional-dependencies]

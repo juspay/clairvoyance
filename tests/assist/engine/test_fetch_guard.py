@@ -314,3 +314,63 @@ async def test_a_proxied_deployment_refuses_to_fetch(monkeypatch) -> None:
     monkeypatch.setattr(fetch, "get_proxy_config", lambda: "http://egress:3128")
     with pytest.raises(fetch.EgressNotGuardedError):
         await fetch.fetch_page("https://shop.example/")
+
+
+class _PostingSession(_RecordingSession):
+    """Answers a POST with ``response``, recording the method used."""
+
+    response_status = 200
+    response_headers: dict = {}
+
+    def post(self, url, **kwargs):
+        _RecordingSession.calls.append({"method": "POST", "url": url, **kwargs})
+        return _FakeGet(
+            _FakeHTTPResponse(
+                url,
+                status=_PostingSession.response_status,
+                headers=_PostingSession.response_headers,
+                chunks=(b'{"ok": true}',),
+            ),
+            _RecordingSession.calls,
+        )
+
+
+async def test_a_json_body_is_posted_under_the_same_guard(monkeypatch) -> None:
+    _RecordingSession.calls = []
+    _PostingSession.response_status, _PostingSession.response_headers = 200, {}
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _PostingSession)
+
+    result = await fetch.fetch_page(
+        "https://shop.example/api", json_body={"query": "{ shop { name } }"}
+    )
+
+    sent = _RecordingSession.calls[0]
+    assert sent["method"] == "POST"
+    assert sent["data"] == '{"query": "{ shop { name } }"}'
+    assert sent["headers"]["Content-Type"] == "application/json"
+    assert sent["allow_redirects"] is False
+    assert result.body == '{"ok": true}'
+
+
+async def test_a_post_never_follows_a_redirect(monkeypatch) -> None:
+    _RecordingSession.calls = []
+    _PostingSession.response_status = 302
+    _PostingSession.response_headers = {"location": "https://elsewhere.example/"}
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _PostingSession)
+
+    with pytest.raises(FetchFailedError):
+        await fetch.fetch_page("https://shop.example/api", json_body={"q": 1})
+    assert len(_RecordingSession.calls) == 1
+
+
+async def test_decode_false_returns_bytes_untouched(monkeypatch) -> None:
+    _RecordingSession.calls = []
+    _pinned_ok(monkeypatch)
+    monkeypatch.setattr(fetch.aiohttp, "ClientSession", _RecordingSession)
+
+    result = await fetch.fetch_page("https://shop.example/logo.png", decode=False)
+
+    assert result.raw == b"<html></html>"
+    assert result.body == ""
