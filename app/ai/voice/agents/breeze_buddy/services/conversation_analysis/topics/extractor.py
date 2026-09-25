@@ -1,22 +1,32 @@
 """Topic extraction and output cleanup."""
 
+import asyncio
 import json
 import re
-from typing import Any, Dict, List, Mapping, Optional
+import time
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 
-from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
+from app.ai.voice.agents.breeze_buddy.accounts.types import KeyAccount
+from app.ai.voice.agents.breeze_buddy.llm import get_llm_service, resolve_openai
 from app.ai.voice.llm import LLMConfiguration, LLMProvider, LLMSdk
 from app.ai.voice.llm._pools import get_openai_httpx_client
+from app.core.config import static
 from app.core.logger import logger
 from app.schemas.breeze_buddy.conversation_analysis import TopicExtractionResult
 from app.services.live_config.store import get_config
 
+_FIRST_TOKEN_TIMEOUT_SECONDS = 30
+
 
 class TopicModelResponseError(ValueError):
     """The model answered, but not with usable topics."""
+
+
+class TopicFirstTokenTimeout(TimeoutError):
+    """The gateway sent no token, thinking included, in the first window."""
 
 
 _PROMPT_ONLY_RESPONSE_INSTRUCTION = """Return only valid JSON with exactly this shape:
@@ -57,14 +67,18 @@ def resolve_topic_evaluation_configuration(
 
     try:
         temperature = float(settings.get("temperature", 0))
-    except (TypeError, ValueError):
-        temperature = 0
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "evaluation_config.settings.temperature must be a number"
+        ) from exc
     temperature = min(2.0, max(0.0, temperature))
 
     try:
         max_output_tokens = int(settings.get("max_output_tokens", 16384))
-    except (TypeError, ValueError, OverflowError):
-        max_output_tokens = 16384
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "evaluation_config.settings.max_output_tokens must be an integer"
+        ) from exc
     max_output_tokens = min(16384, max(128, max_output_tokens))
 
     max_topics = settings.get("max_topics")
@@ -78,7 +92,16 @@ def resolve_topic_evaluation_configuration(
         if max_topics < 1:
             raise ValueError("evaluation_config.settings.max_topics must be >= 1")
 
-    include_agent_prompt = settings.get("include_agent_prompt") is True
+    include_agent_prompt = settings.get("include_agent_prompt", False)
+    if not isinstance(include_agent_prompt, bool):
+        raise ValueError(
+            "evaluation_config.settings.include_agent_prompt must be true or false"
+        )
+    stream = settings.get("stream", False)
+    if not isinstance(stream, bool):
+        raise ValueError("evaluation_config.settings.stream must be true or false")
+    if stream and provider != LLMProvider.OPENAI.value:
+        raise ValueError("evaluation_config.settings.stream needs the openai provider")
 
     return {
         "provider": provider,
@@ -91,6 +114,7 @@ def resolve_topic_evaluation_configuration(
             "max_output_tokens": max_output_tokens,
             "max_topics": max_topics,
             "include_agent_prompt": include_agent_prompt,
+            "stream": stream,
         },
     }
 
@@ -126,9 +150,10 @@ async def _request_llm(
 ) -> Dict[str, Any]:
     endpoint = None
     api_key_name = None
+    on_grid = False
     if runtime["provider"] == LLMProvider.OPENAI.value:
         endpoint = (await get_config("LITELLM_BASE_URL", "", str)).strip()
-        api_key_name = "GRID_API_KEY"
+        on_grid = bool(endpoint)
         if not endpoint:
             endpoint = (await get_config("OPENAI_GATEWAY_BASE_URL", "", str)).strip()
             api_key_name = "OPENAI_GATEWAY_API_KEY"
@@ -137,18 +162,25 @@ async def _request_llm(
                 "OpenAI gateway base URL is not configured; set OPENAI_GATEWAY_BASE_URL"
             )
         endpoint = endpoint.rstrip("/").removesuffix("/chat/completions")
-    llm = await get_llm_service(
-        LLMConfiguration(
-            provider=runtime["provider"],
-            sdk=runtime.get("sdk"),
-            model=runtime["model"],
-            region=runtime.get("region"),
-            endpoint=endpoint,
-            api_key_name=api_key_name,
-            temperature=runtime["settings"]["temperature"],
-            max_tokens=runtime["settings"]["max_output_tokens"],
-        )
+    llm_config = LLMConfiguration(
+        provider=runtime["provider"],
+        sdk=runtime.get("sdk"),
+        model=runtime["model"],
+        region=runtime.get("region"),
+        endpoint=endpoint,
+        api_key_name=api_key_name,
+        temperature=runtime["settings"]["temperature"],
+        max_tokens=runtime["settings"]["max_output_tokens"],
     )
+    if on_grid:
+        if not static.GRID_TOPICS_API_KEY:
+            raise ValueError("GRID_TOPICS_API_KEY is not set in the pod environment")
+        llm = await resolve_openai(
+            llm_config,
+            KeyAccount(api_key=static.GRID_TOPICS_API_KEY, endpoint=endpoint),
+        )
+    else:
+        llm = await get_llm_service(llm_config)
     # AzureLLMService subclasses OpenAILLMService, so Azure evaluations share
     # this pool too, on purpose: without it each one leaks its own client.
     if isinstance(llm, OpenAILLMService):
@@ -156,10 +188,51 @@ async def _request_llm(
             max_retries=0, http_client=get_openai_httpx_client()
         )
     context = LLMContext([{"role": "user", "content": transcript}])
-    content = await llm.run_inference(
-        context,
-        system_instruction=prompt + "\n\n" + _PROMPT_ONLY_RESPONSE_INSTRUCTION,
-    )
+    instruction = prompt + "\n\n" + _PROMPT_ONLY_RESPONSE_INSTRUCTION
+    if runtime["settings"]["stream"]:
+        llm = cast(OpenAILLMService, llm)
+        params = llm.build_chat_completion_params(
+            llm.get_llm_adapter().get_llm_invocation_params(
+                context,
+                system_instruction=instruction,
+                convert_developer_to_user=not llm.supports_developer_role,
+            )
+        )
+        started_at = time.monotonic()
+        first_token_s = 0.0
+        parts: List[str] = []
+        usage = None
+        try:
+            async with asyncio.timeout(_FIRST_TOKEN_TIMEOUT_SECONDS) as deadline:
+                async with await llm._client.chat.completions.create(
+                    **params
+                ) as stream:
+                    async for chunk in stream:
+                        usage = chunk.usage or usage
+                        delta = chunk.choices[0].delta if chunk.choices else None
+                        if not delta:
+                            continue
+                        thinking = getattr(delta, "reasoning_content", None)
+                        if not first_token_s and (delta.content or thinking):
+                            first_token_s = time.monotonic() - started_at
+                            deadline.reschedule(None)
+                        if delta.content:
+                            parts.append(delta.content)
+        except TimeoutError as exc:
+            raise TopicFirstTokenTimeout(
+                f"no first token in {_FIRST_TOKEN_TIMEOUT_SECONDS}s"
+            ) from exc
+        content = "".join(parts)
+        details = usage.completion_tokens_details if usage else None
+        logger.info(
+            f"Topic model answered in {time.monotonic() - started_at:.1f}s: "
+            f"first token {first_token_s:.1f}s, "
+            f"{usage.prompt_tokens if usage else '?'} input tokens, "
+            f"{usage.completion_tokens if usage else '?'} output tokens "
+            f"({details.reasoning_tokens if details else '?'} thinking)"
+        )
+    else:
+        content = await llm.run_inference(context, system_instruction=instruction)
     if not content:
         raise TopicModelResponseError("Topic evaluator returned no content")
     return _decode_json_object(content)

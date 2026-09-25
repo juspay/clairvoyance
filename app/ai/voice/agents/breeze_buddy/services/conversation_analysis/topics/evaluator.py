@@ -16,13 +16,18 @@ from app.database.accessor.breeze_buddy.evaluation_result import (
 )
 from app.schemas.breeze_buddy.conversation_analysis import EvaluationType
 
-from .extractor import TopicModelResponseError, extract_topics
+from .extractor import (
+    TopicFirstTokenTimeout,
+    TopicModelResponseError,
+    extract_topics,
+)
 
-_ANALYSIS_TIMEOUT_SECONDS = 60
+_ANALYSIS_TIMEOUT_SECONDS = 240
 _ANALYSIS_MAX_ATTEMPTS = 2
 
 MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
 MODEL_TIMEOUT = "MODEL_TIMEOUT"
+MODEL_FIRST_TOKEN_TIMEOUT = "MODEL_FIRST_TOKEN_TIMEOUT"
 MODEL_BAD_RESPONSE = "MODEL_BAD_RESPONSE"
 EVALUATION_ERROR = "EVALUATION_ERROR"
 
@@ -36,6 +41,8 @@ class ModelUnavailableError(Exception):
 def classify_failure(exc: Exception) -> str:
     # Our own wait_for ceiling says this transcript was slow, not that the
     # gateway is down: transport timeouts arrive as httpx/SDK errors below.
+    if isinstance(exc, TopicFirstTokenTimeout):
+        return MODEL_FIRST_TOKEN_TIMEOUT
     if isinstance(exc, TimeoutError):
         return MODEL_TIMEOUT
     if isinstance(
@@ -49,6 +56,8 @@ def classify_failure(exc: Exception) -> str:
     ):
         return MODEL_UNAVAILABLE
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if isinstance(status, str) and status.isdigit():
+        status = int(status)
     if isinstance(status, int) and (status == 429 or status >= 500):
         return MODEL_UNAVAILABLE
     if isinstance(
@@ -110,7 +119,7 @@ async def analyze_topics(
         except Exception as exc:
             failure = classify_failure(exc)
             if isinstance(exc, TimeoutError):
-                detail = f"timeout after {_ANALYSIS_TIMEOUT_SECONDS}s"
+                detail = str(exc) or f"timeout after {_ANALYSIS_TIMEOUT_SECONDS}s"
             else:
                 detail = f"{type(exc).__name__}: {exc}"
             logger.bind(attempt=attempt, failure_class=failure, model=model).warning(
