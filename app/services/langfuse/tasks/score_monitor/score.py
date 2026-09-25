@@ -17,8 +17,8 @@ from app.core.config.dynamic import (
 from app.core.config.static import LANGFUSE_BASEURL
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
-    get_all_lead_call_trackers,
-    get_lead_based_analytics,
+    get_daily_summary_merchant_outcomes,
+    get_daily_summary_stats,
     get_lead_by_call_id,
     update_langfuse_scores,
 )
@@ -26,6 +26,76 @@ from app.services.langfuse.client import langfuse_readonly_client
 from app.services.langfuse.trace import fetch_trace
 from app.services.redis import get_redis_service, is_redis_configured
 from app.services.slack.alert import slack_alert
+
+# Daily summary "Calls by Merchant" block: kept short so Slack stays readable
+SUMMARY_TOP_MERCHANTS = 5
+SUMMARY_TOP_OUTCOMES = 3
+# The only outcomes set by platform code rather than by templates:
+# NO_ANSWER = never connected (telephony no-answer/busy/failed callback),
+# BUSY = connected but ended without a result (DEFAULT_OUTCOME, idle timeout)
+NOT_CONNECTED_OUTCOME = "NO_ANSWER"
+NO_RESULT_OUTCOME = "BUSY"
+
+
+def _pct(part: int, whole: int) -> float:
+    return round(part / whole * 100, 1) if whole > 0 else 0.0
+
+
+def format_merchant_breakdown(rows: List[Any]) -> Optional[str]:
+    """
+    Format the per-merchant block of the daily summary.
+
+    ``rows`` are (merchant_id, outcome, calls, merchant_calls, all_calls) from
+    get_daily_summary_merchant_outcomes, ordered by merchant volume. Outcomes
+    are whatever each template writes, so the top ones are picked from the
+    data rather than from a fixed list. Returns None when there is nothing to
+    show.
+    """
+    if not rows:
+        return None
+
+    merchants: Dict[Optional[str], Dict[str, Any]] = {}
+    for row in rows:
+        merchant = merchants.setdefault(
+            row["merchant_id"], {"calls": row["merchant_calls"], "outcomes": {}}
+        )
+        merchant["outcomes"][row["outcome"]] = row["calls"]
+
+    lines: List[str] = []
+    for merchant_id, data in merchants.items():
+        calls = data["calls"]
+        outcomes = data["outcomes"]
+        answered = calls - outcomes.get(NOT_CONNECTED_OUTCOME, 0)
+        no_result = outcomes.get(NO_RESULT_OUTCOME, 0)
+        lines.append(
+            f"• *{merchant_id or '(no merchant)'}* — {calls:,} calls · "
+            f"answered {_pct(answered, calls)}% · "
+            f"no result {_pct(no_result, answered)}% of answered"
+        )
+
+        top_outcomes = sorted(
+            (
+                (outcome, count)
+                for outcome, count in outcomes.items()
+                if outcome not in (NOT_CONNECTED_OUTCOME, NO_RESULT_OUTCOME, None)
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:SUMMARY_TOP_OUTCOMES]
+        if top_outcomes:
+            lines.append(
+                "   ↳ "
+                + " · ".join(
+                    f"{outcome} {_pct(count, answered)}%"
+                    for outcome, count in top_outcomes
+                )
+            )
+
+    other_calls = rows[0]["all_calls"] - sum(m["calls"] for m in merchants.values())
+    if other_calls > 0:
+        lines.append(f"• Other merchants — {other_calls:,} calls")
+
+    return "\n".join(lines)
 
 
 async def track_evaluator_alert(evaluator_name: str) -> None:
@@ -419,49 +489,28 @@ class ScoreMonitor:
             now = datetime.now(timezone.utc)
             start_time = now - timedelta(hours=24)
 
-            # Fetch all call trackers for the last 24 hours
-            call_trackers = await get_all_lead_call_trackers(
+            # Counted in SQL (one row back): loading every call tracker of the
+            # day into memory OOM-killed the pod once volume passed ~100k calls
+            counts = await get_daily_summary_stats(
                 start_date=start_time,
                 end_date=now,
             )
 
-            if not call_trackers:
-                logger.info("No call trackers found for the last 24 hours")
+            if not counts:
+                logger.info("No daily summary stats available for the last 24 hours")
                 return default_stats
 
-            # Initialize counters for call-based metrics
-            calls_attempted = 0  # FINISHED status
-            calls_no_answer = 0
-            calls_confirm = 0
-            calls_cancel = 0
-            calls_address_updated = 0
-            calls_busy = 0
-            provider_counts = default_stats["provider_split"].copy()
-
-            # Process each call tracker for call-based stats
-            for tracker, calling_provider in call_trackers:
-                # Count attempted calls (FINISHED status)
-                if tracker.status and tracker.status.value == "FINISHED":
-                    calls_attempted += 1
-
-                # Count by outcome
-                outcome_value = tracker.outcome if tracker.outcome else None
-                if outcome_value == "NO_ANSWER":
-                    calls_no_answer += 1
-                elif outcome_value == "CONFIRM":
-                    calls_confirm += 1
-                elif outcome_value == "CANCEL":
-                    calls_cancel += 1
-                elif outcome_value == "ADDRESS_UPDATED":
-                    calls_address_updated += 1
-                elif outcome_value == "BUSY":
-                    calls_busy += 1
-
-                # Count by provider
-                if calling_provider:
-                    provider_upper = calling_provider.upper()
-                    if provider_upper in provider_counts:
-                        provider_counts[provider_upper] += 1
+            calls_attempted = counts["calls_attempted"]  # FINISHED status
+            calls_no_answer = counts["calls_no_answer"]
+            calls_confirm = counts["calls_confirm"]
+            calls_cancel = counts["calls_cancel"]
+            calls_address_updated = counts["calls_address_updated"]
+            calls_busy = counts["calls_busy"]
+            provider_counts = {
+                "TWILIO": counts["provider_twilio"],
+                "EXOTEL": counts["provider_exotel"],
+                "PLIVO": counts["provider_plivo"],
+            }
 
             # Calculate call-based derived metrics
             calls_picked = calls_attempted - calls_no_answer
@@ -477,30 +526,13 @@ class ScoreMonitor:
                 (calls_busy / calls_picked * 100) if calls_picked > 0 else 0.0
             )
 
-            # Get lead-based analytics
-            lead_data = await get_lead_based_analytics(
-                start_date=start_time,
-                end_date=now,
-            )
-
-            # Calculate lead-based metrics
-            total_leads = len(lead_data) if lead_data else 0
-            leads_picked = 0
-            leads_confirmed = 0
-            leads_cancelled = 0
-            leads_address_updated = 0
-
-            if lead_data:
-                for lead in lead_data:
-                    # Lead is "picked" if finished_calls > no_answer_calls
-                    if lead["finished_calls"] > lead["no_answer_calls"]:
-                        leads_picked += 1
-                    if lead["confirmed_calls"] > 0:
-                        leads_confirmed += 1
-                    if lead["cancelled_calls"] > 0:
-                        leads_cancelled += 1
-                    if lead["address_update_calls"] > 0:
-                        leads_address_updated += 1
+            # Lead-based metrics (per request_id); a lead is "picked" if
+            # finished_calls > no_answer_calls
+            total_leads = counts["total_leads"]
+            leads_picked = counts["leads_picked"]
+            leads_confirmed = counts["leads_confirmed"]
+            leads_cancelled = counts["leads_cancelled"]
+            leads_address_updated = counts["leads_address_updated"]
 
             # A lead is "successful" if it has CONFIRM, CANCEL, or ADDRESS_UPDATED
             leads_successful = leads_confirmed + leads_cancelled + leads_address_updated
@@ -561,6 +593,24 @@ class ScoreMonitor:
             logger.error(f"Error fetching daily call stats: {e}", exc_info=True)
             return default_stats
 
+    async def _get_merchant_breakdown(self) -> Optional[str]:
+        """
+        Build the "Calls by Merchant" block for the last 24 hours.
+        Returns None if there is no data or the query fails, so the rest of
+        the summary still goes out.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            rows = await get_daily_summary_merchant_outcomes(
+                start_date=now - timedelta(hours=24),
+                end_date=now,
+                top_merchants=SUMMARY_TOP_MERCHANTS,
+            )
+            return format_merchant_breakdown(rows)
+        except Exception as e:
+            logger.error(f"Error building merchant breakdown: {e}", exc_info=True)
+            return None
+
     async def send_daily_summary_if_time(self) -> bool:
         """
         Send daily alert summary if it's the configured hour.
@@ -603,6 +653,7 @@ class ScoreMonitor:
 
             # Get daily call stats
             call_stats = await self._get_daily_call_stats()
+            merchant_breakdown = await self._get_merchant_breakdown()
 
             # Build and send Slack summary message
             try:
@@ -684,6 +735,15 @@ class ScoreMonitor:
                         "text": lead_analytics_text,
                     }
                 )
+
+                # Section 5: per-merchant volume and outcomes (top merchants)
+                if merchant_breakdown:
+                    sections.append(
+                        {
+                            "title": f"Calls by Merchant (top {SUMMARY_TOP_MERCHANTS})",
+                            "text": merchant_breakdown,
+                        }
+                    )
 
                 # Send to Slack
                 success = await slack_alert.send(

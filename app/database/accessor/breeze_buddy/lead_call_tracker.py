@@ -17,10 +17,10 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     append_metadata_field_query,
     count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
-    get_all_lead_call_trackers_query,
     get_call_facts_by_runs_query,
     get_call_stats_by_runs_query,
-    get_lead_based_analytics_query,
+    get_daily_summary_merchant_outcomes_query,
+    get_daily_summary_stats_query,
     get_lead_by_call_id_query,
     get_lead_by_id_query,
     get_lead_call_trackers_count_query,
@@ -681,50 +681,6 @@ async def update_lead_template(
         return None
 
 
-async def get_all_lead_call_trackers(
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None,
-    outcome: Optional[str] = None,
-    request_id: Optional[str] = None,
-    shop_name: Optional[str] = None,
-    page: Optional[int] = None,
-    page_size: Optional[int] = None,
-) -> List[Tuple[LeadCallTracker, Optional[str]]]:
-    """
-    Get all lead call trackers with optional filters and pagination.
-    """
-    logger.info("Getting all lead call trackers with filters and pagination")
-
-    limit = page_size
-    offset = (page - 1) * page_size if page and page_size else None
-
-    try:
-        query_text, values = get_all_lead_call_trackers_query(
-            start_date=start_date,
-            end_date=end_date,
-            outcome=outcome,
-            request_id=request_id,
-            shop_name=shop_name,
-            limit=limit,
-            offset=offset,
-        )
-        result = await run_parameterized_query(query_text, values)
-        if result:
-            decoded_results = [
-                (decode_lead_call_tracker(row), row["calling_provider"])
-                for row in result
-            ]
-            return [
-                (item, provider)
-                for item, provider in decoded_results
-                if item is not None
-            ]
-        return []
-    except Exception as e:
-        logger.error(f"Error getting all lead call trackers: {e}")
-        return []
-
-
 async def get_leads_by_status_and_time_before(
     status: LeadCallStatus, time: datetime, include_locked: bool = False
 ) -> List[LeadCallTracker]:
@@ -779,25 +735,51 @@ async def get_lead_call_trackers_count(
         return 0
 
 
-async def get_lead_based_analytics(
-    start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None,
-) -> List[asyncpg.Record]:
+async def get_daily_summary_stats(
+    start_date: datetime,
+    end_date: datetime,
+) -> Optional[asyncpg.Record]:
     """
-    Get per-lead call data for analytics.
-    Returns list of records with call counts per order_id.
+    Get the aggregated call/lead counts for the daily Slack summary.
+    Returns a single record, or None if the query fails.
     """
-    logger.info("Getting lead-based analytics data")
+    logger.info("Getting daily summary stats")
 
     try:
-        query_text, values = get_lead_based_analytics_query(
+        query_text, values = get_daily_summary_stats_query(
             start_date=start_date,
             end_date=end_date,
         )
         result = await run_parameterized_query(query_text, values)
+        return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Error getting daily summary stats: {e}", exc_info=True)
+        return None
+
+
+async def get_daily_summary_merchant_outcomes(
+    start_date: datetime,
+    end_date: datetime,
+    top_merchants: int,
+) -> List[asyncpg.Record]:
+    """
+    Get (merchant_id, outcome, calls, merchant_calls, all_calls) rows for the
+    top merchants by volume, for the daily Slack summary. Empty list on failure.
+    """
+    logger.info("Getting daily summary merchant outcomes")
+
+    try:
+        query_text, values = get_daily_summary_merchant_outcomes_query(
+            start_date=start_date,
+            end_date=end_date,
+            top_merchants=top_merchants,
+        )
+        result = await run_parameterized_query(query_text, values)
         return result if result else []
     except Exception as e:
-        logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
+        logger.error(
+            f"Error getting daily summary merchant outcomes: {e}", exc_info=True
+        )
         return []
 
 
