@@ -12,6 +12,7 @@ database. api.py delegates here; db/ is reached only through the
 accessors, never directly.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -21,6 +22,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.schemas import (
     REACH_STAGES,
+    ReportCallBar,
     ReportCalls,
     ReportCustomers,
     ReportReach,
@@ -277,10 +279,12 @@ def build_report(
     }
     plan_calls = _empty_calls()
     per_customer: Dict[int, int] = {}
+    histogram: Dict[int, _Bar] = {}
     cards: Dict[str, Dict[str, Any]] = {}
     for ending in endings:
         rows = facts.get(ending.id) or []
         placed = sum(int(r.get("placed") or 0) for r in rows)
+        _add_to_bar(histogram, rows)
         answered = sum(int(r.get("answered") or 0) for r in rows)
         firsts = [r["first_answered_at"] for r in rows if r.get("first_answered_at")]
         first = min(firsts) if firsts else None
@@ -292,8 +296,14 @@ def build_report(
         for r in rows:
             card = cards.setdefault(
                 str(r.get("template") or ""),
-                {"calls": _empty_calls(), "reached": 0, "per_customer": {}},
+                {
+                    "calls": _empty_calls(),
+                    "reached": 0,
+                    "per_customer": {},
+                    "histogram": {},
+                },
             )
+            _add_to_bar(card["histogram"], [r])
             for key in card["calls"]:
                 card["calls"][key] += int(r.get(key) or 0)
             n = int(r.get("placed") or 0)
@@ -335,6 +345,7 @@ def build_report(
         customers=ReportCustomers(
             **customers,
             calls_per_customer={str(k): v for k, v in sorted(per_customer.items())},
+            call_histogram=_bars(histogram),
             by_reach={k: ReportReach(**v) for k, v in by_reach.items()},
             open_by_square=dict(sorted(open_by_square.items())),
         ),
@@ -351,6 +362,7 @@ def build_report(
                 calls_per_customer={
                     str(k): v for k, v in sorted(card["per_customer"].items())
                 },
+                call_histogram=_bars(card["histogram"]),
             )
             # Busiest agent first — a plan's main template is the card a
             # merchant looks at.
@@ -359,6 +371,48 @@ def build_report(
             )
         ],
     )
+
+
+# A calls-per-customer bar while it is being folded: runs, outcome → leads.
+_Bar = Tuple[int, Dict[str, int]]
+
+
+def _add_to_bar(histogram: Dict[int, _Bar], rows: List[Dict[str, Any]]) -> None:
+    """Put one run on the bar for how many FINISHED calls ``rows`` hold —
+    placed or not, so a call the dialler refused counts, one still queued
+    or on the line does not — and add their outcomes to that bar. A run
+    with none is the 0 bar, with nothing to break down."""
+    calls = sum(int(r.get("finished") or 0) for r in rows)
+    runs, outcomes = histogram.get(calls, (0, {}))
+    for r in rows:
+        for outcome, n in _outcomes(r.get("outcomes")).items():
+            outcomes[outcome] = outcomes.get(outcome, 0) + n
+    histogram[calls] = (runs + 1, outcomes)
+
+
+def _outcomes(raw: Any) -> Dict[str, int]:
+    """The facts row's jsonb, as asyncpg hands it back (text, no codec) or
+    as a dict; anything unreadable is no breakdown rather than a failure."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): int(v) for k, v in raw.items() if isinstance(v, (int, float))}
+
+
+def _bars(histogram: Dict[int, _Bar]) -> List[ReportCallBar]:
+    """The folded bars, ascending by calls; outcomes busiest first."""
+    return [
+        ReportCallBar(
+            calls=calls,
+            runs=runs,
+            outcomes=dict(sorted(outcomes.items(), key=lambda kv: (-kv[1], kv[0]))),
+        )
+        for calls, (runs, outcomes) in sorted(histogram.items())
+    ]
 
 
 def _stage(placed: int, spoke: bool) -> str:

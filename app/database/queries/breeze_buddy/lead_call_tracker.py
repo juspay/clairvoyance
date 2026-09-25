@@ -406,20 +406,46 @@ def get_call_facts_by_runs_query(
     a flag. Grouped by template too, so one read scopes the whole call
     table to one agent (a plan may ring more than one). Over the same
     ``mine`` set as get_call_stats_by_runs_query — stamped leads and
-    retries alike."""
+    retries alike.
+
+    ``finished`` and ``outcomes`` are the FINISHED leads of that (run,
+    template), placed or not, the latter as {outcome: count}. A lead the
+    dialler ended without ringing (CALL_LIMIT_REACHED) is in both, never in
+    ``placed``; one still queued or on the line is in neither. The
+    calls-per-customer chart counts these."""
     text = f"""
-        {_run_leads_cte()}
-        SELECT run_id AS enrollment_id,
-               COALESCE("template", '') AS template,
-               count(*)::int AS leads,
-               count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL)::int AS placed,
-               count(*) FILTER (WHERE {_ANSWERED})::int AS answered,
-               count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'NO_ANSWER')::int AS no_answer,
-               count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'BUSY')::int AS busy,
-               count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL AND "status" <> 'FINISHED')::int AS in_progress,
-               min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at
-        FROM mine
-        GROUP BY 1, 2;
+        {_run_leads_cte()},
+        by_outcome AS (
+            SELECT run_id,
+                   COALESCE("template", '') AS template,
+                   COALESCE("outcome", 'N/A') AS outcome,
+                   count(*)::int AS n
+            FROM mine
+            WHERE "status" = 'FINISHED'
+            GROUP BY 1, 2, 3
+        ), outcomes AS (
+            SELECT run_id, template, jsonb_object_agg(outcome, n) AS outcomes
+            FROM by_outcome
+            GROUP BY 1, 2
+        ), facts AS (
+            SELECT run_id,
+                   COALESCE("template", '') AS template,
+                   count(*)::int AS leads,
+                   count(*) FILTER (WHERE "status" = 'FINISHED')::int AS finished,
+                   count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL)::int AS placed,
+                   count(*) FILTER (WHERE {_ANSWERED})::int AS answered,
+                   count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'NO_ANSWER')::int AS no_answer,
+                   count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'BUSY')::int AS busy,
+                   count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL AND "status" <> 'FINISHED')::int AS in_progress,
+                   min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at
+            FROM mine
+            GROUP BY 1, 2
+        )
+        SELECT f.run_id AS enrollment_id, f.template, f.leads, f.finished,
+               f.placed, f.answered, f.no_answer, f.busy, f.in_progress,
+               f.first_answered_at, COALESCE(o.outcomes, '{{}}'::jsonb) AS outcomes
+        FROM facts f
+        LEFT JOIN outcomes o ON o.run_id = f.run_id AND o.template = f.template;
     """
     return text, [merchant_id, enrollment_ids, entered_ats, exited_ats]
 
