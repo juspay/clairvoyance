@@ -24,7 +24,6 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics impo
     extractor,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
-from app.ai.voice.llm._pools import get_openai_httpx_client
 from app.api.routers.breeze_buddy.analytics.handlers import (
     _validate_topic_filters,
     get_topic_dashboard_analytics,
@@ -36,8 +35,10 @@ from app.database.queries.breeze_buddy.analytics.evaluation_result import (
 from app.database.queries.breeze_buddy.evaluation_config import (
     add_discovered_topics_query,
     get_enabled_evaluations_query,
+    get_evaluation_config_query,
     has_enabled_evaluations_query,
     initialize_evaluation_config_query,
+    update_evaluation_configuration_query,
 )
 from app.database.queries.breeze_buddy.evaluation_result import (
     save_evaluation_failure_query,
@@ -104,7 +105,7 @@ async def test_prompt_replacement_preserves_json_braces(
     llm_config = llm_call.args[0]
     assert llm_config.model == "minimaxai/minimax-m2"
     assert llm_config.endpoint == "https://grid.example/v1"
-    assert llm_config.api_key_name == "GRID_API_KEY"
+    assert llm_config.api_key_name == "GRID_TOPICS_API_KEY"
 
 
 async def test_agent_prompt_is_sent_only_when_enabled(
@@ -557,6 +558,12 @@ def test_topic_query_review_guards() -> None:
     catalog_query, _ = add_discovered_topics_query("template-id", ["Delivery"])
     assert "config.evaluation_type = 'TOPIC'" in catalog_query
 
+    for config_query, _ in (
+        get_evaluation_config_query("default"),
+        update_evaluation_configuration_query("default", {}),
+    ):
+        assert "IS NOT DISTINCT FROM NULLIF($1, 'default')::uuid" in config_query
+
     dashboard_query, _ = get_topic_dashboard_rows_query(
         {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}
     )
@@ -719,6 +726,10 @@ def test_model_failures_are_classified() -> None:
     classify = evaluator.classify_failure
 
     assert classify(TimeoutError()) == evaluator.MODEL_TIMEOUT
+    assert (
+        classify(extractor.TopicFirstTokenTimeout())
+        == evaluator.MODEL_FIRST_TOKEN_TIMEOUT
+    )
     assert classify(httpx.ReadTimeout("slow")) == evaluator.MODEL_UNAVAILABLE
     assert (
         classify(openai.APITimeoutError(request=request)) == evaluator.MODEL_UNAVAILABLE
@@ -739,6 +750,10 @@ def test_model_failures_are_classified() -> None:
         classify(_status_error(openai.AuthenticationError, 401))
         == evaluator.EVALUATION_ERROR
     )
+    streamed_503 = openai.APIError("upstream 503", request, body={"code": "503"})
+    streamed_400 = openai.APIError("bad request", request, body={"code": "400"})
+    assert classify(streamed_503) == evaluator.MODEL_UNAVAILABLE
+    assert classify(streamed_400) == evaluator.EVALUATION_ERROR
     assert (
         classify(extractor.TopicModelResponseError("no content"))
         == evaluator.MODEL_BAD_RESPONSE
@@ -823,7 +838,7 @@ async def test_our_own_timeout_fails_the_job_without_pausing(
     failure_call = save_failure.await_args
     assert failure_call is not None
     assert (
-        failure_call.args[-1] == "MODEL_TIMEOUT after 2 attempt(s): timeout after 60s"
+        failure_call.args[-1] == "MODEL_TIMEOUT after 2 attempt(s): timeout after 240s"
     )
 
 
@@ -1140,40 +1155,76 @@ async def test_consumer_count_comes_from_dynamic_config(
         await worker.stop_analysis_worker()
 
 
-async def test_every_evaluation_reuses_one_connection_pool(
+async def test_gateway_evaluations_stream_through_the_shared_pool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A per-request service must not bring its own pool: that pool is never
-    closed, so its connection stays open until the garbage collector runs."""
-    pools = []
+    """Both requests reach the one shared pool (a per-request pool is never
+    closed). A thinking chunk counts as the first token, so an answer that
+    starts after the first-token window still lands; silence is cut."""
 
-    async def fresh_service(llm_config: Any) -> OpenAILLMService:
-        llm = OpenAILLMService(api_key="key", base_url=llm_config.endpoint)
+    def chunk(delta: dict, usage: dict | None = None) -> dict:
+        choices = [{"index": 0, "delta": delta, "finish_reason": None}]
+        return {
+            "id": "c",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "grid-model",
+            "choices": choices if delta else [],
+            "usage": usage,
+        }
 
-        async def run_inference(context: Any, system_instruction: str) -> str:
-            pools.append(llm._client._client)
-            return '{"customer_needs": [], "topics": []}'
+    answer = '{"customer_needs": [], "topics": []}'
+    usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    streams = [
+        [
+            (0, chunk({"reasoning_content": "thinking"})),
+            (1.2, chunk({"content": answer})),
+            (0, chunk({}, usage)),
+        ],
+        [(1.2, chunk({"content": answer}))],
+    ]
+    requests = []
 
-        llm.run_inference = run_inference  # type: ignore[method-assign]
-        return llm
+    async def gateway(request: httpx.Request) -> httpx.Response:
+        events = streams[len(requests)]
+        requests.append(json.loads(request.content))
 
+        async def body():
+            for delay, event in events:
+                await asyncio.sleep(delay)
+                yield f"data: {json.dumps(event)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body()
+        )
+
+    pool = httpx.AsyncClient(transport=httpx.MockTransport(gateway))
+    monkeypatch.setattr(extractor, "get_openai_httpx_client", lambda: pool)
+    monkeypatch.setattr(extractor, "_FIRST_TOKEN_TIMEOUT_SECONDS", 1)
     monkeypatch.setattr(
         extractor, "get_config", AsyncMock(return_value="https://grid.example/v1")
     )
-    monkeypatch.setattr(extractor, "get_llm_service", fresh_service)
+    monkeypatch.setattr(
+        extractor,
+        "get_llm_service",
+        AsyncMock(
+            side_effect=lambda config: OpenAILLMService(
+                api_key="key", base_url=config.endpoint
+            )
+        ),
+    )
+    transcript = [{"role": "user", "content": "My order is late"}]
+    configuration = {
+        "model": "grid-model",
+        "system_prompt": "Extract {max_topics}",
+        "settings": {"stream": True},
+    }
 
-    for _ in range(2):
-        await extractor.extract_topics(
-            [{"role": "user", "content": "My order is late"}],
-            [],
-            {
-                "model": "grid-model",
-                "system_prompt": "Extract {max_topics}",
-                "settings": {"max_topics": 2},
-            },
-        )
-
-    assert pools[0] is pools[1] is get_openai_httpx_client()
+    assert await extractor.extract_topics(transcript, [], configuration) == []
+    with pytest.raises(extractor.TopicFirstTokenTimeout):
+        await extractor.extract_topics(transcript, [], configuration)
+    assert [request["stream"] for request in requests] == [True, True]
 
 
 async def test_consumers_waiting_on_a_probe_run_in_parallel_once_it_recovers(
