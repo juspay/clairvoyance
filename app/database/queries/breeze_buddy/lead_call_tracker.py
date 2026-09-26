@@ -412,7 +412,27 @@ def get_call_facts_by_runs_query(
     template), placed or not, the latter as {outcome: count}. A lead the
     dialler ended without ringing (CALL_LIMIT_REACHED) is in both, never in
     ``placed``; one still queued or on the line is in neither. The
-    calls-per-customer chart counts these."""
+    calls-per-customer chart counts these.
+
+    ``last_answered_at`` / ``last_answered_event`` are the run's LAST
+    answered call before its exited_at (or so far, while open) and the
+    stage that call was placed for: ``current_stage`` when the call square
+    carries a stage label (the walker stamps it into the payload), else the
+    ``event_name`` fact. Both were written into the payload when the call
+    square QUEUED the lead, and a retry carries its parent's — so the word
+    may trail where the customer stood by the time they answered. The
+    report reads "for which event did we call, and then they converted"
+    off it. Per (run, template) like the rest; the caller takes the latest
+    across templates. NULL when the payload carries neither.
+
+    The event is picked in its own CTE (``last_ev``, DISTINCT ON the group,
+    newest call first) rather than an ordered ``array_agg`` in ``facts``:
+    an ordered aggregate turns the whole facts read into a sort, and
+    ``payload`` is a jsonb column that can run to kilobytes on a call-square
+    lead — sorting it for every lead is what the plain ``max(...) FILTER``
+    beside it avoids. ``facts`` stays a hash aggregate that never touches
+    ``payload``; ``last_ev`` unpacks it once per answered lead."""
+    last = f'{_ANSWERED} AND "call_initiated_time" < COALESCE(exited_at, now())'
     text = f"""
         {_run_leads_cte()},
         by_outcome AS (
@@ -437,15 +457,26 @@ def get_call_facts_by_runs_query(
                    count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'NO_ANSWER')::int AS no_answer,
                    count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'BUSY')::int AS busy,
                    count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL AND "status" <> 'FINISHED')::int AS in_progress,
-                   min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at
+                   min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at,
+                   max("call_initiated_time") FILTER (WHERE {last}) AS last_answered_at
             FROM mine
             GROUP BY 1, 2
+        ), last_ev AS (
+            SELECT DISTINCT ON (run_id, COALESCE("template", ''))
+                   run_id,
+                   COALESCE("template", '') AS template,
+                   COALESCE("payload" ->> 'current_stage', "payload" ->> 'event_name') AS last_answered_event
+            FROM mine
+            WHERE {last}
+            ORDER BY run_id, COALESCE("template", ''), "call_initiated_time" DESC, "id"
         )
         SELECT f.run_id AS enrollment_id, f.template, f.leads, f.finished,
                f.placed, f.answered, f.no_answer, f.busy, f.in_progress,
-               f.first_answered_at, COALESCE(o.outcomes, '{{}}'::jsonb) AS outcomes
+               f.first_answered_at, f.last_answered_at, e.last_answered_event,
+               COALESCE(o.outcomes, '{{}}'::jsonb) AS outcomes
         FROM facts f
-        LEFT JOIN outcomes o ON o.run_id = f.run_id AND o.template = f.template;
+        LEFT JOIN outcomes o ON o.run_id = f.run_id AND o.template = f.template
+        LEFT JOIN last_ev e ON e.run_id = f.run_id AND e.template = f.template;
     """
     return text, [merchant_id, enrollment_ids, entered_ats, exited_ats]
 

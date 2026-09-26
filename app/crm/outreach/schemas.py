@@ -886,7 +886,20 @@ class ReportCustomers(BaseModel):
     .goal_met and goal_met_before_reach is the other two stages' sum.
     ``open_by_square`` says where the still-open runs stand right now
     (current_node → runs), so "still open" splits into waiting-for-a-call
-    and waiting-for-an-event by the plan's own squares."""
+    and waiting-for-an-event by the plan's own squares.
+
+    ``goal_met_after_by_event`` is goal_met_after_reach cut by the stage
+    the run's last answered call before it ended was PLACED FOR: the call
+    square's stage label (``current_stage``) when it has one, else the
+    ``event_name`` fact — both written into the lead's payload when the
+    call was queued, and a retry carries its parent's, so the word can
+    trail where the customer stood by the time they answered. It answers
+    "for which event did we call, and then they converted", the proof a
+    merchant asks for beside the lift; not "where was the customer when we
+    spoke". Only meaningful for plans whose call squares carry stage labels
+    or whose letters carry ``event_name``; any other plan gets the single
+    "(no event)" row. Values sum to goal_met_after_reach, busiest first,
+    "(no event)" always last."""
 
     runs: int
     unique_customers: int
@@ -904,6 +917,7 @@ class ReportCustomers(BaseModel):
     open: int
     by_reach: Dict[str, ReportReach] = Field(default_factory=dict)
     open_by_square: Dict[str, int] = Field(default_factory=dict)
+    goal_met_after_by_event: Dict[str, int] = Field(default_factory=dict)
     # The calls-per-customer chart: every FINISHED call lead, placed or not,
     # so a call the dialler refused (CALL_LIMIT_REACHED) is on it; one still
     # queued or on the line is not. calls_per_customer above stays
