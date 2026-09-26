@@ -209,7 +209,8 @@ def test_the_report_and_the_calls_summary_fold_the_same_lead_set() -> None:
     # the one answered definition: the count, the moment, and the stats
     # rows' own `spoke` column
     answered = "'NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED'"
-    assert facts_sql.count(answered) == 2 and stats_sql.count(answered) == 1
+    # facts: answered, first_answered_at, last_answered_at, last_answered_event
+    assert facts_sql.count(answered) == 4 and stats_sql.count(answered) == 1
     assert ") AS spoke" in stats_sql and "GROUP BY 1, 2, 3" in stats_sql
 
 
@@ -489,6 +490,8 @@ def _fact(placed: int, answered: int = 0, first=None, template="nudge", **more):
             "busy": more.pop("busy", 0),
             "in_progress": 0,
             "first_answered_at": first,
+            "last_answered_at": more.pop("last", first),
+            "last_answered_event": more.pop("event", None),
         }
     ]
 
@@ -555,6 +558,85 @@ def test_the_report_tells_before_from_after_by_time_alone() -> None:
             + stage.open
         ) == stage.runs
     assert sum(stage.runs for stage in by.values()) == c.runs
+
+
+def test_after_we_spoke_goals_are_split_by_the_event_we_last_spoke_on() -> None:
+    """The proof beside the lift: for each goal that a conversation
+    preceded, the event the customer stood on at our LAST answered call
+    before the run ended — read off the lead's frozen event_name, the
+    latest across the agents that rang."""
+    h = timedelta(hours=1)
+    endings = [
+        _ending(1, "exited", "goal_met", T0),  # spoke on OFFERED → after
+        _ending(2, "exited", "goal_met", T0),  # two agents; the later one wins
+        _ending(3, "exited", "goal_met", T0),  # spoke, payload had no event
+        _ending(4, "exited", "goal_met", T0),  # spoke only after it ended → before
+        _ending(5, "exited", "withdrawn", T0),  # spoke, but no goal
+        _ending(6, "exited", "goal_met", T0),  # never dialled
+    ]
+    facts = {
+        "r1": _fact(1, 1, T0 - h, event="OFFERED"),
+        "r2": _fact(2, 1, T0 - 3 * h, last=T0 - 3 * h, event="OFFERED")
+        + _fact(1, 1, T0 - h, template="kyc", event="KYC_COMPLETED"),
+        "r3": _fact(1, 1, T0 - h),
+        "r4": _fact(1, 1, T0 + h, last=None),
+        "r5": _fact(1, 1, T0 - h, event="OFFERED"),
+    }
+    c = analytics.build_report(endings, facts).customers
+    assert (c.goal_met_after_reach, c.goal_met_before_reach) == (3, 2)
+    assert c.goal_met_after_by_event == {
+        "KYC_COMPLETED": 1,
+        "OFFERED": 1,
+        "(no event)": 1,
+    }
+    assert sum(c.goal_met_after_by_event.values()) == c.goal_met_after_reach
+    # busiest first, ties by name, the no-event bucket last
+    assert list(c.goal_met_after_by_event) == ["KYC_COMPLETED", "OFFERED", "(no event)"]
+    # ... and last even when it is the biggest bucket — the shape a plan
+    # without stage labels or event_name facts returns
+    endings = [_ending(i, "exited", "goal_met", T0) for i in range(1, 4)]
+    facts = {
+        "r1": _fact(1, 1, T0 - h),
+        "r2": _fact(1, 1, T0 - h),
+        "r3": _fact(1, 1, T0 - h, event="OFFERED"),
+    }
+    by = analytics.build_report(endings, facts).customers.goal_met_after_by_event
+    assert list(by.items()) == [("OFFERED", 1), ("(no event)", 2)]
+
+
+def test_the_last_answered_call_is_the_last_one_before_the_run_ended() -> None:
+    """The read decides "last" with the same answered rule as "first", and
+    stops at the run's exited_at — a call picked up after the goal letter
+    is not where we last spoke BEFORE it. The event rides in its own
+    DISTINCT ON CTE, newest call first, so the facts aggregate stays a hash
+    aggregate and never sorts or unpacks ``payload``; the stage label wins
+    over the merchant's event_name when the call square has one."""
+    sql, _ = get_call_facts_by_runs_query("m1", ["r1"], [T0], [None])
+    last = (
+        '"call_initiated_time" IS NOT NULL AND "status" = \'FINISHED\' '
+        "AND COALESCE(\"outcome\", '') NOT IN "
+        "('NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED') "
+        'AND "call_initiated_time" < COALESCE(exited_at, now())'
+    )
+    assert (
+        f'max("call_initiated_time") FILTER (WHERE {last}) AS last_answered_at' in sql
+    )
+    assert "array_agg" not in sql
+    facts = sql[sql.index("facts AS (") : sql.index("last_ev AS (")]
+    assert "payload" not in facts
+    assert "SELECT DISTINCT ON (run_id, COALESCE(\"template\", ''))" in sql
+    assert (
+        "COALESCE(\"payload\" ->> 'current_stage', \"payload\" ->> 'event_name') "
+        "AS last_answered_event" in sql
+    )
+    assert f"WHERE {last}\n" in sql
+    assert (
+        'ORDER BY run_id, COALESCE("template", \'\'), "call_initiated_time" DESC, "id"'
+        in sql
+    )
+    assert (
+        "LEFT JOIN last_ev e ON e.run_id = f.run_id AND e.template = f.template" in sql
+    )
 
 
 def test_two_agents_fold_into_the_plan_wide_table() -> None:
@@ -671,8 +753,9 @@ def test_the_report_reads_are_windowed_on_entered_at_and_tenant_first() -> None:
     assert 'l."merchant_id" = $1' in text
     assert values == ["m1", ["a", "b"], [T0, T0], [None, T0]]
     assert 'min("call_initiated_time")' in text and "GROUP BY 1, 2" in text
-    # one definition of answered, used for the count and the moment alike
-    assert text.count("'NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED'") == 2
+    # one definition of answered: the count, the first moment, the last moment
+    # before the run ended and the event on it
+    assert text.count("'NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED'") == 4
 
 
 def test_a_run_is_staged_by_whether_anyone_spoke_before_it_ended() -> None:
