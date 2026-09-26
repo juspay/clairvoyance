@@ -252,7 +252,10 @@ def build_report(
     ``by_reach`` cuts the same runs by stage (never dialled / dialled, no
     answer / spoke) with the same time rule, so its "spoke" column is
     exactly the after-we-spoke pair above; ``open_by_square`` is where the
-    open ones stand."""
+    open ones stand. ``goal_met_after_by_event`` splits the after-we-spoke
+    goals by the event the customer was on at the run's LAST answered call
+    before it ended (the lead's frozen ``event_name``; ``_NO_EVENT`` when the
+    payload had none), so it always sums to ``goal_met_after_reach``."""
     by_reach = {
         stage: {
             "runs": 0,
@@ -265,6 +268,7 @@ def build_report(
         for stage in REACH_STAGES
     }
     open_by_square: Dict[str, int] = {}
+    after_by_event: Dict[str, int] = {}
     customers = {
         "runs": len(endings),
         "unique_customers": len({e.enrollment_key for e in endings}),
@@ -330,6 +334,9 @@ def build_report(
         if ending.exit_reason == "goal_met":
             customers[f"goal_met_{when}_reach"] += 1
             by_reach[stage]["goal_met"] += 1
+            if spoke_first:
+                event = _last_answered_event(rows)
+                after_by_event[event] = after_by_event.get(event, 0) + 1
         elif ending.exit_reason == "withdrawn":
             customers[f"withdrawn_{when}_reach"] += 1
             by_reach[stage]["withdrawn"] += 1
@@ -348,6 +355,13 @@ def build_report(
             call_histogram=_bars(histogram),
             by_reach={k: ReportReach(**v) for k, v in by_reach.items()},
             open_by_square=dict(sorted(open_by_square.items())),
+            # busiest first, the no-event bucket last
+            goal_met_after_by_event=dict(
+                sorted(
+                    after_by_event.items(),
+                    key=lambda kv: (-kv[1], kv[0] == _NO_EVENT, kv[0]),
+                )
+            ),
         ),
         calls=_report_calls(plan_calls, dialled, customers["reached"]),
         by_template=[
@@ -413,6 +427,23 @@ def _bars(histogram: Dict[int, _Bar]) -> List[ReportCallBar]:
         )
         for calls, (runs, outcomes) in sorted(histogram.items())
     ]
+
+
+# The bucket for an after-we-spoke goal whose last answered call carried no
+# event_name — a plan whose facts hold none, or a lead pushed outside one.
+_NO_EVENT = "(no event)"
+
+
+def _last_answered_event(rows: List[Dict[str, Any]]) -> str:
+    """PURE: the event on the run's last answered call before it ended,
+    across every template that rang it (the read is per template, the
+    latest wins)."""
+    latest = max(
+        (r for r in rows if r.get("last_answered_at")),
+        key=lambda r: r["last_answered_at"],
+        default=None,
+    )
+    return str((latest or {}).get("last_answered_event") or _NO_EVENT)
 
 
 def _stage(placed: int, spoke: bool) -> str:

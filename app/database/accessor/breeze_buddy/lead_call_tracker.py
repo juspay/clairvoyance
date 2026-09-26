@@ -432,8 +432,10 @@ async def get_call_facts_by_runs(
     runs: Sequence[Tuple[str, datetime, Optional[datetime]]],
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Per workflow run (keyed by its id): one row per template that rang
-    it — template, leads, placed, answered, no_answer, busy, in_progress,
-    first_answered_at. ``runs`` is (id, entered_at, exited_at) per run: the
+    it — template, leads, finished, placed, answered, no_answer, busy,
+    in_progress, outcomes, first_answered_at, last_answered_at and
+    last_answered_event (the payload's event_name on the last answered call
+    before the run ended). ``runs`` is (id, entered_at, exited_at) per run: the
     id finds the leads the run stamped, the lifetime bounds its retries. A
     run with no lead is absent. Plain dicts: the data layer knows no CRM
     shape."""

@@ -412,7 +412,16 @@ def get_call_facts_by_runs_query(
     template), placed or not, the latter as {outcome: count}. A lead the
     dialler ended without ringing (CALL_LIMIT_REACHED) is in both, never in
     ``placed``; one still queued or on the line is in neither. The
-    calls-per-customer chart counts these."""
+    calls-per-customer chart counts these.
+
+    ``last_answered_at`` / ``last_answered_event`` are the run's LAST
+    answered call before its exited_at (or so far, while open) and the
+    ``event_name`` the call square froze into that lead's payload when it
+    dialled — the letter the customer was standing on. The report reads
+    "after which event did we speak, and then they converted" off it. Per
+    (run, template) like the rest; the caller takes the latest across
+    templates. NULL when the payload carries no event_name."""
+    last = f'{_ANSWERED} AND "call_initiated_time" < COALESCE(exited_at, now())'
     text = f"""
         {_run_leads_cte()},
         by_outcome AS (
@@ -437,13 +446,17 @@ def get_call_facts_by_runs_query(
                    count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'NO_ANSWER')::int AS no_answer,
                    count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'BUSY')::int AS busy,
                    count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL AND "status" <> 'FINISHED')::int AS in_progress,
-                   min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at
+                   min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at,
+                   max("call_initiated_time") FILTER (WHERE {last}) AS last_answered_at,
+                   (array_agg("payload" ->> 'event_name' ORDER BY "call_initiated_time" DESC)
+                       FILTER (WHERE {last}))[1] AS last_answered_event
             FROM mine
             GROUP BY 1, 2
         )
         SELECT f.run_id AS enrollment_id, f.template, f.leads, f.finished,
                f.placed, f.answered, f.no_answer, f.busy, f.in_progress,
-               f.first_answered_at, COALESCE(o.outcomes, '{{}}'::jsonb) AS outcomes
+               f.first_answered_at, f.last_answered_at, f.last_answered_event,
+               COALESCE(o.outcomes, '{{}}'::jsonb) AS outcomes
         FROM facts f
         LEFT JOIN outcomes o ON o.run_id = f.run_id AND o.template = f.template;
     """
