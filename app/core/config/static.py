@@ -28,6 +28,11 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 # Gemini Proxy Configuration
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+# Firecrawl Configuration
+# Firecrawl reads a store's site for onboarding research (and its brand
+# colours). Unset = research is unavailable; never called unauthenticated.
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
+
 # Pipecat Agent Configuration
 DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
