@@ -30,6 +30,12 @@ class JourneyCard(BaseModel):
     recording_ref: Optional[str] = None
     transcript_ref: Optional[str] = None
     source_kind: str
+    # A call card's outcome, split by layer (docs/CALL_OUTCOMES.md). Read
+    # from the lead beside the view, which keeps canon's 12 columns; None on
+    # any other arm and on calls from before the columns were written.
+    connection_status: Optional[str] = None
+    agent_outcome: Optional[str] = None
+    eval_outcome: Optional[str] = None
 
 
 #: Who a letter is about — the extractor's answer, never the pass's guess.

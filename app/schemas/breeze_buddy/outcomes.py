@@ -90,6 +90,40 @@ class EvalStatus(str, Enum):
 # the connection-driven retry rule read these across all agents.
 RESERVED_OUTCOMES = frozenset({"VOICEMAIL", "CALLBACK_REQUESTED"})
 
+# ---------------------------------------------------------------------------
+# The legacy ``outcome`` words and what they mean in these columns. Read by
+# the daily coverage report (does a row's columns agree with its legacy word?)
+# and the one-off backfill (what should an old row's columns be?). Both go
+# away with the legacy column.
+# ---------------------------------------------------------------------------
+
+# Dispatcher / abort refusals: never dialed, and why.
+LEGACY_NOT_DIALED_REASONS: Dict[str, ConnectionReason] = {
+    "PRECHECK_FAILED": ConnectionReason.PRECHECK_FAILED,
+    "BLACKLISTED": ConnectionReason.BLACKLISTED,
+    "NUMBER_UNAVAILABLE": ConnectionReason.NUMBER_UNAVAILABLE,
+    "INVALID_PHONE": ConnectionReason.INVALID_PHONE,
+    "NO_CONFIG": ConnectionReason.NO_CONFIG,
+    "ABORT": ConnectionReason.ABORTED,
+    "ABORTED": ConnectionReason.ABORTED,
+    # services/call_limiter.py CALL_LIMIT_OUTCOME (a test pins them equal:
+    # the vocabulary imports nothing from the services it describes).
+    "CALL_LIMIT_REACHED": ConnectionReason.CALL_LIMIT,
+}
+# Inbound calls turned away before an agent ran.
+LEGACY_REJECTED_REASONS: Dict[str, ConnectionReason] = {
+    "BLOCKED_REJECT": ConnectionReason.BLOCKED,
+    "BLOCKED_REDIRECT": ConnectionReason.BLOCKED,
+    "CAPACITY_REJECTED": ConnectionReason.CAPACITY,
+}
+# IVR walker / template errors: an end reason, never an agent outcome.
+LEGACY_IVR_ERRORS = frozenset({"IVR_ERROR", "IVR_LOOP_GUARD", "IVR_NODE_MISSING"})
+# Legacy words an answered call gets when the agent decided nothing.
+LEGACY_SYSTEM_FALLBACKS = frozenset(
+    {"BUSY", "UNKNOWN", "EARLY_HANGUP", "TRANSFERRED", "ended_by_widget"}
+    | LEGACY_IVR_ERRORS
+)
+
 # Column widths (migration 080). A raw provider string is clipped to fit; an
 # agent outcome that does not fit is dropped (the legacy varchar(50) would
 # have refused the same value anyway).

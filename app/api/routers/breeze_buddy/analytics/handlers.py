@@ -19,6 +19,7 @@ from app.api.routers.breeze_buddy.numbers.rbac import (
     rbac_number_scopes,
 )
 from app.database.accessor.breeze_buddy.analytics.analytics import (
+    get_agent_outcome_breakdown_from_db,
     get_analytics_count_from_db,
     get_attempts_to_connect_from_db,
     get_call_detail_records,
@@ -26,9 +27,12 @@ from app.database.accessor.breeze_buddy.analytics.analytics import (
     get_call_details_grouped_count_from_db,
     get_call_details_grouped_from_db,
     get_calls_by_hour_from_db,
+    get_connection_breakdown_from_db,
+    get_connection_funnel_from_db,
     get_distinct_merchant_ids_from_db,
     get_distinct_outcomes_from_db,
     get_distinct_resellers_from_db,
+    get_eval_agreement_from_db,
     get_lead_based_analytics_from_db,
     get_lead_based_trends_from_db,
     get_lead_status_counts_from_db,
@@ -498,6 +502,20 @@ async def get_call_details_analytics(
     }
 
 
+# The call outcome columns (migration 080) a call detail carries as-is.
+CALL_DETAIL_OUTCOME_COLUMNS = (
+    "connection_status",
+    "connection_reason",
+    "provider_status",
+    "hangup_cause",
+    "end_reason",
+    "agent_outcome",
+    "outcome_source",
+    "eval_outcome",
+    "eval_status",
+)
+
+
 def _build_call_detail_result(tracker: Dict[str, Any]) -> CallDetailResult:
     """Build a CallDetailResult from a raw tracker dict."""
     duration = None
@@ -556,6 +574,7 @@ def _build_call_detail_result(tracker: Dict[str, Any]) -> CallDetailResult:
         updated_at=tracker.get("updated_at"),
         execution_mode=tracker.get("execution_mode"),
         call_direction=tracker.get("call_direction"),
+        **{column: tracker.get(column) for column in CALL_DETAIL_OUTCOME_COLUMNS},
     )
 
 
@@ -1072,6 +1091,20 @@ EXPORT_COLUMNS = [
     "Attempt Count",
     "Record",
 ]
+# Call outcome columns, appended AFTER the existing ones so every column a
+# consumer already reads keeps its position (the default export includes all).
+EXPORT_OUTCOME_COLUMNS = {
+    "Connection Status": "connection_status",
+    "Connection Reason": "connection_reason",
+    "Carrier Status": "provider_status",
+    "Hangup Cause": "hangup_cause",
+    "End Reason": "end_reason",
+    "Agent Outcome": "agent_outcome",
+    "Outcome Source": "outcome_source",
+    "Eval Outcome": "eval_outcome",
+    "Eval Status": "eval_status",
+}
+EXPORT_COLUMNS += list(EXPORT_OUTCOME_COLUMNS)
 
 
 async def download_call_details(
@@ -1171,6 +1204,10 @@ async def download_call_details(
                         if tracker.get("id")
                         else ""
                     ),
+                    **{
+                        label: tracker.get(column) or ""
+                        for label, column in EXPORT_OUTCOME_COLUMNS.items()
+                    },
                 }
 
                 # Select only the columns requested by the user, in consistent order
@@ -1225,6 +1262,64 @@ async def get_attempts_to_connect_analytics(
         "type": "attempts-to-connect",
         "filters_applied": filters,
         "results": buckets,
+    }
+
+
+# --- Call outcome analytics (migration 080; docs/CALL_OUTCOMES.md) ---------
+# Finished attempts only, dated on created_at so never-dialled attempts count.
+# Rows without a connection_status are reported as "unclassified" / null
+# groups, never folded into a stage. Existing analytics types are unchanged.
+
+
+async def get_connection_funnel_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """dialled -> answered -> reached a human -> outcome decided."""
+    return {
+        "type": "connection-funnel",
+        "filters_applied": filters,
+        "results": await get_connection_funnel_from_db(filters),
+    }
+
+
+async def get_connection_breakdown_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Finished attempts per connection status and reason."""
+    return {
+        "type": "connection-breakdown",
+        "filters_applied": filters,
+        "results": await get_connection_breakdown_from_db(filters),
+    }
+
+
+async def get_agent_outcome_breakdown_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Answered attempts per agent outcome and source."""
+    return {
+        "type": "agent-outcome-breakdown",
+        "filters_applied": filters,
+        "results": await get_agent_outcome_breakdown_from_db(filters),
+    }
+
+
+async def get_eval_agreement_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Filled / confirmed / flagged: the post-call eval against the agent."""
+    return {
+        "type": "eval-agreement",
+        "filters_applied": filters,
+        "results": await get_eval_agreement_from_db(filters),
     }
 
 

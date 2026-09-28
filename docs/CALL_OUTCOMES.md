@@ -1,6 +1,6 @@
 # Call Outcomes: Connection, Agent and Eval Layers
 
-Status: **Phase 1 implemented** (branch `feat/call-outcome-columns`). Phases 2–4 planned.
+Status: **Phase 1 implemented** (branch `feat/call-outcome-columns`). **Phase 2 implemented** (branch `feat/call-outcome-exposure`). Phases 3–4 planned.
 Owners: Breeze Buddy team.
 Code: `app/schemas/breeze_buddy/outcomes.py` (vocabulary), `app/database/accessor/breeze_buddy/call_outcome.py` (the write switch), migration `080_add_call_outcome_columns.sql`.
 
@@ -164,7 +164,7 @@ Nothing below is stored; each is computed from the columns.
 | 22 | `CALLBACK_REQUESTED` | Re-dialled exactly like today's `BUSY`: `retry_offset`, counts toward `max_retry`, waits for calling hours. No `callback_at` scheduling |
 | 23 | Answered, no agent outcome, under `CONNECTION` | Today's behaviour: re-dial on idle timeout, customer hangup, agent end and IVR no-input; not on early hangup, IVR error or setup error; reaper/reconcile always |
 | 24 | Journey view | Keep canon's 12 columns; the journey read fetches the call outcome columns through a Buddy accessor |
-| 25 | CI | Run the full `pytest tests/` (today only `tests/crm` runs) |
+| 25 | CI | The build pipeline keeps running only `tests/crm`; the Buddy suites (`tests/breeze_buddy`, including the call outcome tests) are run locally before merging |
 | 26 | PR shape | Clairvoyance: one PR per phase. Loom: PR 1 carries Phases 1 and 2 (types and docs) and merges after Clairvoyance PRs 1 and 2, before `WEBHOOK_CALL_OUTCOME_KEYS` is turned on (its docs are the notice); PR 2 carries Phase 3 and merges together with Clairvoyance PR 3 (Loom first or in the same deploy) |
 
 ## 4. Backward-compatibility rules (every phase)
@@ -270,17 +270,34 @@ Nothing below is stored; each is computed from the columns.
 
 **Effort:** backend 10–12 days, Loom 0.5 day; about 3 weeks of calendar time including the soak.
 
-### Phase 2: backfill and additive exposure
+### Phase 2: backfill and additive exposure (implemented)
 
 **Shape:** one Clairvoyance PR; the Loom side (docs and types) rides in Loom PR 1 with Phase 1 (decision 26). Nothing changes behaviour. Every new external key sits behind a switch that is off by default.
+
+**What shipped**
+
+| Part | Code |
+|---|---|
+| 2a CI | Not changed: the pipeline keeps running only `tests/crm` (decision 25) |
+| 2b Backfill | `scripts/backfill_call_outcomes.py`. The legacy mapping tables (`LEGACY_NOT_DIALED_REASONS`, `LEGACY_REJECTED_REASONS`, `LEGACY_IVR_ERRORS`, `LEGACY_SYSTEM_FALLBACKS`) moved from the coverage report into `outcomes.py`, so the script and the report share them and the script never imports `app.ai` |
+| 2c Indexes | `081_add_call_outcome_indexes.sql` (`IF NOT EXISTS`; the by-hand `CONCURRENTLY` procedure is in its header) |
+| 2d Reads | `CallDetailResult` fields, CSV columns, the two filters, analytics types `connection-funnel`, `connection-breakdown`, `agent-outcome-breakdown`, `eval-agreement` (all dated on `created_at`, so `NOT_DIALED` attempts stay in), span attributes |
+| 2e CRM | `call.completed` yielding facts; `call.outcome_evaluated` (`_evaluated_lead_tap`); `announce_call_evaluated` in the lead accessor; journey card via `get_call_outcome_columns` + `crm/record/timeline.py::with_call_outcomes` (fail-open: a failed read returns the cards without the fields) |
+| 2f Webhooks | `utils/call_outcome_webhook.py` (keys + switch), the four builders, `callbacks/outcome_evaluated.py` (second webhook) |
+| Tests | `tests/breeze_buddy/test_backfill_call_outcomes.py`, `tests/breeze_buddy/test_call_outcome_exposure.py` |
+
+Where the code differs from the directions below:
+- **`service_callback` runs inside the live conversation**, not after completion. Its keys say `connectionStatus=ANSWERED` (a pipeline is running) with `endReason=null` (the call has not ended yet), plus the agent outcome so far.
+- **The second webhook is not behind `WEBHOOK_CALL_OUTCOME_KEYS`.** The template's admin-only `notify_webhook` is its switch, and only opted-in templates ever send it.
+- **Webhook log labels** (`webhook=` on the final-delivery log): `service_callback`, `no_answer`, `precheck_failed`, `call_limit`, `call_outcome_evaluated`.
+- **The call-detail list and grouped reads** select `lct.*` and needed no query change; only the CSV read names its columns.
 
 **Prerequisites**
 - The Phase 1 soak is done: at least 99.9% coverage for 7 days and every mismatch explained.
 - The reconcile fix is in: `reconcile_completed_call` writes `ANSWERED` + `provider_status=completed` with **no** `end_reason`, and `EndReason.PIPELINE_NOT_STARTED` is removed. That state can't prove the pipeline never started.
 
-**2a. CI runs every test**
-- `.github/workflows/pr-build-check.yml`: change `pytest tests/crm -q` to `pytest tests/ -q`.
-- Today the `tests/breeze_buddy` suites never run in CI, including the Phase 1 call outcome tests and the dispatcher end-to-end tests. About 20 s locally.
+**2a. CI (not changed)**
+- The build pipeline keeps running only `pytest tests/crm -q` (decision 25). Run `uv run pytest tests -q` locally before merging; the Buddy suites (dispatcher end-to-end, call outcome writes, backfill, exposure) are not run in CI.
 
 **2b. Backfill** (`scripts/backfill_call_outcomes.py`, standalone)
 - **Connection:** copy `scripts/migrate.py`: an asyncpg pool from `POSTGRES_*` via dotenv. Don't import the app, which needs `JWT_SECRET_KEY`.
@@ -388,7 +405,6 @@ Nothing below is stored; each is computed from the columns.
 **Done when**
 - The backfill is complete and the sample review is signed off.
 - The webhook keys are on with no increase in merchant errors.
-- CI runs the full suite.
 
 **Rollback**
 - Keys: turn `WEBHOOK_CALL_OUTCOME_KEYS` off.
@@ -614,7 +630,7 @@ The eval that fills `eval_*` is PR #1207 (`POST_CALL_QUALITY`, TypeSafe Jev engi
 8. **Eligibility** by `connection_status = ANSWERED` when present, falling back to today's `NO_ANSWER` / `VOICEMAIL` skip. Skip `agent_outcome = VOICEMAIL`.
 9. **Validate the output** against the allowed options. `OTHER` is stored as `OTHER`, with the suggested label in the metadata.
 10. **Chat:** don't mark sessions `PENDING` until a chat engine exists.
-11. **Fire the evaluated hook after writing `eval_*`**: `register_evaluated_hook` / `_evaluated_hooks` in `accessor/breeze_buddy/lead_call_tracker.py`, same pattern as the created/finished hooks. The Buddy side wires the CRM `call.outcome_evaluated` event and the opt-in second webhook (`evaluation_config.configuration.notify_webhook`, admin-only) to it.
+11. **Fire the evaluated hook after writing `eval_*`**: once the write-back has committed, re-read the lead and call `lct_accessor.announce_call_evaluated(lead, notify_webhook)` (`accessor/breeze_buddy/lead_call_tracker.py`), where `notify_webhook` is the template's `evaluation_config.configuration.notify_webhook` (admin-only). Phase 2 already registers the CRM `call.outcome_evaluated` tap and the opt-in second webhook on it; the call is fail-open, so it never breaks the eval.
 12. **Tests:** fill / agree / disagree, the transactional write-back, `eval_status` transitions, and eligibility with and without `connection_status`.
 13. **Renumber** the PR's migration (073 is taken) and land the write-back after 080.
 

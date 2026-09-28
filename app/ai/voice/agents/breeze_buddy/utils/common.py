@@ -141,7 +141,13 @@ def convert_to_mulaw(audio_data: bytes, input_format: str = "raw") -> bytes:
 
 
 async def send_webhook_with_retry(
-    session, url: str, data: dict, max_retries: int = 3
+    session,
+    url: str,
+    data: dict,
+    max_retries: int = 3,
+    *,
+    merchant_id: Optional[str] = None,
+    webhook: Optional[str] = None,
 ) -> bool:
     """
     Sends a webhook with retry logic up to max_retries attempts.
@@ -152,6 +158,8 @@ async def send_webhook_with_retry(
         url: webhook URL
         data: payload data
         max_retries: maximum number of attempts (default 3)
+        merchant_id: whose webhook this is, for the per-merchant delivery log
+        webhook: which webhook (e.g. "service_callback"), for the same log
 
     Returns:
         bool: True if successful, False if all attempts failed
@@ -162,12 +170,22 @@ async def send_webhook_with_retry(
     if signature:
         headers["checksum"] = signature
 
+    # One structured line per delivery with its final status, so the
+    # non-2xx rate can be watched per merchant (docs/CALL_OUTCOMES.md, 2f).
+    delivery_log = logger.bind(
+        merchant_id=merchant_id, webhook=webhook, component="merchant_webhook"
+    )
+    last_status: Optional[int] = None
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Webhook attempt {attempt}/{max_retries} to {url}")
             async with session.post(url, json=data, headers=headers) as response:
+                last_status = response.status
                 if response.status == 200:
                     logger.info(f"Webhook succeeded on attempt {attempt}")
+                    delivery_log.bind(webhook_status=200, attempts=attempt).info(
+                        "merchant webhook delivered"
+                    )
                     return True
                 else:
                     response_text = await response.text()
@@ -182,6 +200,9 @@ async def send_webhook_with_retry(
             logger.info(f"Retrying webhook (attempt {attempt + 1}/{max_retries})...")
 
     logger.error(f"All {max_retries} webhook attempts failed for {url}")
+    delivery_log.bind(webhook_status=last_status, attempts=max_retries).warning(
+        "merchant webhook failed"
+    )
     return False
 
 

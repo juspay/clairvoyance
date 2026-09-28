@@ -56,7 +56,21 @@ MIRRORS: Dict[str, str] = {
     "call.inbound": SOURCE_TELEPHONY,
     "call.attempted": SOURCE_TELEPHONY,
     "call.completed": SOURCE_TELEPHONY,
+    # The post-call eval's verdict on one attempt (docs/CALL_OUTCOMES.md).
+    # Mirror-only, like every call topic: never in the code CATALOG.
+    "call.outcome_evaluated": SOURCE_TELEPHONY,
 }
+
+# Call outcome columns a call letter carries (migration 080). They were added
+# after merchants' templates could already declare fields of the same names,
+# so they YIELD to a declared field rather than replace it (mirror_to_crm).
+CALL_OUTCOME_FACTS = (
+    "connection_status",
+    "connection_reason",
+    "end_reason",
+    "agent_outcome",
+    "outcome_source",
+)
 
 _NON_CUSTOMER_EXECUTION_MODES = {
     "TELEPHONY_TEST",
@@ -107,6 +121,7 @@ async def mirror_to_crm(
     occurred_at: Optional[datetime] = None,
     customer_id: Optional[str] = None,
     declared: Optional[Dict[str, Any]] = None,
+    yielding: Optional[Dict[str, Any]] = None,
     **facts: Any,
 ) -> None:
     """Record one buddy-side fact into the event spine.
@@ -119,6 +134,10 @@ async def mirror_to_crm(
     ``declared`` is the merchant-named half (a template's call answers), one
     dict rather than more ``**facts`` so its names cannot collide with a
     keyword above. Ours wins on a clash.
+
+    ``yielding`` are facts of ours added after merchants could already
+    declare fields of the same names (the call outcome columns). On a clash
+    the merchant's declared field is kept, so no existing letter changes.
 
     Skips silently on a missing merchant_id or external_id — both are
     truthful non-CRM states, not errors.
@@ -151,6 +170,17 @@ async def mirror_to_crm(
             )
             continue
         if value is not None:
+            payload[name] = value
+
+    for name, value in (yielding or {}).items():
+        if name in (declared or {}):
+            logger.warning(
+                f"{topic}: {name!r} is a field this template declares — the "
+                f"declared value is kept over the call outcome column "
+                f"(lead {lead_id})"
+            )
+            continue
+        if value is not None and name not in payload:
             payload[name] = value
 
     try:
@@ -208,6 +238,12 @@ async def call_facts(lead: LeadCallTracker) -> Dict[str, Any]:
             continue
         facts[name] = text
     return facts
+
+
+def call_outcome_facts(lead: LeadCallTracker) -> Dict[str, Any]:
+    """The lead's call outcome columns for a call letter (None when unknown:
+    the columns are only written while CALL_OUTCOME_WRITES_ENABLED is on)."""
+    return {name: getattr(lead, name, None) for name in CALL_OUTCOME_FACTS}
 
 
 async def _stamp_customer_on_lead(
@@ -288,6 +324,7 @@ def _created_lead_tap(lead: LeadCallTracker) -> None:
                     ended_at=lead.call_end_time,
                     customer_name=customer_name,
                     declared=await call_facts(lead),
+                    yielding=call_outcome_facts(lead),
                 )
 
         spawn_background_task(_tap(), name=f"crm-lead-created-{lead.id}")
@@ -333,6 +370,7 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
                 ended_at=lead.call_end_time,
                 customer_name=(lead.payload or {}).get("customer_name"),
                 declared=await call_facts(lead),
+                yielding=call_outcome_facts(lead),
             )
 
         spawn_background_task(
@@ -342,6 +380,41 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
         logger.opt(exception=True).error(f"CRM finished-lead tap failed for {lead.id}")
 
 
+def _evaluated_lead_tap(lead: LeadCallTracker, notify_webhook: bool = False) -> None:
+    """call.outcome_evaluated: the post-call eval's verdict on one attempt.
+
+    Fired by the eval's write-back (lct_accessor.announce_call_evaluated).
+    Carries enrollment_id so a waiting workflow square matches its own run,
+    and dedupes on the evaluation result: a re-evaluation is a new letter.
+    """
+    try:
+        if is_non_customer_lead(lead.execution_mode, lead.metaData):
+            return
+        if not lead.merchant_id:
+            return
+
+        async def _tap() -> None:
+            await mirror_to_crm(
+                "call.outcome_evaluated",
+                merchant_id=lead.merchant_id,
+                external_id=lead.eval_result_id or str(lead.id),
+                lead_id=str(lead.id),
+                phone=(lead.payload or {}).get("customer_mobile_number"),
+                customer_id=lead.customer_id,
+                call_id=lead.call_id,
+                enrollment_id=lead.enrollment_id,
+                eval_outcome=lead.eval_outcome,
+                eval_status=lead.eval_status,
+                agent_outcome=lead.agent_outcome,
+                connection_status=lead.connection_status,
+            )
+
+        spawn_background_task(_tap(), name=f"crm-call-evaluated-{lead.id}")
+    except Exception:  # fail-open: CRM taps never break the eval write
+        logger.opt(exception=True).error(f"CRM evaluated-lead tap failed for {lead.id}")
+
+
 # Install the taps. Idempotent: the registry ignores re-registration.
 lct_accessor.register_created_hook(_created_lead_tap)
 lct_accessor.register_finished_hook(_finished_lead_tap)
+lct_accessor.register_evaluated_hook(_evaluated_lead_tap)

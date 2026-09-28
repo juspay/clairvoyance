@@ -2,10 +2,17 @@ import json
 from datetime import datetime, timezone
 
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
+from app.ai.voice.agents.breeze_buddy.utils.call_outcome_webhook import (
+    with_call_outcome_keys,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import (
     send_webhook_with_retry,
 )
 from app.core.logger import logger
+from app.schemas.breeze_buddy.outcomes import (
+    call_outcome_from_lead,
+    completed_call_outcome,
+)
 
 
 async def service_callback(context: TemplateContext, args):
@@ -60,6 +67,21 @@ async def service_callback(context: TemplateContext, args):
             "callDuration": call_duration,
             "orderId": (context.lead.request_id if context.lead else None),
         }
+
+        # Call outcome keys (WEBHOOK_CALL_OUTCOME_KEYS), added BEFORE the
+        # template's declared fields below, so a declared field that shares a
+        # name keeps today's value. This runs inside a live conversation, so
+        # the call was answered; how it ends is not known yet.
+        summary_data = await with_call_outcome_keys(
+            summary_data,
+            (
+                completed_call_outcome(call_outcome_from_lead(context.lead))
+                if context.lead
+                else None
+            ),
+            eval_outcome=context.lead.eval_outcome if context.lead else None,
+            eval_status=context.lead.eval_status if context.lead else None,
+        )
 
         if expected_schema:
             meta = {}
@@ -116,6 +138,8 @@ async def service_callback(context: TemplateContext, args):
                     context.aiohttp_session,
                     webhook_url,
                     summary_data,
+                    merchant_id=context.lead.merchant_id if context.lead else None,
+                    webhook="service_callback",
                 )
                 if not success:
                     logger.error(

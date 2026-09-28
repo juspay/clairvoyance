@@ -281,6 +281,8 @@ class _CallsHarness:
         self.lead = lead
         self.writes: List[Dict[str, Any]] = []
         self.retries: List[Optional[str]] = []
+        # What each retry's NO_ANSWER webhook is built from.
+        self.retried_with: List[Optional[CallOutcome]] = []
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def noop(*_a: Any, **_k: Any) -> None:
@@ -299,8 +301,14 @@ class _CallsHarness:
             self.writes.append(kwargs)
             return self.lead
 
-        async def retry(_lead: Any, _config: Any, outcome: Optional[str] = None):
+        async def retry(
+            _lead: Any,
+            _config: Any,
+            outcome: Optional[str] = None,
+            call_outcome: Optional[CallOutcome] = None,
+        ):
             self.retries.append(outcome)
+            self.retried_with.append(call_outcome)
 
         async def claim(*_a: Any, **_k: Any) -> LeadCallTracker:
             return self.lead
@@ -336,6 +344,8 @@ async def test_carrier_busy_stays_no_answer_in_legacy_and_busy_in_connection(
         hangup_cause="USER_BUSY",
     )
     assert harness.retries == ["NO_ANSWER"]  # today's retry, unchanged
+    # The webhook is built from what was written, not the stale snapshot.
+    assert harness.retried_with == [write["call_outcome"]]
 
 
 async def test_carrier_timeout_is_no_answer_with_its_reason(monkeypatch):
@@ -399,6 +409,7 @@ async def test_completion_from_an_old_caller_is_still_answered(monkeypatch):
         connection_status=ConnectionStatus.ANSWERED
     )
     assert harness.retries == ["BUSY"]  # today's retry, unchanged
+    assert harness.retried_with == [write["call_outcome"]]
 
 
 async def test_completed_call_with_no_pipeline_is_answered_without_an_end_reason(

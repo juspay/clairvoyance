@@ -330,7 +330,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
 
         # Update OpenTelemetry span with evaluation data AFTER DB write,
         # so context.lead.outcome reflects the final persisted value.
-        update_span_with_evaluation_data(context)
+        update_span_with_evaluation_data(context, call_outcome)
 
         # Execute end_conversation_callbacks
         if context.end_conversation_callbacks:

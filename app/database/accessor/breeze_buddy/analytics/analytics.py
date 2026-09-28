@@ -3,11 +3,12 @@ Database accessor functions for analytics with generic filtering.
 All queries are optimized to filter at database level.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.database.queries import run_parameterized_query, run_reader_query
 from app.database.queries.breeze_buddy.analytics.analytics import (
+    get_agent_outcome_breakdown_query,
     get_analytics_call_details_grouped_count_query,
     get_analytics_call_details_grouped_query,
     get_analytics_call_details_query,
@@ -22,9 +23,12 @@ from app.database.queries.breeze_buddy.analytics.analytics import (
     get_attempts_to_connect_query,
     get_call_details_records_query,
     get_calls_by_hour_query,
+    get_connection_breakdown_query,
+    get_connection_funnel_query,
     get_distinct_merchant_ids_query,
     get_distinct_outcomes_query,
     get_distinct_resellers_query,
+    get_eval_agreement_query,
     get_outcome_counts_query,
     get_outcome_counts_total_query,
 )
@@ -623,3 +627,55 @@ async def get_distinct_merchant_ids_from_db(
     except Exception as e:
         logger.error(f"[Analytics DB] Error fetching distinct merchant ids: {str(e)}")
         raise
+
+
+# ---------------------------------------------------------------------------
+# Call outcome analytics (migration 080; docs/CALL_OUTCOMES.md, Phase 2 2d)
+# ---------------------------------------------------------------------------
+
+
+async def _one_row(query: Tuple[str, List[Any]], label: str) -> Dict[str, int]:
+    query_text, values = query
+    try:
+        result = await run_parameterized_query(query_text, values)
+        row = dict(result[0]) if result else {}
+        return {key: int(value or 0) for key, value in row.items()}
+    except Exception as e:
+        logger.error(f"Error getting {label}: {e}", exc_info=True)
+        raise
+
+
+async def _rows(query: Tuple[str, List[Any]], label: str) -> List[Dict[str, Any]]:
+    query_text, values = query
+    try:
+        result = await run_parameterized_query(query_text, values)
+        return [dict(row) for row in result or []]
+    except Exception as e:
+        logger.error(f"Error getting {label}: {e}", exc_info=True)
+        raise
+
+
+async def get_connection_funnel_from_db(filters: Dict[str, Any]) -> Dict[str, int]:
+    """Finished attempts per funnel stage (plus the unclassified ones)."""
+    return await _one_row(get_connection_funnel_query(filters), "connection funnel")
+
+
+async def get_connection_breakdown_from_db(
+    filters: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Finished attempts per connection status and reason."""
+    return await _rows(get_connection_breakdown_query(filters), "connection breakdown")
+
+
+async def get_agent_outcome_breakdown_from_db(
+    filters: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Answered attempts per agent outcome and source."""
+    return await _rows(
+        get_agent_outcome_breakdown_query(filters), "agent outcome breakdown"
+    )
+
+
+async def get_eval_agreement_from_db(filters: Dict[str, Any]) -> Dict[str, int]:
+    """Answered attempts by how the post-call eval relates to the agent."""
+    return await _one_row(get_eval_agreement_query(filters), "eval agreement")

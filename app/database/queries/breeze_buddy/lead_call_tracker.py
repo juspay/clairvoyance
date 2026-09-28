@@ -477,6 +477,23 @@ def get_call_facts_by_runs_query(
     return text, [merchant_id, enrollment_ids, entered_ats, exited_ats]
 
 
+# The call outcome columns a journey card shows beside the legacy outcome.
+JOURNEY_CALL_OUTCOME_COLUMNS = ("connection_status", "agent_outcome", "eval_outcome")
+
+
+def get_call_outcome_columns_query(
+    merchant_id: str, lead_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    """The journey's call outcome columns for one merchant's leads."""
+    columns = ", ".join(f'"{c}"' for c in JOURNEY_CALL_OUTCOME_COLUMNS)
+    text = f"""
+        SELECT "id", {columns}
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "merchant_id" = $1 AND "id" = ANY($2::text[]);
+    """
+    return text, [merchant_id, lead_ids]
+
+
 def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by ID.

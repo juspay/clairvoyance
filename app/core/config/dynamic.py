@@ -97,6 +97,17 @@ async def CALL_OUTCOME_WRITES_ENABLED() -> bool:
     return await get_config("CALL_OUTCOME_WRITES_ENABLED", False, bool)
 
 
+async def WEBHOOK_CALL_OUTCOME_KEYS() -> bool:
+    """Add the call outcome keys to merchant webhooks (default: off).
+
+    Additive: every existing key, value and send condition stays as it is;
+    the new keys (event, connectionStatus, connectionReason, endReason,
+    agentOutcome, outcomeSource, evalOutcome) join them. Off = the payloads
+    are exactly today's. See docs/CALL_OUTCOMES.md (Phase 2, 2f).
+    """
+    return await get_config("WEBHOOK_CALL_OUTCOME_KEYS", False, bool)
+
+
 #: The engine's own join budget, extractors/engine.py VARIABLE_MAX_CHARS.
 #: DUPLICATED here, not imported: app/core imports nothing from app.crm, and
 #: inverting that for one integer would put the base layer under a module

@@ -20,9 +20,8 @@ Goes away with the legacy column.
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
-from app.ai.voice.agents.breeze_buddy.services.call_limiter import CALL_LIMIT_OUTCOME
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.call_outcome import (
     call_outcome_writes_enabled,
@@ -31,7 +30,10 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     get_call_outcome_coverage,
 )
 from app.schemas.breeze_buddy.outcomes import (
-    ConnectionReason,
+    LEGACY_IVR_ERRORS,
+    LEGACY_NOT_DIALED_REASONS,
+    LEGACY_REJECTED_REASONS,
+    LEGACY_SYSTEM_FALLBACKS,
     ConnectionStatus,
     EndReason,
 )
@@ -44,22 +46,6 @@ _TOP = 10
 # on-call; otherwise it posts quietly.
 _COVERAGE_TARGET = 0.999
 
-# Legacy word a dispatcher / abort path writes -> the reason it must carry.
-_NOT_DIALED_REASONS: Dict[str, ConnectionReason] = {
-    "PRECHECK_FAILED": ConnectionReason.PRECHECK_FAILED,
-    "BLACKLISTED": ConnectionReason.BLACKLISTED,
-    "NUMBER_UNAVAILABLE": ConnectionReason.NUMBER_UNAVAILABLE,
-    "INVALID_PHONE": ConnectionReason.INVALID_PHONE,
-    "NO_CONFIG": ConnectionReason.NO_CONFIG,
-    "ABORT": ConnectionReason.ABORTED,
-    "ABORTED": ConnectionReason.ABORTED,
-    CALL_LIMIT_OUTCOME: ConnectionReason.CALL_LIMIT,
-}
-_REJECTED_REASONS: Dict[str, ConnectionReason] = {
-    "BLOCKED_REJECT": ConnectionReason.BLOCKED,
-    "BLOCKED_REDIRECT": ConnectionReason.BLOCKED,
-    "CAPACITY_REJECTED": ConnectionReason.CAPACITY,
-}
 # Every carrier failure is written NO_ANSWER in the legacy column.
 _CARRIER_STATUSES = frozenset(
     {
@@ -68,13 +54,6 @@ _CARRIER_STATUSES = frozenset(
         ConnectionStatus.FAILED.value,
         ConnectionStatus.CANCELED.value,
     }
-)
-# Legacy words the IVR walker writes on its own errors (end_reason IVR_ERROR).
-_IVR_ERRORS = frozenset({"IVR_ERROR", "IVR_LOOP_GUARD", "IVR_NODE_MISSING"})
-# Legacy words an answered call gets when the agent decided nothing.
-_SYSTEM_FALLBACKS = (
-    frozenset({"BUSY", "UNKNOWN", "EARLY_HANGUP", "TRANSFERRED", "ended_by_widget"})
-    | _IVR_ERRORS
 )
 
 
@@ -110,10 +89,10 @@ def is_consistent(row: Mapping[str, Any]) -> bool:
     agent_outcome = row.get("agent_outcome")
 
     if status == ConnectionStatus.NOT_DIALED.value:
-        expected = _NOT_DIALED_REASONS.get(legacy or "")
+        expected = LEGACY_NOT_DIALED_REASONS.get(legacy or "")
         return expected is not None and reason == expected.value
     if status == ConnectionStatus.REJECTED.value:
-        expected = _REJECTED_REASONS.get(legacy or "")
+        expected = LEGACY_REJECTED_REASONS.get(legacy or "")
         return expected is not None and reason == expected.value
     if status in _CARRIER_STATUSES:
         return legacy == "NO_ANSWER"
@@ -121,7 +100,7 @@ def is_consistent(row: Mapping[str, Any]) -> bool:
         return legacy == "UNKNOWN"
     if status == ConnectionStatus.ANSWERED.value:
         if not agent_outcome:
-            return legacy is None or legacy in _SYSTEM_FALLBACKS
+            return legacy is None or legacy in LEGACY_SYSTEM_FALLBACKS
         return (
             (legacy or "").strip().upper() == agent_outcome
             # The legacy column is overwritten on a successful transfer, on
@@ -129,7 +108,7 @@ def is_consistent(row: Mapping[str, Any]) -> bool:
             # decision survives in the agent column.
             or (legacy == "TRANSFERRED" and end_reason == EndReason.TRANSFERRED.value)
             or (legacy == "BUSY" and end_reason == EndReason.IDLE_TIMEOUT.value)
-            or (legacy in _IVR_ERRORS and end_reason == EndReason.IVR_ERROR.value)
+            or (legacy in LEGACY_IVR_ERRORS and end_reason == EndReason.IVR_ERROR.value)
         )
     return False
 

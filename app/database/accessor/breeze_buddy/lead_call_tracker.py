@@ -23,6 +23,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
     get_call_facts_by_runs_query,
+    get_call_outcome_columns_query,
     get_call_outcome_coverage_query,
     get_call_stats_by_runs_query,
     get_lead_based_analytics_query,
@@ -98,6 +99,35 @@ def _fire_hooks(hooks: List[Any], lead: LeadCallTracker, label: str) -> None:
             hook(lead)
         except Exception as e:  # fail-open: taps never break lead writes
             logger.error(f"{label} hook {hook!r} failed for {lead.id}: {e}")
+
+
+# Fired after the post-call eval writes its outcome onto a lead (eval_outcome,
+# eval_status, eval_result_id — docs/CALL_OUTCOMES.md section 9). The eval's
+# write-back calls announce_call_evaluated once its transaction commits; the
+# CRM ``call.outcome_evaluated`` letter and the opt-in merchant webhook listen.
+_evaluated_hooks: List[Any] = []
+
+
+def register_evaluated_hook(hook: Any) -> None:
+    """Register a callable(lead, notify_webhook: bool) fired after the
+    post-call eval has written its outcome onto the lead."""
+    if hook not in _evaluated_hooks:
+        _evaluated_hooks.append(hook)
+
+
+def announce_call_evaluated(
+    lead: LeadCallTracker, notify_webhook: bool = False
+) -> None:
+    """Fire the evaluated hooks for ``lead`` (as re-read after the eval's
+    write-back). ``notify_webhook`` is the template's opt-in for the second
+    merchant webhook (evaluation_config.configuration.notify_webhook).
+    Fail-open, like every hook here: a hook exception is logged, never raised.
+    """
+    for hook in _evaluated_hooks:
+        try:
+            hook(lead, notify_webhook)
+        except Exception as e:  # fail-open: taps never break the eval write
+            logger.error(f"evaluated-lead hook {hook!r} failed for {lead.id}: {e}")
 
 
 def require_template_link(template: str, template_id: Optional[str]) -> None:
@@ -463,6 +493,22 @@ async def get_call_facts_by_runs(
     for row in rows or []:
         out.setdefault(str(row["enrollment_id"]), []).append(dict(row))
     return out
+
+
+async def get_call_outcome_columns(
+    merchant_id: str, lead_ids: Sequence[str]
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """Per lead id: its journey call outcome columns (connection_status,
+    agent_outcome, eval_outcome). Scoped to ``merchant_id``; an unknown id is
+    absent. Plain dicts: the data layer knows no CRM shape."""
+    if not lead_ids:
+        return {}
+    query_text, values = get_call_outcome_columns_query(merchant_id, list(lead_ids))
+    rows = await run_parameterized_query(query_text, values)
+    return {
+        str(row["id"]): {k: v for k, v in dict(row).items() if k != "id"}
+        for row in rows or []
+    }
 
 
 async def update_lead_call_initiated_time(

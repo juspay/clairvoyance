@@ -16,6 +16,10 @@ from app.core.config.static import (
     ENABLE_BREEZE_BUDDY_TRACING,
 )
 from app.core.logger import logger
+from app.schemas.breeze_buddy.outcomes import CallOutcome, completed_call_outcome
+
+# The call outcome columns set as span attributes (docs/CALL_OUTCOMES.md).
+_SPAN_OUTCOME_COLUMNS = ("connection_status", "end_reason", "agent_outcome")
 
 # Module-level idempotency guard to prevent multiple tracing initializations
 _tracing_initialized = False
@@ -184,7 +188,9 @@ def auto_trace(tool_name: str):
     return decorator
 
 
-def update_span_with_evaluation_data(context: TemplateContext) -> None:
+def update_span_with_evaluation_data(
+    context: TemplateContext, call_outcome: Optional[CallOutcome] = None
+) -> None:
     """
     Update the OpenTelemetry span with comprehensive evaluation data for LLM-as-a-Judge.
 
@@ -193,6 +199,9 @@ def update_span_with_evaluation_data(context: TemplateContext) -> None:
 
     Args:
         context: The TemplateContext containing call data and root span
+        call_outcome: The call outcome columns end_conversation built in
+            memory. Taken from here, not the refreshed lead, so the span
+            carries them whether or not CALL_OUTCOME_WRITES_ENABLED is on.
     """
     if not context.root_span or not ENABLE_BREEZE_BUDDY_TRACING or not context.lead:
         return
@@ -202,6 +211,15 @@ def update_span_with_evaluation_data(context: TemplateContext) -> None:
 
         # Core evaluation data
         context.root_span.set_attribute("call_outcome", lead.outcome or "UNKNOWN")
+        # Call outcome columns beside it: the stored ones (the completion
+        # has added ANSWERED / TRANSFERRED), else — writes switched off — the
+        # in-memory ones completed the same way. Only values this call knows.
+        known = {c: getattr(lead, c, None) for c in _SPAN_OUTCOME_COLUMNS}
+        if not any(known.values()) and call_outcome is not None:
+            known = dict(completed_call_outcome(call_outcome).columns())
+        for column in _SPAN_OUTCOME_COLUMNS:
+            if known.get(column):
+                context.root_span.set_attribute(column, known[column])
 
         # Calculate call duration
         call_duration = None
