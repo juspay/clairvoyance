@@ -126,7 +126,7 @@
       "example": "aic"
     },
     "model": {
-      "description": "'noise_cancellation' enhances audio while preserving speakers; 'voice_focus' isolates the foreground/primary speaker. New configurations must provide this together with provider.",
+      "description": "'noise_cancellation' (quail-L) enhances audio while preserving speakers; 'noise_cancellation_s' (quail-S) does the same at about half the CPU per call; 'voice_focus' isolates the foreground/primary speaker. New configurations must provide this together with provider. If the quail-S file is missing from the image, noise_cancellation is used.",
       "example": "voice_focus"
     },
     "enhancement_level": {
@@ -201,7 +201,7 @@
       }
     },
     "noise_filter": {
-      "description": "Processes incoming audio before VAD and STT. New configurations use provider='aic' with model='noise_cancellation' or model='voice_focus'. Existing configurations using type='aic' or type='aic_voice_focus' remain supported without being rewritten.",
+      "description": "Processes incoming audio before VAD and STT. New configurations use provider='aic' with model='noise_cancellation', 'noise_cancellation_s' (quail-S, about half the CPU) or 'voice_focus'. Existing configurations using type='aic' or type='aic_voice_focus' remain supported without being rewritten.",
       "example": {
         "enable": true,
         "provider": "aic",
