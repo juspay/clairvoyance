@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
+from app.ai.voice.agents.breeze_buddy.assist.commerce.fields import STORE_FIELDS
 from app.ai.voice.agents.breeze_buddy.assist.commerce.skeleton import COMMERCE_V2
+from app.ai.voice.agents.breeze_buddy.assist.engine.fields import FieldProfile
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import SkeletonSpec
 
 DEFAULT_ASSIST_TEMPLATE_NAME = "buddy-assist-default"
@@ -39,6 +41,7 @@ class CommerceVertical:
     request_vertical = "commerce"
     blueprint_name = DEFAULT_ASSIST_TEMPLATE_NAME
     skeleton: SkeletonSpec = COMMERCE_V2
+    fields: FieldProfile = STORE_FIELDS
 
     def research_prompt(self) -> str:
         return RESEARCH_PROMPT
