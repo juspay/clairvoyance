@@ -1021,6 +1021,39 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+
+# Origins that are OUR console rather than a merchant's storefront.
+#
+# A widget normally runs only on the sites its owner named, and only while it
+# is active — both right, and both also in the way of the operator who wants
+# to look at their own agent before launching it. These origins are exempt
+# from each: a page served from here is a page we built, so it may open a
+# preview session against a widget that is paused and against an origin the
+# merchant never listed.
+#
+# Origin is a browser control, not an authentication boundary — a non-browser
+# client can claim any origin it likes. What this exempts is therefore worth
+# stating plainly: someone who already knows a public widget key could use it
+# against a paused widget by claiming to be the console. The key is public by
+# design (it ships in every embed snippet), so the exposure is "a paused agent
+# can still be chatted with", not "someone else's data"; voice and try-on, the
+# costly routes, stay off for a paused widget even here.
+#
+# Local consoles (http://localhost:5173) are added through the variable in a
+# local .env, never by default.
+#
+# In production only https origins count, whatever the variable says: a dev
+# server on someone's laptop must never reach a paused production agent.
+WIDGET_CONSOLE_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get(
+        "WIDGET_CONSOLE_ORIGINS",
+        "https://breezebuddy.ai,https://buddy.breezelabs.app",
+    ).split(",")
+    if origin.strip()
+    and (ENVIRONMENT != "production" or origin.strip().startswith("https://"))
+]
+
 # Template `custom` global functions execute author-supplied python_code. An
 # in-process interpreter sandbox is NOT a security boundary, so this feature is
 # OFF by default and must be explicitly enabled per-deployment (and only when
