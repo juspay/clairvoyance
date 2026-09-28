@@ -111,9 +111,15 @@ def test_a_partner_may_not_probe_for_another_reseller(probe_site) -> None:
     probe_site.assert_not_awaited()
 
 
-def test_a_merchant_may_not_spend_an_outbound_fetch(probe_site) -> None:
-    response = _post(MERCHANT)
-    assert response.status_code == 403
+def test_a_merchant_may_probe(probe_site) -> None:
+    assert _post(MERCHANT, merchant_id="9b1086-18.myshopify.com").status_code == 200
+    probe_site.assert_awaited_once()
+
+
+@pytest.mark.parametrize("merchant_id", [None, "", "someone-else.myshopify.com"])
+def test_a_merchant_must_name_a_merchant_in_its_scope(probe_site, merchant_id) -> None:
+    body = {} if merchant_id is None else {"merchant_id": merchant_id}
+    assert _post(MERCHANT, **body).status_code == 403
     probe_site.assert_not_awaited()
 
 
