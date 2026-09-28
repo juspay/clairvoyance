@@ -489,10 +489,16 @@ class NoiseFilterProvider(str, Enum):
 
 
 class NoiseFilterModel(str, Enum):
-    """Models available from the selected noise-filter provider."""
+    """Models available from the selected noise-filter provider.
 
-    NOISE_CANCELLATION = "noise_cancellation"
-    VOICE_FOCUS = "voice_focus"
+    The value names the model and its size; the transport picks the 8 or 16 kHz
+    file. NOISE_CANCELLATION_S costs about half the CPU of NOISE_CANCELLATION
+    (quail-L) per call with the same STT accuracy in lab tests (Sep 2026).
+    """
+
+    NOISE_CANCELLATION = "noise_cancellation"  # quail-L
+    NOISE_CANCELLATION_S = "noise_cancellation_s"  # quail-S
+    VOICE_FOCUS = "voice_focus"  # quail Voice Focus 2.1, size L
 
 
 class NoiseFilterConfig(BaseModel):
@@ -515,8 +521,9 @@ class NoiseFilterConfig(BaseModel):
     )
     model: Optional[NoiseFilterModel] = Field(
         None,
-        description="Noise cancellation preserves speech from all speakers; Voice "
-        "Focus isolates the foreground speaker.",
+        description="Noise cancellation preserves speech from all speakers "
+        "('noise_cancellation' is quail-L, 'noise_cancellation_s' is quail-S at "
+        "about half the CPU); Voice Focus isolates the foreground speaker.",
         exclude_if=lambda value: value is None,
     )
     enhancement_level: Optional[float] = Field(

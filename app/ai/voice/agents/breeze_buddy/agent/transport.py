@@ -32,28 +32,49 @@ TRANSPORT_TYPE_DAILY = "daily"
 TRANSPORT_TYPE_TELEPHONY = "telephony"
 
 
-def _get_aic_model_path(transport_type: str) -> Path:
-    """Select the standard Quail AIC model based on transport.
+def _aic_model_path(model: NoiseFilterModel, transport_type: str) -> Path:
+    """The artifact for a model on a transport.
 
-    Auto-selects the AIC model's input processing rate based on transport:
-    - Daily (web): 16kHz AIC model
-    - Telephony (Twilio/Plivo/Exotel): 8kHz AIC model
-
-    Note:
-        These rates describe the selected AIC model's expected processing rate,
-        not the transport's native audio sample rate. For example, Daily may
-        operate at 24kHz elsewhere in the pipeline while still using the
-        16kHz AIC model here.
-
-    Args:
-        transport_type: The transport type (e.g. TRANSPORT_TYPE_DAILY, TRANSPORT_TYPE_TELEPHONY).
-
-    Returns:
-        Path to the selected AIC model file.
+    The model value carries the size (noise_cancellation = quail-L,
+    noise_cancellation_s = quail-S); the transport picks the processing rate:
+    Daily (web) uses the 16kHz artifact, telephony (Twilio/Plivo/Exotel) the 8kHz
+    one. These rates describe the model, not the transport's native rate: Daily
+    may run at 24kHz elsewhere in the pipeline while still using the 16kHz model
+    here. Voice Focus ships only a 16kHz artifact; the SDK resamples 8kHz input.
     """
-    if transport_type == TRANSPORT_TYPE_DAILY:
-        return Path(static.AIC_MODEL_PATH_16KHZ)
-    return Path(static.AIC_MODEL_PATH)
+    web = transport_type == TRANSPORT_TYPE_DAILY
+    paths = {
+        NoiseFilterModel.NOISE_CANCELLATION: (
+            static.AIC_MODEL_PATH_16KHZ if web else static.AIC_MODEL_PATH
+        ),
+        NoiseFilterModel.NOISE_CANCELLATION_S: (
+            static.AIC_MODEL_PATH_S_16KHZ if web else static.AIC_MODEL_PATH_S
+        ),
+        NoiseFilterModel.VOICE_FOCUS: static.AIC_VOICE_FOCUS_MODEL_PATH,
+    }
+    return Path(paths[model])
+
+
+def _resolve_aic_model(
+    model: NoiseFilterModel, transport_type: str
+) -> tuple[NoiseFilterModel, Path]:
+    """The model to load and its artifact.
+
+    A missing quail-S file falls back to quail-L (noise_cancellation), the model
+    every template ran before quail-S existed, so a soft-failed Docker copy
+    degrades to the known model instead of dropping the filter. The returned
+    model is the one loaded, so logs never report quail-S for a quail-L file.
+    """
+    path = _aic_model_path(model, transport_type)
+    if model == NoiseFilterModel.NOISE_CANCELLATION_S and not path.is_file():
+        logger.warning(
+            "AIC quail-S model file is unavailable; using noise_cancellation "
+            "(quail-L) instead: {}",
+            path,
+        )
+        model = NoiseFilterModel.NOISE_CANCELLATION
+        path = _aic_model_path(model, transport_type)
+    return model, path
 
 
 def _create_audio_input_filter(
@@ -97,14 +118,9 @@ def _create_audio_input_filter(
             logger.warning("AIC filter enabled but license key not configured")
             return None
 
-        # Follow the same local-file approach as standard noise cancellation.
         # Docker provisions the models before startup; the application never
         # downloads model artifacts at runtime.
-        model_path = (
-            Path(static.AIC_VOICE_FOCUS_MODEL_PATH)
-            if model == NoiseFilterModel.VOICE_FOCUS
-            else _get_aic_model_path(transport_type)
-        )
+        model, model_path = _resolve_aic_model(model, transport_type)
         if not model_path.is_file():
             # AICFilter validates the artifact only when the transport starts.
             # Fail open here so a soft-failed Docker copy cannot abort a call.

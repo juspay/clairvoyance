@@ -84,6 +84,14 @@ AIC_VOICE_FOCUS_MODEL_PATH = os.environ.get(
     "AIC_VOICE_FOCUS_MODEL_PATH",
     "/app/models/voice/aic/quail_vf_2_1_l_16khz.aicmodel",
 )
+# quail-S, selected per template with noise_filter.model = "noise_cancellation_s"
+AIC_MODEL_PATH_S = os.environ.get(
+    "AIC_MODEL_PATH_S", "/app/models/voice/aic/quail_s_8khz.aicmodel"
+)
+AIC_MODEL_PATH_S_16KHZ = os.environ.get(
+    "AIC_MODEL_PATH_S_16KHZ",
+    "/app/models/voice/aic/quail_s_16khz.aicmodel",
+)
 
 # TTS Configuration
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
