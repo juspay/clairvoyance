@@ -102,6 +102,42 @@ async def test_orphan_webhook_alert_carries_call_id(fake_redis, captured_slack):
     assert values["Webhook source"] == "call_completion"
 
 
+async def test_long_running_call_alert_carries_the_lead(fake_redis, captured_slack):
+    await alerts.raise_long_running_call(
+        lead_id="lead-1",
+        call_id="CA1234",
+        template="order-confirmation",
+        merchant_id="flipkart",
+        direction="OUTBOUND",
+        call_initiated_time="2026-09-28T10:00:00+00:00",
+        stale_minutes=30,
+    )
+
+    title, fields = captured_slack[0]
+    values = {f["name"]: f["value"] for f in fields}
+    assert "30+ min" in title
+    assert values["Lead id"] == "lead-1"
+    assert values["call_id"] == "CA1234"
+    assert values["Merchant"] == "flipkart"
+
+
+async def test_long_running_call_alert_throttles_per_lead(fake_redis, captured_slack):
+    kwargs = dict(
+        call_id=None,
+        template=None,
+        merchant_id=None,
+        direction=None,
+        call_initiated_time=None,
+        stale_minutes=30,
+    )
+    await alerts.raise_long_running_call(lead_id="lead-A", **kwargs)
+    await alerts.raise_long_running_call(lead_id="lead-A", **kwargs)
+    await alerts.raise_long_running_call(lead_id="lead-B", **kwargs)
+
+    # lead-A repeat suppressed; lead-B fires fresh.
+    assert len(captured_slack) == 2
+
+
 async def test_slack_send_failure_does_not_raise(fake_redis, monkeypatch):
     """A failing Slack send must not propagate — alert is best-effort."""
 

@@ -341,6 +341,60 @@ async def raise_orphan_webhook(call_id: str, source: str) -> None:
     )
 
 
+async def raise_long_running_call(
+    lead_id: str,
+    call_id: Optional[str],
+    template: Optional[str],
+    merchant_id: Optional[str],
+    direction: Optional[str],
+    call_initiated_time: Optional[str],
+    stale_minutes: int,
+) -> None:
+    """
+    P1 — a lead has been PROCESSING for ``stale_minutes`` and the stuck-call
+    reconciler is closing it as UNKNOWN.
+
+    Either the call-end webhook was lost, or a real call ran this long. In the
+    second case the customer may still be on the line: the close frees the
+    channel, retries the lead, and emits call.completed=UNKNOWN — the spine
+    dedupes the real outcome on call_id, so the workflow never hears it.
+    Throttled per lead; each lead is closed once anyway.
+    """
+    await _send(
+        alert_name=f"long_running_call:{lead_id}",
+        throttle_seconds=_THROTTLE_P1,
+        title=(
+            f"[P1] Breeze Buddy: call PROCESSING for {stale_minutes}+ min "
+            "— closing as UNKNOWN"
+        ),
+        fields=[
+            {"name": "Lead id", "value": lead_id},
+            {"name": "call_id", "value": call_id or "n/a"},
+            {"name": "Template", "value": template or "n/a"},
+            {"name": "Merchant", "value": merchant_id or "n/a"},
+            {"name": "Direction", "value": direction or "n/a"},
+            {"name": "Call started", "value": call_initiated_time or "n/a"},
+            {
+                "name": "Effect",
+                "value": (
+                    "Lead closed FINISHED/UNKNOWN, channel released, retry "
+                    "scheduled (outbound). If the call was still live, the "
+                    "workflow only hears UNKNOWN."
+                ),
+            },
+            {
+                "name": "Action",
+                "value": (
+                    "Check the provider's call record for this call_id. If "
+                    "it was still live, the template runs longer than "
+                    "BB_STUCK_CALL_STALE_MINUTES — raise it. If it had ended, "
+                    "find why the call-end webhook never arrived."
+                ),
+            },
+        ],
+    )
+
+
 async def raise_dragontts_degraded() -> None:
     """P1 — DragonTTS is unhealthy; the monitor marked the health flag ``"0"``.
 
