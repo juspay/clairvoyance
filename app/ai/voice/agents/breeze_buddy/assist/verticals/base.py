@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Dict, Mapping, Protocol
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import SkeletonSpec
+from app.ai.voice.agents.breeze_buddy.assist.verticals.fields import FieldProfile
 
 
 class Vertical(Protocol):
@@ -14,6 +15,8 @@ class Vertical(Protocol):
     # The reseller-level blueprint template this vertical's agents are built from.
     blueprint_name: str
     skeleton: SkeletonSpec
+    # The form this vertical's assistants are built from and edited through.
+    fields: FieldProfile
 
     def research_prompt(self) -> str:
         """The brief handed to the site reader (facts only, never instructions)."""
