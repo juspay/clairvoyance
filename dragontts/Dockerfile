@@ -33,4 +33,9 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--loop", "uvloop", "--no-access-log", "--limit-concurrency", "1024", "--timeout-graceful-shutdown", "100"]
+# --timeout-keep-alive 8: keep idle client connections LONGER than clairvoyance's
+# httpx client does (its keepalive_expiry default is 5 s). At uvicorn's default
+# of 5 s both sides expire together, and a sentence sent ~5 s after the last one
+# lands on a connection the server just closed -> "RemoteProtocolError: Server
+# disconnected without sending a response" (that sentence is lost on the call).
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--loop", "uvloop", "--no-access-log", "--limit-concurrency", "1024", "--timeout-graceful-shutdown", "100", "--timeout-keep-alive", "8"]

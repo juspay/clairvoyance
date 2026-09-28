@@ -243,19 +243,102 @@ def test_idle_timeout_is_set_from_env(monkeypatch):
     assert Settings(_env_file=None).elevenlabs_stream_idle_timeout == 1.5
 
 
+def test_ttd_idle_timeout_defaults_to_5s_and_is_set_from_env(monkeypatch):
+    from app.core.config import Settings
+
+    assert Settings(_env_file=None).elevenlabs_ttd_idle_timeout == 5.0
+    monkeypatch.setenv("ELEVENLABS_TTD_IDLE_TIMEOUT", "6.5")
+    assert Settings(_env_file=None).elevenlabs_ttd_idle_timeout == 6.5
+
+
 @pytest.mark.parametrize(
-    "model, rate",
+    "model, rate, setting",
     [
-        (V3_MODEL, 8000),  # eleven_v3: Text-to-Dialogue socket
-        ("eleven_v3_conversational_clean_tempo", 8000),  # Luna's model
-        ("eleven_flash_v2_5", None),  # classic text-to-speech socket
+        (V3_MODEL, 8000, "ttd"),  # eleven_v3: Text-to-Dialogue socket
+        ("eleven_v3_conversational_clean_tempo", 8000, "ttd"),  # Luna's model
+        ("eleven_v4_turbo", 8000, "ttd"),
+        ("eleven_v4_turbo_clean_tempo_v2", 8000, "ttd"),
+        ("eleven_flash_v2_5", None, "classic"),  # classic text-to-speech socket
     ],
 )
-def test_every_elevenlabs_pool_uses_the_setting(monkeypatch, model, rate):
+def test_each_socket_kind_uses_its_own_idle_timeout(monkeypatch, model, rate, setting):
     from app.core.config import settings
     from app.providers.elevenlabs import ElevenLabsProvider
+    from app.providers.elevenlabs_pool import normalize_pipeline_model
 
     monkeypatch.setattr(settings, "elevenlabs_stream_idle_timeout", 1.25)
+    monkeypatch.setattr(settings, "elevenlabs_ttd_idle_timeout", 4.5)
     provider = ElevenLabsProvider(api_key="k", base_url=BASE)
-    pool = provider._get_pool(VOICE, model, False, "hi", rate)
-    assert pool is not None and pool._idle_timeout == 1.25
+    pool = provider._get_pool(VOICE, normalize_pipeline_model(model), False, "hi", rate)
+    assert pool is not None
+    assert pool._idle_timeout == (4.5 if setting == "ttd" else 1.25)
+
+
+async def test_ttd_pause_longer_than_the_classic_timeout_is_not_cut(monkeypatch):
+    """Live regression (scaled down): v4 went quiet ~1.1-1.9 s mid-sentence,
+    the 2 s classic cutoff ended the stream early, and the cut clip was
+    cached. A TTD stream must ride out a pause longer than the classic
+    timeout and end on the server's end-of-turn marker with ALL its audio."""
+    from app.core.config import settings
+    from app.providers import elevenlabs_pool
+    from app.providers.elevenlabs import ElevenLabsProvider
+
+    monkeypatch.setattr(settings, "elevenlabs_stream_idle_timeout", 0.1)
+    monkeypatch.setattr(settings, "elevenlabs_ttd_idle_timeout", 1.0)
+    connect = FakeConnect()
+    monkeypatch.setattr(
+        elevenlabs_pool,
+        "connect",
+        lambda uri, additional_headers=None, open_timeout=None: connect(
+            uri, additional_headers or {}
+        ),
+    )
+    provider = ElevenLabsProvider(api_key="k", base_url=BASE)
+    try:
+        pool = provider._get_pool(VOICE, "eleven_v4_turbo", False, "hi", 8000)
+        assert pool is not None
+        got: list[bytes] = []
+
+        async def consume():
+            async for chunk in pool.stream({"text": "hello there"}):
+                got.append(chunk)
+
+        task = asyncio.create_task(consume())
+        await _wait_for(
+            lambda: connect.sockets
+            and any(m.get("flush") for m in connect.sockets[0].sent)
+        )
+        socket = connect.sockets[0]
+        ctx = next(m["context_id"] for m in socket.sent if m.get("flush"))
+        socket.feed({"context_id": ctx, "audio": base64.b64encode(b"ab").decode()})
+        await asyncio.sleep(0.4)  # 4x the classic cutoff: a v4 mid-sentence pause
+        socket.feed({"context_id": ctx, "audio": base64.b64encode(b"cd").decode()})
+        socket.feed({"context_id": ctx, "is_final_audio_for_turn": True})
+        await asyncio.wait_for(task, timeout=2.0)
+        assert got == [b"ab", b"cd"], "the audio after the pause was kept"
+    finally:
+        await provider.aclose()
+
+
+async def test_classic_socket_idle_end_is_normal_not_a_truncation_warning(logs):
+    """Flash / turbo sockets never send is_final promptly: ending on silence is
+    their normal end, so it must not raise a MAY BE TRUNCATED warning (the
+    0.04 s frame-grid verdict is a TTD property and meaningless there)."""
+    pool = ElevenLabsStreamPool(
+        api_key="k",
+        voice_id=VOICE,
+        model_id="eleven_flash_v2_5",
+        base_url=BASE,
+        connect_fn=FakeConnect(),
+        min_size=1,
+        max_size=1,
+        idle_timeout=0.05,
+    )
+    await pool.start()
+    try:
+        audio = await _drive(pool, [b"x" * 100], send_final=False)
+    finally:
+        await pool.aclose()
+    assert audio == [b"x" * 100]
+    assert _warnings(logs) == []
+    assert any("the normal end on this socket" in m for _, m in logs)
