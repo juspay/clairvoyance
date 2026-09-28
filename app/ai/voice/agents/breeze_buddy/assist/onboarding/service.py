@@ -17,13 +17,16 @@ from pydantic import ValidationError
 from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.assist.engine.fields import (
     AssistFields,
+    apply_edits,
     fields_from_notes,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
     normalize_merchant_domain,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.prompt_core import (
+    replace_brand_block,
     replace_vertical_section,
+    vertical_section_of,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingConfigurationError,
@@ -45,7 +48,10 @@ from app.ai.voice.agents.breeze_buddy.assist.verticals import registry as vertic
 from app.ai.voice.agents.breeze_buddy.assist.verticals.base import Vertical
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    TemplateModel,
+)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.merchants import (
     create_merchant,
@@ -713,6 +719,86 @@ async def create_assistant(body: AssistCreateRequest) -> AssistCreateResponse:
     )
 
 
+class AssistantNotEditableError(Exception):
+    """The assistant was not made from fields (it predates them), so there is
+    no form to save; its prompt is edited instead."""
+
+
+def assistant_fields(template: TemplateModel) -> Optional[AssistFields]:
+    """The fields an assistant was made from, with what its widget shows now
+    (the blueprint's greeting and chips) for fields the merchant has not set;
+    None when it was not made from fields."""
+    configurations = _configuration_dict(template)
+    fields = configurations.get("assist_fields")
+    if not isinstance(fields, dict):
+        return None
+    return {**verticals.DEFAULT.widget_fields(configurations), **fields}
+
+
+async def save_assistant_fields(
+    template: TemplateModel, edits: Mapping[str, List[str]]
+) -> TemplateModel:
+    """Apply a merchant's edits and rebuild the assistant from its fields.
+
+    Only the merchant's parts move: the brand block, the deciding-question
+    section and the widget entries the fields imply. The shared operating
+    block is kept exactly as it is. With no question left, the blueprint's
+    own section comes back rather than the last one staying. Raises
+    ``AssistantNotEditableError`` for an assistant with no fields, and
+    ``ValueError`` for an edit to a field the form does not show.
+    """
+    vertical = verticals.DEFAULT
+    current = assistant_fields(template)
+    prompt = (template.flow or {}).get("system_prompt")
+    if current is None or not isinstance(prompt, str):
+        raise AssistantNotEditableError(template.id)
+    fields = apply_edits(current, edits, vertical.fields)
+
+    try:
+        prompt = replace_brand_block(
+            prompt, vertical.skeleton, vertical.brand_block_from_fields(fields)
+        )
+    except ValueError as exc:
+        raise AssistantNotEditableError(template.id) from exc
+    section = vertical.vertical_section(fields) or await _blueprint_section(
+        template, vertical
+    )
+    if section:
+        prompt = replace_vertical_section(prompt, vertical.skeleton, section)
+    flow = {**copy.deepcopy(template.flow), "system_prompt": prompt}
+
+    configurations = _configuration_dict(template)
+    _merge_config(configurations, vertical.widget_values(fields))
+    configurations["assist_fields"] = fields
+    saved = await _update_template(
+        template.model_copy(
+            update={
+                "flow": flow,
+                "configurations": ConfigurationModel.model_validate(configurations),
+            }
+        )
+    )
+    try:
+        await invalidate_template(saved.id)
+    except Exception as cache_error:
+        logger.warning(
+            f"Assist template cache invalidation failed for {saved.id}: {cache_error}"
+        )
+    return saved
+
+
+async def _blueprint_section(
+    template: TemplateModel, vertical: Vertical
+) -> Optional[str]:
+    """The blueprint's own help section, for an assistant whose merchant has
+    cleared every question; None when the blueprint cannot be found."""
+    blueprint = await get_template_in_scope(
+        template.reseller_id, None, vertical.blueprint_name
+    )
+    prompt = (blueprint.flow or {}).get("system_prompt") if blueprint else None
+    return vertical_section_of(prompt, vertical.skeleton) if prompt else None
+
+
 async def _has_assistant(
     request: AssistOnboardingStreamRequest,
     template_name: str,
@@ -948,6 +1034,8 @@ async def stream_assist_onboarding(
 
 __all__ = [
     "AssistantExistsError",
+    "AssistantNotEditableError",
+    "assistant_fields",
     "BRAND_IDENTITY_MARKER",
     "EXPECTED_BLUEPRINT_MODEL",
     "OnboardingFailure",
@@ -956,5 +1044,6 @@ __all__ = [
     "build_merchant_template",
     "create_assistant",
     "onboard_assist_bare",
+    "save_assistant_fields",
     "stream_assist_onboarding",
 ]

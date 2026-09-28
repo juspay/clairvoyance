@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Mapping, Optional, Protocol, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.fields import FieldProfile
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import SkeletonSpec
@@ -50,6 +50,11 @@ class Vertical(Protocol):
 
     def widget_values(self, fields: Mapping[str, Sequence[str]]) -> Dict[str, object]:
         """Configuration entries the form implies, already config-shaped."""
+        ...
+
+    def widget_fields(self, configurations: Mapping[str, Any]) -> Dict[str, List[str]]:
+        """The form's values for what the config already holds (the
+        blueprint's greeting and chips): the inverse of ``widget_values``."""
         ...
 
     def unpersonalized_context(self) -> str:

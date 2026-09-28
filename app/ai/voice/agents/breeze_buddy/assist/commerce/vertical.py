@@ -8,7 +8,7 @@ tools substitute into their endpoints, the blueprint name, the skeleton.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from app.ai.voice.agents.breeze_buddy.assist.commerce.fields import STORE_FIELDS
 from app.ai.voice.agents.breeze_buddy.assist.commerce.skeleton import COMMERCE_V2
@@ -225,6 +225,29 @@ class CommerceVertical:
         if trusted:
             values["render_ui"] = {"trusted_link_urls": list(dict.fromkeys(trusted))}
         return values
+
+    def widget_fields(self, configurations: Mapping[str, Any]) -> Dict[str, List[str]]:
+        """The greeting, quick replies and tiles the config holds, written as
+        the form writes them, so the merchant edits what shoppers see now."""
+        out: Dict[str, List[str]] = {}
+        greeting = configurations.get("initial_greeting")
+        if isinstance(greeting, str) and greeting.strip():
+            out["initial_greeting"] = [greeting.strip()]
+        replies = [
+            str(reply.get("label") or reply.get("value") or "").strip()
+            for reply in configurations.get("quick_replies") or []
+            if isinstance(reply, Mapping)
+        ]
+        if any(replies):
+            out["quick_replies"] = [reply for reply in replies if reply]
+        tiles = [
+            f"{tile.get('label', '')} | {tile.get('prompt', '')} | {tile.get('image_url', '')}"
+            for tile in configurations.get("greeting_tiles") or []
+            if isinstance(tile, Mapping) and tile.get("label") and tile.get("image_url")
+        ]
+        if tiles:
+            out["greeting_tiles"] = tiles
+        return out
 
     def unpersonalized_context(self) -> str:
         return UNPERSONALIZED_CONTEXT

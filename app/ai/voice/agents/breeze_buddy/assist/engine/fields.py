@@ -15,7 +15,7 @@ field is a question for the merchant.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 # Field key → its values, in the order they were found. What a template keeps
 # and what the merchant edits.
@@ -118,8 +118,44 @@ def _join(values: List[str], value: str) -> None:
         values[0] = joined
 
 
+def apply_edits(
+    current: Mapping[str, Sequence[str]],
+    edits: Mapping[str, Sequence[str]],
+    profile: FieldProfile,
+) -> AssistFields:
+    """The fields after a merchant's edits.
+
+    Only fields the form shows can be edited; ``ValueError`` names any other.
+    A field not sent keeps its value, so a console that does not know a field
+    yet cannot blank it; a field sent empty is cleared. A ``text`` field keeps
+    its line breaks (a two-line greeting); any other is made one line. No line
+    may start with "#", which would open a heading inside the prompt. Values
+    are trimmed to ``MAX_VALUE_CHARS`` and de-duplicated.
+    """
+    out: AssistFields = {key: list(values) for key, values in current.items()}
+    for key, values in edits.items():
+        spec = profile.spec(key)
+        if spec is None or spec.hidden:
+            raise ValueError(f"{key} cannot be edited")
+        joiner = "\n" if spec.kind == "text" else " "
+        cleaned: List[str] = []
+        for raw in values:
+            parts = (" ".join(line.split()) for line in str(raw or "").splitlines())
+            value = joiner.join(
+                part.lstrip("#").strip() for part in parts if part.lstrip("#").strip()
+            )[:MAX_VALUE_CHARS]
+            if value and value not in cleaned:
+                cleaned.append(value)
+        limit = MAX_VALUES_PER_FIELD if spec.many else 1
+        if len(cleaned) > limit:
+            raise ValueError(f"{key} takes at most {limit}")
+        out[key] = cleaned
+    return out
+
+
 __all__ = [
     "AssistFields",
+    "apply_edits",
     "FieldProfile",
     "FieldSection",
     "FieldSpec",
