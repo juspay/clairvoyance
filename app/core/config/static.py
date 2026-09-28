@@ -488,8 +488,8 @@ BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_
 BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10))
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
-# longer than the 10-minute outbound one: the sweep releases the telephony
-# channel, and an inbound lead PROCESSING for 10 minutes is usually a live
+# longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the
+# telephony channel, and a long-PROCESSING inbound lead is usually a live
 # call, not a wedged one.
 BB_INBOUND_STUCK_LEAD_MINUTES = int(
     os.environ.get("BB_INBOUND_STUCK_LEAD_MINUTES", 240)
@@ -510,6 +510,17 @@ BB_CLEAN_STALE_LOCKS_INTERVAL_S = int(
 BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S = int(
     os.environ.get("BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S", 60)
 )
+# Age at which a PROCESSING outbound lead is presumed dead and closed UNKNOWN.
+# Must outlast the longest real call: sweeping a live one emits
+# call.completed=UNKNOWN, the spine dedupes the real one on call_id, and the
+# retry re-dials a customer who is still on the line.
+BB_STUCK_CALL_STALE_MINUTES = int(os.environ.get("BB_STUCK_CALL_STALE_MINUTES", 30))
+if BB_STUCK_CALL_STALE_MINUTES < 1:
+    # Zero or negative makes the reaper select calls that just started and
+    # close them UNKNOWN mid-conversation — fail at boot, not on live calls.
+    raise ValueError(
+        f"BB_STUCK_CALL_STALE_MINUTES must be >= 1, got {BB_STUCK_CALL_STALE_MINUTES}"
+    )
 
 # Health monitor — periodic Slack alerter (alert-only, no state mutation).
 BB_HEALTH_MONITOR_INTERVAL_S = int(os.environ.get("BB_HEALTH_MONITOR_INTERVAL_S", 60))

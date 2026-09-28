@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import os
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -276,8 +279,14 @@ async def test_completed_is_noop_for_orphan_call_sid(
 async def _run_reaper_capturing_close(
     monkeypatch: pytest.MonkeyPatch, lead: LeadCallTracker
 ) -> Dict[str, Any]:
-    """Drive the reaper over one stale lead, returning its close kwargs."""
+    """Drive the reaper over one stale lead, returning its close kwargs.
+
+    The long-running-call alert it raises lands in ``captured["alert"]``.
+    """
     captured: Dict[str, Any] = {}
+
+    async def fake_alert(**kwargs: Any) -> None:
+        captured["alert"] = kwargs
 
     async def fake_stale(*_args: Any, **_kwargs: Any) -> List[LeadCallTracker]:
         return [lead]
@@ -298,6 +307,7 @@ async def _run_reaper_capturing_close(
     monkeypatch.setattr(calls_mod, "release_lock_on_lead_by_id", noop)
     monkeypatch.setattr(calls_mod, "_release_call_resources", noop)
     monkeypatch.setattr(calls_mod, "_get_lead_config", noop)
+    monkeypatch.setattr(calls_mod, "raise_long_running_call", fake_alert)
 
     await calls_mod.reconcile_stuck_processing_leads()
     return captured
@@ -333,3 +343,95 @@ async def test_reaper_still_falls_back_to_unknown_without_an_outcome(
 
     assert captured["outcome"] == "UNKNOWN"
     assert captured["meta_data"] == {"cleanup": "stuck_processing_timeout"}
+
+
+# ---------------------------------------------------------------------------
+# reconcile_stuck_processing_leads — old is not dead: never close a live call
+# ---------------------------------------------------------------------------
+
+
+STALE_MINUTES = 30
+
+
+async def _stale_cutoff(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    """The call_initiated_time cutoff the reaper asks the DB for, with the
+    stale window pinned so a deployment's env override can't skew it."""
+    cutoffs: List[datetime] = []
+
+    async def fake_stale(
+        _status: LeadCallStatus, time: datetime, **_kwargs: Any
+    ) -> List[LeadCallTracker]:
+        cutoffs.append(time)
+        return []
+
+    monkeypatch.setattr(calls_mod, "get_leads_by_status_and_time_before", fake_stale)
+    monkeypatch.setattr(calls_mod, "BB_STUCK_CALL_STALE_MINUTES", STALE_MINUTES)
+    await calls_mod.reconcile_stuck_processing_leads()
+    return cutoffs[0]
+
+
+@pytest.mark.asyncio
+async def test_reaper_cutoff_is_the_configured_stale_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = datetime.now(timezone.utc)
+    cutoff = await _stale_cutoff(monkeypatch)
+
+    expected = before - timedelta(minutes=STALE_MINUTES)
+    assert abs((cutoff - expected).total_seconds()) < 5
+
+
+@pytest.mark.asyncio
+async def test_reaper_leaves_a_15_minute_call_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long call is still PROCESSING at 15 minutes. Closing it would emit
+    call.completed=UNKNOWN; the spine dedupes the real one on call_id, so the
+    workflow would never hear the true outcome."""
+    cutoff = await _stale_cutoff(monkeypatch)
+    started = datetime.now(timezone.utc) - timedelta(minutes=15)
+
+    assert not started < cutoff
+
+
+@pytest.mark.asyncio
+async def test_reaper_closes_a_call_past_the_stale_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cutoff = await _stale_cutoff(monkeypatch)
+    started = datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES + 1)
+
+    assert started < cutoff
+
+
+@pytest.mark.asyncio
+async def test_reaper_alerts_on_the_call_it_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every lead the reaper closes pages once, so a live call it cut short
+    (or a lost call-end webhook) is visible, not a silent UNKNOWN."""
+    captured = await _run_reaper_capturing_close(monkeypatch, make_lead())
+
+    alert = captured["alert"]
+    assert alert["lead_id"] == "lead-1"
+    assert alert["call_id"] == CALL_SID
+    assert alert["direction"] == "OUTBOUND"
+    assert alert["stale_minutes"] == calls_mod.BB_STUCK_CALL_STALE_MINUTES
+    assert captured["outcome"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_non_positive_stale_window_fails_at_boot(value: str) -> None:
+    """Zero or negative would close calls that just started; refuse to boot.
+
+    A subprocess, because the setting is read once at import.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.core.config.static"],
+        env={**os.environ, "BB_STUCK_CALL_STALE_MINUTES": value},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "BB_STUCK_CALL_STALE_MINUTES must be >= 1" in result.stderr
