@@ -3,6 +3,7 @@ Common utilities for validation, parsing, and helper functions.
 """
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -115,3 +116,21 @@ def parse_json_field(value) -> List[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+# E.164: at most 15 digits including the country code; the shortest real
+# number is 7 (Niue, +683 plus 4 digits).
+_MIN_DIALABLE_DIGITS = 7
+_MAX_DIALABLE_DIGITS = 15
+# ASCII digits and the usual formatting only — a letter means a junk value.
+_DIALABLE_CHARS = re.compile(r"\+?[0-9 ().-]+")
+
+
+def is_dialable(raw: object) -> bool:
+    """Plivo dials E.164 numbers: 7 to 15 digits including the country code,
+    written with digits, an optional leading +, spaces, - ( ) or . only.
+    """
+    if not isinstance(raw, str) or not _DIALABLE_CHARS.fullmatch(raw.strip()):
+        return False
+    digit_count = sum(1 for c in raw if "0" <= c <= "9")
+    return _MIN_DIALABLE_DIGITS <= digit_count <= _MAX_DIALABLE_DIGITS
