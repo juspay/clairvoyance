@@ -545,8 +545,8 @@ class _Parks:
     def __init__(self) -> None:
         self.parked: List[Tuple[str, str]] = []
 
-    async def get_workflow(self, merchant_id: str, workflow_id: str) -> Any:
-        return SimpleNamespace(status="live")
+    async def workflow_status(self, merchant_id: str, workflow_id: str) -> str:
+        return "live"
 
     async def park_run(self, run_id: str, last_error: str, lease: Any) -> bool:
         self.parked.append((run_id, last_error))

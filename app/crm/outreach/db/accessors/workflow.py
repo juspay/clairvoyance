@@ -22,6 +22,7 @@ from app.crm.outreach.db.queries.workflow import (
     publish_workflow_query,
     set_workflow_status_query,
     update_draft_query,
+    workflow_status_query,
 )
 from app.crm.outreach.schemas import (
     Workflow,
@@ -54,6 +55,16 @@ async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
+
+
+async def workflow_status(merchant_id: str, workflow_id: str) -> Optional[str]:
+    """The plan's status alone (the walker's per-visit read). None when no
+    such plan — the caller says what that means, exactly as get_workflow's
+    None does."""
+    query, values = workflow_status_query(merchant_id, workflow_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row["status"] if row else None
 
 
 async def list_workflows(

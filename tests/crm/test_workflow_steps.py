@@ -35,7 +35,6 @@ from app.crm.outreach.nodes.context import CUT_SHORT_BY_KEY, OUTCOME_KEY
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     RunStep,
-    Workflow,
     WorkflowDefinition,
 )
 from app.crm.outreach.steps import (
@@ -161,19 +160,8 @@ class _Writes:
         self.calls: List[Tuple[str, Tuple[Any, ...]]] = []
         self.flushes: List[Dict[str, Any]] = []
 
-    async def get_workflow(self, merchant_id: str, workflow_id: str) -> Workflow:
-        return Workflow(
-            id=uuid4(),
-            merchant_id=merchant_id,
-            name="plan",
-            status="live",
-            version=1,
-            created_by=None,
-            created_at=NOW,
-            updated_at=NOW,
-            definition=self.definition,
-            draft=None,
-        )
+    async def workflow_status(self, merchant_id: str, workflow_id: str) -> str:
+        return "live"
 
     async def get_definition(self, *args: Any) -> Dict[str, Any]:
         return self.definition
@@ -680,28 +668,17 @@ def test_an_unreadable_document_never_blocks_an_eject(
     writes = _Writes(_BOARD)
     run = _run(node="hear")
 
-    async def archived(*a: Any, **k: Any) -> Workflow:
-        # Built here, not read back through the fake: patch_accessors has
+    async def archived(*a: Any, **k: Any) -> str:
+        # Answered here, not read back through the fake: patch_accessors has
         # already pointed walker.workflow_accessor at `writes`, so calling
-        # its get_workflow from inside its own replacement recurses.
-        return Workflow(
-            id=uuid4(),
-            merchant_id="m1",
-            name="plan",
-            status="archived",
-            version=1,
-            created_by=None,
-            created_at=NOW,
-            updated_at=NOW,
-            definition=_BOARD,
-            draft=None,
-        )
+        # its workflow_status from inside its own replacement recurses.
+        return "archived"
 
     async def boom(*a: Any, **k: Any) -> Any:
         raise ValueError("definition shape invalid")
 
     patch_accessors(monkeypatch, walker, writes)
-    monkeypatch.setattr(walker.workflow_accessor, "get_workflow", archived)
+    monkeypatch.setattr(walker.workflow_accessor, "workflow_status", archived)
     monkeypatch.setattr(walker, "definition_for", boom)
     asyncio.run(walker.walk_run(run))
 

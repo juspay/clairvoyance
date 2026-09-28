@@ -3,6 +3,7 @@ predicates present, the claim's lease semantics, idempotent stamps."""
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.crm.outreach.db.queries.enrollment import (
     admission_facts_query,
@@ -20,10 +21,13 @@ from app.crm.outreach.db.queries.enrollment import (
 from app.crm.outreach.db.queries.workflow import (
     live_workflows_query,
     publish_workflow_query,
+    workflow_status_query,
 )
+from app.crm.outreach.schemas import WorkflowDefinition
 from app.crm.record.db.queries import customer_has_event_query
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
+PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
 
 
 def test_claim_is_lease_and_attempt_in_one_statement() -> None:
@@ -115,6 +119,54 @@ def test_live_workflows_read_is_merchant_scoped() -> None:
     sql, params = live_workflows_query("m1")
     assert "merchant_id = $1 AND status = 'live'" in sql
     assert params == ["m1"]
+
+
+def test_live_workflows_leaves_the_playbook_in_the_database() -> None:
+    """The entry read runs once per attributed event and wants the DOORS.
+    The playbook is the words a call says — read from the run's PINNED
+    version at execute time (nodes/blocks.py), never from here — and it is
+    the bulk of a document: 835KB of 849KB on the plan that prompted this.
+    Detoasting it per event to compare a topic is the read this strips."""
+    sql, params = live_workflows_query("m1")
+    assert "definition - 'playbook'" in sql
+    # draft is the SAME document with its own playbook, and it is NULL only
+    # between a publish and the next draft save — so a plan being edited would
+    # hand this read the whole document back, per attributed event, for as long
+    # as the edit is open. Entry never reads it (only plans.py does).
+    assert "NULL::jsonb AS draft" in sql
+    assert params == ["m1"]
+
+
+def test_a_plan_without_its_playbook_is_still_a_whole_document() -> None:
+    """What the strip above hands Pydantic: `playbook` is Optional with a
+    None default and no validator cross-checks it, so a document that
+    arrives without it validates and reads exactly as the stored one does
+    for every field the entry path touches."""
+    stored = json.loads((PLANS / "line-nudge-playbook.json").read_text())
+    assert stored.get("playbook"), "fixture must carry a playbook to strip"
+
+    whole = WorkflowDefinition.model_validate(stored)
+    stripped = WorkflowDefinition.model_validate(
+        {k: v for k, v in stored.items() if k != "playbook"}
+    )
+
+    assert stripped.playbook is None
+    assert [d.topic for d in stripped.entries] == [d.topic for d in whole.entries]
+    assert [n.id for n in stripped.nodes] == [n.id for n in whole.nodes]
+    assert stripped.goal_tiers() == whole.goal_tiers()
+
+
+def test_the_walkers_liveness_read_carries_no_document() -> None:
+    """The walker asks one question of crm_workflow per visit — is this plan
+    still live? — and the run's own document comes from its PINNED version
+    (definitions.py, cached). Reading `definition` to compare a status word
+    detoasts the whole plan per claimed run, which at the morning window is
+    every waiting run at once."""
+    sql, params = workflow_status_query("m1", "wf-1")
+    assert "status" in sql
+    assert "definition" not in sql and "draft" not in sql
+    assert "merchant_id = $1 AND id = $2" in sql
+    assert params == ["m1", "wf-1"]
 
 
 def test_publish_requires_a_draft_to_exist() -> None:
