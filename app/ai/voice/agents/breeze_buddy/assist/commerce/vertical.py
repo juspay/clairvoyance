@@ -7,7 +7,8 @@ tools substitute into their endpoints, the blueprint name, the skeleton.
 
 from __future__ import annotations
 
-from typing import Dict, Mapping
+import re
+from typing import Dict, List, Mapping, Optional, Sequence
 
 from app.ai.voice.agents.breeze_buddy.assist.commerce.fields import STORE_FIELDS
 from app.ai.voice.agents.breeze_buddy.assist.commerce.skeleton import COMMERCE_V2
@@ -35,6 +36,66 @@ UNPERSONALIZED_CONTEXT = (
     "personalize this assistant from the Buddy dashboard.)"
 )
 
+_HERO_NOTE = (
+    "Names only — prices/availability ALWAYS come from a tool call, never from here."
+)
+_NO_COMPLIANCE = "*(none — no vertical-specific guardrail required)*"
+# The deciding-question pairs, in the order they are written. The first is a
+# ``###`` heading and the rest ``####``: the section is found by the LAST
+# ``### `` before the skeleton's end marker, so a second ``###`` would leave
+# the first outside the replaceable region.
+_QUESTION_SUFFIXES = ("", "_2", "_3")
+_QUICK_REPLIES = 4
+_QUICK_REPLY_LABEL_CHARS = 40
+_URL = re.compile(r"https://[^\s<>\"'|]+")
+
+
+def _clean(text: str) -> str:
+    """Printable text only; page text can carry control characters."""
+    return "".join(
+        character
+        for character in str(text)
+        if character in "\n\t" or ord(character) >= 32
+    ).strip()
+
+
+def _first(fields: Mapping[str, Sequence[str]], key: str) -> str:
+    values = fields.get(key) or []
+    return _clean(values[0]) if values else ""
+
+
+def _bullets(values: Sequence[str]) -> List[str]:
+    out: List[str] = []
+    for value in values:
+        text = _clean(value)
+        if text:
+            out.append(text if text.startswith("- ") else f"- {text}")
+    return out
+
+
+def _section(title: str, lines: Sequence[str]) -> List[str]:
+    """A ``###`` block, or nothing when it has nothing to say."""
+    body = [line for line in lines if line]
+    return [f"### {title}", "", *body, ""] if body else []
+
+
+def _tile(line: str) -> Optional[Dict[str, str]]:
+    """``label | prompt | image url`` → a greeting tile; None without an image."""
+    parts = [part.strip() for part in str(line).split("|")]
+    if len(parts) < 3 or not parts[0] or not parts[2].startswith("https://"):
+        return None
+    return {"label": parts[0], "prompt": parts[1] or parts[0], "image_url": parts[2]}
+
+
+def _urls(lines: Sequence[str]) -> List[str]:
+    """Every https address written into free-text lines."""
+    return [hit.rstrip(".,;:)]}") for line in lines for hit in _URL.findall(str(line))]
+
+
+def _whatsapp_url(number: str) -> str:
+    digits = "".join(character for character in number if character.isdigit())
+    return f"https://wa.me/{digits}" if digits else ""
+
 
 class CommerceVertical:
     id = "commerce"
@@ -49,11 +110,7 @@ class CommerceVertical:
     def brand_block(
         self, assistant_name: str, brand_name: str, website_context: str
     ) -> str:
-        cleaned = "".join(
-            character
-            for character in website_context
-            if character in "\n\t" or ord(character) >= 32
-        ).strip()[:_MAX_BRAND_CONTEXT_CHARS]
+        cleaned = _clean(website_context)[:_MAX_BRAND_CONTEXT_CHARS]
         return (
             "## Brand identity\n\n"
             f"- **Assistant name:** {assistant_name} Assist\n"
@@ -62,6 +119,112 @@ class CommerceVertical:
             "### Verified website context\n\n"
             f"{cleaned}"
         )
+
+    def starting_fields(
+        self,
+        fields: Mapping[str, Sequence[str]],
+        *,
+        assistant_name: str,
+        brand_name: str,
+    ) -> Dict[str, List[str]]:
+        """The store's fields with its names where research found none: the
+        assistant is "<store> Assist" and the store line is its name, both
+        shown to the merchant to change."""
+        out = {key: list(values) for key, values in fields.items()}
+        if not _first(out, "assistant_name"):
+            out["assistant_name"] = [f"{assistant_name} Assist"]
+        if not _first(out, "brand_line"):
+            out["brand_line"] = [brand_name]
+        return out
+
+    def brand_block_from_fields(self, fields: Mapping[str, Sequence[str]]) -> str:
+        """The brand block written from the store's fields, under the headings
+        the template studio uses (taken from #1209). A section with nothing in
+        it is left out rather than shown empty."""
+        identity = [
+            f"- **Assistant name:** {_first(fields, 'assistant_name')}",
+            f"- **Brand:** {_first(fields, 'brand_line')}",
+            "- **Storefront:** `{shop_url}`",
+        ]
+        tagline = _first(fields, "tagline")
+        if tagline:
+            identity.append(f"- **Tagline / positioning:** {tagline}")
+        hero = _bullets(fields.get("hero_items") or [])
+        whatsapp = _first(fields, "whatsapp")
+        email = _first(fields, "email")
+        escalation = [
+            f"- Primary: **WhatsApp / phone {whatsapp}**" if whatsapp else "",
+            f"- Email: `{email}`" if email else "",
+            *_bullets(fields.get("escalation_extra") or []),
+        ]
+        return "\n".join(
+            [
+                "## Brand identity",
+                "",
+                *identity,
+                "",
+                *_section("What we sell", [_first(fields, "what_we_sell")]),
+                *_section("Hero products", [_HERO_NOTE, "", *hero] if hero else []),
+                *_section("Trust signals", _bullets(fields.get("trust_items") or [])),
+                *_section("Vocabulary register", [_first(fields, "vocabulary")]),
+                *_section("Active offers", _bullets(fields.get("offer_items") or [])),
+                *_section("Store policies", _bullets(fields.get("policies") or [])),
+                *_section(
+                    "Compliance note", [_first(fields, "compliance") or _NO_COMPLIANCE]
+                ),
+                *_section("Escalation channel", escalation),
+            ]
+        ).rstrip()
+
+    def vertical_section(self, fields: Mapping[str, Sequence[str]]) -> Optional[str]:
+        """The merchant's deciding questions as one prompt section, or None
+        when none is filled (the blueprint's own section then stays)."""
+        blocks: List[str] = []
+        for suffix in _QUESTION_SUFFIXES:
+            question = _first(fields, f"question{suffix}")
+            answer = _first(fields, f"question_answer{suffix}")
+            if question and answer:
+                mark = "###" if not blocks else "####"
+                blocks.append(f"{mark} {question}\n\n{answer}\n")
+        return "\n".join(blocks) if blocks else None
+
+    def widget_values(self, fields: Mapping[str, Sequence[str]]) -> Dict[str, object]:
+        """Configuration entries the fields imply, already config-shaped.
+
+        Only fields that are present are written, so a blueprint default
+        stays until the merchant sets its field. Links the assistant may show
+        as buttons (WhatsApp, and any address in the help links) are added to
+        the trusted list.
+        """
+        values: Dict[str, object] = {}
+        if "initial_greeting" in fields:
+            values["initial_greeting"] = _first(fields, "initial_greeting")
+        if "quick_replies" in fields:
+            labels = [_clean(label) for label in fields.get("quick_replies") or []]
+            values["quick_replies"] = [
+                {
+                    "label": label[:_QUICK_REPLY_LABEL_CHARS],
+                    "value": label,
+                    "action": None,
+                    "icon": None,
+                }
+                for label in labels[:_QUICK_REPLIES]
+                if label
+            ]
+        if "greeting_tiles" in fields:
+            tiles = (_tile(line) for line in fields.get("greeting_tiles") or [])
+            values["greeting_tiles"] = [tile for tile in tiles if tile]
+        trusted = [
+            url
+            for url in [
+                _whatsapp_url(_first(fields, "whatsapp")),
+                *_urls(fields.get("escalation_extra") or []),
+            ]
+            if url
+        ]
+        if trusted:
+            values["render_ui"] = {"trusted_link_urls": list(dict.fromkeys(trusted))}
+        return values
 
     def unpersonalized_context(self) -> str:
         return UNPERSONALIZED_CONTEXT

@@ -1,4 +1,5 @@
-"""Authenticated SSE onboarding for Buddy Assist."""
+"""Authenticated Buddy Assist onboarding: the SSE stream, the S2S install, and
+creating an assistant from the console's research."""
 
 from __future__ import annotations
 
@@ -11,7 +12,9 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
     normalize_merchant_domain,
 )
 from app.ai.voice.agents.breeze_buddy.assist.onboarding.service import (
+    AssistantExistsError,
     OnboardingFailure,
+    create_assistant,
     onboard_assist_bare,
     stream_assist_onboarding,
 )
@@ -25,6 +28,8 @@ from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.security.authorization import require_role
 from app.schemas import UserInfo, UserRole
 from app.schemas.breeze_buddy.assist.onboarding import (
+    AssistCreateRequest,
+    AssistCreateResponse,
     AssistOnboardingStreamRequest,
     AssistOnboardRequest,
     AssistOnboardResponse,
@@ -63,6 +68,43 @@ async def onboard_assist_stream(
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post(
+    "/assist/create",
+    response_model=AssistCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_assist(
+    body: AssistCreateRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> AssistCreateResponse:
+    """Create the merchant's assistant from its research findings, switched off.
+
+    Same scope checks as the stream route. 409 when the merchant already has
+    an assistant: nothing is written, so a live one is never replaced.
+    """
+    require_role(current_user, _ONBOARDING_ROLES)
+    validate_reseller_access(current_user, reseller_id=body.reseller_id)
+    validate_merchant_access(current_user, merchant_id=body.merchant_id)
+
+    try:
+        return await create_assistant(body)
+    except AssistantExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This merchant already has an assistant.",
+        ) from exc
+    except OnboardingFailure as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "step": exc.step,
+                "code": exc.code,
+                "message": exc.message,
+                "retryable": exc.retryable,
+            },
+        ) from exc
 
 
 @router.post("/assist/onboard", response_model=AssistOnboardResponse)
