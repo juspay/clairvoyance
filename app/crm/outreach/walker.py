@@ -130,10 +130,14 @@ async def walk_run(run: EnrollmentRun) -> None:
         logger.error(f"walker: run {run.id} claimed without a lease — skipping")
         return
     try:
-        workflow = await workflow_accessor.get_workflow(
+        # The STATUS alone: the plan this visit executes is the run's pinned
+        # version (definition_for, cached), so the live document is never
+        # opened here — and carrying it would detoast the whole plan once
+        # per claimed run.
+        status = await workflow_accessor.workflow_status(
             run.merchant_id, str(run.workflow_id)
         )
-        if workflow is None or workflow.status == "archived":
+        if status is None or status == "archived":
             # The ejected run's last square still closes (canon T26). The
             # pinned document is read for its node TYPE alone, off the LRU
             # that the normal path would have hit a line later anyway.
@@ -161,7 +165,7 @@ async def walk_run(run: EnrollmentRun) -> None:
             else:
                 _deferred(run, "eject")
             return
-        if workflow.status == "paused":
+        if status == "paused":
             return  # the lease push IS the snooze; re-checked next wake
         definition = await definition_for(run)
         if definition is None:

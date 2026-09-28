@@ -24,7 +24,7 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.walker as walker
 from app.crm.outreach.nodes.spec import NodeParked
-from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
+from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition
 from tests.crm.doubles import patch_accessors
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
@@ -107,19 +107,8 @@ class _Writes:
         # positional shape every assertion below already unpacks.
         self.flushes: List[Dict[str, Any]] = []
 
-    async def get_workflow(self, merchant_id: str, workflow_id: str) -> Workflow:
-        return Workflow(
-            id=uuid4(),
-            merchant_id=merchant_id,
-            name="plan",
-            status="live",
-            version=1,
-            created_by=None,
-            created_at=NOW,
-            updated_at=NOW,
-            definition=self.definition,
-            draft=None,
-        )
+    async def workflow_status(self, merchant_id: str, workflow_id: str) -> str:
+        return "live"
 
     async def get_definition(
         self, merchant_id: str, workflow_id: str, version: int
