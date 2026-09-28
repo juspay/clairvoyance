@@ -39,7 +39,7 @@ from app.cache.resilience import get_gate
 from app.core.config import settings
 from app.core.logging import logger
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
-from app.providers.elevenlabs_pool import is_elevenlabs_v3_conversational
+from app.providers.elevenlabs_pool import has_local_pipeline
 from app.providers.registry import ProviderNotConfigured
 from app.schemas.tts import CartesiaVoice, OutputFormat, TTSRequest
 from app.storage.base import CacheRecord, escape_like
@@ -181,10 +181,10 @@ def _same_format(encoding_a: str, rate_a: int, encoding_b: str, rate_b: int) -> 
 def _stores_final(model: str) -> bool:
     """True for models whose cached bytes are the END RESULT in the caller's
     requested output_format (tempo/hygiene/downsample baked in at synth
-    time): the ElevenLabs v3-conversational family. Their cache key includes
-    the output format and hits are zero-processing serves. Everything else
-    keeps the format-agnostic native-store architecture."""
-    return is_elevenlabs_v3_conversational(model)
+    time): the ElevenLabs pipeline families (v3 conversational, v4). Their
+    cache key includes the output format and hits are zero-processing serves.
+    Everything else keeps the format-agnostic native-store architecture."""
+    return has_local_pipeline(model)
 
 
 class CacheService:
@@ -238,7 +238,8 @@ class CacheService:
         req.transcript = normalize_text(req.transcript)
         provider, model = parse_model_id(req.model_id)
         # Speaking-rate params: `tempo` is DragonTTS's ffmpeg atempo factor
-        # and applies ONLY to eleven_v3_conversational. For that model the
+        # and applies ONLY to the pipeline families (eleven_v3_conversational,
+        # eleven_v4_turbo / eleven_v4 and their variants). For those the
         # legacy `speed` param — already sent by existing clients (e.g.
         # clairvoyance templates) and dropped from voice_settings anyway
         # (Text-to-Dialogue reads only stability) — is normalized INTO
@@ -247,7 +248,7 @@ class CacheService:
         # canonical_params can't key on a value the provider ignores (same
         # audio, two entries). Normalizing speed->tempo (rather than keying on
         # both) keeps {speed: 1.2} and {tempo: 1.2} on ONE cache entry.
-        if is_elevenlabs_v3_conversational(model):
+        if has_local_pipeline(model):
             speed = req.params.pop("speed", None)
             if req.params.get("tempo") is None and speed is not None:
                 req.params["tempo"] = speed

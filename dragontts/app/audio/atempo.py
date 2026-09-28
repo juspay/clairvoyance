@@ -1,6 +1,7 @@
 """ffmpeg atempo tempo stage — pitch-preserving speaking-rate control.
 
-Applies to the ElevenLabs ``eleven_v3_conversational`` model ONLY, and only
+Applies to the ElevenLabs pipeline families ONLY (``eleven_v3_conversational``
+and v4: ``eleven_v4_turbo`` / ``eleven_v4``, with their variants), and only
 when the effective tempo differs from 1.0: a tempo of exactly 1.0 (whether
 absent, the default, or explicitly sent) is a pure bypass — ffmpeg is never
 spawned, so ordinary traffic pays zero cost.

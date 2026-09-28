@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 
 from app.core.config import settings
+from app.providers.elevenlabs_pool import is_elevenlabs_ttd_model
 
 _ONES = [
     "zero",
@@ -157,7 +158,7 @@ def prepend_leading_dot(text: str, provider: str, model: str | None = None) -> s
     ("your order" and ".your order") share one entry. Other providers are
     unaffected. Idempotent (never double-dots) and a no-op for empty text.
 
-    ``eleven_v3*`` models are exempt: they speak Text-to-Dialogue, where the
+    ``eleven_v3*`` / ``eleven_v4*`` models are exempt: they speak Text-to-Dialogue, where the
     dot is an untested input artifact rather than a hint (the verified-good
     direct TTD path sends none), so the text goes through verbatim.
 
@@ -169,7 +170,7 @@ def prepend_leading_dot(text: str, provider: str, model: str | None = None) -> s
         and text.strip()  # whitespace-only -> no bare "."
         and provider
         and provider.strip().lower() == "elevenlabs"
-        and not (model and model.strip().startswith("eleven_v3"))
+        and not is_elevenlabs_ttd_model(model)
         and not text.startswith(".")
     ):
         return "." + text
