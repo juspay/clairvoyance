@@ -416,3 +416,21 @@ async def test_synth_http_shaping(model, expect_ssml):
         assert "enable_ssml_parsing" not in payload
         assert payload["voice_settings"] == {"stability": 0.5}
     await provider.aclose()
+
+
+@pytest.mark.parametrize(
+    "base_url", ["http://api.elevenlabs.io", "ws://x", "api.elevenlabs.io"]
+)
+def test_pool_refuses_a_non_tls_base_url(base_url):
+    """The API key rides the WS handshake: never derive a cleartext ws://."""
+    with pytest.raises(ValueError, match="https://"):
+        ElevenLabsStreamPool(
+            api_key="k", voice_id=VOICE, model_id=V3_MODEL, base_url=base_url
+        )
+
+
+def test_pool_derives_wss_from_https():
+    pool = ElevenLabsStreamPool(
+        api_key="k", voice_id=VOICE, model_id=V3_MODEL, base_url=BASE + "/"
+    )
+    assert pool._uri.startswith("wss://api.in.residency.elevenlabs.io/v1/")

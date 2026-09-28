@@ -21,10 +21,7 @@ import pytest
 from app.audio.join import speech_level_dbfs
 from app.core.config import settings
 from app.providers.elevenlabs import ElevenLabsProvider
-from app.providers.elevenlabs_pool import (
-    normalize_v3_conversational,
-    v3_conversational_variant,
-)
+from app.providers.elevenlabs_pool import normalize_pipeline_model, pipeline_variant
 from tests.test_atempo import (
     V3CONV,
     _install_fake_connect,
@@ -100,8 +97,8 @@ def _spy(monkeypatch, target: str) -> list:
     [(V2, "clean_tempo_v2"), (CLEAN, "clean_tempo"), (V3CONV + "_tempo", "tempo")],
 )
 def test_suffixes_map_to_their_own_variant(model, variant):
-    assert v3_conversational_variant(model) == variant
-    assert normalize_v3_conversational(model) == V3CONV  # upstream sees the base
+    assert pipeline_variant(model) == variant
+    assert normalize_pipeline_model(model) == V3CONV  # upstream sees the base
 
 
 def test_v2_is_full_band(monkeypatch):
