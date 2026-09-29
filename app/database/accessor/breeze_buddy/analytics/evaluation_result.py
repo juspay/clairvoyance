@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from app.core.logger import logger
-from app.database.queries import run_parameterized_query
+from app.database.queries import run_reader_query
 from app.database.queries.breeze_buddy.analytics.evaluation_result import (
     get_topic_conversations_query,
     get_topic_dashboard_rows_query,
@@ -178,7 +178,7 @@ async def get_topic_dashboard(
     filters: Dict[str, Any], top_topics: int
 ) -> List[Dict[str, Any]]:
     query, values = get_topic_dashboard_rows_query(filters)
-    rows = await run_parameterized_query(query, values)
+    rows = await run_reader_query(query, values)
     topic_rows = [dict(row) for row in rows or []]
     # ponytail: aggregate bounded dashboard rows here; move back to SQL if
     # production result volume makes transfer or memory cost material.
@@ -213,7 +213,7 @@ async def get_topic_conversations(
     query, values = get_topic_conversations_query(
         filters, limit, cursor_started_at, cursor_id
     )
-    rows = await run_parameterized_query(query, values)
+    rows = await run_reader_query(query, values)
     results = [dict(row) for row in rows or []]
     for result in results:
         result["topics"] = _decode_topics(result.get("topics"))
@@ -231,5 +231,5 @@ async def get_topics_for_source(
         reseller_ids,
         merchant_ids,
     )
-    rows = await run_parameterized_query(query, values)
+    rows = await run_reader_query(query, values)
     return _decode_topics(rows[0]["topics"]) if rows else []

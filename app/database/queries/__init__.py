@@ -39,13 +39,23 @@ async def run_parameterized_query(
 
 # Helper function to execute parameterized READ queries on the replica
 async def run_reader_query(
-    query_text: str, values: List[Any], timeout: Optional[float] = None
+    query_text: str,
+    values: List[Any],
+    timeout: Optional[float] = None,
+    *,
+    retry_with_writer_if_failed: bool = False,
 ) -> List[asyncpg.Record]:
-    """Read from the replica when configured, else the writer; retry once on
-    the writer if the reader fails. Lag-tolerant reads only.
+    """Read from the replica when configured, else the writer. Lag-tolerant
+    reads only.
+
+    A reader failure RAISES by default: a query heavy enough to time out on
+    the replica would land the same load on the primary the replica exists
+    to protect. Pass ``retry_with_writer_if_failed=True`` to retry once on
+    the writer instead. With no reader configured the writer is the normal
+    path, not a retry, so the flag does not apply.
 
     ``timeout`` defaults to POSTGRES_READER_TIMEOUT_SECS (0 to opt out) and
-    bounds the statement and the cancel -- the fallback needs a raise.
+    bounds the statement and the cancel -- a hung replica must raise.
     """
     reader_timeout = timeout if timeout is not None else POSTGRES_READER_TIMEOUT_SECS
 
@@ -58,5 +68,8 @@ async def run_reader_query(
                 return await conn.fetch(query_text, *values)
             return await conn.fetch(query_text, *values, timeout=reader_timeout)
     except Exception as e:
-        logger.warning(f"Reader query failed, falling back to writer: {e}")
+        if not retry_with_writer_if_failed:
+            logger.error(f"Reader query failed, not retrying on writer: {e!r}")
+            raise
+        logger.warning(f"Reader query failed, falling back to writer: {e!r}")
         return await run_parameterized_query(query_text, values, timeout)

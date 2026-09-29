@@ -6,7 +6,7 @@ All queries are optimized to filter at database level.
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
-from app.database.queries import run_parameterized_query, run_reader_query
+from app.database.queries import run_reader_query
 from app.database.queries.breeze_buddy.analytics.analytics import (
     get_analytics_call_details_grouped_count_query,
     get_analytics_call_details_grouped_query,
@@ -57,7 +57,7 @@ async def get_summary_analytics_from_db(
 
     try:
         query_text, values = get_analytics_summary_query(filters, group_by)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
 
         logger.debug(
             f"[Analytics DB] Summary query returned {len(result) if result else 0} rows"
@@ -173,7 +173,7 @@ async def get_call_details_from_db(
         query_text, values = get_analytics_call_details_query(
             filters, limit, offset, sort_by, sort_order
         )
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         logger.info(
             f"[Analytics DB] Call details returned {len(result) if result else 0} records"
         )
@@ -205,7 +205,7 @@ async def get_call_detail_records(
         query_text, values = get_call_details_records_query(
             filters, sort_by, sort_order, limit, offset
         )
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         logger.info(
             f"[Analytics DB] Call details download returned {len(result) if result else 0} records"
         )
@@ -229,7 +229,7 @@ async def get_analytics_count_from_db(
 
     try:
         query_text, values = get_analytics_count_query(filters, filter_execution_mode)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
 
         count = result[0]["count"] if result and len(result) > 0 else 0
         logger.debug(f"[Analytics DB] Count result: {count}")
@@ -255,7 +255,7 @@ async def get_trends_analytics_from_db(
 
     try:
         query_text, values = get_analytics_trends_query(filters, time_granularity)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         logger.info(
             f"[Analytics DB] Trends returned {len(result) if result else 0} time buckets"
         )
@@ -292,7 +292,7 @@ async def get_lead_based_analytics_from_db(
 
     try:
         query_text, values = get_analytics_lead_based_query(filters, group_by)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
 
         if group_by:
             logger.info(
@@ -348,7 +348,7 @@ async def get_telephony_numbers_analytics_from_db(
 
     try:
         query_text, values = get_analytics_telephony_numbers_query(filters)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         logger.info(
             f"[Analytics DB] Telephony numbers analytics returned {len(result) if result else 0} numbers"
         )
@@ -367,7 +367,7 @@ async def get_attempts_to_connect_from_db(filters: Dict[str, Any]) -> Dict[str, 
     logger.info(f"[Analytics DB] Getting attempts-to-connect with filters: {filters}")
     try:
         query_text, values = get_attempts_to_connect_query(filters)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         buckets: Dict[str, int] = {"1": 0, "2": 0, "3": 0, "4+": 0}
         for row in result or []:
             bucket = row["bucket"]
@@ -387,7 +387,7 @@ async def get_calls_by_hour_from_db(filters: Dict[str, Any]) -> Dict[str, int]:
     logger.info(f"[Analytics DB] Getting calls-by-hour with filters: {filters}")
     try:
         query_text, values = get_calls_by_hour_query(filters)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         hours: Dict[str, int] = {str(h): 0 for h in range(24)}
         for row in result or []:
             hour = row["hour"]
@@ -416,7 +416,7 @@ async def get_lead_based_trends_from_db(
         query_text, values = get_analytics_lead_based_trends_query(
             filters, time_granularity
         )
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         logger.info(
             f"[Analytics DB] Lead-based trends returned {len(result) if result else 0} time buckets"
         )
@@ -459,13 +459,13 @@ async def get_lead_status_counts_from_db(
         query_text, values = get_analytics_lead_status_counts_query(
             filters, page, limit, search_reseller_id, search_merchant_identifier
         )
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
 
         # Get total count for pagination
         total_query_text, total_values = get_analytics_lead_status_counts_total_query(
             filters, search_reseller_id, search_merchant_identifier
         )
-        total_result = await run_parameterized_query(total_query_text, total_values)
+        total_result = await run_reader_query(total_query_text, total_values)
         total_count = total_result[0]["total"] if total_result else 0
 
         total_pages = (total_count + limit - 1) // limit if limit > 0 else 1
@@ -497,7 +497,7 @@ async def get_call_details_grouped_count_from_db(
     logger.debug(f"[Analytics DB] Getting grouped count with filters: {filters}")
     try:
         query_text, values = get_analytics_call_details_grouped_count_query(filters)
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         count = result[0]["count"] if result and len(result) > 0 else 0
         logger.debug(f"[Analytics DB] Grouped count result: {count}")
         return count or 0
@@ -522,7 +522,7 @@ async def get_call_details_grouped_from_db(
         query_text, values = get_analytics_call_details_grouped_query(
             filters, limit, offset, sort_by, sort_order
         )
-        result = await run_parameterized_query(query_text, values)
+        result = await run_reader_query(query_text, values)
         logger.info(
             f"[Analytics DB] Grouped call details returned {len(result) if result else 0} records"
         )
@@ -561,12 +561,12 @@ async def get_outcome_counts_from_db(
     )
     try:
         query, values = get_outcome_counts_query(filters, page, limit)
-        result = await run_parameterized_query(query, values)
+        result = await run_reader_query(query, values)
 
         results = [dict(row) for row in result] if result else []
 
         total_query, total_values = get_outcome_counts_total_query(filters)
-        total_result = await run_parameterized_query(total_query, total_values)
+        total_result = await run_reader_query(total_query, total_values)
         total = total_result[0]["total"] if total_result else 0
         total_pages = -(-total // limit) if limit > 0 else 0
 
@@ -594,7 +594,7 @@ async def get_distinct_resellers_from_db(
     logger.info(f"[Analytics DB] Fetching distinct resellers with filters: {filters}")
     try:
         query, values = get_distinct_resellers_query(filters)
-        result = await run_parameterized_query(query, values)
+        result = await run_reader_query(query, values)
 
         if not result:
             return []
@@ -614,7 +614,7 @@ async def get_distinct_merchant_ids_from_db(
     )
     try:
         query, values = get_distinct_merchant_ids_query(filters)
-        result = await run_parameterized_query(query, values)
+        result = await run_reader_query(query, values)
 
         if not result:
             return []

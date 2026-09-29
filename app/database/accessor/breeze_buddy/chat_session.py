@@ -17,7 +17,7 @@ from app.database.decoder.breeze_buddy.chat_session import (
     decode_chat_session_summary,
     decode_chat_turn_metrics,
 )
-from app.database.queries import run_parameterized_query
+from app.database.queries import run_parameterized_query, run_reader_query
 from app.database.queries.breeze_buddy.chat_session import (
     count_chat_sessions_query,
     create_chat_session_query,
@@ -196,7 +196,9 @@ async def list_chat_sessions(
     """
     query, values = list_chat_sessions_query(filters, limit=limit, offset=offset)
     try:
-        rows = await run_parameterized_query(query, values)
+        # Dashboard read, lag-tolerant. One page of rows, and each row's two
+        # subqueries use chat_message's (session_id, idx) key: default timeout.
+        rows = await run_reader_query(query, values)
         summaries: List[ChatSessionSummary] = []
         for row in rows or []:
             decoded = decode_chat_session_summary(row)
@@ -212,7 +214,7 @@ async def count_chat_sessions(filters: Dict[str, Any]) -> int:
     """Total sessions matching the filters (pagination total)."""
     query, values = count_chat_sessions_query(filters)
     try:
-        rows = await run_parameterized_query(query, values)
+        rows = await run_reader_query(query, values)
         row = rows[0] if rows else None
         return int(row["total"]) if row else 0
     except Exception as e:
