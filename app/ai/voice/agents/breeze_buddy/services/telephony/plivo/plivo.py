@@ -15,6 +15,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.conference import
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
 )
+from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import transfer_time_limit
 from app.core.config.static import (
     APP_BASE_URL,
     PLIVO_AUTH_ID,
@@ -140,11 +141,15 @@ async def plivo_dial_xml(
         f"/plivo/callback/transfer/conclude"
         f"?customer_call_sid={call_sid}"
     )
+    # Cap the human part at the call's remaining max duration (min 60s so a
+    # transfer that connects at the deadline isn't dropped instantly).
+    time_limit = transfer_time_limit(transfer_data.get("max_call_end_at"), floor=60)
+    time_limit_attr = f' timeLimit="{time_limit}"' if time_limit else ""
     xml = (
         f'<?xml version="1.0" encoding="UTF-8"?>'
         f"<Response>"
         f'<Dial action="{action_url}" method="POST"'
-        f' callerId="{telephony_number}" timeout="30">'
+        f' callerId="{telephony_number}" timeout="30"{time_limit_attr}>'
         f"<Number>{agent_phone}</Number>"
         f"</Dial></Response>"
     )

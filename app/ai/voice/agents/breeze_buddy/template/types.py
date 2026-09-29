@@ -23,6 +23,8 @@ from app.ai.voice.llm.types import LLMConfiguration, _canonical_credential_id
 from app.core.deprecation import format_template_ref, log_deprecated_fields
 from app.core.logger import logger
 
+DEFAULT_MAX_CALL_DURATION_MINUTES = 30
+
 
 class ActionType(str, Enum):
     TTS_SAY = "tts_say"
@@ -2452,6 +2454,13 @@ class ConfigurationModel(BaseModel):
     enable_topic_evaluation: Optional[bool] = None
     user_idle_configuration: Optional[UserIdleHandlingConfig] = (
         None  # User idle handling config
+    )
+    max_call_duration_minutes: int = Field(
+        DEFAULT_MAX_CALL_DURATION_MINUTES,
+        ge=5,
+        description="Voice call length cap in minutes (default 30, minimum 5); "
+        "the system ends the call once reached, never mid-transfer or on hold. "
+        "After a Plivo warm transfer the rest of the budget caps the human leg.",
     )
     noise_filter: Optional[NoiseFilterConfig] = Field(
         None, description="Noise filter configuration for audio input processing"
