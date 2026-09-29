@@ -4,9 +4,10 @@
 from the row when the block names one (``credential_id``) and from the
 environment when it does not. Each service owns its words, its environment
 accounts and the host rule a row must obey on it — ``llm.py`` (text and
-realtime), ``stt.py``, ``tts.py``; this file only dispatches by the block's
-kind. The factories read the key and the host from a typed account and
-never touch an environment variable themselves, so a row can never be
+realtime), ``stt.py``, ``tts.py``, ``telephony.py``; this file only
+dispatches by the block's kind. The factories read the key and the host
+from a typed account and never touch an environment variable themselves,
+so a row can never be
 right for one service and wrong for another, and a key never travels apart
 from its host.
 
@@ -24,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, overload
 
-from app.ai.voice.agents.breeze_buddy.accounts import llm, stt, tts
+from app.ai.voice.agents.breeze_buddy.accounts import llm, stt, telephony, tts
 from app.ai.voice.agents.breeze_buddy.accounts.blocks import (
     account_blocks,
     kind_of,
@@ -51,6 +52,8 @@ async def env_account(vendor: str, kind: str, block: Any) -> Account:
         return await stt.env_account(vendor, block)
     if kind == "tts":
         return await tts.env_account(vendor, block)
+    if kind == "telephony":
+        return await telephony.env_account(vendor, block)
     return await llm.env_account(vendor, kind, block)
 
 
@@ -62,6 +65,8 @@ def _row_account(
         return stt.row_account(vendor, account, credential_id)
     if kind == "tts":
         return tts.row_account(vendor, account, credential_id)
+    if kind == "telephony":
+        return telephony.row_account(vendor, account, credential_id)
     return llm.row_account(vendor, account, credential_id)
 
 

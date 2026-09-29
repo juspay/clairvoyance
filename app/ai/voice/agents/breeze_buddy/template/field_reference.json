@@ -282,6 +282,13 @@
       "description": "DEPRECATED — use ivr_configuration.priority instead. Ordering priority for this template in the IVR menu (lower = presented earlier).",
       "example": 1
     },
+    "telephony_configuration": {
+      "description": "The Plivo account this template's calls run on (the transfer, the hang-up): credential_id names a credentials row with provider=plivo, like stt_configuration names its STT account. Unset = the environment's account.",
+      "example": {
+        "provider": "plivo",
+        "credential_id": "9c5f4c3f-aeea-4a5a-ab5b-02159c5f0b9e"
+      }
+    },
     "transfer_number": {
       "description": "E.164 phone number to transfer the call to. Used in warm-transfer flows where the AI hands off to a human agent.",
       "example": "+919876543210"

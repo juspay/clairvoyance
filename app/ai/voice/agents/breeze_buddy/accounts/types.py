@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Type, Union, cast
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 # A row's value is exactly its vendor's fields — never more. An unknown key
 # (a `base_url` beside `endpoint`, say) would be dropped silently by
@@ -110,8 +116,41 @@ class KeyOnlyAccount(BaseModel):
     _key_present = field_validator("api_key")(_key_present)
 
 
+class PlivoAccount(BaseModel):
+    """A Plivo account (an org): the auth id and token every REST call about
+    a call on its numbers is signed with. A template's
+    ``telephony_configuration`` names it."""
+
+    model_config = _EXACT_FIELDS
+
+    auth_id: str
+    auth_token: str
+
+    @field_validator("auth_id", "auth_token")
+    @classmethod
+    def _present(cls, value: str, info: ValidationInfo) -> str:
+        if not value or not value.strip():
+            raise ValueError(f"{info.field_name} is empty")
+        return value
+
+    @field_validator("auth_id")
+    @classmethod
+    def _plivo_auth_id(cls, value: str) -> str:
+        """The SDK refuses any other id when the client is BUILT — judged
+        here, at the write, never first met on a live call."""
+        if len(value) != 20 or value[:2] not in ("MA", "SA"):
+            raise ValueError("is not a Plivo auth id (20 characters, MA… or SA…)")
+        return value
+
+
 Account = Union[
-    KeyAccount, AzureAccount, BedrockAccount, GcpAccount, VertexAccount, KeyOnlyAccount
+    KeyAccount,
+    AzureAccount,
+    BedrockAccount,
+    GcpAccount,
+    VertexAccount,
+    KeyOnlyAccount,
+    PlivoAccount,
 ]
 
 # vendor (a credential row's `provider`) -> the shape its value must have.
@@ -134,6 +173,8 @@ SHAPES: Dict[str, Type[BaseModel]] = {
     "elevenlabs": KeyOnlyAccount,  # host = the deployment's, per service (resolve.py)
     "cartesia": KeyAccount,
     "google": GcpAccount,
+    # telephony
+    "plivo": PlivoAccount,
 }
 
 

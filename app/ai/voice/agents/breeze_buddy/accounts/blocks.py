@@ -1,6 +1,7 @@
 """The template side of the vocabulary: which service a block configures,
 which vendor its provider word names (each service owns its words: llm.py,
-stt.py, tts.py), and every block of a template that may name an account."""
+stt.py, tts.py, telephony.py), and every block of a template that may name
+an account."""
 
 from __future__ import annotations
 
@@ -8,8 +9,13 @@ from typing import Any, Iterator, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.accounts.llm import LLM_VENDOR, REALTIME_VENDOR
 from app.ai.voice.agents.breeze_buddy.accounts.stt import STT_VENDOR
+from app.ai.voice.agents.breeze_buddy.accounts.telephony import TELEPHONY_VENDOR
 from app.ai.voice.agents.breeze_buddy.accounts.tts import TTS_VENDOR
-from app.ai.voice.agents.breeze_buddy.template.types import STTConfiguration, TTSConfig
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    STTConfiguration,
+    TelephonyConfiguration,
+    TTSConfig,
+)
 from app.ai.voice.llm.types import LLMConfiguration, RealtimeConfig
 
 
@@ -18,7 +24,8 @@ def _word(value: Any) -> Optional[str]:
 
 
 def kind_of(block: Any) -> str:
-    """Which service a block configures: llm · realtime · stt · tts."""
+    """Which service a block configures: llm · realtime · stt · tts ·
+    telephony."""
     if isinstance(block, RealtimeConfig):
         return "realtime"
     if isinstance(block, LLMConfiguration):
@@ -27,6 +34,8 @@ def kind_of(block: Any) -> str:
         return "stt"
     if isinstance(block, TTSConfig):
         return "tts"
+    if isinstance(block, TelephonyConfiguration):
+        return "telephony"
     raise TypeError(f"not a provider block: {type(block).__name__}")
 
 
@@ -43,6 +52,8 @@ def vendor_of(block: Any) -> str:
         return REALTIME_VENDOR.get(str(word)) or f"realtime:{word}"
     if kind == "stt":
         return STT_VENDOR.get(str(word)) or f"stt:{word}"
+    if kind == "telephony":
+        return TELEPHONY_VENDOR.get(str(word)) or f"telephony:{word}"
     return TTS_VENDOR.get(str(word)) or f"tts:{word}"
 
 
@@ -68,6 +79,9 @@ def account_blocks(configurations: Any) -> Iterator[Tuple[str, Any]]:
         getattr(configurations, "tts_configuration_overrides", None) or {}
     ).items():
         yield f"tts_configuration_overrides.{key}", override
+    telephony = getattr(configurations, "telephony_configuration", None)
+    if telephony is not None:
+        yield "telephony_configuration", telephony
     base_provider = getattr(llm, "provider", None) if llm is not None else None
     for i, observer in enumerate(getattr(configurations, "observers", None) or []):
         obs_llm = getattr(observer, "llm", None)

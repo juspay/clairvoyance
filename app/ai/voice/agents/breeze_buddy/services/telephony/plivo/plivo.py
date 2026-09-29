@@ -1,10 +1,16 @@
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
 from starlette.responses import HTMLResponse
 
+from app.ai.voice.agents.breeze_buddy.accounts import (
+    Accounts,
+    PlivoAccount,
+    plivo_keys,
+    template_plivo_account,
+)
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
@@ -29,18 +35,50 @@ class PlivoProvider(VoiceCallProvider):
     def __init__(
         self, aiohttp_session, telephony_config: Optional[TelephonyConfig] = None
     ):
-        # Store config values directly as instance attributes
-        self.PLIVO_AUTH_ID = PLIVO_AUTH_ID
-        self.PLIVO_AUTH_TOKEN = PLIVO_AUTH_TOKEN
         self.APP_BASE_URL = APP_BASE_URL
-
+        self.account_chosen = False
         super().__init__(None, aiohttp_session, telephony_config)
+        self._use(None)
 
-        # Create Plivo client
+    def _use(self, account: Optional[PlivoAccount]) -> None:
+        """The account this call's REST side runs on — the dial, the
+        transfer and the serializer's hang-up are signed by it. None = the
+        environment's."""
+        self.account = account
+        self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN = plivo_keys(account)
         self.client = plivo.RestClient(self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN)
-
-        # Initialize conference service for transfers
         self.conference_service = PlivoConferenceService(self.client)
+
+    async def use_template_credentials(
+        self, accounts: Accounts, configurations: Any
+    ) -> bool:
+        """Switch to the account the template's ``telephony_configuration``
+        names, else the environment's — asked of the resolver like every
+        STT and TTS block. Raises AccountRefused, as they do: a row that may
+        not serve ends the call.
+
+        Once per call: the call leg belongs to the account it started on, so
+        a later generation (an agent-to-agent transfer to another template)
+        keeps it. True when this call chose its account now."""
+        if self.account_chosen:
+            return False
+        self._use(await template_plivo_account(accounts, configurations))
+        self.account_chosen = True
+        return True
+
+    def set_hangup_credentials(self, transport: Any) -> None:
+        """pipecat builds the Plivo serializer from the environment; point
+        its auto hang-up at this call's account."""
+        if self.account is None:
+            return
+        try:
+            serializer = transport.output()._params.serializer
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not reach the Plivo serializer: {e}")
+            return
+        if serializer is not None:
+            serializer._auth_id = self.PLIVO_AUTH_ID
+            serializer._auth_token = self.PLIVO_AUTH_TOKEN
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Plivo WebSocket connection")

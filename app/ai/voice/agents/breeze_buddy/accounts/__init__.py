@@ -1,4 +1,5 @@
-"""Provider accounts — the account a template's LLM / STT / TTS runs on.
+"""Provider accounts — the account a template's LLM / STT / TTS / telephony
+runs on.
 
 A credentials-table row may hold a PROVIDER ACCOUNT: its ``provider`` names
 the service (``elevenlabs``, ``azure_openai``, ...) and its value carries what
@@ -13,11 +14,12 @@ the files inside. ``types.py`` = the shapes; ``rows.py`` = who may use a
 row; ``blocks.py`` = the template side (which block, which kind, the walk);
 ``llm.py`` / ``stt.py`` / ``tts.py`` = each service's vendor words, its
 environment accounts and the host rule a row must obey on it;
-``resolve.py`` = the resolver, dispatching by kind.
+``resolve.py`` = the resolver, dispatching by kind; ``telephony.py`` = the
+telephony side, like ``stt.py``.
 
 Phases (docs/PROVIDER_CREDENTIALS.md): (1) rows carry a provider; (2) a
 template block names an account, checked at save; (3) the LLM runs on it;
-(4) speech.
+(4) speech; (5) telephony — a template names its Plivo account.
 """
 
 from app.ai.voice.agents.breeze_buddy.accounts.blocks import (
@@ -31,6 +33,10 @@ from app.ai.voice.agents.breeze_buddy.accounts.resolve import (
     env_account,
 )
 from app.ai.voice.agents.breeze_buddy.accounts.rows import in_tenant, refusal
+from app.ai.voice.agents.breeze_buddy.accounts.telephony import (
+    plivo_keys,
+    template_plivo_account,
+)
 from app.ai.voice.agents.breeze_buddy.accounts.tts import unwrap_dragontts
 from app.ai.voice.agents.breeze_buddy.accounts.types import (
     SHAPES,
@@ -42,6 +48,7 @@ from app.ai.voice.agents.breeze_buddy.accounts.types import (
     GcpAccount,
     KeyAccount,
     KeyOnlyAccount,
+    PlivoAccount,
     VertexAccount,
     account_from_value,
     shape_problems,
@@ -58,6 +65,7 @@ __all__ = [
     "GcpAccount",
     "KeyAccount",
     "KeyOnlyAccount",
+    "PlivoAccount",
     "VertexAccount",
     "account_blocks",
     "account_from_value",
@@ -65,8 +73,10 @@ __all__ = [
     "env_account",
     "in_tenant",
     "kind_of",
+    "plivo_keys",
     "refusal",
     "shape_problems",
+    "template_plivo_account",
     "unwrap_dragontts",
     "vendor_of",
 ]
