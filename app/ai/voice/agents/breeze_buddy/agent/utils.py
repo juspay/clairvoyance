@@ -78,15 +78,15 @@ async def send_initial_greeting(
         greeting_text = greeting_result.get("greeting_text")
 
         # Build provider-specific WebSocket message
-        # Plivo uses different event name and message structure than Twilio/Exotel
+        # Plivo/Vobiz use a different event name and message structure than Twilio/Exotel
         provider_str = (
             provider.lower()
             if provider and hasattr(provider, "lower")
             else str(provider or "").lower()
         )
 
-        if provider_str == "plivo":
-            # Plivo bidirectional streaming uses playAudio event
+        if provider_str in ("plivo", "vobiz"):
+            # Plivo-dialect bidirectional streaming (Plivo, Vobiz) uses playAudio
             media_message = {
                 "event": "playAudio",
                 "streamId": stream_sid,

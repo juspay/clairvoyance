@@ -15,11 +15,7 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
-from pipecat.runner.utils import (
-    _create_telephony_transport,
-    create_transport,
-    parse_telephony_websocket,
-)
+from pipecat.runner.utils import create_transport, parse_telephony_websocket
 from pipecat_flows import FlowManager
 
 from app.ai.voice.agents.breeze_buddy.accounts import Accounts
@@ -51,6 +47,8 @@ from app.ai.voice.agents.breeze_buddy.agent.prompt_prefill import spawn_prefill
 from app.ai.voice.agents.breeze_buddy.agent.transfer import apply_transfer
 from app.ai.voice.agents.breeze_buddy.agent.transport import (
     TRANSPORT_TYPE_DAILY,
+    TRANSPORT_TYPE_VOBIZ,
+    create_telephony_transport,
     get_transport_params,
 )
 from app.ai.voice.agents.breeze_buddy.agent.utils import (
@@ -506,6 +504,10 @@ class Agent:
 
         self.call_sid = call_data.get("call_id")
         self.stream_sid = call_data.get("stream_id")
+        # A Vobiz stream opens with a Plivo-shaped start event, so pipecat
+        # reports "plivo"; the websocket path (self.provider) is the truth.
+        if self.provider == CallProvider.VOBIZ:
+            transport_type = TRANSPORT_TYPE_VOBIZ
 
         if not self.stream_sid or not self.call_sid:
             logger.error(
@@ -770,7 +772,7 @@ class Agent:
 
         # Create transport with the call data. Cast: the proxy forwards every
         # attribute so it quacks like a WebSocket, but isn't a subclass.
-        self.transport = await _create_telephony_transport(
+        self.transport = await create_telephony_transport(
             cast(WebSocket, self._rebuild.ws_proxy), params, transport_type, call_data
         )
 
