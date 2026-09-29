@@ -3,7 +3,7 @@
 import json
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.ai.voice.agents.breeze_buddy.template.types import (
     DeepgramSTTConfig,
@@ -106,6 +106,30 @@ class TranscriptionStreamRequest(BaseModel):
     soniox: Optional[SonioxSTTConfig] = None
     deepgram: Optional[DeepgramSTTConfig] = None
     sarvam: Optional[SarvamSTTConfig] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _flat_model_into_deepgram(cls, data: object) -> object:
+        """Put the flat ``model`` inside the deepgram block before it is
+        validated: its Nova/Flux field check must judge the model actually
+        used, or Flux settings are refused as Nova ones."""
+        if not isinstance(data, dict):
+            return data
+        deepgram = data.get("deepgram")
+        raw_model = data.get("model")
+        # Trimmed the way the flat field is trimmed later (_blank_to_none): a
+        # blank model must leave Deepgram's default in place, and a padded
+        # " flux-general-multi " must still read as Flux.
+        model = raw_model.strip() if isinstance(raw_model, str) else None
+        provider = str(data.get("provider") or "").strip().lower()
+        if (
+            provider == "deepgram"
+            and model
+            and isinstance(deepgram, dict)
+            and "model" not in deepgram
+        ):
+            return {**data, "deepgram": {**deepgram, "model": model}}
+        return data
 
     @field_validator("provider", mode="before")
     @classmethod

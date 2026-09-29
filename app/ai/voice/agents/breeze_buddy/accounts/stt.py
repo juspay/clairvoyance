@@ -25,6 +25,7 @@ STT_VENDOR: Dict[str, str] = {
     "cartesia": "cartesia",
     "openai": "openai",
     "google": "google",
+    "smallest": "smallest",
 }
 
 
@@ -60,6 +61,7 @@ async def env_account(vendor: str, block: Any) -> Account:
         "sarvam": static.SARVAM_API_KEY,
         "assemblyai": static.ASSEMBLYAI_API_KEY,
         "cartesia": static.CARTESIA_API_KEY,
+        "smallest": static.SMALLEST_API_KEY,
     }
     if vendor in env_keys:
         if not env_keys[vendor]:
@@ -85,4 +87,12 @@ def row_account(vendor: str, account: Account, credential_id: str) -> Account:
             f"credential {credential_id} names a gateway endpoint, and "
             "OpenAI STT has no gateway — it can only use the public host"
         )
+    if vendor == "smallest":
+        # Key-only row (an endpoint is refused at the write); Pulse has one
+        # public host, which pipecat's service already dials.
+        if not isinstance(account, KeyOnlyAccount):
+            raise AccountRefused(
+                f"credential {credential_id} is not a smallest key-only row"
+            )
+        return KeyAccount(api_key=account.api_key)
     return account

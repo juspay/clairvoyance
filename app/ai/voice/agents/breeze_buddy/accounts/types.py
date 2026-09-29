@@ -173,6 +173,7 @@ SHAPES: Dict[str, Type[BaseModel]] = {
     "elevenlabs": KeyOnlyAccount,  # host = the deployment's, per service (resolve.py)
     "cartesia": KeyAccount,
     "google": GcpAccount,
+    "smallest": KeyOnlyAccount,  # one fixed public host; endpoint refused at write
     # telephony
     "plivo": PlivoAccount,
 }

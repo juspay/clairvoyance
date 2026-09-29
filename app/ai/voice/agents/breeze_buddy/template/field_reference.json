@@ -143,7 +143,7 @@
       }
     },
     "stt_configuration": {
-      "description": "STT provider, language(s), and provider-specific config. Use provider=deepgram for English-only; provider=soniox with enable_language_identification=true for Hindi, South Indian languages, or any multilingual combination.",
+      "description": "STT provider, language(s), and provider-specific config. Providers: soniox (default), deepgram (Nova; set deepgram.model='flux-general-multi' for Flux), sarvam, elevenlabs, assemblyai (universal-3-5-pro default, or universal-3-6-pro), smallest, openai, google. Use provider=deepgram for English-only; provider=soniox with enable_language_identification=true for Hindi, South Indian languages, or any multilingual combination. end_of_speech_ms sets the longest silence before the STT ends the turn, mapped to each provider's own setting and range (soniox 500-3000, deepgram Nova >=10, Flux 500-60000, assemblyai 50-10000); refused for elevenlabs, sarvam, smallest, openai, google and under turn_detection=smart_turn. A provider's own field (e.g. assemblyai.max_turn_silence) wins over it.",
       "example": {
         "provider": "soniox",
         "language": [

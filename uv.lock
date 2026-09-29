@@ -749,7 +749,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
-    { name = "pipecat-ai", extra = ["aic", "anthropic", "assemblyai", "aws", "azure", "cartesia", "daily", "deepgram", "elevenlabs", "google", "mcp", "openai", "sarvam", "soniox"] },
+    { name = "pipecat-ai", extra = ["aic", "anthropic", "assemblyai", "aws", "azure", "cartesia", "daily", "deepgram", "elevenlabs", "google", "mcp", "openai", "sarvam", "smallest", "soniox"] },
     { name = "pipecat-ai-flows" },
     { name = "plivo" },
     { name = "pydub" },
@@ -807,7 +807,7 @@ requires-dist = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
-    { name = "pipecat-ai", extras = ["daily", "google", "assemblyai", "silero", "openai", "azure", "elevenlabs", "aic", "anthropic", "deepgram", "soniox", "mcp", "sarvam", "cartesia", "aws"], specifier = "==1.1.0" },
+    { name = "pipecat-ai", extras = ["daily", "google", "assemblyai", "silero", "openai", "azure", "elevenlabs", "aic", "anthropic", "deepgram", "soniox", "mcp", "sarvam", "cartesia", "aws", "smallest"], specifier = "==1.1.0" },
     { name = "pipecat-ai-flows", specifier = "==1.0.0" },
     { name = "plivo" },
     { name = "pydub" },
@@ -2581,6 +2581,9 @@ openai = [
 ]
 sarvam = [
     { name = "sarvamai" },
+    { name = "websockets" },
+]
+smallest = [
     { name = "websockets" },
 ]
 soniox = [

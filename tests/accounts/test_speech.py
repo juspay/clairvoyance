@@ -183,3 +183,50 @@ def test_the_ivr_walker_ends_the_call_as_an_ivr_error_when_the_voice_check_raise
     asyncio.run(w.run())
     assert (agent.lead.outcome, closed["by"]) == (walker.IVR_ERROR_OUTCOME, "system")
     assert w.accounts is agent.accounts and isinstance(agent.accounts, Accounts)
+
+
+def test_a_smallest_template_runs_on_its_credential_row(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.ai.voice.agents.breeze_buddy.stt as stt_factory
+
+    seen: Dict[str, Any] = {}
+
+    def fake_build(config: Any) -> str:
+        seen["api_key"] = config.api_key
+        return "smallest-svc"
+
+    monkeypatch.setattr(stt_factory, "build_smallest_stt", fake_build)
+    store.rows[ROW2] = cred(id=ROW2, provider="smallest", value={"api_key": "sm-acct"})
+    config = STTConfiguration(provider="smallest", credential_id=ROW2)
+    assert (
+        asyncio.run(
+            stt_factory.create_stt_from_config(config, accounts=Accounts("r-1", "m-1"))
+        )
+        == "smallest-svc"
+    )
+    assert seen == {"api_key": "sm-acct"}
+
+
+def test_a_smallest_row_with_an_endpoint_is_refused(store: Store) -> None:
+    """Smallest has one fixed public host: a row naming another host must
+    not quietly send the key somewhere else."""
+    store.rows[ROW2] = cred(
+        id=ROW2,
+        provider="smallest",
+        value={"api_key": "sm-acct", "endpoint": "https://gateway.example.com"},
+    )
+    config = STTConfiguration(provider="smallest", credential_id=ROW2)
+    with pytest.raises(AccountRefused, match="smallest"):
+        asyncio.run(Accounts("r-1", "m-1").get(config))
+
+
+def test_a_smallest_row_with_an_endpoint_is_refused_at_the_write() -> None:
+    """Key-only shape: the credential API refuses the endpoint on create or
+    update, instead of storing a row that fails on every call."""
+    from app.ai.voice.agents.breeze_buddy.accounts.types import shape_problems
+
+    assert shape_problems(
+        "smallest", {"api_key": "sm", "endpoint": "https://gateway.example.com"}
+    )
+    assert shape_problems("smallest", {"api_key": "sm"}) == []

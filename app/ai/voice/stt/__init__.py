@@ -9,10 +9,16 @@ from __future__ import annotations
 # Export all builder functions and config classes
 from .assemblyai import AssemblyAIConfig, build_assemblyai_stt
 from .deepgram import DeepgramConfig, build_deepgram_stt
+from .deepgram_flux import (
+    DeepgramFluxConfig,
+    DeepgramFluxSTTServiceWithInterims,
+    build_deepgram_flux_stt,
+)
 from .elevenlabs import ElevenLabsConfig, build_elevenlabs_stt
 from .google import build_google_stt
 from .openai import build_openai_stt
 from .sarvam import SarvamConfig, build_sarvam_stt, get_sarvam_language
+from .smallest import SmallestConfig, build_smallest_stt
 from .soniox import SonioxConfig, build_soniox_stt
 from .transcribe import Transcription, TranscriptionError, transcribe_audio
 
@@ -27,6 +33,9 @@ __all__ = [
     # Deepgram
     "DeepgramConfig",
     "build_deepgram_stt",
+    "DeepgramFluxConfig",
+    "DeepgramFluxSTTServiceWithInterims",
+    "build_deepgram_flux_stt",
     # ElevenLabs
     "ElevenLabsConfig",
     "build_elevenlabs_stt",
@@ -38,6 +47,9 @@ __all__ = [
     "SarvamConfig",
     "build_sarvam_stt",
     "get_sarvam_language",
+    # Smallest
+    "SmallestConfig",
+    "build_smallest_stt",
     # Soniox
     "SonioxConfig",
     "build_soniox_stt",

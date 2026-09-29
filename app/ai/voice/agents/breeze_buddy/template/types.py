@@ -63,6 +63,7 @@ class STTProvider(str, Enum):
     GOOGLE = "google"
     ELEVENLABS = "elevenlabs"
     ASSEMBLYAI = "assemblyai"
+    SMALLEST = "smallest"
 
 
 class SonioxSTTConfig(BaseModel):
@@ -99,13 +100,56 @@ class SonioxSTTConfig(BaseModel):
     )
 
 
+def set_by_template(model: BaseModel, name: str) -> bool:
+    """Whether a field holds a value other than its default.
+
+    ``model_fields_set`` cannot answer "did the template set this": it does not
+    survive storage. Templates are saved with ``model_dump(exclude_none=True)``
+    (non-None defaults are written out) and cached with ``model_dump_json()``
+    (None values are written out), so after either round trip every field
+    looks set. The value is what survives, so the value decides.
+
+    Known edge, accepted on purpose: a field set explicitly to its own
+    default reads as unset, so e.g. ``max_turn_silence: 1000`` together with
+    ``end_of_speech_ms: 3000`` runs at 3000. The alternative is worse: every
+    Nova/AssemblyAI template saved before end_of_speech_ms existed carries
+    its defaults written out, and would silently ignore end_of_speech_ms.
+    """
+    return getattr(model, name) != type(model).model_fields[name].default
+
+
+# Nova-only fields: meaningless on Flux, which has no formatting options and
+# ends turns with its own model instead of silence timers.
+_DEEPGRAM_NOVA_ONLY = (
+    "endpointing_ms",
+    "utterance_end_ms",
+    "smart_format",
+    "punctuate",
+    "numerals",
+    "profanity_filter",
+    "diarize",
+    "auto_detect_language",
+)
+_DEEPGRAM_FLUX_ONLY = ("eot_threshold", "eager_eot_threshold", "eot_timeout_ms")
+
+
 class DeepgramSTTConfig(BaseModel):
     """Deepgram-specific STT settings.
 
     All params have sensible defaults — only override what you need.
+
+    A ``flux-*`` model (e.g. ``flux-general-multi``) runs Deepgram Flux, the
+    conversational model that ends turns itself; anything else runs Nova.
+    Each family's fields are refused on the other, so a template never
+    carries a setting that silently does nothing.
     """
 
-    model: str = Field("nova-3-general", description="Deepgram model.")
+    model: str = Field(
+        "nova-3-general",
+        description="Deepgram model. 'nova-3-general' (default) or a Flux "
+        "model: 'flux-general-multi' (Hindi/English code-switching) or "
+        "'flux-general-en'.",
+    )
     endpointing_ms: bool | int = Field(
         25,
         description="Silence threshold before endpointing fires. "
@@ -136,6 +180,60 @@ class DeepgramSTTConfig(BaseModel):
     auto_detect_language: bool = Field(
         False, description="Auto-detect language (uses 'multi' parameter)."
     )
+    # --- Flux only ---
+    eot_threshold: Optional[float] = Field(
+        None,
+        ge=0.5,
+        le=1.0,
+        description="Flux: confidence required to end the turn (Deepgram "
+        "default 0.7). Lower ends turns sooner.",
+    )
+    eager_eot_threshold: Optional[float] = Field(
+        None,
+        ge=0.3,
+        le=0.9,
+        description="Flux: confidence for EagerEndOfTurn (off by default). "
+        "Must not exceed eot_threshold.",
+    )
+    eot_timeout_ms: Optional[int] = Field(
+        None,
+        ge=500,
+        le=60000,
+        description="Flux: longest silence before the turn is forced to end "
+        "(Deepgram default 5000). Wins over stt_configuration.end_of_speech_ms.",
+    )
+    mip_opt_out: bool = Field(
+        True,
+        description="Flux: opt out of Deepgram's Model Improvement Program. "
+        "On by default because the audio is customer calls.",
+    )
+
+    @property
+    def is_flux(self) -> bool:
+        return self.model.startswith("flux")
+
+    @model_validator(mode="after")
+    def _fields_match_model_family(self) -> "DeepgramSTTConfig":
+        """Refuse settings the chosen family would silently ignore."""
+        wrong = _DEEPGRAM_NOVA_ONLY if self.is_flux else _DEEPGRAM_FLUX_ONLY
+        stray = sorted(f for f in wrong if set_by_template(self, f))
+        if stray:
+            family = "Flux" if self.is_flux else "Nova"
+            raise ValueError(
+                f"deepgram: {', '.join(stray)} do not apply to {family} model "
+                f"{self.model!r}"
+            )
+        # Unset eot_threshold is Deepgram's 0.7, which eager must not exceed.
+        effective_eot = self.eot_threshold if self.eot_threshold is not None else 0.7
+        if (
+            self.eager_eot_threshold is not None
+            and self.eager_eot_threshold > effective_eot
+        ):
+            raise ValueError(
+                "deepgram: eager_eot_threshold must not exceed eot_threshold "
+                f"({effective_eot}{' (Deepgram default)' if self.eot_threshold is None else ''})"
+            )
+        return self
 
 
 class SarvamSTTConfig(BaseModel):
@@ -145,8 +243,51 @@ class SarvamSTTConfig(BaseModel):
         None, description="Sarvam model (e.g. 'saaras:v3'). Defaults from env."
     )
     language_code: Optional[str] = Field(
-        None, description="Sarvam language code. Defaults from env."
+        None,
+        description="Sarvam language code, e.g. 'hi-IN'. Pins the language on "
+        "models that accept one (saaras:v3, saarika); unset = auto-detect. "
+        "Defaults from dynamic config.",
     )
+
+
+class SmallestSTTConfig(BaseModel):
+    """Smallest.ai Pulse streaming STT settings.
+
+    Pulse documents no end-of-speech setting, so it cannot take
+    ``stt_configuration.end_of_speech_ms``.
+    """
+
+    language: Optional[str] = Field(
+        None,
+        description="Pulse language code, e.g. 'hi', 'en'. Unset = the "
+        "top-level stt_configuration.language (first code), else 'hi'.",
+    )
+    numerals: bool = Field(
+        True,
+        description="Write spoken numbers as digits. Off = pipecat's 'false'; "
+        "left to Pulse's own default the number came back as English words.",
+    )
+
+    @field_validator("language")
+    @classmethod
+    def _known_language(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        # Local imports: the schema module stays free of pipecat at load time.
+        from pipecat.transcriptions.language import Language
+
+        from app.ai.voice.stt.smallest import SMALLEST_LANGUAGES, smallest_supports
+
+        try:
+            Language(value)
+        except ValueError as e:
+            raise ValueError(f"smallest: unknown language {value!r}") from e
+        if not smallest_supports(value):
+            raise ValueError(
+                f"smallest: Pulse does not support {value!r}; one of "
+                f"{', '.join(sorted(SMALLEST_LANGUAGES))}"
+            )
+        return value
 
 
 class ElevenLabsSTTConfig(BaseModel):
@@ -237,12 +378,13 @@ class AssemblyAISTTConfig(BaseModel):
 
     model: str = Field(
         "universal-3-5-pro",
-        description="AssemblyAI speech model. Universal-3.5 Pro Streaming is "
-        "the only streaming model with native mid-sentence code switching, and "
-        "the only one supporting AssemblyAI-side turn detection — so "
-        "turn_detection='stt_native' requires it. pipecat 1.1.0 knows the same "
-        "model as 'u3-rt-pro'; either spelling (and their -* variants) is "
-        "accepted and normalised to AssemblyAI's documented name.",
+        description="AssemblyAI speech model: 'universal-3-5-pro' (default) or "
+        "'universal-3-6-pro' (same API and price; better on short answers, "
+        "32 languages). The Universal-3.x Pro models are the only streaming "
+        "ones with native mid-sentence code switching and AssemblyAI-side turn "
+        "detection, so turn_detection='stt_native' requires one. pipecat 1.1.0 "
+        "calls 3.5 'u3-rt-pro'; that spelling (and -* variants) is accepted and "
+        "sent under AssemblyAI's documented name.",
     )
     language_codes: Optional[List[str]] = Field(
         None,
@@ -343,6 +485,26 @@ class AssemblyAISTTConfig(BaseModel):
                 "keyterms are appended to the default prompt automatically"
             )
         return self
+
+
+# end_of_speech_ms -> each provider's own "longest silence before the turn
+# must end" setting, with the range that provider's API accepts (vendor docs;
+# None = no documented upper bound). A provider missing here has no such
+# setting and refuses the field.
+END_OF_SPEECH_RANGE_MS: Dict[str, tuple[int, Optional[int]]] = {
+    "soniox": (500, 3000),  # max_endpoint_delay_ms
+    "deepgram": (10, None),  # Nova endpointing_ms
+    "deepgram_flux": (500, 60000),  # Flux eot_timeout_ms
+    "assemblyai": (50, 10000),  # max_turn_silence
+}
+
+
+def end_of_speech_key(config: Any) -> str:
+    """The END_OF_SPEECH_RANGE_MS key for a block: Flux is its own entry."""
+    deepgram = getattr(config, "deepgram", None)
+    if config.provider == STTProvider.DEEPGRAM and deepgram and deepgram.is_flux:
+        return "deepgram_flux"
+    return config.provider.value
 
 
 class SmartTurnConfig(BaseModel):
@@ -480,6 +642,23 @@ class STTConfiguration(BaseModel):
         description="Seconds to wait after last finalized transcript before "
         "ending turn. Only used when turn_detection='timeout'.",
     )
+    end_of_speech_ms: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Longest silence after the caller stops before the STT "
+        "must end the turn, in ms, for whichever provider this template "
+        "uses. Each provider takes it as its own setting and range: soniox "
+        "max_endpoint_delay_ms 500-3000 (a cap; Soniox may end sooner), "
+        "deepgram Nova "
+        "endpointing_ms >=10, deepgram Flux eot_timeout_ms 500-60000 (a cap), "
+        "assemblyai max_turn_silence 50-10000. "
+        "Refused for elevenlabs (use its own vad_silence_threshold_secs), "
+        "sarvam, smallest, openai and google "
+        "and under turn_detection='smart_turn' (the STT does not end turns "
+        "there). A provider's own field wins when both are set, unless it is "
+        "left at its default value (which reads as unset); unset keeps "
+        "today's defaults.",
+    )
 
     # Provider-specific — only the matching one is used at runtime
     soniox: Optional[SonioxSTTConfig] = None
@@ -487,9 +666,65 @@ class STTConfiguration(BaseModel):
     sarvam: Optional[SarvamSTTConfig] = None
     elevenlabs: Optional[ElevenLabsSTTConfig] = None
     assemblyai: Optional[AssemblyAISTTConfig] = None
+    smallest: Optional[SmallestSTTConfig] = None
 
     # SmartTurn ML config — only used when turn_detection='smart_turn'
     smart_turn: Optional[SmartTurnConfig] = None
+
+    @model_validator(mode="after")
+    def _refuse_flux_under_smart_turn(self) -> "STTConfiguration":
+        """Flux finalizes only on its own EndOfTurn (up to eot_timeout_ms)
+        and does not act on the local VAD's stop, so SmartTurn could never
+        end the turn: its tuning would silently do nothing."""
+        if (
+            self.provider == STTProvider.DEEPGRAM
+            and self.deepgram is not None
+            and self.deepgram.is_flux
+            and self.turn_detection == TurnDetectionMode.SMART_TURN
+        ):
+            raise ValueError(
+                "deepgram Flux ends turns itself and ignores SmartTurn: use "
+                "turn_detection='stt_native' (tune eot_threshold / "
+                "eot_timeout_ms) or 'timeout'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_end_of_speech(self) -> "STTConfiguration":
+        """Refuse an end_of_speech_ms the chosen provider cannot honour.
+
+        Rejected at parse (template save, chat, playground) rather than
+        clamped or ignored: a value that silently does nothing is how
+        user_speech_timeout outside turn_detection='timeout' already bites.
+        """
+        ms = self.end_of_speech_ms
+        if ms is None:
+            return self
+        if (
+            self.provider == STTProvider.SONIOX
+            and self.soniox is not None
+            and self.soniox.vad_force_turn_endpoint
+        ):
+            raise ValueError(
+                "end_of_speech_ms does not apply with soniox.vad_force_turn_endpoint: "
+                "VAD-forced endpoints disable Soniox's own endpoint detection"
+            )
+        if self.turn_detection == TurnDetectionMode.SMART_TURN:
+            raise ValueError(
+                "end_of_speech_ms does not apply under turn_detection='smart_turn': "
+                "the local VAD and SmartTurn end the turn; tune smart_turn.stop_secs"
+            )
+        key = end_of_speech_key(self)
+        bounds = END_OF_SPEECH_RANGE_MS.get(key)
+        if bounds is None:
+            raise ValueError(
+                f"end_of_speech_ms is not supported by {self.provider.value}"
+            )
+        low, high = bounds
+        if ms < low or (high is not None and ms > high):
+            span = f"{low}-{high}" if high is not None else f">={low}"
+            raise ValueError(f"{key} supports {span} ms for end_of_speech_ms; got {ms}")
+        return self
 
     @model_validator(mode="after")
     def _normalize_user_speech_timeout(self) -> "STTConfiguration":
