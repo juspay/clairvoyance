@@ -27,6 +27,7 @@ from app.ai.voice.agents.breeze_buddy.chat.agent.tooling import ToolDispatchMixi
 from app.ai.voice.agents.breeze_buddy.chat.flavors import (
     FlavorScope,
     resolve_flavor_scope,
+    set_active_connectors,
 )
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     internal_text_block,
@@ -247,6 +248,7 @@ class ChatAgent(
         self._flavor_scope: FlavorScope = resolve_flavor_scope(
             self.template, self._ui_flavor_groups
         )
+        set_active_connectors(self.template)
         # Catalog-version negotiation (RFC-001 §3.4). Only sessions that
         # declared "v2" at create time may see data-bound components: on a
         # v1 (or unversioned / voice) session they're pruned from the

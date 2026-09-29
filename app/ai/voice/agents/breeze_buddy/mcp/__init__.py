@@ -21,6 +21,7 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline imp
     apply_result_pipeline_json_str,
 )
 from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_tools
+from app.ai.voice.agents.breeze_buddy.mcp.local_gateway import transport_for
 
 # gate_call wraps gated MCP tool handlers with the HITL approval gate (voice).
 # Cycle-safe: template.approval only depends on template.context +
@@ -274,7 +275,9 @@ def _create_direct_http_tool_handler(
             server_params.timeout.total_seconds() if server_params.timeout else 30.0
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout_s) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout_s, transport=transport_for(server_params.url)
+            ) as client:
                 resp = await client.post(server_params.url, json=body, headers=headers)
         except Exception as e:
             logger.warning(f"[BUDDY_MCP] direct {tool_name!r} transport failed: {e}")

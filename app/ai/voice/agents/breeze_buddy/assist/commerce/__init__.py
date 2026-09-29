@@ -38,9 +38,11 @@ from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp import (  # noqa: F401
     schemas,
 )
 
-# Platform connectors — register into the ucp hooks on import.
+# Platform connectors — register on import: into the ucp hooks (shopify)
+# or as an in-process ucp gateway (woocommerce, mcp/local_gateway.py).
 from app.ai.voice.agents.breeze_buddy.assist.platforms import (  # noqa: F401
     shopify,
+    woocommerce,
 )
 
-__all__ = ["schemas", "intents", "shopify"]
+__all__ = ["schemas", "intents", "shopify", "woocommerce"]
