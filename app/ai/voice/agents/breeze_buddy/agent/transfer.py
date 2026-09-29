@@ -71,6 +71,11 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
 
     # 2. Record + persist the transfer (same precedent as IVR selection).
     if bot.lead is not None:
+        # An ending recorded in the outgoing generation (an idle timeout or a
+        # disconnect firing in the same tick as the transfer commit, which
+        # end_conversation then skipped) did not end the call. Clear it so
+        # the new generation's own ending is the one legacy_outcome reads.
+        bot.lead.end_reason = None
         if bot.lead.metaData is None:
             bot.lead.metaData = {}
         bot.lead.metaData.setdefault("agent_transfers", []).append(

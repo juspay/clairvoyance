@@ -100,6 +100,11 @@ from app.database.accessor import (
     update_lead_call_details,
 )
 from app.schemas import ExecutionMode, LeadCallStatus
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+)
 from app.services.redis import get_redis_service
 
 # ---------------------------------------------------------------------------
@@ -398,7 +403,9 @@ class Worker:
         try:
             config = await _get_lead_config(locked)
             if not config:
-                lock_released = await self._fail_and_release(locked.id, "NO_CONFIG")
+                lock_released = await self._fail_and_release(
+                    locked.id, "NO_CONFIG", ConnectionReason.NO_CONFIG
+                )
                 return
 
             if not config.enable_calling:
@@ -416,6 +423,10 @@ class Worker:
                     outcome="BLACKLISTED",
                     meta_data={"reason": "Phone number is blacklisted"},
                     call_end_time=datetime.now(timezone.utc),
+                    call_outcome=CallOutcome(
+                        connection_status=ConnectionStatus.NOT_DIALED,
+                        connection_reason=ConnectionReason.BLACKLISTED,
+                    ),
                 )
                 lock_released = await self._release(locked.id)
                 return
@@ -551,7 +562,9 @@ class Worker:
                         f"failed for lead {locked.id}: {alert_exc}"
                     )
                 lock_released = await self._fail_and_release(
-                    locked.id, "NUMBER_UNAVAILABLE"
+                    locked.id,
+                    "NUMBER_UNAVAILABLE",
+                    ConnectionReason.NUMBER_UNAVAILABLE,
                 )
                 return
 
@@ -591,7 +604,9 @@ class Worker:
                 )
                 await release_channel_token(number.id, token)
                 await _release_number(number.id, number.provider)
-                lock_released = await self._fail_and_release(locked.id, "INVALID_PHONE")
+                lock_released = await self._fail_and_release(
+                    locked.id, "INVALID_PHONE", ConnectionReason.INVALID_PHONE
+                )
                 return
 
             # Atomic check-and-record — the authoritative cap. Placement
@@ -877,8 +892,14 @@ class Worker:
         await schedule_lead(lead_id, next_at)
         return True
 
-    async def _fail_and_release(self, lead_id: str, outcome: str) -> bool:
-        """Mark FINISHED with a terminal outcome and release the lock."""
+    async def _fail_and_release(
+        self, lead_id: str, outcome: str, reason: ConnectionReason
+    ) -> bool:
+        """Mark FINISHED with a terminal outcome and release the lock.
+
+        The lead was never dialed: NOT_DIALED with ``reason`` in the call
+        outcome columns, beside the legacy ``outcome``.
+        """
         try:
             await update_lead_call_completion_details(
                 id=lead_id,
@@ -886,6 +907,10 @@ class Worker:
                 outcome=outcome,
                 meta_data={"reason": f"Dispatcher: {outcome}"},
                 call_end_time=datetime.now(timezone.utc),
+                call_outcome=CallOutcome(
+                    connection_status=ConnectionStatus.NOT_DIALED,
+                    connection_reason=reason,
+                ),
             )
         except Exception as e:  # noqa: BLE001
             logger.error(f"fail_and_release update_completion failed: {e}")
