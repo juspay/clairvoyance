@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -41,6 +42,13 @@ class PlivoProvider(VoiceCallProvider):
 
         # Initialize conference service for transfers
         self.conference_service = PlivoConferenceService(self.client)
+
+    async def hang_up(self, call_id: str) -> bool:
+        try:
+            await asyncio.to_thread(self.client.calls.delete, call_id)
+        except Exception as e:  # 404 = already over
+            logger.info(f"Plivo hang-up of {call_id}: {e}")
+        return True
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Plivo WebSocket connection")

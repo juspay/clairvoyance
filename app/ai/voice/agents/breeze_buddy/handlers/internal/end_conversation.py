@@ -7,6 +7,10 @@ from pipecat.frames.frames import EndFrame
 from app.ai.voice.agents.breeze_buddy.callbacks import (
     service_callback,
 )
+from app.ai.voice.agents.breeze_buddy.crm_mirror import (
+    held_call_completed,
+    mirror_call_completed,
+)
 from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
     update_span_with_evaluation_data,
 )
@@ -75,6 +79,10 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         context.lead.metaData = {}
         logger.debug(f"Initialized empty metaData for call {context.call_sid}")
 
+    # call.completed waits for the topic-evaluation push: the FINISHED write
+    # below parks it here, and `finally` sends it.
+    held: list = []
+    held_token = held_call_completed.set(held)
     try:
         # ── Set call_ended_by default ──────────────────────────────────────
         # _handle_unexpected_disconnect already sets "customer"/"system"/"agent"
@@ -353,6 +361,10 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             exc_info=True,
         )
     finally:
+        held_call_completed.reset(held_token)
+        for finished_lead in held:
+            mirror_call_completed(finished_lead)
+
         # Deny any pending HITL approvals before tearing down — pipecat does
         # NOT cancel parallel function-call tasks on EndFrame, so a blocked
         # gated handler would otherwise outlive the pipeline until timeout.

@@ -79,6 +79,11 @@ class VoiceCallProvider(ABC):
             template_name,
         )
 
+    async def hang_up(self, call_id: str) -> bool:
+        """End a live call from outside its pipeline. True once attempted;
+        False when this provider cannot (the stuck sweep then closes the row)."""
+        return False
+
     def set_completion_callback(self, callback):
         """
         Set the callback function to be called when the call is completed.
