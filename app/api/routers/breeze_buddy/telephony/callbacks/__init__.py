@@ -1,8 +1,8 @@
 """
 Telephony provider callback endpoints.
 
-This module provides webhook endpoints for telephony providers (Twilio, Exotel, Plivo)
-to send call status updates and recording URLs.
+This module provides webhook endpoints for telephony providers (Twilio, Exotel, Plivo,
+Vobiz) to send call status updates and recording URLs.
 
 Endpoints:
 - GET    /{provider}/callback/details                        - Receive call details (Exotel)
@@ -100,7 +100,7 @@ async def callback_status(request: Request, provider: str):
     Smart Router to release the pod (idempotent, safe if already released).
 
     Path Parameters:
-        provider: Telephony provider name ("twilio", "exotel", or "plivo")
+        provider: Telephony provider name ("twilio", "exotel", "plivo", or "vobiz")
 
     Form Data (Twilio):
         CallSid: Unique identifier for the call
@@ -120,6 +120,9 @@ async def callback_status(request: Request, provider: str):
         CallUUID: Unique identifier for the call
         CallStatus: Status of the call
         record_url: (Optional) URL to download the call recording
+
+    Form Data (Vobiz):
+        CallUUID, CallStatus (+ HangupCauseCode fallback)
 
     Returns:
         200 OK response (webhook acknowledgment)
