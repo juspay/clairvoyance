@@ -1,20 +1,27 @@
-"""Brand colours and logo from a rendered page, via Firecrawl's ``branding`` format.
+"""Firecrawl: a site's brand look, its pages and what each one says.
 
-The browser's computed styles for the header and primary button name a brand
-colour far more reliably than counting hex values in a stylesheet. A render
-takes 15-40 s, so callers give it a time budget.
+``brand_look`` reads the ``branding`` format: the browser's computed styles for
+the header and primary button name a brand colour far more reliably than
+counting hex values in a stylesheet. A render takes 15-40 s, so callers give it
+a time budget.
+
+``map`` lists a site's addresses (1 credit a call). ``scrape`` with a ``json``
+format renders one page and fills a JSON schema from it (5 credits a page).
+Firecrawl does the fetching, so no request to the store leaves this server.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, Dict, NamedTuple, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from urllib.parse import urlsplit
 
 import aiohttp
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingConfigurationError,
+    WebsiteScrapingUnavailableError,
     WebsiteScrapingUpstreamError,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.web.fetch import (
@@ -23,8 +30,9 @@ from app.ai.voice.agents.breeze_buddy.assist.engine.web.fetch import (
 from app.core.config.static import FIRECRAWL_API_KEY
 from app.core.transport.http_client import create_aiohttp_session
 
-_ENDPOINT = "https://api.firecrawl.dev/v2/scrape"
-# Longest a render may take.
+_MAP_ENDPOINT = "https://api.firecrawl.dev/v2/map"
+_SCRAPE_ENDPOINT = "https://api.firecrawl.dev/v2/scrape"
+# Longest a brand render may take.
 _TIMEOUT_SECONDS = 60.0
 _HEX_COLOR = re.compile(r"#(?:[0-9a-f]{3}|[0-9a-f]{6})")
 
@@ -43,33 +51,15 @@ class Branding(NamedTuple):
 async def brand_look(url: str) -> Branding:
     """Render ``url`` and read the brand colours and logo the browser computed.
 
-    Raises ``WebsiteScrapingConfigurationError`` without a key and
+    Raises ``WebsiteScrapingConfigurationError`` without a working key and
     ``WebsiteScrapingUpstreamError`` when the provider cannot answer.
     """
-    if not FIRECRAWL_API_KEY:
-        raise WebsiteScrapingConfigurationError("FIRECRAWL_API_KEY is not set")
     payload = {
         "url": normalize_probe_url(url),
         "formats": ["branding"],
         "timeout": int(_TIMEOUT_SECONDS * 1000),
     }
-    headers = {"Authorization": f"Bearer {FIRECRAWL_API_KEY}"}
-    try:
-        async with create_aiohttp_session(
-            # 10 s past Firecrawl's own limit, so its answer reaches us.
-            timeout=aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS + 10)
-        ) as session:
-            async with session.post(_ENDPOINT, headers=headers, json=payload) as resp:
-                if resp.status != 200:
-                    raise WebsiteScrapingUpstreamError(
-                        f"provider returned {resp.status}"
-                    )
-                parsed = await resp.json(content_type=None)
-    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-        raise WebsiteScrapingUpstreamError(f"provider unreachable: {exc}") from exc
-    except ValueError as exc:
-        raise WebsiteScrapingUpstreamError("provider returned invalid JSON") from exc
-
+    parsed = await _call_firecrawl(_SCRAPE_ENDPOINT, payload, _TIMEOUT_SECONDS)
     try:
         return parse_branding(parsed["data"]["branding"])
     # A null or odd-shaped branding block is no answer, not a crash.
@@ -117,4 +107,115 @@ def _https_url(value: Any) -> Optional[str]:
     return text if text.startswith("https://") else None
 
 
-__all__ = ["Branding", "brand_look", "parse_branding"]
+async def list_pages(url: str, *, timeout_seconds: float) -> List[str]:
+    """Addresses Firecrawl finds on the site at ``url`` (sitemap and links)."""
+    payload = {
+        "url": url,
+        "includeSubdomains": False,
+        "timeout": int(timeout_seconds * 1000),
+    }
+    parsed = await _call_firecrawl(_MAP_ENDPOINT, payload, timeout_seconds)
+    try:
+        links = parsed["links"]
+    except (KeyError, TypeError) as exc:
+        raise WebsiteScrapingUpstreamError("provider returned no links") from exc
+    if not isinstance(links, list):
+        raise WebsiteScrapingUpstreamError("provider returned no links")
+    return _web_addresses(link.get("url") for link in links if isinstance(link, dict))
+
+
+async def read_page(
+    url: str,
+    *,
+    schema: Dict[str, Any],
+    prompt: str,
+    timeout_seconds: float,
+    whole_page: bool = False,
+) -> Tuple[str, Dict[str, Any], List[str]]:
+    """Render ``url`` and fill ``schema`` from it: (the page's final address,
+    the filled object, the page's links).
+
+    ``whole_page`` keeps the menu and footer, where a home page keeps its
+    contact details; elsewhere they only repeat the same items.
+    """
+    payload = {
+        "url": url,
+        "formats": [
+            {"type": "json", "schema": schema, "prompt": prompt},
+            *(["links"] if whole_page else []),
+        ],
+        "onlyMainContent": not whole_page,
+        "timeout": int(timeout_seconds * 1000),
+    }
+    parsed = await _call_firecrawl(_SCRAPE_ENDPOINT, payload, timeout_seconds)
+    try:
+        data = parsed["data"]
+        filled, links, metadata = data["json"], data.get("links"), data.get("metadata")
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise WebsiteScrapingUpstreamError("provider returned no json block") from exc
+    # A page Firecrawl could not fill counts as one page not read, not a failed run.
+    if not isinstance(filled, dict):
+        raise WebsiteScrapingUpstreamError("provider returned no json block")
+    final = metadata.get("url") if isinstance(metadata, dict) else None
+    # Where the page landed, if Firecrawl names a real address; else where we asked.
+    landed = (
+        final
+        if isinstance(final, str)
+        and _web_addresses([final])
+        and urlsplit(final).hostname
+        else url
+    )
+    return (
+        landed,
+        filled,
+        _web_addresses(links if isinstance(links, list) else []),
+    )
+
+
+def _web_addresses(values: Any) -> List[str]:
+    """The values that are addresses a URL parser accepts: one odd link in
+    Firecrawl's answer is skipped, it does not end the run."""
+    addresses: List[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        try:
+            urlsplit(value)
+        except ValueError:
+            continue
+        addresses.append(value)
+    return addresses
+
+
+async def _call_firecrawl(
+    endpoint: str, payload: Dict[str, Any], timeout_seconds: float
+) -> Dict[str, Any]:
+    if not FIRECRAWL_API_KEY:
+        raise WebsiteScrapingConfigurationError("FIRECRAWL_API_KEY is not set")
+    headers = {"Authorization": f"Bearer {FIRECRAWL_API_KEY}"}
+    try:
+        async with create_aiohttp_session(
+            # 10 s past Firecrawl's own limit, so its answer reaches us.
+            timeout=aiohttp.ClientTimeout(total=timeout_seconds + 10)
+        ) as session:
+            async with session.post(endpoint, headers=headers, json=payload) as resp:
+                if resp.status == 401:
+                    raise WebsiteScrapingConfigurationError("provider rejected the key")
+                # Out of credits, too many calls, or down: nothing about the site.
+                if resp.status in (402, 429) or resp.status >= 500:
+                    raise WebsiteScrapingUnavailableError(
+                        f"provider returned {resp.status}"
+                    )
+                if resp.status != 200:
+                    raise WebsiteScrapingUpstreamError(
+                        f"provider returned {resp.status}"
+                    )
+                parsed = await resp.json(content_type=None)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        raise WebsiteScrapingUnavailableError(f"provider unreachable: {exc}") from exc
+    except ValueError as exc:
+        raise WebsiteScrapingUpstreamError("provider returned invalid JSON") from exc
+    return parsed
+
+
+__all__ = ["Branding", "brand_look", "list_pages", "parse_branding", "read_page"]

@@ -16,6 +16,9 @@ from app.api.routers.breeze_buddy.assist.onboarding import (
 from app.api.routers.breeze_buddy.assist.onboarding.preview import (
     router as assist_preview_router,
 )
+from app.api.routers.breeze_buddy.assist.onboarding.research import (
+    router as assist_research_router,
+)
 from app.api.routers.breeze_buddy.assist.probe import (
     router as assist_probe_router,
 )
@@ -126,6 +129,8 @@ router.include_router(website_scraping_router, prefix="", tags=["website-scrapin
 
 # Idempotent merchant onboarding for the Buddy Assist widget.
 router.include_router(assist_onboarding_router, prefix="", tags=["assist-onboarding"])
+# Read a store's site and stream what it says, for the console's onboarding.
+router.include_router(assist_research_router, prefix="", tags=["assist-onboarding"])
 # The reseller blueprint the merchant templates are built from (read-only).
 router.include_router(assist_blueprint_router, prefix="", tags=["assist-onboarding"])
 # Recognise a site before anything is built for it.

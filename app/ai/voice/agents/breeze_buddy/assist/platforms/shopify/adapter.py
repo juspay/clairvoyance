@@ -198,6 +198,11 @@ class ShopifyAdapter(GenericAdapter):
     def install(self) -> InstallMethod:
         return "theme_embed"
 
+    def folders_to_skip(self) -> Tuple[str, ...]:
+        # A small store's item and listing pages can still be named "help" or
+        # "express delivery"; they are never its help or delivery page.
+        return ("products", "collections")
+
 
 def _permanent_host(literal: Optional[str]) -> Optional[str]:
     """The permanent domain a page claims, but only if it could really be one.

@@ -73,6 +73,8 @@ class PlatformAdapter(Protocol):
 
     def install(self) -> InstallMethod: ...
 
+    def folders_to_skip(self) -> Tuple[str, ...]: ...
+
 
 _GENERIC_BLOCKED = [
     "/checkout",
@@ -165,6 +167,11 @@ class GenericAdapter:
 
     def install(self) -> InstallMethod:
         return "snippet"
+
+    def folders_to_skip(self) -> Tuple[str, ...]:
+        """Address folders that hold one page per item, never a page about the
+        store. A plain website has no fixed ones."""
+        return ()
 
 
 __all__ = ["GenericAdapter", "PlatformAdapter"]
