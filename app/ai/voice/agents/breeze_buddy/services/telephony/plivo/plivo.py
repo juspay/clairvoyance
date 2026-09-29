@@ -15,19 +15,21 @@ from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
     VoiceCallProvider,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
+    lead_plivo_account,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.conference import (
     PlivoConferenceService,
 )
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
 )
-from app.core.config.static import (
-    APP_BASE_URL,
-    PLIVO_AUTH_ID,
-    PLIVO_AUTH_TOKEN,
-)
+from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
-from app.database.accessor import increment_telephony_number_channels
+from app.database.accessor import (
+    get_lead_by_call_id,
+    increment_telephony_number_channels,
+)
 from app.schemas import CallProvider, TelephonyConfig
 
 
@@ -223,7 +225,21 @@ async def handle_mpc_transfer_webhook(params: dict) -> None:
             f"Moving customer into MPC '{mpc_name}'."
         )
 
-        client = plivo.RestClient(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
+        # Sign the move with the call's account; if it can't be found, answer
+        # the waiting bot now rather than let it time out.
+        try:
+            lead = await get_lead_by_call_id(call_sid)
+            if lead is None:
+                raise LookupError(f"no lead for call {call_sid}")
+            account = await lead_plivo_account(lead)
+        except Exception as e:  # noqa: BLE001 — AccountRefused, or the read failed
+            logger.error(f"[MPC-TRANSFER] Plivo account unresolved for {call_sid}: {e}")
+            await publish_hold_transfer_result(
+                outcome_channel,
+                {"status": "unavailable", "reason": "account_unresolved"},
+            )
+            return
+        client = plivo.RestClient(account.auth_id, account.auth_token)
         conference_service = PlivoConferenceService(client)
         result = await conference_service.move_customer_to_mpc(
             call_sid=call_sid,

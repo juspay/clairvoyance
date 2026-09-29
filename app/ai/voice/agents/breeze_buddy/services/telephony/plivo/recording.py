@@ -10,14 +10,28 @@ from urllib.parse import quote
 
 import aiohttp
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
+    lead_plivo_account,
+)
 from app.core.config.static import (
     APP_BASE_URL,
-    PLIVO_AUTH_ID,
-    PLIVO_AUTH_TOKEN,
     PLIVO_RECORDING_TIME_LIMIT,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import host_matches_allowlist
 from app.core.transport.http_client import get_proxy_config
+from app.database.accessor import get_lead_by_call_id
+
+# Keys go only to Plivo's recording hosts (media.plivo.com and its regions,
+# e.g. aps1.media.plivo.com) over https; any other URL is fetched without them.
+_RECORDING_HOSTS = ["media.plivo.com"]
+
+
+def _is_plivo_recording_url(recording_url: str) -> bool:
+    """Is this recording on Plivo (keys needed), not our own copy?"""
+    return recording_url.startswith("https://") and host_matches_allowlist(
+        recording_url, _RECORDING_HOSTS
+    )
 
 
 def _recording_callback_url(call_uuid: str) -> str:
@@ -55,14 +69,20 @@ async def download_call_recording(
 
     Args:
         recording_url (str): The URL of the recording to download
-        call_sid (str): The call SID for logging purposes
+        call_sid (str): The call SID; a recording on Plivo is fetched with
+            its call's account
 
     Returns:
         Optional[BytesIO]: In-memory file object containing the recording, or None if download failed
     """
     try:
-        # Plivo recordings require basic authentication
-        auth = aiohttp.BasicAuth(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
+        auth = None
+        if _is_plivo_recording_url(recording_url):
+            lead = await get_lead_by_call_id(call_sid)
+            if lead is None:
+                raise LookupError(f"no lead for call {call_sid}")
+            account = await lead_plivo_account(lead)
+            auth = aiohttp.BasicAuth(account.auth_id, account.auth_token)
 
         # Get proxy configuration
         proxy_url = get_proxy_config()
