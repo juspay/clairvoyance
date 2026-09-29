@@ -40,7 +40,7 @@ from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
 from app.ai.voice.tts.catalog import get_enabled_voices as load_tts_voice_catalog
-from app.api.routers import breeze_buddy, devcycle, feature_flags, systems
+from app.api.routers import breeze_buddy, devcycle, feature_flags, mcp, systems
 from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 
 # Import background task scheduler
@@ -66,6 +66,7 @@ from app.core.config.static import (
     ENABLE_DRAGONTTS_KILL_SWITCH,
     ENABLE_SIGTERM_HANDLER,
     HOST,
+    MCP_PUBLIC_ENDPOINT_ENABLED,
     POD_ROLE,
     PORT,
 )
@@ -442,6 +443,11 @@ app.include_router(crm_api.router, prefix="")
 
 # System health endpoints
 app.include_router(systems.router, prefix="", tags=["Systems"])
+
+# Public MCP route (routers/mcp.py). Off by default: our engine answers these
+# URLs in process, and the route has no caller auth yet.
+if MCP_PUBLIC_ENDPOINT_ENABLED:
+    app.include_router(mcp.router, prefix="", tags=["MCP"])
 
 # TTS voice-catalog previews are served straight from the GCS bucket's public
 # URL, so this app exposes no /tts-previews route.

@@ -1233,7 +1233,7 @@
   },
   "FlavorProtocolConfig": {
     "connectors": {
-      "description": "Platform connectors to consult for this protocol, by name. EMPTY (the default) means every registered connector self-selects on the data it is handed — correct when the platform is unambiguous from the payload. Name them explicitly when a connector would otherwise mis-fire on a look-alike gateway: e.g. a non-Shopify store whose product URLs are also /products/{handle} would cost a dead storefront fetch on every product view.",
+      "description": "Platform connectors to consult for this protocol, by name ('shopify', 'woocommerce'). EMPTY (the default) means every registered connector self-selects on the data it is handed — correct when the platform is unambiguous from the payload. Name them explicitly when a connector would otherwise mis-fire on a look-alike gateway: e.g. a non-Shopify store whose product URLs are also /products/{handle} would cost a dead storefront fetch on every product view.",
       "example": [
         "shopify"
       ]
