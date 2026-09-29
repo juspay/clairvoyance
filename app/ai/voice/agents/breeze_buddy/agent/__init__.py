@@ -1425,6 +1425,7 @@ class Agent:
         # greeting one now — the telephony greeting was already sent during
         # transport setup, before this generation was built.
         self.llm_service = llm
+        self.stt_service = stt
         self._suppress_realtime_initial_inference()
 
         # Knowledge base runtime resolution (fail-open). Stream mode goes

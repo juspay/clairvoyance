@@ -125,7 +125,7 @@ async def test_assemblyai_endpointing_requires_the_pro_model(monkeypatch):
     """pipecat raises ValueError for vad_force_turn_endpoint=False on a
     non-u3-pro model. Rejecting it here names the template field instead."""
     monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
-    with pytest.raises(ValueError, match="Universal-3.5 Pro"):
+    with pytest.raises(ValueError, match=r"Universal-3\.x Pro"):
         await create_stt_from_config(
             STTConfiguration(
                 provider=STTProvider.ASSEMBLYAI,
@@ -319,6 +319,33 @@ def test_every_pro_spelling_reaches_the_wire_as_the_documented_name(template_val
         )
     )
     assert _params(svc)["speech_model"] == "universal-3-5-pro"
+
+
+@pytest.mark.parametrize(
+    "template_value", ["universal-3-6-pro", "universal-3-6-pro-preview"]
+)
+def test_universal_3_6_pro_reaches_the_wire_under_its_own_name(template_value):
+    """3.6 rides the same pipecat u3 path as 3.5 but must not be collapsed to
+    3.5 on the wire: pipecat 1.1.0 only knows "u3-rt-pro", AssemblyAI knows
+    each generation by its own name."""
+    svc = build_assemblyai_stt(
+        AssemblyAIConfig(
+            api_key="k", model=template_value, vad_force_turn_endpoint=False
+        )
+    )
+    assert _params(svc)["speech_model"] == "universal-3-6-pro"
+
+
+async def test_universal_3_6_pro_is_allowed_under_stt_native(monkeypatch):
+    monkeypatch.setattr(static, "ASSEMBLYAI_API_KEY", "test-key")
+    svc = await create_stt_from_config(
+        STTConfiguration(
+            provider=STTProvider.ASSEMBLYAI,
+            turn_detection=TurnDetectionMode.STT_NATIVE,
+            assemblyai=AssemblyAISTTConfig(model="universal-3-6-pro"),
+        )
+    )
+    assert _params(svc)["speech_model"] == "universal-3-6-pro"
 
 
 def test_non_pro_models_pass_through_untouched():

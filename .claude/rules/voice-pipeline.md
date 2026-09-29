@@ -11,7 +11,8 @@ paths:
 - Pipecat docs: https://docs.pipecat.ai -- check before making assumptions about Pipecat APIs
 
 ## STT/TTS Providers
-- STT: Soniox (default), Deepgram, Sarvam, OpenAI, Google -- each has different endpoint detection behavior
+- STT: Soniox (default), Deepgram (Nova, or Flux via a `flux-*` model), Sarvam, ElevenLabs, AssemblyAI, Smallest, OpenAI, Google -- each has different endpoint detection behavior
+- `stt_configuration.end_of_speech_ms` maps to each provider's own end-of-speech setting (`END_OF_SPEECH_RANGE_MS` in template/types.py); a provider's own field wins, out-of-range or unsupported values are refused at parse
 - TTS: 7 runtime providers -- elevenlabs (default), cartesia, sarvam, gemini, google, soniox, dragontts (a caching proxy in front of the others, not itself voice-owning) -- voice config can be set template-level via `TTSConfig`, overriding global Redis defaults
 - Voice catalog (static `app/ai/voice/tts/catalog.json`, `GET /tts/voices`) covers only the 6 voice-owning providers -- dragontts is excluded since it proxies the others instead of owning voices
 - Provider selection can be static (env var), dynamic (Redis), or template-level

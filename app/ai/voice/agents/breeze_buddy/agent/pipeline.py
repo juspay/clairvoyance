@@ -155,12 +155,22 @@ async def create_services(
 
     stt_configuration = getattr(configurations, "stt_configuration", None)
 
+    # An STT may interrupt the bot by itself (Sarvam on its first
+    # START_SPEECH) only when interruptions are on and no min_words rule is
+    # set; otherwise the pipeline's rule decides. Both STT paths below use it.
+    interruption = getattr(configurations, "interruption", None) or InterruptionConfig()
+    stt_self_interrupt = (
+        interruption.mode == InterruptionMode.ENABLED and not interruption.min_words
+    )
+
     if stt_configuration:
         logger.info(
             f"Using template STT configuration: provider={stt_configuration.provider.value}"
         )
         stt = await get_stt_service(
-            stt_configuration=stt_configuration, accounts=accounts
+            stt_configuration=stt_configuration,
+            accounts=accounts,
+            stt_self_interrupt=stt_self_interrupt,
         )
     else:
         # Legacy path: build from scattered fields
@@ -176,6 +186,7 @@ async def create_services(
             language_hints=stt_language,
             soniox_context=soniox_context,
             accounts=accounts,
+            stt_self_interrupt=stt_self_interrupt,
         )
 
     if include_llm:

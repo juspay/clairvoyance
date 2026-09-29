@@ -205,17 +205,25 @@ def _stream_configuration(request: TranscriptionStreamRequest) -> STTConfigurati
             if soniox is None:
                 soniox = SonioxSTTConfig(model=model)
             elif "model" not in soniox.model_fields_set:
-                soniox = soniox.model_copy(update={"model": model})
+                soniox = SonioxSTTConfig.model_validate(
+                    {**soniox.model_dump(), "model": model}
+                )
         elif provider == STTProvider.DEEPGRAM:
             if deepgram is None:
                 deepgram = DeepgramSTTConfig(model=model)
             elif "model" not in deepgram.model_fields_set:
-                deepgram = deepgram.model_copy(update={"model": model})
+                # model_validate, not model_copy: model_copy skips validators,
+                # and the Nova/Flux family check must see the final model.
+                deepgram = DeepgramSTTConfig.model_validate(
+                    {**deepgram.model_dump(), "model": model}
+                )
         elif provider == STTProvider.SARVAM:
             if sarvam is None:
                 sarvam = SarvamSTTConfig(model=model)
             elif "model" not in sarvam.model_fields_set:
-                sarvam = sarvam.model_copy(update={"model": model})
+                sarvam = SarvamSTTConfig.model_validate(
+                    {**sarvam.model_dump(), "model": model}
+                )
     return STTConfiguration(
         provider=provider,
         language=request.language,

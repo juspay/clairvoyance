@@ -198,6 +198,7 @@ ENABLE_OPENAI_FOR_MIA = (
 # Only API key lives here. All tuning params are in DeepgramSTTConfig (template)
 # with sensible defaults — no env vars needed.
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+SMALLEST_API_KEY = os.getenv("SMALLEST_API_KEY")  # Smallest.ai Pulse STT
 
 # --- Sarvam STT & TTS Configuration ---
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")

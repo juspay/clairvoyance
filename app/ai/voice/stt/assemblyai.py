@@ -36,10 +36,11 @@ __all__ = [
 DEFAULT_MIN_TURN_SILENCE_MS = 100
 DEFAULT_MAX_TURN_SILENCE_MS = 1000
 
-# The model name AssemblyAI documents, and the one that actually reaches the
-# wire. Universal-3.5 Pro Streaming: multilingual with native mid-sentence code
-# switching across 18 languages.
-U3_PRO_MODEL = "universal-3-5-pro"
+# The Universal-3.x Pro streaming models AssemblyAI documents, each sent to
+# AssemblyAI under its own name. The FIRST is the default: Universal-3.5 Pro
+# (multilingual, native mid-sentence code switching). 3.6 has the same API and
+# price and is opt-in per template.
+U3_PRO_MODELS = ("universal-3-5-pro", "universal-3-6-pro")
 
 # The name pipecat 1.1.0 hardcodes. Its constructor gates AssemblyAI-side turn
 # detection on `settings.model == "u3-rt-pro"` -- an exact string match, not a
@@ -49,6 +50,22 @@ U3_PRO_MODEL = "universal-3-5-pro"
 # Latin script with Hindi romanised ("Mera kupa") and language_codes ignored.
 # So we satisfy pipecat's check with this, then send the documented name.
 PIPECAT_U3_PRO_ALIAS = "u3-rt-pro"
+
+
+def u3_pro_wire_name(model: Optional[str]) -> Optional[str]:
+    """The documented name to send for a Universal-3.x Pro model, or None.
+
+    Variants (``universal-3-6-pro-preview``) collapse to their generation's
+    base name; pipecat's own spelling ``u3-rt-pro`` means 3.5.
+    """
+    if not isinstance(model, str):
+        return None
+    for name in U3_PRO_MODELS:
+        if model.startswith(name):
+            return name
+    if model.startswith(PIPECAT_U3_PRO_ALIAS):
+        return U3_PRO_MODELS[0]
+    return None
 
 
 class AssemblyAISTTServiceWithLanguageCodes(AssemblyAISTTService):
@@ -98,21 +115,18 @@ class AssemblyAISTTServiceWithLanguageCodes(AssemblyAISTTService):
         # pipecat's spelling reach the wire verbatim, and AssemblyAI does not
         # recognise it -- it falls back to Universal-Streaming English, so a
         # Hinglish call returns Latin-script romanisation with no error at all.
-        requested_model = getattr(kwargs.get("settings"), "model", None)
-        is_u3_pro_family = isinstance(requested_model, str) and (
-            requested_model.startswith(U3_PRO_MODEL)
-            or requested_model.startswith(PIPECAT_U3_PRO_ALIAS)
-        )
-        if is_u3_pro_family:
+        wire_name = u3_pro_wire_name(getattr(kwargs.get("settings"), "model", None))
+        if wire_name:
             kwargs["settings"].model = PIPECAT_U3_PRO_ALIAS
 
         super().__init__(**kwargs)
 
-        if is_u3_pro_family:
-            # Variants (universal-3-5-pro-preview, u3-rt-pro-beta-1) collapse
-            # to the canonical name: pipecat 1.1.0's exact-match gate cannot
-            # accept them, and AssemblyAI only documents the base model.
-            self._settings.model = U3_PRO_MODEL
+        if wire_name:
+            # Variants (universal-3-6-pro-preview, u3-rt-pro-beta-1) collapse
+            # to their generation's documented name: pipecat 1.1.0's
+            # exact-match gate cannot accept them, and AssemblyAI only
+            # documents the base models.
+            self._settings.model = wire_name
 
         self._language_codes = language_codes or []
 
@@ -147,7 +161,7 @@ class AssemblyAIConfig:
     """
 
     api_key: str
-    model: str = U3_PRO_MODEL
+    model: str = U3_PRO_MODELS[0]
     vad_force_turn_endpoint: bool = False
     # Leave None so pipecat inherits the transport's rate (8 kHz telephony,
     # 16 kHz web). Pinning it here overrides the pipeline and mislabels the

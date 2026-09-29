@@ -36,6 +36,7 @@ before.
 | `azure_openai_realtime` | `api_key`, `endpoint` | |
 | `gemini` (realtime) | `api_key` | |
 | `deepgram`, `soniox`, `sarvam`, `assemblyai`, `cartesia` | `api_key` | |
+| `smallest` (STT) | `api_key` — one fixed public host; a row naming an `endpoint` is refused | |
 | `elevenlabs` | `api_key` — the host is the deployment's per-service one (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for Scribe) | |
 | `google` (Cloud STT, Chirp TTS, Gemini TTS) | `credentials_json` | |
 | `plivo` (telephony) | `auth_id` (20 characters, `MA…` or `SA…`), `auth_token` | |

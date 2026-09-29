@@ -21,25 +21,32 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     AssemblyAISTTConfig,
     DeepgramSTTConfig,
     ElevenLabsSTTConfig,
+    SmallestSTTConfig,
     SonioxSTTConfig,
     STTConfiguration,
     STTProvider,
     TurnDetectionMode,
+    set_by_template,
 )
 from app.ai.voice.stt import (
     AssemblyAIConfig,
     DeepgramConfig,
+    DeepgramFluxConfig,
     ElevenLabsConfig,
     SarvamConfig,
+    SmallestConfig,
     SonioxConfig,
     build_assemblyai_stt,
+    build_deepgram_flux_stt,
     build_deepgram_stt,
     build_elevenlabs_stt,
     build_google_stt,
     build_openai_stt,
     build_sarvam_stt,
+    build_smallest_stt,
     build_soniox_stt,
 )
+from app.ai.voice.stt.assemblyai import u3_pro_wire_name
 from app.ai.voice.stt.elevenlabs import (
     resolve_languages as resolve_elevenlabs_languages,
 )
@@ -96,9 +103,28 @@ def _deepgram_language(language: str | list[str] | None) -> str:
     return language
 
 
+def _first_language(language: str | list[str] | None) -> str | None:
+    """First code of the template language (single-language providers)."""
+    codes = _language_list(language)
+    return codes[0] if codes else None
+
+
+def _language_list(language: str | list[str] | None) -> list[str]:
+    """Template language as a list of codes (Flux hints, Smallest).
+
+    The legacy path hands over a list joined into one string ("en,hi"), so
+    comma-joined values are split rather than read as a single code.
+    """
+    if language is None:
+        return []
+    items = language if isinstance(language, list) else [language]
+    return [code.strip() for item in items for code in item.split(",") if code.strip()]
+
+
 async def create_stt_from_config(
     config: STTConfiguration,
     accounts: Optional[Accounts] = None,
+    stt_self_interrupt: bool = True,
 ):
     """Create STT service from normalized STTConfiguration.
 
@@ -117,6 +143,32 @@ async def create_stt_from_config(
         # All defaults are in DeepgramSTTConfig — no env/dynamic lookup needed
         dg = config.deepgram or DeepgramSTTConfig()
 
+        if dg.is_flux:
+            logger.info("Using Deepgram Flux STT service for Breeze Buddy")
+            return build_deepgram_flux_stt(
+                DeepgramFluxConfig(
+                    api_key=api_key,
+                    model=dg.model,
+                    language_hints=_language_list(config.language),
+                    eot_threshold=dg.eot_threshold,
+                    eager_eot_threshold=dg.eager_eot_threshold,
+                    eot_timeout_ms=(
+                        dg.eot_timeout_ms
+                        if dg.eot_timeout_ms is not None
+                        else config.end_of_speech_ms
+                    ),
+                    mip_opt_out=dg.mip_opt_out,
+                )
+            )
+
+        # endpointing_ms has a non-None default; a value other than it is the
+        # template's own choice and beats end_of_speech_ms (set_by_template:
+        # model_fields_set does not survive a template save or cache).
+        endpointing = (
+            dg.endpointing_ms
+            if set_by_template(dg, "endpointing_ms") or config.end_of_speech_ms is None
+            else config.end_of_speech_ms
+        )
         logger.info("Using Deepgram Nova-3 STT service for Breeze Buddy")
         return build_deepgram_stt(
             DeepgramConfig(
@@ -126,7 +178,7 @@ async def create_stt_from_config(
                 auto_detect_language=dg.auto_detect_language,
                 smart_format=dg.smart_format,
                 punctuate=dg.punctuate,
-                endpointing=dg.endpointing_ms,
+                endpointing=endpointing,
                 utterance_end_ms=dg.utterance_end_ms,  # None = disabled
                 interim_results=True,
                 profanity_filter=dg.profanity_filter,
@@ -157,12 +209,24 @@ async def create_stt_from_config(
             if sx and sx.finalize_after_secs is not None
             else BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS
         )
+        # Endpoint cap: end_of_speech_ms (validated 500-3000), else env.
+        effective_max_endpoint_delay = (
+            config.end_of_speech_ms or BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS
+        )
         # Same precedence for the VAD-forced endpoint trigger.
         effective_vad_force = (
             sx.vad_force_turn_endpoint
             if sx and sx.vad_force_turn_endpoint is not None
             else BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT
         )
+        if effective_vad_force and config.end_of_speech_ms is not None:
+            # Refused at parse when the template forces it; here the env did.
+            logger.warning(
+                "soniox: end_of_speech_ms={} has no effect: VAD-forced endpoints "
+                "(BREEZE_BUDDY_SONIOX_VAD_FORCE_TURN_ENDPOINT) disable Soniox's "
+                "own endpoint detection",
+                config.end_of_speech_ms,
+            )
         return build_soniox_stt(
             SonioxConfig(
                 api_key=api_key,
@@ -170,7 +234,7 @@ async def create_stt_from_config(
                 vad_force_turn_endpoint=effective_vad_force,
                 language_hints=language or BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS,
                 context_json=effective_context,
-                max_endpoint_delay_ms=BREEZE_BUDDY_SONIOX_MAX_ENDPOINT_DELAY_MS,
+                max_endpoint_delay_ms=effective_max_endpoint_delay,
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),
                 enable_language_identification=enable_lang_id,
@@ -187,14 +251,22 @@ async def create_stt_from_config(
 
         sv = config.sarvam
         bb_model = sv.model if sv and sv.model else await BB_SARVAM_STT_MODEL()
-        bb_lang = (
-            sv.language_code
-            if sv and sv.language_code
-            else await BB_SARVAM_STT_LANGUAGE_CODE()
-        )
+        # saaras models never received a language before this change (they
+        # auto-detected), so they pin only one the TEMPLATE names. The global
+        # Redis default keeps reaching saarika only, as it always has: a key
+        # set in an environment must not silently lock every saaras template.
+        if sv and sv.language_code:
+            bb_lang = sv.language_code
+        elif "saaras" in bb_model.lower():
+            bb_lang = None
+        else:
+            bb_lang = await BB_SARVAM_STT_LANGUAGE_CODE()
 
         return build_sarvam_stt(
             SarvamConfig(
+                # Sarvam's own barge-in fires on the first sound; off when the
+                # template's interruption rule must decide (see pipeline.py).
+                self_interrupt=stt_self_interrupt,
                 api_key=api_key,
                 model=bb_model,
                 sample_rate=SAMPLE_RATE,
@@ -226,15 +298,32 @@ async def create_stt_from_config(
         # "universal-3-5-pro", pipecat 1.1.0 hardcodes "u3-rt-pro" (the
         # builder translates between them). pipecat 1.8.1's is_u3_pro_model
         # matches both plus their -* variants.
-        if not vad_force_turn_endpoint and not aai.model.startswith(
-            ("universal-3-5-pro", "u3-rt-pro")
-        ):
+        if not vad_force_turn_endpoint and not u3_pro_wire_name(aai.model):
             raise ValueError(
                 f"assemblyai: turn_detection={config.turn_detection.value} needs "
-                f"AssemblyAI-side endpointing, which requires Universal-3.5 Pro; "
-                f"got model={aai.model!r}. Set model='universal-3-5-pro' or use "
+                f"AssemblyAI-side endpointing, which requires a Universal-3.x Pro "
+                f"model; got model={aai.model!r}. Set model='universal-3-5-pro' "
+                f"or 'universal-3-6-pro', or use "
                 f"turn_detection='smart_turn'."
             )
+
+        # max_turn_silence defaults to 1000: a value other than it is the
+        # template's own choice; otherwise end_of_speech_ms, else 1000.
+        # A shorter max than min_turn_silence would be refused by AssemblyAI,
+        # so min follows it down.
+        # An explicit null reads as unset here, so end_of_speech_ms applies;
+        # with neither, null still reaches AssemblyAI as before (its default).
+        own_value = aai.max_turn_silence is not None and set_by_template(
+            aai, "max_turn_silence"
+        )
+        max_turn_silence = (
+            aai.max_turn_silence
+            if own_value or config.end_of_speech_ms is None
+            else config.end_of_speech_ms
+        )
+        min_turn_silence = aai.min_turn_silence
+        if min_turn_silence is not None and max_turn_silence is not None:
+            min_turn_silence = min(min_turn_silence, max_turn_silence)
 
         return build_assemblyai_stt(
             AssemblyAIConfig(
@@ -245,8 +334,8 @@ async def create_stt_from_config(
                 keyterms_prompt=aai.keyterms_prompt,
                 prompt=aai.prompt,
                 end_of_turn_confidence_threshold=aai.end_of_turn_confidence_threshold,
-                min_turn_silence=aai.min_turn_silence,
-                max_turn_silence=aai.max_turn_silence,
+                min_turn_silence=min_turn_silence,
+                max_turn_silence=max_turn_silence,
                 formatted_finals=aai.formatted_finals,
                 format_turns=aai.format_turns,
                 language_detection=aai.language_detection,
@@ -327,6 +416,18 @@ async def create_stt_from_config(
             )
         )
 
+    if config.provider == STTProvider.SMALLEST:
+        account = await resolver.get(config, KeyAccount)
+        sm = config.smallest or SmallestSTTConfig()
+        return build_smallest_stt(
+            SmallestConfig(
+                api_key=account.api_key,
+                # the block's language, else the template's, else Hindi
+                language=sm.language or _first_language(config.language) or "hi",
+                numerals=sm.numerals,
+            )
+        )
+
     # Default: Google
     logger.info("Using Google STT service for Breeze Buddy")
     account = await resolver.get(config, GcpAccount)
@@ -338,6 +439,7 @@ async def get_stt_service(
     soniox_context: str | None = None,
     stt_configuration: Optional[STTConfiguration] = None,
     accounts: Optional[Accounts] = None,
+    stt_self_interrupt: bool = True,
 ):
     """Returns an STT service instance.
 
@@ -348,7 +450,11 @@ async def get_stt_service(
     """
     # --- New path: template-level STTConfiguration ---
     if stt_configuration is not None:
-        return await create_stt_from_config(stt_configuration, accounts=accounts)
+        return await create_stt_from_config(
+            stt_configuration,
+            accounts=accounts,
+            stt_self_interrupt=stt_self_interrupt,
+        )
 
     # --- Legacy path: env var BREEZE_BUDDY_STT_SERVICE ---
     provider_map = {
@@ -359,6 +465,7 @@ async def get_stt_service(
         "google": STTProvider.GOOGLE,
         "elevenlabs": STTProvider.ELEVENLABS,
         "assemblyai": STTProvider.ASSEMBLYAI,
+        "smallest": STTProvider.SMALLEST,
     }
     provider = provider_map.get(BREEZE_BUDDY_STT_SERVICE, STTProvider.GOOGLE)
 
@@ -367,4 +474,6 @@ async def get_stt_service(
         language=language_hints,
         soniox=SonioxSTTConfig(context=soniox_context) if soniox_context else None,
     )
-    return await create_stt_from_config(legacy_config)
+    return await create_stt_from_config(
+        legacy_config, stt_self_interrupt=stt_self_interrupt
+    )
