@@ -31,6 +31,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.recording import (
+    download_call_recording as download_call_recording_vobiz,
+)
 from app.ai.voice.agents.breeze_buddy.types.models import (
     CallRecordingResult,
     LeadCancellation,
@@ -567,6 +570,8 @@ async def get_call_recording_handler(
         audio_file = await download_call_recording_exotel(lead.recording_url, call_sid)
     elif call_provider.upper() == "PLIVO":
         audio_file = await download_call_recording_plivo(lead.recording_url, call_sid)
+    elif call_provider.upper() == "VOBIZ":
+        audio_file = await download_call_recording_vobiz(lead.recording_url, call_sid)
     else:
         logger.error(f"Unsupported provider: {call_provider}")
         raise HTTPException(

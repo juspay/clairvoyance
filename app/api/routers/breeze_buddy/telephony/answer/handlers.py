@@ -62,6 +62,9 @@ from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     plivo_record_xml,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.recording import (
+    vobiz_record_xml,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
 from app.core.concurrency import spawn_background_task
 from app.core.config.dynamic import (
@@ -322,6 +325,9 @@ async def _build_stream_xml(ws_url: str, call_id: str, provider: str) -> str:
     Vobiz takes the same <Stream> minus noise cancellation (not supported
     there). Its stream URL is emitted without surrounding whitespace, since
     Vobiz reads the element text as the URL.
+
+    Vobiz gets its own ``<Record>`` (``vobiz_record_xml``: Vobiz-specific
+    defaults).
     """
     # Escape special XML characters in URL (primarily & -> &amp;)
     # Using html_escape with quote=False to avoid escaping quotes in the URL
@@ -330,7 +336,7 @@ async def _build_stream_xml(ws_url: str, call_id: str, provider: str) -> str:
     if provider == "vobiz":
         return (
             '<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response>"
+            f"<Response>{vobiz_record_xml(call_id)}"
             '<Stream bidirectional="true" keepCallAlive="true" '
             f'contentType="audio/x-mulaw;rate=8000">{ws_url_escaped}</Stream>'
             "</Response>"

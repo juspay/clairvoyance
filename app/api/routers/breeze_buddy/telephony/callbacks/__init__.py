@@ -6,7 +6,8 @@ Vobiz) to send call status updates and recording URLs.
 
 Endpoints:
 - GET    /{provider}/callback/details                        - Receive call details (Exotel)
-- POST   /{provider}/callback/details                        - Receive call details (Twilio/Plivo)
+- POST   /{provider}/callback/details                        - Receive call details
+                                                               (Twilio/Plivo/Vobiz)
 - POST   /{provider}/callback/status                         - Receive call status updates
 - POST   /twilio/callback/twiml-fallback - Fallback TwiML when Smart Router is down
 - *      /{provider}/callback/transfer/{action}              - Transfer callbacks (GET/POST)
@@ -62,7 +63,7 @@ async def callback_details_post(
     request: Request, provider: str, background_tasks: BackgroundTasks
 ):
     """
-    Webhook endpoint for receiving call details via POST (Twilio/Plivo).
+    Webhook endpoint for receiving call details via POST (Twilio/Plivo/Vobiz).
 
     This endpoint receives call recording URLs from Twilio via form data.
     The recording is downloaded and processed asynchronously.
@@ -73,6 +74,10 @@ async def callback_details_post(
     Form Data:
         CallSid: Unique identifier for the call
         RecordingUrl: URL to download the call recording
+
+    Form Data (Vobiz, RecordStop):
+        RecordUrl or RecordFile: URL of the recording (needs the X-Auth headers)
+        CallUUID: fallback for the call_uuid query param on the callbackUrl
 
     Returns:
         200 OK response (webhook acknowledgment)

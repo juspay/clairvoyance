@@ -191,14 +191,14 @@ async def handle_callback_details_post(
     request: Request, provider: str, background_tasks: BackgroundTasks
 ) -> Response:
     """
-    Handle POST callback for call details (typically from Twilio or Plivo).
+    Handle POST callback for call details (Twilio, Plivo or Vobiz).
 
     This endpoint receives call recording URLs via form data.
     The recording URL is extracted and processed in the background.
 
     Args:
         request: FastAPI Request object with form data
-        provider: Telephony provider name (e.g., "twilio", "plivo")
+        provider: Telephony provider name (e.g., "twilio", "plivo", "vobiz")
         background_tasks: FastAPI BackgroundTasks for async processing
 
     Returns:
@@ -211,7 +211,7 @@ async def handle_callback_details_post(
     logger.info(f"Received callback from {provider} with form data: {form}")
 
     provider_lower = provider.lower()
-    if provider_lower not in ["twilio", "plivo"]:
+    if provider_lower not in ["twilio", "plivo", "vobiz"]:
         raise HTTPException(
             status_code=404, detail="Feature not supported for this service provider"
         )
@@ -251,6 +251,12 @@ async def handle_callback_details_post(
             # Fallback to direct form fields (older format)
             call_sid = form.get("call_uuid")
             provider_recording_url = form.get("record_url")
+    elif provider_lower == "vobiz":
+        # <Record recordSession> RecordStop callback: the file URL arrives as
+        # RecordUrl or RecordFile (Vobiz documents both); call_uuid rides the
+        # callbackUrl query string, with CallUUID as the fallback.
+        call_sid = request.query_params.get("call_uuid") or form.get("CallUUID")
+        provider_recording_url = form.get("RecordUrl") or form.get("RecordFile")
 
     # call_sid= is stamped alongside call_id= so this trace joins with the
     # voice agent's log lines (agent/__init__.py stamps call_sid=, not
