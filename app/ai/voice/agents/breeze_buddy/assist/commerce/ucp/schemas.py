@@ -31,6 +31,9 @@ from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.hooks import (
     normalize_variants,
     repair_description,
 )
+from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.order_tracking import (
+    register_commerce_order_tracking,
+)
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.render_ui import (
     register_commerce_render_ui_pack,
 )
@@ -579,6 +582,10 @@ register_commerce_render_ui_pack()
 # the order_status / page_read roles — see assist/commerce/ucp/wismo.py.
 # (Its anchoring verifier is wired through the render_ui pack above.)
 register_commerce_wismo()
+
+# Order tracking as a flag (flavor.ucp.features.order_tracking): the two
+# builtins and their function entries — see assist/commerce/ucp/order_tracking.py.
+register_commerce_order_tracking()
 
 # On adding a SECOND flavor: these register_* calls are the whole
 # registration surface, and every one now takes the flavor's group as its

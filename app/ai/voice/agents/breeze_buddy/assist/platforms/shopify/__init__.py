@@ -9,10 +9,14 @@ from __future__ import annotations
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.hooks import (
     register_description_repair,
     register_media_resolver,
+    register_order_lookup,
     register_variant_normalizer,
 )
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.media import (
     resolve_gallery,
+)
+from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.order_tracking import (
+    lookup_order,
 )
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.quirks import (
     repair_flattened_description,
@@ -25,9 +29,11 @@ CONNECTOR_NAME = "shopify"
 register_media_resolver(CONNECTOR_NAME, resolve_gallery)
 register_variant_normalizer(suppress_default_title_variant)
 register_description_repair(repair_flattened_description)
+register_order_lookup(CONNECTOR_NAME, lookup_order)
 
 __all__ = [
     "CONNECTOR_NAME",
+    "lookup_order",
     "resolve_gallery",
     "repair_flattened_description",
     "suppress_default_title_variant",

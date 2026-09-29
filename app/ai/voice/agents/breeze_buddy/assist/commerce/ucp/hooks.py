@@ -5,7 +5,7 @@ serves it. The protocol layer must stay platform-blind —
 so wherever a real gateway's data needs platform knowledge to interpret,
 the UCP module calls a hook here and connectors register into it.
 
-Three seams, each with the same contract: the chain is EMPTY by default
+Four seams, each with the same contract: the chain is EMPTY by default
 (pure-UCP behavior — the projections work with no connector loaded), each
 hook is asked in registration order, the first one to express an opinion
 wins, and a hook that raises is skipped with a log rather than failing the
@@ -79,6 +79,40 @@ DescriptionRepairFn = Callable[[str], Optional[str]]
 _MEDIA_RESOLVERS: List[Tuple[str, MediaResolverFn]] = []
 _VARIANT_NORMALIZERS: List[VariantNormalizerFn] = []
 _DESCRIPTION_REPAIRS: List[DescriptionRepairFn] = []
+
+
+# Order lookup: ``(context, order_number, phone, email) -> (status_code,
+# body)``. ``body`` is the platform's ``{found, orders: [...]}`` answer or
+# its error object; a connector raises OrderLookupUnavailable when it cannot
+# reach its backend or is not configured for this template.
+OrderLookupFn = Callable[..., Awaitable[Tuple[int, Any]]]
+
+_ORDER_LOOKUPS: List[Tuple[str, OrderLookupFn]] = []
+
+
+class OrderLookupUnavailable(RuntimeError):
+    """The connector cannot answer right now (unconfigured, unreachable)."""
+
+
+def register_order_lookup(connector: str, fn: OrderLookupFn) -> None:
+    """Add an order lookup under ``connector``'s name (idempotent for the
+    same function object)."""
+    if all(existing is not fn for _, existing in _ORDER_LOOKUPS):
+        _ORDER_LOOKUPS.append((connector, fn))
+
+
+def resolve_order_lookup(
+    allowed: Optional[Iterable[str]] = None,
+) -> Optional[Tuple[str, OrderLookupFn]]:
+    """The first registered lookup, restricted to the template's declared
+    connectors when it names any. ``None`` when no connector can look up
+    orders."""
+    allowlist = set(allowed) if allowed else None
+    for connector, fn in _ORDER_LOOKUPS:
+        if allowlist is not None and connector not in allowlist:
+            continue
+        return connector, fn
+    return None
 
 
 def register_media_resolver(connector: str, fn: MediaResolverFn) -> None:
@@ -178,6 +212,10 @@ def repair_description(text: str) -> str:
 
 __all__ = [
     "MediaResolverFn",
+    "OrderLookupFn",
+    "OrderLookupUnavailable",
+    "register_order_lookup",
+    "resolve_order_lookup",
     "VariantNormalizerFn",
     "DescriptionRepairFn",
     "register_media_resolver",

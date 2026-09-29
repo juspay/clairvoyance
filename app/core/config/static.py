@@ -667,6 +667,16 @@ NAUTILUS_WEBHOOK_URL = os.environ.get(
     "https://nautilus.breezelabs.app/apps/breeze-buddy/webhooks/clairvoyance",
 )
 
+# Order tracking (``flavor.ucp.features.order_tracking``) tool endpoints.
+# Override per environment. ``{url}`` is filled with the tracking link.
+WISMO_ORDER_LOOKUP_URL = os.environ.get(
+    "WISMO_ORDER_LOOKUP_URL",
+    "https://nautilus.breezelabs.app/apps/breeze-buddy/api/wismo/order",
+)
+WISMO_PAGE_READER_URL = os.environ.get(
+    "WISMO_PAGE_READER_URL", "https://r.jina.ai/{url}"
+)
+
 # SKEW: how far AHEAD of a provider letter's own timestamp our stored clock
 # may sit and still let the letter apply. Two of OUR transitions stamp
 # status_updated_at with now() (recording a submission, recording an
