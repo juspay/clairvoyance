@@ -1411,6 +1411,13 @@ class Agent:
         stt, llm, tts = await create_services(
             self.configurations, include_llm=not is_stream, accounts=self.accounts
         )
+        # Telephony runs on the call's account too: the transfer and the
+        # auto hang-up of this generation's transport.
+        if self.telephony_service is not None:
+            await self.telephony_service.use_template_credentials(
+                self.accounts, self.configurations
+            )
+            self.telephony_service.set_hangup_credentials(self.transport)
         if not is_stream:
             assert llm is not None, "LLM is required in agent mode"
 

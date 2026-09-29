@@ -24,6 +24,19 @@ class VoiceCallProvider(ABC):
         self.completion_callback = None
         self.conference_service: Any = None
 
+    async def use_template_credentials(
+        self, accounts: Any, configurations: Any
+    ) -> bool:
+        """Switch this call's REST client to the account the template's
+        ``telephony_configuration`` names, once per call; True when it chose
+        now. Raises AccountRefused when that row may not serve. Default: the
+        provider has one account, the environment's."""
+        return False
+
+    def set_hangup_credentials(self, transport: Any) -> None:
+        """Hand the call's account to the transport's serializer (its
+        auto hang-up). Default: the serializer keeps the environment's keys."""
+
     @abstractmethod
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         """

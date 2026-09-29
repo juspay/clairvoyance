@@ -5,7 +5,7 @@ voice. It cannot name the **account**: every provider key is one value per
 process (env), so running the same script on two ElevenLabs accounts, or
 giving one merchant its own Azure deployment, means a second deployment.
 
-The change lands in four phases, each deployable on its own:
+The change lands in five phases, each deployable on its own:
 
 | phase | what it brings | this document's section |
 |---|---|---|
@@ -13,6 +13,7 @@ The change lands in four phases, each deployable on its own:
 | 2 | a template block may **name** an account (`credential_id`), checked at save | *On a template* |
 | 3 | the **LLM** runs on the account | *What the engine does* |
 | 4 | **STT and TTS** run on the account | *What the engine does* |
+| 5 | **telephony** (Plivo) runs on the account | *Telephony (phase 5)* |
 
 Code lives in `app/ai/voice/agents/breeze_buddy/accounts/` — the package is
 the door, other modules import from it and never from the files inside.
@@ -37,6 +38,7 @@ before.
 | `deepgram`, `soniox`, `sarvam`, `assemblyai`, `cartesia` | `api_key` | |
 | `elevenlabs` | `api_key` — the host is the deployment's per-service one (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for Scribe) | |
 | `google` (Cloud STT, Chirp TTS, Gemini TTS) | `credentials_json` | |
+| `plivo` (telephony) | `auth_id` (20 characters, `MA…` or `SA…`), `auth_token` | |
 
 `credential_type` is `custom`. Scope is as for every credential: global (no
 reseller, admin-only), reseller-wide, or one merchant. Vocabulary lives in
@@ -176,6 +178,35 @@ Every block's name is honoured by the engine (phases 3 and 4).
   stopped serving since the template was saved ends the call as any IVR
   error does — with an outcome and a closed socket.
 
+## Telephony (phase 5)
+
+*29 Sep 2026.* Every Plivo REST call was signed with the environment's one
+account (`PLIVO_AUTH_ID`). Plivo lets only the account that owns a number
+transfer or hang up a call on it, so a number bought in another org — a US
+number for Barclays, in `juspay-us` — reached us but could not be
+transferred.
+
+A template names its Plivo account exactly as it names its STT account:
+
+```json
+"telephony_configuration": {"provider": "plivo", "credential_id": "9c5f…"}
+```
+
+- **At save**, the block is one more account block: `Accounts.problems`
+  judges it (exists, active, a `plivo` row, in the template's tenant,
+  complete) and a bad reference is a 422. A row a template names cannot be
+  deleted, switched off or re-labelled (409) — the existing guard finds
+  `credential_id` anywhere in the configurations.
+- **At a call**, the call's `Accounts` (the lead's tenant) resolves the
+  block where it resolves the STT and TTS blocks, once per call; the
+  call's Plivo client switches to that account, and the transfer
+  (`connect_to_live_agent`), pipecat's auto hang-up and a hold-and-consult
+  dial run on it (so a hold number must live in that account too). A row
+  that may not serve ends the call, exactly as a refused STT or TTS row
+  does — nothing runs on the environment's keys in its place.
+- A template without the block is resolved to the environment's account,
+  as before.
+
 ## Rolling it out
 
 1. Deploy. `079_credentials_provider.sql` adds a nullable `provider` column
@@ -183,6 +214,9 @@ Every block's name is honoured by the engine (phases 3 and 4).
 2. Create the account rows with `provider` and the value fields above.
 3. Copy the template, set `credential_id` on the blocks that should run on
    the new account, save. A bad id is refused at save.
+4. Telephony (phase 5): create a `plivo` row with the org's `auth_id` /
+   `auth_token`, then set `telephony_configuration.credential_id` on the
+   template. No migration.
 
 ## Rolling back
 
@@ -198,3 +232,10 @@ credential. Nothing to move.
 - The block-redirect message played when a pre-check blocks a call:
   platform audio on the platform's keys (the template is not loaded yet).
 - DragonTTS per-request keys (above).
+- Telephony: the outbound dial, the recording download and the MPC
+  transfer callback still run on the environment's account (the next
+  phase) — until then a template that names an account should be inbound
+  with a non-MPC transfer; so does anything before the template is loaded
+  (the multi-template IVR menu and its redirect). Plivo
+  number search and buy stay on the environment's account. Twilio and
+  Exotel have no telephony block yet.

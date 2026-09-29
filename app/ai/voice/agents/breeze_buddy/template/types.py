@@ -398,6 +398,24 @@ class TurnDetectionMode(str, Enum):
     TIMEOUT = "timeout"
 
 
+class TelephonyConfiguration(BaseModel):
+    """Template-level telephony account: the credentials row (provider
+    ``plivo``) whose account this template's calls run on — the transfer,
+    the hang-up — the way ``stt_configuration`` names its STT account.
+    Unset = the environment's account."""
+
+    provider: Literal["plivo"] = "plivo"
+    credential_id: Optional[str] = Field(
+        default=None,
+        description="Credentials row (provider='plivo') with the Plivo account "
+        "this template's calls run on. Unset = the environment's account.",
+    )
+
+    _canonical_credential_id = field_validator("credential_id")(
+        _canonical_credential_id
+    )
+
+
 class STTConfiguration(BaseModel):
     """Template-level STT configuration.
 
@@ -2424,6 +2442,12 @@ class ConfigurationModel(BaseModel):
     ivr_greeting: Optional[str] = None
     ivr_goodbye: Optional[str] = None
     ivr_priority: Optional[int] = Field(None, ge=1)
+    telephony_configuration: Optional[TelephonyConfiguration] = Field(
+        None,
+        description="The Plivo account this template's calls run on "
+        "(credential_id), like stt_configuration names its STT account. "
+        "Unset = the environment's account.",
+    )
     transfer_number: Optional[str] = Field(
         None, description="Phone number to transfer the call to"
     )
