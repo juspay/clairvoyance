@@ -52,6 +52,10 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.recording import (
+    download_call_recording as download_call_recording_vobiz,
+    recording_file_format as vobiz_recording_file_format,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
@@ -1070,7 +1074,7 @@ async def update_call_recording(
     Args:
         call_id: The call SID
         provider_recording_url: The URL of the recording from the provider
-        provider: The provider name ('twilio' or 'exotel')
+        provider: The provider name ('twilio', 'exotel', 'plivo' or 'vobiz')
     """
     logger.info(
         f"Processing call recording for call_id: {call_id} from provider: {provider}"
@@ -1103,6 +1107,10 @@ async def update_call_recording(
             audio_file = await download_call_recording_plivo(
                 provider_recording_url, call_id
             )
+        elif provider == "vobiz":
+            audio_file = await download_call_recording_vobiz(
+                provider_recording_url, call_id
+            )
         else:
             logger.error(f"Unsupported provider: {provider}")
             return
@@ -1118,6 +1126,12 @@ async def update_call_recording(
         elif provider == "plivo":
             content_type = "audio/mpeg"
             file_extension = "mp3"
+        elif provider == "vobiz":
+            # Vobiz can serve WAV under an .mp3 URL; trust the bytes.
+            file_extension = vobiz_recording_file_format(
+                bytes(audio_file.getbuffer()[:4])
+            )
+            content_type = "audio/wav" if file_extension == "wav" else "audio/mpeg"
         else:  # exotel
             content_type = "audio/mp3"
             file_extension = "mp3"
