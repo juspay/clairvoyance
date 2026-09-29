@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, cast
 
 import aiohttp
 
+from app.ai.voice.agents.breeze_buddy.accounts import AccountRefused, Accounts
 from app.ai.voice.agents.breeze_buddy.crm_mirror import (
     is_non_customer_lead,
     mirror_to_crm,
@@ -555,6 +556,27 @@ class Worker:
                 )
                 return
 
+            call_provider = get_voice_provider(
+                number.provider, session, config.telephony_config
+            )
+            # Dial on the account the template names (its
+            # telephony_configuration), as the live call does — before any
+            # capacity is taken, so no exit here holds a token.
+            try:
+                await call_provider.use_template_credentials(
+                    Accounts(locked.reseller_id, locked.merchant_id),
+                    getattr(template, "configurations", None),
+                )
+            except AccountRefused as e:
+                logger.error(
+                    f"Worker {self._uuid}: telephony account refused for lead "
+                    f"{locked.id}: {e}. Marking FINISHED with NUMBER_UNAVAILABLE."
+                )
+                lock_released = await self._fail_and_release(
+                    locked.id, "NUMBER_UNAVAILABLE"
+                )
+                return
+
             # Channel token gate (Redis). Held until call-end webhook releases.
             token = await acquire_channel_token(number.id)
             if token is None:
@@ -578,10 +600,6 @@ class Worker:
                 await release_channel_token(number.id, token)
                 lock_released = await self._defer_and_release(locked.id, 5)
                 return
-
-            call_provider = get_voice_provider(
-                number.provider, session, config.telephony_config
-            )
 
             customer_mobile = (locked.payload or {}).get("customer_mobile_number")
             if not customer_mobile or not isinstance(customer_mobile, str):

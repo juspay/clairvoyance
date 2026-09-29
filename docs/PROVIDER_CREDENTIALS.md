@@ -204,6 +204,13 @@ A template names its Plivo account exactly as it names its STT account:
   dial run on it (so a hold number must live in that account too). A row
   that may not serve ends the call, exactly as a refused STT or TTS row
   does — nothing runs on the environment's keys in its place.
+- **Outbound.** The dispatcher asks the provider to use the template's
+  account (`use_template_credentials`, the hook the live call uses) before
+  it takes any capacity, and dials with it (so the template's number must
+  live in that account). A refused row ends the lead `NUMBER_UNAVAILABLE`.
+- **After the call** (MPC callback, recording download), the account is
+  the one the lead's template names. Recording keys go only to
+  `https://media.plivo.com` (or a regional host like `aps1.`).
 - A template without the block is resolved to the environment's account,
   as before.
 
@@ -232,10 +239,11 @@ credential. Nothing to move.
 - The block-redirect message played when a pre-check blocks a call:
   platform audio on the platform's keys (the template is not loaded yet).
 - DragonTTS per-request keys (above).
-- Telephony: the outbound dial, the recording download and the MPC
-  transfer callback still run on the environment's account (the next
-  phase) — until then a template that names an account should be inbound
-  with a non-MPC transfer; so does anything before the template is loaded
-  (the multi-template IVR menu and its redirect). Plivo
+- Telephony: anything before the template is loaded (the multi-template
+  IVR menu and its redirect) runs on the environment's account. Plivo
   number search and buy stay on the environment's account. Twilio and
   Exotel have no telephony block yet.
+- Telephony: the paths after the call read the lead's template as it is
+  then — editing its `telephony_configuration` mid-call, or an
+  agent-to-agent transfer to a template on another account, can leave
+  them on the wrong account.

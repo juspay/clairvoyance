@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 import app.services.redis as redis_pkg
+from app.ai.voice.agents.breeze_buddy.accounts import template_plivo_account
 from app.ai.voice.agents.breeze_buddy.dispatch import (
     alerts as alerts_mod,
     channel_semaphore as ch_mod,
@@ -385,6 +386,18 @@ class CallRecorder:
         self.calls: List[Dict[str, Any]] = []
         self._sid = sid
         self._raise_exc = raise_exc
+        # The telephony accounts the worker switched to. Like the harness's
+        # Twilio number, it has none unless a test makes it a Plivo provider.
+        self.accounts: List[Any] = []
+        self.takes_accounts = False
+
+    async def use_template_credentials(
+        self, accounts: Any, configurations: Any
+    ) -> bool:
+        if not self.takes_accounts:
+            return False
+        self.accounts.append(await template_plivo_account(accounts, configurations))
+        return True
 
     def make_call(self, to: str, from_number: str, **kwargs: Any) -> Dict[str, Any]:
         if self._raise_exc is not None:
