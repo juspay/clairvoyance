@@ -453,8 +453,8 @@ class IvrWalker:
                 digit = (data.get("dtmf") or {}).get("digit")
                 if digit:
                     logger.info(f"[IVR] DTMF digit received: {digit}")
-                    # Barge-in: stop any in-flight prompt audio on Plivo.
-                    if provider_str == "plivo":
+                    # Barge-in: stop any in-flight prompt audio (Plivo-dialect streams).
+                    if provider_str in ("plivo", "vobiz"):
                         await send_message(
                             ws=self.ws,
                             message={
@@ -598,12 +598,12 @@ class IvrWalker:
         return p.lower() if hasattr(p, "lower") else str(p).lower()
 
     def _audio_duration_secs(self, audio: bytes) -> float:
-        """Approximate playback duration. Twilio/Plivo = mu-law (1 byte/sample),
+        """Approximate playback duration. Twilio/Plivo/Vobiz = mu-law (1 byte/sample),
         Exotel = PCM16 (2 bytes/sample); both at 8 kHz."""
         provider_str = self._provider_str()
         samples = (
             len(audio)
-            if provider_str in ("twilio", "plivo")
+            if provider_str in ("twilio", "plivo", "vobiz")
             else max(1, len(audio) // 2)
         )
         return samples / 8000.0

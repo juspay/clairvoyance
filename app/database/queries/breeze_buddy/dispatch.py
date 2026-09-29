@@ -54,7 +54,7 @@ def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
 
     - OUTBOUND: took one in ``_acquire_number`` before dialling, for every
       dispatchable execution mode.
-    - INBOUND: only Plivo takes one (``admit_plivo_inbound_call``). Exotel
+    - INBOUND: only Plivo and Vobiz take one (``admit_inbound_call``). Exotel
       and Twilio inbound are ungated, so counting them would shrink the token
       stock for channels nobody actually took.
 
@@ -79,7 +79,7 @@ def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
                )
             OR (
                     l."call_direction" = 'INBOUND'
-                AND n."provider" = 'PLIVO'
+                AND n."provider" IN ('PLIVO', 'VOBIZ')
                )
           )
         GROUP BY l."telephony_number_id";

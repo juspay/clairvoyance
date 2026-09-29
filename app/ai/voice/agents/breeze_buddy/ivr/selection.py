@@ -83,7 +83,7 @@ async def get_template_id_from_call(
 
     This function handles:
     1. Extracting custom_params from correct location (Exotel vs Twilio)
-    2. For Plivo: Extracting template_id from WebSocket URL query params
+    2. For Plivo / Vobiz: Extracting template_id from WebSocket URL query params
     3. Running IVR menu if ivr_mode is enabled
     4. Deferred rate limit check after IVR selection
     5. Validating template_id UUID format
@@ -94,7 +94,7 @@ async def get_template_id_from_call(
         stream_sid: Stream ID for sending audio
         call_sid: Call ID used as Redis key for IVR config
         call_data: Parsed call data from telephony provider
-        provider: "twilio", "exotel", or "plivo"
+        provider: "twilio", "exotel", "plivo" or "vobiz"
         telephony_service: Telephony service for redirect (optional, needed for IVR rate limit)
         from_number: Caller phone number (optional, needed for IVR rate limit)
 
@@ -113,15 +113,17 @@ async def get_template_id_from_call(
     template_id = custom_params.get("template_id")
     ivr_mode = custom_params.get("ivr_mode")
 
-    # For Plivo: Extract template_id from WebSocket URL query params
-    # Plivo's WebSocket call_data only contains stream_id and call_id,
+    # For Plivo/Vobiz: Extract template_id from WebSocket URL query params
+    # Plivo/Vobiz WebSocket call_data only contains stream_id and call_id,
     # so we pass template_id, from_number, to_number via URL query params
-    if provider.lower() == "plivo" and not template_id:
+    if provider.lower() in ("plivo", "vobiz") and not template_id:
         url_query_params = dict(ws.query_params)
         template_id = url_query_params.get("template_id")
         ivr_mode = url_query_params.get("ivr_mode")
         if template_id:
-            logger.info(f"[Plivo] Extracted template_id from URL: {template_id}")
+            logger.info(
+                f"[{provider.lower()}] Extracted template_id from URL: {template_id}"
+            )
 
     # Handle IVR mode (multiple templates available)
     if ivr_mode == "true":
@@ -717,7 +719,7 @@ def _convert_audio_for_provider(mulaw_data: bytes, provider: str) -> bytes:
 
     Args:
         mulaw_data: Audio in mulaw format
-        provider: "twilio", "exotel", or "plivo"
+        provider: "twilio", "exotel", "plivo" or "vobiz"
 
     Returns:
         Audio bytes in provider-specific format
@@ -726,8 +728,8 @@ def _convert_audio_for_provider(mulaw_data: bytes, provider: str) -> bytes:
         provider.lower() if hasattr(provider, "lower") else str(provider).lower()
     )
 
-    if provider_str in ("twilio", "plivo"):
-        # Twilio and Plivo expect mulaw
+    if provider_str in ("twilio", "plivo", "vobiz"):
+        # Twilio, Plivo and Vobiz expect mulaw
         return mulaw_data
     else:
         # Exotel expects raw PCM 16-bit
@@ -745,7 +747,7 @@ async def _send_audio(
         ws: WebSocket connection
         stream_sid: Stream ID for the media message
         audio_bytes: Audio bytes to send
-        provider: Telephony provider ("twilio", "exotel", or "plivo")
+        provider: Telephony provider ("twilio", "exotel", "plivo" or "vobiz")
     """
     payload = base64.b64encode(audio_bytes).decode("utf-8")
 
@@ -755,8 +757,8 @@ async def _send_audio(
         provider.lower() if hasattr(provider, "lower") else str(provider).lower()
     )
 
-    if provider_str == "plivo":
-        # Plivo bidirectional streaming uses playAudio event
+    if provider_str in ("plivo", "vobiz"):
+        # Plivo-dialect bidirectional streaming (Plivo, Vobiz) uses playAudio event
         media_message = {
             "event": "playAudio",
             "streamId": stream_sid,
@@ -824,13 +826,15 @@ async def _wait_for_valid_dtmf(
                                 f"[IVR] Valid digit {digit} - interrupting audio"
                             )
                             # Send clearAudio to stop provider's audio playback
-                            if provider_str == "plivo":
+                            if provider_str in ("plivo", "vobiz"):
                                 clear_message = {
                                     "event": "clearAudio",
                                     "streamId": stream_sid,
                                 }
                                 await send_message(ws=ws, message=clear_message)
-                                logger.info("[IVR] Sent clearAudio command to Plivo")
+                                logger.info(
+                                    f"[IVR] Sent clearAudio command to {provider_str}"
+                                )
 
                             return ivr_options[index]["id"]
                         else:

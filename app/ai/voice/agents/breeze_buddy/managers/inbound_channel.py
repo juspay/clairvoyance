@@ -1,6 +1,6 @@
 """
-Inbound channel accounting — the single place that returns a channel an
-inbound call is holding.
+Inbound channel accounting — the single place that takes and returns the
+channel an inbound call holds.
 
 Why this is its own module rather than part of ``managers.calls``: that module
 imports from the ``dispatch`` package, and importing any ``dispatch`` submodule
@@ -23,17 +23,47 @@ from app.core.logger import logger
 from app.database.accessor import (
     decrement_telephony_number_channels,
     get_telephony_number_by_id,
+    increment_telephony_number_channels,
 )
 from app.schemas import CallDirection, CallProvider, LeadCallStatus
 from app.schemas.breeze_buddy.core import LeadCallTracker
+
+
+async def admit_inbound_call(telephony_number_id: str) -> bool:
+    """Take one channel for an inbound call on a gated number (Plivo, Vobiz).
+
+    Same gate outbound uses in ``_acquire_number``: the atomic
+    ``channels = channels + 1 WHERE channels < maximum_channels`` update, which
+    returns no row when the number is already at its ceiling. Both directions
+    therefore share one counter, so an inbound call genuinely reduces what
+    outbound can dial and vice versa.
+
+    Returns False when at capacity — and also when the UPDATE itself failed,
+    because the accessor collapses both into None. That makes inbound
+    admission fail *closed* on a DB outage, matching outbound (where the
+    worker simply defers the lead). The visible difference is that an inbound
+    caller hears the busy message instead of waiting invisibly in a queue.
+
+    Not idempotent per call, and deliberately so. A provider that retries a
+    slow answer webhook is mostly absorbed upstream: ``resolve_call_templates``
+    looks the call up by ``call_id`` first, finds the lead the earlier attempt
+    created, and routes the retry down the outbound branch, which never reaches
+    this gate. The residual window is a retry that lands before that first
+    insert commits -- both attempts see no lead, both increment, and one
+    channel is held by a lead nobody will ever close until
+    ``reconcile_stuck_processing_leads`` sweeps it. Closing that properly needs
+    a uniqueness guarantee on inbound ``call_id`` (the column has a plain,
+    non-unique index today), which is a bigger change than this gate.
+    """
+    return await increment_telephony_number_channels(telephony_number_id) is not None
 
 
 def inbound_holds_channel(lead: LeadCallTracker, provider: CallProvider) -> bool:
     """
     Is this inbound lead still holding a channel it must give back?
 
-    Only the Plivo answer path takes one (``admit_plivo_inbound_call``), and
-    it does so as part of creating the lead in PROCESSING. So the PROCESSING
+    Only the Plivo and Vobiz answer paths take one (``admit_inbound_call``),
+    and they do so as part of creating the lead in PROCESSING. So the PROCESSING
     row is the receipt: release when this caller is the one moving the lead
     off PROCESSING. Anything already terminal either never
     held a channel (CAPACITY_REJECTED, BLOCKED_* and out-of-hours all write a
@@ -49,7 +79,10 @@ def inbound_holds_channel(lead: LeadCallTracker, provider: CallProvider) -> bool
     Making every releaser claim first is tracked, and reverses an ordering the
     current tests pin.
     """
-    return provider == CallProvider.PLIVO and lead.status == LeadCallStatus.PROCESSING
+    return (
+        provider in (CallProvider.PLIVO, CallProvider.VOBIZ)
+        and lead.status == LeadCallStatus.PROCESSING
+    )
 
 
 async def release_inbound_channel(lead: LeadCallTracker) -> bool:
