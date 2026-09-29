@@ -59,27 +59,33 @@ async def _resolve_user_scopes(
     if not has_merchant_wildcard:
         return merchant_ids if merchant_ids else []
 
-    # Case: Wildcard merchants → walk up the owner chain to find scope
+    # Case: Wildcard merchants → walk up the owner chain to find scope.
+    # A broken owner chain must FAIL CLOSED (return []) — only a positively
+    # confirmed admin owner may yield unrestricted (None). Returning None here
+    # let a wildcard token whose owner is missing/unresolvable mint platform-wide
+    # merchant access (PT-20).
     if not owner_id:
-        # No owner to narrow scope — treat as unrestricted
-        logger.info(
-            f"User {username} has wildcard merchant_ids with no owner_id — granting unrestricted access"
+        logger.warning(
+            f"User {username} has wildcard merchant_ids with no owner_id — "
+            "denying (failing closed)"
         )
-        return None
+        return []
 
     try:
         owner = await get_user_by_id(owner_id)
     except Exception as e:
-        logger.error(f"Failed to resolve owner {owner_id} for user {username}: {e}")
-        return None  # Can't resolve → grant unrestricted rather than lock out
+        logger.error(
+            f"Failed to resolve owner {owner_id} for user {username}: {e} — "
+            "denying (failing closed)"
+        )
+        return []  # Can't resolve → deny rather than grant unrestricted
 
     if not owner:
-        # Owner not in DB (deleted admin/account) — treat as admin-equivalent
-        logger.info(
+        logger.warning(
             f"User {username} has owner_id {owner_id} but owner not found in DB — "
-            "granting unrestricted merchant access"
+            "denying merchant access (failing closed)"
         )
-        return None
+        return []
 
     # Owner is admin → truly unrestricted
     if owner.role == UserRole.ADMIN:
@@ -153,6 +159,22 @@ async def resolve_merchant_ids(user: UserInfo) -> Optional[List[str]]:
     )
 
 
+def _validate_ids_subset(
+    requested_ids: List[str],
+    allowed_ids: Optional[List[str]],
+    error_message: str,
+) -> None:
+    """Shared subset check behind the merchant_ids / reseller_ids validators."""
+    if allowed_ids is None:
+        return  # Unrestricted access
+
+    if not all(rid in allowed_ids for rid in requested_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_message,
+        )
+
+
 def validate_merchant_ids_subset(
     requested_ids: List[str],
     allowed_ids: Optional[List[str]],
@@ -168,14 +190,30 @@ def validate_merchant_ids_subset(
     Raises:
         HTTPException: 403 if requested_ids are not a subset of allowed_ids
     """
-    if allowed_ids is None:
-        return  # Unrestricted access
+    _validate_ids_subset(requested_ids, allowed_ids, error_message)
 
-    if not all(mid in allowed_ids for mid in requested_ids):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=error_message,
-        )
+
+def validate_reseller_ids_subset(
+    requested_ids: List[str],
+    allowed_ids: Optional[List[str]],
+    error_message: str = "Cannot assign reseller_ids outside your scope",
+) -> None:
+    """Validate that requested reseller_ids are a subset of allowed IDs.
+
+    Same subset rule as the merchant variant, kept as its own entry point so
+    reseller-scope call sites don't read as merchant-scope ones. The check is
+    identical by nature — that is exactly why calling the merchant validator on
+    reseller data went unnoticed and stayed correct only by accident.
+
+    Args:
+        requested_ids: The reseller_ids being requested
+        allowed_ids: The allowed reseller_ids (None = unrestricted)
+        error_message: Error message for 403 response
+
+    Raises:
+        HTTPException: 403 if requested_ids are not a subset of allowed_ids
+    """
+    _validate_ids_subset(requested_ids, allowed_ids, error_message)
 
 
 async def _resolve_reseller_scopes(
@@ -209,29 +247,31 @@ async def _resolve_reseller_scopes(
     if "*" not in reseller_ids:
         return reseller_ids if reseller_ids else []
 
-    # Wildcard → walk up the owner chain
+    # Wildcard → walk up the owner chain. Fail CLOSED on a broken chain — only a
+    # confirmed admin owner yields unrestricted (None). Returning None on a
+    # missing/unresolvable owner minted platform-wide reseller access (PT-20).
     if not owner_id:
-        # No owner to narrow scope — treat as unrestricted
-        logger.info(
-            f"User {username} has wildcard reseller_ids with no owner_id — granting unrestricted access"
+        logger.warning(
+            f"User {username} has wildcard reseller_ids with no owner_id — "
+            "denying (failing closed)"
         )
-        return None
+        return []
 
     try:
         owner = await get_user_by_id(owner_id)
     except Exception as e:
         logger.error(
-            f"Failed to resolve owner {owner_id} for reseller_ids of user {username}: {e}"
+            f"Failed to resolve owner {owner_id} for reseller_ids of user "
+            f"{username}: {e} — denying (failing closed)"
         )
-        return None  # Can't resolve → grant unrestricted rather than lock out
+        return []  # Can't resolve → deny rather than grant unrestricted
 
     if not owner:
-        # Owner not in DB (deleted admin/account) — treat as admin-equivalent
-        logger.info(
+        logger.warning(
             f"User {username} has owner_id {owner_id} but owner not found in DB — "
-            "granting unrestricted reseller access"
+            "denying reseller access (failing closed)"
         )
-        return None
+        return []
 
     # Owner is admin → truly unrestricted
     if owner.role == UserRole.ADMIN:

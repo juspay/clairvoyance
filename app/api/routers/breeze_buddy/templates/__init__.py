@@ -37,7 +37,7 @@ from .handlers import (
     list_templates_handler,
     replace_template_handler,
 )
-from .rbac import require_admin_or_reseller_owner
+from .rbac import validate_template_access
 
 router = APIRouter()
 
@@ -88,9 +88,15 @@ async def create_template(
             "message": "Template 'order-confirmation' created successfully with 5 nodes"
         }
     """
-    # RBAC: Check permission to create template for this reseller
-    require_admin_or_reseller_owner(
-        current_user, template_data.reseller_id, operation="create templates"
+    # RBAC: enforce BOTH reseller AND merchant scope from the request body.
+    # Authorizing on reseller membership alone let any merchant in the shared
+    # reseller plant a template into another merchant's namespace, or
+    # reseller-wide with a null merchant_id (PT-09).
+    validate_template_access(
+        current_user,
+        template_data.reseller_id,
+        template_data.merchant_id,
+        operation="create template",
     )
 
     return await create_template_handler(template_data, current_user)
