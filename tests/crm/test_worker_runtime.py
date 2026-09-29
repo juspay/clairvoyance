@@ -211,6 +211,87 @@ def test_a_row_never_inherits_the_previous_rows_ids(
     assert entered == [{}, {}]
 
 
+def test_a_batch_is_worked_concurrently_up_to_the_roles_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A walker row is mostly WAITING — the playbook's llm_call is ~250ms of
+    network per lead — so a serial batch is one wait after another and a pod
+    sits at 3% CPU while a morning pile drains for an hour. The loop runs up
+    to ``concurrency`` rows at once; the rows were claimed together and every
+    write is lease-conditional, so working them together changes nothing but
+    the waiting."""
+    peak = 0
+    in_flight = 0
+    stop = asyncio.Event()
+
+    monkeypatch.setattr(shared_worker, "logger", _Lines())
+
+    async def claim(batch: int) -> List[str]:
+        if peak > 0:  # the batch has been worked; end the loop
+            stop.set()
+            return []
+        return [f"row-{i}" for i in range(10)]
+
+    async def handle(row: str) -> None:
+        nonlocal peak, in_flight
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)  # stand in for the llm_call's wait
+        in_flight -= 1
+
+    asyncio.run(
+        shared_worker.run_drain_loop(
+            claim,
+            handle,
+            interval=0,
+            batch=10,
+            stop_event=stop,
+            name="walker",
+            concurrency=4,
+        )
+    )
+
+    assert peak == 4, "the loop must hold exactly `concurrency` rows in flight"
+
+
+def test_the_default_is_the_serial_loop_it_replaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrency is a per-ROLE dial, and its default is one: the
+    dispatcher's batch must stay serial (its lease bound is batch x 2 x send
+    timeout) and the event worker's claim carries a transaction. A role that
+    does not ask for it keeps exactly today's behaviour, in order."""
+    peak = 0
+    in_flight = 0
+    order: List[str] = []
+    stop = asyncio.Event()
+
+    monkeypatch.setattr(shared_worker, "logger", _Lines())
+
+    async def claim(batch: int) -> List[str]:
+        if order:
+            stop.set()
+            return []
+        return ["a", "b", "c"]
+
+    async def handle(row: str) -> None:
+        nonlocal peak, in_flight
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        order.append(row)
+        in_flight -= 1
+
+    asyncio.run(
+        shared_worker.run_drain_loop(
+            claim, handle, interval=0, batch=10, stop_event=stop, name="dispatcher"
+        )
+    )
+
+    assert peak == 1, "an unasked role must not become concurrent"
+    assert order == ["a", "b", "c"], "serial order is preserved"
+
+
 def _flow(topic: str = "checkout.initiated", goal: str = "order.placed") -> Workflow:
     return Workflow(
         id=uuid.uuid4(),
@@ -604,3 +685,47 @@ def test_keyed_plan_refuses_an_event_without_the_key(
             entry.consume_attributed_event(_event_with("orders/create", payload), "c")
         )
     assert calls == []
+
+
+def test_a_cancelled_row_does_not_orphan_its_siblings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-row guard catches Exception, so only a BaseException escapes —
+    in practice the CancelledError of stop_worker_role's 10s shutdown. Raised
+    straight out of gather it would abandon the rows still in flight, leaving
+    them running with nobody awaiting them. The serial loop had the same exit,
+    but for one row; concurrently it is the whole batch."""
+    finished: List[int] = []
+    started: List[int] = []
+    stop = asyncio.Event()
+
+    monkeypatch.setattr(shared_worker, "logger", _Lines())
+
+    async def claim(batch: int) -> List[int]:
+        if started:
+            stop.set()
+            return []
+        return [0, 1, 2, 3]
+
+    async def handle(row: int) -> None:
+        started.append(row)
+        if row == 1:
+            await asyncio.sleep(0.001)
+            raise asyncio.CancelledError
+        await asyncio.sleep(0.05)
+        finished.append(row)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            shared_worker.run_drain_loop(
+                claim,
+                handle,
+                interval=0,
+                batch=4,
+                stop_event=stop,
+                name="walker",
+                concurrency=4,
+            )
+        )
+
+    assert sorted(finished) == [0, 2, 3], "siblings must finish, not be orphaned"

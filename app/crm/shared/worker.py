@@ -23,6 +23,7 @@ async def run_drain_loop(
     batch: int,
     stop_event: asyncio.Event,
     name: str,
+    concurrency: int = 1,
 ) -> None:
     """``claim`` returns the rows this iteration found (a txn-style claim has
     already committed them); ``handle`` is a per-row post-commit hook.
@@ -30,7 +31,19 @@ async def run_drain_loop(
     The log context is cleared per iteration (the heartbeat fires BEFORE
     the claim that would reset it) and again per row — a handler runs in
     THIS task, so its ids outlive it. Same bug at two scales: a line filed
-    under the wrong row."""
+    under the wrong row.
+
+    ``concurrency`` is how many of the CLAIMED rows are worked at once, and
+    it belongs to the ROLE, not the scaffold — hence the default of one.
+    The walker asks for more because its cost is WAITING: the playbook's
+    llm_call is a model round trip per lead (p50 250ms, measured), so a
+    serial batch is one wait after another and the pod idles at 3% CPU
+    while a morning pile drains. The rows were claimed together and every
+    walker write is lease-conditional, so working them together changes
+    nothing but the waiting. The other two roles must NOT raise it: the
+    dispatcher's bound is batch x 2 x send timeout < lease and assumes
+    serial sends, and the event worker's claim carries a transaction whose
+    connection is not shareable across tasks."""
     backoff = interval
     since_beat = 0
     last_beat = time.monotonic()
@@ -65,19 +78,41 @@ async def run_drain_loop(
             continue
 
         backoff = interval
-        for row in rows:
-            if stop_event.is_set():
-                break
-            since_beat += 1
-            # A handler that raises before stamping its ids would report
-            # the previous row's — worse than none, because it reads true.
-            clear_log_context()
-            try:
-                await handle(row)
-            except Exception as e:
-                # Not cleared AFTER: what the handler stamped names the row
-                # that failed. Empty is honest; wrong is not.
-                logger.bind(worker=name).error(f"{name}: row failed, skipping: {e}")
+        # One gate per pass: asyncio.gather runs each row in its OWN task, so
+        # the log context (a ContextVar) is copied per row and a handler's ids
+        # can no longer outlive it into a sibling — the per-row clear below
+        # stays, because a task inherits whatever stood at creation.
+        gate = asyncio.Semaphore(max(1, concurrency))
+
+        async def _work(row: T) -> None:
+            nonlocal since_beat
+            async with gate:
+                if stop_event.is_set():
+                    return
+                since_beat += 1
+                # A handler that raises before stamping its ids would report
+                # the previous row's — worse than none, because it reads true.
+                clear_log_context()
+                try:
+                    await handle(row)
+                except Exception as e:
+                    # Not cleared AFTER: what the handler stamped names the
+                    # row that failed. Empty is honest; wrong is not.
+                    logger.bind(worker=name).error(f"{name}: row failed, skipping: {e}")
+
+        # At concurrency 1 the gate admits one row at a time in order, which
+        # is the serial loop this replaced. return_exceptions keeps a
+        # BaseException from one row — in practice the CancelledError of
+        # shutdown — from abandoning the rows still in flight; they are
+        # awaited first, and the cancel is re-raised after.
+        outcomes = await asyncio.gather(
+            *(_work(row) for row in rows), return_exceptions=True
+        )
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException) and not isinstance(
+                outcome, Exception
+            ):
+                raise outcome
         # full batch -> loop again immediately (no sleep)
 
 

@@ -155,3 +155,99 @@ def test_one_service_serves_every_call_on_a_loop() -> None:
     asyncio.run(three())
     assert len(_FakeLLM.built) == 1  # one HTTP client, not three
     assert len(_FakeLLM.prompts) == 3
+
+
+def test_concurrent_callers_of_one_key_share_a_single_model_call() -> None:
+    """The cache is written only AFTER two awaits, so N visits wanting the same
+    (prompt, value) inside one walker batch each miss and each call the model —
+    and the values that collide inside a batch are the popular ones (a top
+    brand, a common sub-category). Without single-flight the concurrency dial
+    fights the cache instead of compounding with it.
+    """
+    _FakeLLM.delay = 0.05  # long enough that all eight are in flight together
+
+    async def race() -> Any:
+        return await asyncio.gather(
+            *(
+                TEMPLATE_FUNCTION_REGISTRY["llm_call"](RAW, prompt=SHORT)
+                for _ in range(8)
+            )
+        )
+
+    answers = asyncio.run(race())
+
+    assert answers == ["Blaupunkt Smart TV"] * 8, "every caller gets the answer"
+    assert len(_FakeLLM.prompts) == 1, "eight concurrent callers, ONE model call"
+
+
+def test_a_cancelled_waiter_does_not_cancel_the_shared_call() -> None:
+    """A waiter awaits the leader's future directly, so cancelling ONE waiter
+    cancels the future every other waiter is holding: they get a
+    CancelledError none of them asked for, while the leader's answer arrives
+    fine. Shutdown cancels rows mid-batch, so this is the concurrency dial's
+    own failure mode."""
+    _FakeLLM.delay = 0.05
+
+    async def race() -> Any:
+        leader = asyncio.create_task(
+            TEMPLATE_FUNCTION_REGISTRY["llm_call"](RAW, prompt=SHORT)
+        )
+        await asyncio.sleep(0)  # let the leader register its pending future
+        doomed = asyncio.create_task(
+            TEMPLATE_FUNCTION_REGISTRY["llm_call"](RAW, prompt=SHORT)
+        )
+        survivor = asyncio.create_task(
+            TEMPLATE_FUNCTION_REGISTRY["llm_call"](RAW, prompt=SHORT)
+        )
+        await asyncio.sleep(0.01)  # both waiters are now parked on the future
+        doomed.cancel()
+        return await asyncio.gather(leader, survivor, return_exceptions=True)
+
+    leader_answer, survivor_answer = asyncio.run(race())
+
+    assert leader_answer == "Blaupunkt Smart TV"
+    assert (
+        survivor_answer == "Blaupunkt Smart TV"
+    ), "one cancel must not poison siblings"
+    assert len(_FakeLLM.prompts) == 1
+
+
+def test_a_cancelled_leader_leaves_its_waiters_the_raw_value() -> None:
+    """Shutdown cancels the row that happens to be asking. Its waiters must
+    not hang on a future nobody will resolve: they fall open to the value
+    unchanged, which is the same answer a timed-out or failed call gives."""
+    _FakeLLM.delay = 0.05
+
+    async def race() -> Any:
+        leader = asyncio.create_task(
+            TEMPLATE_FUNCTION_REGISTRY["llm_call"](RAW, prompt=SHORT)
+        )
+        await asyncio.sleep(0)
+        waiter = asyncio.create_task(
+            TEMPLATE_FUNCTION_REGISTRY["llm_call"](RAW, prompt=SHORT)
+        )
+        await asyncio.sleep(0.01)
+        leader.cancel()
+        return await asyncio.gather(leader, waiter, return_exceptions=True)
+
+    leader_result, waiter_result = asyncio.run(race())
+
+    assert isinstance(
+        leader_result, asyncio.CancelledError
+    ), "the leader's cancel stands"
+    assert waiter_result == RAW, "the waiter falls open rather than hanging"
+
+
+def test_two_different_keys_do_not_share_a_flight() -> None:
+    """Single-flight is per (prompt, value): two different products in one
+    batch are two questions, and must not be answered with each other's line."""
+    _FakeLLM.delay = 0.02
+
+    async def race() -> Any:
+        return await asyncio.gather(
+            TEMPLATE_FUNCTION_REGISTRY["llm_call"]("vivo S2 5G (Black)", prompt=SHORT),
+            TEMPLATE_FUNCTION_REGISTRY["llm_call"]("SAMSUNG Galaxy S24", prompt=SHORT),
+        )
+
+    asyncio.run(race())
+    assert len(_FakeLLM.prompts) == 2, "different values are different flights"
