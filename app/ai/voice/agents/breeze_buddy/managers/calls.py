@@ -547,8 +547,8 @@ def _releases_capacity(lead: LeadCallTracker, provider: CallProvider) -> bool:
     Outbound: the worker took a channel (``_acquire_number``) plus a Redis
     dispatch token before dialling, for every dispatchable execution mode.
 
-    Inbound: only the Plivo answer path takes a channel
-    (``admit_plivo_inbound_call``), and it does so as part of creating the
+    Inbound: only the Plivo and Vobiz answer paths take a channel
+    (``admit_inbound_call``), and they do so as part of creating the
     lead in PROCESSING. So release when this callback is the one moving the
     lead off PROCESSING. Anything already terminal when we
     looked it up either never held a channel (CAPACITY_REJECTED, BLOCKED_*

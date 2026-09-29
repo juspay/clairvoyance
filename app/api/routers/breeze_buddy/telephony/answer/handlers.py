@@ -49,6 +49,7 @@ from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     prepare_goodbye_audio,
     prepare_ivr_menu_audio,
 )
+from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import admit_inbound_call
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_allocate_pod,
 )
@@ -57,9 +58,6 @@ from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     check_inbound_policy,
     log_blocked_call,
     set_block_redirect,
-)
-from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo import (
-    admit_plivo_inbound_call,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     plivo_record_xml,
@@ -98,6 +96,8 @@ from app.schemas import (
     TelephonyNumber,
 )
 from app.services.redis.client import get_redis_service
+
+_GATED_INBOUND_PROVIDERS = {"plivo": CallProvider.PLIVO, "vobiz": CallProvider.VOBIZ}
 
 
 async def resolve_call_templates(
@@ -391,7 +391,7 @@ def _error_response(provider: str, message: str, status_code: int) -> Response:
             media_type="application/json",
             status_code=status_code,
         )
-    # Plivo expects XML - escape message for XML safety
+    # Plivo / Vobiz expect XML - escape message for XML safety
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Speak>{html_escape(message)}</Speak>
@@ -419,8 +419,9 @@ def _build_block_response(
     message: str | None,
     action: InboundBlockAction | None,
     redirect_number: str | None,
+    caller_id: str | None = None,
 ) -> Response:
-    """Build a blocking response for Plivo/Twilio: reject with TTS or redirect.
+    """Build a blocking response for Plivo/Vobiz/Twilio: reject with TTS or redirect.
 
     Note: Exotel is handled upstream via Redis + WS disconnect flow and should
     never reach this function.
@@ -430,15 +431,29 @@ def _build_block_response(
     not billed, but the call is never answered, so the message rides as early
     media — which plenty of carriers strip. Delivering the message is the whole
     point of this response, so we pay for the answered leg.
+
+    ``caller_id`` is presented on a Vobiz redirect's B-leg (the called number);
+    Plivo's redirect XML ignores it.
     """
     tts_message = (
         message
         or "Sorry, we are unable to take your call right now. Please try again later."
     )
 
-    if provider == "plivo":
+    if provider in ("plivo", "vobiz"):
         if action == InboundBlockAction.REDIRECT and redirect_number:
-            xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+            if provider == "vobiz" and caller_id:
+                # Vobiz takes the B-leg caller ID from the A-leg (the caller's own
+                # number) unless set; India rejects a non-Vobiz one (hangup 3030).
+                xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(tts_message)}</Speak>
+    <Dial callerId="{html_escape(caller_id)}">
+        <Number>{html_escape(redirect_number)}</Number>
+    </Dial>
+</Response>"""
+            else:
+                xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Speak>{html_escape(tts_message)}</Speak>
     <Dial>
@@ -484,7 +499,7 @@ async def _create_inbound_lead_in_answer_handler(
 
     Errors are swallowed — the answer response must not be blocked by a
     DB write failure. The boolean is reported, not raised, purely so the
-    Plivo capacity gate can hand its channel back: without a PROCESSING row
+    Plivo / Vobiz capacity gate can hand its channel back: without a PROCESSING row
     there is nothing for the call-end callbacks or
     ``reconcile_stuck_processing_leads`` to decrement, so a silently failed
     insert would strand that channel forever. Callers that did not take a
@@ -734,13 +749,14 @@ async def _refuse_inbound_call(
         )
         return _build_json_response(ws_url)
 
-    elif provider == "plivo":
-        # Plivo handles both REDIRECT (Dial XML) and REJECT (Hangup XML)
+    elif provider in ("plivo", "vobiz"):
+        # Plivo / Vobiz handle both REDIRECT (Dial XML) and REJECT (Hangup XML)
         return _build_block_response(
             provider,
             block_message,
             block_action,
             block_redirect,
+            caller_id=to_number,
         )
     else:
         # TODO: Twilio block handling not yet implemented
@@ -752,15 +768,15 @@ async def _refuse_inbound_call(
         )
 
 
-def _gated_plivo_number(provider: str, result: dict) -> Optional[TelephonyNumber]:
+def _gated_inbound_number(provider: str, result: dict) -> Optional[TelephonyNumber]:
     """The number whose channel this inbound call consumes, or None.
 
-    Only Plivo inbound is gated, so this is also the answer to "do we owe a
-    channel back". Both the gate and the failed-insert path key off it, so the
-    rule lives in one place.
+    Only Plivo and Vobiz inbound are gated, so this is also the answer to
+    "do we owe a channel back". Both the gate and the failed-insert path key
+    off it, so the rule lives in one place.
     """
     number = result.get("telephony_number")
-    if provider != "plivo" or number is None or number.provider != CallProvider.PLIVO:
+    if number is None or _GATED_INBOUND_PROVIDERS.get(provider) != number.provider:
         return None
     return number
 
@@ -773,7 +789,7 @@ async def _gate_inbound_channel(
     result: dict,
     tag: str,
 ) -> Optional[Response]:
-    """Take a channel for an inbound Plivo call.
+    """Take a channel for an inbound Plivo / Vobiz call.
 
     Returns the response to send the caller when there is no free channel, or
     None when the call may proceed — either because it was admitted or because
@@ -784,12 +800,12 @@ async def _gate_inbound_channel(
     analytics. Runs before the lead insert, so a rejected call leaves exactly
     one terminal row rather than a PROCESSING row to close.
     """
-    telephony_number = _gated_plivo_number(provider, result)
+    telephony_number = _gated_inbound_number(provider, result)
     if telephony_number is None:
         return None
 
     with timed_phase("acquire_inbound_channel"):
-        admitted = await admit_plivo_inbound_call(str(telephony_number.id))
+        admitted = await admit_inbound_call(str(telephony_number.id))
 
     if admitted:
         return None
@@ -903,19 +919,6 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
         )
         return _error_response(provider, error_msg, result.get("error_status", 500))
 
-    # Vobiz inbound (channel gate, single-template routing) is not wired yet:
-    # refuse the call rather than half-handle it.
-    if provider == "vobiz" and not result.get("is_outbound"):
-        logger.error(
-            f"[{tag}] Inbound Vobiz call {call_id} to {to_number} refused: "
-            "Vobiz inbound is not enabled yet"
-        )
-        return _error_response(
-            provider,
-            "Sorry, this number is not configured to receive calls. Goodbye.",
-            404,
-        )
-
     # ── Inbound policy enforcement ────────────────────────────────────────
     if not result.get("is_outbound"):
         templates = result.get("templates", [])
@@ -1013,6 +1016,21 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
                     {"id": str(t.id), "name": t.name} for t in allowed_templates
                 ]
 
+        # IVR (the keypad menu) is not built for Vobiz yet: a Vobiz number must
+        # route to exactly one inbound template. Refuse loudly rather than
+        # play a menu the stream cannot drive.
+        if provider == "vobiz" and len(result.get("templates", [])) > 1:
+            logger.error(
+                f"[{tag}] Vobiz number {to_number} resolves to "
+                f"{len(result['templates'])} inbound templates; IVR is not "
+                f"supported on Vobiz yet. Refusing call {call_id}."
+            )
+            return _error_response(
+                provider,
+                "Sorry, this number is not configured to receive calls. Goodbye.",
+                409,
+            )
+
         refusal = await _gate_inbound_channel(
             provider, call_id, from_number, to_number, result, tag
         )
@@ -1044,7 +1062,7 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
         # to sweep, nothing recomputes the column, update_telephony_number()
         # cannot set it), so it needs a manual UPDATE. Refunding to cover it
         # would cost a channel on every ordinary failed insert instead.
-        gated = _gated_plivo_number(provider, result)
+        gated = _gated_inbound_number(provider, result)
         if gated is not None and not lead_created:
             logger.error(
                 f"[{tag}] Inbound lead insert failed for call {call_id} after "

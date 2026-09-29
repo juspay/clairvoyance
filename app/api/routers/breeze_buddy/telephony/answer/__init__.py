@@ -34,7 +34,7 @@ async def provider_answer(request: Request, provider: str):
     Resolves templates and returns a provider-appropriate response:
     - Exotel: JSON ``{"url": "wss://..."}``
     - Plivo: XML ``<Stream>`` or ``<GetInput>``
-    - Vobiz: XML ``<Stream>`` (outbound only for now)
+    - Vobiz: XML ``<Stream>`` (one inbound template per number; no keypad menu)
 
     Path Parameters:
         provider: Telephony provider name ("exotel", "plivo" or "vobiz")

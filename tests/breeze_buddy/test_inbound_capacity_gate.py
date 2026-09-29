@@ -29,9 +29,6 @@ from app.ai.voice.agents.breeze_buddy.managers import (
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     PolicyResult,
 )
-from app.ai.voice.agents.breeze_buddy.services.telephony.plivo import (
-    plivo as plivo_mod,
-)
 from app.api.routers.breeze_buddy.telephony.answer import handlers as ans_mod
 from app.database.queries.breeze_buddy.dispatch import (
     count_processing_by_telephony_number_query,
@@ -230,8 +227,8 @@ async def test_admission_fails_closed_when_the_db_says_no(monkeypatch):
     async def at_capacity(number_id: str):
         return None
 
-    monkeypatch.setattr(plivo_mod, "increment_telephony_number_channels", at_capacity)
-    assert await plivo_mod.admit_plivo_inbound_call("num-1") is False
+    monkeypatch.setattr(ic_mod, "increment_telephony_number_channels", at_capacity)
+    assert await ic_mod.admit_inbound_call("num-1") is False
 
 
 @pytest.mark.asyncio
@@ -239,8 +236,8 @@ async def test_admission_succeeds_when_a_row_comes_back(monkeypatch):
     async def admitted(number_id: str):
         return make_number()
 
-    monkeypatch.setattr(plivo_mod, "increment_telephony_number_channels", admitted)
-    assert await plivo_mod.admit_plivo_inbound_call("num-1") is True
+    monkeypatch.setattr(ic_mod, "increment_telephony_number_channels", admitted)
+    assert await ic_mod.admit_inbound_call("num-1") is True
 
 
 @pytest.mark.asyncio
@@ -850,7 +847,7 @@ async def test_answer_handler_admits_and_rejects_at_the_real_call_site(monkeypat
     async def admits(_number_id):
         return number
 
-    monkeypatch.setattr(plivo_mod, "increment_telephony_number_channels", admits)
+    monkeypatch.setattr(ic_mod, "increment_telephony_number_channels", admits)
     await ans_mod._handle_provider_answer(request, "plivo")
     assert admitted_calls == ["CALL-1"], "the gate refused a call it had room for"
 
@@ -858,7 +855,7 @@ async def test_answer_handler_admits_and_rejects_at_the_real_call_site(monkeypat
     async def at_capacity(_number_id):
         return None
 
-    monkeypatch.setattr(plivo_mod, "increment_telephony_number_channels", at_capacity)
+    monkeypatch.setattr(ic_mod, "increment_telephony_number_channels", at_capacity)
     response = await ans_mod._handle_provider_answer(request, "plivo")
     body = bytes(response.body).decode()
 

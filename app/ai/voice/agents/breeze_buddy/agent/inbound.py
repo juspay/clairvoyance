@@ -33,15 +33,15 @@ async def handle_inbound_call(
         call_sid: The call SID
         call_data: Call data from the telephony provider
         call_initiated_time: When the call was initiated
-        provider: The telephony provider (twilio/exotel/plivo)
-        url_query_params: Optional URL query params (for Plivo inbound)
+        provider: The telephony provider (twilio/exotel/plivo/vobiz)
+        url_query_params: Optional URL query params (for Plivo / Vobiz inbound)
 
     Returns:
         Tuple of (lead, error_reason). If successful, lead is set and error_reason is None.
         If failed, lead is None and error_reason contains the failure reason.
     """
-    # Inbound calls supported for Exotel and Plivo
-    if provider not in (CallProvider.EXOTEL, CallProvider.PLIVO):
+    # Inbound calls supported for Exotel, Plivo and Vobiz
+    if provider not in (CallProvider.EXOTEL, CallProvider.PLIVO, CallProvider.VOBIZ):
         logger.warning(
             f"Inbound calls not supported for {provider}. call_sid: {call_sid}"
         )
@@ -57,7 +57,8 @@ async def handle_inbound_call(
 
     logger.info(f"No lead found for call_sid: {call_sid} - treating as inbound call")
 
-    # Get the "to" and "from" numbers from call data or URL query params (for Plivo)
+    # Get the "to" and "from" numbers from call data or URL query params
+    # (for Plivo / Vobiz)
     url_params = url_query_params or {}
     to_number = call_data.get("to") or url_params.get("to_number")
     from_number = call_data.get("from") or url_params.get("from_number", "unknown")
@@ -125,7 +126,7 @@ async def create_lead_from_template_id(
         call_sid: The call SID
         call_data: Call data from the telephony provider
         call_initiated_time: When the call was initiated
-        url_query_params: Optional URL query params (for Plivo inbound)
+        url_query_params: Optional URL query params (for Plivo / Vobiz inbound)
 
     Returns:
         Tuple of (lead, error_reason). If successful, lead is set and error_reason is None.
@@ -147,7 +148,7 @@ async def create_lead_from_template_id(
         logger.error(f"Template not found for template_id: {template_id}")
         return None, "Template not found"
 
-    # Get from_number from call_data or URL query params (for Plivo)
+    # Get from_number from call_data or URL query params (for Plivo / Vobiz)
     start_data = call_data.get("start", {})
     custom_params = call_data.get("custom_parameters") or start_data.get(
         "custom_parameters", {}
