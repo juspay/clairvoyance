@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 
 from app.ai.voice.agents.breeze_buddy.dispatch import (
+    channel_semaphore as cs_mod,
     promoter as prom_mod,
     reconcilers as recon_mod,
     worker as w,
@@ -625,3 +626,152 @@ async def test_reaper_still_reschedules_dispatchable_lead(
         proc_key not in fake_redis.client.lists
         or fake_redis.client.lists[proc_key] == []
     )
+
+
+# ---------------------------------------------------------------------------
+# Phantom-token hotfix — refused tokens are dropped, piles sleep longer
+# ---------------------------------------------------------------------------
+
+
+def _pin_pile_config(monkeypatch, threshold: int, long_defer: int) -> None:
+    async def _threshold():
+        return threshold
+
+    async def _long():
+        return long_defer
+
+    monkeypatch.setattr(cs_mod.dyn_cfg, "BB_CAPACITY_WAIT_PILE_THRESHOLD", _threshold)
+    monkeypatch.setattr(cs_mod.dyn_cfg, "BB_CAPACITY_WAIT_PILE_DEFER_S", _long)
+
+
+async def test_refused_token_is_dropped_not_pushed_back(
+    harness, fake_redis, monkeypatch
+):
+    """
+    One phantom token in the list, Postgres says the number is full.
+
+    The refusal consumes the token instead of pushing it back for the next
+    worker to pop again; the lead is deferred and unlocked, nothing is dialled.
+    """
+    _pin_pile_config(monkeypatch, threshold=50, long_defer=60)
+    lead = make_lead("lead-refused")
+    harness.add_lead(lead)
+    harness.acquire_number_succeeds = False
+
+    await init_channel_semaphore(harness.number.id, 1)  # the phantom
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-refused")
+    await worker._iteration(session=None)
+
+    # The phantom is gone.
+    assert await channel_tokens_available(harness.number.id) == 0
+    # No dial, no DB number release (nothing was acquired).
+    assert harness.call_recorder.calls == []
+    assert harness.released_numbers == []
+    # Lead handling unchanged: deferred, unlocked, still BACKLOG.
+    assert len(harness.deferred) == 1
+    assert harness.deferred[0][0] == "lead-refused"
+    assert "lead-refused" not in harness.locked_lead_ids
+    assert lead.status == LeadCallStatus.BACKLOG
+
+
+async def test_pile_behind_full_number_costs_one_round_per_phantom(
+    harness, fake_redis, monkeypatch
+):
+    """
+    A full number with 17 phantom tokens and 2,000 leads queued behind it:
+    17 refusals in total, an empty list afterwards, and the pile on the
+    long defer once it passes the threshold.
+    """
+    _pin_pile_config(monkeypatch, threshold=50, long_defer=60)
+    refusals: list[str] = []
+
+    async def _counting_acquire(number):
+        refusals.append(number.id)
+        return False
+
+    monkeypatch.setattr(w, "_acquire_number", _counting_acquire)
+
+    n_leads, phantoms = 2000, 17
+    for i in range(n_leads):
+        lead = make_lead(f"lead-{i}")
+        harness.add_lead(lead)
+        await fake_redis.client.rpush(READY_LIST, lead.id)
+    await init_channel_semaphore(harness.number.id, phantoms)
+
+    worker = w.Worker(worker_uuid="w-pile-2000")
+    for _ in range(n_leads):
+        await worker._iteration(session=None)
+
+    assert len(refusals) == phantoms
+    assert await channel_tokens_available(harness.number.id) == 0
+    assert harness.call_recorder.calls == []
+    defers = [secs for _lead, secs in harness.deferred]
+    assert len(defers) == n_leads
+    assert all(1 <= s <= BB_CHANNEL_WAIT_BACKOFF_MAX_S for s in defers[:49])
+    assert all(s == 60 for s in defers[49:])
+    assert not harness.locked_lead_ids
+
+
+async def test_pile_switches_defer_from_jitter_to_long(
+    harness, fake_redis, monkeypatch
+):
+    """
+    Number fully saturated (0 tokens). The first ``threshold - 1`` distinct
+    leads defer with today's 1..MAX jitter; from the threshold on, every
+    lead sleeps the long delay.
+    """
+    _pin_pile_config(monkeypatch, threshold=5, long_defer=60)
+    await init_channel_semaphore(harness.number.id, 0)
+
+    for i in range(8):
+        lead = make_lead(f"lead-{i}")
+        harness.add_lead(lead)
+        await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-pile")
+    for _ in range(8):
+        await worker._iteration(session=None)
+
+    defers = [secs for _lead, secs in harness.deferred]
+    assert len(defers) == 8
+    for secs in defers[:4]:
+        assert 1 <= secs <= BB_CHANNEL_WAIT_BACKOFF_MAX_S
+    assert defers[4:] == [60, 60, 60, 60]
+    assert harness.call_recorder.calls == []
+
+
+async def test_refused_path_also_uses_pile_defer(harness, fake_redis, monkeypatch):
+    """The Postgres-refused defer (old fixed 5 s) follows the same rule."""
+    _pin_pile_config(monkeypatch, threshold=1, long_defer=60)
+    harness.acquire_number_succeeds = False
+    lead = make_lead("lead-refused-pile")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-refused-pile")
+    await worker._iteration(session=None)
+
+    assert harness.deferred == [("lead-refused-pile", 60)]
+
+
+async def test_dial_path_unchanged_when_capacity_exists(
+    harness, fake_redis, monkeypatch
+):
+    """With a free line the worker dials as before and no capwait key is
+    written — the hotfix only touches the no-capacity branches."""
+    _pin_pile_config(monkeypatch, threshold=50, long_defer=60)
+    lead = make_lead("lead-ok")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 2)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-ok")
+    await worker._iteration(session=None)
+
+    assert len(harness.call_recorder.calls) == 1
+    assert harness.deferred == []
+    assert await channel_tokens_available(harness.number.id) == 1
+    assert not any(k.startswith("bb:capwait:") for k in fake_redis.client.hlls)

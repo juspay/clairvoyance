@@ -213,10 +213,15 @@ async def reconcile_channel_tokens() -> None:
     Heal channel-semaphore drift.
 
     For each active telephony number:
-      - If the Redis LIST is missing, create it with M tokens (cold-start
+      - If the Redis LIST is missing, create it with the free count (cold-start
         initialisation; this is the ONLY place channel state is created).
-      - Otherwise compare ``LLEN`` against ``M - in_flight_calls_from_db``
-        and top up or trim to match.
+      - Otherwise top up or trim ``LLEN`` to ``M - max(PROCESSING, channels)``.
+
+    ``channels`` moves at ``+1`` before the dial, and the row turns
+    PROCESSING only once the provider returns a call id, so the higher count
+    never mints a token for a line still being dialled. PROCESSING stays
+    correct when a duplicate release pushes ``channels`` too low, so the
+    extra token that release pushed is still trimmed.
     """
     try:
         numbers = await get_all_telephony_numbers()
@@ -249,7 +254,8 @@ async def reconcile_channel_tokens() -> None:
         # to 1 when the column is NULL.
         max_ch = n.maximum_channels if n.maximum_channels is not None else 1
         in_flight_n = in_flight.get(n.id, 0)
-        expected_free = max(0, max_ch - in_flight_n)
+        channels_n = n.channels if n.channels is not None else 0
+        expected_free = max(0, max_ch - max(in_flight_n, channels_n))
 
         try:
             exists = await channel_exists(n.id)
