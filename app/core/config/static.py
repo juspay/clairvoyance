@@ -1,5 +1,6 @@
 import math
 import os
+from urllib.parse import urlparse
 
 # --- Configuration ---
 
@@ -749,6 +750,34 @@ PLIVO_RECORDING_TIME_LIMIT = int(
 )  # Default: 4 hours (14400 seconds)
 # PLIVO_INR_CONVERSION_RATE lives in dynamic.py (Redis-backed) -- it drifts
 # with the market and updating it shouldn't need a pod restart.
+
+# Vobiz Configuration. Plivo-shaped API on its own host; REST auth is the
+# X-Auth-ID / X-Auth-Token header pair, not HTTP Basic. The base URL is
+# overridable only so a local harness can stand in for Vobiz.
+VOBIZ_AUTH_ID = os.getenv("VOBIZ_AUTH_ID", "")
+VOBIZ_AUTH_TOKEN = os.getenv("VOBIZ_AUTH_TOKEN", "")
+# `or`, not a getenv default: a set-but-empty value (an empty chart secret)
+# must fall back to https, not fail the check below on every pod.
+VOBIZ_API_BASE_URL = (
+    os.getenv("VOBIZ_API_BASE_URL") or "https://api.vobiz.ai/api/v1"
+).rstrip("/")
+_vobiz_api_url = urlparse(VOBIZ_API_BASE_URL)
+if not _vobiz_api_url.hostname or not (
+    _vobiz_api_url.scheme == "https"
+    or (
+        _vobiz_api_url.scheme == "http"
+        and _vobiz_api_url.hostname in ("localhost", "127.0.0.1", "::1")
+    )
+):
+    # Every dial sends X-Auth-ID / X-Auth-Token to this host; anything but
+    # https would put the account token on the wire in clear. Fail at boot.
+    raise ValueError(
+        "VOBIZ_API_BASE_URL must use https (http only for localhost), "
+        f"got {VOBIZ_API_BASE_URL!r}"
+    )
+VOBIZ_RECORDING_TIME_LIMIT = int(
+    os.getenv("VOBIZ_RECORDING_TIME_LIMIT", "14400")
+)  # Default: 4 hours. Vobiz's <Record> itself defaults to 60 s.
 
 # Proxy Configuration
 AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")

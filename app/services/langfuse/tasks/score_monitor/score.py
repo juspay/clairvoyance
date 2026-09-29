@@ -411,6 +411,7 @@ class ScoreMonitor:
                 "TWILIO": 0,
                 "EXOTEL": 0,
                 "PLIVO": 0,
+                "VOBIZ": 0,
             },
         }
 
@@ -641,12 +642,13 @@ class ScoreMonitor:
                     }
                 ]
 
-                # Section 2: Provider split (Twilio vs Exotel vs Plivo)
+                # Section 2: Provider split (Twilio vs Exotel vs Plivo vs Vobiz)
                 provider_split = call_stats["provider_split"]
                 provider_text = (
                     f"• Twilio: {provider_split.get('TWILIO', 0)}\n"
                     f"• Exotel: {provider_split.get('EXOTEL', 0)}\n"
-                    f"• Plivo: {provider_split.get('PLIVO', 0)}"
+                    f"• Plivo: {provider_split.get('PLIVO', 0)}\n"
+                    f"• Vobiz: {provider_split.get('VOBIZ', 0)}"
                 )
                 sections.append(
                     {
