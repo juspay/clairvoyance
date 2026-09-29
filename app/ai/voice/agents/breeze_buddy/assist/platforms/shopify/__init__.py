@@ -23,8 +23,8 @@ from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.quirks import (
 CONNECTOR_NAME = "shopify"
 
 register_media_resolver(CONNECTOR_NAME, resolve_gallery)
-register_variant_normalizer(suppress_default_title_variant)
-register_description_repair(repair_flattened_description)
+register_variant_normalizer(CONNECTOR_NAME, suppress_default_title_variant)
+register_description_repair(CONNECTOR_NAME, repair_flattened_description)
 
 __all__ = [
     "CONNECTOR_NAME",

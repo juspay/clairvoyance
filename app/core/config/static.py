@@ -1026,6 +1026,13 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+# Public MCP endpoint, POST /mcp/{platform}/{store} (app/api/routers/mcp.py).
+# Off by default: our own engine answers these URLs in process, and the route
+# has no caller auth yet. Turn it on only after auth is added to the route.
+MCP_PUBLIC_ENDPOINT_ENABLED = (
+    os.environ.get("MCP_PUBLIC_ENDPOINT_ENABLED", "false").lower() == "true"
+)
+
 # Template `custom` global functions execute author-supplied python_code. An
 # in-process interpreter sandbox is NOT a security boundary, so this feature is
 # OFF by default and must be explicitly enabled per-deployment (and only when

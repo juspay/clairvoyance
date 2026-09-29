@@ -20,6 +20,7 @@ from pipecat_flows.types import FlowResult, FlowsFunctionSchema
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline import (
     apply_result_pipeline_json_str,
 )
+from app.ai.voice.agents.breeze_buddy.mcp import in_process
 from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_tools
 
 # gate_call wraps gated MCP tool handlers with the HITL approval gate (voice).
@@ -235,8 +236,13 @@ def _create_direct_http_tool_handler(
     response_transforms: Optional[List[ResponseTransform]] = None,
     ui_hint: Optional[ToolUiHint] = None,
     default_args: Optional[Dict[str, Any]] = None,
+    transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> Any:
     """Direct JSON-RPC HTTP poster — bypasses pipecat MCPClient entirely.
+
+    ``transport``: set for a URL this process serves itself (our own MCP
+    endpoint, ``mcp/in_process.py``). The request is then answered in
+    process instead of over the network, and read like any HTTP answer.
 
     Used when the upstream rejects the standard MCP handshake (initialize +
     tools/list) but accepts standalone `tools/call` POSTs. Shopify UCP is
@@ -274,7 +280,9 @@ def _create_direct_http_tool_handler(
             server_params.timeout.total_seconds() if server_params.timeout else 30.0
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout_s) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout_s, transport=transport
+            ) as client:
                 resp = await client.post(server_params.url, json=body, headers=headers)
         except Exception as e:
             logger.warning(f"[BUDDY_MCP] direct {tool_name!r} transport failed: {e}")
@@ -620,6 +628,7 @@ async def _load_server_tools(
             )
             return []
         functions: List[FlowsFunctionSchema] = []
+        transport = in_process.transport(server.url)
         for schema in server.tool_schemas:
             tool_name = schema["name"]
             if tool_name in existing_names and server.name:
@@ -642,6 +651,7 @@ async def _load_server_tools(
                     response_transforms=tool_transforms,
                     ui_hint=tool_ui_hint,
                     default_args=server.default_args,
+                    transport=transport,
                 ),
                 bot_instance,
                 tool_name,
@@ -835,6 +845,7 @@ async def get_mcp_global_functions_cached(
                 )
                 continue
             existing_names = {f.name for f in all_functions}
+            transport = in_process.transport(server.url)
             for schema in server.tool_schemas:
                 tool_name = schema["name"]
                 if tool_name in existing_names and server.name:
@@ -862,6 +873,7 @@ async def get_mcp_global_functions_cached(
                             response_transforms=tool_transforms,
                             ui_hint=tool_ui_hint,
                             default_args=server.default_args,
+                            transport=transport,
                         ),
                     )
                 )
