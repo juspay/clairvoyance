@@ -6,13 +6,22 @@ audio I/O, sample rates, and optional audio filters/mixers.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from fastapi import WebSocket
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
+from pipecat.runner.utils import _create_telephony_transport
+from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.daily.transport import DailyParams
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
+from pipecat.transports.websocket.fastapi import (
+    FastAPIWebsocketParams,
+    FastAPIWebsocketTransport,
+)
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.serializer import (
+    VobizFrameSerializer,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import (
     ConfigurationModel,
     NoiseFilterModel,
@@ -30,6 +39,7 @@ from app.core.logger import logger
 # Constants
 TRANSPORT_TYPE_DAILY = "daily"
 TRANSPORT_TYPE_TELEPHONY = "telephony"
+TRANSPORT_TYPE_VOBIZ = "vobiz"
 
 
 def _aic_model_path(model: NoiseFilterModel, transport_type: str) -> Path:
@@ -246,4 +256,44 @@ def get_transport_params(
                 configurations, TRANSPORT_TYPE_TELEPHONY
             ),
         ),
+        "vobiz": lambda: FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_mixer=telephony_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
+        ),
     }
+
+
+async def create_telephony_transport(
+    websocket: WebSocket,
+    params: Any,
+    transport_type: str,
+    call_data: dict,
+) -> BaseTransport:
+    """Build the telephony transport for an already-parsed call.
+
+    pipecat's factory knows twilio/telnyx/plivo/exotel. A Vobiz stream opens
+    with a Plivo-shaped start event, so pipecat detects it as "plivo" and
+    would hang up through api.plivo.com with PLIVO_* keys. The agent relabels
+    those calls "vobiz" from the websocket path, and they get
+    VobizFrameSerializer here instead. Used by the first build and by the
+    agent-to-agent rebuild, so both stay on the same serializer.
+    """
+    if transport_type != TRANSPORT_TYPE_VOBIZ:
+        return await _create_telephony_transport(
+            websocket, params, transport_type, call_data
+        )
+
+    params.add_wav_header = False
+    params.serializer = VobizFrameSerializer(
+        stream_id=call_data["stream_id"],
+        call_id=call_data["call_id"],
+        auth_id=static.VOBIZ_AUTH_ID,
+        auth_token=static.VOBIZ_AUTH_TOKEN,
+    )
+    return FastAPIWebsocketTransport(websocket=websocket, params=params)

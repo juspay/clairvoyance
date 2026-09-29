@@ -547,9 +547,9 @@ async def prepare_initial_greeting_payload(
         logger.info(f"Prepared initial greeting audio from source: {greeting_source}")
 
         # Convert audio format based on provider
-        # Twilio and Plivo expect mulaw, Exotel expects raw PCM (16-bit, 8kHz, mono)
-        if provider_str in ("twilio", "plivo"):
-            # mulaw_data is already in correct format for Twilio and Plivo
+        # Twilio, Plivo and Vobiz expect mulaw, Exotel expects raw PCM (16-bit, 8kHz, mono)
+        if provider_str in ("twilio", "plivo", "vobiz"):
+            # mulaw_data is already in correct format for Twilio, Plivo and Vobiz
             audio_to_send = mulaw_data
             logger.info(f"Audio prepared as mulaw for {provider_str.capitalize()}")
         else:
