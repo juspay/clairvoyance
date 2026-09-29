@@ -7,7 +7,7 @@ handler shapes into the response (mirrors the voice analytics accessor).
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
-from app.database.queries import run_parameterized_query
+from app.database.queries import run_reader_query
 from app.database.queries.breeze_buddy.chat_analytics import (
     get_chat_analytics_summary_query,
     get_chat_analytics_trends_query,
@@ -22,7 +22,7 @@ async def get_chat_summary_from_db(
     agent when ``group_by='template'``."""
     query, values = get_chat_analytics_summary_query(filters, group_by)
     try:
-        rows = await run_parameterized_query(query, values)
+        rows = await run_reader_query(query, values)
         return [dict(row) for row in rows] if rows else []
     except Exception as e:
         logger.error(f"Error fetching chat analytics summary: {e}", exc_info=True)
@@ -35,7 +35,7 @@ async def get_chat_trends_from_db(
     """Time-bucketed chats-started series."""
     query, values = get_chat_analytics_trends_query(filters, time_granularity)
     try:
-        rows = await run_parameterized_query(query, values)
+        rows = await run_reader_query(query, values)
         return [dict(row) for row in rows] if rows else []
     except Exception as e:
         logger.error(f"Error fetching chat analytics trends: {e}", exc_info=True)
@@ -48,7 +48,7 @@ async def get_chats_by_hour_from_db(filters: Dict[str, Any]) -> Dict[str, int]:
     ``get_calls_by_hour_from_db``)."""
     query, values = get_chats_by_hour_query(filters)
     try:
-        rows = await run_parameterized_query(query, values)
+        rows = await run_reader_query(query, values)
         hours: Dict[str, int] = {str(h): 0 for h in range(24)}
         for row in rows or []:
             hour = row["hour"]

@@ -6,8 +6,10 @@ Contract under test (see docs for the dual-pool design):
   exactly like ``run_parameterized_query``.
 - When a reader pool exists and is healthy, the query runs on the reader
   and the writer pool is untouched.
-- When the reader fails at request time, the query is retried once on the
-  writer and the writer's result is returned.
+- When the reader fails at request time, the error is raised and the writer
+  is never touched -- unless the caller passes
+  ``retry_with_writer_if_failed=True``, in which case the query is retried
+  once on the writer and the writer's result is returned.
 - ``init_db_pool`` creates the reader pool only when POSTGRES_READER_HOST
   is set, reusing the writer's per-field values for unset reader vars and
   the same min/max sizes; a reader creation failure must not take the pod
@@ -126,13 +128,44 @@ async def test_run_reader_query_uses_reader_when_healthy(monkeypatch, writer_poo
     assert writer_pool.conn.fetch_calls == []
 
 
-async def test_run_reader_query_falls_back_to_writer_on_reader_failure(
+async def test_reader_failure_raises_and_spares_the_writer_by_default(
+    monkeypatch, writer_pool
+):
+    """A query that fails on the replica must not be replayed on the primary
+    unless the caller asked for it -- that replay is the load the reader
+    exists to keep off the writer."""
+    reader_pool = FakePool(FakeConn(error=RuntimeError("replica down")))
+    monkeypatch.setattr(app_database, "reader_pool", reader_pool)
+
+    with pytest.raises(RuntimeError, match="replica down"):
+        await run_reader_query("SELECT 1", [])
+
+    assert len(reader_pool.conn.fetch_calls) == 1
+    assert writer_pool.conn.fetch_calls == []
+    assert writer_pool.acquires == 0
+
+
+async def test_hung_reader_raises_timeout_and_spares_the_writer_by_default(
+    monkeypatch, writer_pool
+):
+    """The heavy-query case: a 60s timeout on the replica must surface as a
+    TimeoutError, not become a 60s query on the primary."""
+    reader_pool = FakePool(FakeConn(error=asyncio.TimeoutError()))
+    monkeypatch.setattr(app_database, "reader_pool", reader_pool)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await run_reader_query("SELECT 1", [], timeout=60)
+
+    assert writer_pool.conn.fetch_calls == []
+
+
+async def test_run_reader_query_falls_back_to_writer_when_opted_in(
     monkeypatch, writer_pool
 ):
     reader_pool = FakePool(FakeConn(error=RuntimeError("replica down")))
     monkeypatch.setattr(app_database, "reader_pool", reader_pool)
 
-    result = await run_reader_query("SELECT 1", [])
+    result = await run_reader_query("SELECT 1", [], retry_with_writer_if_failed=True)
 
     assert result == ["writer-row"]
     assert len(reader_pool.conn.fetch_calls) == 1
@@ -147,7 +180,18 @@ async def test_run_reader_query_raises_when_writer_retry_also_fails(
     monkeypatch.setattr(app_database, "reader_pool", reader_pool)
 
     with pytest.raises(RuntimeError, match="writer down too"):
-        await run_reader_query("SELECT 1", [])
+        await run_reader_query("SELECT 1", [], retry_with_writer_if_failed=True)
+
+
+def test_writer_retry_flag_is_keyword_only():
+    """A positional fourth argument must not silently turn the retry on."""
+    import inspect
+
+    param = inspect.signature(run_reader_query).parameters[
+        "retry_with_writer_if_failed"
+    ]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is False
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +223,9 @@ async def test_fallback_path_releases_writer_connection(monkeypatch, writer_pool
     monkeypatch.setattr(app_database, "reader_pool", reader_pool)
 
     for _ in range(6):
-        result = await run_reader_query("SELECT 1", [])
+        result = await run_reader_query(
+            "SELECT 1", [], retry_with_writer_if_failed=True
+        )
         assert result == ["writer-row"]
 
     assert reader_pool.peak == 1
@@ -300,7 +346,8 @@ async def test_init_db_pool_continues_without_reader_on_failure(patch_db_env):
 
 
 # ---------------------------------------------------------------------------
-# Pilot call site: get_distinct_outcomes_from_db routes through run_reader_query
+# The analytics accessor is reader-only: every query goes through
+# run_reader_query, and the writer helper is not even importable from it.
 # ---------------------------------------------------------------------------
 
 
@@ -308,15 +355,76 @@ async def test_get_distinct_outcomes_uses_reader_query(monkeypatch):
     from app.database.accessor.breeze_buddy.analytics import analytics as analytics_mod
 
     reader_mock = AsyncMock(return_value=[{"outcome": "INTERESTED"}])
-    writer_mock = AsyncMock(return_value=[{"outcome": "SHOULD_NOT_APPEAR"}])
     monkeypatch.setattr(analytics_mod, "run_reader_query", reader_mock)
-    monkeypatch.setattr(analytics_mod, "run_parameterized_query", writer_mock)
 
     result = await analytics_mod.get_distinct_outcomes_from_db({})
 
     assert result == ["INTERESTED"]
     reader_mock.assert_awaited_once()
+
+
+def test_analytics_accessors_never_use_the_writer_helper():
+    """A new analytics query added with run_parameterized_query would put a
+    dashboard read back on the primary; fail the moment one appears."""
+    from app.database.accessor.breeze_buddy import chat_analytics
+    from app.database.accessor.breeze_buddy.analytics import (
+        analytics as analytics_mod,
+        evaluation_result,
+    )
+
+    for module in (analytics_mod, chat_analytics, evaluation_result):
+        assert not hasattr(module, "run_parameterized_query"), module.__name__
+
+
+async def test_chat_session_list_and_count_read_from_the_reader(monkeypatch):
+    """The conversation-log rail is a dashboard read; the rest of the
+    chat_session accessor serves live chat and stays on the writer."""
+    from app.database.accessor.breeze_buddy import chat_session
+
+    reader_mock = AsyncMock(side_effect=[[], [{"total": 7}]])
+    writer_mock = AsyncMock()
+    monkeypatch.setattr(chat_session, "run_reader_query", reader_mock)
+    monkeypatch.setattr(chat_session, "run_parameterized_query", writer_mock)
+
+    assert await chat_session.list_chat_sessions({}, limit=20, offset=0) == []
+    assert await chat_session.count_chat_sessions({}) == 7
+
     writer_mock.assert_not_awaited()
+    list_call, count_call = reader_mock.await_args_list
+    # Defaults only: the 25s reader timeout, and no writer retry.
+    assert list_call.kwargs == {}
+    assert count_call.kwargs == {}
+
+
+def test_dashboard_reader_calls_use_the_defaults_only():
+    """Dashboard reads pass only (query, values), so they take the defaults:
+    POSTGRES_READER_TIMEOUT_SECS (sized under loom's 30s abort) and no writer
+    retry. A per-call timeout would split the one knob; a per-call retry
+    would send a failed dashboard query onto the primary."""
+    import ast
+    import inspect
+
+    from app.database.accessor.breeze_buddy import chat_analytics, chat_session
+    from app.database.accessor.breeze_buddy.analytics import (
+        analytics as analytics_mod,
+        evaluation_result,
+    )
+
+    offenders = []
+    calls = 0
+    for module in (analytics_mod, chat_analytics, evaluation_result, chat_session):
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "run_reader_query"
+            ):
+                calls += 1
+                if len(node.args) != 2 or node.keywords:
+                    offenders.append(f"{module.__name__}:{node.lineno}")
+
+    assert calls > 0
+    assert offenders == []
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +471,7 @@ async def test_hung_reader_times_out_and_falls_back_to_writer(monkeypatch, write
     reader = FakePool(FakeConn(error=asyncio.TimeoutError()))
     monkeypatch.setattr(app_database, "reader_pool", reader)
 
-    result = await run_reader_query("SELECT 1", [])
+    result = await run_reader_query("SELECT 1", [], retry_with_writer_if_failed=True)
 
     assert result == writer_pool.conn.rows
     assert writer_pool.conn.fetch_calls  # writer actually served it
@@ -379,7 +487,7 @@ async def test_writer_fallback_never_inherits_the_reader_default(
     monkeypatch.setattr(app_database, "reader_pool", reader)
     monkeypatch.setattr(queries, "POSTGRES_READER_TIMEOUT_SECS", 10.0)
 
-    await run_reader_query("SELECT 1", [])
+    await run_reader_query("SELECT 1", [], retry_with_writer_if_failed=True)
 
     assert writer_pool.conn.fetch_timeouts == [None]
 

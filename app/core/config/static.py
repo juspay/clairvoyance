@@ -301,13 +301,19 @@ POSTGRES_READER_HOST = os.getenv("POSTGRES_READER_HOST", "")
 POSTGRES_READER_PORT = os.getenv("POSTGRES_READER_PORT", "")
 POSTGRES_READER_DB = os.getenv("POSTGRES_READER_DB", "")
 
-# Statement ceiling for reader queries (seconds). The writer fallback in
-# run_reader_query can only fire on an EXCEPTION -- a replica that accepts
+# Statement ceiling for reader queries (seconds). A replica that accepts
 # the connection and then stops responding (lock contention, a runaway
-# query, a black-holed network) would otherwise hang the request forever
-# and never fall back. This bound is what turns a hang into an error the
-# fallback can catch. Callers may pass their own; 0 disables the default.
-POSTGRES_READER_TIMEOUT_SECS = float(os.getenv("POSTGRES_READER_TIMEOUT_SECS", "10"))
+# query, a black-holed network) would otherwise hang the request forever.
+# This bound turns a hang into an error: raised to the caller by default,
+# or retried on the writer when the caller opts in with
+# retry_with_writer_if_failed=True. Callers may pass their own; 0 disables
+# the default.
+#
+# 25s: every reader today is a dashboard read, and loom aborts a request at
+# 30s (loom src/lib/api/config.ts). Heavy analytics measured up to ~27s on
+# prod, so 10s cancelled real answers; above ~25s the browser has already
+# left, so the replica would work for nobody.
+POSTGRES_READER_TIMEOUT_SECS = float(os.getenv("POSTGRES_READER_TIMEOUT_SECS", "25"))
 
 # Connection pool settings
 POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))

@@ -597,7 +597,7 @@ async def test_topic_dashboard_aggregates_rows_after_fetch(
     ]
     monkeypatch.setattr(
         evaluation_result,
-        "run_parameterized_query",
+        "run_reader_query",
         AsyncMock(return_value=rows),
     )
 
@@ -645,7 +645,7 @@ async def test_topic_dashboard_limit_picks_named_topics(
     ]
     monkeypatch.setattr(
         evaluation_result,
-        "run_parameterized_query",
+        "run_reader_query",
         AsyncMock(return_value=rows),
     )
     admin = UserInfo(id="admin", username="admin", role=UserRole.ADMIN)
