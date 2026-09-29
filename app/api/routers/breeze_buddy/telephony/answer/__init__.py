@@ -2,7 +2,7 @@
 Unified answer endpoint for all telephony providers.
 
 This module provides the /{provider}/answer endpoint that handles both
-inbound and outbound calls for any supported provider (Exotel, Plivo).
+inbound and outbound calls for any supported provider (Exotel, Plivo, Vobiz).
 
 Flow: Provider webhook -> resolve templates -> return provider-specific response
 
@@ -11,7 +11,7 @@ Endpoints:
 
 Authentication:
 - Exotel: Requires `auth_token` query parameter matching EXOTEL_WEBHOOK_AUTH_TOKEN env var
-- Plivo: No authentication (Plivo validates via answer_url configuration)
+- Plivo / Vobiz: No authentication (parity; signature checks are a follow-up)
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -22,7 +22,7 @@ from .handlers import handle_provider_answer
 
 router = APIRouter()
 
-SUPPORTED_ANSWER_PROVIDERS = {"exotel", "plivo"}
+SUPPORTED_ANSWER_PROVIDERS = {"exotel", "plivo", "vobiz"}
 
 
 @router.api_route("/{provider}/answer", methods=["GET", "POST"])
@@ -34,9 +34,10 @@ async def provider_answer(request: Request, provider: str):
     Resolves templates and returns a provider-appropriate response:
     - Exotel: JSON ``{"url": "wss://..."}``
     - Plivo: XML ``<Stream>`` or ``<GetInput>``
+    - Vobiz: XML ``<Stream>`` (outbound only for now)
 
     Path Parameters:
-        provider: Telephony provider name ("exotel" or "plivo")
+        provider: Telephony provider name ("exotel", "plivo" or "vobiz")
 
     Query Parameters (Exotel):
         auth_token: Required authentication token
@@ -44,7 +45,7 @@ async def provider_answer(request: Request, provider: str):
         CallFrom/From: Caller's phone number
         CallTo/To: Called number
 
-    Form Data (Plivo):
+    Form Data (Plivo / Vobiz):
         CallUUID: Unique call identifier
         From: Caller's phone number
         To: Called number

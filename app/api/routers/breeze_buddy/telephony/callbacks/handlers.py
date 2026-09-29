@@ -10,8 +10,10 @@ Handlers:
 """
 
 import json
+from typing import Optional
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
+from starlette.datastructures import FormData
 from starlette.responses import HTMLResponse
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
@@ -41,6 +43,33 @@ from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.database.accessor import get_lead_by_call_id
+
+# Vobiz's make-call docs say the hangup callback's CallStatus is "always
+# completed", while its call-status page lists busy / no-answer / timeout.
+# The retry path keys on CallStatus, so a "completed" carrying an explicit
+# not-answered hangup code is read as that failure. Codes from
+# https://www.vobiz.ai/docs/concepts/hangup-causes (3000 No Answer, 3010 Busy
+# Line, 3020 Rejected, 6010 Ring Timeout Reached).
+_VOBIZ_UNANSWERED_HANGUP_CODES = {
+    "3000": "no-answer",
+    "6010": "no-answer",
+    "3010": "busy",
+    "3020": "busy",
+}
+
+
+def _vobiz_call_status(form: FormData) -> Optional[str]:
+    """Vobiz CallStatus, with "completed" corrected by an explicit not-answered code."""
+    # The make-call page names the key CallStatus; the callbacks page's
+    # hangup example names it Status. Read both.
+    status = form.get("CallStatus") or form.get("Status")
+    if status is None:
+        return None
+    status = str(status)
+    if status.lower() == "completed":
+        code = str(form.get("HangupCauseCode") or "")
+        return _VOBIZ_UNANSWERED_HANGUP_CODES.get(code, status)
+    return status
 
 
 async def handle_callback_details_get(
@@ -257,7 +286,7 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     Handle POST callback for call status updates.
 
     This endpoint receives call status updates from telephony providers
-    (Twilio, Exotel, Plivo). When a call fails (no-answer, failed, busy),
+    (Twilio, Exotel, Plivo, Vobiz). When a call fails (no-answer, failed, busy),
     it triggers retry logic.
 
     Also serves as a backup release mechanism — when a call ends, it notifies
@@ -268,10 +297,12 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     - Twilio: Uses "CallStatus" field
     - Exotel: Uses "Status" field
     - Plivo: Uses "CallStatus" field, "CallUUID" for call ID
+    - Vobiz: "CallStatus" (+ HangupCauseCode fallback), "CallUUID" for call ID
 
     Args:
         request: FastAPI Request object with form data
-        provider: Telephony provider name (e.g., "twilio", "exotel", "plivo")
+        provider: Telephony provider name (e.g., "twilio", "exotel", "plivo",
+            "vobiz")
 
     Returns:
         200 OK response
@@ -289,6 +320,9 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
     elif provider.lower() == "plivo":
         call_sid = form.get("CallUUID")
         call_status = form.get("CallStatus")
+    elif provider.lower() == "vobiz":
+        call_sid = form.get("CallUUID")
+        call_status = _vobiz_call_status(form)
 
     # Post-connect half of the trace: the hangup/terminal webhook. Direction is
     # included because inbound orphan webhooks and outbound duplicate-call

@@ -5,7 +5,7 @@ This module provides:
 1. resolve_call_templates() - shared logic for resolving templates for both
    inbound and outbound calls, used by both Exotel and Plivo handlers.
 2. handle_provider_answer() - unified handler for answering calls from any provider
-   (Exotel returns JSON, Plivo returns XML).
+   (Exotel returns JSON, Plivo / Vobiz return XML).
 
 Flow:
 
@@ -311,12 +311,31 @@ def _build_websocket_url(
 
 
 # ---------------------------------------------------------------------------
-# Plivo XML helper
+# Stream XML helper (Plivo, Vobiz)
 # ---------------------------------------------------------------------------
 
 
-async def _build_plivo_stream_xml(ws_url: str, call_id: str) -> str:
-    """Build Plivo XML response: session recording, then the WebSocket stream."""
+async def _build_stream_xml(ws_url: str, call_id: str, provider: str) -> str:
+    """Build Plivo-dialect XML (Plivo, Vobiz): session recording, then the
+    WebSocket stream.
+
+    Vobiz takes the same <Stream> minus noise cancellation (not supported
+    there). Its stream URL is emitted without surrounding whitespace, since
+    Vobiz reads the element text as the URL.
+    """
+    # Escape special XML characters in URL (primarily & -> &amp;)
+    # Using html_escape with quote=False to avoid escaping quotes in the URL
+    ws_url_escaped = html_escape(ws_url, quote=False)
+
+    if provider == "vobiz":
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            '<Stream bidirectional="true" keepCallAlive="true" '
+            f'contentType="audio/x-mulaw;rate=8000">{ws_url_escaped}</Stream>'
+            "</Response>"
+        )
+
     noise_cancellation_enabled = await BB_NOISE_CANCELLATION_ENABLED()
     noise_cancellation_level = await BB_NOISE_CANCELLATION_LEVEL()
     noise_cancellation_attr = (
@@ -332,10 +351,6 @@ async def _build_plivo_stream_xml(ws_url: str, call_id: str) -> str:
             f'noiseCancellation="{str(noise_cancellation_enabled).lower()}" '
             f'noiseCancellationLevel="{noise_cancellation_level}"'
         )
-
-    # Escape special XML characters in URL (primarily & -> &amp;)
-    # Using html_escape with quote=False to avoid escaping quotes in the URL
-    ws_url_escaped = html_escape(ws_url, quote=False)
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -393,9 +408,9 @@ def _build_json_response(ws_url: str) -> Response:
     )
 
 
-async def _build_xml_response(ws_url: str, call_id: str) -> HTMLResponse:
-    """Build Plivo XML response."""
-    xml = await _build_plivo_stream_xml(ws_url, call_id)
+async def _build_xml_response(ws_url: str, call_id: str, provider: str) -> HTMLResponse:
+    """Build Plivo-dialect XML response (Plivo, Vobiz)."""
+    xml = await _build_stream_xml(ws_url, call_id, provider)
     return HTMLResponse(content=xml, media_type="application/xml")
 
 
@@ -544,7 +559,7 @@ async def _build_provider_response(
     async def make_response(ws_url: str) -> Response:
         if provider == "exotel":
             return _build_json_response(ws_url)
-        return await _build_xml_response(ws_url, call_id)
+        return await _build_xml_response(ws_url, call_id, provider)
 
     # ── Pod allocation (1-pod-1-call isolation) ──────────────────────────
     # Attempt to allocate a dedicated pod via Smart Router. This runs for
@@ -655,7 +670,7 @@ async def _build_provider_response(
 
 async def handle_provider_answer(request: Request, provider: str) -> Response:
     """
-    Unified answer handler for all telephony providers (Exotel, Plivo).
+    Unified answer handler for all telephony providers (Exotel, Plivo, Vobiz).
 
     Thin timing wrapper: ``answer_total`` is the number the telephony provider
     actually experiences, i.e. how long it waited for our XML/JSON. Plivo's
@@ -664,7 +679,7 @@ async def handle_provider_answer(request: Request, provider: str) -> Response:
 
     Returns:
         - Exotel: JSON ``{"url": "wss://..."}``
-        - Plivo:  XML ``<Stream>``
+        - Plivo / Vobiz: XML ``<Stream>``
     """
     with timed_phase("answer_total", provider=provider):
         return await _handle_provider_answer(request, provider)
@@ -836,11 +851,11 @@ async def _gate_inbound_channel(
 
 async def _handle_provider_answer(request: Request, provider: str) -> Response:
     """
-    Unified answer handler for all telephony providers (Exotel, Plivo).
+    Unified answer handler for all telephony providers (Exotel, Plivo, Vobiz).
 
     Returns:
         - Exotel: JSON ``{"url": "wss://..."}``
-        - Plivo:  XML ``<Stream>``
+        - Plivo / Vobiz: XML ``<Stream>``
     """
     tag = f"Answer:{provider}"
 
@@ -887,6 +902,19 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
             else "Sorry, this number is not configured to receive calls. Goodbye."
         )
         return _error_response(provider, error_msg, result.get("error_status", 500))
+
+    # Vobiz inbound (channel gate, single-template routing) is not wired yet:
+    # refuse the call rather than half-handle it.
+    if provider == "vobiz" and not result.get("is_outbound"):
+        logger.error(
+            f"[{tag}] Inbound Vobiz call {call_id} to {to_number} refused: "
+            "Vobiz inbound is not enabled yet"
+        )
+        return _error_response(
+            provider,
+            "Sorry, this number is not configured to receive calls. Goodbye.",
+            404,
+        )
 
     # ── Inbound policy enforcement ────────────────────────────────────────
     if not result.get("is_outbound"):
