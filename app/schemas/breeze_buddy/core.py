@@ -30,6 +30,7 @@ class CallProvider(str, Enum):
     TWILIO = "TWILIO"
     EXOTEL = "EXOTEL"
     PLIVO = "PLIVO"
+    VOBIZ = "VOBIZ"
 
 
 class LeadCallStatus(str, Enum):

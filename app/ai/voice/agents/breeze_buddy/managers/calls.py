@@ -521,7 +521,7 @@ async def _acquire_number(number: TelephonyNumber) -> bool:
     elif number.provider == CallProvider.EXOTEL:
         result = await increment_telephony_number_channels(number.id)
         return result is not None
-    elif number.provider == CallProvider.PLIVO:
+    elif number.provider in (CallProvider.PLIVO, CallProvider.VOBIZ):
         result = await increment_telephony_number_channels(number.id)
         return result is not None
     return False
@@ -536,7 +536,7 @@ async def _release_number(number_id: str, provider: CallProvider):
         await update_telephony_number_status(number_id, TelephonyNumberStatus.AVAILABLE)
     elif provider == CallProvider.EXOTEL:
         await decrement_telephony_number_channels(number_id)
-    elif provider == CallProvider.PLIVO:
+    elif provider in (CallProvider.PLIVO, CallProvider.VOBIZ):
         await decrement_telephony_number_channels(number_id)
 
 
