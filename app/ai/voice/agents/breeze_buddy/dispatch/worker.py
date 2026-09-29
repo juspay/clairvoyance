@@ -20,7 +20,6 @@ in-flight pick visible to the reaper.
 from __future__ import annotations
 
 import asyncio
-import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, cast
@@ -36,6 +35,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     acquire_channel_token,
+    capacity_defer_seconds,
     release_channel_token,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
@@ -73,7 +73,6 @@ from app.ai.voice.agents.breeze_buddy.utils.playground import (
 from app.core.concurrency import spawn_background_task
 from app.core.config import dynamic as dyn_cfg
 from app.core.config.static import (
-    BB_CHANNEL_WAIT_BACKOFF_MAX_S,
     BB_WORKER_BLPOP_TIMEOUT_S,
     BB_WORKER_COUNT,
     BB_WORKER_HEARTBEAT_REFRESH_S,
@@ -502,25 +501,29 @@ class Worker:
             # Channel token gate (Redis). Held until call-end webhook releases.
             token = await acquire_channel_token(number.id)
             if token is None:
-                # No capacity right now — re-schedule with small jitter.
+                # No capacity right now — re-schedule (see
+                # capacity_defer_seconds for the delay).
                 lock_released = await self._defer_and_release(
-                    locked.id, random.randint(1, BB_CHANNEL_WAIT_BACKOFF_MAX_S)
+                    locked.id, await capacity_defer_seconds(number.id, locked.id)
                 )
                 return
 
             # DB-side bookkeeping: ``telephony_number.status`` (Twilio) or
-            # ``channels`` (Exotel/Plivo) is the operator-visible view used by
-            # admin UI, analytics, and the channel-token reconciler. The Redis
-            # token is the actual capacity gate; the DB write is eventually
-            # consistent state.
+            # ``channels`` (Exotel/Plivo). The ``+1 WHERE channels < max`` is
+            # atomic, so a refusal means the token matched no free line.
             acquired_db = await _acquire_number(number)
             if not acquired_db:
+                # Drop the token rather than push it back: pushed back, the
+                # next worker pops the same stale token and is refused
+                # again. The line returns via the call-end release, and the
+                # reconciler tops the list up if the token was real.
                 logger.warning(
                     f"Worker {self._uuid}: DB capacity denied for number "
-                    f"{number.id} despite Redis token. Releasing token, deferring."
+                    f"{number.id} despite Redis token. Dropping token, deferring."
                 )
-                await release_channel_token(number.id, token)
-                lock_released = await self._defer_and_release(locked.id, 5)
+                lock_released = await self._defer_and_release(
+                    locked.id, await capacity_defer_seconds(number.id, locked.id)
+                )
                 return
 
             call_provider = get_voice_provider(

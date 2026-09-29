@@ -9,7 +9,7 @@ accessor's contract).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import pytest
 
@@ -25,6 +25,7 @@ class _FakeNumber:
     id: str
     maximum_channels: int
     status: str = "AVAILABLE"  # reconciler filters out DISABLED
+    channels: Optional[int] = 0  # Postgres lines-in-use counter
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,130 @@ async def test_reconcile_channels_accounts_for_in_flight(fake_redis, monkeypatch
 
     monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
     monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
+
+    await rc.reconcile_channel_tokens()
+
+    assert len(fake_redis.client.lists[channel_key("num-A")]) == 3
+
+
+# ---------------------------------------------------------------------------
+# reconcile_channel_tokens — the band rule
+#
+# Two Postgres counts say "line in use": ``channels`` (+1 right before the
+# dial) and PROCESSING rows (set once the provider returns a call id). The
+# higher one wins in both directions.
+# ---------------------------------------------------------------------------
+
+
+def _wire(monkeypatch, numbers, in_flight):
+    async def _fake_numbers():
+        return numbers
+
+    async def _fake_in_flight():
+        return in_flight
+
+    monkeypatch.setattr(rc, "get_all_telephony_numbers", _fake_numbers)
+    monkeypatch.setattr(rc, "count_processing_by_telephony_number", _fake_in_flight)
+
+
+async def test_reconcile_channels_no_phantom_for_calls_still_dialling(
+    fake_redis, monkeypatch
+):
+    """5 lines, all taken (channels=5), but only 3 rows are PROCESSING yet —
+    2 calls are between ``+1`` and the CAS update. max - PROCESSING would
+    mint 2 tokens here; the reconciler must mint none."""
+    fake_redis.client.lists[channel_key("num-A")] = []
+    _wire(
+        monkeypatch,
+        [_FakeNumber(id="num-A", maximum_channels=5, channels=5)],
+        {"num-A": 3},
+    )
+
+    await rc.reconcile_channel_tokens()
+
+    assert fake_redis.client.lists[channel_key("num-A")] == []
+
+
+async def test_reconcile_channels_trims_token_from_duplicate_release(
+    fake_redis, monkeypatch
+):
+    """2-line number, calls A and B live. A's end webhook is released twice:
+    ``channels`` 2 -> 0 and two tokens pushed, while only one line is free.
+    PROCESSING (B) is still right, so the extra token must be trimmed —
+    otherwise the next two leads both pass the ``channels < max`` gate and
+    three calls run on two lines."""
+    fake_redis.client.lists[channel_key("num-A")] = ["t1", "t2"]
+    _wire(
+        monkeypatch,
+        [_FakeNumber(id="num-A", maximum_channels=2, channels=0)],
+        {"num-A": 1},
+    )
+
+    await rc.reconcile_channel_tokens()
+
+    assert len(fake_redis.client.lists[channel_key("num-A")]) == 1
+
+
+async def test_reconcile_channels_trims_to_leaked_channels(fake_redis, monkeypatch):
+    """5 tokens, nothing PROCESSING, but Postgres says 2 lines in use (a
+    leaked ``+1``). Trim to 3 — the extra tokens would only be refused."""
+    fake_redis.client.lists[channel_key("num-A")] = [f"t{i}" for i in range(5)]
+    _wire(
+        monkeypatch,
+        [_FakeNumber(id="num-A", maximum_channels=5, channels=2)],
+        {"num-A": 0},
+    )
+
+    await rc.reconcile_channel_tokens()
+
+    assert len(fake_redis.client.lists[channel_key("num-A")]) == 3
+
+
+async def test_reconcile_channels_call_end_window_is_restored_next_tick(
+    fake_redis, monkeypatch
+):
+    """At call end ``channels -1`` and the token push run a moment before the
+    row turns FINISHED. A tick landing in that gap trims the token; the next
+    tick, with both counts caught up, puts it back."""
+    fake_redis.client.lists[channel_key("num-A")] = ["t1"]
+    numbers = [_FakeNumber(id="num-A", maximum_channels=5, channels=4)]
+    in_flight = {"num-A": 5}
+    _wire(monkeypatch, numbers, in_flight)
+
+    await rc.reconcile_channel_tokens()
+    assert len(fake_redis.client.lists.get(channel_key("num-A"), [])) == 0
+
+    in_flight["num-A"] = 4
+    await rc.reconcile_channel_tokens()
+    assert len(fake_redis.client.lists[channel_key("num-A")]) == 1
+
+
+async def test_reconcile_channels_initialises_from_channels_too(
+    fake_redis, monkeypatch
+):
+    """Cold start while 4 of 5 lines are mid-dial: init with 1 token, not 5."""
+    _wire(
+        monkeypatch,
+        [_FakeNumber(id="num-A", maximum_channels=5, channels=4)],
+        {},
+    )
+
+    await rc.reconcile_channel_tokens()
+
+    assert len(fake_redis.client.lists[channel_key("num-A")]) == 1
+
+
+async def test_reconcile_channels_null_channels_behaves_as_before(
+    fake_redis, monkeypatch
+):
+    """Backward compatibility: a row whose ``channels`` is NULL is treated
+    as 0, so the result equals the old max - PROCESSING rule."""
+    fake_redis.client.lists[channel_key("num-A")] = []
+    _wire(
+        monkeypatch,
+        [_FakeNumber(id="num-A", maximum_channels=5, channels=None)],
+        {"num-A": 2},
+    )
 
     await rc.reconcile_channel_tokens()
 

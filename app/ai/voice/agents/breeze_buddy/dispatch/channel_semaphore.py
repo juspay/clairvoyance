@@ -9,15 +9,27 @@ irrelevant — only the count matters.
 This replaces the DB-counter ``increment_telephony_number_channels`` on the
 hot path. The DB counter is retained as the eventually-consistent view used
 by ``reconcile_channel_tokens`` to detect leaks.
+
+``capacity_defer_seconds`` returns how long a lead is deferred when no token
+is available.
 """
 
 from __future__ import annotations
 
+import random
 import secrets
+import time
 from typing import Any, Optional, cast
 
-from app.ai.voice.agents.breeze_buddy.dispatch.keys import channel_key
-from app.core.config.static import BB_CHANNEL_BLPOP_TIMEOUT_S
+from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
+    capacity_wait_key,
+    channel_key,
+)
+from app.core.config import dynamic as dyn_cfg
+from app.core.config.static import (
+    BB_CHANNEL_BLPOP_TIMEOUT_S,
+    BB_CHANNEL_WAIT_BACKOFF_MAX_S,
+)
 from app.core.logger import logger
 from app.services.redis import get_redis_service
 
@@ -163,3 +175,51 @@ async def channel_exists(telephony_number_id: str) -> bool:
     except Exception as e:  # noqa: BLE001
         logger.error(f"channel_exists failed for {telephony_number_id}: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Capacity-wait defer
+# ---------------------------------------------------------------------------
+#
+# Distinct leads waiting on a number (per-minute HyperLogLog, this minute +
+# last) below BB_CAPACITY_WAIT_PILE_THRESHOLD -> random 1..BB_CHANNEL_WAIT_BACKOFF_MAX_S,
+# otherwise BB_CAPACITY_WAIT_PILE_DEFER_S. Distinct leads, not defers: a defer
+# count scales with the delay itself. Redis/config errors fall back to the
+# short delay.
+
+# Two minute buckets are read; a key must outlive the following one.
+_CAPACITY_WAIT_BUCKET_TTL_S = 180
+
+
+def _short_capacity_defer() -> int:
+    return random.randint(1, BB_CHANNEL_WAIT_BACKOFF_MAX_S)
+
+
+async def capacity_defer_seconds(telephony_number_id: str, lead_id: str) -> int:
+    """
+    Record that ``lead_id`` is waiting for a channel on ``telephony_number_id``
+    and return how many seconds it should be deferred.
+    """
+    try:
+        threshold = await dyn_cfg.BB_CAPACITY_WAIT_PILE_THRESHOLD()
+        long_defer = await dyn_cfg.BB_CAPACITY_WAIT_PILE_DEFER_S()
+
+        minute = int(time.time() // 60)
+        this_key = capacity_wait_key(telephony_number_id, minute)
+        last_key = capacity_wait_key(telephony_number_id, minute - 1)
+
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        await client.pfadd(this_key, lead_id)
+        await client.expire(this_key, _CAPACITY_WAIT_BUCKET_TTL_S)
+        waiting = int(await client.pfcount(this_key, last_key))
+    except Exception as e:  # noqa: BLE001 — fall back to the short defer
+        logger.warning(
+            f"capacity_defer_seconds: Redis unavailable for "
+            f"{telephony_number_id}, using short defer: {e}"
+        )
+        return _short_capacity_defer()
+
+    if waiting >= threshold:
+        return long_defer
+    return _short_capacity_defer()

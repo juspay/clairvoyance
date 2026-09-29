@@ -4,7 +4,7 @@ Promoter — moves due leads from ``bb:schedule:leads`` to ``bb:ready:leads``.
 One promoter task runs in every pod; only the leader acts (see ``leader.py``).
 Tick cadence: ``BB_PROMOTER_TICK_MS`` (default 200ms).
 
-Atomicity: the ``ZRANGEBYSCORE`` + ``ZREM`` + ``LPUSH`` move is wrapped in a
+Atomicity: the ``ZRANGEBYSCORE`` + ``ZREM`` + ``RPUSH`` move is wrapped in a
 single Lua script so a mid-loop Redis hiccup can't strip a lead from the
 schedule without also adding it to the ready list. Without Lua, every
 promoter-pod restart could orphan whichever leads were mid-loop until the
@@ -31,7 +31,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.services.redis import get_redis_service
 
-# Lua script: claim up to ARGV[2] members with score <= ARGV[1], LPUSH them
+# Lua script: claim up to ARGV[2] members with score <= ARGV[1], RPUSH them
 # to KEYS[2], return count moved. Atomic per Redis-execution semantics.
 _PROMOTE_LUA = """
 local ids = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, tonumber(ARGV[2]))
@@ -39,7 +39,7 @@ if #ids == 0 then return 0 end
 local moved = 0
 for i = 1, #ids do
   if redis.call('ZREM', KEYS[1], ids[i]) == 1 then
-    redis.call('LPUSH', KEYS[2], ids[i])
+    redis.call('RPUSH', KEYS[2], ids[i])
     moved = moved + 1
   end
 end

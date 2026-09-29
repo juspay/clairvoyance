@@ -53,6 +53,25 @@ class FakeRedisClient:
         self.lists: Dict[str, List[str]] = {}
         self.kv: Dict[str, str] = {}
         self.expirations: Dict[str, int] = {}
+        self.hlls: Dict[str, set[str]] = {}
+
+    # -- HLL ops ------------------------------------------------------------
+
+    async def pfadd(self, key: str, *elements: str) -> int:
+        s = self.hlls.setdefault(key, set())
+        before = len(s)
+        s.update(elements)
+        return int(len(s) > before)
+
+    async def pfcount(self, *keys: str) -> int:
+        union: set[str] = set()
+        for k in keys:
+            union |= self.hlls.get(k, set())
+        return len(union)
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        self.expirations[key] = seconds
+        return True
 
     # -- ZSET ops -----------------------------------------------------------
 
@@ -254,7 +273,7 @@ class FakeRedisService:
         leader-election Lua bodies by content. Tests don't care about Lua
         execution — they care about the resulting state.
         """
-        if "ZRANGEBYSCORE" in script and "ZREM" in script and "LPUSH" in script:
+        if "ZRANGEBYSCORE" in script and "ZREM" in script and "RPUSH" in script:
             schedule_key, ready_key = keys
             now_ms = int(args[0])
             batch = int(args[1])
@@ -265,7 +284,7 @@ class FakeRedisService:
             for i in ids:
                 removed = await self.client.zrem(schedule_key, i)
                 if removed == 1:
-                    await self.client.lpush(ready_key, i)
+                    await self.client.rpush(ready_key, i)
                     moved += 1
             return moved
 
@@ -447,6 +466,10 @@ class DispatchHarness:
         self.opening_line_calls: List[Any] = []
         self.cas_succeeds: bool = True
         self.get_available_returns_none: bool = False
+        # Postgres ``channels + 1 WHERE channels < maximum_channels``. False
+        # simulates the number being full in the DB while Redis still handed
+        # out a token (a phantom).
+        self.acquire_number_succeeds: bool = True
         # Captured alerts so tests can assert no-telephony-number throttled
         # alerts fired without needing a real Slack/Redis round-trip.
         self.no_telephony_number_alerts: list[dict[str, str]] = []
@@ -570,7 +593,7 @@ class DispatchHarness:
         return self.number
 
     async def _acquire_number(self, number: TelephonyNumber) -> bool:
-        return True
+        return self.acquire_number_succeeds
 
     async def _release_number(self, number_id: str, provider) -> None:
         self.released_numbers.append(number_id)
