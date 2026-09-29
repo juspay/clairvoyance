@@ -1,15 +1,22 @@
 import asyncio
+import hashlib
+import json
 import re
+import time
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from num2words import num2words
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 
+from app.core.config.static import LLM_CALL_L2_ENABLED
 from app.core.logger import logger
 from app.services.live_config.store import get_config
+from app.services.redis.client import get_redis_service
 
 
 def indian_number_to_speech(number: int | float) -> str:
@@ -332,12 +339,93 @@ LLM_CALL_TIMEOUT_SECS = 10.0
 # A rewrite is read aloud inside a sentence; anything longer is a model gone
 # off-script, not a short value.
 LLM_CALL_MAX_CHARS = 1000
-# The same (prompt, value) across runs of a campaign is one model call.
-LLM_CALL_CACHE_SIZE = 50
+# Every request setting that can change the answer; the key digests it.
+LLM_CALL_SETTINGS: Dict[str, Any] = {
+    "temperature": 0,
+    "max_completion_tokens": 200,
+    "reasoning_effort": "none",
+}
+# Distinct values a campaign carries (18,803 on flipkart, 29 Sep), with room.
+LLM_CALL_CACHE_SIZE = 50_000
+# The shared store keeps an answer a week: long enough for the next morning.
+LLM_CALL_L2_TTL_SECONDS = 7 * 24 * 3600
+_L2_PREFIX = "tfx"
+_L2_WARN_EVERY_SECONDS = 60.0
 
-_llm_call_cache: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
+# key -> the model call's Task: shared while in flight, the answer once done.
+_llm_call_cache: "OrderedDict[str, asyncio.Task[Optional[str]]]" = OrderedDict()
+# Whose call this is; blocks_for sets it from the run, every key carries it.
+_memo_merchant: ContextVar[str] = ContextVar("llm_memo_merchant", default="")
 # ONE service (one HTTP client) per event loop and key, reused by every call.
 _llm_call_service: Optional[Tuple[Any, str, OpenAILLMService]] = None
+_l2_last_warning = 0.0
+_memo_counts: Dict[str, int] = {}
+_memo_logged_at = 0.0
+
+
+@contextmanager
+def memo_merchant(merchant_id: str) -> Iterator[None]:
+    """Key every llm_call inside the block to this merchant."""
+    token = _memo_merchant.set(merchant_id or "")
+    try:
+        yield
+    finally:
+        _memo_merchant.reset(token)
+
+
+def _cache_key(prompt: str, value: str, merchant: str) -> str:
+    """<model digest>:<merchant>:llm_call:<sha256> -- sha256, never hash(),
+    so every pod computes the same key."""
+    model = [LLM_CALL_MODEL, LLM_CALL_ENDPOINT, LLM_CALL_SETTINGS]
+    namespace = hashlib.sha256(json.dumps(model, sort_keys=True).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps([prompt, value]).encode()).hexdigest()
+    return f"{namespace[:12]}:{merchant or '-'}:llm_call:{digest}"
+
+
+def _l2_warn(what: str, exc: BaseException) -> None:
+    """At most one warning a minute: a down store is otherwise silent."""
+    global _l2_last_warning
+    now = time.monotonic()
+    if now - _l2_last_warning < _L2_WARN_EVERY_SECONDS:
+        return
+    _l2_last_warning = now
+    logger.warning(
+        f"llm memo: shared store {what} failed, falling back to the model "
+        f"({type(exc).__name__}: {exc})"
+    )
+
+
+async def _l2_get(key: str) -> Optional[str]:
+    """The stored answer, or None; never raises."""
+    try:
+        redis = await get_redis_service()
+        return await redis.get(f"{_L2_PREFIX}:{key}")
+    except Exception as exc:  # noqa: BLE001 -- a memo may never fail a call
+        _l2_warn("read", exc)
+        return None
+
+
+async def _l2_put(key: str, answer: str) -> None:
+    """Store one answer; never raises. RedisService.setex is (key, value, ttl)."""
+    try:
+        redis = await get_redis_service()
+        stored = await redis.setex(
+            f"{_L2_PREFIX}:{key}", answer, LLM_CALL_L2_TTL_SECONDS
+        )
+        if not stored:
+            _l2_warn("write", RuntimeError("setex returned False"))
+    except Exception as exc:  # noqa: BLE001
+        _l2_warn("write", exc)
+
+
+def _memo_count(what: str) -> None:
+    """Count memo hits and model calls; one summary line a minute."""
+    global _memo_logged_at
+    _memo_counts[what] = _memo_counts.get(what, 0) + 1
+    now = time.monotonic()
+    if now - _memo_logged_at >= _L2_WARN_EVERY_SECONDS:
+        _memo_logged_at = now
+        logger.info(f"llm memo: {dict(sorted(_memo_counts.items()))}")
 
 
 def _llm_call_llm(api_key: str) -> OpenAILLMService:
@@ -354,10 +442,10 @@ def _llm_call_llm(api_key: str) -> OpenAILLMService:
         base_url=LLM_CALL_ENDPOINT,
         model=LLM_CALL_MODEL,
         settings=OpenAILLMService.Settings(
-            temperature=0,
-            max_completion_tokens=200,
+            temperature=LLM_CALL_SETTINGS["temperature"],
+            max_completion_tokens=LLM_CALL_SETTINGS["max_completion_tokens"],
             extra={
-                "reasoning_effort": "none",
+                "reasoning_effort": LLM_CALL_SETTINGS["reasoning_effort"],
                 "extra_body": {"prompt_cache_key": "crm-playbook-llm-call"},
             },
         ),
@@ -373,14 +461,45 @@ async def llm_call(value: Any, prompt: str) -> Any:
     line may read less polished, never go missing. Callers must await it."""
     if not prompt or value is None or not str(value).strip():
         return value
-    key = (prompt, str(value))
-    if key in _llm_call_cache:
+    key = _cache_key(prompt, str(value), _memo_merchant.get())
+    task = _llm_call_cache.get(key)
+    # A failed call (cancelled, raised or no answer) is asked again, never kept.
+    if task is None or (
+        task.done()
+        and (task.cancelled() or task.exception() is not None or task.result() is None)
+    ):
+        task = asyncio.create_task(_answer(str(value), prompt, key))
+        _llm_call_cache[key] = task
+        if len(_llm_call_cache) > LLM_CALL_CACHE_SIZE:
+            _llm_call_cache.popitem(last=False)
+    else:
         _llm_call_cache.move_to_end(key)
-        return _llm_call_cache[key]
+        _memo_count("local_hits")
+    # shield: one cancelled caller must not cancel the call others share.
+    answer = await asyncio.shield(task)
+    return value if answer is None else answer
+
+
+async def _answer(value: str, prompt: str, key: str) -> Optional[str]:
+    """The shared store, else the model; only a real answer is stored."""
+    if LLM_CALL_L2_ENABLED:
+        stored = await _l2_get(key)
+        if stored and len(stored) <= LLM_CALL_MAX_CHARS:
+            _memo_count("store_hits")
+            return stored
+    _memo_count("model_calls")
+    answer = await _llm_call_rewrite(value, prompt)
+    if answer is not None and LLM_CALL_L2_ENABLED:
+        await _l2_put(key, answer)
+    return answer
+
+
+async def _llm_call_rewrite(value: str, prompt: str) -> Optional[str]:
+    """One model call: the answer, or None on any failure."""
     api_key = await get_config(LLM_CALL_API_KEY_NAME, "", str)
     if not api_key:
         logger.warning(f"llm_call skipped: no {LLM_CALL_API_KEY_NAME}")
-        return value
+        return None
     llm = _llm_call_llm(api_key)
     # The author's prompt is the whole instruction (output rules included);
     # the value goes alone as the user message.
@@ -390,7 +509,7 @@ async def llm_call(value: Any, prompt: str) -> Any:
                 LLMContext(
                     messages=[
                         {"role": "system", "content": prompt},
-                        {"role": "user", "content": str(value)},
+                        {"role": "user", "content": value},
                     ]
                 )
             ),
@@ -398,15 +517,12 @@ async def llm_call(value: Any, prompt: str) -> Any:
         )
     except asyncio.TimeoutError:
         logger.warning(f"llm_call timed out after {LLM_CALL_TIMEOUT_SECS}s")
-        return value
+        return None
     except Exception as e:  # noqa: BLE001 — fail-open, never lose the line
         logger.warning(f"llm_call error: {type(e).__name__}: {e}")
-        return value
+        return None
     text = re.sub(r"\s+", " ", answer or "").strip().strip("\"'“”‘’`").strip()
     if not text or len(text) > LLM_CALL_MAX_CHARS:
         logger.warning("llm_call returned an empty or oversized answer")
-        return value
-    _llm_call_cache[key] = text
-    if len(_llm_call_cache) > LLM_CALL_CACHE_SIZE:
-        _llm_call_cache.popitem(last=False)
+        return None
     return text
