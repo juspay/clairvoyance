@@ -40,6 +40,7 @@ from app.schemas.breeze_buddy.core import (
     TelephonyNumber,
     TelephonyNumberStatus,
 )
+from app.schemas.breeze_buddy.outcomes import CallOutcome
 
 
 class FakeRedisClient:
@@ -465,6 +466,8 @@ class DispatchHarness:
         self.call_limits: Optional[tuple] = None
         self.call_limit_reads: List[str] = []
         self.completions: List[Dict[str, Any]] = []
+        # The call outcome facts each successful dial recorded.
+        self.dial_outcomes: List[Optional[CallOutcome]] = []
         # Toggle behaviours.
         # ``pre_check_result`` is a convenience bool: True -> PROCEED,
         # False -> ABORT. For DEFER, set ``pre_check_decision`` directly
@@ -557,12 +560,14 @@ class DispatchHarness:
         call_id: str,
         call_initiated_time: datetime,
         telephony_number_id: str,
+        call_outcome: Optional[CallOutcome] = None,
     ) -> Optional[LeadCallTracker]:
         if not self.cas_succeeds:
             return None
         lead = self.leads.get(id)
         if not lead:
             return None
+        self.dial_outcomes.append(call_outcome)
         lead.status = status
         lead.call_id = call_id
         lead.call_initiated_time = call_initiated_time
@@ -576,6 +581,7 @@ class DispatchHarness:
         outcome: str,
         meta_data: Dict[str, Any],
         call_end_time: datetime,
+        call_outcome: Optional[CallOutcome] = None,
     ) -> Optional[LeadCallTracker]:
         self.completions.append(
             {
@@ -583,6 +589,7 @@ class DispatchHarness:
                 "status": status,
                 "outcome": outcome,
                 "meta_data": meta_data,
+                "call_outcome": call_outcome,
             }
         )
         lead = self.leads.get(id)

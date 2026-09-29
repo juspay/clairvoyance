@@ -47,6 +47,7 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     CallLimitVerdict,
 )
 from app.schemas import LeadCallStatus
+from app.schemas.breeze_buddy.outcomes import initiated_call_outcome, legacy_outcome
 from tests.breeze_buddy.dispatch.conftest import (
     DispatchHarness,
     FakeRedisService,
@@ -118,11 +119,19 @@ def _san(v: Any) -> Any:
     return type(v).__name__
 
 
-def _tracer(name: str, fn: Callable, trace: list, tids: list) -> Callable:
+def _tracer(
+    name: str, fn: Callable, trace: list, tids: list, facts: Optional[list] = None
+) -> Callable:
     def rec(a, k):
         if name == "schedule_lead" and "template_id" in k:
             tids.append(k["template_id"])
             k = {x: y for x, y in k.items() if x != "template_id"}
+        if facts is not None and "call_outcome" in k:
+            # The call outcome facts ride beside today's writes (docs/
+            # CALL_OUTCOMES.md, PR 1): recorded apart, so the trace still
+            # proves every statement is otherwise today's.
+            facts.append((name, k.get("outcome"), k["call_outcome"]))
+            k = {x: y for x, y in k.items() if x != "call_outcome"}
         trace.append(("call", name, _san(a), _san(k)))
 
     if inspect.iscoroutinefunction(fn):
@@ -287,6 +296,7 @@ async def _run(
 ) -> NS:
     trace: List[Any] = []
     tids: List[Any] = []
+    facts: List[Any] = []
     h = DispatchHarness()
     lead = make_lead("L1")
     lead.next_attempt_at = FIXED_NOW  # due on the frozen clock the worker sees
@@ -308,7 +318,7 @@ async def _run(
     impl["schedule_lead"] = queue_impl.schedule_lead
     impl["is_dispatchable"] = queue_impl.is_dispatchable
     for name, fn in impl.items():
-        monkeypatch.setattr(worker_mod, name, _tracer(name, fn, trace, tids))
+        monkeypatch.setattr(worker_mod, name, _tracer(name, fn, trace, tids, facts))
     monkeypatch.setattr(worker_mod, "logger", _Log(trace))
     monkeypatch.setattr(worker_mod, "datetime", _FrozenDT)
     random.seed(20261004)
@@ -322,6 +332,7 @@ async def _run(
     return NS(
         trace=trace,
         tids=tids,
+        facts=facts,
         raised=raised,
         ret=ret,
         calls=list(h.call_recorder.calls),
@@ -586,6 +597,16 @@ async def test_legacy_dispatch_is_identical_to_base(scenario, base, monkeypatch)
     # every re-queue of the lead now names its template (T5), and only that changed
     assert all(t == "tmpl-1" for t in new.tids)
     assert len(new.tids) == len([e for e in new.trace if e[1] == "schedule_lead"])
+    # the call outcome facts: a finished lead's give back its word, and the
+    # dial records the set-up
+    assert old.facts == []
+    writes = ("update_lead_call_completion_details", "update_lead_call_details")
+    assert len(new.facts) == len([e for e in new.trace if e[1] in writes])
+    for name, word, call_outcome in new.facts:
+        if name == "update_lead_call_details":
+            assert call_outcome == initiated_call_outcome()
+        else:
+            assert legacy_outcome(call_outcome) == word
     # the new return value is the only other visible change: True only when the
     # provider gave a SID (the PROCESSING write was attempted), else False
     got_sid = any(e[1] == "update_lead_call_details" for e in new.trace)

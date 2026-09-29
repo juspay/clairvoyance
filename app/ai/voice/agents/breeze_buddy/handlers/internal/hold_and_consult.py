@@ -38,6 +38,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_request_id,
 )
 from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
+from app.schemas.breeze_buddy.outcomes import initiated_call_outcome
 
 # Channel name pattern for Redis pub/sub
 _CHANNEL_PREFIX = "hold_transfer:result"
@@ -204,6 +205,8 @@ async def hold_and_consult(
             call_direction=CallDirection.OUTBOUND,
             execution_mode=ExecutionMode.HOLD_TRANSFER,
             request_id=inbound_lead_id,
+            # The consult leg is placed right below: set up, as a phone call.
+            call_outcome=initiated_call_outcome(),
         )
         if not outbound_lead:
             subscribe_task.cancel()

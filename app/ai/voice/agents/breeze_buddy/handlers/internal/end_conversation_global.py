@@ -18,6 +18,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import mute_stt
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.core.logger import logger
+from app.schemas.breeze_buddy.outcomes import (
+    SessionEndReason,
+    record_session_end_reason,
+)
 
 DEFAULT_OUTCOME = "BUSY"
 
@@ -60,6 +64,10 @@ async def end_conversation_global(
             context.lead.metaData["call_end_reason"] = reason
         else:
             reason = context.lead.metaData["call_end_reason"]
+
+        # The ending, for legacy_outcome: with no agent word it gives the same
+        # BUSY this default writes.
+        record_session_end_reason(context.lead, SessionEndReason.GLOBAL_END)
 
         if context.lead.outcome is None:
             context.lead.outcome = DEFAULT_OUTCOME
