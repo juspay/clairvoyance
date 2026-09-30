@@ -197,6 +197,20 @@ def test_a_status_becomes_one_letter_per_transition() -> None:
     )
 
 
+def test_a_messages_receipts_are_read_back_by_the_ids_they_were_filed_under() -> None:
+    """The ids the face answers for a read-back are the ones its letters
+    carry — the dispatcher finds a receipt that beat its stamp only if the
+    two agree."""
+    states = ["sent", "delivered", "read", "failed"]
+    body = _body(("messages", _value(statuses=[_status(status=s) for s in states])))
+    filed = [l.external_id for l in inbound.letters(body)]
+    assert inbound.status_letter_keys("whatsapp", OUT_WAMID, states) == (
+        "whatsapp",
+        filed,
+    )
+    assert inbound.status_letter_keys("carrier_pigeon", OUT_WAMID, states) is None
+
+
 def test_an_inbound_message_is_keyed_by_its_own_id() -> None:
     """An inbound message is keyed by its own id."""
     out = inbound.letters(_body(("messages", _value(messages=[_message()]))))

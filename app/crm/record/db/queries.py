@@ -176,6 +176,25 @@ def event_topics_query(merchant_id: str, event_ids: List[str]) -> Tuple[str, Lis
     return query, [merchant_id, event_ids]
 
 
+def events_by_external_ids_query(
+    merchant_id: str, source: str, external_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    """The letters a producer filed under these external ids — read by the
+    dedupe UNIQUE (merchant_id, source, external_id) itself, so a handful of
+    ids is a handful of index probes. Tenant first; another merchant's id is
+    simply absent from the answer."""
+    query = f"""
+        SELECT id, merchant_id, source, topic, schema_version,
+               external_id, payload, received_at, occurred_at,
+               customer_id, attempts
+        FROM {EVENT_RAW_TABLE}
+        WHERE merchant_id = $1
+          AND source = $2
+          AND external_id = ANY($3::text[])
+    """
+    return query, [merchant_id, source, external_ids]
+
+
 # --- crm_event_schema (T24) + the catalog's compute-on-read queries ---------
 
 EVENT_SCHEMA_TABLE = "crm_event_schema"

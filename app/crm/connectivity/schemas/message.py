@@ -132,3 +132,22 @@ class SendRoute(BaseModel):
     # SendRoute.model_rebuild() at the bottom. Importing the family it
     # belongs to resolves the annotation eagerly and both go away.
     template: Optional[ApprovedTemplate] = None
+
+
+class ProviderReceipt(BaseModel):
+    """What a delivery receipt says about one of our messages, read through
+    the event catalog's declared fields — never a provider's payload shape.
+
+    ``state`` is sent · delivered · read · failed; anything else is not a
+    receipt this module acts on.
+    """
+
+    provider_message_id: str
+    state: str
+    occurred_at: Optional[datetime] = None
+    #: The provider's refusal code on a failed receipt (canon T16 col 13:
+    #: the row keeps the provider's own word).
+    error_code: Optional[str] = None
+    #: What the provider billed the message as (Meta's pricing.category),
+    #: when it says.
+    pricing_category: Optional[str] = None
