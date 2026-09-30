@@ -449,6 +449,7 @@ async def send_chat_message_handler(
     *,
     access_check: Optional[Callable[[ChatSession], None]] = None,
     internal: bool = False,
+    internal_prompt: bool = False,
 ) -> StreamingResponse:
     """Drive one turn; stream SSE events until ``turn_end``.
 
@@ -552,6 +553,7 @@ async def send_chat_message_handler(
                     user_content=req.content,
                     context_placement=context_placement,
                     internal=internal,
+                    internal_prompt=internal_prompt,
                 ),
             ),
             media_type="text/event-stream",
@@ -669,6 +671,7 @@ async def serve_session_intent(
         SendChatMessageRequest(content=agent_turn_content(parsed), context=context),
         access_check=None,
         internal=parsed.policy.internal,
+        internal_prompt=parsed.policy.internal_prompt,
     )
 
 

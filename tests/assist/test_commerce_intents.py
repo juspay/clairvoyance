@@ -117,6 +117,7 @@ def test_policy_routes_match_rfc_table():
         "set_qty": "direct",
         "view_product": "direct",
         "enrich_product": "agent_turn",
+        "show_page_product": "agent_turn",
         "checkout": "client",
         "track_order": "client",
     }
