@@ -1,5 +1,6 @@
 from io import BytesIO
 from typing import Any, Dict, List, NamedTuple, Optional
+from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -15,6 +16,15 @@ _LEGACY_TEMPLATE_NAME_ALIASES: Dict[str, str] = {
     "loan_reminder_dpd_0": "1079319f-7c90-4197-94fc-6d8fb4af24c7",
     "loan_collections_dpd_0_7_demo": "6742efc7-9385-4f25-94c2-1a8386797e3d",
 }
+
+
+# Reporting-webhook URL limits. FORMAT only, and deliberately so: no DNS
+# resolution and no address checks here. Those belong at delivery time —
+# the answer can change in the minutes between a push and the call ending,
+# and a lookup on this endpoint would put DNS on the push latency budget
+# and fail pushes whenever a merchant's DNS blips.
+_WEBHOOK_URL_SCHEMES = ("http", "https")
+_WEBHOOK_URL_MAX_LEN = 2048
 
 
 class CallRecordingResult(NamedTuple):
@@ -52,6 +62,49 @@ class PushLeadRequest(BaseModel):
         except ValueError as e:
             raise ValueError("template_id must be a valid UUID") from e
         return v
+
+    @field_validator("reporting_webhook_url")
+    @classmethod
+    def validate_reporting_webhook_url(cls, v: str | None) -> str | None:
+        """Reject a malformed webhook URL while the caller can still fix it.
+
+        This value is dereferenced by a background task minutes or hours after
+        the push, when the sender is long gone and a failure reaches nobody but
+        our own logs. Checking it here — at the writer — is the only point where
+        a rejection lands in front of someone who can act on it.
+
+        Messages never echo the URL back: a webhook URL routinely authenticates
+        the receiver with a shared secret in the query string.
+        """
+        if v is None:
+            return None
+        url = v.strip()
+        if not url:
+            # Empty means "no webhook", which is already how an empty value
+            # behaves downstream (the handler drops it on a falsy check).
+            # Turning that into a 422 would break pushes that work today.
+            return None
+        if len(url) > _WEBHOOK_URL_MAX_LEN:
+            raise ValueError(
+                f"reporting_webhook_url exceeds {_WEBHOOK_URL_MAX_LEN} characters"
+            )
+        try:
+            parsed = urlparse(url)
+            parsed.port  # noqa: B018 — raises on a non-numeric port
+        except ValueError as e:
+            raise ValueError(f"reporting_webhook_url is not a valid URL: {e}") from e
+        if parsed.scheme.lower() not in _WEBHOOK_URL_SCHEMES:
+            raise ValueError(
+                "reporting_webhook_url must start with http:// or https://"
+            )
+        if not parsed.hostname:
+            raise ValueError("reporting_webhook_url has no host")
+        if parsed.username or parsed.password:
+            raise ValueError(
+                "reporting_webhook_url must not embed credentials "
+                "(user:pass@host); use a header or a query token instead"
+            )
+        return url
 
     reseller_id: str
     merchant_id: Optional[str] = None
