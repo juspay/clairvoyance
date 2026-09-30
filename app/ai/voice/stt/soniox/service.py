@@ -43,10 +43,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Optional
+from collections import deque
+from typing import AsyncGenerator, Optional
 
 from loguru import logger
-from pipecat.frames.frames import TranscriptionFrame
+from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.services.soniox.stt import (
     FINALIZE_MESSAGE,
     SonioxContextObject,
@@ -63,6 +64,26 @@ from websockets.protocol import State
 #: ~0.5s and watchdog rescues at ~1.4s, so >= this means even finalize could
 #: not save the turn in time (dead-socket path) — exactly what we want paged on.
 _LATE_FINAL_WARN_SECS = 5.0
+
+#: Where did a late transcript's delay sit? (Incident 2026-09-20, call
+#: 615b9ecd: the caller's words reached Soniox 4-28s late and no log line
+#: could say whether the audio waited in the pod or on Soniox's side.) Two
+#: numbers ride on every ``soniox final`` line and, as maxima, on
+#: ``soniox_call_stats``:
+#:   pod_lag     wall-clock seconds since audio started flowing minus the audio
+#:               seconds that reached this service (time blocked inside the
+#:               socket send excluded) -> audio is queuing INSIDE THE POD,
+#:               upstream of STT (transport, noise filter, CPU starvation).
+#:   soniox_lag  seconds from sending the audio an utterance ends in (Soniox's
+#:               own ``end_ms``) to its final arriving -> the wire or Soniox.
+#:               Healthy is the endpoint delay plus a round trip, under 1s.
+#: Either maximum at or above this escalates ``soniox_call_stats`` to WARNING.
+_LAG_WARN_SECS = 1.5
+#: A pause between audio frames longer than this is the source stopping, not
+#: a backlog (queued frames arrive back to back), so pod_lag is re-anchored.
+_INPUT_GAP_RESET_SECS = 1.0
+#: Send times kept for soniox_lag: 10 minutes of 20ms chunks.
+_SENT_AT_MAXLEN = 50 * 600
 
 
 class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
@@ -108,6 +129,19 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
         self._late_finals = 0
         self._disconnect_flushes = 0
         self._connected_at: Optional[float] = None
+        # Lag attribution (see _LAG_WARN_SECS).
+        self._lag_clock = time.monotonic  # patchable in tests
+        self._audio_anchor = 0.0
+        self._audio_last_at: Optional[float] = None
+        self._audio_secs_in = 0.0
+        self._send_blocked_secs = 0.0
+        self._pod_lag = 0.0
+        self._pod_lag_max = 0.0
+        self._send_block_max = 0.0
+        self._soniox_lag_max = 0.0
+        # Per websocket session (Soniox's end_ms clock restarts with it).
+        self._audio_secs_sent = 0.0
+        self._sent_at: deque[tuple[float, float]] = deque(maxlen=_SENT_AT_MAXLEN)
         # Native endpointing guarantees an <end> within max_endpoint_delay_ms
         # of speech end, so a watchdog tighter than ~2x that budget would
         # preempt healthy semantic endpoints — raise it to the floor instead.
@@ -210,6 +244,8 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
             # here (idempotently) covers both the initial connect and every
             # automatic reconnect.
             self._connected_at = time.time()
+            self._audio_secs_sent = 0.0
+            self._sent_at.clear()
             if self._finalize_after_secs and not self._watchdog_alive():
                 self._spawn_finalize_watchdog()
         except Exception as e:
@@ -253,6 +289,8 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
                 self._watchdog_finalizes_sent
                 or self._disconnect_flushes
                 or self._late_finals
+                or self._pod_lag_max >= _LAG_WARN_SECS
+                or self._soniox_lag_max >= _LAG_WARN_SECS
             )
             else logger.info
         )
@@ -261,9 +299,63 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
             f"finals={self._finals_pushed} "
             f"watchdog_rescues={self._watchdog_finalizes_sent} "
             f"disconnect_flushes={self._disconnect_flushes} "
-            f"late_finals={self._late_finals}"
+            f"late_finals={self._late_finals} "
+            f"pod_lag_max={self._pod_lag_max:.1f}s "
+            f"soniox_lag_max={self._soniox_lag_max:.1f}s "
+            f"send_block_max={self._send_block_max:.2f}s"
             + (f" client_ref={client_ref}" if client_ref else "")
         )
+
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame | None, None]:
+        """pipecat's send, bracketed by the lag bookkeeping (see _LAG_WARN_SECS)."""
+        secs = len(audio) / (2 * self.sample_rate) if self.sample_rate else 0.0
+        self._note_pod_lag(secs)
+        t0 = self._lag_clock()
+        if self._websocket is not None and self._websocket.state is State.OPEN:
+            self._audio_secs_sent += secs
+            self._sent_at.append((self._audio_secs_sent, t0))
+        async for frame in super().run_stt(audio):
+            yield frame
+        blocked = self._lag_clock() - t0
+        self._send_blocked_secs += blocked
+        self._send_block_max = max(self._send_block_max, blocked)
+
+    def _note_pod_lag(self, secs: float) -> None:
+        """How far behind real time the audio reaching this service is."""
+        now = self._lag_clock()
+        if (
+            self._audio_last_at is None
+            or now - self._audio_last_at > _INPUT_GAP_RESET_SECS
+        ):
+            # (Re)anchor: everything received so far counts as on time.
+            self._audio_anchor = now - self._audio_secs_in - self._send_blocked_secs
+        self._audio_last_at = now
+        self._audio_secs_in += secs
+        self._pod_lag = max(
+            0.0,
+            now - self._audio_anchor - self._send_blocked_secs - self._audio_secs_in,
+        )
+        self._pod_lag_max = max(self._pod_lag_max, self._pod_lag)
+
+    def _soniox_lag(self) -> Optional[float]:
+        """Seconds since we sent the audio the buffered final ends in, or None."""
+        end_ms = next(
+            (
+                token["end_ms"]
+                for token in reversed(self._final_transcription_buffer)
+                if "end_ms" in token
+            ),
+            None,
+        )
+        if end_ms is None:
+            return None
+        end_secs = end_ms / 1000.0
+        # Finals arrive in stream order, so chunks before this one are done with.
+        while self._sent_at and self._sent_at[0][0] < end_secs:
+            self._sent_at.popleft()
+        if not self._sent_at:
+            return None
+        return self._lag_clock() - self._sent_at[0][1]
 
     async def _flush_buffered_final_transcript(self) -> None:
         """Emit un-endpointed finals as a final TranscriptionFrame, if any.
@@ -415,9 +507,14 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
         last = getattr(self, "_last_tokens_received", None)
         anchor = last if last is not None else self._buffered_since
         age = time.time() - anchor if anchor is not None else 0.0
+        soniox_lag = self._soniox_lag()
+        if soniox_lag is not None:
+            self._soniox_lag_max = max(self._soniox_lag_max, soniox_lag)
         line = (
             f"soniox final: chars={len(transcript)} age={age:.1f}s "
-            f"watchdog_finalizes={self._watchdog_finalizes_sent} "
+            f"pod_lag={self._pod_lag:.1f}s "
+            + (f"soniox_lag={soniox_lag:.1f}s " if soniox_lag is not None else "")
+            + f"watchdog_finalizes={self._watchdog_finalizes_sent} "
             f"text={transcript[:80]!r}"
         )
         if age >= _LATE_FINAL_WARN_SECS:
