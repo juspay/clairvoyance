@@ -20,6 +20,7 @@ from app.crm.record.db.queries import (
     claim_pending_events_query,
     customer_has_event_query,
     event_topics_query,
+    events_by_external_ids_query,
     get_customer_journey_query,
     get_schema_query,
     insert_detected_schema_query,
@@ -150,6 +151,19 @@ async def event_topics(merchant_id: str, event_ids: List[str]) -> Dict[str, str]
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return {str(row["id"]): str(row["topic"]) for row in rows}
+
+
+async def events_by_external_ids(
+    merchant_id: str, source: str, external_ids: List[str]
+) -> List[RawEvent]:
+    """The letters filed under these external ids. Empty ids read nothing,
+    never the whole table."""
+    if not external_ids:
+        return []
+    query, values = events_by_external_ids_query(merchant_id, source, external_ids)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_raw_event(row) for row in rows]
 
 
 async def list_schemas(merchant_id: str) -> List[EventSchema]:

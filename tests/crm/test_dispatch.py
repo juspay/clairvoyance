@@ -4,6 +4,7 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import List
 
 from app.core.config.static import _positive_float, _positive_int
 from app.core.logger.context import get_log_context
@@ -362,6 +363,36 @@ async def test_a_reclaimed_row_discards_the_late_outcome(monkeypatch) -> None:
     await dispatch._dispatch_one(_message(), 3)
     # Discarded means one write attempt, no retry, no raise — their row now.
     assert calls == [MESSAGE_ACCEPTED]
+
+
+async def test_the_stamp_reads_back_receipts_that_beat_it(monkeypatch) -> None:
+    """Once the row knows the provider id, the receipts filed before it did
+    are read back for that message — and never for an outcome that did not
+    land (a reclaimed row is someone else's to finish)."""
+    read_back: List[tuple] = []
+
+    async def fake_send(send_token, message):
+        return SendOutcome(status="accepted", provider_message_id="wamid.T")
+
+    async def recorded(*args, binding_id=None):
+        return True
+
+    async def watch(merchant_id, channel, provider_message_id):
+        read_back.append((merchant_id, channel, provider_message_id))
+
+    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(dispatch, "send", fake_send)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", recorded)
+    monkeypatch.setattr(dispatch, "apply_filed_receipts", watch)
+    await dispatch._dispatch_one(_message(), 3)
+    assert read_back == [("m-1000", "whatsapp", "wamid.T")]
+
+    async def reclaimed(*args, binding_id=None):
+        return False
+
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", reclaimed)
+    await dispatch._dispatch_one(_message(), 3)
+    assert len(read_back) == 1
 
 
 def test_jitter_stays_in_bounds_and_never_reaches_zero() -> None:

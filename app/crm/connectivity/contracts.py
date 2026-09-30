@@ -65,6 +65,14 @@ What is here, and why each thing is on the surface:
   state, and there is deliberately no timer beside it: the periodic sync
   was removed before it ever ran.
 
+- ``consume_status_event`` — the receipts consumer (worker_main registers
+  it): message.status letters move the manifest along sent -> delivered ->
+  read, or to failed with the provider's code.
+- ``buddy_binding`` / ``conversation_settings`` / ``list_channel_settings``
+  / ``update_channel_settings`` — the merchant's bindings: the one templates
+  go out from, and the one Buddy answers on with Buddy's settings (R1,
+  D13–D15, D24–D28); read total and fail-closed (no agent, handoff off).
+
 ``send()`` stays OFF this surface so that nothing outside the module can
 reach a provider without passing the checks in front of it. So does the
 route resolver, and so do the provider packages.
@@ -89,6 +97,14 @@ from app.crm.connectivity.onboarding import (
 )
 from app.crm.connectivity.queue import queue_message, send_behind
 from app.crm.connectivity.reasons import reason_label
+from app.crm.connectivity.receipts import consume_status_event
+from app.crm.connectivity.schemas.connector import ConversationSettings
+from app.crm.connectivity.settings import (
+    buddy_binding,
+    conversation_settings,
+    list_channel_settings,
+    update_channel_settings,
+)
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -144,4 +160,12 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    # the receipts consumer (worker_main registers)
+    "consume_status_event",
+    # the merchant's bindings: the template binding, Buddy's binding, settings
+    "buddy_binding",
+    "conversation_settings",
+    "list_channel_settings",
+    "update_channel_settings",
+    "ConversationSettings",
 ]
