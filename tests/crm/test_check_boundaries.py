@@ -198,6 +198,30 @@ def test_connection_handle_in_logic_fails(tmp_path: Path) -> None:
     assert any("connection handle in logic" in e for e in check(root))
 
 
+def test_reader_handle_in_logic_fails(tmp_path: Path) -> None:
+    """The replica door stays down too: which reads may lag is an
+    accessor's decision, never a logic file's."""
+    root = _tree(
+        tmp_path,
+        {
+            "app/crm/outreach/runs.py": (
+                "from app.crm.shared.db import crm_replica_read\n"
+                "rows = await crm_replica_read(q, v)\n"
+            ),
+            "app/crm/outreach/db/accessors/enrollment.py": (
+                "from app.crm.shared.db import crm_replica_read\n"
+            ),
+        },
+    )
+    errors = check(root)
+    assert any(
+        e.startswith("app/crm/outreach/runs.py") and "connection handle in logic" in e
+        for e in errors
+    )
+    # the accessor that picks the replica is where the choice belongs
+    assert not any(e.startswith("app/crm/outreach/db/") for e in errors)
+
+
 def test_adapter_import_outside_the_doors_fails(tmp_path: Path) -> None:
     # Any file that is not a named door, however innocent it looks: dispatch
     # reaching an adapter directly would send around send()'s route

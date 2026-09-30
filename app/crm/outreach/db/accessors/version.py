@@ -20,7 +20,7 @@ from app.crm.outreach.db.queries.version import (
 from app.crm.outreach.schemas import (
     WorkflowVersion,
 )
-from app.crm.shared.db import crm_connection
+from app.crm.shared.db import crm_connection, crm_replica_read
 from app.crm.shared.decode import jsonb_value as decode_jsonb
 from app.crm.shared.locks import template_lock_key
 
@@ -84,7 +84,9 @@ async def pinned_definition(
 
 
 async def list_versions(merchant_id: str, workflow_id: str) -> List[WorkflowVersion]:
+    """The console's Versions tab: the replica. A version published a
+    moment ago can be missing for as long as the replica lags; migrate
+    reads the versions it moves between on the primary, in its atom."""
     query, values = list_versions_query(merchant_id, workflow_id)
-    async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
+    rows = await crm_replica_read(query, values)
     return [decode_version(row) for row in rows]

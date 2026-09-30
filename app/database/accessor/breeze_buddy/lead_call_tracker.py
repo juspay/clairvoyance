@@ -7,10 +7,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
 
-from app.core.config.static import CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
 from app.core.logger import logger
+from app.database import READER_TIMEOUT_SECS
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
-from app.database.queries import run_parameterized_query
+from app.database.queries import run_parameterized_query, run_reader_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
@@ -403,7 +403,7 @@ async def get_leads_by_enrollment_id(
     query_text, values = get_leads_by_enrollment_id_query(
         merchant_id, enrollment_id, entered_at, exited_at
     )
-    result = await run_parameterized_query(query_text, values)
+    result = await run_reader_query(query_text, values, timeout=READER_TIMEOUT_SECS)
     decoded = [decode_lead_call_tracker(row) for row in result or []]
     return [lead for lead in decoded if lead is not None]
 
@@ -421,9 +421,7 @@ async def get_call_stats_by_runs(
     query_text, values = get_call_stats_by_runs_query(
         merchant_id, [r[0] for r in runs], [r[1] for r in runs], [r[2] for r in runs]
     )
-    rows = await run_parameterized_query(
-        query_text, values, timeout=CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
-    )
+    rows = await run_reader_query(query_text, values, timeout=READER_TIMEOUT_SECS)
     return [dict(row) for row in rows or []]
 
 
@@ -445,9 +443,7 @@ async def get_call_facts_by_runs(
         merchant_id, [r[0] for r in runs], [r[1] for r in runs], [r[2] for r in runs]
     )
     out: Dict[str, List[Dict[str, Any]]] = {}
-    rows = await run_parameterized_query(
-        query_text, values, timeout=CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
-    )
+    rows = await run_reader_query(query_text, values, timeout=READER_TIMEOUT_SECS)
     for row in rows or []:
         out.setdefault(str(row["enrollment_id"]), []).append(dict(row))
     return out
