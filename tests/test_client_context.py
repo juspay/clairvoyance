@@ -474,3 +474,63 @@ def test_upsert_merge_query_is_shallow_top_level_merge():
     assert ".data || EXCLUDED.data" in sql
     assert "jsonb_set" not in sql  # turn writes never touch the facts namespace
     assert params == ["sess-1", '{"cart_id":"c"}']
+
+
+# ---------------------------------------------------------------------------
+# built-in page facts (BUILTIN_FACTS)
+# ---------------------------------------------------------------------------
+
+
+def test_builtin_fact_accepted_with_no_config():
+    """A template with no client_context block still takes current_product —
+    the whole point: no per-template row edit to get the product-page fact."""
+    state, sk, fk = apply_context_patch(
+        {},
+        state={"cart_id": "nope"},
+        facts={"current_product": {"product_id": "gid://shopify/Product/1"}, "x": 1},
+        merge="shallow",
+        config=None,
+    )
+    assert fk == ["current_product"]
+    assert state[CLIENT_CONTEXT_KEY] == {
+        "current_product": {"product_id": "gid://shopify/Product/1"}
+    }
+    # state stays strictly opt-in: no config means no allowlisted state keys.
+    assert sk == [] and "cart_id" not in state
+
+
+def test_builtin_fact_rides_alongside_a_merchant_allowlist():
+    _, _, fk = apply_context_patch(
+        {},
+        state=None,
+        facts={"offers": [], "current_product": {"product_id": "p1"}, "nope": 1},
+        merge="shallow",
+        config=_cfg(),
+    )
+    assert set(fk) == {"offers", "current_product"}
+
+
+def test_builtin_fact_is_never_instruction_strength():
+    """Shopper-supplied data: it renders user_tail even under system
+    placement, because it is not in trusted_facts."""
+    user_block, system_block = render_client_context(
+        {CLIENT_CONTEXT_KEY: {"current_product": {"product_id": "p1"}}},
+        _cfg(facts_placement="system", trusted_facts=["offers"]),
+    )
+    assert user_block is not None and "current_product" in user_block
+    assert system_block is None
+
+
+def test_render_false_still_suppresses_builtin_facts():
+    assert render_client_context(
+        {CLIENT_CONTEXT_KEY: {"current_product": {"product_id": "p1"}}},
+        _cfg(render=False),
+    ) == (None, None)
+
+
+def test_no_config_renders_the_builtin_fact():
+    user_block, system_block = render_client_context(
+        {CLIENT_CONTEXT_KEY: {"current_product": {"product_id": "p1"}}}, None
+    )
+    assert user_block is not None and "current_product" in user_block
+    assert system_block is None
