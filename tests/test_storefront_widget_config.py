@@ -295,3 +295,24 @@ def test_etag_changes_when_the_appearance_changes(
     after = _get(client).headers["ETag"]
     assert before != after
     assert _get(client, **{"If-None-Match": before}).status_code == 200
+
+
+def test_panel_colours_reach_the_storefront(
+    client: TestClient, lookup: AsyncMock
+) -> None:
+    # The panel surfaces (background, text, the shopper's own bubble) used to
+    # live only in the console's browser-local draft, so a storefront that
+    # dresses itself from this row could never see them and a merchant on a
+    # second machine lost them. They are appearance fields like any other.
+    lookup.return_value = _cfg(
+        appearance={
+            "primary_color": "#0d9488",
+            "surface_color": "#101014",
+            "text_color": "#f5f5f7",
+            "user_bubble_color": "#0d9488",
+        }
+    )
+    body = _get(client).json()
+    assert body["appearance"]["surface_color"] == "#101014"
+    assert body["appearance"]["text_color"] == "#f5f5f7"
+    assert body["appearance"]["user_bubble_color"] == "#0d9488"

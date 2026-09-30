@@ -67,6 +67,7 @@ from app.api.routers.breeze_buddy.chat.handlers import (
 )
 from app.api.routers.breeze_buddy.widget_common import (
     enforce_widget_ip_limit,
+    resolve_session_widget_config,
     resolve_widget_config_for_request,
 )
 from app.api.security.breeze_buddy.widget_token import (
@@ -101,9 +102,6 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 )
 from app.database.accessor.breeze_buddy.tool_approvals import (
     list_pending_tool_approvals,
-)
-from app.database.accessor.breeze_buddy.widget_config import (
-    get_widget_config_by_id,
 )
 from app.schemas import (
     CallDirection,
@@ -518,15 +516,9 @@ async def send_widget_message_handler(
     ctx: WidgetSessionContext,
 ):
     """Drive one chat turn. 409 if voice is currently active."""
-    cfg = await get_widget_config_by_id(ctx.widget_config_id)
-    if cfg is None or not cfg.active:
-        # Token's widget_config_id is stale — probably deleted via the
-        # admin CRUD. 401 so the client knows to abandon the token.
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Widget configuration not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
 
     await enforce_widget_ip_limit(
         request=request,
@@ -589,13 +581,9 @@ async def send_widget_intent_handler(
     validate + policy-route path. Rides the same "message" rate bucket —
     an intent is a turn, not a side channel.
     """
-    cfg = await get_widget_config_by_id(ctx.widget_config_id)
-    if cfg is None or not cfg.active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Widget configuration not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
 
     await enforce_widget_ip_limit(
         request=request,
@@ -652,13 +640,9 @@ async def transcribe_widget_audio_handler(
     ``transcribe_audio``. The returned text is NOT sent as a turn — the embed
     drops it into the composer for the user to edit and send via ``/message``.
     """
-    cfg = await get_widget_config_by_id(ctx.widget_config_id)
-    if cfg is None or not cfg.active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Widget configuration not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
 
     # Separate "transcribe" bucket (same per-merchant hourly cap as messages)
     # so STT spend is counted independently of chat turns.
@@ -730,13 +714,9 @@ async def approve_widget_tool_handler(
     carries ``detail.code="voice_live"`` so the SDK can distinguish it
     from ``already_decided`` / ``lock_contended``.
     """
-    cfg = await get_widget_config_by_id(ctx.widget_config_id)
-    if cfg is None or not cfg.active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Widget configuration not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
 
     await enforce_widget_ip_limit(
         request=request,
@@ -825,13 +805,9 @@ async def update_widget_context_handler(
     §5.1. The turn writers persist via a key-scoped merge that excludes the
     client-context keys, so the two never clobber each other.
     """
-    cfg = await get_widget_config_by_id(ctx.widget_config_id)
-    if cfg is None or not cfg.active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Widget configuration not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
 
     await enforce_widget_ip_limit(
         request=request,
@@ -933,13 +909,9 @@ async def voice_connect_handler(
     pre-loaded into the LLM context. See agent/__init__.py + flow.py
     + end_conversation.py for the resume + drain mechanics.
     """
-    cfg = await get_widget_config_by_id(ctx.widget_config_id)
-    if cfg is None or not cfg.active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Widget configuration not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
 
     await enforce_widget_ip_limit(
         request=request,
@@ -1421,13 +1393,9 @@ async def try_on_widget_handler(
     The photo is held in memory for the call only — never written to chat
     history, ui_blocks, session state, or a log line.
     """
-    cfg = await get_widget_config_by_id(ctx.widget_config_id)
-    if cfg is None or not cfg.active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Widget configuration not found or inactive",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
 
     # The widget hides the affordance from the session's `flavor` block;
     # THIS is the gate, because a browser is not a thing to trust with the
