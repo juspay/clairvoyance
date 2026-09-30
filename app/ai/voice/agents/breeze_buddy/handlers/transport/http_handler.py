@@ -102,6 +102,23 @@ async def _poll_until_ready(
     return result
 
 
+def _authority_region(url_template: str) -> str:
+    """Return the scheme+host portion of a URL *template*.
+
+    ``urlparse`` only fills ``netloc`` when the string contains ``//``, so a
+    template like ``{base_url}/orders`` parses with an empty netloc, so a
+    netloc-based check would miss it entirely. Authority here is everything
+    before the first ``/``, ``?`` or ``#`` after ``://`` (or from the start
+    if the template has no scheme).
+    """
+    candidate = url_template.strip()
+    if "://" in candidate:
+        candidate = candidate.split("://", 1)[1]
+    for separator in ("/", "?", "#"):
+        candidate = candidate.split(separator, 1)[0]
+    return candidate
+
+
 async def http_function_handler(
     context: TemplateContext,
     args: Dict[str, Any],
@@ -164,6 +181,27 @@ async def http_function_handler(
                 "status": "error",
                 "error": f"Missing required arguments: {', '.join(missing_args)}",
             }, None
+
+        # SECURITY: LLM-sourced fields refused in URL host (SSRF, PT-17); path/query ok.
+        host_part = _authority_region(config.http_request.url or "")
+        for field_name, field_cfg in config.expected_fields.items():
+            if field_cfg.source != FieldSource.LLM:
+                continue
+            arg_name = field_cfg.value or field_name
+            if f"{{{field_name}}}" in host_part or (
+                arg_name and f"{{{arg_name}}}" in host_part
+            ):
+                logger.error(
+                    f"[{function_name}] LLM-sourced field '{field_name}' used in "
+                    "URL host position — refusing"
+                )
+                return {
+                    "status": "error",
+                    "error": (
+                        "Template misconfiguration: an LLM-sourced field cannot "
+                        "be used in the URL host."
+                    ),
+                }, None
 
         # Step 1: Resolve expected_fields using FieldResolver
         resolver = FieldResolver(context=context, args=args)
