@@ -14,6 +14,7 @@ from app.core.config.static import (
 )
 from app.crm.connectivity.contracts import (
     claim_sends,
+    consume_status_event,
     consume_template_event,
     dispatch_send,
     register_retire_guard,
@@ -39,6 +40,11 @@ register_consumer(consume_attributed_event)
 # consumer above returns from at once. Registration order is execution
 # order; these two never look at the same letter.
 register_consumer(consume_template_event)
+# The third: connectivity's receipts consumer. Also merchant-level (a
+# receipt names a message, not a person), so it too hears letters the entry
+# consumer returns from; it moves the manifest along sent -> delivered ->
+# read, or to failed with the provider's code.
+register_consumer(consume_status_event)
 # The same inversion for connectivity's template retire guard (phase 14):
 # connectivity may not import outreach, so this root hands outreach's
 # "who would still send this template" into connectivity's slot.

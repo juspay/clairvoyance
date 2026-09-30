@@ -28,7 +28,10 @@ CI-enforced by `scripts/check_migrations.py` and the immutability guard in
    one commit: the registry entry, this doc's list above, and the red
    test in `tests/crm/test_check_migrations.py` pinning the new name.
 3. **048+ is the CPaaS era.** One table owner per migration — the task
-   that owns a table ships its migration (vertical slices).
+   that owns a table ships its migration (vertical slices). One recorded
+   exception: 083 carries the whole inbox schema (connectivity,
+   conversations and buddy changes) so the feature's later changes are
+   code only; its sections are split by owner instead.
 4. Migrations run as `POSTGRES_USER` via
    `uv run python scripts/migrate.py up`; check state with
    `uv run python scripts/migrate.py status`.
