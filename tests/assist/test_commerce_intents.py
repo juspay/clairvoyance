@@ -116,10 +116,41 @@ def test_policy_routes_match_rfc_table():
         "remove_line": "direct",
         "set_qty": "direct",
         "view_product": "direct",
+        "show_page_product": "direct",
         "enrich_product": "agent_turn",
         "checkout": "client",
         "track_order": "client",
     }
+
+
+def test_show_page_product_is_view_product_rendered_in_the_thread():
+    """Same read, different surface — and the surface is the point.
+
+    ``view_product`` fills a full-panel overlay and leaves no trace; this
+    one answers "what am I looking at?", so the card belongs in the thread
+    and has to survive a reload like any other reply.
+    """
+    overlay = ir.INTENT_POLICY["view_product"]
+    inline = ir.INTENT_POLICY["show_page_product"]
+
+    # Same drive: one deterministic get_product read, no LLM either way.
+    assert inline.route is overlay.route
+    assert inline.drive is overlay.drive
+    assert inline.payload_model is overlay.payload_model
+    # Different surface.
+    assert overlay.silent is True
+    assert inline.silent is False
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.intents import (
+        _product_card_show_op,
+    )
+
+    assert inline.show_op is _product_card_show_op
+    op = _product_card_show_op("get_product", None, cast(Any, None))
+    # A one-item grid, not a bare card: a bare card keeps its 320px
+    # carousel-slide width; a grid of one spans the thread.
+    assert op["component"] == "ProductGrid"
+    # Bound to the read, not retyped — same contract as every show op.
+    assert op["bind"] == {"products": "$tool:get_product#/product"}
 
 
 def test_view_product_is_direct_and_silent():

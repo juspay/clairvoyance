@@ -279,6 +279,10 @@ class ApprovalTurnMixin:
                 "status": "denied",
                 "reason": decision_reason or "the user did not approve this action",
             }
+            if approval.function_name in self._client_tools and isinstance(
+                synthetic_result, dict
+            ):
+                self._page_product_shown = bool(synthetic_result.get("product_id"))
 
         yield SSEEvent(
             event="function_call_completed",

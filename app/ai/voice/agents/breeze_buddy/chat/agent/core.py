@@ -37,6 +37,9 @@ from app.ai.voice.agents.breeze_buddy.chat.sse import (
 )
 from app.ai.voice.agents.breeze_buddy.chat.steps.enforcer import PlanEnforcer
 from app.ai.voice.agents.breeze_buddy.chat.steps.plan import PlanExtractor
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    enabled_client_tools,
+)
 from app.ai.voice.agents.breeze_buddy.chat.ui.binding import (
     BindingStore,
 )
@@ -324,6 +327,14 @@ class ChatAgent(
             getattr(render_ui_cfg, "trusted_link_urls", None) or []
         )
         self._plan_enforcement = bool(getattr(configurations, "plan_enforcement", None))
+        # Tools the BROWSER executes. Held as a set because the gate in
+        # cycle.py asks "is this call one of them?" per tool call, and the
+        # tool surface asks "which do I publish?" once per turn.
+        self._client_tools = enabled_client_tools(configurations)
+        # True for a resume turn whose client-tool answer named a product: the
+        # widget already drew that product's card by id, so this turn must not
+        # search for it or draw another (see _page_product_refusal).
+        self._page_product_shown = False
         self._plan_enforcer = PlanEnforcer()
         self._plan_known_tools: Set[str] = set()
         # Handler → cycle-loop hand-off (tool handlers cannot yield SSE):

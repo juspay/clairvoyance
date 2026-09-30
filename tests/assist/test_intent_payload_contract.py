@@ -39,6 +39,7 @@ PAYLOAD_MODELS = {
     "remove_line": ci.RemoveLinePayload,
     "set_qty": ci.SetQtyPayload,
     "view_product": ci.ViewProductPayload,
+    "show_page_product": ci.ViewProductPayload,
     "enrich_product": ci.EnrichProductPayload,
     "checkout": ci.CheckoutPayload,
     "track_order": ci.TrackOrderPayload,
@@ -154,7 +155,7 @@ def test_required_field_validation_stays_strict():
 # copy fails that repo's CI until the constant is bumped — and bumping it
 # is the reviewer's cue to update the other repo in the same change.
 INTENT_FIXTURE_SHA256 = (
-    "0d853c407d8c2ac775cc48db54d66ea4ec350e3cc8a9df5fcac576253bdbc998"
+    "216794b7c1054a45b755a397c2afd3899eebd928f4e4e4a67eece401781cdd3e"
 )
 
 

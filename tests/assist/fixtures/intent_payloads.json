@@ -93,5 +93,14 @@
     {
       "url": "https://amirandsons.example/orders/tok/authenticate?key=k"
     }
+  ],
+  "show_page_product": [
+    {
+      "product_id": "gid://shopify/Product/15719786217545"
+    },
+    {
+      "product_id": "gid://shopify/Product/15719786217545",
+      "url": "https://shop.example/products/diablo-black"
+    }
   ]
 }

@@ -4,7 +4,7 @@ everything here is importable by every sibling mixin module without
 cycles."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import AbstractSet, Any, Dict, List, Optional, Tuple
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat_flows import FlowsFunctionSchema
@@ -116,17 +116,28 @@ def _partition_gated_calls(
     tool_calls: List[Any],
     approval_map: Dict[str, Any],
     node: Dict[str, Any],
+    client_tools: AbstractSet[str] = frozenset(),
 ) -> Tuple[List[Any], List[Any]]:
-    """Split a tool-call batch into (gated, ungated) for HITL — see
-    :func:`is_approval_gated` for the shadowing rule."""
-    gated = [
-        c for c in tool_calls if is_approval_gated(c.function_name, approval_map, node)
-    ]
-    ungated = [
-        c
-        for c in tool_calls
-        if not is_approval_gated(c.function_name, approval_map, node)
-    ]
+    """Split a tool-call batch into (gated, ungated) — calls that cannot run
+    here, and calls that can.
+
+    Two reasons a call is gated, and the turn handles them identically: it
+    needs a human decision (HITL — see :func:`is_approval_gated` for the
+    shadowing rule), or it runs in the shopper's browser. Both end the turn
+    with the call persisted PENDING and resume when the answer arrives; only
+    the answer differs, so they are one partition rather than two.
+
+    A client tool is gated unconditionally — node shadowing does not apply,
+    because the reason it cannot run here is the server having no page to
+    read, not a policy a node could relax."""
+
+    def _gated(call: Any) -> bool:
+        return call.function_name in client_tools or is_approval_gated(
+            call.function_name, approval_map, node
+        )
+
+    gated = [c for c in tool_calls if _gated(c)]
+    ungated = [c for c in tool_calls if not _gated(c)]
     return gated, ungated
 
 

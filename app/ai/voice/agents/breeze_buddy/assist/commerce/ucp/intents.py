@@ -440,6 +440,25 @@ def _product_detail_show_op(tool_name: str, result: Any, agent: Any) -> Dict[str
     }
 
 
+def _product_card_show_op(tool_name: str, result: Any, agent: Any) -> Dict[str, Any]:
+    """The same read, rendered INLINE in the thread as a one-product grid.
+
+    Same drive, same binding, different surface: ``view_product`` fills a
+    full-panel overlay, this one answers "what am I looking at?" where the
+    shopper asked it.
+
+    A grid, not a bare ProductCard: a bare card keeps its carousel-slide
+    width (320px max), while a one-item grid spans the thread. The resolver
+    wraps the single ``product`` object into the one-element ``products``.
+    """
+    return {
+        "op": "show",
+        "id": "root",
+        "component": "ProductGrid",
+        "bind": {"products": f"$tool:{tool_name}#/product"},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Direct cart executor (driven by intent_router.run_direct_intent)
 # ---------------------------------------------------------------------------
@@ -761,6 +780,24 @@ register_intents(
             # no user bubble, no persisted ui block (the tool exchange
             # still persists so the agent knows what the shopper viewed).
             silent=True,
+        ),
+        "show_page_product": IntentPolicy(
+            IntentRoute.DIRECT,
+            ViewProductPayload,
+            default_display="",
+            drive=_drive_view_product,
+            show_op=_product_card_show_op,
+            # NOT silent, unlike view_product: this card IS the answer to
+            # the shopper's question, so it belongs in the thread and has
+            # to survive a reload like any other reply.
+            #
+            # Why an intent and not the agent's own render_ui: the id comes
+            # from the page, and the catalogue SEARCH matches on text — this
+            # store carries ten products under one title. Observed live: the
+            # model searched, the page's product was not among the results,
+            # and it rendered a same-titled different one. A direct read by
+            # id cannot make that mistake, and takes no LLM call to do it.
+            silent=False,
         ),
         "enrich_product": IntentPolicy(
             IntentRoute.AGENT_TURN,
