@@ -86,7 +86,7 @@ def build_bedrock_llm(config: BedrockConfig) -> AWSBedrockLLMService:
         else:
             settings_kwargs["temperature"] = config.temperature
 
-    service = AWSBedrockLLMService(
+    service = _StreamClosingBedrockLLMService(
         aws_region=config.region,
         settings=AWSBedrockLLMSettings(**settings_kwargs),
         function_call_timeout_secs=config.function_call_timeout_secs,
@@ -108,3 +108,30 @@ def _api_key_session(api_key: str) -> aioboto3.Session:
         ScopedEnvTokenProvider(session, environ={_BEARER_TOKEN_ENV: api_key}),
     )
     return aioboto3.Session(botocore_session=session)
+
+
+class _StreamClosingBedrockLLMService(AWSBedrockLLMService):
+    """pipecat's Bedrock service, closing the reply stream however the reply ends.
+
+    pipecat 1.1.0 iterates ``response["stream"]`` and never closes it, so a
+    reply cut off by an interruption leaves its aiohttp connection for the
+    garbage collector — logged as "Unclosed connection" at ERROR. pipecat's
+    OpenAI service already closes its stream in a ``finally`` (``_closing`` in
+    ``openai/base_llm.py``); this is the same for Bedrock.
+    """
+
+    _stream: Any = None
+
+    async def _create_converse_stream(self, client, request_params):
+        response = await super()._create_converse_stream(client, request_params)
+        self._stream = response["stream"]
+        return response
+
+    async def _process_context(self, context):
+        try:
+            await super()._process_context(context)
+        finally:
+            # Finished or interrupted: closed here.
+            stream, self._stream = self._stream, None
+            if stream is not None:
+                stream.close()
