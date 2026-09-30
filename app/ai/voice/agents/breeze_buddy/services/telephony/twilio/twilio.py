@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
@@ -63,6 +64,15 @@ class TwilioProvider(VoiceCallProvider):
         else:
             logger.info("Creating Twilio client without proxy")
             return Client(account_sid, auth_token)
+
+    async def hang_up(self, call_id: str) -> bool:
+        try:
+            await asyncio.to_thread(
+                self.client.calls(call_id).update, status="completed"
+            )
+        except Exception as e:  # already over
+            logger.info(f"Twilio hang-up of {call_id}: {e}")
+        return True
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Twilio WebSocket connection")

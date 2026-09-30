@@ -52,12 +52,14 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.config.static import (
     BB_INBOUND_STUCK_LEAD_MINUTES,
+    BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S,
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
 from app.core.logger import logger
@@ -694,25 +696,57 @@ async def _retry_call(
             await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
 
 
+# A lead PROCESSING this long past its call start is swept (hung up, then
+# closed if nothing finishes it).
+STUCK_PROCESSING_MINUTES = 20
+
+
+async def _hang_up_instead(lead: LeadCallTracker, stale_time: datetime) -> bool:
+    """Hang up a lead just past the threshold instead of closing its row.
+
+    A live call's pipeline sees the disconnect and finishes the lead itself
+    (real outcome, one call.completed). Only leads older than the hang-up
+    window are closed — by then a live pipeline has had at least one sweep
+    interval to finish, so what is left is dead. The window spans 1.5
+    intervals so every lead gets at least one hang-up pass.
+    """
+    window = timedelta(seconds=BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S * 1.5)
+    if (
+        lead.execution_mode != ExecutionMode.TELEPHONY
+        or not lead.call_id
+        or not lead.telephony_number_id
+        or not lead.call_initiated_time
+        or lead.call_initiated_time < stale_time - window
+    ):
+        return False
+    number = await get_telephony_number_by_id(lead.telephony_number_id)
+    if not number:
+        return False
+    return await get_voice_provider(number.provider, None).hang_up(lead.call_id)
+
+
 async def reconcile_stuck_processing_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state — call placed
-    but no call-end webhook received within 10 minutes. Closes the row
-    with outcome=UNKNOWN, releases the telephony number + channel token,
-    and triggers a retry where applicable.
+    but no call-end webhook received within STUCK_PROCESSING_MINUTES. Hangs
+    the call up first (``_hang_up_instead``); a lead still PROCESSING after that is
+    closed with outcome=UNKNOWN, releasing the telephony number + channel
+    token, and triggering a retry where applicable.
 
     Registered on ``BackgroundTaskScheduler``; the scheduler's distributed
     lock guarantees only one pod runs this per interval. See
     docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 5.
     """
     logger.info("Cleaning up stuck leads...")
-    stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    stale_time = datetime.now(timezone.utc) - timedelta(
+        minutes=STUCK_PROCESSING_MINUTES
+    )
     stale_leads = await get_leads_by_status_and_time_before(
         LeadCallStatus.PROCESSING, stale_time, include_locked=True
     )
 
     # Inbound needs a far longer grace period. An outbound lead PROCESSING for
-    # 10 minutes is wedged; an inbound one is usually a customer still talking.
+    # 20 minutes is wedged; an inbound one is usually a customer still talking.
     # This sweep RELEASES the channel, so sweeping a live inbound call hands it
     # back mid-conversation and the number then over-admits in both directions.
     inbound_stale_time = datetime.now(timezone.utc) - timedelta(
@@ -742,7 +776,7 @@ async def reconcile_stuck_processing_leads():
             # is_locked=TRUE from a crashed pod. Safe here because the
             # BackgroundTaskScheduler distributed lock ensures only one
             # reconciler runs at a time, and we only reach this path after
-            # a 10-minute staleness timeout.
+            # a 20-minute staleness timeout.
             locked_lead = await acquire_lock_on_lead_by_id(
                 lead.id, expected_status=LeadCallStatus.PROCESSING, force=True
             )
@@ -753,6 +787,10 @@ async def reconcile_stuck_processing_leads():
                 continue
 
             logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
+
+            if await _hang_up_instead(locked_lead, stale_time):
+                logger.info(f"Hung up stuck lead {lead.id}; its pipeline closes it")
+                continue
 
             # Merge, don't obliterate: the update REPLACES meta_data and
             # overwrites outcome, so a bare write here destroys whatever a
@@ -976,7 +1014,7 @@ async def reconcile_completed_call(call_id: str) -> None:
     When the far end answers and releases sub-second, the media socket never
     connects, so no agent runs and this becomes the only terminal signal for
     that call — leaving the row PROCESSING until the stuck-processing reaper
-    closes it ten minutes later.
+    closes it twenty minutes later.
 
     Closes the row itself rather than asserting a cause it cannot observe:
     a row with no outcome is equally a pipeline that never started and one
@@ -1027,7 +1065,7 @@ async def reconcile_completed_call(call_id: str) -> None:
         # Closed here rather than through handle_unanswered_calls: that path
         # asserts NO_ANSWER and blanks meta_data, and a row with no outcome is
         # equally a pipeline that died mid-conversation. Say UNKNOWN, as the
-        # reaper does — 30s sooner rather than ten minutes later.
+        # reaper does — 30s sooner rather than twenty minutes later.
         cleanup_meta = dict(claimed.metaData or {})
         cleanup_meta["cleanup"] = "completed_no_pipeline"
         await update_lead_call_completion_details(

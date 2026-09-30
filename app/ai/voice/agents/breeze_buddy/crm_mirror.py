@@ -34,8 +34,9 @@ hooks installed before the first lead moves.
   retires into the spine's front door.
 """
 
+from contextvars import ContextVar
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
@@ -295,7 +296,22 @@ def _created_lead_tap(lead: LeadCallTracker) -> None:
         logger.opt(exception=True).error(f"CRM created-lead tap failed for {lead.id}")
 
 
+# Set by end_conversation around its FINISHED write: the tap parks the lead
+# here and end_conversation sends it after the topic-evaluation push.
+held_call_completed: ContextVar[Optional[List[LeadCallTracker]]] = ContextVar(
+    "held_call_completed", default=None
+)
+
+
 def _finished_lead_tap(lead: LeadCallTracker) -> None:
+    held = held_call_completed.get()
+    if held is not None:
+        held.append(lead)
+        return
+    mirror_call_completed(lead)
+
+
+def mirror_call_completed(lead: LeadCallTracker) -> None:
     """A14's call.completed at THE terminal-transition choke point.
 
     Fires ONLY on the transition to FINISHED — mid-call outcome writes pass
