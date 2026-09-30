@@ -47,26 +47,34 @@ def merge_llm_config(
     """
     observer_llm = override or LLMConfiguration()
     provider = observer_llm.provider or base.provider
-    # The account (accounts): the observer's own row when it
-    # names one; else the template's — only when the observer really is the
-    # same connection (same provider, no endpoint of its own), because an
-    # Azure key must never be sent to api.openai.com or to a private URL;
+    # The account (accounts): the observer's own row or named account when
+    # it names one; else the template's, only when the observer really is
+    # the same connection (same provider, no endpoint of its own), because
+    # an Azure key must never be sent to api.openai.com or to a private URL;
     # else none, the environment's account.
     same_connection = (
         observer_llm.provider is None or observer_llm.provider == base.provider
     ) and not observer_llm.endpoint
-    credential_id = observer_llm.credential_id or (
-        base.credential_id if same_connection else None
-    )
-    # An observer that runs on an account — its own row, or the one it
-    # inherits — takes its connection FROM that row: the base's gateway
+    if observer_llm.credential_id or observer_llm.account:
+        credential_id = observer_llm.credential_id
+        account = observer_llm.account
+    elif same_connection:
+        credential_id = base.credential_id
+        account = base.account
+    else:
+        credential_id = None
+        account = None
+    # An observer that runs on an account (its own, or the one it
+    # inherits) takes its connection FROM that account: the base's gateway
     # endpoint and named key never ride along (a block may not carry both
-    # an endpoint and a credential_id, and the row's key belongs to the
-    # row's host). Without an account, the base's connection is inherited
-    # as before.
-    endpoint = observer_llm.endpoint or (None if credential_id else base.endpoint)
+    # an endpoint and an account, and the account's key belongs to the
+    # account's host). Without an account, the base's connection is
+    # inherited as before.
+    endpoint = observer_llm.endpoint or (
+        None if credential_id or account else base.endpoint
+    )
     api_key_name = observer_llm.api_key_name or (
-        None if credential_id else base.api_key_name
+        None if credential_id or account else base.api_key_name
     )
     if observer_llm.temperature is not None:
         temperature = observer_llm.temperature
@@ -88,6 +96,7 @@ def merge_llm_config(
         endpoint=endpoint,
         api_key_name=api_key_name,
         credential_id=credential_id,
+        account=account,
         temperature=temperature,
         max_tokens=(
             observer_llm.max_tokens if observer_llm.max_tokens is not None else 256

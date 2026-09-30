@@ -45,6 +45,24 @@ def _no_endpoint_beside_an_account(block: Any) -> Any:
     return block
 
 
+def _a_named_account_stands_alone(block: Any) -> Any:
+    """A block that names a deployment account (``account``) takes its host
+    and key from it. A ``credential_id`` beside it would name a second
+    account, and an ``endpoint`` beside it would send the named account's key
+    wherever the block points, so both pairs are refused wherever the block
+    is parsed. An ``api_key_name`` beside it is ignored, as beside a row."""
+    if not getattr(block, "account", None):
+        return block
+    if getattr(block, "credential_id", None):
+        raise ValueError("name one account: account or credential_id, not both")
+    if getattr(block, "endpoint", None):
+        raise ValueError(
+            "endpoint belongs to the named account, not the block; drop it "
+            "here, the account's endpoint is used"
+        )
+    return block
+
+
 def _region_is_a_name(value: Optional[str]) -> Optional[str]:
     if value is None or value == "":
         return value
@@ -315,6 +333,9 @@ class LLMConfiguration(BaseModel):
     _no_endpoint_beside_an_account = model_validator(mode="after")(
         _no_endpoint_beside_an_account
     )
+    _a_named_account_stands_alone = model_validator(mode="after")(
+        _a_named_account_stands_alone
+    )
 
     _region_is_a_name = field_validator("region")(_region_is_a_name)
 
@@ -356,6 +377,15 @@ class LLMConfiguration(BaseModel):
         "(azure -> azure_openai, openai -> openai, google_vertex -> "
         "google_vertex), in the template's tenant. Wins over api_key_name and "
         "the env default. Unset = today's keys.",
+    )
+    account: Optional[str] = Field(
+        None,
+        description="A deployment account by name, for the openai provider: "
+        "`grid-topics` (the Grid gateway on GRID_TOPICS_API_KEY; topic "
+        "evaluations only). Its host and key "
+        "come from this deployment's environment, the key from the pod "
+        "environment only, so the same name works in every environment. "
+        "Wins over api_key_name; never beside credential_id or endpoint.",
     )
     temperature: Optional[float] = Field(
         None, ge=0.0, le=2.0, description="Sampling temperature"

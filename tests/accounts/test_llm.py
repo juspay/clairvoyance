@@ -57,6 +57,64 @@ def test_an_observer_inherits_the_account_only_as_the_same_connection() -> None:
     assert (plain.endpoint, plain.api_key_name) == ("http://grid.internal/v1", "GRID")
 
 
+def test_an_observer_carries_a_named_account_as_it_carries_a_row() -> None:
+    """Never dropped on the way: the resolver answers for it, and refuses
+    grid-topics, which serves topic evaluations only."""
+    from app.ai.voice.agents.breeze_buddy.observers.factory import merge_llm_config
+
+    base = LLMConfiguration(provider="openai", account="grid-topics")
+    assert merge_llm_config(None, base).account == "grid-topics"
+    # another connection: not the account
+    assert merge_llm_config(LLMConfiguration(provider="azure"), base).account is None
+    # its own named account under a row template: never both on one block
+    own = merge_llm_config(
+        LLMConfiguration(account="grid-topics"),
+        LLMConfiguration(provider="openai", credential_id=ROW),
+    )
+    assert (own.account, own.credential_id) == ("grid-topics", None)
+    # its own named account under a gateway template: the gateway's endpoint
+    # and named key never ride along
+    gateway = LLMConfiguration(
+        provider="openai", endpoint="http://grid.internal/v1", api_key_name="GRID"
+    )
+    merged = merge_llm_config(LLMConfiguration(account="grid-topics"), gateway)
+    assert (merged.account, merged.endpoint, merged.api_key_name) == (
+        "grid-topics",
+        None,
+        None,
+    )
+
+
+def test_the_thinking_switch_follows_the_accounts_host(
+    store: Store, env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """thinking.enabled=false turns thinking off on a gateway. A row (or a
+    named account) carries the gateway, and the block then has no endpoint of
+    its own, so the account's host decides; the environment's own OpenAI
+    account (no gateway) never gets the gateway switch."""
+    import app.ai.voice.agents.breeze_buddy.llm as llm_factory
+
+    seen: Dict[str, Any] = {}
+
+    def fake_build(config: Any) -> str:
+        seen[config.base_url] = config.disable_thinking
+        return "svc"
+
+    monkeypatch.setattr(llm_factory, "build_openai_llm", fake_build)
+    store.rows[ROW2] = cred(
+        id=ROW2,
+        provider="openai",
+        value={"api_key": "gw-key", "endpoint": "https://gw.example/v1"},
+    )
+    off = {"enabled": False}
+    for block in (
+        LLMConfiguration(provider="openai", credential_id=ROW2, thinking=off),
+        LLMConfiguration(provider="openai", thinking=off),
+    ):
+        asyncio.run(llm_factory.get_llm_service(block, accounts=Accounts("r-1", "m-1")))
+    assert seen == {"https://gw.example/v1": True, None: False}
+
+
 def test_a_typed_get_refuses_the_wrong_shape_with_the_vendors_words(
     store: Store,
 ) -> None:

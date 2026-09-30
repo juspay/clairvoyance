@@ -1,9 +1,11 @@
 """One resolver per call: which account does this block run on?
 
 ``Accounts``, built from the CALL's tenant, answers every factory's question
-from the row when the block names one (``credential_id``) and from the
-environment when it does not. Each service owns its words, its environment
-accounts and the host rule a row must obey on it — ``llm.py`` (text and
+from the row when the block names one (``credential_id``), from a named
+deployment account when a text-LLM block names one (``account``, see
+``llm.named_account``), and from the environment otherwise. Each service
+owns its words, its environment accounts and the host rule a row must obey
+on it: ``llm.py`` (text and
 realtime), ``stt.py``, ``tts.py``, ``telephony.py``; this file only
 dispatches by the block's kind. The factories read the key and the host
 from a typed account and never touch an environment variable themselves,
@@ -79,6 +81,9 @@ class Accounts:
 
     reseller_id: Optional[str] = None
     merchant_id: Optional[str] = None
+    # Only the post-call topic evaluations set it: the one caller the
+    # grid-topics account serves (llm.named_account).
+    for_topics: bool = False
     _memo: Dict[Tuple[Any, ...], Account] = field(default_factory=dict)
 
     @overload
@@ -107,10 +112,12 @@ class Accounts:
         kind = kind_of(block)
         vendor = vendor_of(block)
         credential_id = getattr(block, "credential_id", None) or None
+        account_name = getattr(block, "account", None) or None
         key = (
             vendor,
             kind,
             credential_id,
+            account_name,
             getattr(block, "endpoint", None),
             getattr(block, "api_key_name", None),
         )
@@ -121,6 +128,10 @@ class Accounts:
                 )
             if credential_id:
                 self._memo[key] = await self._row(vendor, kind, credential_id)
+            elif account_name:
+                self._memo[key] = await llm.named_account(
+                    account_name, vendor, self.for_topics
+                )
             else:
                 self._memo[key] = await env_account(vendor, kind, block)
         return self._memo[key]
@@ -150,10 +161,14 @@ class Accounts:
 
     async def problems(self, configurations: Any) -> List[str]:
         """Save-time check: the same path a call takes, for every block that
-        names an account. Empty = clean."""
+        names an account or a named account's key. Empty = clean."""
         found: List[str] = []
         for name, block in account_blocks(configurations):
-            if not getattr(block, "credential_id", None):
+            if not (
+                getattr(block, "credential_id", None)
+                or getattr(block, "account", None)
+                or getattr(block, "api_key_name", None) in llm.NAMED_ACCOUNT_KEYS
+            ):
                 continue
             try:
                 await self.get(block)

@@ -109,6 +109,8 @@ Three laws on the block, enforced wherever it is parsed (save, chat,
 playground): `credential_id` is stored in the one canonical spelling; an
 `endpoint` beside a `credential_id` is refused (the account's endpoint is
 used); a `region` is a name (`asia-south1`), never a host.
+A text-LLM block may instead name a deployment account, `account` (see *Named deployment accounts* below).
+An `account` beside a `credential_id` or an `endpoint` is refused as well.
 
 **The same check at save.** `POST /templates`, `PUT /templates/{id}`, a
 version rollback and the Assist onboarding save run `Accounts.problems` on the document and answer 422
@@ -156,6 +158,16 @@ Every block's name is honoured by the engine (phases 3 and 4).
 - **Observers** run on their own row when they name one, else on the
   conversation's account only when they are the same connection (same
   provider, no endpoint of their own), else on the environment's.
+  A named `account` follows the same rule as a row.
+- **Named deployment accounts.** A text-LLM block on the `openai` provider may name `account` instead of a row.
+  The block holds only the name; the host and the key are the deployment's own, the key read from the pod environment only (`static.py`), never from dynamic config.
+  `grid-topics` is the Grid gateway (`LITELLM_BASE_URL`) on `GRID_TOPICS_API_KEY`, for topic evaluations only: a template or observer naming it is refused at save and at call time.
+  The names live in `accounts/llm.py` (`named_account`); adding one is one branch there, one pod variable and its key in `NAMED_ACCOUNT_KEYS`.
+  An unknown name, another provider, or a missing key is `AccountRefused`, and `Accounts.problems` checks a named account at save as it checks a row.
+  Each account's key serves only that account: an `api_key_name` naming one (`NAMED_ACCOUNT_KEYS`) is refused at save and at call time.
+- **Topic evaluations** build their model through `get_llm_service` like every other caller.
+  The topic configuration (`evaluation_config.configuration`) takes `account` and `extra_body`; on the `openai` provider a configuration that names no account runs on `grid-topics`, where every topic evaluation ran before.
+  `PATCH /templates/{id}/topics/configuration` resolves the account it is given and answers 400 when this deployment cannot serve it.
 - **Gemini prompt cache.** A CachedContent belongs to one GCP project, so
   the chat prompt cache is keyed by the client's project and location as
   well — two Vertex accounts never share an entry.

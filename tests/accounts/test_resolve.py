@@ -181,6 +181,106 @@ def test_without_a_row_the_environment_answers_with_the_same_rules(
         )
 
 
+# --- the resolver: a named deployment account ---------------------------------------
+
+
+def test_a_named_account_brings_this_deployments_host_and_its_static_key(
+    env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def get_config(name: str, default: Any, kind: Any) -> str:
+        return {
+            "LITELLM_BASE_URL": "https://grid.example/v1/chat/completions/",
+            # a dynamic value under the key's own name is never read
+            "GRID_TOPICS_API_KEY": "from-devcycle",
+        }.get(name, "")
+
+    monkeypatch.setattr(llm_accounts, "get_config", get_config)
+    monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "topics-key")
+    topics = LLMConfiguration(provider="openai", account="grid-topics")
+
+    grid = resolved(Accounts(for_topics=True).get(topics))
+    assert (grid.api_key, grid.endpoint) == ("topics-key", "https://grid.example/v1")
+    # the topics key serves topic evaluations only, never a template's calls
+    with pytest.raises(AccountRefused, match="serves topic evaluations only"):
+        resolved(Accounts("r-1", "m-1").get(topics))
+    # the account wins over a named key, as a row does
+    named = resolved(
+        Accounts(for_topics=True).get(
+            LLMConfiguration(
+                provider="openai", account="grid-topics", api_key_name="GW_KEY"
+            )
+        )
+    )
+    assert named.api_key == "topics-key"
+
+    for block, words in (
+        (LLMConfiguration(provider="openai", account="grid"), "no account named"),
+        (
+            LLMConfiguration(provider="azure", account="grid-topics"),
+            "serves the openai provider, this block needs azure_openai",
+        ),
+    ):
+        with pytest.raises(AccountRefused, match=words):
+            resolved(Accounts(for_topics=True).get(block))
+
+    monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "")
+    with pytest.raises(AccountRefused, match="GRID_TOPICS_API_KEY is not set"):
+        resolved(Accounts(for_topics=True).get(topics))
+
+    async def no_gateway(name: str, default: Any, kind: Any) -> str:
+        return ""
+
+    monkeypatch.setattr(llm_accounts, "get_config", no_gateway)
+    with pytest.raises(AccountRefused, match="LITELLM_BASE_URL is required"):
+        resolved(Accounts(for_topics=True).get(topics))
+
+
+def test_a_named_account_is_the_blocks_only_host() -> None:
+    with pytest.raises(ValueError, match="name one account"):
+        LLMConfiguration(provider="openai", account="grid-topics", credential_id=ROW)
+    with pytest.raises(ValueError, match="endpoint belongs to the named account"):
+        LLMConfiguration(
+            provider="openai",
+            account="grid-topics",
+            endpoint="https://attacker.example",
+        )
+
+
+def test_a_named_accounts_key_is_never_an_api_key_name(
+    env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A named account's key serves only that account: never as a block's
+    ``api_key_name``, whatever the block's provider or endpoint."""
+
+    async def get_config(name: str, default: Any, kind: Any) -> str:
+        return {"GRID_TOPICS_API_KEY": "topics-key", "GW_KEY": "named"}.get(name, "")
+
+    monkeypatch.setattr(llm_accounts, "get_config", get_config)
+    accounts = Accounts("r-1", "m-1")
+    for key_name, account in [("GRID_TOPICS_API_KEY", "grid-topics")]:
+        for block in (
+            LLMConfiguration(
+                provider="openai",
+                endpoint="https://elsewhere.example/v1",
+                api_key_name=key_name,
+            ),
+            LLMConfiguration(provider="openai", api_key_name=key_name),
+            LLMConfiguration(provider="azure", api_key_name=key_name),
+            LLMConfiguration(provider="aws_bedrock", api_key_name=key_name),
+        ):
+            with pytest.raises(AccountRefused, match=f"the '{account}' account's key"):
+                resolved(accounts.get(block))
+    # any other named key is still the author's own
+    gw = resolved(
+        accounts.get(
+            LLMConfiguration(
+                provider="openai", endpoint="https://gw", api_key_name="GW_KEY"
+            )
+        )
+    )
+    assert (gw.api_key, gw.endpoint) == ("named", "https://gw")
+
+
 # --- the publish law ------------------------------------------------------------
 
 
@@ -222,6 +322,49 @@ def test_problems_walks_every_block_and_names_each_bad_one(store: Store) -> None
     )
     assert resolved(Accounts("r-1", "m-1").problems(clean)) == []
     assert resolved(Accounts("r-1", "m-1").problems(None)) == []
+
+
+def test_problems_checks_a_named_account_too(store: Store) -> None:
+    conf = _configurations(
+        llm_configurations={"provider": "openai", "account": "grid-topics"},
+        observers=[
+            _observer(account="grid"),
+            _observer(),
+            _observer(account="grid-topics"),
+        ],
+    )
+    found = resolved(Accounts("r-1", "m-1").problems(conf))
+    assert [f.split(":")[0] for f in found] == [
+        "llm_configurations",
+        "observers[0].llm",
+        "observers[2].llm",
+    ]
+    # the topics account serves topic evaluations only, never a template
+    assert "serves topic evaluations only" in found[0]
+    assert "no account named 'grid'" in found[1]
+    assert "serves topic evaluations only" in found[2]
+    assert store.reads == []
+
+
+def test_problems_refuses_a_named_accounts_key_by_name(store: Store) -> None:
+    conf = _configurations(
+        llm_configurations={
+            "provider": "openai",
+            "endpoint": "https://elsewhere.example/v1",
+            "api_key_name": "GRID_TOPICS_API_KEY",
+        },
+        observers=[
+            _observer(api_key_name="GRID_TOPICS_API_KEY"),
+            _observer(api_key_name="GW_KEY"),  # the author's own: not checked here
+        ],
+    )
+    found = resolved(Accounts("r-1", "m-1").problems(conf))
+    assert [f.split(":")[0] for f in found] == [
+        "llm_configurations",
+        "observers[0].llm",
+    ]
+    assert all("the 'grid-topics' account's key" in f for f in found)
+    assert store.reads == []
 
 
 def test_a_template_without_the_word_reads_nothing(store: Store, env: None) -> None:

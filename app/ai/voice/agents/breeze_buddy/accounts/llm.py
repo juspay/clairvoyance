@@ -1,6 +1,7 @@
 """The LLM side: which vendor a text-LLM or realtime block names, and the
 environment's account for it. ``api_key_name`` (a named dynamic-config key)
-lives here — it is an LLM word."""
+and ``account`` (a named deployment account) live here; both are LLM
+words."""
 
 from __future__ import annotations
 
@@ -39,6 +40,50 @@ REALTIME_VENDOR: Dict[str, str] = {
     "gemini": "gemini",
 }
 
+# The deployment accounts a text-LLM block may name by ``account``. Each
+# speaks the OpenAI API, so each serves the openai provider.
+NAMED_ACCOUNTS = ("grid-topics",)
+# Each named account's key, by its pod variable. A key serves only its own
+# account, never a block that names it as its ``api_key_name``.
+NAMED_ACCOUNT_KEYS = {
+    "GRID_TOPICS_API_KEY": "grid-topics",
+}
+
+
+async def named_account(name: str, vendor: str, for_topics: bool = False) -> Account:
+    """The deployment account a block names by ``account``. The block holds
+    only the name; the host and the key are this deployment's own, and the
+    key is read from the pod environment only (static), never from dynamic
+    config, so a DevCycle value can never repoint it. ``grid-topics`` serves
+    post-call topic evaluations only (``for_topics``): its key was split from
+    live traffic's so that neither starves the other. Raises AccountRefused
+    for an unknown name, another provider, a caller the account does not
+    serve, or a missing host or key."""
+    if name not in NAMED_ACCOUNTS:
+        raise AccountRefused(
+            f"no account named {name!r}; one of {', '.join(NAMED_ACCOUNTS)}"
+        )
+    if vendor != "openai":
+        raise AccountRefused(
+            f"account {name!r} serves the openai provider, this block needs "
+            f"{vendor}"
+        )
+    if name == "grid-topics" and not for_topics:
+        raise AccountRefused(
+            "account 'grid-topics' serves topic evaluations only; its key is "
+            "kept apart from live traffic"
+        )
+    # grid-topics: the Grid gateway on the topic evaluations' own key.
+    endpoint = (await get_config("LITELLM_BASE_URL", "", str)).strip()
+    if not endpoint:
+        raise AccountRefused("LITELLM_BASE_URL is required for the grid-topics account")
+    if not static.GRID_TOPICS_API_KEY:
+        raise AccountRefused("GRID_TOPICS_API_KEY is not set in the pod environment")
+    return KeyAccount(
+        api_key=static.GRID_TOPICS_API_KEY,
+        endpoint=endpoint.rstrip("/").removesuffix("/chat/completions"),
+    )
+
 
 async def env_account(vendor: str, kind: str, block: Any) -> Account:
     """The environment's LLM / realtime account for a vendor. A template's
@@ -50,6 +95,12 @@ async def env_account(vendor: str, kind: str, block: Any) -> Account:
     api_key_name = getattr(block, "api_key_name", None) or None
 
     async def named_key(label: str) -> Optional[str]:
+        owner = NAMED_ACCOUNT_KEYS.get(api_key_name or "")
+        if owner:
+            raise AccountRefused(
+                f"{api_key_name} is the {owner!r} account's key; it serves only "
+                "that account and is never an api_key_name"
+            )
         # A custom endpoint without a named key would send the default key
         # to a third party — refused, as before.
         if endpoint and not api_key_name:

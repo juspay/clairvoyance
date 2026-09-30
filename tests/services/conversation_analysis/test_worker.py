@@ -13,6 +13,8 @@ import openai
 import pytest
 from fastapi import HTTPException
 
+import app.ai.voice.agents.breeze_buddy.accounts.llm as llm_accounts
+import app.ai.voice.agents.breeze_buddy.llm as llm_factory
 from app.ai.voice.agents.breeze_buddy.chat import cleanup as chat_cleanup
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis import (
     queue,
@@ -78,11 +80,11 @@ async def test_prompt_replacement_preserves_json_braces(
     )
     build_llm = AsyncMock(return_value=llm)
     monkeypatch.setattr(
-        extractor,
+        llm_accounts,
         "get_config",
         AsyncMock(return_value="https://grid.example/v1/chat/completions"),
     )
-    monkeypatch.setattr(extractor, "resolve_openai", build_llm)
+    monkeypatch.setattr(llm_factory, "resolve_openai", build_llm)
     monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "topics-key")
     configuration = {
         "model": "minimaxai/minimax-m2",
@@ -117,8 +119,8 @@ async def test_agent_prompt_is_sent_only_when_enabled(
     llm = SimpleNamespace(
         run_inference=AsyncMock(return_value='{"customer_needs": [], "topics": []}')
     )
-    monkeypatch.setattr(extractor, "get_config", AsyncMock(return_value="https://g"))
-    monkeypatch.setattr(extractor, "resolve_openai", AsyncMock(return_value=llm))
+    monkeypatch.setattr(llm_accounts, "get_config", AsyncMock(return_value="https://g"))
+    monkeypatch.setattr(llm_factory, "resolve_openai", AsyncMock(return_value=llm))
     monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "topics-key")
     transcript = [
         {"role": "system", "content": "You are Priya calling from SBI."},
@@ -138,6 +140,114 @@ async def test_agent_prompt_is_sent_only_when_enabled(
         )
         prompt = llm.run_inference.await_args.kwargs["system_instruction"]
         assert prompt.count("calling from SBI") == expected_count
+
+
+def test_a_topic_config_names_its_account_and_its_gateway_fields() -> None:
+    resolve = extractor.resolve_topic_evaluation_configuration
+    # no account named: where every topic evaluation ran before accounts
+    assert resolve({"model": "m"})["account"] == "grid-topics"
+    assert resolve({"model": "m", "account": " grid-topics "})["account"] == (
+        "grid-topics"
+    )
+    vertex = resolve(
+        {"provider": "google_vertex", "region": "asia-south1", "model": "gemini"}
+    )
+    assert (vertex["account"], vertex["extra_body"]) == (None, None)
+    assert resolve({"model": "m", "extra_body": {}})["extra_body"] is None
+    for configuration, words in (
+        (
+            {"provider": "azure", "model": "m", "account": "grid-topics"},
+            "account needs the openai provider",
+        ),
+        ({"model": "m", "extra_body": ["low"]}, "extra_body must be an object"),
+        (
+            {"model": "m", "extra_body": {"stream": False, "model": "x", "user": "u"}},
+            "extra_body may not set model, stream",
+        ),
+    ):
+        with pytest.raises(ValueError, match=words):
+            resolve(configuration)
+
+
+async def test_a_topic_config_patch_checks_the_account_it_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routers.breeze_buddy.topics import handlers
+    from app.schemas.breeze_buddy.conversation_analysis import (
+        UpdateTopicConfigurationRequest,
+    )
+
+    current: dict[str, Any] = {
+        "configuration": {
+            "provider": "openai",
+            "model": "glm-5.3-flash",
+            "system_prompt": "p",
+            "settings": {"stream": True},
+        }
+    }
+    saved: dict = {}
+
+    async def update(template_id: str, patch: dict) -> dict:
+        saved.update(patch)
+        return {"configuration": {**current["configuration"], **patch}}
+
+    monkeypatch.setattr(
+        handlers, "get_evaluation_config", AsyncMock(return_value=current)
+    )
+    monkeypatch.setattr(handlers, "update_evaluation_configuration", update)
+    monkeypatch.setattr(
+        llm_accounts, "get_config", AsyncMock(return_value="https://grid.example/v1")
+    )
+
+    # a misspelt account: refused before it is saved
+    with pytest.raises(HTTPException) as misspelt:
+        await handlers.update_topic_configuration_handler(
+            TEMPLATE_ID, UpdateTopicConfigurationRequest(account="grid-topic")
+        )
+    assert misspelt.value.status_code == 400
+    assert "no account named 'grid-topic'" in misspelt.value.detail
+    assert saved == {}
+
+    request = UpdateTopicConfigurationRequest(
+        account="grid-topics",
+        model="glm-5.3-flash",
+        extra_body={"reasoning_effort": "low"},
+    )
+    # no key for the account in this deployment: refused before it is saved
+    monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "")
+    with pytest.raises(HTTPException) as refused:
+        await handlers.update_topic_configuration_handler(TEMPLATE_ID, request)
+    assert refused.value.status_code == 400
+    assert "GRID_TOPICS_API_KEY" in refused.value.detail
+    assert saved == {}
+
+    monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "topics-key")
+    response = await handlers.update_topic_configuration_handler(TEMPLATE_ID, request)
+    assert saved == {
+        "account": "grid-topics",
+        "model": "glm-5.3-flash",
+        "extra_body": {"reasoning_effort": "low"},
+    }
+    assert (response.account, response.extra_body) == (
+        "grid-topics",
+        {"reasoning_effort": "low"},
+    )
+
+    # another provider drops the openai account and its gateway fields
+    saved.clear()
+    current["configuration"] = {
+        **current["configuration"],
+        "account": "grid-topics",
+        "extra_body": {"reasoning_effort": "low"},
+        "settings": {},
+    }
+    await handlers.update_topic_configuration_handler(
+        TEMPLATE_ID,
+        UpdateTopicConfigurationRequest(
+            provider="google_vertex", region="asia-south1", model="gemini"
+        ),
+    )
+    assert (saved["account"], saved["extra_body"]) == (None, None)
 
 
 def test_a_setting_of_the_wrong_type_is_refused() -> None:
@@ -1213,7 +1323,7 @@ async def test_gateway_evaluations_stream_through_the_shared_pool(
     monkeypatch.setattr(extractor, "get_openai_httpx_client", lambda: pool)
     monkeypatch.setattr(extractor, "_FIRST_TOKEN_TIMEOUT_SECONDS", 1)
     monkeypatch.setattr(
-        extractor, "get_config", AsyncMock(return_value="https://grid.example/v1")
+        llm_accounts, "get_config", AsyncMock(return_value="https://grid.example/v1")
     )
     monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "topics-key")
     transcript = [{"role": "user", "content": "My order is late"}]

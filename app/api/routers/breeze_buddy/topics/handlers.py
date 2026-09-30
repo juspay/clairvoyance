@@ -2,9 +2,11 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.extractor import (
     resolve_topic_evaluation_configuration,
 )
+from app.ai.voice.llm import LLMConfiguration
 from app.api.routers.breeze_buddy.templates.rbac import validate_template_access
 from app.database.accessor.breeze_buddy.evaluation_config import (
     add_discovered_topics,
@@ -129,7 +131,18 @@ async def update_topic_configuration_handler(
         if "provider" in patch and patch["provider"] != existing["provider"]:
             patch.setdefault("sdk", None)
             patch.setdefault("region", None)
+            patch.setdefault("account", None)
+            patch.setdefault("extra_body", None)
         resolved = resolve_topic_evaluation_configuration({**existing, **patch})
+        if resolved["account"] and ("account" in patch or "provider" in patch):
+            # The resolver every evaluation uses: an unknown account, or one
+            # this deployment has no key for, is a 400 here rather than a
+            # FAILED row on every evaluation after it.
+            await Accounts(for_topics=True).get(
+                LLMConfiguration(
+                    provider=resolved["provider"], account=resolved["account"]
+                )
+            )
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
