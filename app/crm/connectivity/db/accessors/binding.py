@@ -5,16 +5,21 @@ owns their fate — an installation and its primary pipe are written together
 or not at all.
 """
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.crm.connectivity.db.decoders.binding import decode_binding
 from app.crm.connectivity.db.queries.binding import (
     binding_by_address_query,
     binding_by_id_query,
+    buddy_binding_query,
     has_active_primary_binding_query,
     inbound_binding_query,
+    lock_channel_bindings_query,
+    merchant_bindings_query,
     pause_bindings_for_installation_query,
     primary_binding_query,
+    update_conversation_channel_query,
+    update_template_message_channel_query,
     upsert_binding_query,
 )
 from app.crm.connectivity.schemas.connector import ChannelBinding
@@ -119,4 +124,57 @@ async def get_binding_for_inbound(
     query, values = inbound_binding_query(channel, address)
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None
+
+
+async def list_merchant_bindings(merchant_id: str) -> List[ChannelBinding]:
+    """Every non-retired pipe of this merchant, default first."""
+    query, values = merchant_bindings_query(merchant_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_binding(row) for row in rows]
+
+
+async def buddy_binding(merchant_id: str, channel: str) -> Optional[ChannelBinding]:
+    """The active binding Buddy answers on, or None when none is picked."""
+    query, values = buddy_binding_query(merchant_id, channel)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None
+
+
+async def lock_channel_bindings(
+    conn: DbTxn, merchant_id: str, binding_id: str
+) -> List[ChannelBinding]:
+    """The merchant's bindings on ``binding_id``'s channel, locked; empty when
+    that binding is not this merchant's."""
+    query, values = lock_channel_bindings_query(merchant_id, binding_id)
+    rows = await conn.fetch(query, *values)
+    return [decode_binding(row) for row in rows]
+
+
+async def update_template_message_channel(
+    conn: DbTxn, merchant_id: str, binding_id: str, is_primary: bool
+) -> Optional[ChannelBinding]:
+    """The binding after it was marked (or unmarked) as the one templates go
+    out from; None when it is not this merchant's."""
+    query, values = update_template_message_channel_query(
+        merchant_id, binding_id, is_primary
+    )
+    row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None
+
+
+async def update_conversation_channel(
+    conn: DbTxn,
+    merchant_id: str,
+    binding_id: str,
+    conversation: Optional[Dict[str, Any]],
+) -> Optional[ChannelBinding]:
+    """The binding after Buddy's settings were put on it — or taken off,
+    with ``None``; None when the binding is not this merchant's."""
+    query, values = update_conversation_channel_query(
+        merchant_id, binding_id, conversation
+    )
+    row = await conn.fetchrow(query, *values)
     return decode_binding(row) if row is not None else None

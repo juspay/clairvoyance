@@ -1,6 +1,7 @@
 """SQL builders for crm_channel_binding (T12, the pipe)."""
 
-from typing import Any, List, Tuple
+import json
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.connectivity.vocabulary.status import (
     BINDING_ACTIVE,
@@ -185,3 +186,106 @@ def inbound_binding_query(channel: str, address: str) -> Tuple[str, List[Any]]:
            AND status <> $3
     """
     return query, [channel, address, BINDING_RETIRED]
+
+
+def merchant_bindings_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """Every pipe the merchant still holds — not the retired ones, which
+    have surrendered their address. Default first, then oldest first."""
+    query = f"""
+        SELECT {BINDING_COLUMNS}
+          FROM {BINDING_TABLE}
+         WHERE merchant_id = $1
+           AND status <> $2
+         ORDER BY is_primary DESC, created_at
+    """
+    return query, [merchant_id, BINDING_RETIRED]
+
+
+# ---------------------------------------------------------------------------
+# Bindings: the template binding (is_primary) and Buddy's binding (the one row
+# holding capabilities["conversation"], migration 085). The writes below run
+# inside accounts/channel_settings.py's bindings atom, after
+# lock_channel_bindings_query.
+# ---------------------------------------------------------------------------
+
+
+def lock_channel_bindings_query(
+    merchant_id: str, binding_id: str
+) -> Tuple[str, List[Any]]:
+    """Every binding of the merchant on ``binding_id``'s channel, that one
+    included, locked in id order. Two changes at once queue behind each
+    other instead of each seeing the old holder and tripping a unique index.
+    Retired rows too: the move clears the config wherever it sits."""
+    query = f"""
+        SELECT {BINDING_COLUMNS}
+          FROM {BINDING_TABLE}
+         WHERE merchant_id = $1
+           AND channel = (
+                   SELECT channel FROM {BINDING_TABLE}
+                    WHERE merchant_id = $1 AND id = $2::uuid
+               )
+         ORDER BY id
+           FOR UPDATE
+    """
+    return query, [merchant_id, binding_id]
+
+
+def update_template_message_channel_query(
+    merchant_id: str, binding_id: str, is_primary: bool
+) -> Tuple[str, List[Any]]:
+    """Mark one binding as the one templates go out from (``True``) — or
+    unmark it (``False``). The atom decides from the rows it locked, and
+    check_primary has already refused a binding that is not active. A
+    switch unmarks the current primary before marking the new one:
+    crm_channel_binding_primary_uq is checked per statement."""
+    query = f"""
+        UPDATE {BINDING_TABLE}
+           SET is_primary = $3
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+        RETURNING {BINDING_COLUMNS}
+    """
+    return query, [merchant_id, binding_id, is_primary]
+
+
+def update_conversation_channel_query(
+    merchant_id: str, binding_id: str, conversation: Optional[Dict[str, Any]]
+) -> Tuple[str, List[Any]]:
+    """Put Buddy's whole settings object on one binding, under
+    capabilities["conversation"] — or take it off, with ``None``.
+
+    It writes, it never merges: the atom builds the object from the rows it
+    locked (lock_channel_bindings_query), so nothing changes in between. Only
+    that key is touched; every other capability the provider declared stays
+    as it was. A move takes the settings off the old binding before putting
+    them on the new one: crm_channel_binding_buddy_uq is checked per
+    statement."""
+    query = f"""
+        UPDATE {BINDING_TABLE}
+           SET capabilities = CASE
+                   WHEN $3::jsonb IS NULL THEN capabilities - 'conversation'
+                   ELSE jsonb_set(capabilities, '{{conversation}}', $3::jsonb)
+               END
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+        RETURNING {BINDING_COLUMNS}
+    """
+    return query, [
+        merchant_id,
+        binding_id,
+        json.dumps(conversation) if conversation is not None else None,
+    ]
+
+
+def buddy_binding_query(merchant_id: str, channel: str) -> Tuple[str, List[Any]]:
+    """The active binding Buddy answers on, if the merchant has picked one.
+    The predicate is 085's, so the unique index answers it."""
+    query = f"""
+        SELECT {BINDING_COLUMNS}
+          FROM {BINDING_TABLE}
+         WHERE merchant_id = $1
+           AND channel = $2
+           AND capabilities ? 'conversation'
+           AND status = $3
+    """
+    return query, [merchant_id, channel, BINDING_ACTIVE]

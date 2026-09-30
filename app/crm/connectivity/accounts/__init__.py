@@ -7,6 +7,8 @@ Importers name the file they mean:
                          every connector
     installations.py     which installation is behind a pipe, whether it is
                          usable, and its credentials
+    channel_settings.py  which number templates go out from, which number
+                         Buddy answers on, and Buddy's settings
 
 The tables' mechanics stay in ``connectivity/db/`` (the boundary checker
 pins a table's SQL to its owning module's db/ package).

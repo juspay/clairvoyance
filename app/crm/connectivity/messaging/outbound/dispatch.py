@@ -26,6 +26,7 @@ from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.messaging.gate import gate, mint_send_token
+from app.crm.connectivity.messaging.receipts import apply_filed_receipts
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
 from app.crm.connectivity.send import send
 from app.crm.connectivity.vocabulary.reasons import (
@@ -320,6 +321,12 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
             f"outcome '{plan.status}' discarded"
         )
         return
+
+    # The row knows its provider id now: a receipt that beat this write was
+    # filed but matched nothing — read it back and apply it (receipts.py).
+    await apply_filed_receipts(
+        message.merchant_id, message.channel, plan.provider_message_id
+    )
 
     # Every message ends here, so counting this line by status IS the
     # send-failure rate — no second signal to keep in step. reason_class
