@@ -108,6 +108,34 @@ class ResearchDelta(BaseModel):
     sources: List[str] = Field(default_factory=list)
 
 
+ColorRole = Literal["primary", "secondary", "accent", "background", "link"]
+
+
+class BrandColor(BaseModel):
+    """One colour, the job it does, and the source that said so."""
+
+    role: ColorRole
+    hex: str
+    source: str
+
+
+class BrandLook(BaseModel):
+    """How a site looks: the colours and logo an assistant can start from."""
+
+    colors: List[BrandColor] = Field(default_factory=list)
+    logo_url: Optional[str] = None
+    # The site's square icon: what fits a small square slot when the logo is
+    # a wide wordmark.
+    icon_url: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+
+    def color(self, role: ColorRole) -> Optional[str]:
+        for entry in self.colors:
+            if entry.role == role:
+                return entry.hex
+        return None
+
+
 class ToolBinding(BaseModel):
     kind: Literal["mcp", "function"]
     name: str
@@ -152,7 +180,10 @@ class MirrorPolicy(BaseModel):
 
 
 __all__ = [
+    "BrandColor",
+    "BrandLook",
     "Classification",
+    "ColorRole",
     "InstallMethod",
     "MirrorPolicy",
     "ResearchDelta",

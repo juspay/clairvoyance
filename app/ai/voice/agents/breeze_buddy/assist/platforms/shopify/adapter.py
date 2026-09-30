@@ -71,6 +71,9 @@ PERMANENT_DOMAIN_SUFFIX = ".myshopify.com"
 # script; it is both a classifier signal and the identity the tenant is
 # keyed by, so the probe reads its value rather than just noting it.
 SHOP_LITERAL = "Shopify.shop"
+# The platform's own colours (its badge, its wallet button, its admin green):
+# they show up on ordinary storefronts and are never the merchant's brand.
+STOCK_COLORS: Tuple[str, ...] = ("#96bf48", "#5a31f4", "#008060")
 # One DNS label — what the platform allows in front of the permanent suffix.
 _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
@@ -119,6 +122,9 @@ class ShopifyAdapter(GenericAdapter):
 
     def store_name(self, merchant_domain: str) -> str:
         return merchant_domain.removesuffix(PERMANENT_DOMAIN_SUFFIX)
+
+    def stock_colors(self) -> Tuple[str, ...]:
+        return STOCK_COLORS
 
     def legacy_section_markers(self) -> LegacyMarkers:
         return {LEGACY_SECTION_START: (self.id, LEGACY_SECTION_END)}

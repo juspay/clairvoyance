@@ -49,6 +49,8 @@ class PlatformAdapter(Protocol):
         self, profile: SiteProfile, budget_seconds: float
     ) -> ResearchDelta: ...
 
+    def stock_colors(self) -> Tuple[str, ...]: ...
+
     def legacy_section_markers(self) -> LegacyMarkers: ...
 
     def validate_blueprint(
@@ -132,6 +134,11 @@ class GenericAdapter:
         self, profile: SiteProfile, budget_seconds: float
     ) -> ResearchDelta:
         return ResearchDelta()
+
+    def stock_colors(self) -> Tuple[str, ...]:
+        """Colours that belong to the platform (its badges, its buttons), never
+        offered as a merchant's brand colour. A plain website has none."""
+        return ()
 
     def legacy_section_markers(self) -> LegacyMarkers:
         return {}
