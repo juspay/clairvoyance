@@ -346,6 +346,8 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
             # skip LLM-based detection entirely.
             overrides = req.configurations_override or {}
             stt_language = overrides.get("stt_language", "")
+            if isinstance(stt_language, list):
+                stt_language = stt_language[0] if stt_language else ""
             normalized_language = SHORT_TO_FULL_LANGUAGE_CODE.get(
                 stt_language, stt_language
             )
