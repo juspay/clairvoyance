@@ -9,7 +9,7 @@ from typing import List
 from app.crm.outreach.db.decoders.step import decode_step
 from app.crm.outreach.db.queries.step import run_steps_query
 from app.crm.outreach.schemas import RunStep
-from app.crm.shared.db import crm_connection
+from app.crm.shared.db import crm_replica_read
 
 
 async def run_steps(merchant_id: str, run_id: str, limit: int) -> List[RunStep]:
@@ -18,8 +18,7 @@ async def run_steps(merchant_id: str, run_id: str, limit: int) -> List[RunStep]:
     OLD end, where a timeline reader expects it) and they are reversed
     here, so the caller always gets chronological order. The OPEN square
     is not here — steps.timeline() unions it in from the run row (canon
-    T26, law 3)."""
+    T26, law 3). The console's read: the replica."""
     query, values = run_steps_query(merchant_id, run_id, limit)
-    async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
+    rows = await crm_replica_read(query, values)
     return [decode_step(row) for row in reversed(rows)]

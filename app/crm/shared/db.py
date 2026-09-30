@@ -8,17 +8,23 @@ through contract functions, never another module's tables directly.
 
 from contextlib import asynccontextmanager
 from typing import (
+    Any,
     AsyncIterator,
     Awaitable,
     Callable,
     Concatenate,
+    List,
+    Mapping,
     ParamSpec,
+    Sequence,
     TypeVar,
+    cast,
 )
 
 import asyncpg
 
-from app.database import db_connection
+from app.database import READER_TIMEOUT_SECS, db_connection
+from app.database.queries import run_reader_query
 
 # The opaque vocabulary logic files are allowed to see (via each module's
 # db/ door). Logic types against DbTxn and catches UniqueViolation without
@@ -41,6 +47,26 @@ async def crm_connection() -> AsyncIterator[asyncpg.Connection]:
     each instead of reusing one."""
     async with db_connection() as conn:
         yield conn
+
+
+async def crm_replica_read(
+    query: str, values: Sequence[Any]
+) -> List[Mapping[str, Any]]:
+    """THE one way a crm read reaches the READ REPLICA — for the console's
+    reports only (Performance, Versions, Runs, a customer's journey),
+    never for a worker or a write. The replica runs behind the primary
+    (seconds at peak): a chart a few seconds old is fine, a walker or a
+    claim acting on a stale row acts twice.
+
+    No replica configured → the writer, so local runs are unchanged. A
+    replica failure RAISES: retrying a report on the primary would put
+    back the very load the replica takes off it (run_reader_query's
+    default). READER_TIMEOUT_SECS bounds taking and returning the
+    connection and the statement — named here too, because the writer
+    fallback's pool has no ceiling of its own."""
+    rows = await run_reader_query(query, list(values), timeout=READER_TIMEOUT_SECS)
+    # asyncpg Records read by key like the Mapping the crm decoders take.
+    return cast(List[Mapping[str, Any]], rows)
 
 
 P = ParamSpec("P")

@@ -28,8 +28,9 @@ PR time — earlier than a grant would fail:
      *_in_txn: the suffix declares "I am a boundary's body".
   9. ATOMIC DOCSTRING — every *_in_txn body opens with "ATOMIC: <what
      shares fate> — <the law>"; grep ATOMIC: is the atom inventory.
-  10. HANDLES STAY DOWN — connection()/crm_connection never appears in
-     logic; accessors self-scope single statements and batch loops. A
+  10. HANDLES STAY DOWN — connection()/crm_connection/crm_replica_read
+     never appears in logic; accessors self-scope single statements and
+     batch loops, and choose the replica there (console reads only). A
      logic file touches a handle ONLY as an _in_txn body's txn param.
   11. PROVIDER FACE CONFINEMENT — each provider face has exactly ONE
      composition root outside providers/: the send door (the ADAPTERS
@@ -321,7 +322,7 @@ def check(root: Path = ROOT) -> list[str]:
                         f"named *_in_txn — the suffix declares the boundary body"
                     )
             if not in_db_pkg and re.search(
-                r"\bcrm_connection\b|async with connection\(", text
+                r"\bcrm_(?:connection|replica_read)\b|async with connection\(", text
             ):
                 errors.append(
                     f"{rp}: connection handle in logic — accessors self-scope "

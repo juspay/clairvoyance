@@ -320,7 +320,11 @@ async def test_init_db_pool_creates_reader_with_writer_fallbacks(patch_db_env):
         "port": "5432",
         "min_size": 1,
         "max_size": 3,
+        # the replica's statement ceiling lives on its pool; the writer's
+        # pool is left without one
+        "command_timeout": app_database.READER_TIMEOUT_SECS,
     }
+    assert "command_timeout" not in writer_kwargs
     assert app_database.reader_pool is not None
 
 

@@ -29,6 +29,15 @@ from app.services.aws.kms import decrypt_kms
 
 pool = None
 reader_pool = None
+# The replica's statement ceiling (seconds), set once on the reader pool as
+# asyncpg's command_timeout: any replica statement that names no timeout of
+# its own is cancelled here. A caller's explicit timeout still wins
+# (run_reader_query passes its own). Replica readers that can fall back to
+# the writer pass it explicitly too, since the writer pool has no ceiling.
+# Above loom's 30 s client timeout: a report the browser has abandoned can
+# keep running here for the rest of the minute — on the replica, never the
+# primary (on 21 Sep 2026 abandoned reports on the PRIMARY held prod's DB).
+READER_TIMEOUT_SECS = 60
 # Serialises pool CREATION. The lifespan swallows an init failure and keeps
 # serving (app/main.py), so `pool` can still be None when traffic arrives --
 # and `create_pool()` awaits, so concurrent cold starts would each build a
@@ -158,6 +167,7 @@ async def _create_reader_pool(
             port=POSTGRES_READER_PORT or POSTGRES_PORT,
             min_size=min_size,
             max_size=max_size,
+            command_timeout=READER_TIMEOUT_SECS,
         )
         logger.info("Reader database pool initialized successfully.")
     except Exception as e:

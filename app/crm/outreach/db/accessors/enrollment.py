@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
-from app.core.config.static import CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
 from app.crm.outreach.db.decoders.enrollment import (
     decode_customer_run,
     decode_run,
@@ -54,7 +53,7 @@ from app.crm.outreach.schemas import (
     RunRow,
     WorkflowRunSummary,
 )
-from app.crm.shared.db import crm_connection
+from app.crm.shared.db import crm_connection, crm_replica_read
 
 
 async def occupied_nodes(
@@ -241,11 +240,10 @@ async def get_run(
     merchant_id: str, workflow_id: str, run_id: str
 ) -> Optional[EnrollmentRun]:
     """One run by id, or None when it is not this merchant's or not this
-    plan's."""
+    plan's. The console's read (a run's steps and calls): the replica."""
     query, values = get_run_query(merchant_id, workflow_id, run_id)
-    async with crm_connection() as conn:
-        row = await conn.fetchrow(query, *values)
-    return decode_run(row) if row else None
+    rows = await crm_replica_read(query, values)
+    return decode_run(rows[0]) if rows else None
 
 
 async def open_runs_for_customer(
@@ -360,7 +358,8 @@ async def list_runs(
 ) -> Tuple[List[RunRow], int]:
     """One page of runs and the filtered total. The total rides on the
     rows; an empty page (an offset past the last match) has none, so it
-    is counted on its own — never reported as 0 for a list that is not."""
+    is counted on its own — never reported as 0 for a list that is not.
+    The console's Runs tab: the replica."""
     query, values = list_runs_query(
         merchant_id,
         workflow_id,
@@ -376,25 +375,25 @@ async def list_runs(
         anchor_entered_at,
         anchor_id,
     )
-    async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
-        if rows:
-            total = int(rows[0]["total"])
-        else:
-            count_query, count_values = count_runs_query(
-                merchant_id,
-                workflow_id,
-                status,
-                node,
-                version,
-                exit_reason,
-                search,
-                since,
-                until,
-                anchor_entered_at,
-                anchor_id,
-            )
-            total = int(await conn.fetchval(count_query, *count_values) or 0)
+    rows = await crm_replica_read(query, values)
+    if rows:
+        total = int(rows[0]["total"])
+    else:
+        count_query, count_values = count_runs_query(
+            merchant_id,
+            workflow_id,
+            status,
+            node,
+            version,
+            exit_reason,
+            search,
+            since,
+            until,
+            anchor_entered_at,
+            anchor_id,
+        )
+        counted = await crm_replica_read(count_query, count_values)
+        total = int(counted[0]["total"] or 0) if counted else 0
     return [decode_run_row(row) for row in rows], total
 
 
@@ -404,14 +403,10 @@ async def run_endings_in_window(
     since: Optional[datetime],
     until: Optional[datetime],
 ) -> List[RunEnding]:
-    """One RunEnding per run of the plan that entered in the window."""
+    """One RunEnding per run of the plan that entered in the window. The
+    console's Performance tab: the replica."""
     query, values = run_endings_in_window_query(merchant_id, workflow_id, since, until)
-    async with crm_connection() as conn:
-        # Bounded like the lead reads it feeds: a report the browser gave
-        # up on must not keep running (asyncpg cancels on timeout).
-        rows = await conn.fetch(
-            query, *values, timeout=CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
-        )
+    rows = await crm_replica_read(query, values)
     return [
         RunEnding(
             str(row["id"]),
@@ -452,8 +447,9 @@ async def workflow_summary(
     query, values = workflow_summary_query(merchant_id, workflow_id, since, until)
     # The arm counts are their own statement (enh A/04): a run with two
     # split squares expands to two rows there, which folded into the
-    # aggregate above would count it twice. Both reads sit on one
-    # connection and one window — read-only, so no atom is owed.
+    # aggregate above would count it twice. All four reads share one
+    # window, each its own statement — read-only, so no atom is owed. The
+    # console's Performance tab: the replica.
     split_query, split_values = workflow_split_counts_query(
         merchant_id, workflow_id, since, until
     )
@@ -461,18 +457,17 @@ async def workflow_summary(
         merchant_id, workflow_id, since, until, tz
     )
     node_query, node_values = open_by_node_query(merchant_id, workflow_id)
-    async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
-        split_rows = await conn.fetch(split_query, *split_values)
-        day_rows = await conn.fetch(day_query, *day_values)
-        node_rows = await conn.fetch(node_query, *node_values)
+    rows = await crm_replica_read(query, values)
+    split_rows = await crm_replica_read(split_query, split_values)
+    day_rows = await crm_replica_read(day_query, day_values)
+    node_rows = await crm_replica_read(node_query, node_values)
     return decode_run_summary(rows, split_rows, day_rows, node_rows)
 
 
 async def customer_runs(
     merchant_id: str, customer_id: str, limit: int
 ) -> List[CustomerRun]:
+    """A customer's journey in the console: the replica."""
     query, values = customer_runs_query(merchant_id, customer_id, limit)
-    async with crm_connection() as conn:
-        rows = await conn.fetch(query, *values)
+    rows = await crm_replica_read(query, values)
     return [decode_customer_run(row) for row in rows]

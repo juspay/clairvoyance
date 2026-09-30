@@ -120,7 +120,11 @@ every driver method on a `txn`/`conn` in a logic file, nesting included.
 `import asyncpg` is legal only in `shared/db.py` and `db/` packages —
 grep-enforced. Single statements and same-builder
 batch loops self-scope INSIDE accessors (`crm_connection`, db-internal —
-no explicit transaction; Postgres runs one statement atomically); a logic
+no explicit transaction; Postgres runs one statement atomically;
+`crm_replica_read(query, values)` is the one door to the read replica, for
+the console's reports only — the replica lags, so no worker, claim or write
+reads there, and a replica failure raises rather than retrying on the
+primary); a logic
 file touches a handle in exactly ONE place: the `txn` param of an
 `_in_txn` body (threading through the atom's private sub-steps is part
 of the body; it never escapes the atom). Multi-

@@ -116,23 +116,14 @@ def test_an_empty_page_is_counted_rather_than_reported_as_nothing() -> None:
 
 @pytest.mark.asyncio
 async def test_the_accessor_counts_when_the_page_is_empty(monkeypatch) -> None:
-    from contextlib import asynccontextmanager
-
     from app.crm.outreach.db.accessors import enrollment as acc
 
-    class Conn:
-        async def fetch(self, query, *values):
-            return []
+    async def fake_read(query, values):
+        if "count(*)::int AS total" in query:
+            return [{"total": 46}]
+        return []
 
-        async def fetchval(self, query, *values):
-            assert "count(*)::int AS total" in query
-            return 46
-
-    @asynccontextmanager
-    async def fake_connection():
-        yield Conn()
-
-    monkeypatch.setattr(acc, "crm_connection", fake_connection)
+    monkeypatch.setattr(acc, "crm_replica_read", fake_read)
     rows, total = await acc.list_runs("m1", "wf", None, 10, 900)
     assert rows == [] and total == 46
 
