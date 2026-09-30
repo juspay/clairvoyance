@@ -24,6 +24,7 @@ shape, modules/00 §1, ruled 7 Sep 2026):
   template.py  template.* — Meta's verdicts about a registered template.
   account.py   account.update — a notice about the WABA itself.
   flow.py      a completed Flow: the form, her answers, our token.
+  bindings.py  binding.buddy_moved — OUR letter: Buddy answers on another binding.
   shared.py    the source words, the narrowed-item read, _f/_entry.
 
 SOURCE · ENTRIES · DERIVERS are the SPEC_MODULES contract and ALL this
@@ -39,6 +40,7 @@ from typing import Dict, List
 from app.crm.record.extractors.engine import Deriver
 from app.crm.record.extractors.whatsapp import (
     account,
+    bindings,
     flow,
     inbound,
     status,
@@ -59,12 +61,20 @@ DERIVERS: Dict[str, Deriver] = {
     "recipient_phone": status.recipient_phone,
     "status": status.status,
     "status_message_id": status.status_message_id,
+    "status_error": status.status_error,
+    "billed_category": status.billed_category,
     "ban_state": account.ban_state,
 }
 
 ENTRIES: List[CatalogEntry] = [
     _entry("message.inbound", "Message received", inbound.fields()),
     _entry("message.status", "Message status", status.fields(), about="merchant"),
+    _entry(
+        "binding.buddy_moved",
+        "Buddy moved to another binding",
+        bindings.buddy_moved_fields(),
+        about="merchant",
+    ),
     _entry(
         "template.status",
         "Template review",

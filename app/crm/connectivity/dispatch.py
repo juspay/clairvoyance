@@ -38,6 +38,7 @@ from app.crm.connectivity.reasons import (
     REASON_SUPPRESSED,
     reason_class,
 )
+from app.crm.connectivity.receipts import apply_parked, sweep_parked
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
 from app.crm.connectivity.status import (
@@ -254,10 +255,26 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
     # pass's claim and sweep lines.
     set_log_context(component=LOG_COMPONENT)
 
-    # Reclaim first, so rows abandoned by a dead worker rejoin this batch
-    # instead of waiting a tick. The sweep KILLS rather than requeues a row
-    # out of attempts — every lap through it was a claim that really sent, so
-    # an unbounded sweep would be an unbounded sender.
+    # Each housekeeping sweep is fenced on its own: one that fails (a lock
+    # timeout, a bad row) must not stop the others or the claim — a
+    # dispatcher that cannot sweep can still send. Reclaim runs first, so
+    # rows abandoned by a dead worker rejoin this batch instead of waiting a
+    # tick.
+    for sweep in (_requeue_stale_claims, _sweep_receipts):
+        try:
+            await sweep()
+        except Exception as e:
+            logger.opt(exception=e).error(f"crm dispatch {sweep.__name__} failed")
+
+    messages = await message_accessor.claim_queued_messages(batch)
+    _log_queue_lag(messages, batch)
+    return messages
+
+
+async def _requeue_stale_claims() -> None:
+    """Return a dead worker's claims to the queue. KILLS rather than requeues
+    a row out of attempts — every lap through here was a claim that really
+    sent, so an unbounded sweep would be an unbounded sender."""
     reclaimed, exhausted = await message_accessor.requeue_stale_claims(
         CRM_DISPATCH_STALE_MINUTES, CRM_DISPATCH_MAX_ATTEMPTS
     )
@@ -276,9 +293,16 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
             f"attempts: {sample_ids(exhausted)}"
         )
 
-    messages = await message_accessor.claim_queued_messages(batch)
-    _log_queue_lag(messages, batch)
-    return messages
+
+async def _sweep_receipts() -> None:
+    """Receipts parked ahead of their row's stamp (receipts.py): drain the
+    ones whose row has the id now, drop the ones past the grace — those name
+    messages this system did not send. Quietly. This is the ONLY place the
+    sweep runs, so it lives and dies with the dispatcher role
+    (worker_main)."""
+    expired = await sweep_parked()
+    if expired:
+        logger.debug(f"crm dispatch dropped {expired} unmatched parked receipt(s)")
 
 
 def _log_queue_lag(messages: Sequence[QueuedMessage], limit: int) -> None:
@@ -385,6 +409,10 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
             f"outcome '{plan.status}' discarded"
         )
         return
+
+    # The row knows its provider id now: any receipt that raced ahead of this
+    # write (parked by receipts.py) is applied here, in order-free fashion.
+    await apply_parked(message.merchant_id, plan.provider_message_id)
 
     # Every message ends here, so counting this line by status IS the
     # send-failure rate — no second signal to keep in step. reason_class

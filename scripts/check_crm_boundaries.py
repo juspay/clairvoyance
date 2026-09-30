@@ -72,6 +72,7 @@ TABLE_OWNERS = {
     "crm_connector_installation": "connectivity",
     "crm_channel_binding": "connectivity",
     "crm_channel_template": "connectivity",
+    "crm_message_receipt_pending": "connectivity",
 }
 
 # ---- rule 11's map: one composition root per provider face ----------------
