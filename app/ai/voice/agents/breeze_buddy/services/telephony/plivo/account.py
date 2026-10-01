@@ -8,14 +8,16 @@ from app.ai.voice.agents.breeze_buddy.accounts import (
     PlivoAccount,
     template_plivo_account,
 )
-from app.database.accessor import get_template_by_id
+from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.schemas import LeadCallTracker
 
 
 async def lead_plivo_account(lead: LeadCallTracker) -> PlivoAccount:
     """The account the lead's template names, else the environment's.
     Raises AccountRefused."""
-    template = await get_template_by_id(lead.template_id) if lead.template_id else None
+    template = (
+        await get_template_by_id_cached(lead.template_id) if lead.template_id else None
+    )
     return await template_plivo_account(
         Accounts(lead.reseller_id, lead.merchant_id),
         getattr(template, "configurations", None),

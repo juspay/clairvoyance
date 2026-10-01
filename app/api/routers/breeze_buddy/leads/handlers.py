@@ -34,6 +34,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import
 from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.recording import (
     download_call_recording as download_call_recording_vobiz,
 )
+from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.types.models import (
     CallRecordingResult,
     LeadCancellation,
@@ -64,7 +65,6 @@ from app.database.accessor import (
     get_lead_by_id,
     get_leads_by_request_id,
     get_telephony_number_by_id,
-    get_template_by_id,
     handle_lead_abort,
     is_number_blacklisted,
 )
@@ -208,7 +208,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
     try:
         # Templates resolve by id ONLY — name-based resolution (and the
         # merchant→reseller shared-template fallback) has been removed.
-        template = await get_template_by_id(req.template_id)
+        template = await get_template_by_id_cached(req.template_id)
         if template:
             # Enforce that the template belongs to the requested reseller/merchant
             if template.reseller_id != req.reseller_id:

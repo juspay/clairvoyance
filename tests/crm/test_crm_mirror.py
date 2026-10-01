@@ -236,9 +236,7 @@ def _mirror_harness(
 
     monkeypatch.setattr(crm_mirror, "record_event", fake_record_event)
     monkeypatch.setattr(crm_mirror, "spawn_background_task", run_now)
-    monkeypatch.setattr(
-        crm_mirror.template_accessor, "get_template_by_id", fake_get_template
-    )
+    monkeypatch.setattr(crm_mirror, "get_template_by_id_cached", fake_get_template)
     return recorded
 
 
