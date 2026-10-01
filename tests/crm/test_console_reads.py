@@ -185,7 +185,11 @@ def test_the_report_and_the_calls_summary_fold_the_same_lead_set() -> None:
     stats_sql, stats_params = get_call_stats_by_runs_query("m1", ["a"], [T0], [None])
     assert facts_params == stats_params == ["m1", ["a"], [T0], [None]]
     for sql in (facts_sql, stats_sql):
-        assert 'JOIN "lead_call_tracker" l ON l."enrollment_id" = r.id' in sql
+        # one enrollment-index probe per run: the OFFSET 0 fence keeps the
+        # planner from flattening it into a hash join over every linked lead
+        assert 'WHERE l."enrollment_id" = r.id' in sql
+        assert sql.count("CROSS JOIN LATERAL (") == 2
+        assert sql.count("OFFSET 0") == 2
         assert 'l."enrollment_id" IS NULL AND l."attempt_count" > 0' in sql
         # equality on the stamped lead's request_id carried through `s`
         # (one row per run × request_id); the correlated IN it replaces

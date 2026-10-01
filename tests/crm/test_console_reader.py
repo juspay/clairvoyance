@@ -80,6 +80,10 @@ def pools(monkeypatch: pytest.MonkeyPatch) -> Tuple[FakePool, FakePool]:
 # customer's journey — each is called by the console routes and nothing else.
 CONSOLE_READS = [
     ("summary", lambda: enrollment.workflow_summary("m1", "wf", None, None), 4),
+    # a windowed summary also counts the window's runs per version (Runs tab)
+    ("windowed summary", lambda: enrollment.workflow_summary("m1", "wf", T0, None), 5),
+    ("has runs", lambda: enrollment.workflow_has_runs("m1", "wf"), 1),
+    ("open runs", lambda: enrollment.workflow_open_runs("m1", "wf"), 2),
     ("report runs", lambda: enrollment.run_endings_in_window("m1", "wf", T0, None), 1),
     ("call stats", lambda: get_call_stats_by_runs("m1", RUNS), 1),
     ("call facts", lambda: get_call_facts_by_runs("m1", RUNS), 1),

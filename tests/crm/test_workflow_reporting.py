@@ -147,10 +147,10 @@ def test_the_arm_counts_are_their_own_statement_over_the_same_window() -> None:
     query, values = workflow_split_counts_query(
         "m1", "wf-1", datetime(2026, 9, 1, tzinfo=timezone.utc), None
     )
-    assert "jsonb_each_text" in query
+    assert "jsonb_object_keys(e.context)" in query
     assert "e.merchant_id = $1" in query and "e.workflow_id = $2" in query
-    assert "fact.key LIKE $5" in query
-    assert "GROUP BY fact.key, fact.value" in query
+    assert "k LIKE $5" in query
+    assert "GROUP BY 1, 2" in query
     assert values[0] == "m1" and values[-1] == "split_%"
 
 
