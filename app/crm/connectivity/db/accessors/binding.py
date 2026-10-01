@@ -5,7 +5,7 @@ owns their fate — an installation and its primary pipe are written together
 or not at all.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.connectivity.db.decoders.binding import decode_binding
 from app.crm.connectivity.db.queries.binding import (
@@ -182,12 +182,14 @@ async def set_primary(
 
 async def take_conversation(
     conn: DbTxn, merchant_id: str, channel: str
-) -> Optional[Dict[str, Any]]:
-    """Buddy's settings as they were stored, lifted off their number; None
-    when no number held them."""
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(the number that held them, Buddy's settings as stored), lifted off
+    that number; None when no number held them."""
     query, values = take_conversation_query(merchant_id, channel)
     row = await conn.fetchrow(query, *values)
-    return jsonb_object(row["conversation"]) if row is not None else None
+    if row is None:
+        return None
+    return str(row["id"]), jsonb_object(row["conversation"])
 
 
 async def put_conversation(

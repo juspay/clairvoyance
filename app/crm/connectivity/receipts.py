@@ -55,7 +55,7 @@ from app.crm.connectivity.db.accessors import (
     message as message_accessor,
     receipt as receipt_accessor,
 )
-from app.crm.connectivity.schemas.message import ProviderReceipt
+from app.crm.connectivity.schemas.message import MessageTick, ProviderReceipt
 from app.crm.connectivity.status import (
     MESSAGE_DELIVERED,
     MESSAGE_FAILED,
@@ -246,3 +246,13 @@ async def sweep_parked() -> int:
     ):
         await apply_parked(merchant_id, provider_message_id)
     return await receipt_accessor.expire_parked(int(PARK_GRACE.total_seconds()))
+
+
+async def message_ticks(
+    merchant_id: str, message_ids: List[str]
+) -> Dict[str, MessageTick]:
+    """What receipts have made of these rows, by id — the conversations
+    timeline shows its ticks from here. Rows of another merchant read as
+    absent."""
+    ticks = await message_accessor.message_ticks(merchant_id, message_ids)
+    return {tick.id: tick for tick in ticks}

@@ -600,6 +600,14 @@ CRM_DISPATCH_BATCH = _positive_int("CRM_DISPATCH_BATCH", 20)
 # long a genuinely dead worker's rows wait for rescue.
 CRM_DISPATCH_STALE_MINUTES = _positive_int("CRM_DISPATCH_STALE_MINUTES", 15)
 
+# The conversations module (the WhatsApp inbox). How often each walker pod
+# runs the inbox sweeps (closing messages, lapsed handoffs, Buddy moving
+# numbers, retention); how long Buddy's responder holds a thread for one
+# turn; and how long resolved threads are kept (inbox D22: 90 days).
+CRM_INBOX_SWEEP_SECONDS = _positive_float("CRM_INBOX_SWEEP_SECONDS", 30.0)
+CRM_INBOX_BOT_LEASE_SECONDS = _positive_int("CRM_INBOX_BOT_LEASE_SECONDS", 90)
+CRM_INBOX_RETENTION_DAYS = _positive_int("CRM_INBOX_RETENTION_DAYS", 90)
+
 # Bounded so one undeliverable message cannot earn a provider rate-limit ban
 # for every other merchant sharing that sender.
 CRM_DISPATCH_MAX_ATTEMPTS = _positive_int("CRM_DISPATCH_MAX_ATTEMPTS", 3)

@@ -91,11 +91,15 @@ async def queue_message(
     template_id: Optional[str],
     variables: Dict[str, Any],
     dedupe_key: str,
+    binding_id: Optional[str] = None,
 ) -> Optional[str]:
     """Propose one send. Returns the new row's id, or None when
     dedupe_key already names a row for this merchant — the producer's
     retry was absorbed (T16 col 23), and it should carry on as if it
     had queued. Raises ValueError on a proposal the vocabulary refuses.
+    ``binding_id`` sends from a named number (a teammate's template from the
+    Inbox goes out on the number the customer wrote to); None is the
+    primary, as every workflow send.
 
     A new row files ``message.queued`` (letters.py) so the conversation
     timeline shows the template the customer is about to get. The letter is
@@ -115,6 +119,7 @@ async def queue_message(
         template_id,
         variables,
         dedupe_key,
+        binding_id,
     )
     # The letter is the inbox timeline's only record of what we sent (D1), so
     # every template on a channel WITH conversations files one — broadcasts

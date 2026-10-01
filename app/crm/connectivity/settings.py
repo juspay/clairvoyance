@@ -17,11 +17,12 @@ parse, a number that isn't Buddy's — every one reads as the defaults: no
 agent, and ``human_handoff`` OFF.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.db import DbTxn, atomically
 from app.crm.connectivity.db.accessors import binding as binding_accessor
+from app.crm.connectivity.letters import file_buddy_moved_letter
 from app.crm.connectivity.schemas.connector import (
     ChannelBinding,
     ChannelSettingsRead,
@@ -168,7 +169,7 @@ async def update_channel_settings(
     agent_id = changes.get("default_agent_id")
     if agent_id is not None:
         await _check_agent(merchant_id, agent_id)
-    binding = await atomically(
+    result = await atomically(
         _update_number_in_txn,
         merchant_id,
         binding_id,
@@ -176,8 +177,20 @@ async def update_channel_settings(
         patch.is_primary is True,
         patch.is_buddy_number is True or bool(changes),
     )
-    if binding is None:
+    if result is None:
         return None
+    binding, moved_from = result
+    if moved_from is not None:
+        # After the commit, never inside it: the letter is how conversations
+        # learns to resolve the old number's threads, and a letter for a move
+        # that rolled back would resolve them for nothing. Fire-and-forget;
+        # conversations' window sweep catches what a lost letter leaves.
+        await file_buddy_moved_letter(
+            merchant_id=merchant_id,
+            channel=binding.channel,
+            from_binding_id=moved_from,
+            to_binding_id=binding.id,
+        )
     if changes:
         logger.bind(merchant_id=merchant_id, fields=sorted(changes)).info(
             f"Buddy's settings saved on binding {binding_id}"
@@ -192,15 +205,17 @@ async def _update_number_in_txn(
     changes: Dict[str, Any],
     make_primary: bool,
     make_buddy: bool,
-) -> Optional[ChannelBinding]:
+) -> Optional[Tuple[ChannelBinding, Optional[str]]]:
     """ATOMIC: the merchant's numbers on the channel are locked together, so
     switching the primary and moving Buddy each see ONE holder and leave one
     — two changes at once queue instead of racing past each other into a
-    unique-index 500. A refusal raises and rolls back every part."""
+    unique-index 500. A refusal raises and rolls back every part. Returns
+    the number and, when Buddy moved here from another number, that one."""
     numbers = await binding_accessor.lock_channel_numbers(txn, merchant_id, binding_id)
     target = next((n for n in numbers if n.id == binding_id), None)
     if target is None or target.status == BINDING_RETIRED:
         return None
+    moved_from: Optional[str] = None
 
     if make_primary and not target.is_primary:
         check_primary(target, numbers)
@@ -217,21 +232,25 @@ async def _update_number_in_txn(
             raise SettingsError(
                 "this number is paused — reconnect it before Buddy answers on it"
             )
-        moved = await binding_accessor.take_conversation(
+        taken = await binding_accessor.take_conversation(
             txn, merchant_id, target.channel
         )
+        if taken is not None:
+            moved_from = taken[0]
         target = await binding_accessor.put_conversation(
-            txn, merchant_id, target.id, moved or {}
+            txn, merchant_id, target.id, taken[1] if taken is not None else {}
         )
         if target is None:
             raise RuntimeError(f"binding {binding_id} vanished under its lock")
         logger.bind(merchant_id=merchant_id).info(
             f"Buddy now answers on binding {binding_id}"
-            + (" (settings moved from another number)" if moved is not None else "")
+            + (f" (moved from binding {moved_from})" if moved_from else "")
         )
 
     if changes:
         target = await binding_accessor.update_conversation_settings(
             txn, merchant_id, target.id, changes
         )
-    return target
+        if target is None:
+            raise RuntimeError(f"binding {binding_id} lost Buddy's settings")
+    return target, moved_from

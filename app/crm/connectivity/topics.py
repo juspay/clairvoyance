@@ -48,6 +48,12 @@ TOPIC_INBOUND = "message.inbound"
 #: word the provider's own letters about that channel carry.
 TOPIC_QUEUED = "message.queued"
 
+#: Buddy moved to another number: the merchant chose a different number for
+#: Buddy to answer on, and its settings moved with it. Filed by THIS module
+#: after the move commits (settings.py); the conversations module resolves
+#: the old number's open threads when it hears it. Source = the channel.
+TOPIC_BUDDY_MOVED = "number.buddy_moved"
+
 #: A provider said something about the connected account itself (a review
 #: decision, a ban, a tier change) — the letters the health probe will read.
 TOPIC_ACCOUNT = "account.update"

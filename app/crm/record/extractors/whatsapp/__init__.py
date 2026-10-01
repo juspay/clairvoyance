@@ -25,6 +25,7 @@ shape, modules/00 §1, ruled 7 Sep 2026):
   account.py   account.update — a notice about the WABA itself.
   flow.py      a completed Flow: the form, her answers, our token.
   queued.py    message.queued — OUR letter about a message we are sending.
+  numbers.py   number.buddy_moved — OUR letter: Buddy answers on another number.
   shared.py    the source words, the narrowed-item read, _f/_entry.
 
 SOURCE · ENTRIES · DERIVERS are the SPEC_MODULES contract and ALL this
@@ -42,6 +43,7 @@ from app.crm.record.extractors.whatsapp import (
     account,
     flow,
     inbound,
+    numbers,
     queued,
     status,
     template,
@@ -54,6 +56,8 @@ DERIVERS: Dict[str, Deriver] = {
     "sender_name": inbound.sender_name,
     "message_type": inbound.message_type,
     "message_text": inbound.message_text,
+    "media_caption": inbound.media_caption,
+    "business_number": inbound.business_number,
     "replied_to": inbound.replied_to,
     "reply": inbound.reply,
     "flow_response": flow.flow_response,
@@ -73,6 +77,12 @@ ENTRIES: List[CatalogEntry] = [
         "message.queued",
         "Message we sent",
         queued.fields(),
+        about="merchant",
+    ),
+    _entry(
+        "number.buddy_moved",
+        "Buddy moved to another number",
+        numbers.buddy_moved_fields(),
         about="merchant",
     ),
     _entry(

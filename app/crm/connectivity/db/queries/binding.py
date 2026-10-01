@@ -295,8 +295,8 @@ def set_primary_query(merchant_id: str, binding_id: str) -> Tuple[str, List[Any]
 
 def take_conversation_query(merchant_id: str, channel: str) -> Tuple[str, List[Any]]:
     """Lift Buddy's settings off whichever number holds them, returning
-    them — the first half of a move. Before the second, because
-    crm_channel_binding_buddy_uq is checked per statement."""
+    that number and the settings — the first half of a move. Before the
+    second, because crm_channel_binding_buddy_uq is checked per statement."""
     query = f"""
         UPDATE {BINDING_TABLE} b
            SET capabilities = b.capabilities - 'conversation'
@@ -308,7 +308,7 @@ def take_conversation_query(merchant_id: str, channel: str) -> Tuple[str, List[A
                       AND capabilities ? 'conversation'
                ) old
          WHERE b.id = old.id
-        RETURNING old.conversation
+        RETURNING old.id, old.conversation
     """
     return query, [merchant_id, channel]
 

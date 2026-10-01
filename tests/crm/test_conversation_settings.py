@@ -127,6 +127,7 @@ class _Numbers:
     def __init__(self, *rows: ChannelBinding) -> None:
         self.rows = {row.id: row for row in rows}
         self.changes: List[Dict[str, Any]] = []
+        self.letters: List[Dict[str, Any]] = []
 
     def __getitem__(self, binding_id: str) -> ChannelBinding:
         return self.rows[binding_id]
@@ -155,7 +156,7 @@ class _Numbers:
         async def take(txn, merchant_id, channel):
             for row in rows.values():
                 if "conversation" in row.capabilities:
-                    return row.capabilities.pop("conversation")
+                    return row.id, row.capabilities.pop("conversation")
             return None
 
         async def put(txn, merchant_id, binding_id, conversation):
@@ -178,7 +179,11 @@ class _Numbers:
             # "shop" sits under reseller r-1.
             return [SimpleNamespace(id="shop", reseller_id="r-1")], 1
 
+        async def letter(**fields: Any) -> None:
+            self.letters.append(fields)
+
         accessor = settings.binding_accessor
+        monkeypatch.setattr(settings, "file_buddy_moved_letter", letter)
         monkeypatch.setattr(settings, "atomically", atomically)
         monkeypatch.setattr(accessor, "lock_channel_numbers", lock)
         monkeypatch.setattr(accessor, "clear_primary", clear_primary)
@@ -302,6 +307,27 @@ async def test_the_first_buddy_number_starts_from_the_defaults(monkeypatch) -> N
         "shop", "b-2", _patch(is_buddy_number=True)
     )
     assert read is not None and read.conversation == ConversationSettings()
+    assert numbers.letters == []  # Buddy left no number: nothing to resolve
+
+
+async def test_a_move_files_the_letter_and_a_save_in_place_does_not(
+    monkeypatch,
+) -> None:
+    """Conversations resolves the old number's threads from this letter —
+    filed only when Buddy really LEFT a number."""
+    numbers = _Numbers(_binding(conversation={}), _binding(id="b-2", is_primary=False))
+    numbers.install(monkeypatch)
+    await settings.update_channel_settings("shop", "b-2", _patch(is_buddy_number=True))
+    assert numbers.letters == [
+        {
+            "merchant_id": "shop",
+            "channel": "whatsapp",
+            "from_binding_id": "b-1",
+            "to_binding_id": "b-2",
+        }
+    ]
+    await settings.update_channel_settings("shop", "b-2", _patch(human_handoff=True))
+    assert len(numbers.letters) == 1
 
 
 async def test_buddy_cannot_move_to_a_paused_number(monkeypatch) -> None:

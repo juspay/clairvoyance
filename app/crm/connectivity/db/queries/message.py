@@ -51,15 +51,18 @@ def insert_message_query(
     template_id: Optional[str],
     variables: Dict[str, Any],
     dedupe_key: str,
+    binding_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """One queued row, no verdict (gate-mechanics §1). The dedupe unique
     (merchant_id, dedupe_key) absorbs a producer's retry: conflict = no
-    row returned, and the caller treats that as already queued."""
+    row returned, and the caller treats that as already queued.
+    ``binding_id`` names the number to send from; NULL is the primary."""
     query = f"""
         INSERT INTO {MESSAGE_TABLE}
             (merchant_id, customer_id, channel, sent_to_address, source_kind,
-             source_id, purpose_key, template_id, variables, dedupe_key)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+             source_id, purpose_key, template_id, variables, dedupe_key,
+             binding_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::uuid)
         ON CONFLICT (merchant_id, dedupe_key) DO NOTHING
         RETURNING id
     """
@@ -74,6 +77,7 @@ def insert_message_query(
         template_id,
         json.dumps(variables),
         dedupe_key,
+        binding_id,
     ]
 
 
@@ -403,3 +407,17 @@ def apply_receipt_query(
         MESSAGE_FAILED,
         MESSAGE_DEAD,
     ]
+
+
+def message_ticks_query(
+    merchant_id: str, message_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    """What became of these rows — the timeline joins its ticks from here
+    at read, never copying them."""
+    query = f"""
+        SELECT id, status, reason, sent_at, delivered_at, read_at
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND id = ANY($2::uuid[])
+    """
+    return query, [merchant_id, message_ids]

@@ -12,10 +12,11 @@ send must never break the send. A letter that failed to file is logged by
 record; the manifest row — the authority on what was sent — is unaffected.
 """
 
+import uuid
 from typing import Any, Dict, Optional
 
 from app.crm.connectivity.schemas.message import SessionBodyType, body_text
-from app.crm.connectivity.topics import TOPIC_QUEUED
+from app.crm.connectivity.topics import TOPIC_BUDDY_MOVED, TOPIC_QUEUED
 from app.crm.record.contracts import record_event
 
 #: The ``kind`` a template send's letter carries — beside the body kinds
@@ -95,4 +96,28 @@ async def file_queued_letter(
             body=body,
         ),
         customer_id=customer_id,
+    )
+
+
+async def file_buddy_moved_letter(
+    *,
+    merchant_id: str,
+    channel: str,
+    from_binding_id: str,
+    to_binding_id: str,
+) -> Optional[str]:
+    """File ``number.buddy_moved``: Buddy now answers on ``to_binding_id``
+    instead of ``from_binding_id``. Merchant-level (no customer). Each move
+    is its own fact, so its external id is fresh — two moves back and forth
+    are two letters, never a duplicate."""
+    return await record_event(
+        merchant_id=merchant_id,
+        source=channel,
+        topic=TOPIC_BUDDY_MOVED,
+        external_id=f"buddy-moved:{uuid.uuid4()}",
+        payload={
+            "channel": channel,
+            "from_binding_id": from_binding_id,
+            "to_binding_id": to_binding_id,
+        },
     )
