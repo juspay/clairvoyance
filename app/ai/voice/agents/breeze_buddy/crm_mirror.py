@@ -37,14 +37,12 @@ hooks installed before the first lead moves.
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.crm.identity.contracts import resolve as crm_resolve
 from app.crm.record.contracts import record_event
-from app.database.accessor.breeze_buddy import (
-    lead_call_tracker as lct_accessor,
-    template as template_accessor,
-)
+from app.database.accessor.breeze_buddy import lead_call_tracker as lct_accessor
 from app.schemas import CallDirection, LeadCallStatus, LeadCallTracker
 
 SOURCE_LEAD_API = "lead-api"
@@ -184,7 +182,7 @@ async def call_facts(lead: LeadCallTracker) -> Dict[str, Any]:
     if not lead.template_id:
         return {}
     try:
-        template = await template_accessor.get_template_by_id(str(lead.template_id))
+        template = await get_template_by_id_cached(str(lead.template_id))
     except Exception:
         logger.opt(exception=True).warning(
             f"CRM mirror: template {lead.template_id} unreadable — "

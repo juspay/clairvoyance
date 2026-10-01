@@ -675,7 +675,7 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
     )
     monkeypatch.setattr(
         worker_mod,
-        "get_template_by_id",
+        "get_template_by_id_cached",
         h.get_template_by_id,
     )
     monkeypatch.setattr(worker_mod, "is_number_blacklisted", h.is_number_blacklisted)
