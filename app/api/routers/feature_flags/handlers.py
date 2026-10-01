@@ -1,7 +1,5 @@
 """Business logic handlers for feature flags operations."""
 
-import json
-
 from fastapi import HTTPException
 
 from app.core.logger import logger
@@ -12,14 +10,14 @@ from app.schemas.feature_flags import (
     FeatureFlagUpdate,
     FeatureFlagUpdateResponse,
 )
-from app.services.live_config.store import FEATURE_FLAGS_KEY, get_all_flags
-from app.services.redis.client import get_redis_service
+from app.services.live_config.store import get_all_flags, set_all_flags
 
 
 async def get_feature_flags_handler() -> FeatureFlagResponse:
-    """Get all feature flags from Redis."""
+    """Get all feature flags from Redis (fresh: operators see Redis as it is
+    now, not this pod's memo)."""
     try:
-        flags = await get_all_flags()
+        flags = await get_all_flags(fresh=True)
         return FeatureFlagResponse(flags=flags, total_count=len(flags))
     except Exception as e:
         logger.error(f"Failed to fetch feature flags: {e}")
@@ -33,13 +31,12 @@ async def update_feature_flags_handler(
 ) -> FeatureFlagUpdateResponse:
     """Update feature flags in Redis."""
     try:
-        existing_flags = await get_all_flags()
+        # Fresh read: a merge built on a memoised copy could drop another
+        # pod's write from the last few seconds.
+        existing_flags = await get_all_flags(fresh=True)
         updated_flags = {**existing_flags, **update.flags}
 
-        redis = await get_redis_service()
-        client = await redis.get_client()
-
-        await client.set(FEATURE_FLAGS_KEY, json.dumps(updated_flags))
+        await set_all_flags(updated_flags)
 
         logger.info(
             f"Feature flags updated by {current_user.username}: "
@@ -64,7 +61,7 @@ async def delete_feature_flag_handler(
 ) -> FeatureFlagDeleteResponse:
     """Delete a feature flag from Redis."""
     try:
-        existing_flags = await get_all_flags()
+        existing_flags = await get_all_flags(fresh=True)
 
         if flag_key not in existing_flags:
             raise HTTPException(
@@ -73,10 +70,7 @@ async def delete_feature_flag_handler(
 
         del existing_flags[flag_key]
 
-        redis = await get_redis_service()
-        client = await redis.get_client()
-
-        await client.set(FEATURE_FLAGS_KEY, json.dumps(existing_flags))
+        await set_all_flags(existing_flags)
 
         logger.info(f"Feature flag deleted by {current_user.username}: {flag_key}")
 

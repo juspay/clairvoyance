@@ -4,17 +4,25 @@ DevCycle Feature Flag Store with Redis
 Redis-based feature flag storage:
 1. One API call to DevCycle at startup
 2. Store all flags in Redis
-3. Fast Redis lookup for flag access
+3. Fast Redis lookup for flag access, through a per-process memo of the
+   parsed blob (LIVE_CONFIG_MEMO_TTL_SECONDS; see "REDIS OPERATIONS" below:
+   another process's change is seen up to TTL seconds later, 0 = off)
 4. Fallback: Redis -> environment -> default
 """
 
+import asyncio
 import json
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Dict, Optional, Tuple
 
 import aiohttp
 
 # Get basic environment variables directly (to avoid circular imports)
-from app.core.config.static import DEVCYCLE_SERVER_KEY, ENABLE_REDIS_DYNAMIC_CONFIG
+from app.core.config.static import (
+    DEVCYCLE_SERVER_KEY,
+    ENABLE_REDIS_DYNAMIC_CONFIG,
+    LIVE_CONFIG_MEMO_TTL_SECONDS,
+)
 from app.core.logger import logger
 from app.services.live_config.utils import (
     build_variable_mapping,
@@ -119,8 +127,9 @@ async def fetch_and_update_feature_flags() -> bool:
             if isinstance(feat, dict):
                 await process_feature_variables(feat, variable_map, stash_flag)
 
-        # Load existing from Redis
-        old_flags = await _get_all_flags_from_redis()
+        # Load existing from Redis. Fresh, not memoised: this decides whether
+        # to write, and must compare against what Redis holds right now.
+        old_flags = await _get_all_flags_from_redis(fresh=True)
         logger.info(f"Old flags from Redis: {old_flags}")
         logger.debug(
             f"Loaded {len(old_flags)} existing flags from Redis: {list(old_flags.keys())}"
@@ -148,6 +157,9 @@ async def fetch_and_update_feature_flags() -> bool:
                 f"FAILED to update feature flags in Redis: {type(e).__name__}: {e}"
             )
             raise
+        finally:
+            # Even on error: a timed-out SET may still have landed.
+            invalidate_flags_memo()
 
         return True
 
@@ -204,8 +216,26 @@ async def get_flag_count() -> int:
     return len(await _get_all_flags_from_redis())
 
 
-async def get_all_flags() -> Dict[str, Any]:
-    return await _get_all_flags_from_redis()
+async def get_all_flags(*, fresh: bool = False) -> Dict[str, Any]:
+    """All flags as a dict the caller owns (safe to mutate).
+
+    ``fresh=True`` skips the in-process memo and reads Redis now; use it
+    for read-modify-write, so a write is never built on a copy up to
+    LIVE_CONFIG_MEMO_TTL_SECONDS old (that would drop another pod's change).
+    """
+    return await _get_all_flags_from_redis(fresh=fresh)
+
+
+async def set_all_flags(flags: Dict[str, Any]) -> None:
+    """Replace the whole flag blob in Redis, then drop this process's memo
+    so the writer reads its own write at once. Errors propagate."""
+    redis = await get_redis_service()
+    client = await redis.get_client()
+    try:
+        await client.set(FEATURE_FLAGS_KEY, json.dumps(flags))
+    finally:
+        # Even on error: a timed-out SET may still have landed.
+        invalidate_flags_memo()
 
 
 async def get_config(key: str, default_value: Any, return_type: type = str) -> Any:
@@ -247,35 +277,148 @@ async def get_config(key: str, default_value: Any, return_type: type = str) -> A
 # ---------------------------------------------------------------------------
 #  REDIS OPERATIONS (CLUSTER SAFE)
 # ---------------------------------------------------------------------------
+#
+# The whole flag set lives in ONE Redis key, and every read used to GET and
+# json.loads all of it to return one flag (the dispatcher alone does ~4 per
+# claim). So each process keeps the last successfully parsed blob for
+# LIVE_CONFIG_MEMO_TTL_SECONDS (static config, default 5):
+#
+# - at most one GET per TTL per process; callers that arrive while a refresh
+#   is in flight share that one GET (single-flight), and a caller cancelled
+#   while waiting does not cancel it for the others (asyncio.shield);
+# - only a successful parse of a JSON object is kept. A Redis error, a
+#   missing key or a non-object blob is NOT memoised: every such read goes
+#   to Redis and logs exactly as before;
+# - callers get their own copy of dicts/lists, as they did when each read
+#   was a fresh json.loads, so no caller can change what the next one sees;
+# - a write through this module (DevCycle sync, set_all_flags) drops the
+#   memo, so the writing process reads its own write at once.
+#
+# The one behaviour change: a flag changed by ANOTHER process becomes
+# visible here up to TTL seconds later instead of on the next read.
+# LIVE_CONFIG_MEMO_TTL_SECONDS=0 turns the memo off (the exact old path).
+
+# Injectable clock (tests replace it; never patch time.monotonic globally,
+# the event loop runs on it).
+_monotonic = time.monotonic
+
+# What _read_flags_blob returns when the key is missing or empty.
+_NO_BLOB: Any = object()
+
+# (expires_at on _monotonic's clock, parsed blob). Never handed to callers.
+_flags_memo: Optional[Tuple[float, Dict[str, Any]]] = None
+# The one refresh in flight, if any; callers await it through shield().
+_flags_refresh: Optional["asyncio.Task[Any]"] = None
+# Bumped by every invalidation: a refresh started before a local write must
+# not memoise the value it read before that write landed.
+_flags_generation = 0
+
+
+def invalidate_flags_memo() -> None:
+    """Forget this process's copy of the flag blob (next read goes to Redis).
+
+    Called after every write to FEATURE_FLAGS_KEY made in this process.
+    A refresh already in flight still answers its current waiters but will
+    not be memoised, and new callers start a new one."""
+    global _flags_memo, _flags_refresh, _flags_generation
+    _flags_generation += 1
+    _flags_memo = None
+    _flags_refresh = None
+
+
+def _copy_json(value: Any) -> Any:
+    """Deep copy of a json.loads result (dicts/lists rebuilt, scalars shared:
+    str/int/float/bool/None are immutable). Faster than copy.deepcopy for
+    this shape, and gives callers the same ownership a fresh json.loads did."""
+    if isinstance(value, dict):
+        return {k: _copy_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_copy_json(v) for v in value]
+    return value
+
+
+async def _read_flags_blob() -> Any:
+    """One GET + json.loads of the whole blob, no memo. Returns _NO_BLOB when
+    the key is missing or empty; raises on Redis or JSON errors."""
+    redis = await get_redis_service()
+    client = await redis.get_client()
+
+    raw = await client.get(FEATURE_FLAGS_KEY)
+    if not raw:
+        return _NO_BLOB
+    return json.loads(raw)
+
+
+async def _refresh_flags_memo(generation: int) -> Any:
+    """Body of the single in-flight refresh. Memoises only a parsed JSON
+    object, and only if no local write invalidated the memo meanwhile."""
+    global _flags_memo, _flags_refresh
+    try:
+        # TTL counts from before the GET, so the copy is never older than TTL
+        # relative to the moment Redis was read.
+        read_at = _monotonic()
+        parsed = await _read_flags_blob()
+        if isinstance(parsed, dict) and generation == _flags_generation:
+            _flags_memo = (read_at + LIVE_CONFIG_MEMO_TTL_SECONDS, parsed)
+        return parsed
+    finally:
+        if _flags_refresh is asyncio.current_task():
+            _flags_refresh = None
+
+
+def _retrieve_refresh_outcome(task: "asyncio.Task[Any]") -> None:
+    """Mark the refresh's exception as retrieved: when every waiter was
+    cancelled nobody else reads it, and asyncio would log "Task exception
+    was never retrieved". The waiters (if any) still get and log it."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _load_flags_blob() -> Any:
+    """The parsed blob through the memo (shared object: callers must copy
+    before handing it out). Same contract as _read_flags_blob."""
+    global _flags_refresh
+    if LIVE_CONFIG_MEMO_TTL_SECONDS <= 0:
+        return await _read_flags_blob()
+
+    memo = _flags_memo
+    if memo is not None and memo[0] > _monotonic():
+        return memo[1]
+
+    loop = asyncio.get_running_loop()
+    task = _flags_refresh
+    # A refresh left over from another event loop (run.py's startup loop, a
+    # thread's loop) cannot be awaited here; start one on this loop.
+    if task is None or task.done() or task.get_loop() is not loop:
+        task = loop.create_task(_refresh_flags_memo(_flags_generation))
+        task.add_done_callback(_retrieve_refresh_outcome)
+        _flags_refresh = task
+    return await asyncio.shield(task)
 
 
 async def _get_flag_from_redis(key: str) -> Optional[Any]:
     try:
-        redis = await get_redis_service()
-        client = await redis.get_client()
-
-        raw = await client.get(FEATURE_FLAGS_KEY)
-        if not raw:
+        all_flags = await _load_flags_blob()
+        if all_flags is _NO_BLOB:
             return None
 
-        all_flags = json.loads(raw)
-        return all_flags.get(key)
+        return _copy_json(all_flags.get(key))
     except Exception as e:
         logger.error(f"Redis get error for {key}: {e}")
         return None
 
 
-async def _get_all_flags_from_redis() -> Dict[str, Any]:
-    """Load all flags from single Redis key."""
+async def _get_all_flags_from_redis(fresh: bool = False) -> Dict[str, Any]:
+    """Load all flags from single Redis key (memoised unless ``fresh``)."""
     try:
-        redis = await get_redis_service()
-        client = await redis.get_client()
-
-        raw = await client.get(FEATURE_FLAGS_KEY)
-        if not raw:
+        if fresh:
+            all_flags = await _read_flags_blob()
+        else:
+            all_flags = await _load_flags_blob()
+        if all_flags is _NO_BLOB:
             return {}
 
-        return json.loads(raw)
+        return _copy_json(all_flags)
 
     except Exception as e:
         logger.error(f"Error loading all flags: {e}")
