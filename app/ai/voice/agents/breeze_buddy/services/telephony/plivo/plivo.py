@@ -24,7 +24,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.conference import
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
 )
-from app.core.config.static import APP_BASE_URL
+from app.core.config.static import APP_BASE_URL, PLIVO_REST_TIMEOUT_SECONDS
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_call_id
 from app.schemas import CallProvider, TelephonyConfig
@@ -45,7 +45,11 @@ class PlivoProvider(VoiceCallProvider):
         environment's."""
         self.account = account
         self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN = plivo_keys(account)
-        self.client = plivo.RestClient(self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN)
+        self.client = plivo.RestClient(
+            self.PLIVO_AUTH_ID,
+            self.PLIVO_AUTH_TOKEN,
+            timeout=PLIVO_REST_TIMEOUT_SECONDS,
+        )
         self.conference_service = PlivoConferenceService(self.client)
 
     async def use_template_credentials(
@@ -236,7 +240,9 @@ async def handle_mpc_transfer_webhook(params: dict) -> None:
                 {"status": "unavailable", "reason": "account_unresolved"},
             )
             return
-        client = plivo.RestClient(account.auth_id, account.auth_token)
+        client = plivo.RestClient(
+            account.auth_id, account.auth_token, timeout=PLIVO_REST_TIMEOUT_SECONDS
+        )
         conference_service = PlivoConferenceService(client)
         result = await conference_service.move_customer_to_mpc(
             call_sid=call_sid,

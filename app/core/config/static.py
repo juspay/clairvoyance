@@ -742,6 +742,14 @@ EXOTEL_TEMPLATE_APPLET_APP_ID = os.getenv("EXOTEL_TEMPLATE_APPLET_APP_ID", "")
 # Plivo Configuration
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
+
+# Plivo REST read timeout (seconds). The SDK default is 5s, which is too tight
+# when Plivo's API has a slow minute: a slow-but-successful calls.create then
+# times out on our side, make_call treats it as 'not placed' and the lead is
+# retried -> a ghost call plus a duplicate dial, and an orphan status webhook.
+# 15s covers Plivo's slow-response window; a held dispatch thread is cheaper
+# than calling a customer twice.
+PLIVO_REST_TIMEOUT_SECONDS = int(os.getenv("PLIVO_REST_TIMEOUT_SECONDS", "15"))
 PLIVO_RECORDING_TIME_LIMIT = int(
     os.getenv("PLIVO_RECORDING_TIME_LIMIT", "14400")
 )  # Default: 4 hours (14400 seconds)
