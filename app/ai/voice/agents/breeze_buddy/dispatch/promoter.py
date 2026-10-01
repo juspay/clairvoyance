@@ -1,5 +1,5 @@
 """
-Promoter — moves due leads from ``bb:schedule:leads`` to ``bb:ready:leads``.
+Promoter — moves due leads from ``bb:schedule:leads`` to a ready list.
 
 One promoter task runs in every pod; only the leader acts (see ``leader.py``).
 Tick cadence: ``BB_PROMOTER_TICK_MS`` (default 200ms).
@@ -19,8 +19,11 @@ import time
 from typing import Optional
 
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
+    LEAD_TIER_PREFIX,
     PROMOTER_PAUSED,
     READY_LIST,
+    READY_LIST_HIGH,
+    READY_LIST_MEDIUM,
     SCHEDULE_ZSET,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
@@ -31,15 +34,21 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.services.redis import get_redis_service
 
-# Lua script: claim up to ARGV[2] members with score <= ARGV[1], RPUSH them
-# to KEYS[2], return count moved. Atomic per Redis-execution semantics.
+# Lua script: claim up to ARGV[2] members with score <= ARGV[1] and RPUSH
+# each to the ready list for its tier hint (ARGV[3] .. lead id): 'high' ->
+# KEYS[2], 'medium' -> KEYS[3], anything else -> KEYS[4]. Returns count
+# moved. Atomic per Redis-execution semantics.
 _PROMOTE_LUA = """
 local ids = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, tonumber(ARGV[2]))
 if #ids == 0 then return 0 end
 local moved = 0
 for i = 1, #ids do
   if redis.call('ZREM', KEYS[1], ids[i]) == 1 then
-    redis.call('RPUSH', KEYS[2], ids[i])
+    local tier = redis.call('GET', ARGV[3] .. ids[i])
+    local dest = KEYS[4]
+    if tier == 'high' then dest = KEYS[2]
+    elseif tier == 'medium' then dest = KEYS[3] end
+    redis.call('RPUSH', dest, ids[i])
     moved = moved + 1
   end
 end
@@ -100,8 +109,8 @@ class Promoter:
             redis = await get_redis_service()
             moved = await redis.run_script(
                 _PROMOTE_LUA,
-                keys=[SCHEDULE_ZSET, READY_LIST],
-                args=[str(now_ms), str(BB_PROMOTER_BATCH)],
+                keys=[SCHEDULE_ZSET, READY_LIST_HIGH, READY_LIST_MEDIUM, READY_LIST],
+                args=[str(now_ms), str(BB_PROMOTER_BATCH), LEAD_TIER_PREFIX],
             )
             return int(moved) if moved else 0
         except Exception as e:  # noqa: BLE001

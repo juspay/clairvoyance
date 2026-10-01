@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 import pytest
 
 from app.ai.voice.agents.breeze_buddy.dispatch import queue
-from app.ai.voice.agents.breeze_buddy.dispatch.keys import SCHEDULE_ZSET
+from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
+    SCHEDULE_ZSET,
+    lead_tier_key,
+)
 
 
 async def test_schedule_lead_writes_to_zset_with_correct_score(fake_redis):
@@ -137,3 +140,96 @@ def test_is_dispatchable_telephony_modes_only():
     assert queue.is_dispatchable(ExecutionMode.DAILY_TEST) is False
     assert queue.is_dispatchable(ExecutionMode.DAILY_STREAM) is False
     assert queue.is_dispatchable(ExecutionMode.HOLD_TRANSFER) is False
+
+
+# ---------------------------------------------------------------------------
+# Merchant tiers — the hint schedule_lead leaves for the promoter
+# ---------------------------------------------------------------------------
+
+
+def _pin_tiers(monkeypatch, high=(), medium=()):
+    async def _high():
+        return list(high)
+
+    async def _medium():
+        return list(medium)
+
+    monkeypatch.setattr(queue.dyn_cfg, "BB_PRIORITY_HIGH_MERCHANT_IDS", _high)
+    monkeypatch.setattr(queue.dyn_cfg, "BB_PRIORITY_MEDIUM_MERCHANT_IDS", _medium)
+
+
+async def test_schedule_lead_writes_tier_hint_for_priority_merchant(
+    fake_redis, monkeypatch
+):
+    _pin_tiers(monkeypatch, high=["m-high"], medium=["m-med"])
+    when = datetime(2026, 5, 14, 9, 30, 0, tzinfo=timezone.utc)
+
+    await queue.schedule_lead("lead-h", when, jitter_ms=0, merchant_id="m-high")
+    await queue.schedule_lead("lead-m", when, jitter_ms=0, merchant_id="m-med")
+    await queue.schedule_lead("lead-n", when, jitter_ms=0, merchant_id="m-other")
+
+    kv = fake_redis.client.kv
+    assert kv[lead_tier_key("lead-h")] == "high"
+    assert kv[lead_tier_key("lead-m")] == "medium"
+    assert lead_tier_key("lead-n") not in kv
+    assert (
+        fake_redis.client.expirations[lead_tier_key("lead-h")] == queue._LEAD_TIER_TTL_S
+    )
+
+
+async def test_schedule_lead_without_merchant_keeps_existing_hint(
+    fake_redis, monkeypatch
+):
+    """Defer paths pass no merchant; the hint from the first schedule stays."""
+    _pin_tiers(monkeypatch, high=["m-high"])
+    when = datetime(2026, 5, 14, 9, 30, 0, tzinfo=timezone.utc)
+
+    await queue.schedule_lead("lead-h", when, jitter_ms=0, merchant_id="m-high")
+    await queue.schedule_lead("lead-h", when, jitter_ms=0)  # a defer
+
+    assert fake_redis.client.kv[lead_tier_key("lead-h")] == "high"
+
+
+async def test_schedule_lead_clears_hint_when_merchant_leaves_a_tier(
+    fake_redis, monkeypatch
+):
+    """Config changed: the next schedule with the merchant drops the hint."""
+    _pin_tiers(monkeypatch, high=["m-x"])
+    when = datetime(2026, 5, 14, 9, 30, 0, tzinfo=timezone.utc)
+    await queue.schedule_lead("lead-x", when, jitter_ms=0, merchant_id="m-x")
+    assert lead_tier_key("lead-x") in fake_redis.client.kv
+
+    _pin_tiers(monkeypatch)  # m-x removed from every tier
+    await queue.schedule_lead("lead-x", when, jitter_ms=0, merchant_id="m-x")
+
+    assert lead_tier_key("lead-x") not in fake_redis.client.kv
+
+
+async def test_merchant_in_both_lists_is_high(fake_redis, monkeypatch):
+    _pin_tiers(monkeypatch, high=["m-both"], medium=["m-both"])
+    assert await queue.merchant_tier("m-both") == "high"
+
+
+async def test_merchant_tier_none_and_config_error_are_normal(fake_redis, monkeypatch):
+    assert await queue.merchant_tier(None) is None
+
+    async def _boom():
+        raise RuntimeError("config down")
+
+    monkeypatch.setattr(queue.dyn_cfg, "BB_PRIORITY_HIGH_MERCHANT_IDS", _boom)
+    assert await queue.merchant_tier("m-high") is None
+
+
+async def test_tier_hint_failure_does_not_fail_scheduling(fake_redis, monkeypatch):
+    """The ZADD is what dispatch needs; a hint write error must not undo it."""
+    _pin_tiers(monkeypatch, high=["m-high"])
+    when = datetime(2026, 5, 14, 9, 30, 0, tzinfo=timezone.utc)
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("redis hiccup")
+
+    monkeypatch.setattr(fake_redis.client, "set", _boom)
+
+    ok = await queue.schedule_lead("lead-h", when, jitter_ms=0, merchant_id="m-high")
+    assert ok is True
+    assert "lead-h" in fake_redis.client.zsets[SCHEDULE_ZSET]

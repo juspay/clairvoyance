@@ -18,25 +18,38 @@ from app.database.queries.breeze_buddy.telephony_number import (
 
 
 def get_unscheduled_backlog_leads_query(
-    lookahead_seconds: int, limit: int
+    lookahead_seconds: int,
+    limit: int,
+    high_merchant_ids: List[str],
+    medium_merchant_ids: List[str],
 ) -> Tuple[str, List[Any]]:
     """
     For ``reconcile_backlog_to_zset``: find BACKLOG rows that should be on
     the schedule. Bounded by a small lookahead window so the scan is cheap
     even on a large table — far-future leads are handled by subsequent
     reconciler ticks as their firing time approaches.
+
+    Rows for high-tier merchants sort first, then medium, then the rest,
+    each by due time, so a full batch admits priority merchants before
+    others. Both lists empty reduces to plain due-time order.
     """
     text = f"""
-        SELECT id, reseller_id, EXTRACT(EPOCH FROM next_attempt_at) * 1000 AS score_ms
+        SELECT id, reseller_id, merchant_id,
+               EXTRACT(EPOCH FROM next_attempt_at) * 1000 AS score_ms
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = 'BACKLOG'
           AND "is_locked" = FALSE
           AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
           AND "next_attempt_at" <= NOW() + ($1 || ' seconds')::interval
-        ORDER BY "next_attempt_at" ASC
+        ORDER BY CASE
+                   WHEN "merchant_id" = ANY($3::text[]) THEN 0
+                   WHEN "merchant_id" = ANY($4::text[]) THEN 1
+                   ELSE 2
+                 END,
+                 "next_attempt_at" ASC
         LIMIT $2;
     """
-    return text, [str(lookahead_seconds), limit]
+    return text, [str(lookahead_seconds), limit, high_merchant_ids, medium_merchant_ids]
 
 
 def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:

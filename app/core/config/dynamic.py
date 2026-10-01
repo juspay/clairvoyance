@@ -193,6 +193,20 @@ async def BB_CAPACITY_WAIT_PILE_DEFER_S() -> int:
     return await get_config("BB_CAPACITY_WAIT_PILE_DEFER_S", 60, int)
 
 
+async def BB_PRIORITY_HIGH_MERCHANT_IDS() -> list[str]:
+    """Comma-separated merchant ids whose leads are promoted to the high
+    ready list. Empty (default) routes everyone to the normal list."""
+    raw = await get_config("BB_PRIORITY_HIGH_MERCHANT_IDS", "", str)
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+async def BB_PRIORITY_MEDIUM_MERCHANT_IDS() -> list[str]:
+    """Comma-separated merchant ids whose leads are promoted to the medium
+    ready list. A merchant in both lists is high."""
+    raw = await get_config("BB_PRIORITY_MEDIUM_MERCHANT_IDS", "", str)
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
 async def BB_STALE_LOCK_THRESHOLD_MINUTES() -> int:
     """Minutes a BACKLOG row may remain `is_locked=TRUE` before
     `clean_stale_bb_locks` unlocks it. Controls the §7.1 trade-off:

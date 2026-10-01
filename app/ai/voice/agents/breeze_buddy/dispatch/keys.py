@@ -9,8 +9,18 @@ Redis usage in the app.
 # score = next_attempt_at unix-ms, member = lead_id
 SCHEDULE_ZSET = "bb:schedule:leads"
 
-# Global FIFO list of leads ready to dispatch right now.
+# FIFO lists of leads ready to dispatch right now, one per merchant tier.
+# ``READY_LIST`` is the normal tier and the only list that existed before
+# tiers; a lead with no tier hint lands there.
 READY_LIST = "bb:ready:leads"
+READY_LIST_HIGH = "bb:ready:leads:high"
+READY_LIST_MEDIUM = "bb:ready:leads:medium"
+READY_LISTS = (READY_LIST_HIGH, READY_LIST_MEDIUM, READY_LIST)
+
+# Per-lead tier hint read by the promoter: value ``high`` or ``medium``.
+# Written by ``schedule_lead`` when the merchant is in a tier list; absent
+# means normal. TTL'd, so cancelled or finished leads need no cleanup.
+LEAD_TIER_PREFIX = "bb:lead:tier:"  # + lead_id
 
 # Per-worker reliability list. Workers RPUSH their in-flight lead_id here
 # so the reaper can recover work from a dead worker.
@@ -62,6 +72,10 @@ def reseller_paused_key(reseller_id: str) -> str:
 
 def alert_throttle_key(alert_name: str) -> str:
     return f"{ALERT_THROTTLE_PREFIX}{alert_name}"
+
+
+def lead_tier_key(lead_id: str) -> str:
+    return f"{LEAD_TIER_PREFIX}{lead_id}"
 
 
 def capacity_wait_key(telephony_number_id: str, minute_bucket: int) -> str:

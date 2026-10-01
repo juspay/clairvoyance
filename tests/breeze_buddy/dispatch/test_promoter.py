@@ -12,7 +12,10 @@ from app.ai.voice.agents.breeze_buddy.dispatch import promoter as p
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     PROMOTER_PAUSED,
     READY_LIST,
+    READY_LIST_HIGH,
+    READY_LIST_MEDIUM,
     SCHEDULE_ZSET,
+    lead_tier_key,
 )
 
 
@@ -134,3 +137,25 @@ async def test_promoter_keeps_due_order_first_in_first_out(fake_redis):
     # Workers pop the head: the earliest-due lead goes first.
     assert (await fake_redis.client.blpop(READY_LIST))[1] == "a"
     await prom._leader.stop()
+
+
+async def test_promoter_routes_by_tier_hint(fake_redis):
+    """high / medium hints go to their lists; no hint goes to the normal list,
+    and the hint is read at promote time, not at schedule time."""
+    fake_redis.client.kv[lead_tier_key("h1")] = "high"
+    fake_redis.client.kv[lead_tier_key("m1")] = "medium"
+    fake_redis.client.kv[lead_tier_key("junk")] = "platinum"  # unknown value
+    z = fake_redis.client.zsets.setdefault(SCHEDULE_ZSET, {})
+    z.update({"h1": 1_000, "m1": 2_000, "n1": 3_000, "junk": 4_000})
+
+    prom = p.Promoter()
+    await prom._leader.start()
+    prom._leader._is_leader = True
+    moved = await prom._tick_once()
+    await prom._leader.stop()
+
+    assert moved == 4
+    assert fake_redis.client.lists[READY_LIST_HIGH] == ["h1"]
+    assert fake_redis.client.lists[READY_LIST_MEDIUM] == ["m1"]
+    assert fake_redis.client.lists[READY_LIST] == ["n1", "junk"]
+    assert fake_redis.client.zsets.get(SCHEDULE_ZSET, {}) == {}

@@ -166,11 +166,26 @@ class FakeRedisClient:
             end = end + 1
         return L[start:end]
 
-    async def blpop(self, key: str, timeout: int = 0) -> Optional[Tuple[str, str]]:
-        L = self.lists.get(key, [])
-        if L:
-            return (key, L.pop(0))
+    async def blpop(self, keys, timeout: int = 0) -> Optional[Tuple[str, str]]:
+        """Redis semantics: first non-empty key in the given order wins."""
+        for key in [keys] if isinstance(keys, str) else keys:
+            L = self.lists.get(key, [])
+            if L:
+                return (key, L.pop(0))
         return None
+
+    # -- STRING ops (client-level, as redis-py exposes them) ------------------
+
+    async def get(self, key: str) -> Optional[str]:
+        return self.kv.get(key)
+
+    async def set(self, key: str, value: str, nx: bool = False, ex=None):
+        if nx and key in self.kv:
+            return None
+        self.kv[key] = value
+        if ex is not None:
+            self.expirations[key] = ex
+        return True
 
     async def delete(self, key: str) -> int:
         n = 0
@@ -274,9 +289,10 @@ class FakeRedisService:
         execution — they care about the resulting state.
         """
         if "ZRANGEBYSCORE" in script and "ZREM" in script and "RPUSH" in script:
-            schedule_key, ready_key = keys
+            schedule_key, high_key, medium_key, normal_key = keys
             now_ms = int(args[0])
             batch = int(args[1])
+            tier_prefix = args[2]
             ids = await self.client.zrangebyscore(
                 schedule_key, 0, now_ms, start=0, num=batch
             )
@@ -284,7 +300,11 @@ class FakeRedisService:
             for i in ids:
                 removed = await self.client.zrem(schedule_key, i)
                 if removed == 1:
-                    await self.client.rpush(ready_key, i)
+                    tier = self.client.kv.get(f"{tier_prefix}{i}")
+                    dest = {"high": high_key, "medium": medium_key}.get(
+                        tier or "", normal_key
+                    )
+                    await self.client.rpush(dest, i)
                     moved += 1
             return moved
 
