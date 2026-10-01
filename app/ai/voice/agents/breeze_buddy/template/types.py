@@ -1894,7 +1894,8 @@ class FlavorProtocolConfig(BaseModel):
     connectors: List[str] = Field(
         default_factory=list,
         description=(
-            "Platform connectors to consult for this protocol, by name. "
+            "Platform connectors to consult for this protocol, by name "
+            "(registered: 'shopify', 'woocommerce'). "
             "EMPTY (the default) means every registered connector "
             "self-selects on the data it is handed — correct when the "
             "platform is unambiguous from the payload. Name them "

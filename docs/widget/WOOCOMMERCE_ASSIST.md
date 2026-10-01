@@ -1,0 +1,189 @@
+# Buddy Assist on a WooCommerce store
+
+Set up Buddy Assist for a WooCommerce merchant by creating one template and
+one widget config. No code change is needed per merchant.
+
+In the examples, replace `<host>` with the store host (e.g.
+`www.example.com`) and `<store>` with a short store name (e.g. `example`).
+
+## How it works
+
+Shopify serves the six commerce tools itself, at `https://{shop}/api/ucp/mcp`.
+WooCommerce has no such endpoint, so clairvoyance serves the same tools
+in process (`assist/platforms/woocommerce/`), reading the store's public
+Store API with GET requests only.
+
+```
+Widget → clairvoyance → LLM
+             ↓ tool call (search_catalog, get_product, create_cart, ...)
+      local://woocommerce/<host> → WooCommerce gateway
+                                 → GET https://<host>/wp-json/wc/store/v1/...
+             ↓ UCP result, same shape as Shopify
+      product cards, cart card → widget
+```
+
+| | Shopify | WooCommerce |
+|---|---|---|
+| Tool server URL | `https://{shop_url}/api/ucp/mcp` | `local://woocommerce/<host>` |
+| Cart | Stored in Shopify | Stored in the cart id, e.g. `1128598:2,1315323:1` |
+| Checkout button | `ui_intents.urls.checkout_page` plus the `cart` cookie | The cart's `continue_url`: `https://<host>/checkout-link/?products=<cart id>` |
+
+The engine, widget and voice are the same for both platforms.
+
+## 1. Check the store
+
+All three must pass.
+
+```bash
+# Store API is open. Expect: 200 application/json, and a JSON list of products
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "https://<host>/wp-json/wc/store/v1/products?per_page=1"
+
+# WooCommerce version. Expect: 10.0 or later (needed for checkout links)
+curl -s "https://<host>/" | grep -o 'content="WooCommerce [0-9.]*"'
+
+# Checkout links work. Expect: 302 to /cart/ with "checkout link was out of date"
+curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" "https://<host>/checkout-link/"
+```
+
+Reading the first check:
+
+| Result | Meaning |
+|---|---|
+| `200 application/json` | WooCommerce with an open Store API. Continue. |
+| `200 text/html` | Not WooCommerce. The site answers every path with its own page (e.g. a single-page app on another platform). This gateway cannot serve it. |
+| `403` | WooCommerce, but a firewall or security plugin blocks the Store API. The merchant must allow public GET requests to `/wp-json/wc/store/v1/`. |
+| `404` | Wrong host, or not WooCommerce. Try the other form (`www.` or bare domain). |
+
+Use for `<host>` the exact host that returned `200 application/json`.
+
+## 2. Create the template
+
+Copy the default Assist blueprint
+(`tests/assist/fixtures/buddy-assist-default.v2.json`, or the default Assist
+template in the database) and apply the changes below.
+
+### 2.1 Top-level fields
+
+| Field | Value |
+|---|---|
+| `reseller_id` | The merchant's reseller, e.g. `BB_ASSIST` |
+| `merchant_id` | `<host>` |
+| `name` | `<store>-assist` |
+| `secrets` | `{"shop_url": "<host>"}` |
+| `expected_payload_schema` | `{"shop_url": {"type": "string", "example": "<host>", "description": "Storefront domain used by the assistant's commerce tools."}}` |
+
+### 2.2 System prompt: `flow.system_prompt`
+
+| Find | Change to |
+|---|---|
+| `{{brand_identity_section}}` | The brand block below |
+| `{{#shopify_operating_section}}` … `{{/shopify_operating_section}}` | Delete the whole block, markers included |
+| `https://{{shop_domain}}/pages/contact` | The store's real contact page URL |
+| Any other `{{shop_domain}}` | `<host>` |
+| `{{ui_primitives_section}}` | Keep as is. Without it, no cards render. |
+
+Brand block (the format onboarding writes):
+
+```
+## Brand identity
+
+- **Assistant name:** <Store name> Assist
+- **Brand:** <Store name>
+- **Storefront:** `{shop_url}`
+
+### Verified website context
+
+5-10 lines: what the store sells, main categories, brands, currency.
+```
+
+### 2.3 Tool server: `configurations.mcp.servers[0]`
+
+| Field | Change |
+|---|---|
+| `name` | `woocommerce-store` |
+| `url` | `local://woocommerce/<host>`. Write the host literally, not `{shop_url}`: the widget can override `{shop_url}`. |
+| `default_args` | `{}` |
+| `tool_response_transforms` | In `create_cart`, `get_cart` and `update_cart`, delete the `derive_field` rule (it builds the Shopify `cart_token`). Keep every `scale_by_exponent` rule. |
+| `tool_ui_instructions` | In `create_cart`, `get_cart` and `update_cart`, delete `,{prop:'cart_token',ref:'$tool:<tool>#/cart_token'}` and `, and cart-cookie sync itself`. |
+| `tool_schemas` | Replace the Shopify GID descriptions with `Product id`, `Variant id` and `Cart id`. WooCommerce ids are numbers. |
+| `tool_schemas` → `search_catalog` → `description` | Append the search hint below. |
+
+Search hint:
+
+```
+ This store's search matches words in product TITLES only: send 1-3 product
+ words as they appear in a title (e.g. 'wireless mouse', 'neckband'), never a
+ sentence; put budgets in filters.price (minor units, e.g. 100000 = Rs 1,000).
+ If a search returns nothing, retry once with fewer or more common words.
+```
+
+### 2.4 Other configuration
+
+| Field | Change | Why |
+|---|---|---|
+| `configurations.flavor` | `{"ucp": {"connectors": ["woocommerce"], "features": {}}}` | Stops Shopify-only data fixes from running |
+| `configurations.ui_intents.urls.checkout_page` | Delete the key | A configured page wins over the checkout link, and would open an empty cart |
+
+### 2.5 Final check
+
+The edited JSON must not contain `shopify`, `cart_token`, `{shop_url}` inside
+`configurations`, or any `{{…}}` except `{{ui_primitives_section}}`.
+
+## 3. Save the template and widget config
+
+Both calls need an admin or reseller-owner login.
+
+1. `POST /agent/voice/breeze-buddy/templates` with the edited JSON
+   (`reseller_id`, `name`, `merchant_id`, `is_active`, `flow`,
+   `expected_payload_schema`, `expected_callback_response_schema`,
+   `configurations`, `secrets`, `supported_channels`). Note the template id.
+2. `POST /agent/voice/breeze-buddy/widget-config` with `reseller_id`,
+   `merchant_id`, `template_id` and `allowed_origins` (every origin the store
+   uses, e.g. `["https://<host>"]`). The response has the `public_widget_key`.
+
+## 4. Install on the store
+
+WooCommerce has no app embed. The merchant pastes this into the site footer
+(a header/footer plugin or the theme):
+
+```html
+<breeze-buddy-assist tenant="<public_widget_key>" shop="<host>"
+  api-base="https://clairvoyance.breezelabs.app"></breeze-buddy-assist>
+<script src="https://breezebuddy.ai/widget/assist.js" async></script>
+```
+
+## 5. Test
+
+Open the store (or any page with the embed, served from an origin in
+`allowed_origins`).
+
+| Test | Expected |
+|---|---|
+| Search with a budget, e.g. "wireless mouse under 1000" | Cards with correct prices (₹699, not ₹6.99) |
+| Add to cart on a simple product | Adds directly |
+| Add to cart on a variable product | A picker with the real variations; sold-out ones are disabled |
+| "+" or remove on the cart card | Quantity and total update |
+| Add by chat, e.g. "add the blue one" | The assistant adds it and shows the cart |
+| Review and checkout | Opens `https://<host>/checkout-link/?products=…`; the store checkout shows the same items and total |
+
+## Limits
+
+- Store search matches title words only; natural sentences can return nothing.
+- Each Store API call takes about 1 second. A search with variable products
+  makes one extra call for their variations.
+- The store's cart icon shows assistant items only after checkout opens.
+- The checkout link replaces the shopper's existing store cart.
+- Tax, shipping and final stock are checked on the store's checkout page.
+- The assistant cart uses catalog prices. A store with cart-level price rules
+  (e.g. a dynamic pricing plugin) can show a different total at checkout.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Session call returns 403 | Page origin not in `allowed_origins` | Add the exact origin |
+| "Upstream HTTP 404" on every tool | `url` still points to `/api/ucp/mcp` | Set `local://woocommerce/<host>` |
+| "The store answered HTTP 403" | The store blocks our server | Merchant allows `/wp-json/wc/store/v1/` |
+| Prices 100 times too small | A `scale_by_exponent` rule was changed | Keep the blueprint's rules |
+| Checkout opens an empty cart | `checkout_page` is still set | Delete `ui_intents.urls.checkout_page` |
+| Cart card does not render after a chat add | A `cart_token` bind is left in `tool_ui_instructions` | Delete it |

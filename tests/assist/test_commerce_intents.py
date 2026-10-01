@@ -885,3 +885,48 @@ class TestDuplicateVariantLines:
             {"item": {"id": "v9"}, "quantity": 5},
             {"item": {"id": "v9"}, "quantity": 3},
         ]
+
+
+# ---------------------------------------------------------------------------
+# Connector scope — hooks follow the template's flavor.<protocol>.connectors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "named, expected",
+    [
+        (["otherplatform"], ["v1"]),  # its own connector: the hook applies
+        (["woocommerce"], ["v1", "v2"]),  # another connector: hook skipped
+        ([], ["v1"]),  # none named: every hook self-selects
+    ],
+)
+async def test_connector_hooks_follow_the_templates_connectors(
+    monkeypatch, named, expected
+):
+    """A real ChatAgent turn: the variant hook runs inside the ProductDetail
+    validator, where only the turn's connector scope can gate it."""
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp import hooks
+    from app.ai.voice.agents.breeze_buddy.template.types import FlavorProtocolConfig
+
+    monkeypatch.setattr(
+        hooks, "_VARIANT_NORMALIZERS", [("otherplatform", lambda vs: vs[:1])]
+    )
+    template = _template()
+    template.configurations.flavor = {"ucp": FlavorProtocolConfig(connectors=named)}
+    product = {
+        "id": "p1",
+        "title": "Tee",
+        "price_range": {"min": {"amount": 499.0, "currency": "INR"}},
+        "variants": [{"id": "v1", "title": "S"}, {"id": "v2", "title": "M"}],
+    }
+    recorder = _Recorder({"get_product": [_envelope({"product": product})]})
+    _patch_boundary(monkeypatch, recorder, template=template)
+
+    parsed = ir.parse_ui_intent(
+        _wire("view_product", {"product_id": "p1", "title": "Tee"})
+    )
+    events = await _collect(ir.run_direct_intent(session_id="s1", parsed=parsed))
+
+    op = next(e.data["op"] for e in events if e.event == "ui_op")
+    assert op["type"] == "ProductDetail"
+    assert [v["id"] for v in op["props"]["product"]["variants"]] == expected
