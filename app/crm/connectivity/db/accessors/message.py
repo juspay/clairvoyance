@@ -20,12 +20,15 @@ from app.crm.connectivity.db.queries.message import (
     claim_queued_messages_query,
     insert_message_query,
     insert_session_message_query,
+    message_id_by_provider_query,
     message_state_by_dedupe_query,
+    message_ticks_query,
     requeue_stale_claims_query,
     send_behind_provider_id_query,
 )
 from app.crm.connectivity.schemas.message import (
     MessageState,
+    MessageTick,
     QueuedMessage,
     SendBehind,
 )
@@ -44,6 +47,7 @@ async def insert_message(
     template_id: Optional[str],
     variables: Dict[str, Any],
     dedupe_key: str,
+    binding_id: Optional[str] = None,
 ) -> Optional[str]:
     """None = the dedupe unique absorbed it (a row already names this send)."""
     query, values = insert_message_query(
@@ -57,6 +61,7 @@ async def insert_message(
         template_id,
         variables,
         dedupe_key,
+        binding_id,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
@@ -195,3 +200,31 @@ async def apply_receipt(
         async with crm_connection() as conn:
             row = await conn.fetchrow(query, *values)
     return row["status"] if row is not None else None
+
+
+async def message_ticks(merchant_id: str, message_ids: List[str]) -> List[MessageTick]:
+    if not message_ids:
+        return []
+    query, values = message_ticks_query(merchant_id, message_ids)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [
+        MessageTick(
+            id=str(row["id"]),
+            status=row["status"],
+            reason=row["reason"],
+            sent_at=row["sent_at"],
+            delivered_at=row["delivered_at"],
+            read_at=row["read_at"],
+        )
+        for row in rows
+    ]
+
+
+async def message_id_by_provider(
+    merchant_id: str, provider_message_id: str
+) -> Optional[str]:
+    query, values = message_id_by_provider_query(merchant_id, provider_message_id)
+    async with crm_connection() as conn:
+        found = await conn.fetchval(query, *values)
+    return str(found) if found is not None else None

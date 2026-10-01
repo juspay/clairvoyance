@@ -71,7 +71,9 @@ def test_insert_is_a_queued_row_absorbed_by_the_dedupe_unique() -> None:
     )
     assert "ON CONFLICT (merchant_id, dedupe_key) DO NOTHING" in sql
     assert "status" not in sql  # the column default: queued, no verdict
-    assert values[-1] == "run-1:ask" and values[8] == '{"name": "Priya"}'
+    assert values[9] == "run-1:ask" and values[8] == '{"name": "Priya"}'
+    # No binding named: the dispatcher sends from the primary.
+    assert values[10] is None and "binding_id" in sql
 
 
 def test_queue_message_returns_id_then_none_on_retry(

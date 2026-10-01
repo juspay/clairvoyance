@@ -1095,6 +1095,12 @@ CRM_RUN_SWEEP_INTERVAL_SECONDS = _positive_float(
     "CRM_RUN_SWEEP_INTERVAL_SECONDS", 3600.0
 )
 
+# The conversations module (the inbox). How often each walker pod runs the
+# inbox sweeps (closing messages, lapsed handoffs, Buddy moving bindings,
+# retention), and how long resolved threads are kept (inbox D22: 90 days).
+CRM_INBOX_SWEEP_SECONDS = _positive_float("CRM_INBOX_SWEEP_SECONDS", 30.0)
+CRM_INBOX_RETENTION_DAYS = _positive_int("CRM_INBOX_RETENTION_DAYS", 90)
+
 UAP_ENVIRONMENT = os.environ.get("UAP_ENVIRONMENT", "production").strip().lower()
 _UAP_HOSTS = {
     "sandbox": "https://sandbox.juspay.in",
