@@ -287,7 +287,7 @@ class UpdateOutcomeInDatabaseHook(Hook):
             # Update lead in database with outcome
             logger.info(
                 f"Updating lead {context.lead.id} in database with outcome: {outcome}, "
-                f"metadata: {meta_data}, via function '{function_name}'"
+                f"metadata keys: {list(meta_data.keys())}, via function '{function_name}'"
             )
 
             updated_lead = await update_lead_call_completion_details(
@@ -300,7 +300,7 @@ class UpdateOutcomeInDatabaseHook(Hook):
 
             logger.debug(
                 f"update_lead_call_completion_details returned for lead {context.lead.id}: "
-                f"{updated_lead}"
+                f"{updated_lead.id if updated_lead else None}"
             )
 
             if updated_lead:
