@@ -14,7 +14,11 @@ import plivo
 from plivo.exceptions import ResourceNotFoundError
 
 from app.core.config.dynamic import PLIVO_INR_CONVERSION_RATE
-from app.core.config.static import PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN
+from app.core.config.static import (
+    PLIVO_AUTH_ID,
+    PLIVO_AUTH_TOKEN,
+    PLIVO_REST_TIMEOUT_SECONDS,
+)
 from app.core.logger import logger
 from app.schemas.breeze_buddy.telephony_numbers import (
     AvailableTelephonyNumber,
@@ -43,7 +47,9 @@ class PlivoNumberProvider(NumberProvider):
             raise ValueError(
                 "PLIVO_AUTH_ID and PLIVO_AUTH_TOKEN must be set in environment"
             )
-        self.client = plivo.RestClient(PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
+        self.client = plivo.RestClient(
+            PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, timeout=PLIVO_REST_TIMEOUT_SECONDS
+        )
 
     async def search_numbers(
         self, params: TelephonyNumberSearchParams
