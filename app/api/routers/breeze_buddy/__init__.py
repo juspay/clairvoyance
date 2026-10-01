@@ -36,6 +36,9 @@ from app.api.routers.breeze_buddy.demo import router as demo_router
 from app.api.routers.breeze_buddy.dragontts import router as dragontts_router
 from app.api.routers.breeze_buddy.evaluations import router as evaluations_router
 
+# Inbox: Buddy answering a thread it holds (called by the conversations worker)
+from app.api.routers.breeze_buddy.inbox import router as inbox_router
+
 # Knowledge base (RAG) management: KBs, documents, retrieval testing
 from app.api.routers.breeze_buddy.knowledge_base import router as knowledge_base_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
@@ -174,6 +177,9 @@ router.include_router(daily_router, prefix="", tags=["daily"])
 
 # Chat (text-mode sessions: REST + SSE, no STT/TTS/VAD)
 router.include_router(chat_router, prefix="", tags=["chat"])
+
+# Inbox: Buddy's answer on a thread, run on this pod like a chat turn (D41)
+router.include_router(inbox_router, prefix="", tags=["inbox"])
 
 # Widget public mode (CHAT_MODE.md §14)
 # - widget_config: per-merchant config (admin/reseller-scoped CRUD)

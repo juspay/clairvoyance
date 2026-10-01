@@ -34,6 +34,11 @@ class ChatEndedReason(str, Enum):
 
     USER_ENDED = "user_ended"
     IDLE_TIMEOUT = "idle_timeout"
+    # Inbox (thread-bound) sessions, migration 083: the reply window ran out,
+    # a teammate took the thread, or Buddy moved to another binding.
+    WINDOW_CLOSED = "window_closed"
+    TAKEN_OVER = "taken_over"
+    BINDING_CHANGED = "binding_changed"
 
 
 class WidgetChannel(str, Enum):
@@ -119,6 +124,10 @@ class ChatSession(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     current_channel: WidgetChannel = WidgetChannel.CHAT
     voice_lead_id: Optional[str] = None
+    #: Which surface the session talks on, for its whole life (migration
+    #: 083): web (the widget and dashboard chat) · whatsapp · instagram.
+    #: Not ``current_channel``, which is a widget session's chat/voice mode.
+    channel: str = "web"
     created_at: Optional[datetime] = None
     last_activity_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None

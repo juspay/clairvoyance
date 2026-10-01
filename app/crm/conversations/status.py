@@ -80,6 +80,11 @@ VIEWS = (
     VIEW_ALL,
 )
 
+# --- why Buddy has a thread back: told to Buddy as its turn's message --------
+RESUME_HANDED_BACK = "handed_back"
+RESUME_CLAIM_TIMEOUT = "claim_timeout"
+RESUME_REASONS = (RESUME_HANDED_BACK, RESUME_CLAIM_TIMEOUT)
+
 # --- the live stream's wake-up kinds (SSE "thread" events) ------------------
 WAKE_MESSAGE = "message"
 WAKE_STATE = "state"

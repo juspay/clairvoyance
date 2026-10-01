@@ -540,6 +540,26 @@ async def test_buddy_owes_her_what_she_wrote_past_his_cursor(
     assert asked == [([words.KIND_INBOUND], cursor, 1)]
 
 
+async def test_a_turn_that_tells_buddy_runs_with_nothing_unanswered(
+    monkeypatch,
+) -> None:
+    from app.crm.conversations import bot
+
+    thread = _thread(bot_template_id=AGENT, last_inbound_at=NOW, bot_cursor_at=NOW)
+
+    async def get_thread(merchant_id, thread_id):
+        return thread
+
+    async def rows_after(*args: Any):
+        return []  # she has nothing unanswered
+
+    monkeypatch.setattr(bot.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(bot.message_accessor, "rows_after", rows_after)
+    assert await bot.bot_work("shop", thread.id) is None
+    work = await bot.bot_work("shop", thread.id, unanswered_only=False)
+    assert work is not None and work.agent_id == AGENT
+
+
 async def test_a_thread_buddy_does_not_answer_owes_nothing_without_a_read(
     monkeypatch,
 ) -> None:
@@ -1133,6 +1153,208 @@ async def test_the_context_slice_reads_oldest_first(monkeypatch) -> None:
     assert [r.id for r in rows] == ["r1", "r2", "r3"]
 
 
+# --- asking Buddy to answer (D41): the projector and the lapse sweep --------
+
+
+class _Http:
+    """A stand-in for create_http_client: records the post, answers with
+    ``status`` or raises ``error``."""
+
+    def __init__(self, status: int = 202, error: Optional[Exception] = None) -> None:
+        self.status = status
+        self.error = error
+        self.posts: List[Dict[str, Any]] = []
+
+    def __call__(self, **kwargs: Any) -> "_Http":
+        return self
+
+    async def __aenter__(self) -> "_Http":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def post(self, url: str, json: Any, headers: Dict[str, str]) -> Any:
+        if self.error is not None:
+            raise self.error
+        self.posts.append({"url": url, "json": json, "headers": headers})
+        return SimpleNamespace(status_code=self.status)
+
+
+async def test_buddy_is_asked_with_the_merchants_own_short_lived_token(
+    monkeypatch,
+) -> None:
+    from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
+    from app.crm.conversations import ask
+
+    http = _Http()
+    monkeypatch.setattr(ask, "APP_BASE_URL", "https://api.example/")
+    monkeypatch.setattr(ask, "create_http_client", http)
+    assert await ask.ask_buddy("shop", "t-1") is True
+    [post] = http.posts
+    assert post["url"] == (
+        "https://api.example/agent/voice/breeze-buddy/inbox/threads/t-1/answer"
+    )
+    assert post["json"] == {"merchant_id": "shop", "reason": None}
+    assert await ask.ask_buddy("shop", "t-1", words.RESUME_HANDED_BACK) is True
+    assert http.posts[1]["json"] == {"merchant_id": "shop", "reason": "handed_back"}
+    user = rbac_token_manager.verify_rbac_token(
+        post["headers"]["Authorization"].removeprefix("Bearer ")
+    )
+    assert user.merchant_ids == ["shop"] and user.role == "merchant"
+
+
+@pytest.mark.parametrize(
+    ("base", "http"),
+    [
+        ("", _Http()),  # not configured: nothing is sent
+        ("https://api.example", _Http(status=500)),
+        ("https://api.example", _Http(error=TimeoutError("slow"))),
+    ],
+)
+async def test_asking_buddy_never_fails_the_caller(monkeypatch, base, http) -> None:
+    from app.crm.conversations import ask
+
+    monkeypatch.setattr(ask, "APP_BASE_URL", base)
+    monkeypatch.setattr(ask, "create_http_client", http)
+    assert await ask.ask_buddy("shop", "t-1") is False
+
+
+def _projected(monkeypatch, buddy_answers: bool, asked: List[str]) -> None:
+    async def buddy_binding(merchant_id: str, channel: str):
+        return SimpleNamespace(id=BUDDY_BINDING, address="PN_BUDDY", is_primary=False)
+
+    async def settings(merchant_id, channel, binding_id=None):
+        return SimpleNamespace(default_agent_id=AGENT, claim_sla_minutes=10)
+
+    async def atomically(fn, *args):
+        return SimpleNamespace(conversation_id="t-1"), buddy_answers
+
+    async def ask_buddy(merchant_id, thread_id):
+        asked.append(thread_id)
+        return False  # even a failed ask leaves the letter done
+
+    monkeypatch.setattr(project, "buddy_binding", buddy_binding)
+    monkeypatch.setattr(project, "conversation_settings", settings)
+    monkeypatch.setattr(project, "atomically", atomically)
+    monkeypatch.setattr(project, "ask_buddy", ask_buddy)
+
+
+@pytest.mark.parametrize("buddy_answers", [True, False])
+async def test_the_projector_asks_buddy_only_when_buddy_holds_the_thread(
+    monkeypatch, buddy_answers
+) -> None:
+    asked: List[str] = []
+    _projected(monkeypatch, buddy_answers, asked)
+    await project.consume_conversation_event(
+        _letter("message.inbound", _inbound("PN_BUDDY")),
+        "33333333-3333-4333-8333-333333333333",
+    )
+    assert asked == (["t-1"] if buddy_answers else [])
+
+
+def test_buddy_is_not_asked_while_a_teammate_holds_or_is_awaited() -> None:
+    teammate = plan_inbound(
+        _thread(bot_template_id=AGENT, assignee_user_id="u-1"), None, AGENT, 10, NOW
+    )
+    waiting = plan_inbound(
+        _thread(bot_template_id=AGENT), _handoff(opened_at=NOW), AGENT, 10, NOW
+    )
+    held = plan_inbound(_thread(bot_template_id=AGENT), None, AGENT, 10, NOW)
+    assert not teammate.buddy_answers and not waiting.buddy_answers
+    assert held.buddy_answers
+
+
+@pytest.mark.parametrize(
+    ("over", "asks"),
+    [
+        # Buddy has it back: told nobody came, with or without her messages
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW), True),
+        # no agent: nobody to tell
+        (dict(last_inbound_at=NOW), False),
+        # the widget answers its own threads
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW, channel="widget"), False),
+        # the window has shut: Buddy could not answer her anyway
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW - timedelta(hours=25)), False),
+    ],
+)
+async def test_a_lapsed_handoff_tells_buddy_it_has_the_thread_back(
+    monkeypatch, over, asks
+) -> None:
+    from app.crm.conversations import handoffs
+
+    asked: List[tuple] = []
+    thread = _thread(**over)
+
+    async def get_thread(merchant_id, thread_id):
+        return thread
+
+    async def settings_for(t):
+        return SimpleNamespace(claim_sla_minutes=10)
+
+    async def lapse(*args):
+        return object()
+
+    async def wake(*args):
+        return None
+
+    async def ask_buddy(merchant_id, thread_id, reason=None):
+        asked.append((thread_id, reason))
+        return True
+
+    monkeypatch.setattr(handoffs.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(handoffs, "settings_for", settings_for)
+    monkeypatch.setattr(handoffs.handoff_accessor, "lapse", lapse)
+    monkeypatch.setattr(handoffs, "wake", wake)
+    monkeypatch.setattr(handoffs, "ask_buddy", ask_buddy)
+    old = _handoff(opened_at=NOW - timedelta(hours=1), conversation_id=thread.id)
+    assert await handoffs.lapse_if_due(old, NOW) is True
+    assert asked == ([(thread.id, words.RESUME_CLAIM_TIMEOUT)] if asks else [])
+
+
+@pytest.mark.parametrize(
+    ("agent", "hours_ago", "asks"),
+    [
+        (AGENT, 1, True),
+        # no agent set: Buddy does not hold it, so nobody is told
+        (None, 1, False),
+        # the window has shut
+        (AGENT, 25, False),
+    ],
+)
+async def test_a_hand_back_tells_buddy_it_has_the_thread_back(
+    monkeypatch, agent, hours_ago, asks
+) -> None:
+    from app.crm.conversations import threads
+    from app.crm.conversations.access import Actor
+
+    asked: List[tuple] = []
+    # hand_back reads the window on the real clock
+    wrote = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    back = _thread(bot_template_id=agent, last_inbound_at=wrote)
+
+    async def thread_or_404(merchant_id, thread_id):
+        return back
+
+    async def settings_for(t):
+        return SimpleNamespace(default_agent_id=back.bot_template_id)
+
+    async def atomically(fn, *args):
+        return back
+
+    async def ask_buddy(merchant_id, thread_id, reason=None):
+        asked.append((thread_id, reason))
+        return True
+
+    monkeypatch.setattr(threads, "thread_or_404", thread_or_404)
+    monkeypatch.setattr(threads, "settings_for", settings_for)
+    monkeypatch.setattr(threads, "atomically", atomically)
+    monkeypatch.setattr(threads, "ask_buddy", ask_buddy)
+    teammate = Actor(user_id="u-1", read_only=False, manager=False)
+    assert await threads.hand_back("shop", back.id, teammate) is back
+    assert asked == ([(back.id, words.RESUME_HANDED_BACK)] if asks else [])
+
+
 def test_a_widget_thread_is_never_this_answers_work() -> None:
     from app.crm.conversations import bot
 
@@ -1217,3 +1439,56 @@ async def test_a_replayed_letter_changes_nothing(monkeypatch) -> None:
         10,
     )
     assert result is None and calls == []
+
+
+# --- handoff_to_human is offered only where handoff is on ---------------------
+
+
+@pytest.mark.parametrize("human_handoff", [True, False])
+async def test_handoff_is_available_only_with_human_handoff_on(
+    monkeypatch, human_handoff
+) -> None:
+    """The agent is offered handoff_to_human only when the binding's settings
+    switch human handoff on (D15, D34); off, it never asks."""
+    from app.crm.conversations import handoffs
+
+    session = "55555555-5555-4555-8555-555555555555"
+    thread = _thread(bot_template_id=AGENT, bot_session_id=session)
+
+    async def get_thread(merchant_id, thread_id):
+        return thread
+
+    async def settings_for(t):
+        return SimpleNamespace(human_handoff=human_handoff)
+
+    monkeypatch.setattr(handoffs.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(handoffs, "settings_for", settings_for)
+    available = await handoffs.handoff_available("shop", thread.id, session)
+    assert available is human_handoff
+
+
+async def test_an_unknown_priority_is_asked_as_normal(monkeypatch) -> None:
+    from app.crm.conversations import handoffs
+
+    session = "55555555-5555-4555-8555-555555555555"
+    thread = _thread(bot_template_id=AGENT, bot_session_id=session)
+    asked: List[str] = []
+
+    async def thread_or_404(merchant_id, thread_id):
+        return thread
+
+    async def settings_for(t):
+        return SimpleNamespace(human_handoff=True)
+
+    async def atomically(fn, *args):
+        asked.append(args[-1])  # the priority, last
+        return _handoff()
+
+    monkeypatch.setattr(handoffs, "thread_or_404", thread_or_404)
+    monkeypatch.setattr(handoffs, "settings_for", settings_for)
+    monkeypatch.setattr(handoffs, "atomically", atomically)
+    for priority in ("urgent", "loud"):
+        await handoffs.request_handoff(
+            "shop", thread.id, session, "customer_requested", None, priority
+        )
+    assert asked == [words.PRIORITY_URGENT, words.PRIORITY_NORMAL]

@@ -77,14 +77,20 @@ async def owes_reply(thread: Thread) -> bool:
     return bool(unanswered)
 
 
-async def bot_work(merchant_id: str, thread_id: str) -> Optional[BotWork]:
+async def bot_work(
+    merchant_id: str, thread_id: str, unanswered_only: bool = True
+) -> Optional[BotWork]:
     """The thread as Buddy's turn answers it (see _work), read fresh — None
-    unless she wrote since Buddy last answered."""
+    unless she wrote since Buddy last answered. ``unanswered_only=False``:
+    whenever it is Buddy's to answer (a turn that tells Buddy why it has the
+    thread back runs with or without her messages)."""
     thread = await thread_accessor.get_thread(merchant_id, thread_id)
     if thread is None:
         return None
     work = _work(thread)
-    return work if work is not None and await owes_reply(thread) else None
+    if work is None or not unanswered_only:
+        return work
+    return work if await owes_reply(thread) else None
 
 
 async def bot_may_speak(

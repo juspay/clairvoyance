@@ -12,10 +12,12 @@ from app.ai.voice.agents.breeze_buddy.chat.agent.approval import ApprovalTurnMix
 from app.ai.voice.agents.breeze_buddy.chat.agent.context import ContextSeedMixin
 from app.ai.voice.agents.breeze_buddy.chat.agent.cycle import CycleLoopMixin
 from app.ai.voice.agents.breeze_buddy.chat.agent.direct import DirectDispatchMixin
+from app.ai.voice.agents.breeze_buddy.chat.agent.handoff import HandoffMixin
 from app.ai.voice.agents.breeze_buddy.chat.agent.render_ui import RenderUiHandlerMixin
 from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
     _CHIPS_NUDGE,
     _MAX_TOOL_CYCLES,
+    CONVERSATION_CHANNELS,
     _chip_labels,
     _KbMessage,
     _partition_gated_calls,
@@ -124,6 +126,7 @@ class ChatAgent(
     ContextSeedMixin,
     CycleLoopMixin,
     DirectDispatchMixin,
+    HandoffMixin,
     RenderUiHandlerMixin,
     ToolDispatchMixin,
 ):
@@ -147,8 +150,17 @@ class ChatAgent(
         catalog_version: Optional[str] = None,
         merchant_id: Optional[str] = None,
         custom_components: Optional[Dict[str, "CustomComponentDef"]] = None,
+        channel: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> None:
         self.session_id = session_id
+        # The surface this session talks on (chat_session.channel) and, for
+        # an inbox session, the conversation thread it answers. A text-only
+        # (messaging) channel gets no UI catalog, no render_ui and no chips;
+        # a thread-bound session may be offered handoff_to_human.
+        self.channel = channel
+        self.conversation_id = conversation_id
+        self._text_only = channel in CONVERSATION_CHANNELS
         self.template = template
         self.template_vars = template_vars or {}
         self._llm = llm
@@ -300,7 +312,9 @@ class ChatAgent(
         configurations = self.template.configurations
         render_ui_cfg = getattr(configurations, "render_ui", None)
         self._render_ui_enabled = (
-            bool(getattr(render_ui_cfg, "enabled", False)) and self._catalog_v2
+            bool(getattr(render_ui_cfg, "enabled", False))
+            and self._catalog_v2
+            and not self._text_only
         )
         # Forced think-step tools: template config wins; absent, the
         # enabled flavor's pack default applies (commerce: search_catalog).

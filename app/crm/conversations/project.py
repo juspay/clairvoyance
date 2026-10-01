@@ -25,7 +25,7 @@ thread's upsert still locks the row, which is the point of it).
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import (
@@ -38,6 +38,7 @@ from app.crm.connectivity.contracts import (
     normalize_address,
     receipt_target,
 )
+from app.crm.conversations.ask import ask_buddy
 from app.crm.conversations.db import DbTxn, atomically
 from app.crm.conversations.db.accessors import (
     handoff as handoff_accessor,
@@ -135,7 +136,7 @@ async def _project_inbound(event: RawEvent, customer_id: str) -> None:
     caption = value("media_caption")
     body = {"type": kind, "text": text, "caption": caption}
     sender = value("sender_address")
-    row = await atomically(
+    projected = await atomically(
         _project_inbound_in_txn,
         event.merchant_id,
         event.source,
@@ -150,10 +151,16 @@ async def _project_inbound(event: RawEvent, customer_id: str) -> None:
         settings.default_agent_id,
         settings.claim_sla_minutes,
     )
-    if row is not None:
-        logger.bind(merchant_id=event.merchant_id, thread_id=row.conversation_id).info(
-            f"inbound {event.id} projected onto thread {row.conversation_id}"
-        )
+    if projected is None:
+        return
+    row, buddy_answers = projected
+    logger.bind(merchant_id=event.merchant_id, thread_id=row.conversation_id).info(
+        f"inbound {event.id} projected onto thread {row.conversation_id}"
+    )
+    if buddy_answers:
+        # After the atom: the turn reads what was just written. A call that
+        # fails is logged and the letter still completes (ask never raises).
+        await ask_buddy(event.merchant_id, row.conversation_id)
 
 
 async def _project_inbound_in_txn(
@@ -170,7 +177,7 @@ async def _project_inbound_in_txn(
     occurred_at: datetime,
     agent_id: Optional[str],
     claim_sla_minutes: int,
-) -> Optional[TimelineRow]:
+) -> Optional[Tuple[TimelineRow, bool]]:
     """ATOMIC: the timeline row, the thread's window and who answers it move
     together — the upsert locks the thread, so two letters for one customer
     queue, and a replayed letter (no row inserted) changes nothing."""
@@ -208,7 +215,7 @@ async def _project_inbound_in_txn(
         row.created_at,
     )
     await wake(merchant_id, thread.id, WAKE_MESSAGE, txn)
-    return row
+    return row, plan.buddy_answers
 
 
 async def _project_template(event: RawEvent, customer_id: str) -> None:

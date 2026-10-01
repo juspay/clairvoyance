@@ -27,11 +27,14 @@ from app.crm.conversations.status import (
 @dataclass(frozen=True)
 class InboundPlan:
     """The thread's controller fields after the message. ``bot_template_id``
-    and ``bot_session_id`` are written as given — None clears them."""
+    and ``bot_session_id`` are written as given — None clears them.
+    ``buddy_answers``: Buddy holds the thread now, so it is asked to answer
+    her (D41); never while a teammate holds it or is being waited for."""
 
     reopen: bool
     bot_template_id: Optional[str]
     bot_session_id: Optional[str]
+    buddy_answers: bool = False
 
 
 def plan_inbound(
@@ -44,14 +47,25 @@ def plan_inbound(
     """PURE: see the module docstring."""
     held = held_by(thread, handoff, claim_sla_minutes, now)
     if held == HELD_RESOLVED:
-        return InboundPlan(reopen=True, bot_template_id=agent_id, bot_session_id=None)
+        return InboundPlan(
+            reopen=True,
+            bot_template_id=agent_id,
+            bot_session_id=None,
+            buddy_answers=agent_id is not None,
+        )
     if held == HELD_BY_NOBODY:
-        return InboundPlan(reopen=False, bot_template_id=agent_id, bot_session_id=None)
+        return InboundPlan(
+            reopen=False,
+            bot_template_id=agent_id,
+            bot_session_id=None,
+            buddy_answers=agent_id is not None,
+        )
     if held == HELD_BY_BUDDY:
         return InboundPlan(
             reopen=False,
             bot_template_id=thread.bot_template_id,
             bot_session_id=thread.bot_session_id,
+            buddy_answers=True,
         )
     # teammate or waiting: whoever holds it keeps it.
     return InboundPlan(
