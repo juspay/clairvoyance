@@ -408,11 +408,14 @@ def get_call_facts_by_runs_query(
     ``mine`` set as get_call_stats_by_runs_query — stamped leads and
     retries alike.
 
-    ``finished`` and ``outcomes`` are the FINISHED leads of that (run,
-    template), placed or not, the latter as {outcome: count}. A lead the
-    dialler ended without ringing (CALL_LIMIT_REACHED) is in both, never in
-    ``placed``; one still queued or on the line is in neither. The
-    calls-per-customer chart counts these.
+    ``placed_finished`` and ``outcomes`` are the leads of that (run,
+    template) that were DIALLED (call_initiated_time set) and have
+    FINISHED, the latter as {outcome: count} — the calls a customer
+    actually got, which is what the per-customer cap counts. A lead that
+    ended without ringing (ABORTED from the plan's daily ceiling,
+    CALL_LIMIT_REACHED, PRECHECK_FAILED, BLACKLISTED, ...) is in neither,
+    by the dial fact rather than a list of outcome names; one still on the
+    line is in neither yet. The calls-per-customer chart counts these.
 
     ``last_answered_at`` / ``last_answered_event`` are the run's LAST
     answered call before its exited_at (or so far, while open) and the
@@ -441,7 +444,7 @@ def get_call_facts_by_runs_query(
                    COALESCE("outcome", 'N/A') AS outcome,
                    count(*)::int AS n
             FROM mine
-            WHERE "status" = 'FINISHED'
+            WHERE "status" = 'FINISHED' AND "call_initiated_time" IS NOT NULL
             GROUP BY 1, 2, 3
         ), outcomes AS (
             SELECT run_id, template, jsonb_object_agg(outcome, n) AS outcomes
@@ -451,7 +454,7 @@ def get_call_facts_by_runs_query(
             SELECT run_id,
                    COALESCE("template", '') AS template,
                    count(*)::int AS leads,
-                   count(*) FILTER (WHERE "status" = 'FINISHED')::int AS finished,
+                   count(*) FILTER (WHERE "status" = 'FINISHED' AND "call_initiated_time" IS NOT NULL)::int AS placed_finished,
                    count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL)::int AS placed,
                    count(*) FILTER (WHERE {_ANSWERED})::int AS answered,
                    count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'NO_ANSWER')::int AS no_answer,
@@ -470,7 +473,7 @@ def get_call_facts_by_runs_query(
             WHERE {last}
             ORDER BY run_id, COALESCE("template", ''), "call_initiated_time" DESC, "id"
         )
-        SELECT f.run_id AS enrollment_id, f.template, f.leads, f.finished,
+        SELECT f.run_id AS enrollment_id, f.template, f.leads, f.placed_finished,
                f.placed, f.answered, f.no_answer, f.busy, f.in_progress,
                f.first_answered_at, f.last_answered_at, e.last_answered_event,
                COALESCE(o.outcomes, '{{}}'::jsonb) AS outcomes

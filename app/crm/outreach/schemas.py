@@ -860,12 +860,20 @@ REACH_STAGES = ("never_dialled", "dialled_no_answer", "spoke")
 
 class ReportCallBar(BaseModel):
     """One bar of the calls-per-customer chart: the runs with exactly
-    ``calls`` FINISHED call leads (placed or not), and how they ended
-    (outcome → leads). The outcomes sum to calls × runs."""
+    ``calls`` DIALLED calls that finished, and how those calls ended
+    (outcome → calls). The outcomes sum to calls × runs — except on an
+    ``or_more`` bar.
+
+    ``or_more`` marks the top bar when the merchant caps calls per customer
+    (ADR 0025) and runs with MORE dialled calls than ``max_calls`` were
+    folded into it — calls from before the cap was set, or from more than
+    one cap window in the run's life. It then reads "N+ calls", and its
+    outcomes sum to those runs' real calls, not N × runs."""
 
     calls: int
     runs: int
     outcomes: Dict[str, int] = Field(default_factory=dict)
+    or_more: bool = False
 
 
 class ReportCustomers(BaseModel):
@@ -918,10 +926,12 @@ class ReportCustomers(BaseModel):
     by_reach: Dict[str, ReportReach] = Field(default_factory=dict)
     open_by_square: Dict[str, int] = Field(default_factory=dict)
     goal_met_after_by_event: Dict[str, int] = Field(default_factory=dict)
-    # The calls-per-customer chart: every FINISHED call lead, placed or not,
-    # so a call the dialler refused (CALL_LIMIT_REACHED) is on it; one still
-    # queued or on the line is not. calls_per_customer above stays
-    # placed-only — "customers called twice or more" is about calls that rang.
+    # The calls-per-customer chart: DIALLED calls that finished, so a lead
+    # that never rang (ABORTED, CALL_LIMIT_REACHED, ...) or one still on the
+    # line is not on it; capped at the merchant's max_calls, the top bar
+    # folding everyone above it (ReportCallBar.or_more). calls_per_customer
+    # above stays placed-only and uncapped — "customers called twice or
+    # more" reads it.
     call_histogram: List[ReportCallBar] = Field(default_factory=list)
 
 

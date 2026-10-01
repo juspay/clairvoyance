@@ -16,6 +16,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from app.core.logger import logger
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -34,6 +35,7 @@ from app.crm.outreach.schemas import (
     WorkflowRunSummary,
 )
 from app.database.accessor import get_call_facts_by_runs, get_call_stats_by_runs
+from app.database.accessor.breeze_buddy.merchants import get_merchant_call_limits
 
 # The widest window a report or calls summary will materialise, and the
 # window a caller who names none gets. Both reads pull every run that
@@ -219,8 +221,10 @@ async def workflow_report(
     Two reads, each the narrowest one that answers its own question — the
     plan's runs that entered in the window (how each stands), and what the
     lead store did for each of them (how many calls, and when the first
-    conversation began). The arithmetic is pure and lives below, so the
-    shape a merchant reads is testable without a database."""
+    conversation began) — plus the merchant's per-customer cap, which only
+    sets where the calls-per-customer chart stops. The arithmetic is pure
+    and lives below, so the shape a merchant reads is testable without a
+    database."""
     since, until = bounded_window(since, until)
     workflow = await workflow_accessor.get_workflow(merchant_id, workflow_id)
     if workflow is None:
@@ -229,7 +233,26 @@ async def workflow_report(
         merchant_id, workflow_id, since, until
     )
     facts = await get_call_facts_by_runs(merchant_id, _lifetimes(endings))
-    return build_report(endings, facts)
+    return build_report(endings, facts, await _merchant_max_calls(merchant_id))
+
+
+async def _merchant_max_calls(merchant_id: str) -> Optional[int]:
+    """The merchant's per-customer cap (ADR 0025) — the largest max_calls
+    over its rules — where the calls-per-customer chart stops, or None: no
+    merchant, no rule, or the rules unreadable. A chart bound, not a
+    permission: an unreadable rule draws the chart uncapped rather than
+    failing the report (the dial path fails closed on the same read; this
+    is not that path)."""
+    try:
+        limits = await get_merchant_call_limits(merchant_id)
+    except Exception as e:
+        logger.warning(
+            f"report: call limits unreadable for {merchant_id}, "
+            f"calls-per-customer chart drawn uncapped: {e}"
+        )
+        return None
+    rules = (limits.call_limits or []) if limits else []
+    return max((rule.max_calls for rule in rules), default=None)
 
 
 # A run with no entered_at (never on a real row) still needs a lower bound
@@ -238,7 +261,9 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def build_report(
-    endings: List[RunEnding], facts: Dict[str, List[Dict[str, Any]]]
+    endings: List[RunEnding],
+    facts: Dict[str, List[Dict[str, Any]]],
+    max_calls: Optional[int] = None,
 ) -> WorkflowReport:
     """PURE decide: the two tables, from the runs and their calls.
 
@@ -256,7 +281,13 @@ def build_report(
     goals by the stage the run's LAST answered call before it ended was
     placed for (the lead's ``current_stage``, else its ``event_name``, both
     written when the call was queued; ``_NO_EVENT`` when it carries
-    neither), so it always sums to ``goal_met_after_reach``."""
+    neither), so it always sums to ``goal_met_after_reach``.
+
+    ``call_histogram`` counts each run's DIALLED calls that finished; with
+    ``max_calls`` (the merchant's per-customer cap) every run above it is
+    folded into the ``max_calls`` bar, marked ``or_more`` — so the chart
+    stops at the cap and no run is dropped. ``calls_per_customer`` is left
+    uncapped: the card's "called twice or more" reads it."""
     by_reach = {
         stage: {
             "runs": 0,
@@ -353,7 +384,7 @@ def build_report(
         customers=ReportCustomers(
             **customers,
             calls_per_customer={str(k): v for k, v in sorted(per_customer.items())},
-            call_histogram=_bars(histogram),
+            call_histogram=_bars(histogram, max_calls),
             by_reach={k: ReportReach(**v) for k, v in by_reach.items()},
             open_by_square=dict(sorted(open_by_square.items())),
             # busiest first; the no-event bucket always last, whatever its
@@ -379,7 +410,7 @@ def build_report(
                 calls_per_customer={
                     str(k): v for k, v in sorted(card["per_customer"].items())
                 },
-                call_histogram=_bars(card["histogram"]),
+                call_histogram=_bars(card["histogram"], max_calls),
             )
             # Busiest agent first — a plan's main template is the card a
             # merchant looks at.
@@ -395,11 +426,12 @@ _Bar = Tuple[int, Dict[str, int]]
 
 
 def _add_to_bar(histogram: Dict[int, _Bar], rows: List[Dict[str, Any]]) -> None:
-    """Put one run on the bar for how many FINISHED calls ``rows`` hold —
-    placed or not, so a call the dialler refused counts, one still queued
-    or on the line does not — and add their outcomes to that bar. A run
-    with none is the 0 bar, with nothing to break down."""
-    calls = sum(int(r.get("finished") or 0) for r in rows)
+    """Put one run on the bar for how many DIALLED calls that finished
+    ``rows`` hold — a lead that never rang (ABORTED, CALL_LIMIT_REACHED,
+    ...) or one still on the line is not a call here — and add their
+    outcomes to that bar. A run with none is the 0 bar, with nothing to
+    break down."""
+    calls = sum(int(r.get("placed_finished") or 0) for r in rows)
     runs, outcomes = histogram.get(calls, (0, {}))
     for r in rows:
         for outcome, n in _outcomes(r.get("outcomes")).items():
@@ -420,15 +452,29 @@ def _outcomes(raw: Any) -> Dict[str, int]:
     return {str(k): int(v) for k, v in raw.items() if isinstance(v, (int, float))}
 
 
-def _bars(histogram: Dict[int, _Bar]) -> List[ReportCallBar]:
-    """The folded bars, ascending by calls; outcomes busiest first."""
+def _bars(
+    histogram: Dict[int, _Bar], max_calls: Optional[int] = None
+) -> List[ReportCallBar]:
+    """The folded bars, ascending by calls; outcomes busiest first. With
+    ``max_calls``, every bar above it joins the ``max_calls`` bar — runs and
+    outcomes added — and that bar is ``or_more`` if anything joined it."""
+    capped: Dict[int, Tuple[int, Dict[str, int], bool]] = {}
+    for calls, (runs, outcomes) in histogram.items():
+        above = max_calls is not None and calls > max_calls
+        at = max_calls if above and max_calls is not None else calls
+        have_runs, have, more = capped.get(at, (0, {}, False))
+        joined = dict(have)
+        for outcome, n in outcomes.items():
+            joined[outcome] = joined.get(outcome, 0) + n
+        capped[at] = (have_runs + runs, joined, more or above)
     return [
         ReportCallBar(
             calls=calls,
             runs=runs,
             outcomes=dict(sorted(outcomes.items(), key=lambda kv: (-kv[1], kv[0]))),
+            or_more=more,
         )
-        for calls, (runs, outcomes) in sorted(histogram.items())
+        for calls, (runs, outcomes, more) in sorted(capped.items())
     ]
 
 
