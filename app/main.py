@@ -9,6 +9,10 @@ from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.ai.voice.agents.breeze_buddy.chat.cleanup import end_idle_chat_sessions
+from app.ai.voice.agents.breeze_buddy.chat.whatsapp.responder import (
+    start_responder,
+    stop_responder,
+)
 from app.ai.voice.agents.breeze_buddy.dispatch import (
     clean_stale_bb_locks,
     monitor_dispatch_health,
@@ -65,6 +69,7 @@ from app.core.config.static import (
     HOST,
     POD_ROLE,
     PORT,
+    RESPONDER_ROLE,
 )
 
 # Import necessary components from the new structure
@@ -316,8 +321,12 @@ async def lifespan(_app: FastAPI):
 
     # CRM worker roles (design/worker-runtime.md): one image, N pods. A
     # non-"api" CRM_ROLE runs its drain loop as an asyncio task in this
-    # process instead of serving HTTP — see app/crm/worker_main.py.
-    if CRM_ROLE != "api":
+    # process instead of serving HTTP — see app/crm/worker_main.py. The
+    # responder is Buddy's (app/ai), so the crm registry cannot hold it.
+    if CRM_ROLE == RESPONDER_ROLE:
+        await start_responder()
+        logger.info("Buddy's WhatsApp responder started")
+    elif CRM_ROLE != "api":
         await start_worker_role(CRM_ROLE)
         logger.info(f"CRM worker role '{CRM_ROLE}' started")
     else:
@@ -332,7 +341,10 @@ async def lifespan(_app: FastAPI):
     if CRM_ROLE != "api":
         try:
             logger.info(f"Stopping CRM worker role '{CRM_ROLE}'...")
-            await stop_worker_role()
+            if CRM_ROLE == RESPONDER_ROLE:
+                await stop_responder()
+            else:
+                await stop_worker_role()
         except Exception as e:
             logger.error(
                 f"Error stopping CRM worker role '{CRM_ROLE}': {e}", exc_info=True

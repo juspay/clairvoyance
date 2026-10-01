@@ -73,7 +73,9 @@ What is here, and why each thing is on the surface:
   reply to fit instead of having it refused.
 - ``consume_status_event`` — the receipts consumer (worker_main registers
   it): message.status letters move the manifest along sent -> delivered ->
-  read, or to failed with the provider's code. ``message_ticks`` reads what
+  read, or to failed with the provider's code. ``receipt_target`` names the
+  send a receipt letter is about (conversations wakes the thread showing
+  it). ``message_ticks`` reads what
   they wrote, for a timeline.
 - ``TOPIC_BUDDY_MOVED`` — the letter this module files when Buddy moves to
   another number; conversations resolves the old number's threads.
@@ -110,7 +112,11 @@ from app.crm.connectivity.onboarding import (
 )
 from app.crm.connectivity.queue import queue_message, send_behind
 from app.crm.connectivity.reasons import reason_label
-from app.crm.connectivity.receipts import consume_status_event, message_ticks
+from app.crm.connectivity.receipts import (
+    consume_status_event,
+    message_ticks,
+    receipt_target,
+)
 from app.crm.connectivity.schemas.connector import (
     ChannelSettingsRead,
     ConversationSettings,
@@ -146,7 +152,12 @@ from app.crm.connectivity.templates.reads import (
     template_status,
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
-from app.crm.connectivity.topics import TOPIC_BUDDY_MOVED, TOPIC_INBOUND, TOPIC_QUEUED
+from app.crm.connectivity.topics import (
+    TOPIC_BUDDY_MOVED,
+    TOPIC_INBOUND,
+    TOPIC_QUEUED,
+    TOPIC_STATUS,
+)
 
 __all__ = [
     # the dispatcher role
@@ -205,11 +216,14 @@ __all__ = [
     "consume_status_event",
     # the topic of our own send's echo — outreach must never react to it
     "TOPIC_QUEUED",
-    # the conversations module's letters: a customer wrote, Buddy moved
+    # the conversations module's letters: a customer wrote, a send moved
+    # (a receipt), Buddy moved
     "TOPIC_INBOUND",
+    "TOPIC_STATUS",
     "TOPIC_BUDDY_MOVED",
     # what became of our sends, for a timeline's ticks
     "message_ticks",
+    "receipt_target",
     "MessageTick",
     # the merchant's numbers: the template number, Buddy's number and settings
     "buddy_number",

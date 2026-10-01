@@ -298,6 +298,12 @@ async def run_chat_turn(
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
         custom_components=model_renderable(await resolve_custom_components(template)),
+        channel=session.channel,
+        conversation_id=(
+            session.metadata.get("conversation_id")
+            if isinstance(session.metadata, dict)
+            else None
+        ),
     )
     async for event in agent.run_turn(
         user_content=user_content,
@@ -395,6 +401,12 @@ async def run_chat_approval_continuation(
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
         custom_components=model_renderable(await resolve_custom_components(template)),
+        channel=session.channel,
+        conversation_id=(
+            session.metadata.get("conversation_id")
+            if isinstance(session.metadata, dict)
+            else None
+        ),
     )
     async for event in agent.run_approval_turn(
         approval=claimed,

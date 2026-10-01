@@ -76,6 +76,15 @@ async def _request_handoff_in_txn(
     return opened
 
 
+async def handoff_available(merchant_id: str, thread_id: str) -> bool:
+    """May an agent on this thread ask for a person right now? Fail closed:
+    no thread, a resolved one, or handoff switched off on the number — no."""
+    thread = await thread_accessor.get_thread(merchant_id, thread_id)
+    if thread is None or thread.resolved_at is not None:
+        return False
+    return (await settings_for(thread)).human_handoff
+
+
 async def lapse_if_due(handoff: Handoff, now: datetime) -> bool:
     """Close an unclaimed handoff past its claim SLA (D5) — Buddy takes the
     thread back. True when this call closed it."""

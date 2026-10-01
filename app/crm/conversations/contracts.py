@@ -8,7 +8,8 @@
 - Buddy's responder (PR 3, buddy-side): ``claim_bot_work``,
   ``bot_may_speak``, ``set_bot_session``, ``thread_for_session``,
   ``pending_inbound``, ``human_era_slice``, ``record_bot_reply``,
-  ``mark_bot_cursor``, ``end_chat``, ``request_handoff``.
+  ``mark_bot_cursor``, ``thread_by_id``, ``handoff_available``,
+  ``request_handoff``.
 - The widget (PR 3): ``open_widget_thread``, ``append_widget_inbound``,
   ``widget_messages_after``.
 """
@@ -16,18 +17,20 @@
 from app.crm.conversations.bot import (
     bot_may_speak,
     claim_bot_work,
-    end_chat,
     human_era_slice,
     mark_bot_cursor,
     pending_inbound,
     record_bot_reply,
     set_bot_session,
+    thread_by_id,
     thread_for_session,
 )
-from app.crm.conversations.handoffs import request_handoff
+from app.crm.conversations.handoffs import handoff_available, request_handoff
 from app.crm.conversations.moves import consume_buddy_moved
 from app.crm.conversations.project import consume_conversation_event
+from app.crm.conversations.reply import SERVICE_PURPOSE, SOURCE_AGENT
 from app.crm.conversations.schemas import BotWork, Handoff, Thread, TimelineRow
+from app.crm.conversations.status import CHANNEL_WHATSAPP, KIND_INBOUND
 from app.crm.conversations.widget import (
     append_widget_inbound,
     open_widget_thread,
@@ -50,12 +53,18 @@ __all__ = [
     "human_era_slice",
     "record_bot_reply",
     "mark_bot_cursor",
-    "end_chat",
+    "thread_by_id",
+    "handoff_available",
     "request_handoff",
     # the widget
     "open_widget_thread",
     "append_widget_inbound",
     "widget_messages_after",
+    # the words a caller reads rows and threads by, and sends under
+    "CHANNEL_WHATSAPP",
+    "KIND_INBOUND",
+    "SERVICE_PURPOSE",
+    "SOURCE_AGENT",
     # shapes
     "BotWork",
     "Handoff",

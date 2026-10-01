@@ -66,3 +66,6 @@ WAKE_MESSAGE = "message"
 WAKE_STATE = "state"
 WAKE_HANDOFF = "handoff"
 WAKE_READ = "read"
+#: One of our sends on the thread moved (sent · delivered · read · failed):
+#: the Inbox re-reads its ticks.
+WAKE_RECEIPT = "receipt"

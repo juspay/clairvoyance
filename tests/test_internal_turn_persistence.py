@@ -289,6 +289,7 @@ async def _drive_run_chat_turn(monkeypatch, *, internal: bool) -> Dict[str, Any]
             status=ChatSessionStatus.ACTIVE,
             template_id="tpl-1",
             metadata={},
+            channel="web",
             current_node=None,
             # None = unmetered — billing gate/deduction no-op in-harness.
             merchant_id=None,

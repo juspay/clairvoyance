@@ -103,3 +103,14 @@ async def last_by_author(
     query, values = q.last_by_author_query(merchant_id, thread_id, kind, author_kind)
     async with crm_connection() as conn:
         return await conn.fetchval(query, *values)
+
+
+async def thread_for_send(
+    merchant_id: str, provider_message_id: str, message_id: Optional[str]
+) -> Optional[str]:
+    query, values = q.thread_for_send_query(
+        merchant_id, provider_message_id, message_id
+    )
+    async with crm_connection() as conn:
+        found = await conn.fetchval(query, *values)
+    return str(found) if found is not None else None

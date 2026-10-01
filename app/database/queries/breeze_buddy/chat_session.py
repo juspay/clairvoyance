@@ -17,7 +17,7 @@ CHAT_TURN_METRICS_TABLE = "chat_turn_metrics"
 _SESSION_COLUMNS = """
     id, template_id, reseller_id, merchant_id,
     status, outcome, current_node, metadata,
-    current_channel, voice_lead_id,
+    current_channel, voice_lead_id, channel,
     created_at, last_activity_at, ended_at, ended_reason
 """
 
@@ -44,16 +44,17 @@ def create_chat_session_query(
     reseller_id: str,
     merchant_id: Optional[str],
     metadata_json: str,
+    channel: str = "web",
 ) -> Tuple[str, List[Any]]:
     """Insert a new ACTIVE session, returning the full row."""
     query = f"""
         INSERT INTO {CHAT_SESSION_TABLE} (
-            template_id, reseller_id, merchant_id, metadata
+            template_id, reseller_id, merchant_id, metadata, channel
         )
-        VALUES ($1, $2, $3, $4::jsonb)
+        VALUES ($1, $2, $3, $4::jsonb, $5)
         RETURNING {_SESSION_COLUMNS}
     """
-    return query, [template_id, reseller_id, merchant_id, metadata_json]
+    return query, [template_id, reseller_id, merchant_id, metadata_json, channel]
 
 
 def get_chat_session_by_id_query(session_id: str) -> Tuple[str, List[Any]]:
@@ -138,8 +139,11 @@ def list_idle_chat_sessions_query(
     cutoff: datetime,
     statuses: List[str],
     limit: int = 100,
+    channels: Optional[List[str]] = None,
 ) -> Tuple[str, List[Any]]:
-    """Sessions whose last_activity_at < cutoff and status ∈ statuses.
+    """Sessions whose last_activity_at < cutoff and status ∈ statuses —
+    on the given channels only, when named (the idle sweeper names "web":
+    a WhatsApp session lives as long as its reply window, not a tab).
 
     Ordered ascending so the oldest are processed first by the sweeper.
     """
@@ -148,10 +152,27 @@ def list_idle_chat_sessions_query(
         FROM {CHAT_SESSION_TABLE}
         WHERE status = ANY($1)
           AND last_activity_at < $2
+          AND ($4::text[] IS NULL OR channel = ANY($4))
         ORDER BY last_activity_at ASC
         LIMIT $3
     """
-    return query, [statuses, cutoff, limit]
+    return query, [statuses, cutoff, limit, channels]
+
+
+def list_open_sessions_on_channel_query(
+    channel: str, statuses: List[str], limit: int
+) -> Tuple[str, List[Any]]:
+    """Open sessions on one channel, oldest activity first — the WhatsApp
+    responder reconciles them against their threads."""
+    query = f"""
+        SELECT {_SESSION_COLUMNS}
+        FROM {CHAT_SESSION_TABLE}
+        WHERE channel = $1
+          AND status = ANY($2)
+        ORDER BY last_activity_at ASC
+        LIMIT $3
+    """
+    return query, [channel, statuses, limit]
 
 
 # -- conversational-log listing (CHAT_ANALYTICS_PLAN.md, Phase 1A) -----------

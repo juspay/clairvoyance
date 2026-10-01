@@ -22,6 +22,16 @@ from app.ai.voice.agents.breeze_buddy.chat.ui.chips import carries_identifier
 # this ceiling; 20 is headroom, not a target.
 _MAX_TOOL_CYCLES = 20
 
+#: A tool result carrying this key ENDS the turn: its value is the turn's
+#: last reply, and no further LLM call runs. Opt-in — only a handler that
+#: means "nothing more should be said" sets it (handoff_to_human: once a
+#: person is asked for, Buddy adds nothing after the waiting message).
+TURN_END_REPLY_KEY = "_end_turn_with"
+
+#: Channels whose sessions are text only: no UI catalog in the prompt, no
+#: render_ui, no chips (WhatsApp replies are plain text, D32).
+TEXT_ONLY_CHANNELS = frozenset({"whatsapp"})
+
 # The forced final chips cycle's user-role nudge (quick_replies=
 # 'forced_final'). It rides an internal USER row so live context and
 # next-turn replay stay identical AND user/model alternation holds around

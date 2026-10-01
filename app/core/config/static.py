@@ -561,6 +561,8 @@ def _positive_float(env_var: str, default: float) -> float:
 # HTTP or the dispatcher. "api" (default) starts no loop.
 # -----------------------------------------------------------------------------
 CRM_ROLE = os.environ.get("CRM_ROLE", "api").lower()
+#: Buddy answering on WhatsApp (app/ai/.../chat/whatsapp/responder.py).
+RESPONDER_ROLE = "responder"
 
 CRM_WORKER_INTERVAL = _positive_float("CRM_WORKER_INTERVAL", 1.0)
 CRM_WORKER_BATCH = _positive_int("CRM_WORKER_BATCH", 100)
@@ -607,6 +609,16 @@ CRM_DISPATCH_STALE_MINUTES = _positive_int("CRM_DISPATCH_STALE_MINUTES", 15)
 CRM_INBOX_SWEEP_SECONDS = _positive_float("CRM_INBOX_SWEEP_SECONDS", 30.0)
 CRM_INBOX_BOT_LEASE_SECONDS = _positive_int("CRM_INBOX_BOT_LEASE_SECONDS", 90)
 CRM_INBOX_RETENTION_DAYS = _positive_int("CRM_INBOX_RETENTION_DAYS", 90)
+# Buddy's WhatsApp responder (CRM_ROLE=responder): threads answered at once
+# per pass, how long her last message must be quiet before Buddy answers (a
+# burst becomes one turn), the idle poll, and how often open WhatsApp
+# sessions are reconciled with their threads (ended when the thread let go).
+CRM_RESPONDER_BATCH = _positive_int("CRM_RESPONDER_BATCH", 10)
+CRM_RESPONDER_SETTLE_SECONDS = _positive_int("CRM_RESPONDER_SETTLE_SECONDS", 2)
+CRM_RESPONDER_INTERVAL = _positive_float("CRM_RESPONDER_INTERVAL", 1.0)
+CRM_RESPONDER_RECONCILE_SECONDS = _positive_float(
+    "CRM_RESPONDER_RECONCILE_SECONDS", 60.0
+)
 
 # Bounded so one undeliverable message cannot earn a provider rate-limit ban
 # for every other merchant sharing that sender.

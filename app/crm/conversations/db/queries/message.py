@@ -143,3 +143,20 @@ def last_by_author_query(
            AND author_kind = $4
     """
     return query, [merchant_id, thread_id, kind, author_kind]
+
+
+def thread_for_send_query(
+    merchant_id: str, provider_message_id: str, message_id: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """The thread showing one of our sends — by the provider's id (Buddy's
+    and a teammate's free-form replies carry it) or by our row's id (a
+    template is recorded before the provider names it)."""
+    query = f"""
+        SELECT conversation_id
+          FROM {TIMELINE_TABLE}
+         WHERE merchant_id = $1
+           AND (provider_message_id = $2
+                OR ($3::uuid IS NOT NULL AND message_id = $3::uuid))
+         LIMIT 1
+    """
+    return query, [merchant_id, provider_message_id, message_id]

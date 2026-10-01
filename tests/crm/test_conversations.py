@@ -454,10 +454,135 @@ def test_the_replay_guards_match_the_partial_unique_indexes() -> None:
 def test_take_over_is_a_compare_and_set_and_the_bot_claim_skips_locked_rows() -> None:
     query, _ = thread_q.take_over_query("m", "t", "u", {})
     assert "AND assignee_user_id IS NULL" in query
-    query, values = thread_q.claim_bot_work_query(90, 10)
-    assert "FOR UPDATE SKIP LOCKED" in query and values == [90, 10]
+    query, values = thread_q.claim_bot_work_query(90, 2, ["whatsapp"], 10)
+    assert "FOR UPDATE SKIP LOCKED" in query and values == [90, 10, 2, ["whatsapp"]]
+    # the responder answers WhatsApp; the widget answers its own threads
+    assert "t.channel = ANY($4::text[])" in query
+    # a burst settles into one turn: her last message must be 2s old
+    assert "t.last_inbound_at <= now() - make_interval(secs => $3::int)" in query
     assert "last_inbound_at > t.bot_cursor_at" in query
 
 
 def test_every_view_has_a_predicate() -> None:
     assert set(thread_q.VIEW_PREDICATES) == set(words.VIEWS)
+
+
+# --- may Buddy speak: re-checked before every send ---------------------------
+
+#: bot_may_speak reads the wall clock: a handoff opened "now" is inside its SLA.
+_JUST_NOW = datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("thread", "handoff", "session_id", "may"),
+    [
+        (_thread(bot_template_id=AGENT), None, None, True),
+        # her handoff is open: Buddy is silent...
+        (_thread(bot_template_id=AGENT), _handoff(opened_at=_JUST_NOW), None, False),
+        # ...bar the turn that asked for it (its waiting message)
+        (
+            _thread(bot_template_id=AGENT),
+            _handoff(opened_at=_JUST_NOW),
+            "55555555-5555-4555-8555-555555555555",
+            True,
+        ),
+        # a teammate claimed it: even the asking session is silent
+        (
+            _thread(bot_template_id=AGENT, assignee_user_id="u-1"),
+            _handoff(opened_at=_JUST_NOW, claimed_by="u-1", claimed_at=_JUST_NOW),
+            "55555555-5555-4555-8555-555555555555",
+            False,
+        ),
+        # Buddy moved to another number
+        (
+            _thread(bot_template_id=AGENT, binding_id="other-number"),
+            None,
+            None,
+            False,
+        ),
+    ],
+)
+async def test_bot_may_speak(monkeypatch, thread, handoff, session_id, may) -> None:
+    from app.crm.conversations import bot
+
+    async def get_thread(merchant_id, thread_id):
+        return thread
+
+    async def open_for_thread(merchant_id, thread_id):
+        return handoff
+
+    async def settings(_thread):
+        return SimpleNamespace(claim_sla_minutes=10)
+
+    async def buddy(merchant_id, channel):
+        return SimpleNamespace(id=BUDDY_NUMBER)
+
+    monkeypatch.setattr(bot.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(bot.handoff_accessor, "open_for_thread", open_for_thread)
+    monkeypatch.setattr(bot, "settings_for", settings)
+    monkeypatch.setattr(bot, "buddy_number", buddy)
+    assert await bot.bot_may_speak("shop", thread.id, session_id) is may
+
+
+# --- receipts wake the thread showing the send --------------------------------
+
+
+def _receipt_letter(topic: str) -> RawEvent:
+    """A filed receipt: it names a message, never a customer."""
+    return RawEvent(
+        id="77777777-7777-4777-8777-777777777777",
+        merchant_id="shop",
+        source="whatsapp",
+        topic=topic,
+        schema_version="v23.0",
+        external_id="wamid.X:read",
+        payload={},
+        received_at=NOW,
+    )
+
+
+async def test_a_receipt_wakes_the_thread_showing_the_send(monkeypatch) -> None:
+    from app.crm.conversations import project
+
+    woken: List[tuple] = []
+    asked: List[tuple] = []
+
+    async def target(event):
+        return "wamid.X", "66666666-6666-4666-8666-666666666666"
+
+    async def thread_for_send(merchant_id, provider_message_id, message_id):
+        asked.append((merchant_id, provider_message_id, message_id))
+        return "22222222-2222-4222-8222-222222222222"
+
+    async def wake(merchant_id, thread_id, kind):
+        woken.append((thread_id, kind))
+
+    monkeypatch.setattr(project, "receipt_target", target)
+    monkeypatch.setattr(project.message_accessor, "thread_for_send", thread_for_send)
+    monkeypatch.setattr(project, "wake", wake)
+    receipt = _receipt_letter(project.TOPIC_STATUS)
+    # receipts name no customer — they must not be turned away for it
+    await project.consume_conversation_event(receipt, None)
+    assert asked == [("shop", "wamid.X", "66666666-6666-4666-8666-666666666666")]
+    assert woken == [("22222222-2222-4222-8222-222222222222", "receipt")]
+
+
+async def test_a_receipt_for_a_send_no_thread_shows_wakes_nothing(monkeypatch) -> None:
+    from app.crm.conversations import project
+
+    async def none(*args):
+        return None
+
+    async def wake(*args):
+        raise AssertionError("nothing to wake")
+
+    monkeypatch.setattr(project, "receipt_target", none)
+    monkeypatch.setattr(project, "wake", wake)
+    receipt = _receipt_letter(project.TOPIC_STATUS)
+    await project.consume_conversation_event(receipt, None)
+
+
+def test_the_send_lookup_reads_either_id() -> None:
+    query, values = message_q.thread_for_send_query("shop", "wamid.X", None)
+    assert "provider_message_id = $2" in query and "message_id = $3::uuid" in query
+    assert values == ["shop", "wamid.X", None]

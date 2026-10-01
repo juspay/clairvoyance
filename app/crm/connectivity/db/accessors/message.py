@@ -20,6 +20,7 @@ from app.crm.connectivity.db.queries.message import (
     claim_queued_messages_query,
     insert_message_query,
     insert_session_message_query,
+    message_id_by_provider_query,
     message_state_by_dedupe_query,
     message_ticks_query,
     requeue_stale_claims_query,
@@ -218,3 +219,12 @@ async def message_ticks(merchant_id: str, message_ids: List[str]) -> List[Messag
         )
         for row in rows
     ]
+
+
+async def message_id_by_provider(
+    merchant_id: str, provider_message_id: str
+) -> Optional[str]:
+    query, values = message_id_by_provider_query(merchant_id, provider_message_id)
+    async with crm_connection() as conn:
+        found = await conn.fetchval(query, *values)
+    return str(found) if found is not None else None

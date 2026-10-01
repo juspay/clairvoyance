@@ -82,8 +82,11 @@ class ToolDispatchMixin:
         # handler reference into a closure, so post-build wrapping is a no-op.
         for handler_name, handler_func in flow_builder.handler_map.items():
             flow_builder.handler_map[handler_name] = with_context(self)(handler_func)
+        # A text-only session (WhatsApp) passes no allowlist: the builder
+        # then drops the UI section from the prompt, so the model never
+        # learns a UI protocol its channel cannot show.
         flow_config = flow_builder.build_flow_config(
-            self.template, ui_allowlist=self._ui_allowlist
+            self.template, ui_allowlist=None if self._text_only else self._ui_allowlist
         )
         self.flow_config = flow_config
 
@@ -178,6 +181,9 @@ class ToolDispatchMixin:
                 )
         if self._plan_enforcement:
             global_funcs.append(build_revise_plan_schema(self._revise_plan_handler))
+        # handoff_to_human: offered only on a thread-bound session whose
+        # number has human handoff on (D34) — no template edit.
+        global_funcs.extend(await self._handoff_tools())
 
         # Aggregate per-tool context-retention policy across every MCP server
         # the template declares. Used by llm_driver to compact stale

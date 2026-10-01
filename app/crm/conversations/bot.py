@@ -4,15 +4,17 @@ thread side of a turn. The responder never reads crm tables; it asks here.
     claim_bot_work      threads with messages Buddy has not answered,
                         leased to one responder for a turn
     bot_may_speak       re-checked before EVERY send: nobody took the
-                        thread, no person is being waited for, and it is
-                        still on Buddy's number
+                        thread, no person is being waited for (bar the
+                        handoff this very session just asked for — its
+                        waiting message still goes), and it is still on
+                        Buddy's number
     set_bot_session     the chat_session answering this window
     pending_inbound     what she said since Buddy last answered
     human_era_slice     what was said while a teammate held it (context
                         for the first turn after a hand back)
     record_bot_reply    Buddy's reply onto the timeline (read-your-writes)
     mark_bot_cursor     the turn answered up to here; the lease goes
-    end_chat            Buddy ended the chat (end_conversation, R6)
+    thread_by_id        the thread as it stands (session reconciliation)
 """
 
 from datetime import datetime, timezone
@@ -20,7 +22,6 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config.static import CRM_INBOX_BOT_LEASE_SECONDS
 from app.crm.connectivity.contracts import buddy_number
-from app.crm.conversations.db import atomically
 from app.crm.conversations.db.accessors import (
     handoff as handoff_accessor,
     message as message_accessor,
@@ -33,12 +34,12 @@ from app.crm.conversations.status import (
     AUTHOR_ASSIST,
     CHANNEL_WIDGET,
     HELD_BY_BUDDY,
+    HELD_WAITING,
     KIND_INBOUND,
     KIND_OUTBOUND,
-    OUTCOME_RESOLVED,
     WAKE_MESSAGE,
 )
-from app.crm.conversations.threads import resolve_thread_in_txn, settings_for
+from app.crm.conversations.threads import settings_for
 
 #: Rows one turn reads at most.
 TURN_ROWS_MAX = 50
@@ -66,20 +67,37 @@ def _work(thread: Thread) -> Optional[BotWork]:
     )
 
 
-async def claim_bot_work(batch: int) -> List[BotWork]:
-    """Lease up to ``batch`` threads for one turn each, across merchants."""
-    threads = await thread_accessor.claim_bot_work(CRM_INBOX_BOT_LEASE_SECONDS, batch)
+async def claim_bot_work(
+    channels: List[str], batch: int, settle_seconds: int = 0
+) -> List[BotWork]:
+    """Lease up to ``batch`` threads on ``channels`` for one turn each,
+    across merchants — only once her last message is ``settle_seconds`` old
+    (a burst is one turn)."""
+    threads = await thread_accessor.claim_bot_work(
+        CRM_INBOX_BOT_LEASE_SECONDS, settle_seconds, channels, batch
+    )
     return [work for work in map(_work, threads) if work is not None]
 
 
-async def bot_may_speak(merchant_id: str, thread_id: str) -> bool:
-    """Fail closed: anything but "Buddy holds it, on Buddy's number" is no."""
+async def bot_may_speak(
+    merchant_id: str, thread_id: str, session_id: Optional[str] = None
+) -> bool:
+    """Fail closed: anything but "Buddy holds it, on Buddy's number" is no —
+    except that ``session_id``'s own fresh handoff still lets it finish the
+    turn that asked for it (the waiting message)."""
     thread = await thread_accessor.get_thread(merchant_id, thread_id)
     if thread is None:
         return False
     handoff = await handoff_accessor.open_for_thread(merchant_id, thread_id)
     sla = (await settings_for(thread)).claim_sla_minutes
-    if held_by(thread, handoff, sla, datetime.now(timezone.utc)) != HELD_BY_BUDDY:
+    held = held_by(thread, handoff, sla, datetime.now(timezone.utc))
+    own_handoff = (
+        held == HELD_WAITING
+        and session_id is not None
+        and handoff is not None
+        and handoff.chat_session_id == session_id
+    )
+    if held != HELD_BY_BUDDY and not own_handoff:
         return False
     if thread.channel == CHANNEL_WIDGET:
         return True
@@ -150,9 +168,7 @@ async def mark_bot_cursor(
     return await thread_accessor.mark_bot_cursor(merchant_id, thread_id, answered_upto)
 
 
-async def end_chat(merchant_id: str, thread_id: str) -> Optional[Thread]:
-    """Buddy ended the chat: the thread resolves and any open handoff
-    closes. Her next message starts fresh (D12)."""
-    return await atomically(
-        resolve_thread_in_txn, merchant_id, thread_id, OUTCOME_RESOLVED, None
-    )
+async def thread_by_id(merchant_id: str, thread_id: str) -> Optional[Thread]:
+    """The thread as it stands — the responder reads it to decide how a
+    session that no longer holds it ended."""
+    return await thread_accessor.get_thread(merchant_id, thread_id)

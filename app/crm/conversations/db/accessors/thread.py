@@ -160,8 +160,12 @@ async def view_counts(
     return {view: int(row[view] or 0) for view in q.COUNTED_VIEWS} if row else {}
 
 
-async def claim_bot_work(lease_seconds: int, limit: int) -> List[Thread]:
-    query, values = q.claim_bot_work_query(lease_seconds, limit)
+async def claim_bot_work(
+    lease_seconds: int, settle_seconds: int, channels: List[str], limit: int
+) -> List[Thread]:
+    query, values = q.claim_bot_work_query(
+        lease_seconds, settle_seconds, channels, limit
+    )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_thread(row) for row in rows]

@@ -74,6 +74,7 @@ def _active_session():
         current_node="start",
         template_id="t1",
         metadata={"template_vars": {}},
+        channel="web",
         # None = unmetered — the billing gate/deduction are no-ops, which
         # is the right posture for these harness tests.
         merchant_id=None,

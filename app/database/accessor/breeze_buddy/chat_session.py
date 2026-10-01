@@ -30,6 +30,7 @@ from app.database.queries.breeze_buddy.chat_session import (
     list_chat_sessions_query,
     list_chat_turn_metrics_for_session_query,
     list_idle_chat_sessions_query,
+    list_open_sessions_on_channel_query,
     merge_client_context_query,
     record_chat_turn_metrics_query,
     set_chat_session_voice_lead_query,
@@ -57,6 +58,7 @@ async def create_chat_session(
     reseller_id: str,
     merchant_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    channel: str = "web",
 ) -> Optional[ChatSession]:
     """Insert a new ACTIVE chat session and return the full row."""
     query, values = create_chat_session_query(
@@ -64,6 +66,7 @@ async def create_chat_session(
         reseller_id=reseller_id,
         merchant_id=merchant_id,
         metadata_json=json.dumps(metadata or {}),
+        channel=channel,
     )
     try:
         result = await run_parameterized_query(query, values)
@@ -158,16 +161,30 @@ async def update_chat_session_outcome(
         raise
 
 
+async def list_open_sessions_on_channel(
+    channel: str, statuses: List[ChatSessionStatus], limit: int = 100
+) -> List[ChatSession]:
+    """Open sessions on one channel (the WhatsApp responder's reconcile)."""
+    query, values = list_open_sessions_on_channel_query(
+        channel=channel, statuses=[s.value for s in statuses], limit=limit
+    )
+    rows = await run_parameterized_query(query, values)
+    return [s for s in (decode_chat_session(row) for row in rows or []) if s]
+
+
 async def list_idle_chat_sessions(
     cutoff: datetime,
     statuses: List[ChatSessionStatus],
     limit: int = 100,
+    channels: Optional[List[str]] = None,
 ) -> List[ChatSession]:
-    """Find sessions whose last_activity_at < cutoff and status ∈ statuses."""
+    """Find sessions whose last_activity_at < cutoff and status ∈ statuses,
+    on the given channels when named."""
     query, values = list_idle_chat_sessions_query(
         cutoff=cutoff,
         statuses=[s.value for s in statuses],
         limit=limit,
+        channels=channels,
     )
     try:
         rows = await run_parameterized_query(query, values)

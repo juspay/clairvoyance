@@ -421,3 +421,17 @@ def message_ticks_query(
            AND id = ANY($2::uuid[])
     """
     return query, [merchant_id, message_ids]
+
+
+def message_id_by_provider_query(
+    merchant_id: str, provider_message_id: str
+) -> Tuple[str, List[Any]]:
+    """Our row for the provider's id — what a receipt is about."""
+    query = f"""
+        SELECT id
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND provider_message_id = $2
+         LIMIT 1
+    """
+    return query, [merchant_id, provider_message_id]

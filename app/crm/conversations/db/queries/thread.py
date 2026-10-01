@@ -340,23 +340,29 @@ def view_counts_query(
 # ---------------------------------------------------------------------------
 
 
-def claim_bot_work_query(lease_seconds: int, limit: int) -> Tuple[str, List[Any]]:
+def claim_bot_work_query(
+    lease_seconds: int, settle_seconds: int, channels: List[str], limit: int
+) -> Tuple[str, List[Any]]:
     """Threads with customer messages Buddy has not answered, nobody else
     holding them, no live lease — leased for one turn. SKIP LOCKED lets
-    several responders share the queue. An unclaimed handoff past its SLA
-    no longer holds the thread back only once the sweep closes it; until
-    then Buddy waits (it is at most a sweep interval)."""
+    several responders share the queue. Her last message must be at least
+    ``settle_seconds`` old, so a burst of messages becomes one turn. Only
+    the ``channels`` this responder answers (the widget answers its own). An
+    unclaimed handoff past its SLA no longer holds the thread back only once
+    the sweep closes it; until then Buddy waits (at most a sweep interval)."""
     query = f"""
         UPDATE {THREAD_TABLE} t
            SET bot_lease_until = now() + make_interval(secs => $1::int)
           FROM (
                    SELECT id FROM {THREAD_TABLE} t
                     WHERE t.resolved_at IS NULL
+                      AND t.channel = ANY($4::text[])
                       AND t.last_inbound_at IS NOT NULL
                       AND t.assignee_user_id IS NULL
                       AND t.bot_template_id IS NOT NULL
                       AND (t.bot_cursor_at IS NULL OR t.last_inbound_at > t.bot_cursor_at)
                       AND (t.bot_lease_until IS NULL OR t.bot_lease_until < now())
+                      AND t.last_inbound_at <= now() - make_interval(secs => $3::int)
                       AND NOT {_OPEN_HANDOFF}
                     ORDER BY t.last_inbound_at
                     LIMIT $2
@@ -365,7 +371,7 @@ def claim_bot_work_query(lease_seconds: int, limit: int) -> Tuple[str, List[Any]
          WHERE t.id = due.id
         RETURNING {", ".join("t." + c.strip() for c in THREAD_COLUMNS.split(","))}
     """
-    return query, [lease_seconds, limit]
+    return query, [lease_seconds, limit, settle_seconds, channels]
 
 
 def start_bot_query(
