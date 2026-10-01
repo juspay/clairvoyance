@@ -41,6 +41,7 @@ from app.core.config.static import TWILIO_TEMPLATE_WEBSOCKET_URL
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.database.accessor import get_lead_by_call_id
+from app.schemas.breeze_buddy.outcomes import hangup_cause_from_callback
 
 
 async def handle_callback_details_get(
@@ -393,7 +394,11 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
                         f"call {call_sid}: {pub_error}"
                     )
 
-                await handle_unanswered_calls(call_sid)
+                await handle_unanswered_calls(
+                    call_sid,
+                    provider_status=call_status.lower(),
+                    hangup_cause=hangup_cause_from_callback(form),
+                )
 
     return Response(status_code=200)
 

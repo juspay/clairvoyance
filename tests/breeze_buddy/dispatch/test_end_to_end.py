@@ -42,6 +42,11 @@ from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
 from app.core.config.static import BB_CHANNEL_WAIT_BACKOFF_MAX_S
 from app.schemas import LeadCallStatus
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+)
 from tests.breeze_buddy.dispatch.conftest import (
     AlwaysLeader,
     CallRecorder,
@@ -370,6 +375,11 @@ async def test_blacklisted_phone_finalizes_lead(harness, fake_redis):
     assert lead.status == LeadCallStatus.FINISHED
     assert lead.outcome == "BLACKLISTED"
     assert await channel_tokens_available(harness.number.id) == 1
+    # Call outcome columns: never dialed, and why.
+    assert harness.completions[-1]["call_outcome"] == CallOutcome(
+        connection_status=ConnectionStatus.NOT_DIALED,
+        connection_reason=ConnectionReason.BLACKLISTED,
+    )
 
 
 async def test_get_available_number_returns_none_marks_lead_finished(
@@ -405,6 +415,10 @@ async def test_get_available_number_returns_none_marks_lead_finished(
     assert len(harness.completions) == 1
     assert harness.completions[0]["outcome"] == "NUMBER_UNAVAILABLE"
     assert harness.completions[0]["status"] == LeadCallStatus.FINISHED
+    assert harness.completions[0]["call_outcome"] == CallOutcome(
+        connection_status=ConnectionStatus.NOT_DIALED,
+        connection_reason=ConnectionReason.NUMBER_UNAVAILABLE,
+    )
     assert lead.status == LeadCallStatus.FINISHED
     assert lead.outcome == "NUMBER_UNAVAILABLE"
     # Throttled alert fired once with the right scope.

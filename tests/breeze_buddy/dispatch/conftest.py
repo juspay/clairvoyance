@@ -39,6 +39,7 @@ from app.schemas.breeze_buddy.core import (
     TelephonyNumber,
     TelephonyNumberStatus,
 )
+from app.schemas.breeze_buddy.outcomes import CallOutcome
 
 
 class FakeRedisClient:
@@ -538,6 +539,7 @@ class DispatchHarness:
         outcome: str,
         meta_data: Dict[str, Any],
         call_end_time: datetime,
+        call_outcome: Optional[CallOutcome] = None,
     ) -> Optional[LeadCallTracker]:
         self.completions.append(
             {
@@ -545,6 +547,7 @@ class DispatchHarness:
                 "status": status,
                 "outcome": outcome,
                 "meta_data": meta_data,
+                "call_outcome": call_outcome,
             }
         )
         lead = self.leads.get(id)

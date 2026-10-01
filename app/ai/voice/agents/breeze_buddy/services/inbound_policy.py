@@ -31,6 +31,12 @@ from app.schemas import (
     InboundBlockAction,
     LeadCallStatus,
 )
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+    parse_enum,
+)
 from app.services.redis.client import get_redis_service
 
 DEFAULT_TIMEZONE = "Asia/Kolkata"
@@ -283,6 +289,12 @@ async def log_blocked_call(
             call_direction=CallDirection.INBOUND,
             execution_mode=ExecutionMode.TELEPHONY,
             outcome=outcome,
+            # The reason is the word itself (BLOCKED_REJECT / BLOCKED_REDIRECT
+            # / CAPACITY_REJECTED), so legacy_outcome copies it back.
+            call_outcome=CallOutcome(
+                connection_status=ConnectionStatus.REJECTED,
+                connection_reason=parse_enum(ConnectionReason, outcome),
+            ),
         )
 
         logger.info(

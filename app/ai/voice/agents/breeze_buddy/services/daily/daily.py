@@ -47,6 +47,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_recording_url,
 )
 from app.schemas import LeadCallStatus, LeadCallTracker
+from app.schemas.breeze_buddy.outcomes import CallOutcome, completed_call_outcome
 
 
 async def daily_completion_function(
@@ -54,11 +55,14 @@ async def daily_completion_function(
     outcome: Optional[str] = None,
     call_end_time: Optional[datetime] = None,
     meta_data: Optional[dict] = None,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """Completion function for Daily mode - updates lead status to FINISHED.
 
     For Daily mode, the call_id is actually the lead_id since Daily doesn't have
-    a traditional call_sid like telephony providers.
+    a traditional call_sid like telephony providers. ``call_outcome`` carries
+    the call outcome columns beside the legacy ``outcome``; a web session that
+    completes was connected, so it defaults to ANSWERED.
     """
     logger.info(f"Daily completion: updating lead {call_id} to FINISHED")
     return await update_lead_call_completion_details(
@@ -67,6 +71,7 @@ async def daily_completion_function(
         outcome=outcome,
         meta_data=meta_data,
         call_end_time=call_end_time,
+        call_outcome=completed_call_outcome(call_outcome),
     )
 
 
