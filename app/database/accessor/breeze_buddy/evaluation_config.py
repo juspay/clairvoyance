@@ -10,6 +10,7 @@ from app.database.queries.breeze_buddy.evaluation_config import (
     has_enabled_evaluations_query,
     initialize_evaluation_config_query,
     remove_topics_query,
+    save_evaluation_configuration_query,
     set_evaluation_enabled_query,
     update_evaluation_configuration_query,
 )
@@ -20,8 +21,11 @@ async def initialize_evaluation_config(template_id: str) -> None:
     await run_parameterized_query(query, values)
 
 
-async def get_evaluation_config(template_id: str) -> Optional[Dict[str, Any]]:
-    query, values = get_evaluation_config_query(template_id)
+async def get_evaluation_config(
+    template_id: str,
+    evaluation_type: str,
+) -> Optional[Dict[str, Any]]:
+    query, values = get_evaluation_config_query(template_id, evaluation_type)
     rows = await run_parameterized_query(query, values)
     return dict(rows[0]) if rows else None
 
@@ -40,18 +44,34 @@ async def has_enabled_evaluations(template_id: str) -> bool:
 
 async def set_evaluation_enabled(
     template_id: str,
+    evaluation_type: str,
     enabled: bool,
 ) -> Optional[Dict[str, Any]]:
-    query, values = set_evaluation_enabled_query(template_id, enabled)
+    query, values = set_evaluation_enabled_query(template_id, evaluation_type, enabled)
     rows = await run_parameterized_query(query, values)
     return dict(rows[0]) if rows else None
 
 
 async def update_evaluation_configuration(
     template_id: str,
+    evaluation_type: str,
     patch: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    query, values = update_evaluation_configuration_query(template_id, patch)
+    query, values = update_evaluation_configuration_query(
+        template_id, evaluation_type, patch
+    )
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None
+
+
+async def save_evaluation_configuration(
+    template_id: str,
+    evaluation_type: str,
+    configuration: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    query, values = save_evaluation_configuration_query(
+        template_id, evaluation_type, configuration
+    )
     rows = await run_parameterized_query(query, values)
     return dict(rows[0]) if rows else None
 

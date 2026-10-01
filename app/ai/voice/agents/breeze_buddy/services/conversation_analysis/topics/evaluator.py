@@ -14,7 +14,7 @@ from app.database.accessor.breeze_buddy.evaluation_result import (
     save_evaluation_failure,
     save_evaluation_results,
 )
-from app.schemas.breeze_buddy.conversation_analysis import EvaluationType
+from app.schemas.breeze_buddy.evals import EvaluationType
 
 from .extractor import (
     TopicFirstTokenTimeout,
