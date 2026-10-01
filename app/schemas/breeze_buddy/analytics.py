@@ -31,6 +31,11 @@ class AnalyticsType(str, Enum):
     CHATS_BY_HOUR = "chats-by-hour"
     TOPIC_DASHBOARD = "topic-dashboard"
     TOPIC_CONVERSATIONS = "topic-conversations"
+    # Call outcome columns (migration 080; docs/CALL_OUTCOMES.md)
+    CONNECTION_FUNNEL = "connection-funnel"
+    CONNECTION_BREAKDOWN = "connection-breakdown"
+    AGENT_OUTCOME_BREAKDOWN = "agent-outcome-breakdown"
+    EVAL_AGREEMENT = "eval-agreement"
 
     @classmethod
     def _missing_(cls, value: object) -> Optional["AnalyticsType"]:
@@ -99,6 +104,14 @@ class AnalyticsFilters(BaseModel):
         None, description="Filter by call status (completed, failed, etc.)"
     )
     outcome: Optional[List[str]] = Field(None, description="Filter by call outcome")
+    connection_status: Optional[List[str]] = Field(
+        None,
+        description="Filter by connection status (call outcome columns): "
+        "NOT_DIALED, REJECTED, NO_ANSWER, BUSY, FAILED, CANCELED, ANSWERED, UNKNOWN",
+    )
+    agent_outcome: Optional[List[str]] = Field(
+        None, description="Filter by the agent's outcome (upper-cased)"
+    )
     call_direction: Optional[str] = Field(
         None, description="Filter by call direction (INBOUND or OUTBOUND)"
     )
@@ -228,6 +241,17 @@ class CallDetailResult(BaseModel):
     updated_at: Optional[datetime] = None
     execution_mode: Optional[str] = None
     call_direction: Optional[str] = None
+    # Call outcome columns (migration 080; docs/CALL_OUTCOMES.md). Null on
+    # rows written before the columns were switched on and not backfilled.
+    connection_status: Optional[str] = None
+    connection_reason: Optional[str] = None
+    provider_status: Optional[str] = None
+    hangup_cause: Optional[str] = None
+    end_reason: Optional[str] = None
+    agent_outcome: Optional[str] = None
+    outcome_source: Optional[str] = None
+    eval_outcome: Optional[str] = None
+    eval_status: Optional[str] = None
 
 
 class CallDetailGroupedResult(BaseModel):

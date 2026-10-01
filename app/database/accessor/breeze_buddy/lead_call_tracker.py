@@ -9,6 +9,10 @@ import asyncpg
 
 from app.core.config.static import CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
 from app.core.logger import logger
+from app.database.accessor.breeze_buddy.call_outcome import (
+    call_outcome_writes_enabled,
+    gate_call_outcome,
+)
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
@@ -19,6 +23,8 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
     get_call_facts_by_runs_query,
+    get_call_outcome_columns_query,
+    get_call_outcome_coverage_query,
     get_call_stats_by_runs_query,
     get_lead_based_analytics_query,
     get_lead_by_call_id_query,
@@ -49,6 +55,11 @@ from app.schemas import (
     ExecutionMode,
     LeadCallStatus,
     LeadCallTracker,
+)
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
 )
 
 
@@ -88,6 +99,35 @@ def _fire_hooks(hooks: List[Any], lead: LeadCallTracker, label: str) -> None:
             hook(lead)
         except Exception as e:  # fail-open: taps never break lead writes
             logger.error(f"{label} hook {hook!r} failed for {lead.id}: {e}")
+
+
+# Fired after the post-call eval writes its outcome onto a lead (eval_outcome,
+# eval_status, eval_result_id — docs/CALL_OUTCOMES.md section 9). The eval's
+# write-back calls announce_call_evaluated once its transaction commits; the
+# CRM ``call.outcome_evaluated`` letter and the opt-in merchant webhook listen.
+_evaluated_hooks: List[Any] = []
+
+
+def register_evaluated_hook(hook: Any) -> None:
+    """Register a callable(lead, notify_webhook: bool) fired after the
+    post-call eval has written its outcome onto the lead."""
+    if hook not in _evaluated_hooks:
+        _evaluated_hooks.append(hook)
+
+
+def announce_call_evaluated(
+    lead: LeadCallTracker, notify_webhook: bool = False
+) -> None:
+    """Fire the evaluated hooks for ``lead`` (as re-read after the eval's
+    write-back). ``notify_webhook`` is the template's opt-in for the second
+    merchant webhook (evaluation_config.configuration.notify_webhook).
+    Fail-open, like every hook here: a hook exception is logged, never raised.
+    """
+    for hook in _evaluated_hooks:
+        try:
+            hook(lead, notify_webhook)
+        except Exception as e:  # fail-open: taps never break the eval write
+            logger.error(f"evaluated-lead hook {hook!r} failed for {lead.id}: {e}")
 
 
 def require_template_link(template: str, template_id: Optional[str]) -> None:
@@ -132,6 +172,7 @@ async def create_lead_call_tracker(
     outcome: Optional[
         str
     ] = None,  # For blocked calls where outcome is known at insert time
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
@@ -144,6 +185,8 @@ async def create_lead_call_tracker(
         telephony_number_id: Telephony number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
         outcome: Call outcome (optional, e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
+        call_outcome: Call outcome columns for a row that is terminal at insert;
+            written only while CALL_OUTCOME_WRITES_ENABLED is on.
 
     Raises:
         ValueError: when template_id is missing for a non-placeholder
@@ -173,6 +216,7 @@ async def create_lead_call_tracker(
             telephony_number_id=telephony_number_id,
             call_direction=call_direction,
             outcome=outcome,
+            call_outcome=await gate_call_outcome(call_outcome),
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -453,6 +497,22 @@ async def get_call_facts_by_runs(
     return out
 
 
+async def get_call_outcome_columns(
+    merchant_id: str, lead_ids: Sequence[str]
+) -> Dict[str, Dict[str, Optional[str]]]:
+    """Per lead id: its journey call outcome columns (connection_status,
+    agent_outcome, eval_outcome). Scoped to ``merchant_id``; an unknown id is
+    absent. Plain dicts: the data layer knows no CRM shape."""
+    if not lead_ids:
+        return {}
+    query_text, values = get_call_outcome_columns_query(merchant_id, list(lead_ids))
+    rows = await run_parameterized_query(query_text, values)
+    return {
+        str(row["id"]): {k: v for k, v in dict(row).items() if k != "id"}
+        for row in rows or []
+    }
+
+
 async def update_lead_call_initiated_time(
     call_id: str, call_initiated_time: datetime
 ) -> Optional[LeadCallTracker]:
@@ -601,10 +661,15 @@ async def update_lead_call_completion_details(
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
     expected_status: Optional[LeadCallStatus] = None,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call completion details.
     Only updates fields that are not None.
+
+    ``call_outcome`` carries the call outcome columns beside the legacy outcome,
+    in the same statement; it is dropped while CALL_OUTCOME_WRITES_ENABLED is
+    off, leaving the write exactly today's.
 
     With ``expected_status`` the write becomes an atomic claim — None then
     means "another caller got there first", not "the update failed". Callers
@@ -615,7 +680,13 @@ async def update_lead_call_completion_details(
 
     try:
         query_text, values = update_lead_call_completion_details_query(
-            id, status, outcome, meta_data, call_end_time, expected_status
+            id,
+            status,
+            outcome,
+            meta_data,
+            call_end_time,
+            expected_status,
+            call_outcome=await gate_call_outcome(call_outcome),
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
@@ -835,10 +906,18 @@ async def handle_lead_abort(
 ) -> Optional[LeadCallTracker]:
     """
     Abort a lead by lead ID.
-    Sets status to FINISHED and outcome to ABORT.
+    Sets status to FINISHED and outcome to ABORT (connection: NOT_DIALED / ABORTED).
     """
     try:
-        query_text, values = abort_lead_by_id_query(lead_id, cancellation_reason)
+        call_outcome = await gate_call_outcome(
+            CallOutcome(
+                connection_status=ConnectionStatus.NOT_DIALED,
+                connection_reason=ConnectionReason.ABORTED,
+            )
+        )
+        query_text, values = abort_lead_by_id_query(
+            lead_id, cancellation_reason, call_outcome=call_outcome
+        )
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
@@ -956,7 +1035,11 @@ async def reset_widget_voice_lead(
         f"(seed: {sorted(meta_data_seed.keys())}, mode: {execution_mode.value})"
     )
     query_text, values = reset_widget_voice_lead_query(
-        lead_id, payload, meta_data_seed, execution_mode.value
+        lead_id,
+        payload,
+        meta_data_seed,
+        execution_mode.value,
+        clear_call_outcome=await call_outcome_writes_enabled(),
     )
     try:
         result = await run_parameterized_query(query_text, values)
@@ -1000,3 +1083,17 @@ async def count_recent_contacted_leads(
     except Exception as e:
         logger.error(f"Error counting recent contacted leads: {e}")
         return None
+
+
+async def get_call_outcome_coverage(since: datetime) -> List[Dict[str, Any]]:
+    """Finished leads since ``since`` grouped by legacy outcome and the call
+    outcome columns, as plain dicts. Raises on DB error."""
+    query_text, values = get_call_outcome_coverage_query(since)
+    try:
+        rows = await run_parameterized_query(
+            query_text, values, timeout=CRM_ANALYTICS_QUERY_TIMEOUT_SECONDS
+        )
+        return [dict(row) for row in rows or []]
+    except Exception as e:
+        logger.error(f"Error reading call outcome coverage since {since}: {e}")
+        raise

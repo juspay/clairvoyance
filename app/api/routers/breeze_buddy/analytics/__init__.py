@@ -24,6 +24,7 @@ from app.schemas.breeze_buddy.conversation_analysis import (
 
 from .handlers import (
     download_call_details,
+    get_agent_outcome_breakdown_analytics,
     get_attempts_to_connect_analytics,
     get_call_based_analytics,
     get_call_details_analytics,
@@ -31,10 +32,13 @@ from .handlers import (
     get_calls_by_hour_analytics,
     get_chat_based_analytics,
     get_chats_by_hour_analytics,
+    get_connection_breakdown_analytics,
+    get_connection_funnel_analytics,
     get_conversion_analytics,
     get_distinct_merchant_ids,
     get_distinct_outcomes,
     get_distinct_resellers,
+    get_eval_agreement_analytics,
     get_lead_based_analytics,
     get_lead_status_counts,
     get_outcome_counts,
@@ -71,6 +75,10 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.CHATS_BY_HOUR: get_chats_by_hour_analytics,
     AnalyticsType.TOPIC_DASHBOARD: get_topic_dashboard_analytics,
     AnalyticsType.TOPIC_CONVERSATIONS: get_topic_conversations_analytics,
+    AnalyticsType.CONNECTION_FUNNEL: get_connection_funnel_analytics,
+    AnalyticsType.CONNECTION_BREAKDOWN: get_connection_breakdown_analytics,
+    AnalyticsType.AGENT_OUTCOME_BREAKDOWN: get_agent_outcome_breakdown_analytics,
+    AnalyticsType.EVAL_AGREEMENT: get_eval_agreement_analytics,
 }
 
 

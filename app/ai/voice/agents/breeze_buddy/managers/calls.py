@@ -55,6 +55,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import
 from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
+from app.ai.voice.agents.breeze_buddy.utils.call_outcome_webhook import (
+    with_call_outcome_keys,
+)
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.config.static import (
     BB_INBOUND_STUCK_LEAD_MINUTES,
@@ -92,6 +95,14 @@ from app.schemas import (
     PreCheckFailureAction,
     TelephonyNumber,
     TelephonyNumberStatus,
+)
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    ConnectionReason,
+    ConnectionStatus,
+    EndReason,
+    completed_call_outcome,
+    connection_from_provider_status,
 )
 from app.services.gcp.storage.storage import upload_file_to_gcs
 from app.services.redis.client import get_redis_service
@@ -256,12 +267,17 @@ async def _run_pre_checks_for_lead(
     if exhausted_reason:
         meta_data["pre_check_defer_exhausted"] = exhausted_reason
 
+    precheck_outcome = CallOutcome(
+        connection_status=ConnectionStatus.NOT_DIALED,
+        connection_reason=ConnectionReason.PRECHECK_FAILED,
+    )
     await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome="PRECHECK_FAILED",
         meta_data=meta_data,
         call_end_time=datetime.now(timezone.utc),
+        call_outcome=precheck_outcome,
     )
 
     # Send webhook for pre-check failure
@@ -280,7 +296,14 @@ async def _run_pre_checks_for_lead(
             "orderId": lead.request_id,
         }
         try:
-            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+            webhook_data = await with_call_outcome_keys(webhook_data, precheck_outcome)
+            await send_webhook_with_retry(
+                session,
+                reporting_webhook_url,
+                webhook_data,
+                merchant_id=lead.merchant_id,
+                webhook="precheck_failed",
+            )
         except Exception as e:
             logger.error(
                 f"Error sending pre-check failure webhook for lead {lead.id}: {e}"
@@ -315,12 +338,17 @@ async def finish_lead_call_limit_reached(
         **(lead.metaData or {}),
         "call_limit": {**rule_meta, "calls_in_window": verdict.count},
     }
+    call_limit_outcome = CallOutcome(
+        connection_status=ConnectionStatus.NOT_DIALED,
+        connection_reason=ConnectionReason.CALL_LIMIT,
+    )
     finished = await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome=CALL_LIMIT_OUTCOME,
         meta_data=meta_data,
         call_end_time=datetime.now(timezone.utc),
+        call_outcome=call_limit_outcome,
     )
     if finished is None:
         logger.error(
@@ -354,7 +382,16 @@ async def finish_lead_call_limit_reached(
             "orderId": lead.request_id,
         }
         try:
-            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+            webhook_data = await with_call_outcome_keys(
+                webhook_data, call_limit_outcome
+            )
+            await send_webhook_with_retry(
+                session,
+                reporting_webhook_url,
+                webhook_data,
+                merchant_id=lead.merchant_id,
+                webhook="call_limit",
+            )
         except Exception as e:
             logger.error(f"Error sending call-limit webhook for lead {lead.id}: {e}")
     return True
@@ -607,10 +644,16 @@ async def _release_call_resources(lead: LeadCallTracker) -> None:
 
 
 async def _retry_call(
-    lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
+    lead: LeadCallTracker,
+    config: CallExecutionConfig,
+    outcome: Optional[str] = None,
+    call_outcome: Optional[CallOutcome] = None,
 ):
     """
     Schedules a retry for a call and sends webhook for NO_ANSWER outcomes.
+
+    ``call_outcome`` is what the caller just wrote: ``lead`` is the snapshot
+    from before that write, so its own call outcome columns are still empty.
     """
     is_last_attempt = lead.attempt_count >= config.max_retry - 1
 
@@ -636,9 +679,15 @@ async def _retry_call(
             }
 
             try:
+                summary_data = await with_call_outcome_keys(summary_data, call_outcome)
                 async with create_aiohttp_session() as session:
                     success = await send_webhook_with_retry(
-                        session, reporting_webhook_url, summary_data, max_retries=3
+                        session,
+                        reporting_webhook_url,
+                        summary_data,
+                        max_retries=3,
+                        merchant_id=lead.merchant_id,
+                        webhook="no_answer",
                     )
                     if success:
                         logger.info(
@@ -759,12 +808,24 @@ async def reconcile_stuck_processing_leads():
             # mid-call outcome hook recorded.
             cleanup_meta = dict(locked_lead.metaData or {})
             cleanup_meta["cleanup"] = "stuck_processing_timeout"
+            # An outcome proves a pipeline ran (so the call was answered) and
+            # died before finalising; without one, no signal says whether
+            # anyone picked up.
+            pipeline_ran = bool(locked_lead.outcome)
             await update_lead_call_completion_details(
                 id=locked_lead.id,
                 status=LeadCallStatus.FINISHED,
                 outcome=locked_lead.outcome or "UNKNOWN",
                 meta_data=cleanup_meta,
                 call_end_time=datetime.now(timezone.utc),
+                call_outcome=CallOutcome(
+                    connection_status=(
+                        ConnectionStatus.ANSWERED
+                        if pipeline_ran
+                        else ConnectionStatus.UNKNOWN
+                    ),
+                    end_reason=EndReason.PIPELINE_ERROR if pipeline_ran else None,
+                ),
             )
 
             # ``locked_lead`` is the pre-update snapshot: the lock was taken
@@ -795,9 +856,14 @@ async def handle_call_completion(
     outcome: str | None = None,
     call_end_time: datetime | None = None,
     meta_data: dict | None = None,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Handles call completion events.
+
+    ``call_outcome`` carries the call outcome columns (connection, end
+    reason, agent outcome) beside the legacy ``outcome``, which is written
+    exactly as before.
     """
     logger.info(f"Call completed for call_id: {call_id} with outcome: {outcome}")
 
@@ -855,12 +921,14 @@ async def handle_call_completion(
     # Persist the call record unconditionally — config lookup must not gate this.
     # _get_lead_config can fail (e.g. unknown provider enum value in the DB) for
     # reasons unrelated to recording the call outcome, transcription, and metadata.
+    completed = completed_call_outcome(call_outcome, bool(is_transfer))
     updated_lead = await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome=outcome,
         meta_data=meta_data,
         call_end_time=call_end_time,
+        call_outcome=completed,
     )
 
     # call.completed is mirrored to the CRM inside
@@ -879,18 +947,26 @@ async def handle_call_completion(
         and lead.call_direction == CallDirection.OUTBOUND
         and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
-        await _retry_call(lead, config, outcome)
+        await _retry_call(lead, config, outcome, completed)
 
     return updated_lead
 
 
-async def handle_unanswered_calls(call_id: str):
+async def handle_unanswered_calls(
+    call_id: str,
+    provider_status: Optional[str] = None,
+    hangup_cause: Optional[str] = None,
+):
     """
     Handles unanswered call events.
 
     This is called when a call fails to connect (no-answer, busy, failed).
     It releases the allocated pod (if pod isolation is enabled), cleans up
     resources, and schedules a retry if configured.
+
+    The legacy outcome is NO_ANSWER for every carrier status; the call
+    outcome columns keep what the carrier actually said (``provider_status``,
+    ``hangup_cause``) and map it to a connection status.
     """
     logger.info(f"Handling unanswered call for call_id: {call_id}")
 
@@ -941,12 +1017,22 @@ async def handle_unanswered_calls(call_id: str):
     if not config and lead.template not in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
         return
 
+    connection_status, connection_reason = connection_from_provider_status(
+        provider_status
+    )
+    unanswered = CallOutcome(
+        connection_status=connection_status or ConnectionStatus.NO_ANSWER,
+        connection_reason=connection_reason,
+        provider_status=provider_status,
+        hangup_cause=hangup_cause,
+    )
     await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
         outcome="NO_ANSWER",
         meta_data={},
         call_end_time=datetime.now(timezone.utc),
+        call_outcome=unanswered,
     )
 
     # call.completed is mirrored to the CRM inside
@@ -958,7 +1044,7 @@ async def handle_unanswered_calls(call_id: str):
         and lead.call_direction == CallDirection.OUTBOUND
         and lead.execution_mode == ExecutionMode.TELEPHONY
     ):
-        await _retry_call(lead, config, "NO_ANSWER")
+        await _retry_call(lead, config, "NO_ANSWER", unanswered)
 
 
 # Long enough that a live pipeline has always written FINISHED first —
@@ -1030,12 +1116,20 @@ async def reconcile_completed_call(call_id: str) -> None:
         # reaper does — 30s sooner rather than ten minutes later.
         cleanup_meta = dict(claimed.metaData or {})
         cleanup_meta["cleanup"] = "completed_no_pipeline"
+        # The carrier said completed — the far end picked up — so the call
+        # was answered. How the session ended is not recorded: an empty
+        # outcome is equally a pipeline that never started and one that died
+        # before any outcome was set, and nothing on the row tells them apart.
         await update_lead_call_completion_details(
             id=claimed.id,
             status=LeadCallStatus.FINISHED,
             outcome=claimed.outcome or "UNKNOWN",
             meta_data=cleanup_meta,
             call_end_time=datetime.now(timezone.utc),
+            call_outcome=CallOutcome(
+                connection_status=ConnectionStatus.ANSWERED,
+                provider_status="completed",
+            ),
         )
 
         await _release_call_resources(claimed)

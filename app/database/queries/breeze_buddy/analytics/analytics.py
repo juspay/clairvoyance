@@ -183,6 +183,13 @@ def build_analytics_where_clause(
         values.append(filters["outcome"])
         conditions.append(f"lct.outcome = ANY(${len(values) + value_offset})")
 
+    # Call outcome columns (migration 080). The writers store them
+    # upper-cased, so the filter values are upper-cased the same way.
+    for column in ("connection_status", "agent_outcome"):
+        if filters.get(column):
+            values.append([str(v).strip().upper() for v in filters[column]])
+            conditions.append(f"lct.{column} = ANY(${len(values) + value_offset})")
+
     if "call_direction" in filters and filters["call_direction"]:
         values.append(filters["call_direction"])
         conditions.append(f"lct.call_direction = ${len(values) + value_offset}")
@@ -462,6 +469,16 @@ def get_call_details_records_query(
             lct.call_initiated_time,
             lct.call_end_time,
             lct.outcome,
+            -- call outcome columns (migration 080)
+            lct.connection_status,
+            lct.connection_reason,
+            lct.provider_status,
+            lct.hangup_cause,
+            lct.end_reason,
+            lct.agent_outcome,
+            lct.outcome_source,
+            lct.eval_outcome,
+            lct.eval_status,
             -- attempts MADE: the stored column is a 0-based retry counter,
             -- and never-dialed leads (ABORT before any call) must show 0
             lct.attempt_count
@@ -809,6 +826,130 @@ def get_attempts_to_connect_query(filters: Dict[str, Any]) -> Tuple[str, List[An
             COUNT(*) as count
         FROM picked
         GROUP BY 1;
+    """
+    return text, values
+
+
+# ---------------------------------------------------------------------------
+# Call outcome analytics (migration 080; docs/CALL_OUTCOMES.md, Phase 2 2d).
+# Every query counts finished attempts only, and a row with no
+# connection_status (written before the columns were switched on and not yet
+# backfilled) is reported as unclassified — never silently as unreached.
+# ---------------------------------------------------------------------------
+
+
+def _finished_attempts_scope(filters: Dict[str, Any]) -> Tuple[str, str, List[Any]]:
+    """(join_clause, where_clause, values) for finished attempts under filters.
+
+    Dated on created_at, not the default call_initiated_time: a NOT_DIALED or
+    REJECTED attempt never has an initiated time, and would otherwise fall out
+    of the funnel it belongs to.
+    """
+    conditions, values = build_analytics_where_clause(filters, date_column="created_at")
+    conditions.append("lct.status = 'FINISHED'")
+    join_clause = (
+        f'LEFT JOIN "{TELEPHONY_NUMBER_TABLE}" ou ON lct.telephony_number_id = ou.id'
+        if "provider" in filters and filters["provider"]
+        else ""
+    )
+    return join_clause, " WHERE " + " AND ".join(conditions), values
+
+
+def get_connection_funnel_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """One row: finished attempts through dialled -> answered -> reached a
+    human (answered, not voicemail) -> outcome decided (an agent outcome other
+    than VOICEMAIL). Success joins in phase 3, once templates declare lists."""
+    join_clause, where_clause, values = _finished_attempts_scope(filters)
+    text = f"""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE lct.connection_status IS NULL) AS unclassified,
+            COUNT(*) FILTER (
+                WHERE lct.connection_status NOT IN ('NOT_DIALED', 'REJECTED')
+            ) AS dialled,
+            COUNT(*) FILTER (WHERE lct.connection_status = 'ANSWERED') AS answered,
+            COUNT(*) FILTER (
+                WHERE lct.connection_status = 'ANSWERED'
+                  AND COALESCE(lct.agent_outcome, '') <> 'VOICEMAIL'
+            ) AS reached_human,
+            COUNT(*) FILTER (
+                WHERE lct.connection_status = 'ANSWERED'
+                  AND lct.agent_outcome IS NOT NULL
+                  AND lct.agent_outcome <> 'VOICEMAIL'
+            ) AS outcome_decided
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause};
+    """
+    return text, values
+
+
+def get_connection_breakdown_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """Finished attempts per (connection_status, connection_reason)."""
+    join_clause, where_clause, values = _finished_attempts_scope(filters)
+    text = f"""
+        SELECT lct.connection_status, lct.connection_reason, COUNT(*) AS count
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause}
+        GROUP BY 1, 2
+        ORDER BY count DESC;
+    """
+    return text, values
+
+
+def get_agent_outcome_breakdown_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """Answered attempts per (agent_outcome, outcome_source); a NULL agent
+    outcome is an answered call where the agent decided nothing."""
+    join_clause, where_clause, values = _finished_attempts_scope(filters)
+    where_clause += " AND lct.connection_status = 'ANSWERED'"
+    text = f"""
+        SELECT lct.agent_outcome, lct.outcome_source, COUNT(*) AS count
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause}
+        GROUP BY 1, 2
+        ORDER BY count DESC;
+    """
+    return text, values
+
+
+def get_eval_agreement_query(filters: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    """How the post-call eval relates to the live agent outcome, over answered
+    attempts: filled (agent empty, eval decided), confirmed (same), flagged
+    (differ), no_outcome (neither decided), plus the eval lifecycle counts."""
+    join_clause, where_clause, values = _finished_attempts_scope(filters)
+    where_clause += " AND lct.connection_status = 'ANSWERED'"
+    text = f"""
+        SELECT
+            COUNT(*) AS answered,
+            COUNT(*) FILTER (WHERE lct.eval_status IS NULL) AS not_evaluated,
+            COUNT(*) FILTER (WHERE lct.eval_status = 'PENDING') AS pending,
+            COUNT(*) FILTER (WHERE lct.eval_status = 'FAILED') AS failed,
+            COUNT(*) FILTER (WHERE lct.eval_status = 'SKIPPED') AS skipped,
+            COUNT(*) FILTER (
+                WHERE lct.eval_status = 'DONE'
+                  AND lct.agent_outcome IS NULL AND lct.eval_outcome IS NOT NULL
+            ) AS filled,
+            COUNT(*) FILTER (
+                WHERE lct.eval_status = 'DONE'
+                  AND lct.agent_outcome IS NOT NULL
+                  AND lct.eval_outcome = lct.agent_outcome
+            ) AS confirmed,
+            COUNT(*) FILTER (
+                WHERE lct.eval_status = 'DONE'
+                  AND lct.agent_outcome IS NOT NULL
+                  AND lct.eval_outcome IS DISTINCT FROM lct.agent_outcome
+            ) AS flagged,
+            COUNT(*) FILTER (
+                WHERE lct.eval_status = 'DONE'
+                  AND lct.agent_outcome IS NULL AND lct.eval_outcome IS NULL
+            ) AS no_outcome
+        FROM "{LEAD_CALL_TRACKER_TABLE}" lct
+        {join_clause}
+        {where_clause};
     """
     return text, values
 
