@@ -637,6 +637,12 @@ class Workflow(WorkflowSummary):
 
     definition: Optional[Dict[str, Any]]
     draft: Optional[Dict[str, Any]]
+    # Whether the plan has ever taken a run: the console's Performance and
+    # Runs empty states, answered with the detail read instead of an
+    # all-time summary over every run. Set only on GET /workflows/{id};
+    # None means "not computed" (other routes, or the replica could not
+    # answer) and the console falls back to the summary.
+    has_runs: Optional[bool] = None
 
 
 class DayCount(BaseModel):
@@ -667,6 +673,19 @@ class WorkflowRunSummary(BaseModel):
     runs_per_day: List[DayCount] = Field(default_factory=list)
     # "Where open runs are": waiting + parked runs by the square they stand
     # on NOW — a present-tense count, so the window does not narrow it.
+    open_by_node: Dict[str, int] = Field(default_factory=dict)
+    # The Runs tab's version filter: runs that entered in the window per
+    # pinned version. Filled only for a windowed summary (since or until);
+    # versions with no run in the window are absent, not zero.
+    runs_by_version: Dict[int, int] = Field(default_factory=dict)
+
+
+class WorkflowOpenRuns(BaseModel):
+    """The runs still in flight, now: what the Publish dialog shows before
+    a migrate (open counts and the squares they stand on), without the
+    all-time summary that also counted every run the plan ever had."""
+
+    open: Dict[str, int]
     open_by_node: Dict[str, int] = Field(default_factory=dict)
 
 
@@ -963,6 +982,11 @@ class WorkflowReport(BaseModel):
     customers: ReportCustomers
     calls: ReportCalls
     by_template: List[ReportTemplate] = Field(default_factory=list)
+    # GET /report?include_calls=true: the calls summary of the SAME runs,
+    # folded from the same per-run facts read. The console's Performance
+    # tab asked /report and /calls/summary in parallel and each ran the run
+    # list and the 1.5 s facts read; one request runs them once.
+    calls_summary: Optional["WorkflowCallSummary"] = None
 
 
 class WorkflowCallSummary(BaseModel):
@@ -987,6 +1011,10 @@ class WorkflowCallSummary(BaseModel):
     contacted_runs: int
     reached_runs: int
     cost_total: Optional[float]
+
+
+# WorkflowReport names WorkflowCallSummary before it is defined.
+WorkflowReport.model_rebuild()
 
 
 class CustomerRun(EnrollmentRun):

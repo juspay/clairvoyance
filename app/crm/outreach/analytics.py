@@ -30,6 +30,7 @@ from app.crm.outreach.schemas import (
     RunEnding,
     TemplateCalls,
     WorkflowCallSummary,
+    WorkflowOpenRuns,
     WorkflowReport,
     WorkflowRunSummary,
 )
@@ -85,6 +86,30 @@ async def workflow_summary(
     )
 
 
+async def workflow_has_runs(merchant_id: str, workflow_id: str) -> bool:
+    """Whether the plan has ever taken a run — the console's empty states,
+    without an all-time summary over every run the plan ever had."""
+    return await enrollment_accessor.workflow_has_runs(merchant_id, workflow_id)
+
+
+async def workflow_open_runs(merchant_id: str, workflow_id: str) -> WorkflowOpenRuns:
+    """The runs in flight now, by status and square (the Publish dialog)."""
+    return await enrollment_accessor.workflow_open_runs(merchant_id, workflow_id)
+
+
+def _contacted_reached(facts: Dict[Any, Any]) -> Tuple[int, int]:
+    """PURE: runs with at least one placed lead, and with at least one
+    answered lead, over get_call_facts_by_runs' per-run rows. One place, so
+    the calls summary and the report's own calls summary count alike."""
+    contacted = reached = 0
+    for per_template in facts.values():
+        if sum(int(r.get("placed") or 0) for r in per_template) >= 1:
+            contacted += 1
+        if sum(int(r.get("answered") or 0) for r in per_template) >= 1:
+            reached += 1
+    return contacted, reached
+
+
 async def workflow_call_summary(
     merchant_id: str,
     workflow_id: str,
@@ -104,12 +129,7 @@ async def workflow_call_summary(
     runs = _lifetimes(endings)
     rows = await get_call_stats_by_runs(merchant_id, runs)
     facts = await get_call_facts_by_runs(merchant_id, runs)
-    contacted = reached = 0
-    for per_template in facts.values():
-        if sum(int(r.get("placed") or 0) for r in per_template) >= 1:
-            contacted += 1
-        if sum(int(r.get("answered") or 0) for r in per_template) >= 1:
-            reached += 1
+    contacted, reached = _contacted_reached(facts)
     return summarize_calls(
         {"outcomes": rows, "contacted": contacted, "reached": reached}
     )
@@ -211,10 +231,17 @@ async def workflow_report(
     workflow_id: str,
     since: Optional[datetime],
     until: Optional[datetime],
+    include_calls: bool = False,
 ) -> Optional[WorkflowReport]:
     """The day report for a window of the plan's runs (entered_at): the
     customer table and the call table. None when no such plan; ValueError
     on an unbounded or inverted window (bounded_window).
+
+    ``include_calls`` also returns the calls summary of the same runs
+    (``calls_summary``), folded from the SAME run list and per-run facts
+    read plus the per-(template, outcome) stats — exactly what
+    workflow_call_summary returns, without running the run list and the
+    facts read a second time.
 
     Two reads, each the narrowest one that answers its own question — the
     plan's runs that entered in the window (how each stands), and what the
@@ -228,8 +255,16 @@ async def workflow_report(
     endings = await enrollment_accessor.run_endings_in_window(
         merchant_id, workflow_id, since, until
     )
-    facts = await get_call_facts_by_runs(merchant_id, _lifetimes(endings))
-    return build_report(endings, facts)
+    runs = _lifetimes(endings)
+    facts = await get_call_facts_by_runs(merchant_id, runs)
+    report = build_report(endings, facts)
+    if include_calls:
+        rows = await get_call_stats_by_runs(merchant_id, runs)
+        contacted, reached = _contacted_reached(facts)
+        report.calls_summary = summarize_calls(
+            {"outcomes": rows, "contacted": contacted, "reached": reached}
+        )
+    return report
 
 
 # A run with no entered_at (never on a real row) still needs a lower bound

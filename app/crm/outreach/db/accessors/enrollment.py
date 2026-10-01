@@ -11,6 +11,7 @@ import asyncpg
 
 from app.crm.outreach.db.decoders.enrollment import (
     decode_customer_run,
+    decode_open_runs,
     decode_run,
     decode_run_row,
     decode_run_summary,
@@ -29,6 +30,7 @@ from app.crm.outreach.db.queries.enrollment import (
     occupied_nodes_on_version_query,
     occupied_nodes_query,
     open_by_node_query,
+    open_by_status_query,
     open_runs_for_customer_query,
     park_run_query,
     patch_open_run_query,
@@ -39,10 +41,12 @@ from app.crm.outreach.db.queries.enrollment import (
     resume_run_by_id_query,
     resume_run_query,
     run_endings_in_window_query,
+    runs_by_version_query,
     runs_per_day_query,
     runs_referencing_template_query,
     source_event_used_query,
     sweep_exited_runs_query,
+    workflow_has_runs_query,
     workflow_split_counts_query,
     workflow_summary_query,
 )
@@ -51,6 +55,7 @@ from app.crm.outreach.schemas import (
     EnrollmentRun,
     RunEnding,
     RunRow,
+    WorkflowOpenRuns,
     WorkflowRunSummary,
 )
 from app.crm.shared.db import crm_connection, crm_replica_read
@@ -461,7 +466,33 @@ async def workflow_summary(
     split_rows = await crm_replica_read(split_query, split_values)
     day_rows = await crm_replica_read(day_query, day_values)
     node_rows = await crm_replica_read(node_query, node_values)
-    return decode_run_summary(rows, split_rows, day_rows, node_rows)
+    # The Runs tab's version filter counts, for a windowed summary only:
+    # one statement here replaces a page read per version from the console.
+    version_rows: List[Any] = []
+    if since is not None or until is not None:
+        version_query, version_values = runs_by_version_query(
+            merchant_id, workflow_id, since, until
+        )
+        version_rows = list(await crm_replica_read(version_query, version_values))
+    return decode_run_summary(rows, split_rows, day_rows, node_rows, version_rows)
+
+
+async def workflow_has_runs(merchant_id: str, workflow_id: str) -> bool:
+    """Whether the plan has ever taken a run (the console's empty states):
+    one EXISTS on the replica."""
+    query, values = workflow_has_runs_query(merchant_id, workflow_id)
+    rows = await crm_replica_read(query, values)
+    return bool(rows and rows[0]["has_runs"])
+
+
+async def workflow_open_runs(merchant_id: str, workflow_id: str) -> WorkflowOpenRuns:
+    """The runs in flight now, by status and by square (the Publish
+    dialog): two reads over the open-runs partial index, on the replica."""
+    status_query, status_values = open_by_status_query(merchant_id, workflow_id)
+    node_query, node_values = open_by_node_query(merchant_id, workflow_id)
+    status_rows = await crm_replica_read(status_query, status_values)
+    node_rows = await crm_replica_read(node_query, node_values)
+    return decode_open_runs(status_rows, node_rows)
 
 
 async def customer_runs(
