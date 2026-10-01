@@ -1,0 +1,49 @@
+-- Migration: index one template's chat sessions in list order
+-- Description: GET /chat/sessions with a template_id is how the console
+-- reads one agent's chats: the agent overview (latest 5), the agent's
+-- Conversations tab, the Conversations page with an agent picked, and both
+-- legacy log pages. Its query is
+--
+--   WHERE template_id = $1 [AND created_at window]
+--   ORDER BY last_activity_at DESC, id DESC LIMIT n OFFSET m
+--
+-- The only index with template_id is (template_id) alone. It finds the rows
+-- but not their order, and for a template that is most of the table
+-- (go_indigo: ~111k of ~141k sessions) the planner skips it: every page,
+-- page 1 included, is a seq scan of the template's rows plus a sort that
+-- spills to disk (prod EXPLAIN 2026-09-26: 111k rows read, external merge
+-- 5.8MB, 70-130ms). It grows with the table, ~11k sessions/day.
+--
+-- (template_id, last_activity_at DESC, id DESC) stores the rows in exactly
+-- that order: equality column first, then the sort keys in the query's
+-- direction, id last as the tiebreaker list_chat_sessions_query sorts by.
+-- A page is then an index walk that stops after LIMIT rows. No scan of the
+-- template and no sort (local, 141k rows: page 1 14ms -> 0.4ms).
+--
+-- What else it touches: it is used by that list query only. EXPLAIN over
+-- every chat_session query shape keeps the count, the chat analytics
+-- (template_id + created_at aggregates), the idle sweeper (idle_sweep index),
+-- the template purge (the deduplicated, ~1MB template_id index) and every
+-- widget read/write (by id) on their current plans. The cost is one more
+-- entry per chat_session write, ~3-5us (local, 20k updates/inserts), and
+-- ~55 bytes per session (~8MB today). It adds no new indexed column, so HOT
+-- eligibility of any UPDATE is unchanged.
+--
+-- PRODUCTION NOTE (the 054 / 075 precedent): migrations run inside a
+-- transaction, so CREATE INDEX CONCURRENTLY cannot be used here, and a plain
+-- CREATE INDEX blocks inserts into chat_session (widget session creates)
+-- while it builds. Run the concurrent form manually FIRST, outside a
+-- transaction, and check it is valid (a failed concurrent build leaves an
+-- INVALID index; drop it CONCURRENTLY and retry). Then apply this migration:
+-- IF NOT EXISTS makes it a no-op that only records the version.
+--
+--   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_chat_session_template_activity
+--       ON chat_session (template_id, last_activity_at DESC, id DESC);
+--
+--   SELECT indisvalid FROM pg_index
+--    WHERE indexrelid = 'idx_chat_session_template_activity'::regclass;
+--
+-- Rollback: DROP INDEX CONCURRENTLY idx_chat_session_template_activity;
+
+CREATE INDEX IF NOT EXISTS idx_chat_session_template_activity
+    ON chat_session (template_id, last_activity_at DESC, id DESC);
