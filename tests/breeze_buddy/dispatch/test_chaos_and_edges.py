@@ -154,7 +154,7 @@ async def test_promoter_lua_script_body_is_stable(fake_redis):
     this test.
     """
     # Required commands in order.
-    for cmd in ("ZRANGEBYSCORE", "ZREM", "LPUSH"):
+    for cmd in ("ZRANGEBYSCORE", "ZREM", "RPUSH"):
         assert cmd in _PROMOTE_LUA, f"Promoter script missing {cmd}"
 
     # Single KEYS[1]/KEYS[2] pair, single ARGV[1]/ARGV[2] pair.

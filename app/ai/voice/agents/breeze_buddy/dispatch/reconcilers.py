@@ -10,6 +10,7 @@ runs each reconciler per interval. No new locking primitives needed.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Any, List, cast
 
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
@@ -67,7 +68,14 @@ async def reconcile_backlog_to_zset() -> None:
     """
     try:
         limit = await dyn_cfg.BB_RECONCILE_BACKLOG_LIMIT()
-        leads = await get_unscheduled_backlog_leads(lookahead_seconds=120, limit=limit)
+        high_ids = await dyn_cfg.BB_PRIORITY_HIGH_MERCHANT_IDS()
+        medium_ids = await dyn_cfg.BB_PRIORITY_MEDIUM_MERCHANT_IDS()
+        leads = await get_unscheduled_backlog_leads(
+            lookahead_seconds=120,
+            limit=limit,
+            high_merchant_ids=high_ids,
+            medium_merchant_ids=medium_ids,
+        )
     except Exception as e:  # noqa: BLE001
         logger.error(f"reconcile_backlog_to_zset: DB read failed: {e}")
         return
@@ -79,11 +87,18 @@ async def reconcile_backlog_to_zset() -> None:
     client: Any = cast(Any, await redis.get_client())
 
     fixed = 0
-    for lead_id, _reseller_id, score_ms in leads:
+    for lead_id, _reseller_id, merchant_id, score_ms in leads:
         try:
             existing = await client.zscore(SCHEDULE_ZSET, lead_id)
             if existing is None:
-                await client.zadd(SCHEDULE_ZSET, {lead_id: score_ms})
+                # Through schedule_lead so the tier hint is written too; the
+                # score is already jittered or exact in the DB, so no jitter.
+                await schedule_lead(
+                    lead_id,
+                    datetime.fromtimestamp(score_ms / 1000, tz=timezone.utc),
+                    jitter_ms=0,
+                    merchant_id=merchant_id,
+                )
                 fixed += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(f"reconcile_backlog_to_zset: ZADD failed for {lead_id}: {e}")
@@ -184,7 +199,9 @@ async def reap_stuck_processing_lists() -> None:
                 if lead.next_attempt_at is not None and is_dispatchable(
                     lead.execution_mode
                 ):
-                    await schedule_lead(lead_id, lead.next_attempt_at)
+                    await schedule_lead(
+                        lead_id, lead.next_attempt_at, merchant_id=lead.merchant_id
+                    )
                     rescheduled += 1
                 await client.lrem(proc_key, 1, lead_id)
                 continue

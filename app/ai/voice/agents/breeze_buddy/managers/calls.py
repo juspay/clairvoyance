@@ -695,7 +695,11 @@ async def _retry_call(
         # web-mode flow, not by phantom-dialling via Plivo/Twilio.
         # See docs/BACKLOG_DISPATCHER_REDESIGN.md §4 (retry semantics).
         if is_dispatchable(lead.execution_mode):
-            await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
+            await schedule_lead(
+                lead_id=retry_id,
+                next_attempt_at=next_attempt_at,
+                merchant_id=lead.merchant_id,
+            )
 
 
 async def reconcile_stuck_processing_leads():

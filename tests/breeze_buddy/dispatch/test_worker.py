@@ -14,6 +14,8 @@ import pytest
 from app.ai.voice.agents.breeze_buddy.dispatch import worker as w
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     READY_LIST,
+    READY_LIST_HIGH,
+    READY_LIST_MEDIUM,
     processing_list_for,
     reseller_paused_key,
     worker_heartbeat_key,
@@ -122,3 +124,51 @@ async def test_processing_list_rpush_and_lrem_roundtrip(fake_redis):
 
     await worker._lrem_processing("lead-99")
     assert fake_redis.client.lists[key] == []
+
+
+# ---------------------------------------------------------------------------
+# Weighted picking across the tier lists
+# ---------------------------------------------------------------------------
+
+
+async def test_pick_order_rotates_by_weights(fake_redis):
+    worker = w.Worker()
+    firsts = [worker._ready_keys_for_pick()[0] for _ in range(12)]
+    cycle = [READY_LIST_HIGH] * 3 + [READY_LIST_MEDIUM] * 2 + [READY_LIST]
+    assert firsts == cycle * 2
+
+
+async def test_weighted_split_when_every_tier_has_leads(fake_redis):
+    """3:2:1 over 60 picks with all lists full: 30 high, 20 medium, 10 normal."""
+    fake_redis.client.lists[READY_LIST_HIGH] = [f"h{i}" for i in range(100)]
+    fake_redis.client.lists[READY_LIST_MEDIUM] = [f"m{i}" for i in range(100)]
+    fake_redis.client.lists[READY_LIST] = [f"n{i}" for i in range(100)]
+
+    worker = w.Worker()
+    picked = [p for p in [await worker._blpop_ready() for _ in range(60)] if p]
+
+    assert len(picked) == 60
+    assert sum(1 for x in picked if x.startswith("h")) == 30
+    assert sum(1 for x in picked if x.startswith("m")) == 20
+    assert sum(1 for x in picked if x.startswith("n")) == 10
+    # FIFO inside each tier.
+    assert [x for x in picked if x.startswith("h")][:3] == ["h0", "h1", "h2"]
+
+
+async def test_empty_tiers_fall_through_without_waiting(fake_redis):
+    """Only normal has leads: every pick, whatever its first key, serves it."""
+    fake_redis.client.lists[READY_LIST] = ["n0", "n1", "n2", "n3", "n4", "n5"]
+    worker = w.Worker()
+    assert [await worker._blpop_ready() for _ in range(6)] == [
+        "n0",
+        "n1",
+        "n2",
+        "n3",
+        "n4",
+        "n5",
+    ]
+
+
+async def test_all_lists_empty_returns_none(fake_redis):
+    worker = w.Worker()
+    assert await worker._blpop_ready() is None

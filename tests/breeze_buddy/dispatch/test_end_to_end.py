@@ -24,6 +24,7 @@ from typing import cast
 
 from app.ai.voice.agents.breeze_buddy.dispatch import (
     promoter as prom_mod,
+    queue as queue_mod,
     reconcilers as recon_mod,
     worker as w,
 )
@@ -34,6 +35,8 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     READY_LIST,
+    READY_LIST_HIGH,
+    READY_LIST_MEDIUM,
     SCHEDULE_ZSET,
     processing_list_for,
     worker_heartbeat_key,
@@ -625,3 +628,128 @@ async def test_reaper_still_reschedules_dispatchable_lead(
         proc_key not in fake_redis.client.lists
         or fake_redis.client.lists[proc_key] == []
     )
+
+
+# ---------------------------------------------------------------------------
+# Merchant tiers end to end: schedule -> promote -> weighted pick -> dial
+# ---------------------------------------------------------------------------
+
+
+async def test_three_merchants_are_served_by_weight_and_nobody_starves(
+    harness, fake_redis, monkeypatch
+):
+    """
+    600 high, 300 medium, 100 normal leads all due now, every number with a
+    free line. Over the first 60 picks the split is 30 / 20 / 10, the normal
+    merchant is dialled from the first cycle, and each tier stays FIFO.
+    """
+
+    async def _high():
+        return ["m-high"]
+
+    async def _medium():
+        return ["m-med"]
+
+    monkeypatch.setattr(queue_mod.dyn_cfg, "BB_PRIORITY_HIGH_MERCHANT_IDS", _high)
+    monkeypatch.setattr(queue_mod.dyn_cfg, "BB_PRIORITY_MEDIUM_MERCHANT_IDS", _medium)
+
+    due = datetime.now(timezone.utc) - timedelta(seconds=1)
+    plan = [("h", "m-high", 600), ("m", "m-med", 300), ("n", "m-shop", 100)]
+    for prefix, merchant, count in plan:
+        for i in range(count):
+            lead = make_lead(f"{prefix}{i}")
+            lead.merchant_id = merchant
+            harness.add_lead(lead)
+            await schedule_lead(lead.id, due, jitter_ms=0, merchant_id=merchant)
+
+    await init_channel_semaphore(harness.number.id, 10_000)
+    prom = prom_mod.Promoter(leader=cast(LeaderElection, AlwaysLeader()))
+    while await prom._tick_once():
+        pass
+    assert len(fake_redis.client.lists[READY_LIST_HIGH]) == 600
+    assert len(fake_redis.client.lists[READY_LIST_MEDIUM]) == 300
+    assert len(fake_redis.client.lists[READY_LIST]) == 100
+
+    worker = w.Worker(worker_uuid="w-tiers")
+    for _ in range(60):
+        await worker._iteration(session=None)
+
+    picked = [
+        lead_id
+        for lead_id, l in harness.leads.items()
+        if l.status == LeadCallStatus.PROCESSING
+    ]
+    assert len(picked) == 60
+    assert sum(1 for x in picked if x.startswith("h")) == 30
+    assert sum(1 for x in picked if x.startswith("m")) == 20
+    assert sum(1 for x in picked if x.startswith("n")) == 10
+    # The 6th pick of the very first cycle is a normal-tier lead.
+    assert "n0" in picked
+
+
+async def test_no_tier_config_means_todays_single_list(
+    harness, fake_redis, monkeypatch
+):
+    """Empty tier lists: every lead lands in bb:ready:leads and dials as before."""
+
+    async def _empty():
+        return []
+
+    monkeypatch.setattr(queue_mod.dyn_cfg, "BB_PRIORITY_HIGH_MERCHANT_IDS", _empty)
+    monkeypatch.setattr(queue_mod.dyn_cfg, "BB_PRIORITY_MEDIUM_MERCHANT_IDS", _empty)
+
+    lead = make_lead("lead-plain")
+    harness.add_lead(lead)
+    await schedule_lead(
+        lead.id,
+        datetime.now(timezone.utc) - timedelta(seconds=1),
+        jitter_ms=0,
+        merchant_id="merchant-1",
+    )
+    await init_channel_semaphore(harness.number.id, 2)
+    prom = prom_mod.Promoter(leader=cast(LeaderElection, AlwaysLeader()))
+    await prom._tick_once()
+
+    assert fake_redis.client.lists.get(READY_LIST_HIGH, []) == []
+    assert fake_redis.client.lists.get(READY_LIST_MEDIUM, []) == []
+    assert fake_redis.client.lists[READY_LIST] == ["lead-plain"]
+
+    await w.Worker(worker_uuid="w-plain")._iteration(session=None)
+    assert len(harness.call_recorder.calls) == 1
+
+
+async def test_deferred_priority_lead_keeps_its_tier(harness, fake_redis, monkeypatch):
+    """A high-tier lead that finds no line is deferred without a merchant id
+    and must come back into the high list, not the normal one."""
+
+    async def _high():
+        return ["m-high"]
+
+    async def _empty():
+        return []
+
+    monkeypatch.setattr(queue_mod.dyn_cfg, "BB_PRIORITY_HIGH_MERCHANT_IDS", _high)
+    monkeypatch.setattr(queue_mod.dyn_cfg, "BB_PRIORITY_MEDIUM_MERCHANT_IDS", _empty)
+
+    lead = make_lead("lead-h-defer")
+    lead.merchant_id = "m-high"
+    harness.add_lead(lead)
+    await schedule_lead(
+        lead.id,
+        datetime.now(timezone.utc) - timedelta(seconds=1),
+        jitter_ms=0,
+        merchant_id="m-high",
+    )
+    await init_channel_semaphore(harness.number.id, 0)  # saturated
+    prom = prom_mod.Promoter(leader=cast(LeaderElection, AlwaysLeader()))
+    await prom._tick_once()
+    assert fake_redis.client.lists[READY_LIST_HIGH] == ["lead-h-defer"]
+
+    await w.Worker(worker_uuid="w-h-defer")._iteration(session=None)
+    assert harness.deferred and harness.deferred[0][0] == "lead-h-defer"
+
+    # Make the deferred score due and promote again: still high.
+    fake_redis.client.zsets[SCHEDULE_ZSET]["lead-h-defer"] = 0
+    await prom._tick_once()
+    assert fake_redis.client.lists[READY_LIST_HIGH] == ["lead-h-defer"]
+    assert fake_redis.client.lists.get(READY_LIST, []) == []

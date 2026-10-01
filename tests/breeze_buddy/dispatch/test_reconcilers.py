@@ -34,7 +34,7 @@ class _FakeNumber:
 
 async def test_reconcile_backlog_adds_missing_leads(fake_redis, monkeypatch):
     async def _fake_get(*a, **kw):
-        return [("lead-A", "res-1", 1000), ("lead-B", "res-1", 2000)]
+        return [("lead-A", "res-1", None, 1000), ("lead-B", "res-1", None, 2000)]
 
     monkeypatch.setattr(rc, "get_unscheduled_backlog_leads", _fake_get)
 
@@ -49,7 +49,7 @@ async def test_reconcile_backlog_skips_already_present(fake_redis, monkeypatch):
     fake_redis.client.zsets[SCHEDULE_ZSET] = {"lead-A": 500}
 
     async def _fake_get(*a, **kw):
-        return [("lead-A", "res-1", 1000), ("lead-B", "res-1", 2000)]
+        return [("lead-A", "res-1", None, 1000), ("lead-B", "res-1", None, 2000)]
 
     monkeypatch.setattr(rc, "get_unscheduled_backlog_leads", _fake_get)
 

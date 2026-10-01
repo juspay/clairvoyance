@@ -42,6 +42,8 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     READY_LIST,
+    READY_LIST_HIGH,
+    READY_LIST_MEDIUM,
     processing_list_for,
     reseller_paused_key,
     worker_heartbeat_key,
@@ -102,6 +104,11 @@ from app.database.accessor import (
 )
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.services.redis import get_redis_service
+
+# Picks per cycle that look at the high / medium / normal ready list first.
+# A list that is empty falls through to the next, so the split only applies
+# while several tiers have leads waiting.
+_PICK_WEIGHTS = (3, 2, 1)
 
 # ---------------------------------------------------------------------------
 # Greeting pre-warm
@@ -197,7 +204,7 @@ CALL_LIMIT_UNAVAILABLE_DEFER_S = 30
 
 class Worker:
     """
-    Long-lived asyncio task that consumes from ``bb:ready:leads`` and
+    Long-lived asyncio task that consumes from the ready lists and
     dispatches one lead at a time.
     """
 
@@ -206,6 +213,7 @@ class Worker:
         self._task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._stopping = asyncio.Event()
+        self._pick_count = 0
 
     @property
     def uuid(self) -> str:
@@ -308,11 +316,25 @@ class Worker:
         finally:
             await self._lrem_processing(lead_id)
 
+    def _ready_keys_for_pick(self) -> List[str]:
+        """Key order for this pick. With weights (h, m, n) a cycle of
+        h + m + n picks puts high first h times, medium first m times and
+        normal first n times; the other two lists follow as fallbacks."""
+        high_w, medium_w, normal_w = _PICK_WEIGHTS
+        slot = self._pick_count % (high_w + medium_w + normal_w)
+        self._pick_count += 1
+        if slot < high_w:
+            return [READY_LIST_HIGH, READY_LIST_MEDIUM, READY_LIST]
+        if slot < high_w + medium_w:
+            return [READY_LIST_MEDIUM, READY_LIST_HIGH, READY_LIST]
+        return [READY_LIST, READY_LIST_HIGH, READY_LIST_MEDIUM]
+
     async def _blpop_ready(self) -> Optional[str]:
         try:
             redis = await get_redis_service()
             client: Any = cast(Any, await redis.get_client())
-            popped = await client.blpop(READY_LIST, timeout=BB_WORKER_BLPOP_TIMEOUT_S)
+            keys = self._ready_keys_for_pick()
+            popped = await client.blpop(keys, timeout=BB_WORKER_BLPOP_TIMEOUT_S)
             if popped is None:
                 return None
             _, lead_id = popped
@@ -381,7 +403,9 @@ class Worker:
             )
             # Defer 30s; operator unpauses by removing the key.
             await schedule_lead(
-                lead_id, datetime.now(timezone.utc) + timedelta(seconds=30)
+                lead_id,
+                datetime.now(timezone.utc) + timedelta(seconds=30),
+                merchant_id=lead.merchant_id,
             )
             return
 

@@ -425,7 +425,11 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         # See docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 1.
         lead_execution_mode = req.execution_mode or ExecutionMode.TELEPHONY
         if next_attempt_at is not None and is_dispatchable(lead_execution_mode):
-            await schedule_lead(lead_id=uuid, next_attempt_at=next_attempt_at)
+            await schedule_lead(
+                lead_id=uuid,
+                next_attempt_at=next_attempt_at,
+                merchant_id=req.merchant_id,
+            )
 
         # CRM identity stamp + event mirror (ADR 0017). Backgrounded: the
         # push response never waits on CRM work, and a CRM failure cannot
@@ -891,7 +895,9 @@ async def dispatch_now_lead_handler(lead_id: str, current_user: UserInfo) -> Dic
         )
 
     # No jitter — operator intent is literally "now".
-    await schedule_lead(lead_id=lead_id, next_attempt_at=now, jitter_ms=0)
+    await schedule_lead(
+        lead_id=lead_id, next_attempt_at=now, jitter_ms=0, merchant_id=lead.merchant_id
+    )
 
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) "
