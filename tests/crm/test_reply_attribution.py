@@ -21,7 +21,7 @@ carry no `match` at all.
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -30,7 +30,7 @@ import app.crm.outreach.entry as entry
 import app.crm.outreach.reply_attribution as attribution
 from app.crm.connectivity.schemas.message import SendBehind
 from app.crm.outreach.entry import consume_attributed_event
-from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
+from app.crm.outreach.schemas import EnrollmentRun, Workflow
 from app.crm.record.schemas import RawEvent
 
 NOW = datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc)
@@ -135,6 +135,17 @@ class _Spine:
     async def live_workflows(self, merchant_id: str) -> List[Workflow]:
         return []
 
+    async def live_plan_versions(self, merchant_id: str) -> List[Workflow]:
+        return await self.live_workflows(merchant_id)
+
+    async def live_definition(
+        self, merchant_id: str, workflow_id: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        for flow in await self.live_workflows(merchant_id):
+            if str(flow.id) == workflow_id and flow.version == version:
+                return flow.definition
+        return None
+
     async def open_runs_for_customer(self, merchant_id, customer_id):
         return list(self.runs)
 
@@ -159,9 +170,11 @@ def _install(
     """The spine, plus the ONE read attribution makes. `behind` is what the
     manifest says about the id the tap threads to; the list collects the ids
     asked for, so a test can prove the read happened once per letter."""
-    definitions._definitions.clear()
+    definitions.reset_caches()
     for module, name in (
         (entry.workflow_accessor, "live_workflows"),
+        (entry.workflow_accessor, "live_plan_versions"),
+        (definitions.workflow_accessor, "live_definition"),
         (entry.enrollment_accessor, "open_runs_for_customer"),
         (definitions.version_accessor, "get_definition"),
         (entry.enrollment_accessor, "cancel_run"),
