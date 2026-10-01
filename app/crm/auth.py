@@ -203,7 +203,7 @@ async def verify_s2s_merchant(merchant_id: str, request: Request) -> str:
     # The stored token is a JWT — verifying it rejects expired/rotated
     # tokens even when the byte-compare still matches.
     try:
-        rbac_token_manager.verify_rbac_token(stored_token)
+        await rbac_token_manager.verify_rbac_token(stored_token)
     except HTTPException:
         # Re-raised unchanged: the answer stays the token manager's.
         _log_refusal(merchant_id, "stored_token_expired")
@@ -255,7 +255,7 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
     # Local decode, no DB. Raises 401 on a bad signature, an expiry, or a
     # widget/demo token.
     try:
-        caller = rbac_token_manager.verify_rbac_token(presented)
+        caller = await rbac_token_manager.verify_rbac_token(presented)
     except HTTPException:
         _log_refusal(merchant_id, "bad_token")
         raise
