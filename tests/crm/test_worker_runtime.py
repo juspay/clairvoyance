@@ -273,7 +273,7 @@ def _wire(
     monkeypatch: pytest.MonkeyPatch, flow: Workflow, calls: List[Any]
 ) -> EnrollmentRun:
     run = _open_run(flow)
-    definitions._definitions.clear()
+    definitions.reset_caches()
 
     async def live_workflows(merchant_id: str) -> List[Workflow]:
         # The read is tenant-scoped in SQL: another merchant sees no plans.
@@ -305,7 +305,24 @@ def _wire(
         calls.append(("enrol", kwargs))
         return object()
 
+    async def live_plan_versions(merchant_id: str) -> List[Workflow]:
+        return await live_workflows(merchant_id)
+
+    async def live_definition(
+        merchant_id: str, workflow_id: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        for flow in await live_workflows(merchant_id):
+            if str(flow.id) == workflow_id and flow.version == version:
+                return flow.definition
+        return None
+
     monkeypatch.setattr(entry.workflow_accessor, "live_workflows", live_workflows)
+    monkeypatch.setattr(
+        entry.workflow_accessor, "live_plan_versions", live_plan_versions
+    )
+    monkeypatch.setattr(
+        definitions.workflow_accessor, "live_definition", live_definition
+    )
     monkeypatch.setattr(
         entry.enrollment_accessor, "open_runs_for_customer", open_runs_for_customer
     )
