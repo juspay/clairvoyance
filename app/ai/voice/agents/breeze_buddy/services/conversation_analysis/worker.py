@@ -24,8 +24,8 @@ from app.schemas.breeze_buddy.chat import ChatSessionStatus
 from app.schemas.breeze_buddy.conversation_analysis import (
     ConversationChannel,
     ConversationEvaluationJob,
-    EvaluationType,
 )
+from app.schemas.breeze_buddy.evals import EvaluationType
 
 from .queue import (
     LOG_COMPONENT,

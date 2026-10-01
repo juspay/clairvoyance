@@ -50,8 +50,8 @@ from app.schemas.breeze_buddy.chat import ChatSessionStatus
 from app.schemas.breeze_buddy.conversation_analysis import (
     ConversationChannel,
     ConversationEvaluationJob,
-    EvaluationType,
 )
+from app.schemas.breeze_buddy.evals import EvaluationType
 
 TEMPLATE_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -171,6 +171,7 @@ async def test_non_list_transcript_is_ignored(
                 created_at=now,
                 status=LeadCallStatus.FINISHED,
                 outcome=None,
+                payload=None,
                 metaData={"transcription": {"role": "user"}},
             )
         ),
@@ -567,8 +568,10 @@ def test_topic_query_review_guards() -> None:
     assert "config.evaluation_type = 'TOPIC'" in catalog_query
 
     for config_query, _ in (
-        get_evaluation_config_query("default"),
-        update_evaluation_configuration_query("default", {}),
+        get_evaluation_config_query("default", EvaluationType.TOPIC.value),
+        update_evaluation_configuration_query(
+            "default", EvaluationType.TOPIC.value, {}
+        ),
     ):
         assert "IS NOT DISTINCT FROM NULLIF($1, 'default')::uuid" in config_query
 

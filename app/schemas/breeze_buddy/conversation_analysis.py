@@ -15,10 +15,6 @@ class ConversationChannel(str, Enum):
     CHAT = "CHAT"
 
 
-class EvaluationType(str, Enum):
-    TOPIC = "TOPIC"
-
-
 class ConversationEvaluationJob(BaseModel):
     source_id: str = Field(min_length=1, max_length=255)
     channel: ConversationChannel
