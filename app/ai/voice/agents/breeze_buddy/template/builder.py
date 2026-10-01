@@ -26,6 +26,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal import (
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_handler import (
     http_function_handler,
 )
+from app.ai.voice.agents.breeze_buddy.template.flavor_functions import (
+    append_flavor_functions,
+    synthesize_flavor_functions,
+)
 from app.ai.voice.agents.breeze_buddy.template.global_function import (
     GlobalFunctionRegistry,
 )
@@ -466,6 +470,9 @@ class FlowConfigBuilder:
         # chat both flow through this method, so the tool appears uniformly
         # on both channels.
         kb_tool_function = synthesize_kb_tool_function(bot_instance, log=self._log)
+        # Functions a loaded flavor contributes from its own switches
+        # (template/flavor_functions.py); declared names win, same as the KB tool.
+        flavor_functions = synthesize_flavor_functions(bot_instance, log=self._log)
 
         # Direct mode has a single flat `functions` array. Each entry is
         # routed by `type`: http/builtin/custom go through the global-function
@@ -473,8 +480,9 @@ class FlowConfigBuilder:
         # The KB tool is appended BEFORE the disabled filter so per-channel
         # disabling applies to it like any other function.
         if flow.get("mode") == FlowMode.DIRECT.value:
-            declared_functions = append_kb_tool(
-                flow.get("functions") or [], kb_tool_function
+            declared_functions = append_flavor_functions(
+                append_kb_tool(flow.get("functions") or [], kb_tool_function),
+                flavor_functions,
             )
             direct_functions = filter_disabled_identifiers(
                 declared_functions, self._disabled_names, "function"
@@ -491,7 +499,10 @@ class FlowConfigBuilder:
         # always run it; we shallow-copy the flow dict to avoid mutating the
         # caller's structure when assigning the filtered list back.
         global_functions = filter_disabled_identifiers(
-            append_kb_tool(flow.get("global_functions") or [], kb_tool_function),
+            append_flavor_functions(
+                append_kb_tool(flow.get("global_functions") or [], kb_tool_function),
+                flavor_functions,
+            ),
             self._disabled_names,
             "function",
         )

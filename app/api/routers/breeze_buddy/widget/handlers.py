@@ -244,6 +244,15 @@ def _extract_widget_config(template: object) -> _WidgetSurface:
         )
         for qr in (getattr(configurations, "quick_replies", None) or [])
     ]
+    if _template_order_tracking_enabled(template) and not any(
+        "where is my order" in ((qr.value or qr.label) or "").casefold()
+        for qr in quick_replies
+    ):
+        quick_replies.append(
+            QuickReplyWire(
+                label=_ORDER_TRACKING_QUICK_REPLY, value=_ORDER_TRACKING_QUICK_REPLY
+            )
+        )
     return _WidgetSurface(
         quick_replies=quick_replies,
         enable_text_input=getattr(configurations, "enable_text_input", True),
@@ -387,6 +396,16 @@ async def _read_upload(upload: UploadFile, max_bytes: int, label: str) -> bytes:
 # fallback below reads as one decision.
 _TRY_ON_PROTOCOL = "ucp"
 _TRY_ON_FEATURE = "try_on"
+# Order tracking's switch, same block. The feature's tools come from the
+# commerce flavor; the widget only adds the entry point the shopper taps.
+_ORDER_TRACKING_FEATURE = "order_tracking"
+_ORDER_TRACKING_QUICK_REPLY = "Where is my order?"
+
+
+def _template_order_tracking_enabled(template: object) -> bool:
+    """Reads ``flavor.ucp.features.order_tracking``. Fails closed."""
+    block = _template_flavor(template).get(_TRY_ON_PROTOCOL)
+    return bool(block.features.get(_ORDER_TRACKING_FEATURE, False)) if block else False
 
 
 def _template_try_on_enabled(template: object) -> bool:
