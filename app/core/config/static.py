@@ -971,6 +971,36 @@ ENABLE_REDIS_DYNAMIC_CONFIG = (
     os.getenv("ENABLE_REDIS_DYNAMIC_CONFIG", "true").lower() == "true"
 )
 
+
+def _memo_ttl_seconds(env_var: str, default: float) -> float:
+    """Read a memo TTL. Unset -> default; anything unusable -> 0 (memo off).
+
+    Fails toward OFF, not toward the default, on purpose: 0 is the rollback
+    lever, and a mistyped rollback ("0s", "off") must still roll back. Off
+    is the pre-memo behaviour, so a bad value can only cost Redis load,
+    never staleness.
+    """
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if math.isfinite(value) and value > 0 else 0.0
+
+
+# How long one process trusts its parsed copy of the dynamic-config blob
+# (Redis key devcycle:flags) before reading it again. Every get_config() used
+# to GET and json.loads the whole blob to return one key; the dispatcher
+# alone does ~4 per claim. With the memo, a process does at most one GET per
+# TTL (concurrent refreshes share one GET). TRADE-OFF: a flag changed by
+# ANOTHER process (DevCycle webhook or /feature-flags on another pod) is seen
+# here up to this many seconds later instead of on the next read; a write
+# made by THIS process is seen at once. 0 disables the memo = the exact old
+# behaviour (rollback is this env var, no deploy of code).
+LIVE_CONFIG_MEMO_TTL_SECONDS = _memo_ttl_seconds("LIVE_CONFIG_MEMO_TTL_SECONDS", 5.0)
+
 # DevCycle Configuration
 DEVCYCLE_WEBHOOK_SECRET = os.getenv("DEVCYCLE_WEBHOOK_SECRET", "")
 DEVCYCLE_SERVER_KEY = os.getenv("DEVCYCLE_SERVER_KEY", "")
