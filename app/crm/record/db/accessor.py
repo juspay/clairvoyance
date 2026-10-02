@@ -44,6 +44,7 @@ async def insert_event(
     schema_version: str,
     occurred_at: Optional[datetime],
     customer_id: Optional[str],
+    processed: bool = False,
 ) -> Optional[str]:
     """One INSERT — atomic on its own; a dedupe conflict returns None."""
     query, values = insert_event_query(
@@ -55,6 +56,7 @@ async def insert_event(
         schema_version,
         occurred_at,
         customer_id,
+        processed,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)

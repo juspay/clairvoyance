@@ -17,16 +17,19 @@ def insert_event_query(
     schema_version: str,
     occurred_at: Optional[datetime],
     customer_id: Optional[str],
+    processed: bool = False,
 ) -> Tuple[str, List[Any]]:
     """Store the letter raw. Dedupe rides the UNIQUE (merchant_id, source,
     external_id): a conflict is a silent drop (no row returned), still OK.
     occurred_at is the source's claim, clamped never later than
-    received_at (LEAST against now())."""
+    received_at (LEAST against now()). ``processed`` stamps processed_at
+    at insert, so the row never enters the consumer's pending queue."""
     query = f"""
         INSERT INTO {EVENT_RAW_TABLE}
             (merchant_id, source, topic, external_id, payload,
-             schema_version, occurred_at, customer_id)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, LEAST($7, now()), $8)
+             schema_version, occurred_at, customer_id, processed_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, LEAST($7, now()), $8,
+                CASE WHEN $9::boolean THEN now() END)
         ON CONFLICT (merchant_id, source, external_id) DO NOTHING
         RETURNING id
     """
@@ -39,6 +42,7 @@ def insert_event_query(
         schema_version,
         occurred_at,
         customer_id,
+        processed,
     ]
 
 

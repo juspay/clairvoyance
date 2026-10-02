@@ -194,6 +194,28 @@ def test_call_completed_mirror_names_the_run_and_the_outcome(
     assert "enrollment_id" not in recorded[0]["payload"]
 
 
+def test_call_attempted_is_filed_already_processed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TEMPORARY (2 Oct 2026): nothing listens for call.attempted, so it is
+    recorded with processed_at stamped and never enters the consumer's
+    pending queue; every other mirror still does."""
+    recorded: List[Dict[str, Any]] = []
+
+    async def fake_record_event(**kw: Any) -> None:
+        recorded.append(kw)
+
+    monkeypatch.setattr(crm_mirror, "record_event", fake_record_event)
+    for topic in ("call.attempted", "call.completed"):
+        asyncio.run(
+            crm_mirror.mirror_to_crm(
+                topic, merchant_id="m1", external_id="CA1", lead_id="L1"
+            )
+        )
+    by_topic = {e["topic"]: e["processed"] for e in recorded}
+    assert by_topic == {"call.attempted": True, "call.completed": False}
+
+
 # --------------------------------------------------------------------------
 # A template's declared answers, and the names a merchant is free to choose
 # --------------------------------------------------------------------------
