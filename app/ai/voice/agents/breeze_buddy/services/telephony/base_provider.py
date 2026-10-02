@@ -6,6 +6,16 @@ from fastapi import WebSocket
 
 from app.schemas import CallProvider, TelephonyConfig
 
+# ``make_call``'s ``status`` when the dial request was sent but no reply came
+# back: the provider may have placed the call. Not a failure (that is None) —
+# the dialler must neither redial nor release; the provider's own webhook
+# settles it, matched to the lead through ``dial_ref``.
+DIAL_OUTCOME_UNKNOWN = "unknown"
+
+# The lead's meta_data key that marks it held after such a dial, until a
+# webhook claims it or the stuck sweep puts it back to be dialled again.
+UNKNOWN_DIAL_META_KEY = "unknown_dial"
+
 
 class VoiceCallProvider(ABC):
     """
@@ -50,6 +60,7 @@ class VoiceCallProvider(ABC):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        dial_ref: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Initiate a call.
@@ -63,6 +74,10 @@ class VoiceCallProvider(ABC):
             telephony_number: Caller ID / telephony number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            dial_ref: Key/values the provider echoes back on this call's
+                webhooks, so a dial whose reply was lost can still be matched
+                to its lead. Plivo puts them on its answer + hangup URLs;
+                providers that never return DIAL_OUTCOME_UNKNOWN ignore them.
         """
 
     async def make_call_async(
@@ -71,6 +86,7 @@ class VoiceCallProvider(ABC):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        dial_ref: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Await-able wrapper around ``make_call`` that keeps it off the event loop.
@@ -90,6 +106,7 @@ class VoiceCallProvider(ABC):
             telephony_number,
             reseller_id,
             template_name,
+            dial_ref=dial_ref,
         )
 
     def set_completion_callback(self, callback):

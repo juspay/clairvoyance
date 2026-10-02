@@ -14,7 +14,7 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
 # the circular import via ``dispatch/__init__.py`` -> ``dispatch.worker`` ->
@@ -42,6 +42,10 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     CALL_LIMIT_OUTCOME,
     CallLimitVerdict,
     describe_call_limit,
+    unrecord_call_limit,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    UNKNOWN_DIAL_META_KEY,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
@@ -68,6 +72,7 @@ from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
+    claim_unknown_dial,
     create_lead_call_tracker,
     decrement_telephony_number_channels,
     get_call_execution_config_by_template_id,
@@ -77,6 +82,7 @@ from app.database.accessor import (
     get_telephony_number_by_id,
     increment_telephony_number_channels,
     release_lock_on_lead_by_id,
+    requeue_unknown_dial,
     update_lead_call_completion_details,
     update_lead_call_recording_url,
     update_telephony_number_status,
@@ -698,6 +704,42 @@ async def _retry_call(
             await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
 
 
+async def requeue_unclaimed_unknown_dial(lead: LeadCallTracker) -> bool:
+    """
+    Undo the hold on a lead whose dial got no reply and that no webhook ever
+    claimed: back to BACKLOG, due now, scheduled — the same lead and attempt,
+    so no retry is spent on a call that never happened. Releases the channel
+    + number held for it (once) and takes back its call-limit entry.
+
+    The requeue runs first and is conditional on the lead still being held,
+    so a webhook claiming it at the same moment wins and nothing is released
+    under a live call. False in that case.
+    """
+    dialled_at = lead.call_initiated_time
+    if dialled_at is None or not await requeue_unknown_dial(
+        lead.id, dialled_at, UNKNOWN_DIAL_META_KEY
+    ):
+        return False
+
+    await _release_call_resources(lead)
+
+    hold = (lead.metaData or {}).get(UNKNOWN_DIAL_META_KEY) or {}
+    member = hold.get("call_limit_member")
+    phone = (lead.payload or {}).get("customer_mobile_number")
+    if member and phone and lead.merchant_id:
+        await unrecord_call_limit(
+            merchant_id=lead.merchant_id, phone=phone, member=member
+        )
+
+    if is_dispatchable(lead.execution_mode):
+        await schedule_lead(lead_id=lead.id, next_attempt_at=datetime.now(timezone.utc))
+    logger.warning(
+        f"Unknown-outcome dial for lead {lead.id} got no webhook in 10 minutes: "
+        "the provider never placed it; lead put back to be dialled"
+    )
+    return True
+
+
 async def reconcile_stuck_processing_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state — call placed
@@ -758,6 +800,20 @@ async def reconcile_stuck_processing_leads():
 
             logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
 
+            if (
+                locked_lead.call_id is None
+                and UNKNOWN_DIAL_META_KEY in (locked_lead.metaData or {})
+                and locked_lead.call_initiated_time is not None
+            ):
+                # Held after a dial whose reply never arrived, and no webhook
+                # in 10 minutes: the provider never placed it. Dial it again
+                # rather than closing it — most templates allow no retry, so
+                # closing would mean this customer is never called.
+                if await requeue_unclaimed_unknown_dial(locked_lead):
+                    # The requeue unlocked the row; a worker may own it now.
+                    locked_lead = None
+                continue
+
             # Merge, don't obliterate: the update REPLACES meta_data and
             # overwrites outcome, so a bare write here destroys whatever a
             # mid-call outcome hook recorded.
@@ -792,6 +848,41 @@ async def reconcile_stuck_processing_leads():
         finally:
             if locked_lead:
                 await release_lock_on_lead_by_id(locked_lead.id)
+
+
+async def claim_unknown_dial_from_webhook(
+    call_id: Optional[str], url_params: Mapping[str, str]
+) -> bool:
+    """
+    Link a provider webhook to the lead whose dial got no reply.
+
+    When the provider's reply to a dial times out, the worker holds the lead
+    PROCESSING with no call_id (the call may have been placed). The provider
+    then calls back with a call id we never stored — but on URLs that carry
+    the ``lead_id`` + ``dial_at`` the worker put on them. Attaching the call
+    id here, before anything looks the lead up by it, lets the call run its
+    normal course: answered calls reach the agent, outcomes land on the lead,
+    the channel is released once at the end.
+
+    A no-op (and False) for every webhook not answering such a dial. Never
+    raises — a webhook must carry on exactly as before.
+    """
+    lead_id = url_params.get("lead_id")
+    dial_at = url_params.get("dial_at")
+    if not (call_id and lead_id and dial_at):
+        return False
+    try:
+        dialled_at = datetime.fromisoformat(dial_at)
+    except ValueError:
+        logger.warning(f"Unreadable dial_at {dial_at!r} on webhook for {call_id}")
+        return False
+    claimed = await claim_unknown_dial(lead_id, dialled_at, call_id)
+    if claimed:
+        logger.warning(
+            f"Unknown-outcome dial resolved: lead {lead_id} is call {call_id} "
+            "(the provider placed it although its reply never arrived)"
+        )
+    return claimed
 
 
 async def handle_call_completion(

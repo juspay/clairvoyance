@@ -15,6 +15,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
+    claim_unknown_dial_query,
     count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
@@ -27,8 +28,10 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_leads_by_enrollment_id_query,
     get_leads_by_request_id_query,
     get_leads_by_status_and_time_before_query,
+    hold_unknown_dial_query,
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
+    requeue_unknown_dial_query,
     reset_widget_voice_lead_query,
     update_langfuse_scores_query,
     update_lead_call_completion_details_query,
@@ -326,6 +329,63 @@ async def update_lead_call_details(
     except Exception as e:
         logger.error(f"Error updating lead: {e}")
         return None
+
+
+async def hold_unknown_dial(
+    lead_id: str,
+    dialled_at: datetime,
+    telephony_number_id: str,
+    marker: Dict[str, Any],
+) -> Optional[LeadCallTracker]:
+    """
+    Hold the lead PROCESSING with no call_id after a dial whose reply never
+    arrived (see ``hold_unknown_dial_query``). None when the row left BACKLOG
+    under us, or on error.
+    """
+    try:
+        query_text, values = hold_unknown_dial_query(
+            lead_id, dialled_at, telephony_number_id, marker
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return decode_lead_call_tracker(result[0])
+        logger.warning(f"Lead {lead_id} not held — status may have changed")
+        return None
+    except Exception as e:
+        logger.error(f"Error holding unknown-outcome dial for lead {lead_id}: {e}")
+        return None
+
+
+async def claim_unknown_dial(lead_id: str, dialled_at: datetime, call_id: str) -> bool:
+    """
+    Attach ``call_id`` to the lead held after a dial with no reply (see
+    ``claim_unknown_dial_query``). True when this webhook claimed it; False
+    for every other webhook and on any error (a malformed lead_id included).
+    """
+    try:
+        query_text, values = claim_unknown_dial_query(lead_id, dialled_at, call_id)
+        result = await run_parameterized_query(query_text, values)
+        return bool(result) and get_row_count(result) > 0
+    except Exception as e:
+        logger.error(f"Error claiming unknown-outcome dial for lead {lead_id}: {e}")
+        return False
+
+
+async def requeue_unknown_dial(
+    lead_id: str, dialled_at: datetime, marker_key: str
+) -> bool:
+    """
+    Put an unclaimed held lead back to be dialled now (see
+    ``requeue_unknown_dial_query``). False when a webhook claimed it first,
+    or on error.
+    """
+    try:
+        query_text, values = requeue_unknown_dial_query(lead_id, dialled_at, marker_key)
+        result = await run_parameterized_query(query_text, values)
+        return bool(result) and get_row_count(result) > 0
+    except Exception as e:
+        logger.error(f"Error requeueing unknown-outcome dial for lead {lead_id}: {e}")
+        return False
 
 
 async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:

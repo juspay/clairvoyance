@@ -221,6 +221,96 @@ def update_lead_call_details_query(
     return text, values
 
 
+def hold_unknown_dial_query(
+    lead_id: str,
+    dialled_at: datetime,
+    telephony_number_id: str,
+    marker: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Hold a lead after a dial whose reply never arrived: PROCESSING with no
+    call_id, under ``call_initiated_time = dialled_at``, with ``marker`` merged
+    into meta_data — in one statement, so a held lead always carries its
+    marker. Same BACKLOG guard as ``update_lead_call_details_query``.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "status" = $1,
+            "call_id" = NULL,
+            "call_initiated_time" = $2,
+            "telephony_number_id" = $3,
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $4::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $5 AND "status" = $6
+        RETURNING *;
+    """
+    values = [
+        LeadCallStatus.PROCESSING.value,
+        dialled_at,
+        telephony_number_id,
+        json.dumps(marker),
+        lead_id,
+        LeadCallStatus.BACKLOG.value,
+    ]
+    return text, values
+
+
+def claim_unknown_dial_query(
+    lead_id: str, dialled_at: datetime, call_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Attach a provider call id to the lead held after a dial with no reply.
+
+    Matches only the dial still waiting for one — PROCESSING, no call_id, and
+    dialled at exactly ``dialled_at`` — so a late webhook from an older dial of
+    the same lead can never attach to a newer one. Zero rows for every other
+    webhook.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+          AND "status" = $3
+          AND "call_id" IS NULL
+          AND "call_initiated_time" = $4
+        RETURNING "id";
+    """
+    values = [call_id, lead_id, LeadCallStatus.PROCESSING.value, dialled_at]
+    return text, values
+
+
+def requeue_unknown_dial_query(
+    lead_id: str, dialled_at: datetime, marker_key: str
+) -> Tuple[str, List[Any]]:
+    """
+    Put a held lead that no webhook ever claimed back to be dialled now: the
+    provider never placed that call. Same match as the claim, so exactly one
+    of the two wins. Unlocks in the same statement (the caller must not unlock
+    again — a worker may own the row by then) and drops the hold marker.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "status" = $1,
+            "is_locked" = FALSE,
+            "next_attempt_at" = NOW(),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb - $2::text,
+            "updated_at" = NOW()
+        WHERE "id" = $3
+          AND "status" = $4
+          AND "call_id" IS NULL
+          AND "call_initiated_time" = $5
+        RETURNING "id";
+    """
+    values = [
+        LeadCallStatus.BACKLOG.value,
+        marker_key,
+        lead_id,
+        LeadCallStatus.PROCESSING.value,
+        dialled_at,
+    ]
+    return text, values
+
+
 def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by call ID.

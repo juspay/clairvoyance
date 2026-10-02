@@ -73,6 +73,10 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     record_outbound_call_attempt,
     unrecord_call_limit,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    DIAL_OUTCOME_UNKNOWN,
+    UNKNOWN_DIAL_META_KEY,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import _gemini_realtime_config
@@ -95,6 +99,7 @@ from app.database.accessor import (
     defer_lead_next_attempt_and_release_lock,
     get_lead_by_id,
     get_template_by_id,
+    hold_unknown_dial,
     is_number_blacklisted,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
@@ -707,6 +712,13 @@ class Worker:
                     return
                 call_limit_member = verdict.member
 
+            # The provider echoes these back on the call's webhooks — the only
+            # link to this lead if its reply (with the call id) never arrives.
+            # dial_at is also the call_initiated_time an unknown dial is held
+            # under, so a webhook matches this exact dial and no other.
+            dialled_at = datetime.now(timezone.utc)
+            dial_ref = {"lead_id": str(locked.id), "dial_at": dialled_at.isoformat()}
+
             try:
                 call = await call_provider.make_call_async(
                     customer_mobile,
@@ -715,6 +727,7 @@ class Worker:
                     # answer-url observability tag only (never parsed back);
                     # id-only convention — no template names in routing.
                     template_name=locked.template_id or "",
+                    dial_ref=dial_ref,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.error(
@@ -730,6 +743,48 @@ class Worker:
                 # Backoff retry. Use defer_seconds derived from attempt_count.
                 backoff = min(60, 5 * (locked.attempt_count + 1))
                 lock_released = await self._defer_and_release(locked.id, backoff)
+                return
+
+            if call and call.get("status") == DIAL_OUTCOME_UNKNOWN:
+                # Sent, but no reply: the provider may have placed the call,
+                # so this is neither a failure nor a dial to repeat. Hold the
+                # lead exactly as a placed call — PROCESSING, lock + channel
+                # + call-limit record kept — just without a call_id. The
+                # provider's webhook fills it in (claim_unknown_dial) and the
+                # call runs its normal course; if no webhook ever comes, the
+                # provider never placed it, and the stuck-PROCESSING sweep puts
+                # this same lead back to be dialled (requeue_unclaimed_unknown_dial)
+                # after releasing the channel once and taking back the
+                # call-limit entry recorded here.
+                held = await hold_unknown_dial(
+                    locked.id,
+                    dialled_at,
+                    number.id,
+                    {
+                        UNKNOWN_DIAL_META_KEY: {
+                            "dial_at": dial_ref["dial_at"],
+                            "call_limit_member": call_limit_member,
+                        }
+                    },
+                )
+                if not held:
+                    # Same as the CAS loss below: the row moved on under us.
+                    logger.error(
+                        f"Worker {self._uuid}: dial outcome unknown and CAS "
+                        f"lost for lead {locked.id}. Releasing resources; the "
+                        "call may be orphaned."
+                    )
+                    await release_channel_token(number.id, token)
+                    await _release_number(number.id, number.provider)
+                    lock_released = await self._release(locked.id)
+                    return
+                lock_released = True
+                logger.warning(
+                    f"Worker {self._uuid}: dial outcome unknown for lead "
+                    f"{locked.id} via {number.provider.value} number "
+                    f"{number.id}; held PROCESSING until the provider's "
+                    "webhook claims it or the stuck sweep closes it"
+                )
                 return
 
             if not call or not call.get("sid"):
