@@ -18,21 +18,30 @@ from app.schemas import LeadCallTracker
 
 
 async def get_unscheduled_backlog_leads(
-    lookahead_seconds: int = 120, limit: int = 1000
-) -> List[Tuple[str, str, int]]:
+    lookahead_seconds: int = 120,
+    limit: int = 1000,
+    high_merchant_ids: Optional[List[str]] = None,
+    medium_merchant_ids: Optional[List[str]] = None,
+) -> List[Tuple[str, str, Optional[str], int]]:
     """
-    Return ``(id, reseller_id, score_ms)`` triples for BACKLOG leads due
-    within the lookahead window. Used by ``reconcile_backlog_to_zset`` to
-    detect and re-emit lost ZADD events.
+    Return ``(id, reseller_id, merchant_id, score_ms)`` for BACKLOG leads
+    due within the lookahead window, priority merchants first. Used by
+    ``reconcile_backlog_to_zset`` to detect and re-emit lost ZADD events.
     """
     try:
         query, values = get_unscheduled_backlog_leads_query(
-            lookahead_seconds=lookahead_seconds, limit=limit
+            lookahead_seconds=lookahead_seconds,
+            limit=limit,
+            high_merchant_ids=high_merchant_ids or [],
+            medium_merchant_ids=medium_merchant_ids or [],
         )
         rows = await run_parameterized_query(query, values)
         if not rows:
             return []
-        return [(r["id"], r["reseller_id"], int(r["score_ms"])) for r in rows]
+        return [
+            (r["id"], r["reseller_id"], r["merchant_id"], int(r["score_ms"]))
+            for r in rows
+        ]
     except Exception as e:
         logger.error(f"get_unscheduled_backlog_leads failed: {e}", exc_info=True)
         raise
