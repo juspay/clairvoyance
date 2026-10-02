@@ -11,7 +11,7 @@ a dedicated rotate endpoint later; this PR keeps the surface minimal.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
@@ -43,6 +43,17 @@ class WidgetAppearance(BaseModel):
     draggable: Optional[str] = Field(None, max_length=8)
     modes: Optional[str] = Field(None, max_length=32)
     default_mode: Optional[str] = Field(None, max_length=16)
+    # The panel's look past the one brand colour, each a widget-SDK attribute
+    # of the same name (theme, surface-color, user-bubble-bg, …). Unset means
+    # the SDK's theme decides — which is what makes "dark" actually dark.
+    theme: Optional[Literal["light", "dark"]] = None
+    surface_color: Optional[str] = Field(None, max_length=64)
+    text_color: Optional[str] = Field(None, max_length=64)
+    user_bubble_bg: Optional[str] = Field(None, max_length=64)
+    user_bubble_fg: Optional[str] = Field(None, max_length=64)
+    quick_reply_bg: Optional[str] = Field(None, max_length=64)
+    quick_reply_fg: Optional[str] = Field(None, max_length=64)
+    quick_reply_color: Optional[str] = Field(None, max_length=64)
     # Hosted skin (full custom UI in a sandboxed iframe) and hosted
     # theme.css for the default UI. Both are widget-SDK contracts
     # (custom-skin-url / custom-style-url); the server only insists on
