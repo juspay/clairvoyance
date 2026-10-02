@@ -12,7 +12,9 @@ from app.database.queries.breeze_buddy.dispatch import (
     clean_stale_bb_locks_query,
     count_processing_by_telephony_number_query,
     get_unscheduled_backlog_leads_query,
+    park_lead_until_and_release_lock_query,
     update_lead_next_attempt_at_query,
+    wake_window_parked_leads_query,
 )
 from app.schemas import LeadCallTracker
 
@@ -76,4 +78,38 @@ async def update_lead_next_attempt_at_now(
         return decode_lead_call_tracker(rows[0])
     except Exception as e:
         logger.error(f"update_lead_next_attempt_at_now failed: {e}", exc_info=True)
+        raise
+
+
+async def park_lead_until_and_release_lock(
+    lead_id: str, park_until: datetime
+) -> Optional[LeadCallTracker]:
+    """Park an out-of-hours lead until ``park_until`` and unlock it.
+    Returns the updated row, or None if the lead is gone."""
+    try:
+        query, values = park_lead_until_and_release_lock_query(lead_id, park_until)
+        rows = await run_parameterized_query(query, values)
+        if not rows:
+            return None
+        return decode_lead_call_tracker(rows[0])
+    except Exception as e:
+        logger.error(f"park_lead_until_and_release_lock failed: {e}", exc_info=True)
+        raise
+
+
+async def wake_window_parked_leads(
+    template_id: str,
+    parked_at: List[datetime],
+    wake_at: datetime,
+) -> List[Tuple[str, datetime]]:
+    """Move leads parked at an old window opening to ``wake_at``. Returns
+    ``(id, next_attempt_at)`` for every moved row."""
+    try:
+        query, values = wake_window_parked_leads_query(
+            template_id=template_id, parked_at=parked_at, wake_at=wake_at
+        )
+        rows = await run_parameterized_query(query, values)
+        return [(r["id"], r["next_attempt_at"]) for r in (rows or [])]
+    except Exception as e:
+        logger.error(f"wake_window_parked_leads failed: {e}", exc_info=True)
         raise
