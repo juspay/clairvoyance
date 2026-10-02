@@ -171,8 +171,11 @@ async def create_draft(
     name: str,
     language: str,
     components: List[Dict[str, Any]],
+    category: Optional[str] = None,
 ) -> TemplateRead:
     """A local draft. Nothing is sent to the provider until submit().
+    ``category`` is the one the merchant picked, kept on the draft so it is
+    still picked when the draft is reopened (submit sends its own).
 
     Both inputs are validated CLOSED here rather than at submit, because a
     draft that cannot ever be submitted is worse than a refusal: it looks
@@ -198,6 +201,7 @@ async def create_draft(
         name,
         language,
         components,
+        category,
     )
 
 
@@ -209,6 +213,7 @@ async def _create_draft_in_txn(
     name: str,
     language: str,
     components: List[Dict[str, Any]],
+    category: Optional[str] = None,
 ) -> TemplateRead:
     """ATOMIC: the natural-key probe and the write share one fate — two
     concurrent create calls for one key must not both pass the probe and
@@ -218,7 +223,14 @@ async def _create_draft_in_txn(
     )
     if existing is None:
         return await template_accessor.insert_template_draft(
-            txn, merchant_id, channel, provider_account_ref, name, language, components
+            txn,
+            merchant_id,
+            channel,
+            provider_account_ref,
+            name,
+            language,
+            components,
+            category,
         )
     if existing.status != TEMPLATE_DRAFT:
         raise TemplateError(
@@ -226,7 +238,7 @@ async def _create_draft_in_txn(
             f"account and is '{existing.status}' — edit it instead of recreating it"
         )
     updated = await template_accessor.update_draft_components(
-        txn, merchant_id, existing.id, components
+        txn, merchant_id, existing.id, components, category
     )
     if updated is None:
         raise TemplateError("the draft changed while it was being updated")
@@ -268,7 +280,9 @@ async def submit(merchant_id: str, template_id: str, category: str) -> TemplateR
             )
         )
 
-    claimed = await atomically(_claim_for_submit_in_txn, merchant_id, template_id)
+    claimed = await atomically(
+        _claim_for_submit_in_txn, merchant_id, template_id, category
+    )
     if claimed is None:
         raise TemplateError("this template is already being submitted")
 
@@ -317,12 +331,16 @@ async def submit(merchant_id: str, template_id: str, category: str) -> TemplateR
 
 
 async def _claim_for_submit_in_txn(
-    txn: DbTxn, merchant_id: str, template_id: str
+    txn: DbTxn, merchant_id: str, template_id: str, category: str
 ) -> Optional[TemplateRead]:
     """ATOMIC: the status test and the swap to 'submitting' share one fate —
     two concurrent submits must not both believe they hold the claim, because
-    each of them would then register the same template with the provider."""
-    return await template_accessor.claim_for_submit(txn, merchant_id, template_id)
+    each of them would then register the same template with the provider.
+    The category being sent is written with the claim, not only after the
+    provider answers."""
+    return await template_accessor.claim_for_submit(
+        txn, merchant_id, template_id, category
+    )
 
 
 async def _record_submission_in_txn(
@@ -358,9 +376,13 @@ async def _record_submission_in_txn(
 
 
 async def edit(
-    merchant_id: str, template_id: str, components: List[Dict[str, Any]]
+    merchant_id: str,
+    template_id: str,
+    components: List[Dict[str, Any]],
+    category: Optional[str] = None,
 ) -> TemplateRead:
-    """Replace a template's components.
+    """Replace a template's components (and, for a draft, the category the
+    merchant picked; a registered template's category is the provider's).
 
     A draft is edited locally. Anything the provider has already seen is
     edited AT the provider — and for a provider that re-reviews in place,
@@ -372,7 +394,7 @@ async def edit(
 
     if template.status in TEMPLATE_LOCAL_EDIT:
         return await atomically(
-            _edit_draft_in_txn, merchant_id, template_id, components
+            _edit_draft_in_txn, merchant_id, template_id, components, category
         )
 
     spec = _spec_for(template.channel)
@@ -420,13 +442,17 @@ async def edit(
 
 
 async def _edit_draft_in_txn(
-    txn: DbTxn, merchant_id: str, template_id: str, components: List[Dict[str, Any]]
+    txn: DbTxn,
+    merchant_id: str,
+    template_id: str,
+    components: List[Dict[str, Any]],
+    category: Optional[str] = None,
 ) -> TemplateRead:
     """ATOMIC: one statement — this exists so a draft edit enters the
     database through the same door every other transition does, rather than
     growing a second way in the first time it needs a second statement."""
     updated = await template_accessor.update_draft_components(
-        txn, merchant_id, template_id, components
+        txn, merchant_id, template_id, components, category
     )
     if updated is None:
         raise TemplateError("this template is no longer a draft")

@@ -29,6 +29,23 @@ def status_message_id(payload: Dict[str, Any]) -> Optional[Any]:
     return _item(payload, "statuses").get("id")
 
 
+def status_error(payload: Dict[str, Any]) -> Optional[Any]:
+    """The provider's refusal code on a failed receipt (Meta's
+    errors[0].code) — the word the manifest keeps (canon T16 col 13)."""
+    errors = _item(payload, "statuses").get("errors")
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        code = errors[0].get("code")
+        return str(code) if code is not None else None
+    return None
+
+
+def billed_category(payload: Dict[str, Any]) -> Optional[Any]:
+    """What the provider billed the message as (Meta's pricing.category) —
+    it can differ from the category a template was submitted under."""
+    pricing = _item(payload, "statuses").get("pricing")
+    return pricing.get("category") if isinstance(pricing, dict) else None
+
+
 def fields() -> List[CatalogField]:
     """A receipt for our own outbound: which send, and what became of it.
 
@@ -51,4 +68,9 @@ def fields() -> List[CatalogField]:
             keyable=True,
             derived=True,
         ),
+        # connectivity/receipts.py reads these two to move the manifest: the
+        # failure code on a failed receipt, and what the message was billed
+        # as. Spelled there again (rule 12); a test pins the names equal.
+        _f("status_error", "text", "Failure code", derived=True),
+        _f("billed_category", "text", "Billed as", derived=True),
     ]

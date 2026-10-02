@@ -65,6 +65,23 @@ What is here, and why each thing is on the surface:
   state, and there is deliberately no timer beside it: the periodic sync
   was removed before it ever ran.
 
+- ``send_session`` and its body shapes — a free-form reply inside the
+  customer-service window, sent NOW (the conversations module and Buddy's
+  WhatsApp responder are its callers). Same manifest, same gate, same send
+  door as a template; the words ride the message.queued letter (D1).
+  ``conversation_profile`` is the channel's limits, so a caller shapes a
+  reply to fit instead of having it refused.
+- ``consume_status_event`` — the receipts consumer (worker_main registers
+  it): message.status letters move the manifest along sent -> delivered ->
+  read, or to failed with the provider's code. ``message_ticks`` reads what
+  they wrote, for a timeline.
+- ``TOPIC_BUDDY_MOVED`` — the letter this module files when Buddy moves to
+  another number; conversations resolves the old number's threads.
+- ``buddy_number`` / ``conversation_settings`` / ``list_channel_settings``
+  / ``update_channel_settings`` — the merchant's numbers: the one templates
+  go out from, and the one Buddy answers on with Buddy's settings (R1,
+  D13–D15, D24–D28); read total and fail-closed (no agent, handoff off).
+
 ``send()`` stays OFF this surface so that nothing outside the module can
 reach a provider without passing the checks in front of it. So does the
 route resolver, and so do the provider packages.
@@ -75,7 +92,11 @@ from app.crm.connectivity.actions import (
     perform_action,
     validate_action_args,
 )
-from app.crm.connectivity.channels import registers_templates_for
+from app.crm.connectivity.channels import (
+    ConversationProfile,
+    conversation_profile,
+    registers_templates_for,
+)
 from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.ingress import META_INGRESS
@@ -85,9 +106,33 @@ from app.crm.connectivity.onboarding import (
     list_installations,
     onboard,
     resubscribe,
+    signup_config,
 )
 from app.crm.connectivity.queue import queue_message, send_behind
 from app.crm.connectivity.reasons import reason_label
+from app.crm.connectivity.receipts import consume_status_event, message_ticks
+from app.crm.connectivity.schemas.connector import (
+    ChannelSettingsRead,
+    ConversationSettings,
+    SignupConfig,
+)
+from app.crm.connectivity.schemas.message import (
+    ButtonsBody,
+    ImageBody,
+    ListBody,
+    ListRow,
+    MessageTick,
+    ReplyButton,
+    SessionSendResult,
+    TextBody,
+)
+from app.crm.connectivity.session import send_session
+from app.crm.connectivity.settings import (
+    buddy_number,
+    conversation_settings,
+    list_channel_settings,
+    update_channel_settings,
+)
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -101,6 +146,7 @@ from app.crm.connectivity.templates.reads import (
     template_status,
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
+from app.crm.connectivity.topics import TOPIC_BUDDY_MOVED, TOPIC_INBOUND, TOPIC_QUEUED
 
 __all__ = [
     # the dispatcher role
@@ -116,6 +162,8 @@ __all__ = [
     "validate_action_args",
     "ActionError",
     # connections
+    "signup_config",
+    "SignupConfig",
     "onboard",
     "get_installation",
     "list_installations",
@@ -142,4 +190,32 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    # free-form replies inside the customer-service window
+    "send_session",
+    "SessionSendResult",
+    "TextBody",
+    "ButtonsBody",
+    "ListBody",
+    "ImageBody",
+    "ReplyButton",
+    "ListRow",
+    "conversation_profile",
+    "ConversationProfile",
+    # the receipts consumer (worker_main registers)
+    "consume_status_event",
+    # the topic of our own send's echo — outreach must never react to it
+    "TOPIC_QUEUED",
+    # the conversations module's letters: a customer wrote, Buddy moved
+    "TOPIC_INBOUND",
+    "TOPIC_BUDDY_MOVED",
+    # what became of our sends, for a timeline's ticks
+    "message_ticks",
+    "MessageTick",
+    # the merchant's numbers: the template number, Buddy's number and settings
+    "buddy_number",
+    "conversation_settings",
+    "list_channel_settings",
+    "update_channel_settings",
+    "ConversationSettings",
+    "ChannelSettingsRead",
 ]
