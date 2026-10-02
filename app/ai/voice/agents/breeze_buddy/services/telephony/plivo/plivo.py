@@ -1,7 +1,8 @@
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
 import plivo
+import requests
 from fastapi import WebSocket
 from starlette.responses import HTMLResponse
 
@@ -13,6 +14,7 @@ from app.ai.voice.agents.breeze_buddy.accounts import (
 )
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    DIAL_OUTCOME_UNKNOWN,
     VoiceCallProvider,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
@@ -99,6 +101,7 @@ class PlivoProvider(VoiceCallProvider):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        dial_ref: Optional[Dict[str, str]] = None,
     ):
         """
         Initiate an outbound call via Plivo.
@@ -114,13 +117,28 @@ class PlivoProvider(VoiceCallProvider):
             telephony_number: Caller ID / telephony number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            dial_ref: Put on both the answer and hangup URL, which Plivo calls
+                back verbatim — the only link to the lead when the reply that
+                carries the CallUUID never arrives.
+
+        Returns:
+            ``{"status": "call_initiated", "sid": <CallUUID>}`` when Plivo
+            replied; ``{"status": DIAL_OUTCOME_UNKNOWN, "sid": None}`` when the
+            request was sent but the reply timed out (Plivo may have placed
+            the call); None when Plivo did not place it.
         """
         answer_url = f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/answer"
+        hangup_url = (
+            f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status"
+        )
         params = {}
         if reseller_id:
             params["reseller_id"] = reseller_id
         if template_name:
             params["template"] = template_name
+        if dial_ref:
+            params.update(dial_ref)
+            hangup_url += "?" + urlencode(dial_ref)
         if params:
             answer_url += "?" + urlencode(params)
 
@@ -129,7 +147,7 @@ class PlivoProvider(VoiceCallProvider):
                 from_=telephony_number,
                 to_=customer_mobile_number,
                 answer_url=answer_url,
-                hangup_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status",
+                hangup_url=hangup_url,
             )
 
             logger.info(f"Plivo call initiated with answer_url: {answer_url}")
@@ -146,6 +164,13 @@ class PlivoProvider(VoiceCallProvider):
 
             logger.info(f"Plivo call initiated successfully: {call_uuid}")
             return {"status": "call_initiated", "sid": call_uuid}
+
+        except requests.exceptions.ReadTimeout as e:
+            # The request reached Plivo; only its reply is missing. Plivo may
+            # have placed the call (1 Oct: 692 of these, many rang), so this is
+            # not "not placed" — reporting None would redial the customer.
+            logger.error(f"Plivo call outcome unknown (no reply in time): {e}")
+            return {"status": DIAL_OUTCOME_UNKNOWN, "sid": None}
 
         except Exception as e:
             logger.error(f"Error when making call via Plivo: {e}")
