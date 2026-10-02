@@ -145,9 +145,11 @@ async def resolve_openai(
         # Hybrid-thinking models (Qwen on SGLang/vLLM) default to thinking ON
         # server-side and ignore every normal-field switch; a thinking block
         # with enabled=false on a gateway template is the template author's
-        # way to switch it off. Inert without a custom endpoint (real OpenAI
+        # way to switch it off. Inert without a gateway (real OpenAI
         # reasoning uses reasoning_effort above, not chat_template_kwargs).
-        disable_thinking = bool(llm_config.endpoint and not llm_config.thinking.enabled)
+        # The account's host decides: a credential row or a named account
+        # carries the gateway, and the block then has no endpoint of its own.
+        disable_thinking = bool(base_url and not llm_config.thinking.enabled)
 
     return build_openai_llm(
         OpenAIConfig(

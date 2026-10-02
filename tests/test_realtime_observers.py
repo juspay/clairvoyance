@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -23,6 +24,39 @@ def _observer_config(**overrides):
     }
     data.update(overrides)
     return ObserverConfig.model_validate(data)
+
+
+async def test_a_claude_observer_builds_its_request_on_pipecats_adapter():
+    """pipecat's Anthropic adapter requires enable_prompt_caching; the
+    observer called it without, so every check on Claude raised TypeError
+    and the observer never detected anything."""
+    from pipecat.adapters.services.anthropic_adapter import AnthropicLLMAdapter
+
+    from app.ai.voice.agents.breeze_buddy.observers import llm as observer_llm
+
+    sent = {}
+
+    async def create(**params):
+        sent.update(params)
+        block = SimpleNamespace(type="tool_use", name="end_conversation", input={})
+        return SimpleNamespace(content=[block])
+
+    svc: Any = SimpleNamespace(
+        get_llm_adapter=AnthropicLLMAdapter,
+        _settings=SimpleNamespace(model="claude-haiku-4-5@20251001", max_tokens=256),
+        _client=SimpleNamespace(
+            beta=SimpleNamespace(messages=SimpleNamespace(create=create))
+        ),
+    )
+    tools = _build_tool_from_action(_observer_config())
+
+    result = await observer_llm._call_anthropic(
+        svc, "user: leave a message after the tone", "Detect voicemail.", tools, "o"
+    )
+
+    assert result == ("end_conversation", {})
+    assert "Detect voicemail." in str(sent["system"])
+    assert [tool["name"] for tool in sent["tools"]] == ["end_conversation"]
 
 
 async def test_build_observers_skips_disabled_config(monkeypatch):
