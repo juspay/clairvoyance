@@ -7,6 +7,7 @@ from typing import Any, Callable, Coroutine, Dict, Optional
 
 from app.core.config.static import (
     CRM_DISPATCH_BATCH,
+    CRM_WALKER_CONCURRENCY,
     CRM_WORKER_BATCH,
     CRM_WORKER_INTERVAL,
     POSTGRES_MAX_OVERFLOW,
@@ -73,6 +74,10 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         batch=CRM_WORKER_BATCH,
         stop_event=stop_event,
         name="walker",
+        # The ONLY role that asks: a visit's cost is the playbook's model
+        # round trip, and its writes are lease-conditional so the claimed
+        # rows may be worked together.
+        concurrency=CRM_WALKER_CONCURRENCY,
     ),
 }
 

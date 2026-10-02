@@ -1060,6 +1060,27 @@ CRM_WALKER_LEASE_SECONDS = int(os.environ.get("CRM_WALKER_LEASE_SECONDS", 300))
 
 # Consecutive failed claims before a run parks for a human.
 CRM_WALKER_MAX_ATTEMPTS = int(os.environ.get("CRM_WALKER_MAX_ATTEMPTS", 3))
+
+# How many of a claimed batch the walker works AT ONCE. A visit's cost is
+# mostly waiting — the playbook's llm_call is a model round trip per lead
+# (p50 250ms, measured 2026-09-29) — so a serial batch is one wait after
+# another: 100 rows took ~21s while the pod sat at 3% CPU, and a morning
+# window's pile drained for ~56 minutes at ~538 runs/min on two pods.
+#
+# Ships at 1 (exactly the serial loop it replaces) so the ramp is an env
+# change watched in production, not a deploy. Two ceilings bound it:
+# POSTGRES_POOL_SIZE + POSTGRES_MAX_OVERFLOW (15 a pod on the defaults) and
+# the model provider's concurrent-request quota, which this multiplies.
+CRM_WALKER_CONCURRENCY = _positive_int("CRM_WALKER_CONCURRENCY", 1)
+
+# The playbook's llm_call memoises on (prompt, value), so its working set is a
+# campaign's DISTINCT fact values, not its runs: 18,803 on flipkart (11,354
+# product_name, 5,055 brand, 2,394 sub_category) over 77,080 runs, ~6.8 reuses
+# each, measured 2026-09-29. At the previous 50 slots every entry was evicted
+# seconds before its reuses arrived, so the cache existed and never hit and
+# every lead paid the full round trip (p50 250ms). ~400 bytes a value against a
+# 4Gi request.
+LLM_CALL_CACHE_SIZE = _positive_int("LLM_CALL_CACHE_SIZE", 50_000)
 # Exited runs age out (canon T20 exited_at: the retention sweep is most
 # of what keeps the hot table small). Batched; leftovers go next tick.
 CRM_RUN_RETENTION_DAYS = int(os.environ.get("CRM_RUN_RETENTION_DAYS", 90))

@@ -2,12 +2,13 @@ import asyncio
 import re
 from collections import OrderedDict
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from num2words import num2words
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 
+from app.core.config.static import LLM_CALL_CACHE_SIZE
 from app.core.logger import logger
 from app.services.live_config.store import get_config
 
@@ -332,10 +333,15 @@ LLM_CALL_TIMEOUT_SECS = 10.0
 # A rewrite is read aloud inside a sentence; anything longer is a model gone
 # off-script, not a short value.
 LLM_CALL_MAX_CHARS = 1000
-# The same (prompt, value) across runs of a campaign is one model call.
-LLM_CALL_CACHE_SIZE = 50
+
+
+# The cache bound lives in the static env layer (CLAUDE.md: never read
+# os.environ in module code); see LLM_CALL_CACHE_SIZE there for the
+# working set it is sized against.
 
 _llm_call_cache: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
+# Keys with a round trip already in flight — one asker per key.
+_llm_call_pending: "Dict[Tuple[str, str], asyncio.Future[Any]]" = {}
 # ONE service (one HTTP client) per event loop and key, reused by every call.
 _llm_call_service: Optional[Tuple[Any, str, OpenAILLMService]] = None
 
@@ -370,13 +376,49 @@ def _llm_call_llm(api_key: str) -> OpenAILLMService:
 async def llm_call(value: Any, prompt: str) -> Any:
     """ASYNC: the value rewritten by the LLM as `prompt` asks ("only the
     main product's short name"), or the value unchanged on any failure — a
-    line may read less polished, never go missing. Callers must await it."""
+    line may read less polished, never go missing. Callers must await it.
+
+    SINGLE-FLIGHT: the cache is written only after the round trip, so without
+    this the N visits of one walker batch that want the same (prompt, value)
+    would each miss and each ask the model — and the values that collide
+    inside a batch are precisely the popular ones (a top brand, a common
+    sub-category). The first caller asks; the rest await its answer."""
     if not prompt or value is None or not str(value).strip():
         return value
     key = (prompt, str(value))
     if key in _llm_call_cache:
         _llm_call_cache.move_to_end(key)
         return _llm_call_cache[key]
+
+    inflight = _llm_call_pending.get(key)
+    if inflight is not None:
+        # shield, not a bare await: awaiting a Future directly means this
+        # caller's cancellation cancels the FUTURE, which every other waiter
+        # is holding — one cancelled row would hand its siblings a
+        # CancelledError none of them asked for. Shutdown cancels rows
+        # mid-batch, so that is this dial's own failure mode.
+        return await asyncio.shield(inflight)
+
+    pending: "asyncio.Future[Any]" = asyncio.get_running_loop().create_future()
+    _llm_call_pending[key] = pending
+    try:
+        answer = await _llm_call_uncached(value, prompt, key)
+    except BaseException:
+        # Never leave a waiter hanging on a cancelled leader: they fall open
+        # to the raw value, which is what a failed call gives them anyway.
+        if not pending.done():
+            pending.set_result(value)
+        raise
+    else:
+        if not pending.done():
+            pending.set_result(answer)
+        return answer
+    finally:
+        _llm_call_pending.pop(key, None)
+
+
+async def _llm_call_uncached(value: Any, prompt: str, key: Any) -> Any:
+    """The round trip itself — one caller at a time per key (see llm_call)."""
     api_key = await get_config(LLM_CALL_API_KEY_NAME, "", str)
     if not api_key:
         logger.warning(f"llm_call skipped: no {LLM_CALL_API_KEY_NAME}")
