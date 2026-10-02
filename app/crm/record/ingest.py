@@ -40,9 +40,11 @@ async def ingest_event(
     occurred_at: Optional[datetime] = None,
     schema_version: str = "1",
     customer_id: Optional[str] = None,
+    processed: bool = False,
 ) -> Optional[str]:
     """Store one letter, honestly: the new event id, None on duplicate,
-    a raised exception when the store failed.
+    a raised exception when the store failed. ``processed`` files the
+    letter already stamped: it is kept for the record but never consumed.
 
     The accepted line is the only place a merchant's TRAFFIC is visible:
     a sender that stops raises no error anywhere, so counting letters is
@@ -58,6 +60,7 @@ async def ingest_event(
         schema_version,
         occurred_at,
         customer_id,
+        processed,
     )
     logger.bind(
         component=LOG_COMPONENT,
@@ -93,6 +96,7 @@ async def record_event(
     occurred_at: Optional[datetime] = None,
     schema_version: str = "1",
     customer_id: Optional[str] = None,
+    processed: bool = False,
 ) -> Optional[str]:
     """Record one fact into the event spine. Returns the new event id,
     or None on duplicate / failure."""
@@ -106,6 +110,7 @@ async def record_event(
             occurred_at=occurred_at,
             schema_version=schema_version,
             customer_id=customer_id,
+            processed=processed,
         )
     except Exception as e:
         # Full fields: the mirrors call this with no route context to

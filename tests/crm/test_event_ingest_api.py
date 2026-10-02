@@ -238,6 +238,19 @@ def test_journey_and_ingest_mount_once_each() -> None:
 # --- ingest.py: the raising variant vs the fail-open mirror door ---
 
 
+def test_insert_can_file_a_letter_already_processed() -> None:
+    """processed=True stamps processed_at in the INSERT itself, so the row
+    is on the record but never on the pending queue; the default leaves it
+    NULL for the consumer."""
+    from app.crm.record.db.queries import insert_event_query
+
+    sql, params = insert_event_query("m1", "s", "t", "x", "{}", "1", None, None, True)
+    assert "processed_at" in sql and "CASE WHEN $9::boolean THEN now() END" in sql
+    assert params[-1] is True
+    _, params = insert_event_query("m1", "s", "t", "x", "{}", "1", None, None)
+    assert params[-1] is False
+
+
 def test_ingest_event_serializes_payload_and_returns_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
