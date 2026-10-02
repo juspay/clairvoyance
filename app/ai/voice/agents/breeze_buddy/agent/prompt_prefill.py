@@ -23,6 +23,10 @@ prefix length). The failure mode of any mismatch is only a cache miss
 (visible as turn-1 ``cache_read`` = 0 in the metrics), never a correctness
 issue.
 
+On the ``/v1/responses`` surface (Bedrock) the same contract holds through
+the service's ``_build_response_params``: one non-streaming ``responses.create``
+with ``max_output_tokens=16`` and the synthetic user turn appended to ``input``.
+
 Scope: Azure/OpenAI text-LLM services only (Gemini chat caches explicitly
 via chat/llm/gemini/prompt_cache.py; Vertex Claude via
 ``enable_prompt_caching``). The flag is deliberately not validated at
@@ -52,6 +56,7 @@ from pipecat.processors.aggregators.llm_context import (
 )
 from pipecat.services.aws.llm import AWSBedrockLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
 from pipecat_flows.types import FlowsDirectFunctionWrapper, FlowsFunctionSchema
 
 from app.ai.voice.llm import is_openai_model
@@ -107,7 +112,10 @@ def spawn_prefill(
             # Only GPT models cache the prefix automatically on Bedrock; the
             # others need explicit cache points, which this service never sends.
             skip = f"bedrock model '{llm_config.model}' has no automatic prefix cache"
-        elif not isinstance(llm_service, (BaseOpenAILLMService, AWSBedrockLLMService)):
+        elif not isinstance(
+            llm_service,
+            (BaseOpenAILLMService, OpenAIResponsesHttpLLMService, AWSBedrockLLMService),
+        ):
             skip = (
                 f"service {type(llm_service).__name__} is not an "
                 "Azure/OpenAI/Bedrock text-LLM service"
@@ -186,6 +194,8 @@ async def prefill_system_prompt(
         )
         if isinstance(llm_service, AWSBedrockLLMService):
             request = _bedrock_prefill(llm_service, context)
+        elif isinstance(llm_service, OpenAIResponsesHttpLLMService):
+            request = _responses_prefill(llm_service, context)
         else:
             request = _chat_prefill(llm_service, context)
         usage = await asyncio.wait_for(request, timeout=_PREFILL_TIMEOUT_SECS)
@@ -245,6 +255,34 @@ async def _chat_prefill(llm_service: Any, context: LLMContext) -> _PrefillUsage:
     return _PrefillUsage(
         model=params["model"],
         prompt=getattr(usage, "prompt_tokens", "?"),
+        cached=getattr(details, "cached_tokens", None),
+        cache_write=getattr(details, "cache_write_tokens", None),
+    )
+
+
+async def _responses_prefill(
+    llm_service: OpenAIResponsesHttpLLMService, context: LLMContext
+) -> _PrefillUsage:
+    """The /v1/responses parity request (see module docstring)."""
+    adapter = llm_service.get_llm_adapter()
+    invocation = adapter.get_llm_invocation_params(
+        context, system_instruction=llm_service._settings.system_instruction
+    )
+    params = llm_service._build_response_params(invocation)
+    params["stream"] = False
+    params["max_output_tokens"] = _PREFILL_MAX_COMPLETION_TOKENS
+    params["input"] = [
+        *params["input"],
+        {"role": "user", "content": _PREFILL_SYNTHETIC_USER_TURN},
+    ]
+    response = await llm_service._client.responses.create(**params)
+
+    # responses reports input_tokens/input_tokens_details, not prompt_*.
+    usage = getattr(response, "usage", None)
+    details = getattr(usage, "input_tokens_details", None)
+    return _PrefillUsage(
+        model=params["model"],
+        prompt=getattr(usage, "input_tokens", "?"),
         cached=getattr(details, "cached_tokens", None),
         cache_write=getattr(details, "cache_write_tokens", None),
     )
