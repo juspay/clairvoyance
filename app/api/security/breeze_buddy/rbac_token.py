@@ -3,8 +3,9 @@ Breeze Buddy specific RBAC token management.
 Handles JWT token creation and verification with Breeze Buddy's RBAC model.
 """
 
+import time
 from datetime import timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import jwt as pyjwt
 from fastapi import Depends, HTTPException, WebSocket, status
@@ -12,10 +13,46 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.logger import logger
 from app.core.security.jwt import jwt_manager
+from app.database.accessor.breeze_buddy.merchants import (
+    get_merchant_by_merchant_identifier,
+)
+from app.database.accessor.breeze_buddy.users import get_user_by_id
 from app.schemas import UserInfo, UserRole
 
 # HTTP Bearer security scheme
 security = HTTPBearer()
+
+# A token names who it was minted for in ``sub``: merchant S2S and launch
+# tokens name a merchant as "merchant:<merchant_id>" (merchants/handlers.py,
+# auth launch-token); every other token names a users row by its id.
+_MERCHANT_SUB_PREFIX = "merchant:"
+
+# ponytail: a per-pod cache of principals seen active, so a disabled user or
+# merchant is refused within this many seconds, not instantly. Redis +
+# pub/sub if a revoke ever has to land on every pod at once.
+_ACTIVE_CACHE_SECONDS = 30.0
+_active_until: Dict[str, float] = {}
+
+
+async def _principal_is_active(sub: str) -> bool:
+    """Does the user or merchant this token was minted for still exist and
+    stand active? A signature only proves the token was issued; this is
+    what lets disabling the user (or merchant) revoke every token it holds.
+    Only an active answer is cached; a lookup failure raises."""
+    now = time.monotonic()
+    if _active_until.get(sub, 0.0) > now:
+        return True
+    if sub.startswith(_MERCHANT_SUB_PREFIX):
+        merchant = await get_merchant_by_merchant_identifier(
+            sub[len(_MERCHANT_SUB_PREFIX) :]
+        )
+        active = merchant is not None and merchant.is_active is True
+    else:
+        user = await get_user_by_id(sub)
+        active = user is not None and user.is_active is True
+    if active:
+        _active_until[sub] = now + _ACTIVE_CACHE_SECONDS
+    return active
 
 
 class BreezeBuddyRBACTokenManager:
@@ -74,15 +111,53 @@ class BreezeBuddyRBACTokenManager:
         # Use the generic JWT manager to create the token
         return self.jwt_manager.create_access_token(payload, expires_delta)
 
-    def verify_rbac_token(self, token: str) -> UserInfo:
+    async def verify_rbac_token(self, token: str) -> UserInfo:
         """
-        Verify and decode a JWT token with Breeze Buddy RBAC information.
+        Verify a JWT token with Breeze Buddy RBAC information: the signature
+        and claims (``_decode_rbac_token``), then the user or merchant it was
+        minted for must still exist and be active. Fails closed: a lookup
+        that errors refuses the token.
 
         Args:
             token: JWT token string
 
         Returns:
             UserInfo object containing user and RBAC information
+
+        Raises:
+            HTTPException: 401 if the token is invalid, expired, or its user
+            or merchant is missing or inactive
+        """
+        user_info = self._decode_rbac_token(token)
+        try:
+            active = await _principal_is_active(user_info.id)
+        except Exception as e:
+            logger.error(
+                f"RBAC verifier: could not check that {user_info.username} "
+                f"({user_info.id}) is active, refusing: {e}"
+            )
+            active = False
+        if not active:
+            logger.warning(
+                f"RBAC verifier: rejected token for {user_info.username} "
+                f"({user_info.id}): no active user or merchant"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        logger.info(
+            f"RBAC token verified for user: {user_info.username} "
+            f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, merchants: {user_info.merchant_ids})"
+        )
+        return user_info
+
+    def _decode_rbac_token(self, token: str) -> UserInfo:
+        """
+        Verify the signature and claims of a JWT token and decode its
+        Breeze Buddy RBAC information. No database read — that is
+        ``verify_rbac_token``'s second half.
 
         Raises:
             HTTPException: If token is invalid or expired
@@ -150,7 +225,7 @@ class BreezeBuddyRBACTokenManager:
             if role_str == "shop":
                 role_str = "user"
 
-            user_info = UserInfo(
+            return UserInfo(
                 id=user_id,
                 username=username,
                 role=UserRole(role_str),
@@ -160,12 +235,6 @@ class BreezeBuddyRBACTokenManager:
                 permissions=payload.get("permissions", []),
                 owner_id=payload.get("owner_id"),
             )
-
-            logger.info(
-                f"RBAC token verified for user: {user_info.username} "
-                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, merchants: {user_info.merchant_ids})"
-            )
-            return user_info
 
         except pyjwt.ExpiredSignatureError:
             logger.warning("JWT token has expired")
@@ -269,10 +338,10 @@ async def get_current_user_with_rbac(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return rbac_token_manager.verify_rbac_token(credentials.credentials)
+    return await rbac_token_manager.verify_rbac_token(credentials.credentials)
 
 
-def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
+async def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
     """Authenticate a WebSocket connection with the standard RBAC bearer token.
 
     The FastAPI ``Depends(HTTPBearer())`` guards are HTTP-only, so WebSocket
@@ -295,7 +364,7 @@ def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing credentials",
         )
-    return rbac_token_manager.verify_rbac_token(token)
+    return await rbac_token_manager.verify_rbac_token(token)
 
 
 async def get_active_user(
@@ -313,6 +382,6 @@ async def get_active_user(
     Raises:
         HTTPException: If user is inactive
     """
-    # Note: is_active check would need database lookup
-    # For now, we assume token = active user
+    # verify_rbac_token already refused a token whose user or merchant is
+    # missing or inactive.
     return current_user
