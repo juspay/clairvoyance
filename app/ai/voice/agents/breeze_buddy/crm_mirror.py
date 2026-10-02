@@ -58,6 +58,13 @@ MIRRORS: Dict[str, str] = {
     "call.completed": SOURCE_TELEPHONY,
 }
 
+# TEMPORARY: topics filed already stamped processed_at,
+# so they skip the consumer. Nothing reads call.attempted (no plan listens
+# for it), yet it was ~1/3 of the 10:00 wave on the pending queue. The
+# proper fix is to decide whether these letters belong on the spine at all
+# or should be consumed cheaply; until then they are recorded and skipped.
+_PRE_PROCESSED = frozenset({"call.attempted"})
+
 _NON_CUSTOMER_EXECUTION_MODES = {
     "TELEPHONY_TEST",
     "DAILY_TEST",
@@ -162,6 +169,7 @@ async def mirror_to_crm(
             payload=payload,
             occurred_at=occurred_at,
             customer_id=customer_id,
+            processed=topic in _PRE_PROCESSED,
         )
     except Exception:
         # record_event swallows its own failures; this catches a programming
