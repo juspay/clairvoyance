@@ -8,6 +8,12 @@
 3. **Parked runs movable by events**: `resume_run_on_event_query` and `cancel_open_runs_query` accept `status IN ('waiting','parked')` (cancel already does); a resumed parked run becomes `waiting` with `attempts=0` (the human's "resume" semantics, now event-driven). Docstring: "an event is evidence the customer moved; a parked run that hears it is no longer stuck on the thing that parked it".
 4. **Restart-on-repeat anywhere** (#1041 generalised): `patch_open_run_query` drops the `current_node = <entry start>` restriction when the definition sets `restart_on_repeat: true` on the entry (new word) — then a repeat of the current node's OWN stage topic (the entry topic that started the run, or for ladder nodes the stage's topic) re-arms `wake_at = GREATEST(wake_at, now()+debounce)` and merges facts. Validator: `restart_on_repeat` requires `debounce_minutes > 0`.
 
+
+**Amendment (1 Oct 2026):** a restart door re-arms wait squares only.
+`patch_open_run_query` takes the list of squares (`current_node = ANY($4)`),
+from `repeat.rearm_squares`: the start, plus the pinned plan's waits with
+`restart_on_repeat`. A call, send or action square is never in it.
+
 ## Red tests
 - Queries: facts nested under `facts`; parked included in resume; patch query has/hasn't the node restriction per flag.
 - `run_facts`: precedence (facts of current node override top-level), bookkeeping excluded, `current_node` present.

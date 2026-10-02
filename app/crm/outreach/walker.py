@@ -111,7 +111,9 @@ async def walk_run(run: EnrollmentRun) -> None:
     already re-arms the run, and the next claim re-reads it WITH the
     reply and takes the right branch. Action nodes are idempotent
     (dedupe run:node, uuid5 lead), so a re-executed visit is exactly as
-    safe as the lease retry this file already relied on.
+    safe as the lease retry this file already relied on — except after an
+    insert: a square that reaches out is written onto BEFORE it executes
+    (_advance).
 
     Stamped before the lease check, so even the earliest failure line
     carries the run's ids; the nodes this visit executes inherit them."""
@@ -357,6 +359,24 @@ async def _advance(
                 ):
                     _deferred(run, f"hold on {node.id}")
                 return
+
+        if NODE_TYPES[node.type].reaches_out and not first:
+            # Written onto the square before it executes: event-side writes
+            # are keyed on the square a run stands on, so a reset landing
+            # during the insert cannot move it; one landing before this
+            # write wins with nothing inserted. wake_at stays the lease.
+            if not await enrollment_accessor.advance_run(
+                str(run.id),
+                node.id,
+                lease,
+                dict(context),  # before this square's patch
+                lease,
+                node_arrived_at=arrived_at,
+                steps=as_rows(walked),
+            ):
+                _deferred(run, f"step onto {node.id}")
+                return
+            walked = []
 
         execute = NODE_TYPES[node.type].execute
         dispatched: Optional[str] = None

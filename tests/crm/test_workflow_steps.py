@@ -199,7 +199,9 @@ def _walk(monkeypatch: pytest.MonkeyPatch, writes: _Writes, run: EnrollmentRun) 
     definitions._definitions.clear()
     asyncio.run(
         walker._advance(
-            run, WorkflowDefinition.model_validate(writes.definition), LEASE
+            run,
+            WorkflowDefinition.model_validate(writes.definition),
+            LEASE,
         )
     )
 

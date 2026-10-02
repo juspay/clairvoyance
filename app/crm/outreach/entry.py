@@ -23,7 +23,7 @@ stays pending and returns next poll. Our writes commit on their own
 source-event check and the open-run unique — not by that rollback.
 """
 
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
@@ -33,7 +33,7 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
-from app.crm.outreach.nodes import listens
+from app.crm.outreach.nodes import is_wait, listens
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     LATEST_LETTER_KEY,
@@ -590,13 +590,17 @@ async def _try_enrol(
             )
             return
         repeat_facts = {k: v for k, v in context.items() if k not in _FOUNDING_KEYS}
+        pinned_door, timers = await _repeat_door(
+            open_runs, flow, key, door.topic, door, definition
+        )
         await apply_repeat(
             event.merchant_id,
             str(flow.id),
             key,
-            await _repeat_door(open_runs, flow, key, door.topic, door),
+            pinned_door,
             str(event.id),
             repeat_facts,
+            timers,
         )
 
 
@@ -606,7 +610,8 @@ async def _repeat_door(
     enrollment_key: str,
     topic: str,
     latest: WorkflowEntryAt,
-) -> WorkflowEntryAt:
+    live: Optional[WorkflowDefinition] = None,
+) -> Tuple[WorkflowEntryAt, List[str]]:
     """The repeat's words are the OPEN RUN'S version's door: its on_repeat
     and debounce, and the square it starts on — v5 may have renamed the
     start square, and the patch's `current_node = start` guard would then
@@ -616,7 +621,10 @@ async def _repeat_door(
     read at the top of this pass; when it is not among her open runs (a
     keyed run that resolved to another customer, or a sibling tick opened
     it after the read) the latest door stands in — exactly the
-    pre-pinning behaviour."""
+    pre-pinning behaviour.
+
+    With the door come that document's wait squares — what a
+    restart_on_repeat door may re-arm (repeat.rearm_squares)."""
     for run in open_runs:
         if (
             str(run.workflow_id) == str(flow.id)
@@ -625,9 +633,15 @@ async def _repeat_door(
             pinned = await definition_for(run)
             if pinned is not None:
                 doors = pinned.entries
-                return next((d for d in doors if d.topic == topic), doors[0])
+                door = next((d for d in doors if d.topic == topic), doors[0])
+                return door, _timers(pinned)
             break
-    return latest
+    return latest, _timers(live) if live is not None else []
+
+
+def _timers(definition: WorkflowDefinition) -> List[str]:
+    """PURE: the squares of a plan that wait — the ones a repeat may re-arm."""
+    return [node.id for node in definition.nodes if is_wait(node)]
 
 
 def _enrollment_key(

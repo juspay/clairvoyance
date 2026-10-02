@@ -312,29 +312,27 @@ async def patch_open_run(
     merchant_id: str,
     workflow_id: str,
     enrollment_key: str,
-    entry_node: str,
+    squares: List[str],
     event_id: str,
     patch: Dict[str, Any],
     accumulate: bool,
     max_field: Optional[str],
     max_value: Optional[float],
     debounce_minutes: float,
-    anywhere: bool = False,
 ) -> bool:
-    """True when an open run on the door's start square (or, with
-    ``anywhere``, on any square) took the repeat."""
+    """True when an open run standing on one of ``squares`` took the
+    repeat."""
     query, values = patch_open_run_query(
         merchant_id,
         workflow_id,
         enrollment_key,
-        entry_node,
+        squares,
         event_id,
         patch,
         accumulate,
         max_field,
         max_value,
         debounce_minutes,
-        anywhere,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)

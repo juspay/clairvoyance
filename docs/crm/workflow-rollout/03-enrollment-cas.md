@@ -25,3 +25,16 @@
 
 ## Out of scope
 - #1041's patch query (it is event-side; unchanged). Phase 16 generalises repeats.
+
+## Amendment (1 Oct 2026) — write the token onto a square that reaches out before executing it
+
+A reset landing between a call square's insert and the visit's write left the
+run on `quiet-15m`, the call reporting to nobody, and the re-done visit
+adopting the finished lead (same uuid5) and waiting a full alarm.
+
+- `NodeSpec.reaches_out` (call, send, action): before executing one, the
+  walker `advance_run`s the token onto it under the claim's lease, leaving
+  `wake_at` as that lease, so one token serves the whole visit.
+  Event-side writes are keyed on the square a run stands on, so a reset
+  landing before the write wins with nothing inserted, and one landing after
+  cannot move the run. A dispatching visit now writes twice.
