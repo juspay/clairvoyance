@@ -613,7 +613,7 @@ def test_a_repeat_is_judged_by_the_open_runs_own_version(
     monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
     # v5's entry topic, but the order is A's -> the open run on v3
     _consume(_event("orders/confirmed", {"order_id": "A"}))
-    ((_, _, key, door, _, _),) = repeats
+    ((_, _, key, door, _, _, _),) = repeats
     assert key == "A"
     assert door.on_repeat == "refresh_latest"
     assert door.start == "wait-30m"
@@ -945,7 +945,7 @@ def test_a_letter_the_square_listens_for_moves_the_run_and_is_not_its_repeat(
     # topic, so this IS a repeat of the profile door
     _consume(_event("loan.profile_created", {"application_id": "L-1"}, "ev-2"))
     assert len(spine.resumes) == 1
-    ((_, _, key, door, event_id, _),) = repeats
+    ((_, _, key, door, event_id, _, _),) = repeats
     assert (key, door.topic, event_id) == ("L-1", "loan.profile_created", "ev-2")
 
 

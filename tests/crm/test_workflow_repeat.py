@@ -13,7 +13,7 @@ import app.crm.outreach.entry as entry
 from app.crm.outreach import repeat
 from app.crm.outreach.db.queries.enrollment import patch_open_run_query
 from app.crm.outreach.plans import validate_definition
-from app.crm.outreach.repeat import parse_repeat_policy, repeat_plan
+from app.crm.outreach.repeat import parse_repeat_policy, rearm_squares, repeat_plan
 from app.crm.outreach.schemas import WorkflowDefinition, WorkflowEntryAt
 
 _NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
@@ -109,7 +109,7 @@ def test_patch_touches_only_an_open_run_on_the_entry_square_by_key() -> None:
         "m1",
         "wf-1",
         "ORD-1",
-        "wait_10m",
+        ["wait_10m"],
         "ev-1",
         {"cart_value": 4500},
         False,
@@ -117,8 +117,9 @@ def test_patch_touches_only_an_open_run_on_the_entry_square_by_key() -> None:
         4500.0,
         10.0,
     )
-    assert "status = 'waiting' AND ($11::boolean OR current_node = $4)" in sql
-    assert params[10] is False  # pinned to the start square unless restart_on_repeat
+    assert "status = 'waiting' AND current_node = ANY($4::text[])" in sql
+    assert params[3] == ["wait_10m"]  # the start square alone, unless restart_on_repeat
+    assert len(params) == 10
     assert "enrollment_key = $3" in sql and "customer_id" not in sql
     assert "NOT (COALESCE(context->'repeat_event_ids', '[]'::jsonb) ? $5::text)" in sql
     assert "make_interval(secs => $10::float8 * 60)" in sql
@@ -128,7 +129,7 @@ def test_patch_touches_only_an_open_run_on_the_entry_square_by_key() -> None:
 
 def test_patch_marks_the_event_used_and_compares_in_the_statement() -> None:
     sql, _ = patch_open_run_query(
-        "m1", "wf-1", "c-1", "w", "ev-1", {}, False, "cart_value", 1.0, 0.0
+        "m1", "wf-1", "c-1", ["w"], "ev-1", {}, False, "cart_value", 1.0, 0.0
     )
     assert (
         "'repeat_event_ids'" in sql and "jsonb_build_array(to_jsonb($5::text))" in sql
@@ -211,10 +212,13 @@ def test_a_refused_enrol_hands_the_repeat_to_apply_repeat(
         },
     )()
     asyncio.run(entry._try_enrol(flow, *_with_door(definition), event, "cust-1"))
-    ((merchant, wf, key, door, event_id, facts),) = calls
+    ((merchant, wf, key, door, event_id, facts, timers),) = calls
     assert (merchant, wf, key, event_id) == ("m1", "wf-1", "ORD-1", "ev-9")
     assert facts["cart_value"] == 900
     assert (door.on_repeat, door.start) == ("refresh_latest", "wait_10m")
+    # The plan's timers ride along, off the same document: with no open
+    # run of hers to pin by, the live plan's waits.
+    assert timers == [n.id for n in definition.nodes if n.type == "wait"]
 
 
 def test_a_successful_enrol_never_calls_apply_repeat(
@@ -265,7 +269,7 @@ def test_patch_never_takes_the_runs_own_founding_event() -> None:
     repeat_event_ids — without this predicate it would overwrite newer
     facts with the first snapshot and restart the alarm."""
     sql, params = patch_open_run_query(
-        "m1", "wf-1", "c-1", "w", "ev-1", {"cart_value": 1}, False, None, None, 10.0
+        "m1", "wf-1", "c-1", ["w"], "ev-1", {"cart_value": 1}, False, None, None, 10.0
     )
     assert "context->>'source_event_id' IS DISTINCT FROM $5::text" in sql
     assert params[4] == "ev-1"
@@ -275,7 +279,7 @@ def test_debounce_only_ever_extends_the_alarm() -> None:
     """P10: now() + N pulls the alarm EARLIER when the debounce is shorter
     than the remaining entry wait; a debounce may only extend the window."""
     sql, _ = patch_open_run_query(
-        "m1", "wf-1", "c-1", "w", "ev-1", {}, False, None, None, 10.0
+        "m1", "wf-1", "c-1", ["w"], "ev-1", {}, False, None, None, 10.0
     )
     assert "GREATEST(wake_at, now() + make_interval(secs => $10::float8 * 60))" in sql
     assert "THEN now() + make_interval" not in sql
@@ -352,35 +356,37 @@ def test_the_repeat_carries_the_refreshed_phone_but_never_the_founding_id(
             flow, *_with_door(_definition(on_repeat="refresh_latest")), event, "c"
         )
     )
-    ((_, _, _, _, _, facts),) = calls
+    ((_, _, _, _, _, facts, _),) = calls
     assert facts["phone"] == "+919876543210"
     assert facts["cart_value"] == 900
     assert "source_event_id" not in facts
 
 
-# --- rollout phase 16: restart_on_repeat — any square re-arms on its own
-# stage's repeat (G8; the #1041 patch generalised) ---
+# --- rollout phase 16: restart_on_repeat — any TIMER re-arms on its own
+# stage's repeat (G8; the #1041 patch generalised; narrowed to waits
+# 1 Oct 2026) ---
 
 
-def test_the_patch_leaves_the_start_square_only_with_restart_on_repeat() -> None:
-    _, params = patch_open_run_query(
-        "m1", "wf-1", "ORD-1", "wait_10m", "ev-1", {}, False, None, None, 10.0
-    )
-    assert params[10] is False
-    _, params = patch_open_run_query(
-        "m1",
-        "wf-1",
-        "ORD-1",
-        "wait_10m",
-        "ev-1",
-        {},
-        False,
-        None,
-        None,
-        10.0,
-        anywhere=True,
-    )
-    assert params[10] is True
+def test_a_repeat_re_arms_the_start_square_only_unless_restart_on_repeat() -> None:
+    timers = ["wait_10m", "after-call-1-a", "gap-30m"]
+    assert rearm_squares(_door(debounce_minutes=10), timers) == ["wait_10m"]
+    assert rearm_squares(
+        _door(debounce_minutes=10, restart_on_repeat=True), timers
+    ) == ["wait_10m", "after-call-1-a", "gap-30m"]
+
+
+def test_restart_on_repeat_never_re_arms_a_square_that_reaches_out() -> None:
+    """The lost-lease collision (1 Oct 2026): an alarm slid under the walker
+    while it stands on a call square inserting the lead refused the move
+    and left the run waiting a full alarm on a spent report. A call has no
+    timer to restart; the list a restart door may re-arm is the plan's
+    WAITS, which the caller reads off the pinned document — so a call,
+    send or action square is simply never in it."""
+    door = _door(debounce_minutes=10, restart_on_repeat=True)
+    squares = rearm_squares(door, ["quiet-15m", "after-call-1-a"])
+    assert "call-1-a" not in squares and squares[0] == door.start
+    # A door that starts on a non-wait square still debounces its start.
+    assert rearm_squares(door, [])[0] == door.start
 
 
 def test_restart_on_repeat_needs_a_debounce_to_re_arm() -> None:
@@ -402,6 +408,10 @@ def test_apply_repeat_hands_the_restart_word_to_the_patch(
     door = _door(
         on_repeat="refresh_latest", debounce_minutes=10, restart_on_repeat=True
     )
-    asyncio.run(repeat.apply_repeat("m1", "wf-1", "ORD-1", door, "ev-1", {"cart": 1}))
-    ((*_, anywhere),) = seen
-    assert anywhere is True
+    asyncio.run(
+        repeat.apply_repeat(
+            "m1", "wf-1", "ORD-1", door, "ev-1", {"cart": 1}, ["wait_10m", "settle"]
+        )
+    )
+    ((_, _, _, squares, *_),) = seen
+    assert squares == ["wait_10m", "settle"]

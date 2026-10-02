@@ -548,25 +548,24 @@ def patch_open_run_query(
     merchant_id: str,
     workflow_id: str,
     enrollment_key: str,
-    entry_node: str,
+    squares: List[str],
     event_id: str,
     patch: Dict[str, Any],
     accumulate: bool,
     max_field: Optional[str],
     max_value: Optional[float],
     debounce_minutes: float,
-    anywhere: bool = False,
 ) -> Tuple[str, List[Any]]:
     """Repeat entries (modules/05 §Repeat entries): ONE idempotent UPDATE
     in the reply's shape (resume_run_by_id_query). Touches only a run still
-    standing on the door's start square (status waiting, current_node =
-    the start) — a run past it is never patched — unless the door says
-    restart_on_repeat (phase 16, G8: ``anywhere``): then a repeat of the
-    door's topic re-arms whichever square the run stands on, "KYC retried,
-    the timer restarts". Found by enrollment_key so a keyed plan's order
-    edit patches ITS order's run. The event marks itself used in
-    context.repeat_event_ids, so a redelivered repeat matches zero rows and
-    the alarm cannot slide twice for one letter.
+    standing on one of ``squares`` (status waiting): the door's start
+    square alone — a run past it is never patched — or, with
+    restart_on_repeat (phase 16, G8), the plan's wait squares (the caller's
+    list, repeat.rearm_squares; never a square that reaches out). Found by
+    enrollment_key so a keyed plan's order edit patches ITS order's run.
+    The event marks itself used in context.repeat_event_ids, so a
+    redelivered repeat matches zero rows and the alarm cannot slide twice
+    for one letter.
 
     The facts win unconditionally (refresh_latest), only when the new value
     beats the stored one (refresh_max — compared here, in the statement, a
@@ -611,7 +610,7 @@ def patch_open_run_query(
                            ELSE wake_at END,
             last_error = NULL
         WHERE merchant_id = $1 AND workflow_id = $2::uuid AND enrollment_key = $3
-          AND status = 'waiting' AND ($11::boolean OR current_node = $4)
+          AND status = 'waiting' AND current_node = ANY($4::text[])
           AND NOT (COALESCE(context->'repeat_event_ids', '[]'::jsonb) ? $5::text)
           AND context->>'source_event_id' IS DISTINCT FROM $5::text
         RETURNING id
@@ -620,14 +619,13 @@ def patch_open_run_query(
         merchant_id,
         workflow_id,
         enrollment_key,
-        entry_node,
+        list(squares),
         event_id,
         json.dumps(patch),
         accumulate,
         max_field,
         max_value,
         debounce_minutes,
-        anywhere,
     ]
 
 

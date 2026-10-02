@@ -36,7 +36,7 @@ flows leave on_repeat at ignore and debounce at 0.
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.logger import logger
 from app.crm.outreach.db.accessors import (
@@ -140,6 +140,17 @@ def repeat_plan(door: WorkflowEntry, facts: Dict[str, Any]) -> RepeatPlan:
     return RepeatPlan({}, False, None, None, debounce)
 
 
+def rearm_squares(door: WorkflowEntryAt, timers: Sequence[str]) -> List[str]:
+    """PURE: the squares a repeat of this door may re-arm — the start, plus
+    the plan's wait squares (``timers``) with restart_on_repeat. Never a
+    square that reaches out: a call has no timer to restart."""
+    if not door.restart_on_repeat:
+        return [door.start]
+    squares = [door.start]
+    squares.extend(square for square in timers if square != door.start)
+    return squares
+
+
 async def apply_repeat(
     merchant_id: str,
     workflow_id: str,
@@ -147,13 +158,14 @@ async def apply_repeat(
     door: WorkflowEntryAt,
     event_id: str,
     facts: Dict[str, Any],
+    timers: Sequence[str] = (),
 ) -> bool:
     """A refused enrol may be a repeat of an open run standing on the
-    door's start square — or, when the door says restart_on_repeat (phase
-    16), on any square. Returns True when a run was patched. Zero rows is
-    the normal answer for "not a repeat" (nothing open, or the run
-    already moved on) and for a redelivered event (it marked itself used
-    the first time)."""
+    door's start square — or, with restart_on_repeat (phase 16), on any
+    timer of its plan (``timers``, see rearm_squares). Returns
+    True when a run was patched. Zero rows is the normal answer for "not a
+    repeat" (nothing open, or the run already moved on) and for a
+    redelivered event (it marked itself used the first time)."""
     plan = repeat_plan(door, facts)
     if plan.is_noop:
         return False  # ignore + no debounce: exactly today's behaviour
@@ -161,14 +173,13 @@ async def apply_repeat(
         merchant_id,
         workflow_id,
         enrollment_key,
-        door.start,
+        rearm_squares(door, timers),
         event_id,
         plan.patch,
         plan.accumulate,
         plan.max_field,
         plan.max_value,
         plan.debounce_minutes,
-        door.restart_on_repeat,
     )
     if patched:
         logger.info(
