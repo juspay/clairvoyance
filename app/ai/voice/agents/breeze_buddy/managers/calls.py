@@ -19,7 +19,10 @@ from typing import Any, Optional, Tuple
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
 # the circular import via ``dispatch/__init__.py`` -> ``dispatch.worker`` ->
 # ``managers.calls``. The submodules below have no dependency on this file.
-from app.ai.voice.agents.breeze_buddy.dispatch.alerts import raise_orphan_webhook
+from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    raise_long_running_call,
+    raise_orphan_webhook,
+)
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     release_channel_token,
 )
@@ -62,6 +65,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.config.static import (
     BB_INBOUND_STUCK_LEAD_MINUTES,
+    BB_STUCK_CALL_STALE_MINUTES,
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
 from app.core.logger import logger
@@ -701,22 +705,25 @@ async def _retry_call(
 async def reconcile_stuck_processing_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state — call placed
-    but no call-end webhook received within 10 minutes. Closes the row
-    with outcome=UNKNOWN, releases the telephony number + channel token,
-    and triggers a retry where applicable.
+    but no call-end webhook received within BB_STUCK_CALL_STALE_MINUTES.
+    Raises a P1 Slack alert per lead, closes the row with outcome=UNKNOWN,
+    releases the telephony number + channel token, and triggers a retry
+    where applicable.
 
     Registered on ``BackgroundTaskScheduler``; the scheduler's distributed
     lock guarantees only one pod runs this per interval. See
     docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 5.
     """
     logger.info("Cleaning up stuck leads...")
-    stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    stale_time = datetime.now(timezone.utc) - timedelta(
+        minutes=BB_STUCK_CALL_STALE_MINUTES
+    )
     stale_leads = await get_leads_by_status_and_time_before(
         LeadCallStatus.PROCESSING, stale_time, include_locked=True
     )
 
-    # Inbound needs a far longer grace period. An outbound lead PROCESSING for
-    # 10 minutes is wedged; an inbound one is usually a customer still talking.
+    # Inbound needs a far longer grace period. An outbound lead PROCESSING past
+    # the stale window is wedged; an inbound one is usually a customer still talking.
     # This sweep RELEASES the channel, so sweeping a live inbound call hands it
     # back mid-conversation and the number then over-admits in both directions.
     inbound_stale_time = datetime.now(timezone.utc) - timedelta(
@@ -746,7 +753,7 @@ async def reconcile_stuck_processing_leads():
             # is_locked=TRUE from a crashed pod. Safe here because the
             # BackgroundTaskScheduler distributed lock ensures only one
             # reconciler runs at a time, and we only reach this path after
-            # a 10-minute staleness timeout.
+            # the BB_STUCK_CALL_STALE_MINUTES staleness timeout.
             locked_lead = await acquire_lock_on_lead_by_id(
                 lead.id, expected_status=LeadCallStatus.PROCESSING, force=True
             )
@@ -757,6 +764,23 @@ async def reconcile_stuck_processing_leads():
                 continue
 
             logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
+
+            # Page on it: a lead this old is either a lost call-end webhook or
+            # a real call still running, and closing a live one loses its
+            # outcome (call.completed dedupes on call_id).
+            await raise_long_running_call(
+                lead_id=str(locked_lead.id),
+                call_id=locked_lead.call_id,
+                template=locked_lead.template,
+                merchant_id=locked_lead.merchant_id,
+                direction=getattr(locked_lead.call_direction, "value", None),
+                call_initiated_time=(
+                    locked_lead.call_initiated_time.isoformat()
+                    if locked_lead.call_initiated_time
+                    else None
+                ),
+                stale_minutes=BB_STUCK_CALL_STALE_MINUTES,
+            )
 
             # Merge, don't obliterate: the update REPLACES meta_data and
             # overwrites outcome, so a bare write here destroys whatever a
