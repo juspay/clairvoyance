@@ -499,6 +499,13 @@
         }
       ]
     },
+    "assist_fields": {
+      "description": "Buddy Assist only: the merchant-editable fields (field key → values) this assistant's brand block was built from, filled from site research at setup. Absent on templates not made by Assist setup.",
+      "example": {
+        "brand_line": ["Kosha: merino base layers for Indian winters"],
+        "offer_items": ["Winter sale: 20% off thermals", "Free socks over 999"]
+      }
+    },
     "flavor": {
       "description": "Protocol dialect → which platform connectors serve it and which optional flavor features are on. Keyed exactly the way the flavor packages are laid out on disk (assist/<flavor>/<protocol>/ + assist/<flavor>/connectors/<name>/), so config and code read the same. Absent, or a protocol left unset, means connectors self-select on the payload and every optional feature is OFF. The engine never interprets the keys — a flavor resolves its own protocol block by name. Fields documented under FlavorProtocolConfig.",
       "example": {

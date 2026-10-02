@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Protocol
+from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence
 
+from app.ai.voice.agents.breeze_buddy.assist.engine.fields import FieldProfile
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import SkeletonSpec
 
 
@@ -14,6 +15,8 @@ class Vertical(Protocol):
     # The reseller-level blueprint template this vertical's agents are built from.
     blueprint_name: str
     skeleton: SkeletonSpec
+    # The form this vertical's assistants are built from and edited through.
+    fields: FieldProfile
 
     def research_prompt(self) -> str:
         """The brief handed to the site reader (facts only, never instructions)."""
@@ -23,6 +26,35 @@ class Vertical(Protocol):
         self, assistant_name: str, brand_name: str, website_context: str
     ) -> str:
         """What replaces the skeleton's brand marker for one merchant."""
+        ...
+
+    def starting_fields(
+        self,
+        fields: Mapping[str, Sequence[str]],
+        *,
+        assistant_name: str,
+        brand_name: str,
+    ) -> Dict[str, List[str]]:
+        """``fields`` with the merchant's names in the fields research left
+        empty, so the form alone is enough to rebuild the brand block."""
+        ...
+
+    def brand_block_from_fields(self, fields: Mapping[str, Sequence[str]]) -> str:
+        """The brand block written from this vertical's form."""
+        ...
+
+    def vertical_section(self, fields: Mapping[str, Sequence[str]]) -> Optional[str]:
+        """The merchant-specific help section from the form; None keeps the
+        blueprint's own."""
+        ...
+
+    def widget_values(self, fields: Mapping[str, Sequence[str]]) -> Dict[str, object]:
+        """Configuration entries the form implies, already config-shaped."""
+        ...
+
+    def widget_fields(self, configurations: Mapping[str, Any]) -> Dict[str, List[str]]:
+        """The form's values for what the config already holds (the
+        blueprint's greeting and chips): the inverse of ``widget_values``."""
         ...
 
     def unpersonalized_context(self) -> str:

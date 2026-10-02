@@ -2660,6 +2660,14 @@ class ConfigurationModel(BaseModel):
             "empty list = no tiles."
         ),
     )
+    assist_fields: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description=(
+            "Buddy Assist only: the merchant-editable fields (field key → "
+            "values) this assistant's brand block was built from. Absent on "
+            "templates not made by Assist setup."
+        ),
+    )
     enable_text_input: bool = Field(
         True,
         description=(

@@ -12,7 +12,7 @@ slot says; the commerce vertical's patterns live in
 from __future__ import annotations
 
 import hashlib
-from typing import Tuple
+from typing import Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import SkeletonSpec
 
@@ -39,9 +39,53 @@ def shared_core(prompt: str, skeleton: SkeletonSpec) -> str:
     return op
 
 
+def replace_vertical_section(prompt: str, skeleton: SkeletonSpec, section: str) -> str:
+    """Swap the merchant-specific help section for ``section``.
+
+    Located exactly as ``shared_core`` locates it for hashing, so the section
+    the fleet table normalises away is the section replaced here. Returns the
+    prompt untouched when ``section`` is blank, the skeleton declares no such
+    section, or the prompt has none. Taken from #1209.
+    """
+    if not skeleton.vertical_section_end or not section.strip():
+        return prompt
+    end = prompt.find(skeleton.vertical_section_end)
+    if end < 0:
+        return prompt
+    start = prompt.rfind("\n### ", 0, end)
+    if start < 0:
+        return prompt
+    return prompt[: start + 1] + section.rstrip("\n") + "\n" + prompt[end:]
+
+
+def vertical_section_of(prompt: str, skeleton: SkeletonSpec) -> Optional[str]:
+    """The merchant-specific help section, found as ``replace_vertical_section``
+    finds it; None when the prompt has none."""
+    if not skeleton.vertical_section_end:
+        return None
+    end = prompt.find(skeleton.vertical_section_end)
+    start = prompt.rfind("\n### ", 0, end) if end >= 0 else -1
+    return prompt[start + 1 : end] if start >= 0 else None
+
+
+def replace_brand_block(prompt: str, skeleton: SkeletonSpec, brand: str) -> str:
+    """Swap everything before the operating block for ``brand``, keeping the
+    operating block exactly as it is. ``ValueError`` when not this skeleton."""
+    head, operating = split_prompt(prompt, skeleton)
+    gap = head[len(head.rstrip()) :] or "\n\n"
+    return brand.rstrip() + gap + operating
+
+
 def core_hash(prompt: str, skeleton: SkeletonSpec) -> str:
     """Short, stable fingerprint of ``shared_core`` (what the fleet table shows)."""
     return hashlib.sha256(shared_core(prompt, skeleton).encode()).hexdigest()[:12]
 
 
-__all__ = ["core_hash", "shared_core", "split_prompt"]
+__all__ = [
+    "core_hash",
+    "replace_brand_block",
+    "replace_vertical_section",
+    "shared_core",
+    "split_prompt",
+    "vertical_section_of",
+]

@@ -8,15 +8,25 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, cast
+from typing import Any, AsyncIterator, Dict, List, Literal, Mapping, Optional, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 from pydantic import ValidationError
 
 from app.ai.voice.agents.breeze_buddy.accounts import Accounts
+from app.ai.voice.agents.breeze_buddy.assist.engine.fields import (
+    AssistFields,
+    apply_edits,
+    fields_from_notes,
+)
 from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
     normalize_merchant_domain,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.prompt_core import (
+    replace_brand_block,
+    replace_vertical_section,
+    vertical_section_of,
 )
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingConfigurationError,
@@ -38,7 +48,10 @@ from app.ai.voice.agents.breeze_buddy.assist.verticals import registry as vertic
 from app.ai.voice.agents.breeze_buddy.assist.verticals.base import Vertical
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    TemplateModel,
+)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.merchants import (
     create_merchant,
@@ -57,6 +70,8 @@ from app.database.accessor.breeze_buddy.widget_config import (
     update_widget_config,
 )
 from app.schemas.breeze_buddy.assist.onboarding import (
+    AssistCreateRequest,
+    AssistCreateResponse,
     AssistOnboardingCompletion,
     AssistOnboardingError,
     AssistOnboardingStreamRequest,
@@ -183,21 +198,32 @@ def build_merchant_template(
     existing_template: Optional[TemplateModel],
     adapter: PlatformAdapter,
     vertical: Vertical,
+    fields: Optional[AssistFields] = None,
 ) -> TemplateModel:
     """Build a merchant template from the DB blueprint without mutating it.
 
     Platform-blind: the adapter decides which prompt sections, MCP servers,
     config entries and payload keys survive; everything another platform
-    owns is dropped.
+    owns is dropped. With ``fields`` the brand block is written from the
+    vertical's form instead of ``website_context``, and the fields are kept
+    on the template for the merchant to edit.
     """
     flow = copy.deepcopy(default_template.flow)
     prompt = flow.get("system_prompt")
     _validate_default_template(default_template, adapter, vertical)
     assert isinstance(prompt, str)
 
-    brand_block = vertical.brand_block(
-        body.merchant_name, body.bot_brand_name or body.merchant_name, website_context
-    )
+    if fields is not None:
+        brand_block = vertical.brand_block_from_fields(fields)
+        section = vertical.vertical_section(fields)
+        if section:
+            prompt = replace_vertical_section(prompt, vertical.skeleton, section)
+    else:
+        brand_block = vertical.brand_block(
+            body.merchant_name,
+            body.bot_brand_name or body.merchant_name,
+            website_context,
+        )
     prompt = prompt.replace(vertical.skeleton.brand_marker, brand_block, 1)
     prompt = resolve_platform_sections(
         prompt, {adapter.id}, registry.legacy_section_markers()
@@ -219,6 +245,9 @@ def build_merchant_template(
         configurations.pop("mcp", None)
     for key in registry.foreign_tool_config_keys(adapter):
         configurations.pop(key, None)
+    if fields is not None:
+        _merge_config(configurations, vertical.widget_values(fields))
+        configurations["assist_fields"] = copy.deepcopy(fields)
 
     expected_payload_schema = copy.deepcopy(
         default_template.expected_payload_schema or {}
@@ -262,6 +291,25 @@ def build_merchant_template(
         updated_at=(existing_template.updated_at if existing_template else None),
     )
     return candidate
+
+
+def _merge_config(
+    configurations: Dict[str, Any], values: Mapping[str, Any], *, nested: bool = False
+) -> None:
+    """``values`` onto the blueprint's config.
+
+    A top-level value replaces the blueprint's (the merchant's greeting wins).
+    A map merges into the blueprint's, and a list inside one joins it, so the
+    blueprint's trusted links are kept alongside the merchant's.
+    """
+    for key, value in values.items():
+        existing = configurations.get(key)
+        if isinstance(value, Mapping) and isinstance(existing, dict):
+            _merge_config(existing, value, nested=True)
+        elif nested and isinstance(value, list) and isinstance(existing, list):
+            existing.extend(item for item in value if item not in existing)
+        else:
+            configurations[key] = copy.deepcopy(value)
 
 
 def _persistable_config(template: TemplateModel) -> Optional[Dict[str, Any]]:
@@ -581,6 +629,195 @@ async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardRespon
     )
 
 
+class AssistantExistsError(Exception):
+    """The merchant already has an assistant; creating must not touch it."""
+
+
+async def create_assistant(body: AssistCreateRequest) -> AssistCreateResponse:
+    """Create a merchant's assistant from its research findings, switched off.
+
+    The findings are sorted into the vertical's fields, the brand block is
+    written from them, and the fields are kept on the template for the
+    merchant to edit. Template and widget both start inactive, so shoppers
+    see nothing until the merchant turns it on. A merchant that already has
+    an assistant gets ``AssistantExistsError`` and nothing is written:
+    running setup again is a separate, careful path.
+    """
+    request = body.as_onboarding_request()
+    adapter = registry.for_request(request.platform)
+    vertical = verticals.for_request(request.vertical or adapter.vertical)
+    template_name = _template_name(request.merchant_name)
+
+    if await _has_assistant(request, template_name):
+        raise AssistantExistsError(request.merchant_id)
+
+    default_template = await get_template_in_scope(
+        request.reseller_id, None, vertical.blueprint_name
+    )
+    if default_template is None:
+        raise OnboardingFailure(
+            "loading_default_template",
+            "DEFAULT_TEMPLATE_NOT_FOUND",
+            "The default Assist template is not configured for this reseller.",
+        )
+
+    await _ensure_assist_merchant(
+        request.reseller_id,
+        request.merchant_id,
+        _site_host(request.website_url),
+        request.merchant_name,
+    )
+    fields = vertical.starting_fields(
+        fields_from_notes(
+            ((note.field, note.value) for note in body.notes), vertical.fields
+        ),
+        assistant_name=request.merchant_name,
+        brand_name=request.bot_brand_name or request.merchant_name,
+    )
+    candidate = build_merchant_template(
+        default_template=default_template,
+        body=request,
+        website_context="",
+        template_id=str(uuid4()),
+        existing_template=None,
+        adapter=adapter,
+        vertical=vertical,
+        fields=fields,
+    )
+    try:
+        template = await _create_template(candidate)
+    except OnboardingFailure:
+        # A second click that lost the race to the first: already created.
+        if await _has_assistant(request, template_name):
+            raise AssistantExistsError(request.merchant_id)
+        raise
+    appearance = (
+        body.appearance.model_dump(exclude_none=True) if body.appearance else None
+    )
+    try:
+        widget = await _create_widget(request, template.id, appearance=appearance)
+    except Exception as exc:
+        try:
+            await delete_template_if_not_referenced(template.id)
+        except Exception as cleanup_error:
+            logger.warning(
+                f"Assist create cleanup failed for template {template.id}: "
+                f"{cleanup_error}"
+            )
+        if await _has_assistant(request, template_name, own_template=template.id):
+            raise AssistantExistsError(request.merchant_id) from exc
+        raise
+    logger.info(
+        f"Assist assistant created, switched off, for reseller={request.reseller_id} "
+        f"merchant={request.merchant_id} with {len(fields)} fields"
+    )
+    return AssistCreateResponse(
+        template_id=template.id,
+        template_name=template.name,
+        widget_config=_widget_payload(widget),
+        fields=fields,
+    )
+
+
+class AssistantNotEditableError(Exception):
+    """The assistant was not made from fields (it predates them), so there is
+    no form to save; its prompt is edited instead."""
+
+
+def assistant_fields(template: TemplateModel) -> Optional[AssistFields]:
+    """The fields an assistant was made from, with what its widget shows now
+    (the blueprint's greeting and chips) for fields the merchant has not set;
+    None when it was not made from fields."""
+    configurations = _configuration_dict(template)
+    fields = configurations.get("assist_fields")
+    if not isinstance(fields, dict):
+        return None
+    return {**verticals.DEFAULT.widget_fields(configurations), **fields}
+
+
+async def save_assistant_fields(
+    template: TemplateModel, edits: Mapping[str, List[str]]
+) -> TemplateModel:
+    """Apply a merchant's edits and rebuild the assistant from its fields.
+
+    Only the merchant's parts move: the brand block, the deciding-question
+    section and the widget entries the fields imply. The shared operating
+    block is kept exactly as it is. With no question left, the blueprint's
+    own section comes back rather than the last one staying. Raises
+    ``AssistantNotEditableError`` for an assistant with no fields, and
+    ``ValueError`` for an edit to a field the form does not show.
+    """
+    vertical = verticals.DEFAULT
+    current = assistant_fields(template)
+    prompt = (template.flow or {}).get("system_prompt")
+    if current is None or not isinstance(prompt, str):
+        raise AssistantNotEditableError(template.id)
+    fields = apply_edits(current, edits, vertical.fields)
+
+    try:
+        prompt = replace_brand_block(
+            prompt, vertical.skeleton, vertical.brand_block_from_fields(fields)
+        )
+    except ValueError as exc:
+        raise AssistantNotEditableError(template.id) from exc
+    section = vertical.vertical_section(fields) or await _blueprint_section(
+        template, vertical
+    )
+    if section:
+        prompt = replace_vertical_section(prompt, vertical.skeleton, section)
+    flow = {**copy.deepcopy(template.flow), "system_prompt": prompt}
+
+    configurations = _configuration_dict(template)
+    _merge_config(configurations, vertical.widget_values(fields))
+    configurations["assist_fields"] = fields
+    saved = await _update_template(
+        template.model_copy(
+            update={
+                "flow": flow,
+                "configurations": ConfigurationModel.model_validate(configurations),
+            }
+        )
+    )
+    try:
+        await invalidate_template(saved.id)
+    except Exception as cache_error:
+        logger.warning(
+            f"Assist template cache invalidation failed for {saved.id}: {cache_error}"
+        )
+    return saved
+
+
+async def _blueprint_section(
+    template: TemplateModel, vertical: Vertical
+) -> Optional[str]:
+    """The blueprint's own help section, for an assistant whose merchant has
+    cleared every question; None when the blueprint cannot be found."""
+    blueprint = await get_template_in_scope(
+        template.reseller_id, None, vertical.blueprint_name
+    )
+    prompt = (blueprint.flow or {}).get("system_prompt") if blueprint else None
+    return vertical_section_of(prompt, vertical.skeleton) if prompt else None
+
+
+async def _has_assistant(
+    request: AssistOnboardingStreamRequest,
+    template_name: str,
+    *,
+    own_template: Optional[str] = None,
+) -> bool:
+    """Whether the merchant already has an assistant: a widget, or a template
+    under its name other than ``own_template`` (the one being created)."""
+    widget = await get_widget_config_by_reseller_merchant(
+        request.reseller_id, request.merchant_id
+    )
+    if widget is not None:
+        return True
+    template = await get_template_in_scope(
+        request.reseller_id, request.merchant_id, template_name
+    )
+    return template is not None and template.id != own_template
+
+
 async def stream_assist_onboarding(
     body: AssistOnboardingStreamRequest,
 ) -> AsyncIterator[SSEEvent]:
@@ -796,12 +1033,17 @@ async def stream_assist_onboarding(
 
 
 __all__ = [
+    "AssistantExistsError",
+    "AssistantNotEditableError",
+    "assistant_fields",
     "BRAND_IDENTITY_MARKER",
     "EXPECTED_BLUEPRINT_MODEL",
     "OnboardingFailure",
     "SHOP_DOMAIN_PLACEHOLDER",
     "blueprint_shape_warnings",
     "build_merchant_template",
+    "create_assistant",
     "onboard_assist_bare",
+    "save_assistant_fields",
     "stream_assist_onboarding",
 ]

@@ -189,6 +189,85 @@ class AssistOnboardRequest(BaseModel):
         return normalized
 
 
+class AssistResearchNote(BaseModel):
+    """One fact from ``POST /assist/research/stream``, sent back as received."""
+
+    field: str = Field(..., min_length=1, max_length=64)
+    value: str = Field(..., max_length=2000)
+    source_url: str = Field("", max_length=2048)
+
+
+class AssistCreateRequest(BaseModel):
+    """Body of ``POST /assist/create``: make the assistant, switched off.
+
+    ``notes`` are the research findings the console showed the merchant;
+    they are sorted into the vertical's fields here, by the server's rules.
+    ``appearance`` is the starting look (the colour and logo the preview
+    found). ``allowed_origins`` defaults to the store's own origin.
+    """
+
+    reseller_id: str = Field(..., min_length=1, max_length=255)
+    merchant_id: str = Field(..., min_length=1, max_length=255)
+    merchant_name: str = Field(..., min_length=1, max_length=255)
+    website_url: str = Field(..., max_length=2048)
+    platform: OnboardingPlatform
+    vertical: Optional[OnboardingVertical] = None
+    bot_brand_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    allowed_origins: List[str] = Field(default_factory=list, max_length=20)
+    notes: List[AssistResearchNote] = Field(default_factory=list, max_length=500)
+    appearance: Optional[WidgetAppearance] = None
+
+    @field_validator("reseller_id", "merchant_id", "merchant_name", "bot_brand_name")
+    @classmethod
+    def _strip_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+    @field_validator("website_url")
+    @classmethod
+    def _validate_website_url(cls, value: str) -> str:
+        return _public_https_url(value, origin_only=False)
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _validate_allowed_origins(cls, values: List[str]) -> List[str]:
+        return list(
+            dict.fromkeys(
+                _public_https_url(value, origin_only=True) for value in values
+            )
+        )
+
+    def as_onboarding_request(self) -> AssistOnboardingStreamRequest:
+        """The same merchant as an onboarding request, switched off, so the
+        onboarding builders serve both paths."""
+        host = urlsplit(self.website_url).netloc
+        return AssistOnboardingStreamRequest(
+            reseller_id=self.reseller_id,
+            merchant_id=self.merchant_id,
+            merchant_name=self.merchant_name,
+            website_url=self.website_url,
+            platform=self.platform,
+            vertical=self.vertical,
+            bot_brand_name=self.bot_brand_name,
+            allowed_origins=self.allowed_origins or [f"https://{host}"],
+            is_active=False,
+        )
+
+
+class AssistCreateResponse(BaseModel):
+    """Body of ``POST /assist/create``."""
+
+    template_id: str
+    template_name: str
+    widget_config: Dict[str, Any]
+    # The fields the assistant was built from, as the merchant will edit them.
+    fields: Dict[str, List[str]]
+
+
 class AssistOnboardResponse(BaseModel):
     """Body of ``POST /assist/onboard``."""
 
@@ -226,6 +305,9 @@ class AssistOnboardingCompletion(BaseModel):
 __all__ = [
     "OnboardingPlatform",
     "OnboardingVertical",
+    "AssistCreateRequest",
+    "AssistCreateResponse",
+    "AssistResearchNote",
     "AssistOnboardRequest",
     "AssistOnboardResponse",
     "AssistOnboardingCompletion",
