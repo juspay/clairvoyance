@@ -68,6 +68,10 @@ async def end_idle_chat_sessions() -> None:
             cutoff=cutoff,
             statuses=[ChatSessionStatus.ACTIVE, ChatSessionStatus.IDLE],
             limit=_SWEEP_BATCH_SIZE,
+            # Web sessions only: a WhatsApp session lives as long as its
+            # reply window, and its own responder ends it (window closed,
+            # taken over, Buddy moved) — tab inactivity means nothing there.
+            channels=["web"],
         )
     except Exception as exc:
         logger.error(f"chat cleanup: list_idle_chat_sessions failed: {exc}")

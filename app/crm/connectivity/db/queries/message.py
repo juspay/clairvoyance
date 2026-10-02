@@ -10,16 +10,23 @@ reads it through that layer's accessor, never SQL from here.
 """
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.connectivity.reasons import (
     REASON_ATTEMPTS_EXHAUSTED,
     REASON_RECLAIMED_STALE_CLAIM,
+    REASON_SESSION_ABANDONED,
 )
 from app.crm.connectivity.status import (
+    MESSAGE_ACCEPTED,
     MESSAGE_DEAD,
+    MESSAGE_DELIVERED,
+    MESSAGE_FAILED,
     MESSAGE_QUEUED,
+    MESSAGE_READ,
     MESSAGE_SENDING,
+    MESSAGE_SENT,
 )
 
 MESSAGE_TABLE = "crm_message"
@@ -44,15 +51,18 @@ def insert_message_query(
     template_id: Optional[str],
     variables: Dict[str, Any],
     dedupe_key: str,
+    binding_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """One queued row, no verdict (gate-mechanics §1). The dedupe unique
     (merchant_id, dedupe_key) absorbs a producer's retry: conflict = no
-    row returned, and the caller treats that as already queued."""
+    row returned, and the caller treats that as already queued.
+    ``binding_id`` names the number to send from; NULL is the primary."""
     query = f"""
         INSERT INTO {MESSAGE_TABLE}
             (merchant_id, customer_id, channel, sent_to_address, source_kind,
-             source_id, purpose_key, template_id, variables, dedupe_key)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+             source_id, purpose_key, template_id, variables, dedupe_key,
+             binding_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::uuid)
         ON CONFLICT (merchant_id, dedupe_key) DO NOTHING
         RETURNING id
     """
@@ -67,6 +77,7 @@ def insert_message_query(
         template_id,
         json.dumps(variables),
         dedupe_key,
+        binding_id,
     ]
 
 
@@ -217,5 +228,210 @@ def send_behind_provider_id_query(
           FROM {MESSAGE_TABLE}
          WHERE merchant_id = $1
            AND provider_message_id = $2
+    """
+    return query, [merchant_id, provider_message_id]
+
+
+# ---------------------------------------------------------------------------
+# Session sends — a free-form reply's row is written IN FLIGHT and closed by
+# the same call; the dispatcher never claims it.
+# ---------------------------------------------------------------------------
+
+
+def insert_session_message_query(
+    merchant_id: str,
+    customer_id: str,
+    channel: str,
+    sent_to_address: str,
+    source_kind: str,
+    source_id: Optional[str],
+    purpose_key: str,
+    dedupe_key: str,
+) -> Tuple[str, List[Any]]:
+    """One free-form reply, written already in flight ('sending', attempt 1).
+
+    ``claimed_at`` stays NULL, and that is the marker, not an accident: the
+    dispatcher's claim always stamps claimed_at, so its stale sweep
+    (``claimed_at < now() - …``) can never pick this row up and re-send a
+    reply whose words it does not have. An abandoned session row is closed
+    by its own sweep below instead.
+
+    No template, no variables (canon T16 col 11: free-text sends carry
+    none — the words ride the message.queued letter). The dedupe unique
+    absorbs a caller's retry of the same reply: conflict = no row returned.
+    """
+    query = f"""
+        INSERT INTO {MESSAGE_TABLE}
+            (merchant_id, customer_id, channel, sent_to_address, source_kind,
+             source_id, purpose_key, template_id, variables, dedupe_key,
+             status, attempt)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, '{{}}'::jsonb, $8, $9, 1)
+        ON CONFLICT (merchant_id, dedupe_key) DO NOTHING
+        RETURNING id
+    """
+    return query, [
+        merchant_id,
+        customer_id,
+        channel,
+        sent_to_address,
+        source_kind,
+        source_id,
+        purpose_key,
+        dedupe_key,
+        MESSAGE_SENDING,
+    ]
+
+
+def message_state_by_dedupe_query(
+    merchant_id: str, dedupe_key: str
+) -> Tuple[str, List[Any]]:
+    """The row a dedupe key already names — one point read on the
+    (merchant_id, dedupe_key) unique."""
+    query = f"""
+        SELECT id, status, reason, provider_message_id
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND dedupe_key = $2
+    """
+    return query, [merchant_id, dedupe_key]
+
+
+def abandon_stale_session_sends_query(stale_minutes: int) -> Tuple[str, List[Any]]:
+    """Close session rows whose sender died between the insert and the
+    outcome — 'sending' with no claim (the session marker) past the stale
+    window.
+
+    Dead, never requeued: the words are not on the row, so there is nothing
+    to send again, and the honest answer is "we do not know whether it went
+    out". The candidate set is small by construction — only rows still
+    'sending' — so it runs beside the dispatcher's own stale sweep each pass.
+    """
+    query = f"""
+        UPDATE {MESSAGE_TABLE}
+           SET status = $2,
+               reason = $3
+         WHERE status = $4
+           AND claimed_at IS NULL
+           AND created_at < now() - make_interval(mins => $1::int)
+        RETURNING id
+    """
+    return query, [
+        stale_minutes,
+        MESSAGE_DEAD,
+        REASON_SESSION_ABANDONED,
+        MESSAGE_SENDING,
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Receipts — what became of a message we sent (message.status letters)
+# ---------------------------------------------------------------------------
+
+
+def _rank(expr: str) -> str:
+    """A status's place on the delivery ladder; 0 for anything off it.
+    The words are bound ($7..$10), never spelled."""
+    return (
+        f"CASE {expr} WHEN $7::text THEN 1 WHEN $8::text THEN 2 "
+        f"WHEN $9::text THEN 3 WHEN $10::text THEN 4 ELSE 0 END"
+    )
+
+
+def apply_receipt_query(
+    merchant_id: str,
+    provider_message_id: str,
+    state: str,
+    occurred_at: Optional[datetime],
+    error_code: Optional[str],
+    pricing_category: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """Move one row along accepted -> sent -> delivered -> read, never back.
+
+    Receipts arrive out of order and more than once, so the STATUS only ever
+    advances (a late 'delivered' after 'read' changes nothing), while each
+    TIMESTAMP is a fact recorded the first time it is seen, whatever order
+    it came in. 'failed' is taken only from accepted or sent: a message the
+    customer already has cannot fail after the fact. The provider's code
+    rides into ``reason`` on that transition alone (canon T16 col 13).
+
+    'failed' and 'dead' are TERMINAL for the status: a 'sent' receipt that
+    arrives after the 'failed' one (Meta sends sent, then failed 131026; the
+    spine may hand them over the other way round) must not move a failed row
+    back up the ladder and hide the failure. Its timestamp is still
+    recorded — the facts stay first-seen whatever the status says.
+
+    Every SET expression reads the OLD row — Postgres evaluates them before
+    writing — so the status CASEs compare against where the row was.
+    ``merchant_id`` leads the WHERE: the id is the provider's and arrives on
+    a letter, so another tenant's id must match nothing.
+    """
+    moved = (
+        f"status NOT IN ($11::text, $12::text) "
+        f"AND {_rank('$3::text')} > {_rank('status')}"
+    )
+    fails = "$3::text = $11::text AND status IN ($7::text, $8::text)"
+    query = f"""
+        UPDATE {MESSAGE_TABLE}
+           SET status = CASE
+                   WHEN {fails} THEN $11::text
+                   WHEN $3::text <> $11::text AND {moved} THEN $3::text
+                   ELSE status
+               END,
+               reason = CASE WHEN {fails} THEN COALESCE($5, reason)
+                             ELSE reason END,
+               sent_at = CASE WHEN $3::text <> $11::text
+                              THEN COALESCE(sent_at, $4::timestamptz, now())
+                              ELSE sent_at END,
+               delivered_at = CASE WHEN $3::text IN ($9::text, $10::text)
+                                   THEN COALESCE(delivered_at, $4::timestamptz, now())
+                                   ELSE delivered_at END,
+               read_at = CASE WHEN $3::text = $10::text
+                              THEN COALESCE(read_at, $4::timestamptz, now())
+                              ELSE read_at END,
+               pricing_category = COALESCE($6, pricing_category)
+         WHERE merchant_id = $1
+           AND provider_message_id = $2
+        RETURNING id, status
+    """
+    return query, [
+        merchant_id,
+        provider_message_id,
+        state,
+        occurred_at,
+        error_code,
+        pricing_category,
+        MESSAGE_ACCEPTED,
+        MESSAGE_SENT,
+        MESSAGE_DELIVERED,
+        MESSAGE_READ,
+        MESSAGE_FAILED,
+        MESSAGE_DEAD,
+    ]
+
+
+def message_ticks_query(
+    merchant_id: str, message_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    """What became of these rows — the timeline joins its ticks from here
+    at read, never copying them."""
+    query = f"""
+        SELECT id, status, reason, sent_at, delivered_at, read_at
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND id = ANY($2::uuid[])
+    """
+    return query, [merchant_id, message_ids]
+
+
+def message_id_by_provider_query(
+    merchant_id: str, provider_message_id: str
+) -> Tuple[str, List[Any]]:
+    """Our row for the provider's id — what a receipt is about."""
+    query = f"""
+        SELECT id
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND provider_message_id = $2
+         LIMIT 1
     """
     return query, [merchant_id, provider_message_id]

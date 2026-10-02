@@ -9,7 +9,11 @@ gather -> decide (PURE, returns the problems) -> apply.
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
-from app.crm.connectivity.contracts import registers_templates_for, template_status
+from app.crm.connectivity.contracts import (
+    TOPIC_QUEUED,
+    registers_templates_for,
+    template_status,
+)
 from app.crm.outreach import playbook
 from app.crm.outreach.catalog_laws import (
     Catalogs,
@@ -37,6 +41,11 @@ from app.crm.outreach.schemas import (
     WorkflowNode,
     WorkflowSummary,
 )
+
+#: Our own record of a send (connectivity's message.queued): never a door, a
+#: goal or a wait's letter. entry.py ignores it before any of those is
+#: judged; refusing it here keeps a plan from publishing as if it would react.
+OWN_SEND_TOPICS = frozenset({TOPIC_QUEUED})
 
 
 def validate_definition(
@@ -104,6 +113,11 @@ def validate_definition(
     # walker executes from, so validator and walker cannot disagree.
     for node in definition.nodes:
         problems.extend(NODE_TYPES[node.type].validate(node, definition))
+        for topic in sorted(set(node.topics) & OWN_SEND_TOPICS):
+            problems.append(
+                f"node {node.id}: {topic!r} is our own record of a send — a "
+                f"wait never hears it"
+            )
         if node.match is not None and not listens(node):
             problems.append(
                 f"node {node.id}: match belongs to a wait that lists topics — "
@@ -126,6 +140,11 @@ def validate_definition(
         problems.append("entry: a plan needs at least one door (a topic and a start)")
     topics_seen = set()
     for door in definition.entries:
+        if door.topic in OWN_SEND_TOPICS:
+            problems.append(
+                f"entry topic {door.topic!r} is our own record of a send — a "
+                f"workflow cannot start from its own messages"
+            )
         if door.topic in topics_seen:
             problems.append(
                 f"entry topic {door.topic!r} appears twice — one door per topic"
@@ -154,6 +173,11 @@ def validate_definition(
     # reason — two tiers claiming goal_met could never be told apart.
     reasons_seen = set()
     for index, tier in enumerate(definition.goals):
+        for topic in sorted(set(tier.topics) & OWN_SEND_TOPICS):
+            problems.append(
+                f"goal tier {index}: {topic!r} is our own record of a send — "
+                f"it never ends a run"
+            )
         if tier.exit_reason not in GOAL_EXIT_REASONS:
             problems.append(
                 f"goal tier {index}: exit_reason {tier.exit_reason!r} is not one "

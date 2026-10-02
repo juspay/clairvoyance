@@ -40,6 +40,20 @@ TOPIC_STATUS = "message.status"
 #: A customer wrote back to us.
 TOPIC_INBOUND = "message.inbound"
 
+#: We wrote a manifest row — a template queued for the dispatcher, or a
+#: free-form reply sent inside the customer-service window. Filed by THIS
+#: module at insert time (ADR 0014 amendment), so the letter carries what
+#: the manifest deliberately never stores: the words of a free-form reply
+#: (canon T16 keeps no rendered text). Its source is the CHANNEL, the same
+#: word the provider's own letters about that channel carry.
+TOPIC_QUEUED = "message.queued"
+
+#: Buddy moved to another number: the merchant chose a different number for
+#: Buddy to answer on, and its settings moved with it. Filed by THIS module
+#: after the move commits (settings.py); the conversations module resolves
+#: the old number's open threads when it hears it. Source = the channel.
+TOPIC_BUDDY_MOVED = "number.buddy_moved"
+
 #: A provider said something about the connected account itself (a review
 #: decision, a ban, a tier change) — the letters the health probe will read.
 TOPIC_ACCOUNT = "account.update"

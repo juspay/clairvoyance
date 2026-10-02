@@ -43,6 +43,7 @@ def decode_chat_session(row: asyncpg.Record) -> Optional[ChatSession]:
         metadata=metadata,
         current_channel=WidgetChannel(channel_raw),
         voice_lead_id=str(voice_lead_id_raw) if voice_lead_id_raw else None,
+        channel=row.get("channel") or "web",
         created_at=row["created_at"],
         last_activity_at=row["last_activity_at"],
         ended_at=row.get("ended_at"),

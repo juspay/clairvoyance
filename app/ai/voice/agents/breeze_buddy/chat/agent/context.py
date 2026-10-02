@@ -43,6 +43,14 @@ if TYPE_CHECKING:
     from app.ai.voice.agents.breeze_buddy.chat.agent.core import ChatAgent
 
 
+#: How a reply reads on a text-only channel (WhatsApp, D32).
+TEXT_ONLY_STYLE = (
+    "You are replying in a WhatsApp chat. Write plain text a person reads "
+    "on a phone: short paragraphs, no tables, no headings, no UI. Use "
+    "*bold* sparingly and plain links."
+)
+
+
 class ContextSeedMixin:
     async def _prepare_kb_message(
         self: "ChatAgent",
@@ -170,6 +178,10 @@ class ContextSeedMixin:
             *role_messages,
             *task_messages,
         ]
+        if self._text_only:
+            # Stable across turns (prompt-cache friendly), right after the
+            # template's own instructions.
+            messages.append({"role": "system", "content": TEXT_ONLY_STYLE})
         if kb_message is not None and kb_message.placement == "prefix":
             messages.append(kb_message.message)
         messages.extend(history)

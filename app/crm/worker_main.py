@@ -14,9 +14,16 @@ from app.core.config.static import (
 )
 from app.crm.connectivity.contracts import (
     claim_sends,
+    consume_status_event,
     consume_template_event,
     dispatch_send,
     register_retire_guard,
+)
+from app.crm.conversations.contracts import (
+    claim_inbox_tick,
+    consume_buddy_moved,
+    consume_conversation_event,
+    run_inbox_tick,
 )
 from app.crm.outreach.contracts import (
     claim_due_runs,
@@ -39,6 +46,16 @@ register_consumer(consume_attributed_event)
 # consumer above returns from at once. Registration order is execution
 # order; these two never look at the same letter.
 register_consumer(consume_template_event)
+# The third: connectivity's receipts consumer. Also merchant-level (a
+# receipt names a message, not a person), so it too hears letters the entry
+# consumer returns from; it moves the manifest along sent -> delivered ->
+# read, or to failed with the provider's code.
+register_consumer(consume_status_event)
+# The fourth and fifth: conversations' projector (a customer's message on
+# Buddy's number becomes a thread; a template on a shared number joins it)
+# and its "Buddy moved" consumer (the old number's threads resolve).
+register_consumer(consume_conversation_event)
+register_consumer(consume_buddy_moved)
 # The same inversion for connectivity's template retire guard (phase 14):
 # connectivity may not import outreach, so this root hands outreach's
 # "who would still send this template" into connectivity's slot.
@@ -66,15 +83,34 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         stop_event=stop_event,
         name="dispatcher",
     ),
-    "walker": lambda stop_event: run_drain_loop(
-        claim_due_runs,
-        walk_run,
-        interval=CRM_WORKER_INTERVAL,
-        batch=CRM_WORKER_BATCH,
-        stop_event=stop_event,
-        name="walker",
-    ),
+    "walker": lambda stop_event: _walker(stop_event),
 }
+
+
+async def _walker(stop_event: asyncio.Event) -> None:
+    """The walker pod runs two loops: workflow runs, and the inbox sweeps
+    (closing messages, lapsed handoffs, retention) — so the inbox needs no
+    pod of its own. Each is the shared scaffold; one failing never stops
+    the other."""
+    await asyncio.gather(
+        run_drain_loop(
+            claim_due_runs,
+            walk_run,
+            interval=CRM_WORKER_INTERVAL,
+            batch=CRM_WORKER_BATCH,
+            stop_event=stop_event,
+            name="walker",
+        ),
+        run_drain_loop(
+            claim_inbox_tick,
+            run_inbox_tick,
+            interval=CRM_WORKER_INTERVAL,
+            batch=1,
+            stop_event=stop_event,
+            name="inbox-sweeper",
+        ),
+    )
+
 
 _task: Optional[asyncio.Task] = None
 _stop_event: Optional[asyncio.Event] = None

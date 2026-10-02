@@ -5,20 +5,29 @@ owns their fate — an installation and its primary pipe are written together
 or not at all.
 """
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.connectivity.db.decoders.binding import decode_binding
 from app.crm.connectivity.db.queries.binding import (
     binding_by_address_query,
     binding_by_id_query,
+    buddy_number_query,
+    clear_primary_query,
     has_active_primary_binding_query,
     inbound_binding_query,
+    lock_channel_numbers_query,
+    merchant_bindings_query,
     pause_bindings_for_installation_query,
     primary_binding_query,
+    put_conversation_query,
+    set_primary_query,
+    take_conversation_query,
+    update_conversation_settings_query,
     upsert_binding_query,
 )
 from app.crm.connectivity.schemas.connector import ChannelBinding
 from app.crm.shared.db import DbTxn, crm_connection
+from app.crm.shared.decode import jsonb_object
 
 
 async def get_binding(
@@ -119,4 +128,73 @@ async def get_binding_for_inbound(
     query, values = inbound_binding_query(channel, address)
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None
+
+
+async def list_merchant_bindings(merchant_id: str) -> List[ChannelBinding]:
+    """Every non-retired pipe of this merchant, default first."""
+    query, values = merchant_bindings_query(merchant_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_binding(row) for row in rows]
+
+
+async def update_conversation_settings(
+    conn: DbTxn, merchant_id: str, binding_id: str, changes: Dict[str, Any]
+) -> Optional[ChannelBinding]:
+    """The pipe after the merge, or None when it is not this merchant's, is
+    retired, or does not hold Buddy's settings."""
+    query, values = update_conversation_settings_query(merchant_id, binding_id, changes)
+    row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None
+
+
+async def buddy_number(merchant_id: str, channel: str) -> Optional[ChannelBinding]:
+    """The active number Buddy answers on, or None when none is picked."""
+    query, values = buddy_number_query(merchant_id, channel)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None
+
+
+async def lock_channel_numbers(
+    conn: DbTxn, merchant_id: str, binding_id: str
+) -> List[ChannelBinding]:
+    """The merchant's numbers on ``binding_id``'s channel, locked; empty when
+    that number is not this merchant's."""
+    query, values = lock_channel_numbers_query(merchant_id, binding_id)
+    rows = await conn.fetch(query, *values)
+    return [decode_binding(row) for row in rows]
+
+
+async def clear_primary(conn: DbTxn, merchant_id: str, channel: str) -> None:
+    query, values = clear_primary_query(merchant_id, channel)
+    await conn.execute(query, *values)
+
+
+async def set_primary(
+    conn: DbTxn, merchant_id: str, binding_id: str
+) -> Optional[ChannelBinding]:
+    query, values = set_primary_query(merchant_id, binding_id)
+    row = await conn.fetchrow(query, *values)
+    return decode_binding(row) if row is not None else None
+
+
+async def take_conversation(
+    conn: DbTxn, merchant_id: str, channel: str
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(the number that held them, Buddy's settings as stored), lifted off
+    that number; None when no number held them."""
+    query, values = take_conversation_query(merchant_id, channel)
+    row = await conn.fetchrow(query, *values)
+    if row is None:
+        return None
+    return str(row["id"]), jsonb_object(row["conversation"])
+
+
+async def put_conversation(
+    conn: DbTxn, merchant_id: str, binding_id: str, conversation: Dict[str, Any]
+) -> Optional[ChannelBinding]:
+    query, values = put_conversation_query(merchant_id, binding_id, conversation)
+    row = await conn.fetchrow(query, *values)
     return decode_binding(row) if row is not None else None
