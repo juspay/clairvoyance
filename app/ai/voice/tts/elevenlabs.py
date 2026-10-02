@@ -46,11 +46,11 @@ def build_elevenlabs_tts(config: ElevenLabsConfig):
 
     return ElevenLabsTTSService(
         api_key=config.api_key,
-        voice_id=config.voice_id,
-        model=config.model,
         url=config.url,
         enable_ssml_parsing=config.enable_ssml_parsing,
         settings=ElevenLabsTTSService.Settings(
+            voice=config.voice_id,
+            model=config.model,
             speed=config.speed,
             stability=config.stability,
             similarity_boost=config.similarity_boost,
