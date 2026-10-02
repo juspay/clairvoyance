@@ -179,6 +179,20 @@ async def BB_CHANNEL_DRIFT_ALERT_THRESHOLD() -> int:
     return await get_config("BB_CHANNEL_DRIFT_ALERT_THRESHOLD", 5, int)
 
 
+async def BB_CAPACITY_WAIT_PILE_THRESHOLD() -> int:
+    """Distinct leads waiting on one telephony number at or above which a
+    capacity defer uses BB_CAPACITY_WAIT_PILE_DEFER_S instead of the
+    1..BB_CHANNEL_WAIT_BACKOFF_MAX_S jitter. Raise to disable."""
+    return await get_config("BB_CAPACITY_WAIT_PILE_THRESHOLD", 50, int)
+
+
+async def BB_CAPACITY_WAIT_PILE_DEFER_S() -> int:
+    """Capacity defer once a number has a pile of waiting leads. Bounds
+    rechecks to pile / this many seconds; a freed line can idle this long
+    at the tail of a pile."""
+    return await get_config("BB_CAPACITY_WAIT_PILE_DEFER_S", 60, int)
+
+
 async def BB_STALE_LOCK_THRESHOLD_MINUTES() -> int:
     """Minutes a BACKLOG row may remain `is_locked=TRUE` before
     `clean_stale_bb_locks` unlocks it. Controls the §7.1 trade-off:

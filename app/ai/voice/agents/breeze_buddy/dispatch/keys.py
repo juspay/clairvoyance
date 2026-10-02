@@ -38,6 +38,11 @@ RESELLER_PAUSED_PREFIX = "bb:reseller:paused:"  # + reseller_id
 # the underlying condition persists. Each alert kind has its own key.
 ALERT_THROTTLE_PREFIX = "bb:alert:fired:"  # + alert_name
 
+# Per-number, per-minute HyperLogLog of distinct leads waiting for a channel
+# (``capacity_defer_seconds``). The number id is a ``{}`` hash tag so the
+# two minute keys share a slot for the multi-key PFCOUNT on Redis Cluster.
+CAPACITY_WAIT_PREFIX = "bb:capwait:"  # + {telephony_number_id}:minute_bucket
+
 
 def processing_list_for(worker_uuid: str) -> str:
     return f"{PROCESSING_LIST_PREFIX}{worker_uuid}"
@@ -57,3 +62,7 @@ def reseller_paused_key(reseller_id: str) -> str:
 
 def alert_throttle_key(alert_name: str) -> str:
     return f"{ALERT_THROTTLE_PREFIX}{alert_name}"
+
+
+def capacity_wait_key(telephony_number_id: str, minute_bucket: int) -> str:
+    return f"{CAPACITY_WAIT_PREFIX}{{{telephony_number_id}}}:{minute_bucket}"
