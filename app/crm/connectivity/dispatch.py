@@ -8,10 +8,11 @@ The loop itself is not here: claim_sends()/dispatch_send() plug into the
 shared drain-loop scaffold (app/crm/shared/worker.py) as the "dispatcher"
 role in app/crm/worker_main.py. This file owns only what a row means.
 
-The gate exists as a thin slice: _gate() below probes platform suppression
-(fail closed) before every send, and a refusal writes a 'blocked' row. The
-full may_contact() — consent, purpose, quiet hours — replaces _gate's body
-with B5; the call site never changes.
+The gate exists as a thin slice: gate() below probes platform suppression
+(fail closed) before every send, and a refusal writes a 'blocked' row (a
+probe that ran out of time writes a retryable failure instead). The full
+may_contact() — consent, purpose, quiet hours — replaces gate's body with
+B5; the call sites never change.
 """
 
 import asyncio
@@ -32,12 +33,14 @@ from app.crm.connectivity.channels import gate_handle_kind_for
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.reasons import (
     REASON_ATTEMPTS_EXHAUSTED,
+    REASON_GATE_TIMEOUT,
     REASON_GATE_UNAVAILABLE,
     REASON_PROVIDER_REJECTED,
     REASON_SEND_ERROR,
     REASON_SUPPRESSED,
     reason_class,
 )
+from app.crm.connectivity.receipts import apply_parked, sweep_parked
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.send import send
 from app.crm.connectivity.status import (
@@ -175,9 +178,10 @@ def plan_for_outcome(
     )
 
 
-async def _gate(message: QueuedMessage) -> Optional[str]:
-    """Returns a refusal reason, or None to allow. may_contact() (B5)
-    replaces this body; the call site never changes.
+async def gate(message: QueuedMessage) -> Optional[str]:
+    """Returns a refusal reason, or None to allow — for both send paths (a
+    free-form reply in session.py passes the SAME check a template does).
+    may_contact() (B5) replaces this body; the call sites never change.
 
     The thin slice that exists today is the one check a person who said
     STOP is protected by: platform's suppression probe, which itself fails
@@ -188,6 +192,8 @@ async def _gate(message: QueuedMessage) -> Optional[str]:
     # consent from the consent table, purpose authorisation, quiet hours.
     # Suppression stays as check #1; may_contact() joins it here, and its
     # decision_id flows into mint_send_token below.
+    # Read at call time, so a test (or a hot config reload) is honoured.
+    timeout = CRM_MESSAGE_SEND_TIMEOUT_SECONDS
     kind = gate_handle_kind_for(message.channel)
     if kind is None:
         # A channel the gate cannot check must not slip through unchecked.
@@ -200,17 +206,15 @@ async def _gate(message: QueuedMessage) -> Optional[str]:
         # deadline plus send()'s.
         if await asyncio.wait_for(
             is_suppressed({kind: message.sent_to_address}),
-            timeout=CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
+            timeout=timeout,
         ):
             return REASON_SUPPRESSED
     except asyncio.TimeoutError:
-        # Fail closed, not retry-later-by-word: nothing was sent, so this is
-        # OUR refusal, same as a probe that raised.
-        logger.error(
-            f"gate probe timed out after {CRM_MESSAGE_SEND_TIMEOUT_SECONDS}s "
-            f"for {message.id}"
-        )
-        return REASON_GATE_UNAVAILABLE
+        # Fail closed — nothing is sent — but as no-answer-yet, not "no": a
+        # slow read is not a verdict, and refusal_outcome() turns this word
+        # into a retryable failure rather than a terminal block.
+        logger.error(f"gate probe timed out after {timeout}s for {message.id}")
+        return REASON_GATE_TIMEOUT
     except Exception as e:
         # is_suppressed is total by contract; this catches an escape from
         # OUR plumbing around it. Unknown gate input → NO (ADR 0018).
@@ -219,12 +223,21 @@ async def _gate(message: QueuedMessage) -> Optional[str]:
     return None
 
 
-def mint_send_token(message: QueuedMessage) -> SendToken:
-    """The token that names the one message _gate() just allowed.
+def refusal_outcome(refusal: str) -> SendOutcome:
+    """PURE: what a gate refusal records, on either send path. A probe that
+    ran out of time is no answer — a retryable failure that sent nothing;
+    every other refusal is OUR terminal 'blocked'."""
+    if refusal == REASON_GATE_TIMEOUT:
+        return SendOutcome(status=MESSAGE_FAILED, reason=refusal, retryable=True)
+    return SendOutcome(status=MESSAGE_BLOCKED, reason=refusal)
 
-    Policy lives in _gate(); this mints identity, and send() refuses a token
+
+def mint_send_token(message: QueuedMessage) -> SendToken:
+    """The token that names the one message gate() just allowed.
+
+    Policy lives in gate(); this mints identity, and send() refuses a token
     that does not name this exact message — so no adapter was ever wired
-    without one. When may_contact() (B5) replaces _gate's body, its
+    without one. When may_contact() (B5) replaces gate's body, its
     decision_id lands here, tracing a send back to the grant.
     """
     return SendToken(
@@ -254,10 +267,26 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
     # pass's claim and sweep lines.
     set_log_context(component=LOG_COMPONENT)
 
-    # Reclaim first, so rows abandoned by a dead worker rejoin this batch
-    # instead of waiting a tick. The sweep KILLS rather than requeues a row
-    # out of attempts — every lap through it was a claim that really sent, so
-    # an unbounded sweep would be an unbounded sender.
+    # Each housekeeping sweep is fenced on its own: one that fails (a lock
+    # timeout, a bad row) must not stop the others or the claim — a
+    # dispatcher that cannot sweep can still send. Reclaim runs first, so
+    # rows abandoned by a dead worker rejoin this batch instead of waiting a
+    # tick.
+    for sweep in (_requeue_stale_claims, _close_abandoned_sessions, _sweep_receipts):
+        try:
+            await sweep()
+        except Exception as e:
+            logger.opt(exception=e).error(f"crm dispatch {sweep.__name__} failed")
+
+    messages = await message_accessor.claim_queued_messages(batch)
+    _log_queue_lag(messages, batch)
+    return messages
+
+
+async def _requeue_stale_claims() -> None:
+    """Return a dead worker's claims to the queue. KILLS rather than requeues
+    a row out of attempts — every lap through here was a claim that really
+    sent, so an unbounded sweep would be an unbounded sender."""
     reclaimed, exhausted = await message_accessor.requeue_stale_claims(
         CRM_DISPATCH_STALE_MINUTES, CRM_DISPATCH_MAX_ATTEMPTS
     )
@@ -276,9 +305,30 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
             f"attempts: {sample_ids(exhausted)}"
         )
 
-    messages = await message_accessor.claim_queued_messages(batch)
-    _log_queue_lag(messages, batch)
-    return messages
+
+async def _close_abandoned_sessions() -> None:
+    """Session sends (free-form replies) are never claimed and never
+    requeued — their words are not on the row — so a sender that died
+    mid-reply leaves a row only this sweep can close, as dead."""
+    abandoned = await message_accessor.abandon_stale_session_sends(
+        CRM_DISPATCH_STALE_MINUTES
+    )
+    if abandoned:
+        logger.error(
+            f"crm dispatch closed {len(abandoned)} abandoned session send(s): "
+            f"{sample_ids(abandoned)}"
+        )
+
+
+async def _sweep_receipts() -> None:
+    """Receipts parked ahead of their row's stamp (receipts.py): drain the
+    ones whose row has the id now, drop the ones past the grace — those name
+    messages this system did not send. Quietly. This is the ONLY place the
+    sweep runs, so it lives and dies with the dispatcher role
+    (worker_main)."""
+    expired = await sweep_parked()
+    if expired:
+        logger.debug(f"crm dispatch dropped {expired} unmatched parked receipt(s)")
 
 
 def _log_queue_lag(messages: Sequence[QueuedMessage], limit: int) -> None:
@@ -329,15 +379,16 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         source_kind=message.source_kind,
         source_id=message.source_id,
     )
-    refusal = await _gate(message)
+    refusal = await gate(message)
     if refusal is not None:
-        # Blocked before the adapter is ever touched — the row records OUR
-        # refusal with its reason, and nothing reaches the provider.
+        # Stopped before the adapter is ever touched — the row records OUR
+        # refusal with its reason (or, for a probe that timed out, a
+        # retryable failure), and nothing reaches the provider.
         # gate_unavailable is louder: it means misconfig (a channel the gate
         # cannot probe), not policy — the one refusal an operator must notice.
         log = logger.error if refusal == REASON_GATE_UNAVAILABLE else logger.warning
-        log(f"message {message.id} blocked by gate — {refusal}")
-        outcome = SendOutcome(status=MESSAGE_BLOCKED, reason=refusal)
+        log(f"message {message.id} stopped by gate — {refusal}")
+        outcome = refusal_outcome(refusal)
     else:
         try:
             outcome = await send(mint_send_token(message), message)
@@ -385,6 +436,10 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
             f"outcome '{plan.status}' discarded"
         )
         return
+
+    # The row knows its provider id now: any receipt that raced ahead of this
+    # write (parked by receipts.py) is applied here, in order-free fashion.
+    await apply_parked(message.merchant_id, plan.provider_message_id)
 
     # Every message ends here, so counting this line by status IS the
     # send-failure rate — no second signal to keep in step. reason_class

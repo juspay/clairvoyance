@@ -210,14 +210,17 @@ class _FakeTemplateAccessor:
         self.calls.append("insert")
         return _template()
 
-    async def update_draft_components(self, txn, merchant_id, template_id, components):
+    async def update_draft_components(
+        self, txn, merchant_id, template_id, components, category=None
+    ):
         """Test double: record the draft edit."""
         self.calls.append("update_draft")
         return _template(components=components)
 
-    async def claim_for_submit(self, txn, merchant_id, template_id):
+    async def claim_for_submit(self, txn, merchant_id, template_id, category):
         """Test double: the exclusive claim, or nothing."""
         self.calls.append("claim")
+        self.claimed_category = category
         return _template(status="submitting") if self.claim else None
 
     async def release_submit_claim(self, merchant_id, template_id):
@@ -1029,3 +1032,56 @@ def test_the_publish_check_is_on_the_contract_surface() -> None:
     assert "template_status" in contracts.__all__
     assert "registers_templates_for" in contracts.__all__
     assert contracts.registers_templates_for is channels_module.registers_templates_for
+
+
+def test_a_draft_keeps_the_category_the_merchant_picked() -> None:
+    """The editor's category rides on the draft (submitted_category, OURS),
+    so a reopened draft still says Marketing and submit sends Marketing —
+    and an edit that sends no category leaves the draft's alone."""
+    from app.crm.connectivity.db.queries.template import (
+        insert_template_draft_query,
+        update_draft_components_query,
+    )
+
+    query, values = insert_template_draft_query(
+        "shop", "whatsapp", "waba-1", "sale", "en", "[]", "MARKETING"
+    )
+    assert "submitted_category" in query and values[-1] == "MARKETING"
+    query, values = update_draft_components_query("shop", "t-1", "[]", None)
+    assert "submitted_category = COALESCE($5, submitted_category)" in query
+    assert values[-1] is None
+
+
+def test_the_submit_claim_records_the_category_being_sent() -> None:
+    """Written with the claim: a submit that dies after the provider accepted
+    still says what we asked for when the webhook resumes it."""
+    from app.crm.connectivity.db.queries.template import claim_for_submit_query
+
+    query, values = claim_for_submit_query("shop", "t-1", "UTILITY")
+    assert "submitted_category = $5" in query and values[4] == "UTILITY"
+
+
+@pytest.mark.parametrize("category", ["marketing", "UTILITY; DROP", "A" * 33, ""])
+def test_a_draft_category_must_look_like_a_provider_category(category) -> None:
+    from pydantic import ValidationError
+
+    from app.crm.connectivity.schemas.template import (
+        CreateTemplateDraftRequest,
+        EditTemplateRequest,
+    )
+
+    with pytest.raises(ValidationError):
+        EditTemplateRequest(merchant_id="shop", components=[], category=category)
+    with pytest.raises(ValidationError):
+        CreateTemplateDraftRequest(
+            merchant_id="shop",
+            channel="whatsapp",
+            provider_account_ref="waba-1",
+            name="sale",
+            language="en",
+            components=[],
+            category=category,
+        )
+    assert (
+        EditTemplateRequest(merchant_id="shop", components=[], category="MARKETING")
+    ).category == "MARKETING"

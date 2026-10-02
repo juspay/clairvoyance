@@ -579,7 +579,7 @@ def test_a_whole_batch_of_worst_case_sends_fits_inside_the_claim_lease() -> None
     assert CRM_MESSAGE_SEND_TIMEOUT_SECONDS < lease_seconds
     # The whole-batch bound. The 2× is no longer just margin: each message
     # may burn one full timeout in the gate probe (its own wait_for in
-    # dispatch._gate) and another in send(), so 2× IS the worst case — at
+    # dispatch.gate) and another in send(), so 2× IS the worst case — at
     # the defaults 20 × 20s × 2 = 800s against 900s, leaving 100s for pass
     # overhead (DB reads, backoff writes). Nudge one dial and the others
     # must follow.

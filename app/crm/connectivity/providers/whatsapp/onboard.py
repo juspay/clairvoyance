@@ -16,12 +16,21 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.core.config.static import META_APP_ID, META_APP_SECRET
+from app.core.config.static import (
+    META_APP_ID,
+    META_APP_SECRET,
+    META_ES_CONFIG_ID,
+    META_WHATSAPP_GRAPH_VERSION,
+)
 from app.core.logger import logger
 from app.crm.connectivity.providers.base import ConnectorHandshakeError
 from app.crm.connectivity.providers.meta.graph import GraphError, call, segment
 from app.crm.connectivity.providers.whatsapp import TOKEN_KEY
-from app.crm.connectivity.schemas.connector import HealthLevel, OnboardResult
+from app.crm.connectivity.schemas.connector import (
+    HealthLevel,
+    OnboardResult,
+    SignupConfig,
+)
 from app.crm.connectivity.schemas.message import CredentialBundle
 
 #: Ceiling on the phone-number page walk. Twenty-five per page, so this is
@@ -55,6 +64,23 @@ class OnboardWhatsappRequest(BaseModel):
     phone_number_id: str = Field(..., description="Meta phone_number_id")
     display_label: Optional[str] = Field(
         None, description="What the merchant calls this account in the console"
+    )
+
+
+def signup_config() -> SignupConfig:
+    """The browser half of Embedded Signup: the app id and the signup
+    configuration id FB.init / FB.login take, and the Graph version the SDK
+    should speak (the same one our server-side calls use). Public values —
+    see SignupConfig."""
+    app_id = META_APP_ID.strip()
+    config_id = META_ES_CONFIG_ID.strip()
+    configured = bool(app_id and config_id)
+    return SignupConfig(
+        connector_key="whatsapp",
+        configured=configured,
+        app_id=app_id if configured else None,
+        config_id=config_id if configured else None,
+        graph_version=META_WHATSAPP_GRAPH_VERSION.strip("/"),
     )
 
 

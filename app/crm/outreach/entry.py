@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
+from app.crm.connectivity.contracts import TOPIC_QUEUED
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -130,6 +131,13 @@ async def consume_attributed_event(
     can never see."""
     if customer_id is None:
         return  # not about a person: nothing to admit, end or wake
+    if event.topic == TOPIC_QUEUED:
+        # Our own record of a send (connectivity files it for the inbox
+        # timeline, and spells the topic). A fact about US, not something
+        # the customer did: it never starts, ends or wakes a workflow — a
+        # plan that sends a template must not enrol her again from its own
+        # send.
+        return
     open_runs = await enrollment_accessor.open_runs_for_customer(
         event.merchant_id, customer_id
     )
