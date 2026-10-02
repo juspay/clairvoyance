@@ -37,7 +37,8 @@ class TTSRequest(BaseModel):
     @classmethod
     def _validate_tempo(cls, v: dict) -> dict:
         # params.tempo is the ffmpeg atempo speaking-rate factor. It applies
-        # ONLY to eleven_v3_conversational (other models get it stripped in
+        # ONLY to the pipeline families — eleven_v3_conversational and v4
+        # (eleven_v4_turbo / eleven_v4) — (other models get it stripped in
         # CacheService._resolve); the range is ffmpeg's atempo hard bounds.
         tempo = v.get("tempo")
         if tempo is not None:

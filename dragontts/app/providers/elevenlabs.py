@@ -10,10 +10,12 @@ and the streaming path live-forwards 16 kHz chunks to a 16 kHz caller. A
 separate conversion layer (app/audio/format.py) maps this to the caller's
 requested ``output_format`` (e.g. μ-law 8 kHz for telephony) before caching.
 
-EXCEPTION — eleven_v3 models: the Text-to-Dialogue socket synthesizes at a
-request-selected rate, and the v3-CONVERSATIONAL family carries DragonTTS-local
-pipeline variants (see elevenlabs_pool.v3_conversational_variant; suffixes are
-stripped before any upstream call):
+EXCEPTION — eleven_v3 / eleven_v4 models: the Text-to-Dialogue socket (their
+only endpoint) synthesizes at a request-selected rate, and the
+v3-CONVERSATIONAL and v4 (``eleven_v4_turbo`` / ``eleven_v4``) families carry
+DragonTTS-local pipeline variants (see elevenlabs_pool.pipeline_variant;
+suffixes are stripped before any upstream call). Shown for v3 conversational;
+v4 takes the same suffixes, its base at ELEVENLABS_V4_NATIVE_SAMPLE_RATE:
 
 - ``eleven_v3_conversational`` (base): ElevenLabs' own ``pcm_8000`` directly.
   tempo 1 serves it unaltered; tempo != 1 applies ONLY the pitch-preserving
@@ -58,10 +60,12 @@ from app.core.logging import logger
 from app.providers import elevenlabs_pool
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
 from app.providers.elevenlabs_pool import (
-    is_elevenlabs_v3_conversational,
-    is_elevenlabs_v3_model,
-    normalize_v3_conversational,
-    v3_conversational_variant,
+    has_local_pipeline,
+    is_elevenlabs_ttd_model,
+    is_elevenlabs_v4_model,
+    normalize_pipeline_model,
+    pipeline_family,
+    pipeline_variant,
 )
 
 # Models that accept a language_code (the multilingual flash/turbo variants).
@@ -82,8 +86,8 @@ class ElevenLabsProvider(BaseTTSProvider):
     name = "elevenlabs"
     # Native PCM @ 16 kHz so the conversation path streams live and the cache
     # entry serves every requested format on read (μ-law/telephony is produced
-    # by convert-on-serve, as for the other 16 kHz-native providers). v3 models
-    # are the exception — see synth_native_format below.
+    # by convert-on-serve, as for the other 16 kHz-native providers). v3 / v4
+    # (Text-to-Dialogue) models are the exception — see synth_native_format below.
     native_encoding = "pcm_s16le"
     native_sample_rate = 16000
 
@@ -93,7 +97,7 @@ class ElevenLabsProvider(BaseTTSProvider):
         """v3 (Text-to-Dialogue) synthesizes at the model-variant-selected rate
         (base v3conv = ElevenLabs' own pcm_8000; _tempo/_clean_tempo = the
         full-band native rate); classic at 16 kHz."""
-        if is_elevenlabs_v3_model(model):
+        if is_elevenlabs_ttd_model(model):
             return "pcm_s16le", self._v3_rate_for(model, params)
         return self.native_encoding, self.native_sample_rate
 
@@ -106,12 +110,14 @@ class ElevenLabsProvider(BaseTTSProvider):
         ``_clean_tempo`` generate at the configured full-band rate — the
         custom anti-aliased downsample to the caller's 8 kHz happens once, at
         synth time, and the cache stores that end result. Plain ``eleven_v3``
-        (non-conversational) uses the configured native rate.
+        (non-conversational) uses the configured native rate. The v4 family
+        mirrors this: its base speaks ELEVENLABS_V4_NATIVE_SAMPLE_RATE
+        directly, its processed variants use the same full-band rate as v3's.
         """
-        if (
-            v3_conversational_variant(model) == "base"
-            and settings.elevenlabs_tempo1_direct_pcm8000
-        ):
+        variant = pipeline_variant(model)
+        if is_elevenlabs_v4_model(model) and variant in (None, "base"):
+            return settings.elevenlabs_v4_native_sample_rate
+        if variant == "base" and settings.elevenlabs_tempo1_direct_pcm8000:
             return 8000
         return settings.elevenlabs_v3_native_sample_rate
 
@@ -143,7 +149,8 @@ class ElevenLabsProvider(BaseTTSProvider):
         # Lazily created on first streaming miss; warmed eagerly when the model
         # matches a default.
         self._pools: dict[
-            tuple[str, str, bool, str | None], elevenlabs_pool.ElevenLabsStreamPool
+            tuple[str, str, bool, str | None, int | None],
+            elevenlabs_pool.ElevenLabsStreamPool,
         ] = {}
 
     def _voice_settings(self, params: dict, model_id: str | None = None) -> dict:
@@ -167,14 +174,14 @@ class ElevenLabsProvider(BaseTTSProvider):
                 value = params.get(key)
                 if value is not None:
                     vs[key] = value
-        if is_elevenlabs_v3_model(model_id):
+        if is_elevenlabs_ttd_model(model_id):
             # Text-to-Dialogue reads ONLY stability; sending speed /
             # similarity_boost would imply an effect the endpoint doesn't have
             # (they're silently ignored). Keep stability when present.
             dropped = sorted(k for k in vs if k != "stability")
             if dropped:
                 logger.info(
-                    f"ElevenLabs v3 model {model_id}: dropping unsupported "
+                    f"ElevenLabs Text-to-Dialogue model {model_id}: dropping unsupported "
                     f"voice_settings {dropped} (Text-to-Dialogue reads only stability)"
                 )
             vs = {k: v for k, v in vs.items() if k == "stability"}
@@ -184,18 +191,24 @@ class ElevenLabsProvider(BaseTTSProvider):
     def _tempo_for(self, params: dict | None, model_id: str | None) -> float:
         """Effective ffmpeg atempo factor for this request (1.0 = bypass).
 
-        Only ``eleven_v3_conversational`` is ever stretched — every other model
-        returns 1.0 regardless of params (the cache layer also strips tempo for
-        non-v3conv models, so their keys never fragment). Exactly 1.0 — absent,
-        default, or explicit — never spawns ffmpeg.
+        Only the pipeline families (v3 conversational, v4) are ever stretched —
+        every other model returns 1.0 regardless of params (the cache layer
+        also strips tempo for them, so their keys never fragment). Exactly 1.0
+        — absent, default, or explicit — never spawns ffmpeg. The
+        ELEVENLABS_V3CONV_DEFAULT_TEMPO knob is v3-conversational only; v4
+        without a tempo param speaks at 1.0.
         """
-        if not is_elevenlabs_v3_conversational(model_id):
+        if not has_local_pipeline(model_id):
             return 1.0
         if not settings.elevenlabs_atempo_enabled:
             return 1.0
         raw = (params or {}).get("tempo")
         if raw is None:
-            raw = settings.elevenlabs_v3conv_default_tempo
+            raw = (
+                settings.elevenlabs_v3conv_default_tempo
+                if pipeline_family(model_id) == "eleven_v3_conversational"
+                else 1.0
+            )
         try:
             tempo = float(raw)
         except (TypeError, ValueError):
@@ -248,12 +261,12 @@ class ElevenLabsProvider(BaseTTSProvider):
         """
         if not self.api_key:
             return None
-        # v3 (Text-to-Dialogue) pools are sized by their own knob: TTD sockets
-        # hold a permanent keepalive context and eleven_v3 has NO HTTP
+        # Text-to-Dialogue (v3 / v4) pools are sized by their own knob: TTD
+        # sockets hold a permanent keepalive context and v3 / v4 have NO HTTP
         # fallback, so they warm independently of the classic pool size.
         pool_size = (
             settings.elevenlabs_dialogue_pool_size
-            if is_elevenlabs_v3_model(model_id)
+            if is_elevenlabs_ttd_model(model_id)
             else settings.elevenlabs_stream_pool_size
         )
         if pool_size < 1:
@@ -261,17 +274,17 @@ class ElevenLabsProvider(BaseTTSProvider):
         # Non-multilingual models ignore language on the socket (the pool only
         # sends language_code for multilingual models), so normalize it out of
         # the key — otherwise identical requests that differ only by language
-        # each spin up a redundant warm socket (pool fragmentation). v3 models
-        # DO take a connect-time language_code, so their key keeps it.
+        # each spin up a redundant warm socket (pool fragmentation). TTD
+        # (v3 / v4) models DO take a connect-time language_code, so their key keeps it.
         if (
             model_id not in _ELEVENLABS_MULTILINGUAL_MODELS
-            and not is_elevenlabs_v3_model(model_id)
+            and not is_elevenlabs_ttd_model(model_id)
         ):
             language = None
         # output_format is connect-time, so the v3 rate rides in the key.
         v3_rate = (
             sample_rate
-            if sample_rate is not None and is_elevenlabs_v3_model(model_id)
+            if sample_rate is not None and is_elevenlabs_ttd_model(model_id)
             else None
         )
         key = (voice_id, model_id, enable_ssml_parsing, language, v3_rate)
@@ -282,7 +295,13 @@ class ElevenLabsProvider(BaseTTSProvider):
                 voice_id=voice_id,
                 model_id=model_id,
                 base_url=self.base_url,
-                idle_timeout=settings.elevenlabs_stream_idle_timeout,
+                # TTD waits longer before guessing the end: v4 pauses up to
+                # ~1.9 s between audio bursts (see ELEVENLABS_TTD_IDLE_TIMEOUT).
+                idle_timeout=(
+                    settings.elevenlabs_ttd_idle_timeout
+                    if is_elevenlabs_ttd_model(model_id)
+                    else settings.elevenlabs_stream_idle_timeout
+                ),
                 min_size=pool_size,
                 max_size=max(pool_size * 2, pool_size + 4),
                 enable_ssml_parsing=enable_ssml_parsing,
@@ -293,7 +312,7 @@ class ElevenLabsProvider(BaseTTSProvider):
                 # the 16 kHz cache-native rate.
                 output_format=(
                     f"pcm_{v3_rate or settings.elevenlabs_v3_native_sample_rate}"
-                    if is_elevenlabs_v3_model(model_id)
+                    if is_elevenlabs_ttd_model(model_id)
                     else "pcm_16000"
                 ),
             )
@@ -301,16 +320,15 @@ class ElevenLabsProvider(BaseTTSProvider):
         return pool
 
     async def warm(self) -> None:
-        """Pre-warm the pool for the default voice+model (called at startup).
+        """Pre-warm the classic pool named by ELEVENLABS_WARM_* (at startup).
 
         Other (voice, model) combos warm lazily on their first streaming miss.
         """
         if not self.api_key or settings.elevenlabs_stream_pool_size < 1:
             return
-        defaults = PROVIDER_DEFAULTS.get("elevenlabs", {})
-        voice = defaults.get("voice_id", "")
-        model = defaults.get("model", "eleven_flash_v2_5")
-        language = defaults.get("language")
+        voice = settings.elevenlabs_warm_voice_id
+        model = settings.elevenlabs_warm_model
+        language = settings.elevenlabs_warm_language or None
         if not voice or not model:
             return
         try:
@@ -365,9 +383,9 @@ class ElevenLabsProvider(BaseTTSProvider):
         final_model_id = model if model else defaults["model"]
         final_language = language if language else defaults["language"]
 
-        if is_elevenlabs_v3_model(final_model_id):
-            # Eleven v3 exists ONLY on the Text-to-Dialogue socket — the
-            # classic /v1/text-to-speech endpoint below returns 404 for it.
+        if is_elevenlabs_ttd_model(final_model_id):
+            # Eleven v3 / v4 exist ONLY on the Text-to-Dialogue socket — the
+            # classic /v1/text-to-speech endpoints reject them (404 / 400).
             return await self._synth_v3(
                 text=text,
                 voice_id=final_voice_id,
@@ -393,7 +411,7 @@ class ElevenLabsProvider(BaseTTSProvider):
         # pipecat's use_base_code.
         if (
             final_model_id in _ELEVENLABS_MULTILINGUAL_MODELS
-            or is_elevenlabs_v3_model(final_model_id)
+            or is_elevenlabs_ttd_model(final_model_id)
         ) and final_language:
             payload["language_code"] = final_language.split("-")[0]
         if params.get("enable_ssml_parsing"):
@@ -402,10 +420,10 @@ class ElevenLabsProvider(BaseTTSProvider):
             # when requested. v3 does not support SSML parsing — silently
             # reading the tags aloud would corrupt v3 audio, so the flag is
             # dropped for v3 models instead of forwarded.
-            if is_elevenlabs_v3_model(final_model_id):
+            if is_elevenlabs_ttd_model(final_model_id):
                 logger.warning(
-                    "enable_ssml_parsing requested with an eleven_v3 model — "
-                    "not supported on v3; ignoring"
+                    "enable_ssml_parsing requested with a Text-to-Dialogue "
+                    "model (eleven_v3 / eleven_v4) — not supported; ignoring"
                 )
             else:
                 payload["enable_ssml_parsing"] = True
@@ -425,6 +443,55 @@ class ElevenLabsProvider(BaseTTSProvider):
             sample_rate=16000,
         )
 
+    async def _speak_v3(
+        self,
+        pool: elevenlabs_pool.ElevenLabsStreamPool,
+        msg: dict,
+        *,
+        voice_id: str,
+        model: str,
+    ) -> bytes:
+        """Speak one v3 utterance over the TTD pool, retrying ONCE on failure.
+
+        A socket the network drops ("no close frame received or sent") fails
+        every utterance on it; without a retry that sentence is silently
+        missing from the live call. Retrying is safe HERE: the clip is
+        collected whole before anything leaves DragonTTS, so a failed
+        attempt's partial audio is discarded — the caller never hears it and
+        nothing is cached until a clip completes. The dead socket is no longer
+        ready, so the retry lands on another one (or a fresh connect).
+        Cancellation (caller hung up / barge-in) is a BaseException and is
+        never retried. If the retry also fails, the error is raised as before
+        and logged with the full text so the lost sentence is traceable.
+        """
+        text = msg.get("text", "")
+        for attempt in (1, 2):
+            chunks: list[bytes] = []
+            try:
+                async for chunk in pool.stream(msg):
+                    chunks.append(chunk)
+                if attempt == 2:
+                    logger.info(
+                        f"ElevenLabs TTD retry succeeded [voice_id={voice_id}, "
+                        f"model_id={model}]: {text[:50]}..."
+                    )
+                return b"".join(chunks)
+            except Exception as e:
+                if attempt == 1:
+                    logger.warning(
+                        f"ElevenLabs TTD synth failed ({type(e).__name__}: {e}) — "
+                        f"retrying once [voice_id={voice_id}, model_id={model}]: "
+                        f"{text[:50]}..."
+                    )
+                    continue
+                logger.error(
+                    f"ElevenLabs TTD synth failed after retry "
+                    f"({type(e).__name__}: {e}) — sentence NOT spoken "
+                    f"[voice_id={voice_id}, model_id={model}] text={text!r}"
+                )
+                raise
+        raise AssertionError("unreachable")  # pragma: no cover
+
     async def _synth_v3(
         self,
         *,
@@ -434,7 +501,8 @@ class ElevenLabsProvider(BaseTTSProvider):
         language: str | None,
         params: dict,
     ) -> AudioResult:
-        """One-shot eleven_v3 synth: one Text-to-Dialogue utterance, joined.
+        """One-shot Text-to-Dialogue synth (eleven_v3 / eleven_v4): one
+        utterance, joined.
 
         The bytes path (/tts/bytes, warmer) previously fell through to the
         classic HTTP endpoint, which 404s for v3 — v3 is TTD-only. Speak the
@@ -444,24 +512,27 @@ class ElevenLabsProvider(BaseTTSProvider):
         """
         if params.get("enable_ssml_parsing"):
             logger.warning(
-                "enable_ssml_parsing requested with an eleven_v3 model — "
-                "not supported on v3; ignoring"
+                "enable_ssml_parsing requested with a Text-to-Dialogue "
+                "model (eleven_v3 / eleven_v4) — not supported; ignoring"
             )
         lang_code = language.split("-")[0] if language else None
-        variant = v3_conversational_variant(model)
+        variant = pipeline_variant(model)
+        v4 = is_elevenlabs_v4_model(model)
         tempo = self._tempo_for(params, model)
         sample_rate = self._v3_rate_for(model, params)
         # The variant suffix is DragonTTS-local; ElevenLabs only knows the
         # base id, so every upstream call speaks the normalized name.
-        upstream_model = normalize_v3_conversational(model)
+        upstream_model = normalize_pipeline_model(model)
         pool = self._get_pool(voice_id, upstream_model, False, lang_code, sample_rate)
         if pool is None:
             raise ProviderError(
-                "ElevenLabs v3 requires the stream pool "
+                "ElevenLabs Text-to-Dialogue models require the stream pool "
                 "(ELEVENLABS_DIALOGUE_POOL_SIZE >= 1) — Text-to-Dialogue has "
                 "no HTTP endpoint"
             )
-        direct = variant == "base" and sample_rate == 8000 and tempo == 1.0
+        # The v4 base is served as generated at whatever rate it speaks; the
+        # v3-conversational base only at its direct pcm_8000.
+        direct = variant == "base" and tempo == 1.0 and (v4 or sample_rate == 8000)
         logger.info(
             f"Synthesizing with ElevenLabs Text-to-Dialogue (pcm_{sample_rate})"
             f"{' — direct, unaltered' if direct else ''}"
@@ -473,10 +544,7 @@ class ElevenLabsProvider(BaseTTSProvider):
             "text": text,
             "voice_settings": self._voice_settings(params, upstream_model),
         }
-        chunks = []
-        async for chunk in pool.stream(msg):
-            chunks.append(chunk)
-        audio = b"".join(chunks)
+        audio = await self._speak_v3(pool, msg, voice_id=voice_id, model=model)
         if direct:
             # base model, speed 1: serve ElevenLabs' own pcm_8000 exactly as
             # generated — no hygiene, no stretch, no downsample.
@@ -489,10 +557,12 @@ class ElevenLabsProvider(BaseTTSProvider):
         # Hygiene runs ONLY where the variant asks for clean: _clean_tempo,
         # plain eleven_v3 (legacy chain), or the base model when its direct-8k
         # path is knob-disabled (then it runs the full-band chain instead).
-        # base and _tempo at tempo != 1 stay untouched except for atempo.
+        # base and _tempo at tempo != 1 stay untouched except for atempo, and
+        # The v4 base is never cleaned (only its _clean_tempo variants are).
         if settings.elevenlabs_utterance_hygiene_enabled and (
-            variant in ("clean_tempo", "clean_tempo_v2", None)
-            or (variant == "base" and sample_rate != 8000)
+            variant in ("clean_tempo", "clean_tempo_v2")
+            or (variant is None and not v4)
+            or (variant == "base" and sample_rate != 8000 and not v4)
         ):
             cleaned = clean_utterance(
                 audio,
@@ -593,18 +663,18 @@ class ElevenLabsProvider(BaseTTSProvider):
         final_language = language if language else defaults["language"]
         # Variant suffixes (_tempo/_clean_tempo) are DragonTTS-local pipeline
         # selectors — ElevenLabs only knows the base id.
-        upstream_model_id = normalize_v3_conversational(final_model_id)
+        upstream_model_id = normalize_pipeline_model(final_model_id)
 
         msg = {
             "text": text,
             "voice_settings": self._voice_settings(params, upstream_model_id),
         }
         # SSML is a connect-time socket setting (see _get_pool / pool URI), so it
-        # selects which warm pool to use — not a per-message field. v3 never
-        # takes it (Text-to-Dialogue has no SSML support), so it's normalized
-        # out of the key — keeping it would split the v3 pool in two for no
+        # selects which warm pool to use — not a per-message field. v3 / v4
+        # never take it (Text-to-Dialogue has no SSML support), so it's
+        # normalized out of the key — keeping it would split the TTD pool in two for no
         # effect, and the bytes path (_synth_v3) always passes False.
-        ssml = bool(params.get("enable_ssml_parsing")) and not is_elevenlabs_v3_model(
+        ssml = bool(params.get("enable_ssml_parsing")) and not is_elevenlabs_ttd_model(
             final_model_id
         )
         logger.info(

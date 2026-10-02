@@ -40,8 +40,9 @@ PROVIDER_DEFAULTS: dict[str, dict] = {
         # synth); only enable_ssml_parsing=True gets its own key. ElevenLabs
         # only honors this on eleven_flash_v2_5 etc. (NOT eleven_v3).
         "enable_ssml_parsing": False,
-        # ffmpeg atempo speaking-rate factor. Applies ONLY to
-        # eleven_v3_conversational (see ElevenLabsProvider._tempo_for); the
+        # ffmpeg atempo speaking-rate factor. Applies ONLY to the pipeline
+        # families — eleven_v3_conversational and v4 (eleven_v4_turbo /
+        # eleven_v4) — (see ElevenLabsProvider._tempo_for); the
         # default lives here so canonical_params collapses an explicit
         # tempo==1.0 with "absent" into one cache key — and 1.0 never
         # touches ffmpeg at all (pure bypass, zero spawn cost).
@@ -195,14 +196,36 @@ class Settings(BaseSettings):
     # the WS URL). Each socket multiplexes up to 5 concurrent contexts. Streaming
     # misses reuse a warm socket; if none is ready, fall back to one-shot HTTP.
     elevenlabs_stream_pool_size: int = 16
+    # Which classic pool those ELEVENLABS_STREAM_POOL_SIZE sockets are opened
+    # for at startup. A socket pins voice + model + language when it connects,
+    # so this must match the busiest classic template or the warm sockets sit
+    # idle while real misses open their own. Language is the code clairvoyance
+    # actually sends: a null template language arrives as its default "en".
+    # Speed/stability are per-sentence, so they don't matter here. Kept apart
+    # from PROVIDER_DEFAULTS on purpose — those feed cache-key canonicalization,
+    # and changing them would re-key or mis-serve cached audio. An empty voice
+    # or model skips startup warming. Env: ELEVENLABS_WARM_VOICE_ID,
+    # ELEVENLABS_WARM_MODEL, ELEVENLABS_WARM_LANGUAGE.
+    elevenlabs_warm_voice_id: str = "iB2rIwm9cQCRGWoKDRtX"
+    elevenlabs_warm_model: str = "eleven_flash_v2_5"
+    elevenlabs_warm_language: str = "en"
     # Max server-silence gap (seconds) after audio starts that ends an ElevenLabs
     # WS utterance (ElevenLabs delays is_final ~20s). Lower = faster stream
     # close/turn-end; raise if long utterances ever truncate at a >N s pause.
     # 2.0 (was 0.8): v3 pauses 0.33-0.6 s mid-clip, and 0.8 cut greetings short
     # ("…Kammari Meena से"). Env: ELEVENLABS_STREAM_IDLE_TIMEOUT.
     elevenlabs_stream_idle_timeout: float = 2.0
-    # Warm ElevenLabs Text-to-Dialogue sockets for eleven_v3 models (v3 exists
-    # ONLY there — the classic text-to-speech endpoint 404s for it). Sized
+    # The same fallback for the Text-to-Dialogue socket (eleven_v3* /
+    # eleven_v4*), which normally ends on is_final_audio_for_turn — this only
+    # fires when that marker never comes, so it adds no delay to a normal
+    # sentence. Longer than the classic one because v4 goes quiet for up to
+    # ~1.9 s between audio bursts mid-sentence (live-measured; v3 ~0.4 s): at
+    # 2 s, v4 sentences lost their last ~1 s and the cut clip was cached.
+    # Env: ELEVENLABS_TTD_IDLE_TIMEOUT.
+    elevenlabs_ttd_idle_timeout: float = 5.0
+    # Warm ElevenLabs Text-to-Dialogue sockets for eleven_v3 / eleven_v4 models
+    # (they exist ONLY there — the classic text-to-speech endpoint rejects
+    # them). Sized
     # separately from the classic pool: each TTD socket carries a permanent
     # keepalive context (one of its 5 server-side context slots, leaving 4
     # usable) and has no HTTP fallback, so 2 warm sockets cover a call's
@@ -266,8 +289,9 @@ class Settings(BaseSettings):
     # params.tempo. Set to e.g. 1.15 to make the speed-up global for that
     # model without any client change (still bypassed at exactly 1.0).
     elevenlabs_v3conv_default_tempo: float = 1.0
-    # Native PCM rate requested from ElevenLabs for the full-band v3 chains:
-    # the _tempo / _clean_tempo variants (always), plain eleven_v3, and the
+    # Native PCM rate requested from ElevenLabs for the full-band chains: the
+    # _tempo / _clean_tempo variants of v3 conversational AND v4 (always),
+    # plain eleven_v3, and the
     # base model when elevenlabs_tempo1_direct_pcm8000=False. 8000 =
     # telephony-native (no resampling); the .env ships 44100 = best 8 kHz
     # call quality (generate + atempo full-band, ONE anti-aliased sinc
@@ -275,6 +299,14 @@ class Settings(BaseSettings):
     # Probe-confirmed supported on the TTD socket:
     # 44100/24000/22050/16000/8000.
     elevenlabs_v3_native_sample_rate: int = 8000
+    # Native PCM rate for the Eleven v4 BASE models (eleven_v4_turbo /
+    # eleven_v4, no suffix) — served as generated, like the v3-conversational
+    # base's pcm_8000. Their _tempo / _clean_tempo / _clean_tempo_v2 variants
+    # use the full-band rate above, exactly as v3's do. 8000 = telephony-native,
+    # matching v3. A /tts/stream miss streams live ONLY when the requested
+    # format equals this rate; any other rate synthesizes the whole sentence
+    # first. Probe-confirmed on the TTD socket: 8000/16000/44100.
+    elevenlabs_v4_native_sample_rate: int = 8000
     # Spark recovery for the full-band variants (_tempo / _clean_tempo):
     # band-limiting to 8 kHz irreversibly deletes everything above ~3.4 kHz
     # (sibilance, air, crispness), so this gently re-weights the top

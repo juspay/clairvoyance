@@ -19,9 +19,10 @@ Differences from Cartesia (encoded here):
   rate) and ``auto_mode=true`` (reduces latency for full phrases).
 - Hard **5-context cap per socket** (server-enforced); ``acquire`` skips a socket
   already at the cap and will open another up to ``max_size``.
-- ``eleven_v3*`` models use a DIFFERENT endpoint: the Text-to-Dialogue
-  multi-context socket (``/v1/text-to-dialogue/multi-stream-input``), the only
-  way to reach v3 (the text-to-speech socket rejects those model ids). The wire
+- ``eleven_v3*`` / ``eleven_v4*`` models use a DIFFERENT endpoint: the
+  Text-to-Dialogue multi-context socket
+  (``/v1/text-to-dialogue/multi-stream-input``), the only way to reach them
+  (the text-to-speech socket rejects those model ids). The wire
   protocol differs accordingly: contexts open with a ``voices`` registration
   (voice is NOT in the URL), text travels as ``inputs`` entries, only
   ``stability`` is honored in voice_settings, and the socket auto-closes after
@@ -60,34 +61,41 @@ from app.providers.base import ProviderError
 _ELEVENLABS_MULTILINGUAL_MODELS = {"eleven_flash_v2_5", "eleven_turbo_v2_5"}
 
 
-def is_elevenlabs_v3_model(model_id: str | None) -> bool:
-    """True for Eleven v3 models — only reachable via the Text-to-Dialogue
-    socket (the text-to-speech multi-context socket rejects them)."""
-    return bool(model_id) and model_id.startswith("eleven_v3")
+_TTD_MODEL_PREFIXES = ("eleven_v3", "eleven_v4")
 
 
-def is_elevenlabs_v3_conversational(model_id: str | None) -> bool:
-    """True for the v3 *Conversational* variant only — the single model the
-    ffmpeg atempo tempo stage ever applies to. Plain ``eleven_v3``, flash and
-    v2 models are unaffected even when a tempo param is sent (the cache layer
-    strips it before keying for non-v3conv models)."""
-    return bool(model_id) and model_id.strip().lower().startswith(
-        "eleven_v3_conversational"
-    )
+def is_elevenlabs_ttd_model(model_id: str | None) -> bool:
+    """True for Eleven v3 and v4 models — only reachable via the
+    Text-to-Dialogue socket (the text-to-speech multi-context socket rejects
+    them: 404 for v3, 400 for v4)."""
+    return bool(model_id) and model_id.strip().startswith(_TTD_MODEL_PREFIXES)
 
 
-# DragonTTS-local pipeline selectors layered ON TOP of eleven_v3_conversational.
-# ElevenLabs has no such model ids — normalize_* strips the suffix before any
-# upstream call — they choose the LOCAL processing chain (and the generation
-# rate) so a template can A/B chains by model name with zero client changes:
-#   base          : ElevenLabs' own pcm_8000. tempo 1 = unaltered;
-#                   tempo != 1 = atempo only (no hygiene).
+def is_elevenlabs_v4_model(model_id: str | None) -> bool:
+    """True for Eleven v4 models (``eleven_v4``, ``eleven_v4_turbo``). They
+    share the v3 Text-to-Dialogue path but none of the v3-tuned audio
+    processing, which was measured on v3 output only."""
+    return bool(model_id) and model_id.strip().startswith("eleven_v4")
+
+
+# DragonTTS-local pipeline selectors layered ON TOP of a pipeline family's base
+# model. ElevenLabs has no such model ids — normalize_pipeline_model strips the
+# suffix before any upstream call — they choose the LOCAL processing chain (and
+# the generation rate) so a template can A/B chains by model name with zero
+# client changes:
+#   base          : the family's direct rate (v3 conversational: ElevenLabs'
+#                   own pcm_8000; v4: ELEVENLABS_V4_NATIVE_SAMPLE_RATE).
+#                   tempo 1 = unaltered; tempo != 1 = atempo only (no hygiene).
 #   _tempo        : full-band native rate + atempo, no hygiene; the custom
 #                   anti-aliased downsample to the caller's rate happens once
 #                   at synth time and the cache stores that end result.
 #   _clean_tempo  : full-band native rate + hygiene + end release + atempo.
 _V3CONV = "eleven_v3_conversational"
-_V3CONV_SUFFIXES = (
+# v4 bases (longest first). Matched EXACTLY — base or base + a known suffix —
+# so a future eleven_v4_* model is never mistaken for a variant of eleven_v4.
+# v3 conversational keeps its prefix match (any unknown suffix = its base).
+_V4_PIPELINE_BASES = ("eleven_v4_turbo", "eleven_v4")
+_PIPELINE_SUFFIXES = (
     # _clean_tempo_v2: _clean_tempo + end release, longer sentence tail and one
     # loudness per sentence, so cached sentences join like one speaker
     # (app/audio/join.py, app/audio/level.py).
@@ -97,25 +105,52 @@ _V3CONV_SUFFIXES = (
 )  # longest first for stripping
 
 
-def v3_conversational_variant(model_id: str | None) -> str | None:
-    """Pipeline variant of a v3-conversational model id: "base", "tempo",
-    "clean_tempo", "clean_tempo_v2" — or None when the model is not
-    v3-conversational at all (plain eleven_v3 / flash / v2)."""
+def _split_pipeline_model(model_id: str | None) -> tuple[str, str] | None:
+    """(base model, variant) for a pipeline-family id, else None."""
     m = (model_id or "").strip().lower()
-    if not m.startswith(_V3CONV):
-        return None
-    for suffix in _V3CONV_SUFFIXES:
-        if m == _V3CONV + suffix:
-            return suffix.lstrip("_")
-    return "base"
+    if m.startswith(_V3CONV):
+        for suffix in _PIPELINE_SUFFIXES:
+            if m == _V3CONV + suffix:
+                return _V3CONV, suffix.lstrip("_")
+        return _V3CONV, "base"
+    for base in _V4_PIPELINE_BASES:
+        if m == base:
+            return base, "base"
+        for suffix in _PIPELINE_SUFFIXES:
+            if m == base + suffix:
+                return base, suffix.lstrip("_")
+    return None
 
 
-def normalize_v3_conversational(model_id: str | None) -> str | None:
+def has_local_pipeline(model_id: str | None) -> bool:
+    """True for the models that carry DragonTTS's local pipeline — the v3
+    *Conversational* family and the v4 family (``eleven_v4_turbo``,
+    ``eleven_v4``), with or without a variant suffix. Only these ever take the
+    ffmpeg atempo stage; plain ``eleven_v3``, flash and v2 models are
+    unaffected even when a tempo param is sent (the cache layer strips it
+    before keying for them)."""
+    return _split_pipeline_model(model_id) is not None
+
+
+def pipeline_family(model_id: str | None) -> str | None:
+    """Upstream base model of a pipeline-family id (``eleven_v3_conversational``,
+    ``eleven_v4_turbo``, ``eleven_v4``), or None for any other model."""
+    split = _split_pipeline_model(model_id)
+    return split[0] if split else None
+
+
+def pipeline_variant(model_id: str | None) -> str | None:
+    """Pipeline variant of a pipeline-family id: "base", "tempo",
+    "clean_tempo", "clean_tempo_v2" — or None when the model has no local
+    pipeline at all (plain eleven_v3 / flash / v2)."""
+    split = _split_pipeline_model(model_id)
+    return split[1] if split else None
+
+
+def normalize_pipeline_model(model_id: str | None) -> str | None:
     """Map a DragonTTS variant name to the real upstream model id (suffixes
-    stripped); non-v3conv ids pass through unchanged."""
-    if is_elevenlabs_v3_conversational(model_id):
-        return _V3CONV
-    return model_id
+    stripped); ids without a local pipeline pass through unchanged."""
+    return pipeline_family(model_id) or model_id
 
 
 # Path appended to the WS host. The host is derived from the provider's
@@ -390,8 +425,8 @@ class ElevenLabsStreamPool:
             .replace("http://", "ws://")
             .rstrip("/")
         )
-        self._v3 = is_elevenlabs_v3_model(model_id)
-        if self._v3:
+        self._ttd = is_elevenlabs_ttd_model(model_id)
+        if self._ttd:
             # Text-to-Dialogue socket: voice registers per context (not in the
             # URL), auto_mode/inactivity_timeout are not TTD params, and
             # sync_alignment=true matches pipecat's dialogue service. Idle
@@ -478,7 +513,7 @@ class ElevenLabsStreamPool:
             self._uri,
             self._headers,
             self._connect_fn,
-            keepalive_voice=self._voice_id if self._v3 else None,
+            keepalive_voice=self._voice_id if self._ttd else None,
             keepalive_interval=self._keepalive_interval,
         )
         conn._task = asyncio.create_task(conn.run())
@@ -559,7 +594,7 @@ class ElevenLabsStreamPool:
         q: asyncio.Queue = asyncio.Queue()
         conn.contexts[ctx_id] = q
         try:
-            if self._v3:
+            if self._ttd:
                 # Text-to-Dialogue sequence (mirrors pipecat's
                 # ElevenLabsDialogueTTSService): 1) open the context with a
                 # voices registration (only stability is honored in
