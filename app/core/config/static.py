@@ -23,6 +23,13 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 # Off by default: reload re-execs the server in a subprocess that cannot
 # reach the Daily bot zygote. Set UVICORN_RELOAD=true for local dev.
 UVICORN_RELOAD = os.environ.get("UVICORN_RELOAD", "false").lower() == "true"
+# Fork the Daily bot zygote at boot (run.py). Only the API server launches Daily
+# bots, so only it sets this to "true". Everywhere else (voice-agent pods, CRM,
+# dialler) the zygote would hold a full copy of the imported app (~240Mi
+# resident) that nothing uses. Without it, a Daily launch spawns per call.
+DAILY_BOT_ZYGOTE_AT_BOOT = (
+    os.environ.get("DAILY_BOT_ZYGOTE_AT_BOOT", "false").lower() == "true"
+)
 UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 
 # Gemini Proxy Configuration
