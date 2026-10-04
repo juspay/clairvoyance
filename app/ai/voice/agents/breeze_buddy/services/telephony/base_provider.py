@@ -92,6 +92,15 @@ class VoiceCallProvider(ABC):
             template_name,
         )
 
+    async def is_call_live(self, lead: Any) -> Optional[bool]:
+        """Ask the provider whether the lead's call is still in progress.
+
+        True = live, False = ended or unknown to the provider, None = this
+        provider cannot say (the default). Raises when the lookup fails; the
+        caller treats that as "do not know", never as "ended".
+        """
+        return None
+
     def set_completion_callback(self, callback):
         """
         Set the callback function to be called when the call is completed.

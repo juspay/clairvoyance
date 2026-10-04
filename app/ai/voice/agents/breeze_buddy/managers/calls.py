@@ -12,6 +12,8 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 """
 
 import asyncio
+import random
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
@@ -62,6 +64,10 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retry
 from app.core.config.static import (
     BB_INBOUND_STUCK_LEAD_MINUTES,
+    BB_STUCK_SWEEP_LOOKUP_DEADLINE_S,
+    BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S,
+    BB_STUCK_SWEEP_MAX_CALL_MINUTES,
+    BB_STUCK_SWEEP_MAX_LOOKUPS,
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
 from app.core.logger import logger
@@ -698,6 +704,28 @@ async def _retry_call(
             await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
 
 
+async def _provider_says_call_live(lead: LeadCallTracker) -> Optional[bool]:
+    """Ask the lead's telephony provider whether its call is still live.
+
+    True = live, False = ended, None = the provider cannot say. Raises when
+    the lookup fails or times out; the sweep treats that as "possibly live".
+    """
+    if not lead.call_id or not lead.telephony_number_id:
+        return None
+    number = await get_telephony_number_by_id(lead.telephony_number_id)
+    if not number:
+        return None
+    # Imported here: the provider modules import the agent, which imports us.
+    from app.ai.voice.agents.breeze_buddy.services.telephony.utils import (
+        get_voice_provider,
+    )
+
+    provider = get_voice_provider(number.provider, None)
+    return await asyncio.wait_for(
+        provider.is_call_live(lead), timeout=BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S
+    )
+
+
 async def reconcile_stuck_processing_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state — call placed
@@ -739,9 +767,53 @@ async def reconcile_stuck_processing_leads():
 
     logger.info(f"Found {len(stale_leads)} stuck leads to clean up.")
 
+    # The query has no ORDER BY; shuffle so the capped lookups cannot starve
+    # the same leads behind a pile of long live calls.
+    random.shuffle(stale_leads)
+    lookups = 0
+    lookup_deadline = time.monotonic() + BB_STUCK_SWEEP_LOOKUP_DEADLINE_S
+    max_call_age = timedelta(minutes=BB_STUCK_SWEEP_MAX_CALL_MINUTES)
     for lead in stale_leads:
         locked_lead = None
         try:
+            # A call can outlive the 10 minutes (a long conversation). Closing
+            # it would free its line while it is still live, so ask the
+            # provider first; skip whenever we cannot be sure it has ended.
+            # Past the age ceiling no call can still be live (Plivo's default
+            # time limit), so a lookup that never clears cannot hold the line
+            # forever: close it without asking.
+            call_age_exceeded = (
+                lead.call_initiated_time is not None
+                and datetime.now(timezone.utc) - lead.call_initiated_time > max_call_age
+            )
+            if lead.call_id and not call_age_exceeded:
+                if (
+                    lookups >= BB_STUCK_SWEEP_MAX_LOOKUPS
+                    or time.monotonic() >= lookup_deadline
+                ):
+                    logger.info(
+                        f"Stuck lead {lead.id}: per-run provider lookup budget "
+                        f"({BB_STUCK_SWEEP_MAX_LOOKUPS} lookups / "
+                        f"{BB_STUCK_SWEEP_LOOKUP_DEADLINE_S}s) used up, "
+                        "checking next run."
+                    )
+                    continue
+                lookups += 1
+                try:
+                    live = await _provider_says_call_live(lead)
+                except Exception as e:  # noqa: BLE001 - fail safe: keep the line
+                    logger.warning(
+                        f"Stuck lead {lead.id}: provider live-call lookup failed "
+                        f"({type(e).__name__}: {e}); skipping this run."
+                    )
+                    continue
+                if live:
+                    logger.info(
+                        f"Stuck lead {lead.id} (call {lead.call_id}) is still "
+                        "live at the provider; leaving it, checking next run."
+                    )
+                    continue
+
             # Forcefully acquire the lock — the lead may still be marked
             # is_locked=TRUE from a crashed pod. Safe here because the
             # BackgroundTaskScheduler distributed lock ensures only one

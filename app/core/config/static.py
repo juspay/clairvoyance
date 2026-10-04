@@ -495,6 +495,21 @@ BB_INBOUND_STUCK_LEAD_MINUTES = int(
     os.environ.get("BB_INBOUND_STUCK_LEAD_MINUTES", 240)
 )
 
+# Stuck-call sweep: provider live-call lookups per run, and each one's timeout
+BB_STUCK_SWEEP_MAX_LOOKUPS = int(os.environ.get("BB_STUCK_SWEEP_MAX_LOOKUPS", 50))
+BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S = float(
+    os.environ.get("BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S", 5)
+)
+# Stop looking up after this long in one run (the sweep runs every 60 s).
+BB_STUCK_SWEEP_LOOKUP_DEADLINE_S = float(
+    os.environ.get("BB_STUCK_SWEEP_LOOKUP_DEADLINE_S", 40)
+)
+# A call older than this is closed without asking: no call outlives Plivo's
+# default time limit, and a lookup that always fails must not hold a line forever.
+BB_STUCK_SWEEP_MAX_CALL_MINUTES = int(
+    os.environ.get("BB_STUCK_SWEEP_MAX_CALL_MINUTES", 240)
+)
+
 # Reconcilers
 BB_RECONCILE_BACKLOG_INTERVAL_S = int(
     os.environ.get("BB_RECONCILE_BACKLOG_INTERVAL_S", 60)
