@@ -3,10 +3,11 @@ Database query functions for the application.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
+from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -218,6 +219,45 @@ def update_lead_call_details_query(
         id,
         LeadCallStatus.BACKLOG.value,
     ]
+    return text, values
+
+
+def attach_placed_call_to_lead_query(
+    id: str,
+    call_id: str,
+    call_initiated_time: datetime,
+    telephony_number_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Stamp a PLACED call on a lead the merchant FINISHED (aborted) mid-dial.
+
+    Used when the dispatcher's BACKLOG -> PROCESSING CAS lost after the
+    provider already accepted the dial. The call is live and holds a channel;
+    its webhooks look the lead up by ``call_id`` and return the line via
+    ``telephony_number_id``. Status and outcome are untouched; a marker is
+    MERGED into ``meta_data`` (never replacing it) so the completion and
+    answer paths know not to treat this as a normal call.
+
+    Guards: only a FINISHED lead (a lost CAS can also be a DB error that left
+    the row BACKLOG, and a BACKLOG row carrying a call id would be re-dialled
+    and lose this call's line) and only a lead with no call yet (a different
+    live call's id is never overwritten).
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_id" = $1, "call_initiated_time" = $2, "telephony_number_id" = $3,
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $5::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $4 AND "call_id" IS NULL AND "status" = 'FINISHED'
+        RETURNING *;
+    """
+    marker = {
+        CALL_ATTACHED_AFTER_FINISH: {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "call_id": call_id,
+        }
+    }
+    values = [call_id, call_initiated_time, telephony_number_id, id, json.dumps(marker)]
     return text, values
 
 

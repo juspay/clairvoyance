@@ -34,6 +34,7 @@ from .breeze_buddy.credentials import (
 from .breeze_buddy.lead_call_tracker import (
     acquire_lock_on_lead_by_id,
     append_metadata_field,
+    attach_placed_call_to_lead,
     create_lead_call_tracker,
     defer_lead_next_attempt_and_release_lock,
     get_all_lead_call_trackers,
@@ -125,6 +126,7 @@ __all__ = [
     "update_lead_call_initiated_time",
     "update_lead_template",
     "update_lead_call_id_by_id",
+    "attach_placed_call_to_lead",
     "update_lead_call_recording_url",
     "get_all_lead_call_trackers",
     "get_lead_based_analytics",

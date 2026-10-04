@@ -108,6 +108,7 @@ from app.schemas import (
     TelephonyNumber,
     TelephonyNumberStatus,
 )
+from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
 from app.services.gcp.storage.storage import upload_file_to_gcs
 from app.services.redis.client import get_redis_service
 
@@ -959,6 +960,17 @@ async def handle_call_completion(
     # Runs before the completion UPDATE below so the inbound guard in
     # _releases_capacity still sees this lead as PROCESSING.
     await _release_call_resources(lead)
+
+    # A call placed for a lead the merchant had already aborted (the dispatcher
+    # stamped the call on the finished lead): the line is back, and that is all
+    # this webhook may do. No completion UPDATE (it would overwrite the ABORT
+    # outcome and replace meta_data), no CRM mirror, no retry.
+    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
+        logger.info(
+            f"Call {call_id} was attached to aborted lead {lead.id}; "
+            "line released, lead left as the merchant finished it."
+        )
+        return lead
 
     # Check if this is a transfer — for outcome override only
     is_transfer = (

@@ -98,6 +98,7 @@ from app.schemas import (
     LeadCallStatus,
     TelephonyNumber,
 )
+from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
 from app.services.redis.client import get_redis_service
 
 _GATED_INBOUND_PROVIDERS = {"plivo": CallProvider.PLIVO, "vobiz": CallProvider.VOBIZ}
@@ -155,6 +156,19 @@ async def resolve_call_templates(
     if lead:
         # Outbound call - look up template using template_id from lead (preferred) or fall back to name
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
+
+        # The merchant aborted this lead while the dial was in flight; the
+        # call exists but must not be served: hang up, no agent.
+        if (getattr(lead, "metaData", None) or {}).get(CALL_ATTACHED_AFTER_FINISH):
+            logger.warning(
+                f"[Answer] Call {call_sid} belongs to aborted lead {lead.id}; "
+                "hanging up without an agent"
+            )
+            return {
+                "error": "Lead was aborted",
+                "error_status": 410,
+                "hangup_silently": True,
+            }
 
         # id-only resolution: the lead stores the template_id it resolved
         # to at push time; name fallback was removed.
@@ -915,6 +929,14 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
     # Resolve templates
     with timed_phase("resolve_call_templates"):
         result = await resolve_call_templates(call_id, from_number, to_number)
+
+    if result.get("hangup_silently"):
+        if provider == "exotel":
+            return _error_response(provider, result["error"], result["error_status"])
+        return HTMLResponse(
+            content='<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
 
     if "error" in result:
         logger.error(f"[{tag}] {result['error']}")
