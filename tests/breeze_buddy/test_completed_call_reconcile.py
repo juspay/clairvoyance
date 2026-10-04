@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -353,32 +354,31 @@ async def test_reaper_still_falls_back_to_unknown_without_an_outcome(
 STALE_MINUTES = 30
 
 
-async def _stale_cutoff(monkeypatch: pytest.MonkeyPatch) -> datetime:
-    """The call_initiated_time cutoff the reaper asks the DB for, with the
-    stale window pinned so a deployment's env override can't skew it."""
-    cutoffs: List[datetime] = []
-
-    async def fake_stale(
-        _status: LeadCallStatus, time: datetime, **_kwargs: Any
-    ) -> List[LeadCallTracker]:
-        cutoffs.append(time)
-        return []
-
-    monkeypatch.setattr(calls_mod, "get_leads_by_status_and_time_before", fake_stale)
+async def _closes(monkeypatch: pytest.MonkeyPatch, minutes_ago: float) -> bool:
+    """Does the reaper close an outbound call started ``minutes_ago``, with the stale
+    window pinned (a deployment's env override can't skew it) and the provider saying
+    the call has ended? The DB query's cutoff is the shorter unknown-dial hold (#1280);
+    the stale window is applied to each row, so it is asserted by behaviour here."""
     monkeypatch.setattr(calls_mod, "BB_STUCK_CALL_STALE_MINUTES", STALE_MINUTES)
-    await calls_mod.reconcile_stuck_processing_leads()
-    return cutoffs[0]
+    monkeypatch.setattr(
+        calls_mod, "_provider_says_call_live", AsyncMock(return_value=False)
+    )
+    lead = make_lead().model_copy(
+        update={
+            "call_initiated_time": datetime.now(timezone.utc)
+            - timedelta(minutes=minutes_ago)
+        }
+    )
+    captured = await _run_reaper_capturing_close(monkeypatch, lead)
+    return "outcome" in captured
 
 
 @pytest.mark.asyncio
 async def test_reaper_cutoff_is_the_configured_stale_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    before = datetime.now(timezone.utc)
-    cutoff = await _stale_cutoff(monkeypatch)
-
-    expected = before - timedelta(minutes=STALE_MINUTES)
-    assert abs((cutoff - expected).total_seconds()) < 5
+    assert not await _closes(monkeypatch, STALE_MINUTES - 1)
+    assert await _closes(monkeypatch, STALE_MINUTES + 1)
 
 
 @pytest.mark.asyncio
@@ -388,20 +388,39 @@ async def test_reaper_leaves_a_15_minute_call_alone(
     """A long call is still PROCESSING at 15 minutes. Closing it would emit
     call.completed=UNKNOWN; the spine dedupes the real one on call_id, so the
     workflow would never hear the true outcome."""
-    cutoff = await _stale_cutoff(monkeypatch)
-    started = datetime.now(timezone.utc) - timedelta(minutes=15)
-
-    assert not started < cutoff
+    assert not await _closes(monkeypatch, 15)
 
 
 @pytest.mark.asyncio
 async def test_reaper_closes_a_call_past_the_stale_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cutoff = await _stale_cutoff(monkeypatch)
-    started = datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES + 1)
+    assert await _closes(monkeypatch, STALE_MINUTES + 1)
 
-    assert started < cutoff
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("minutes_ago", [6, STALE_MINUTES + 1])
+async def test_an_unclaimed_unknown_dial_is_requeued_not_closed_or_paged(
+    monkeypatch: pytest.MonkeyPatch, minutes_ago: int
+) -> None:
+    """#1280's hold meets the stale window: a dial whose reply never came and that
+    no webhook claimed is dialled again (most templates allow no retry), never
+    closed UNKNOWN; it is not a long-running call, so it pages nobody (1 Oct had
+    ~700 such dials)."""
+    monkeypatch.setattr(calls_mod, "BB_STUCK_CALL_STALE_MINUTES", STALE_MINUTES)
+    monkeypatch.setattr(calls_mod, "BB_UNKNOWN_DIAL_HOLD_MINUTES", 5)
+    requeue = AsyncMock(return_value=True)
+    monkeypatch.setattr(calls_mod, "requeue_unclaimed_unknown_dial", requeue)
+    held = make_lead(meta_data={"unknown_dial": {"at": "x"}}).model_copy(
+        update={
+            "call_id": None,
+            "call_initiated_time": datetime.now(timezone.utc)
+            - timedelta(minutes=minutes_ago),
+        }
+    )
+    captured = await _run_reaper_capturing_close(monkeypatch, held)
+    requeue.assert_awaited_once()
+    assert "alert" not in captured and "outcome" not in captured
 
 
 @pytest.mark.asyncio

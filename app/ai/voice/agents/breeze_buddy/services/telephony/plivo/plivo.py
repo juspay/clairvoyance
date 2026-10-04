@@ -1,8 +1,13 @@
-from typing import Any, Optional
+import asyncio
+import socket
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlencode
 
 import plivo
+import requests
+import urllib3
 from fastapi import WebSocket
+from plivo.exceptions import ResourceNotFoundError
 from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.accounts import (
@@ -13,6 +18,7 @@ from app.ai.voice.agents.breeze_buddy.accounts import (
 )
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    DIAL_OUTCOME_UNKNOWN,
     VoiceCallProvider,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
@@ -26,12 +32,62 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 )
 from app.core.config.static import (
     APP_BASE_URL,
+    BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S,
     OUTBOUND_RING_TIMEOUT_SECONDS,
     PLIVO_REST_TIMEOUT_SECONDS,
 )
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_call_id
 from app.schemas import CallProvider, TelephonyConfig
+
+
+def _never_connected(e: BaseException) -> bool:
+    """True when the failure proves no connection to Plivo was ever made
+    (connect timeout, connection refused, DNS): urllib3's ConnectTimeoutError
+    family (NewConnectionError and NameResolutionError included) anywhere in
+    the exception's chain."""
+    seen: Set[int] = set()
+    stack: List[Any] = [e]
+    while stack:
+        x = stack.pop()
+        if x is None or id(x) in seen:
+            continue
+        seen.add(id(x))
+        if isinstance(
+            x,
+            (
+                urllib3.exceptions.ConnectTimeoutError,
+                ConnectionRefusedError,
+                socket.gaierror,
+            ),
+        ):
+            return True
+        stack.append(getattr(x, "reason", None))
+        stack.append(x.__cause__)
+        stack.append(x.__context__)
+        stack.extend(a for a in getattr(x, "args", ()) if isinstance(a, BaseException))
+    return False
+
+
+def sent_without_reply(e: BaseException) -> bool:
+    """
+    Whether a failed dial request may still have reached Plivo, i.e. the call
+    may exist. "Not placed" needs proof that nothing was sent (the connection
+    was never made); every failure after the request could have gone out — a
+    read timeout, the connection dropped before the reply, a broken chunked
+    body, an unclassified connection error — is "unknown". A false unknown
+    costs a hold that the webhook or the stuck sweep settles; a false
+    "not placed" rings the customer twice.
+    """
+    if isinstance(e, requests.exceptions.ConnectTimeout):
+        return False
+    if isinstance(
+        e, (requests.exceptions.ReadTimeout, requests.exceptions.ChunkedEncodingError)
+    ):
+        return True
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return not _never_connected(e)
+    return False
 
 
 class PlivoProvider(VoiceCallProvider):
@@ -87,6 +143,23 @@ class PlivoProvider(VoiceCallProvider):
             serializer._auth_id = self.PLIVO_AUTH_ID
             serializer._auth_token = self.PLIVO_AUTH_TOKEN
 
+    async def is_call_live(self, lead: Any) -> Optional[bool]:
+        """True while Plivo lists the lead's call as live; False once it
+        answers "not found". Any other failure raises."""
+        self._use(await lead_plivo_account(lead))
+        # Its own short client timeout: a thread cannot be cancelled, so the
+        # caller's wait_for alone would leave it running for the 15 s default.
+        client = plivo.RestClient(
+            self.PLIVO_AUTH_ID,
+            self.PLIVO_AUTH_TOKEN,
+            timeout=BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S,
+        )
+        try:
+            await asyncio.to_thread(client.live_calls.get, lead.call_id)
+        except ResourceNotFoundError:
+            return False
+        return True
+
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Plivo WebSocket connection")
         await telephony_bot(
@@ -103,6 +176,7 @@ class PlivoProvider(VoiceCallProvider):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        dial_ref: Optional[Dict[str, str]] = None,
     ):
         """
         Initiate an outbound call via Plivo.
@@ -118,13 +192,28 @@ class PlivoProvider(VoiceCallProvider):
             telephony_number: Caller ID / telephony number
             reseller_id: Optional merchant ID for tiered pod allocation
             template_name: Optional template name for WebSocket path routing
+            dial_ref: Put on both the answer and hangup URL, which Plivo calls
+                back verbatim — the only link to the lead when the reply that
+                carries the CallUUID never arrives.
+
+        Returns:
+            ``{"status": "call_initiated", "sid": <CallUUID>}`` when Plivo
+            replied; ``{"status": DIAL_OUTCOME_UNKNOWN, "sid": None}`` when the
+            request was sent but the reply timed out (Plivo may have placed
+            the call); None when Plivo did not place it.
         """
         answer_url = f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/answer"
+        hangup_url = (
+            f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status"
+        )
         params = {}
         if reseller_id:
             params["reseller_id"] = reseller_id
         if template_name:
             params["template"] = template_name
+        if dial_ref:
+            params.update(dial_ref)
+            hangup_url += "?" + urlencode(dial_ref)
         if params:
             answer_url += "?" + urlencode(params)
         # Off (0) = the SDK's own ring_timeout, 120 s.
@@ -139,7 +228,7 @@ class PlivoProvider(VoiceCallProvider):
                 from_=telephony_number,
                 to_=customer_mobile_number,
                 answer_url=answer_url,
-                hangup_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status",
+                hangup_url=hangup_url,
                 **ring,
             )
 
@@ -157,6 +246,16 @@ class PlivoProvider(VoiceCallProvider):
 
             logger.info(f"Plivo call initiated successfully: {call_uuid}")
             return {"status": "call_initiated", "sid": call_uuid}
+
+        except requests.exceptions.RequestException as e:
+            # Sent, no usable reply (a read timeout — 1 Oct: 692 of these, many
+            # rang — or the connection dropped before the reply): Plivo may have
+            # placed the call, so this is not "not placed"; None would redial.
+            if sent_without_reply(e):
+                logger.error(f"Plivo call outcome unknown (sent, no reply): {e!r}")
+                return {"status": DIAL_OUTCOME_UNKNOWN, "sid": None}
+            logger.error(f"Error when making call via Plivo: {e}")
+            return None
 
         except Exception as e:
             logger.error(f"Error when making call via Plivo: {e}")
