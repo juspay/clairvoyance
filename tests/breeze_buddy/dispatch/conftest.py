@@ -33,6 +33,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
 from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.core import (
+    CALL_ATTACHED_AFTER_FINISH,
     CallExecutionConfig,
     InboundBlockAction,
     LeadCallTracker,
@@ -463,6 +464,8 @@ class DispatchHarness:
         # generate_realtime_opening_line flag (see the greeting mock below).
         self.opening_line_calls: List[Any] = []
         self.cas_succeeds: bool = True
+        # What a lost CAS means for the row (e.g. FINISHED = merchant abort).
+        self.cas_lost_status: Optional[LeadCallStatus] = None
         self.get_available_returns_none: bool = False
         # Captured alerts so tests can assert no-telephony-number throttled
         # alerts fired without needing a real Slack/Redis round-trip.
@@ -521,6 +524,8 @@ class DispatchHarness:
         telephony_number_id: str,
     ) -> Optional[LeadCallTracker]:
         if not self.cas_succeeds:
+            if self.cas_lost_status is not None and id in self.leads:
+                self.leads[id].status = self.cas_lost_status
             return None
         lead = self.leads.get(id)
         if not lead:
@@ -529,6 +534,26 @@ class DispatchHarness:
         lead.call_id = call_id
         lead.call_initiated_time = call_initiated_time
         lead.telephony_number_id = telephony_number_id
+        return lead
+
+    async def attach_placed_call_to_lead(
+        self,
+        id: str,
+        call_id: str,
+        call_initiated_time: datetime,
+        telephony_number_id: str,
+    ) -> Optional[LeadCallTracker]:
+        # Mirrors the SQL guards: FINISHED rows only, never over another call.
+        lead = self.leads.get(id)
+        if not lead or lead.status != LeadCallStatus.FINISHED or lead.call_id:
+            return None
+        lead.call_id = call_id
+        lead.call_initiated_time = call_initiated_time
+        lead.telephony_number_id = telephony_number_id
+        lead.metaData = {
+            **(lead.metaData or {}),
+            CALL_ATTACHED_AFTER_FINISH: {"at": "now", "call_id": call_id},
+        }
         return lead
 
     async def update_lead_call_completion_details(
@@ -667,6 +692,9 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
     )
     monkeypatch.setattr(
         worker_mod, "update_lead_call_details", h.update_lead_call_details
+    )
+    monkeypatch.setattr(
+        worker_mod, "attach_placed_call_to_lead", h.attach_placed_call_to_lead
     )
     monkeypatch.setattr(
         worker_mod,

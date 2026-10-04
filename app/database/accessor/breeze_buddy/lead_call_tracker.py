@@ -15,6 +15,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     abort_lead_by_id_query,
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
+    attach_placed_call_to_lead_query,
     count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
@@ -325,6 +326,31 @@ async def update_lead_call_details(
 
     except Exception as e:
         logger.error(f"Error updating lead: {e}")
+        return None
+
+
+async def attach_placed_call_to_lead(
+    id: str,
+    call_id: str,
+    call_initiated_time: datetime,
+    telephony_number_id: str,
+) -> Optional[LeadCallTracker]:
+    """
+    Stamp a placed call's id, start time and number on its lead, whatever the
+    lead's status. Returns None when nothing was stamped (the lead is gone or
+    already carries a different call id) or on error.
+    """
+    try:
+        query_text, values = attach_placed_call_to_lead_query(
+            id, call_id, call_initiated_time, telephony_number_id
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return decode_lead_call_tracker(result[0])
+        logger.warning(f"Lead {id}: placed call {call_id} was not stamped on it")
+        return None
+    except Exception as e:
+        logger.error(f"Error stamping placed call {call_id} on lead {id}: {e}")
         return None
 
 

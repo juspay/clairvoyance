@@ -92,6 +92,7 @@ from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
+    attach_placed_call_to_lead,
     defer_lead_next_attempt_and_release_lock,
     get_lead_by_id,
     get_template_by_id,
@@ -774,23 +775,49 @@ class Worker:
                     name=f"crm-call-attempted-{call_sid}",
                 )
 
+            call_initiated_time = datetime.now(timezone.utc)
             updated = await update_lead_call_details(
                 locked.id,
                 LeadCallStatus.PROCESSING,
                 call_sid,
-                datetime.now(timezone.utc),
+                call_initiated_time,
                 number.id,
             )
             if not updated:
-                # CAS lost (status changed under us). Call is placed; we now
-                # have an orphan call_sid. Log loudly and release resources.
-                logger.error(
-                    f"Worker {self._uuid}: post-make_call CAS lost for lead "
-                    f"{locked.id} (call_sid={call_sid}). Releasing resources; "
-                    "the call may be orphaned."
+                # CAS lost. Two very different causes:
+                #  (a) the lead really left BACKLOG (the merchant aborted it
+                #      during the dial): the call is LIVE and holds this
+                #      channel, so the line belongs to the call. Stamp the
+                #      call on the lead (status untouched, marker merged into
+                #      meta_data) so its end webhook finds it by call id and
+                #      returns the line once. Nothing is given back here: the
+                #      DB channel is the real guard (the Redis token is
+                #      re-minted by reconcile_channel_tokens within 60 s).
+                #  (b) update_lead_call_details swallowed a DB error and the
+                #      row is still BACKLOG: stamping + unlocking would let the
+                #      lead be re-dialled and lose this call's line, so the
+                #      attach refuses (it requires FINISHED) and we fall back
+                #      to releasing the line.
+                stamped = await attach_placed_call_to_lead(
+                    locked.id, call_sid, call_initiated_time, number.id
                 )
-                await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                if stamped:
+                    logger.error(
+                        f"Worker {self._uuid}: post-make_call CAS lost for "
+                        f"lead {locked.id} (call_sid={call_sid}); the lead is "
+                        "finished but the call is live: keeping its channel, "
+                        "stamped the call on the lead so its end webhook "
+                        "releases the line."
+                    )
+                else:
+                    logger.error(
+                        f"Worker {self._uuid}: post-make_call CAS lost for "
+                        f"lead {locked.id} (call_sid={call_sid}) and the lead "
+                        "is not a finished one that can carry the call. "
+                        "Releasing the line; the call may be orphaned."
+                    )
+                    await release_channel_token(number.id, token)
+                    await _release_number(number.id, number.provider)
                 lock_released = await self._release(locked.id)
                 return
 
