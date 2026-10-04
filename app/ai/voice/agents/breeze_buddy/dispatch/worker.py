@@ -87,6 +87,7 @@ from app.core.config.static import (
     BB_WORKER_COUNT,
     BB_WORKER_HEARTBEAT_REFRESH_S,
     BB_WORKER_HEARTBEAT_TTL_S,
+    BB_WORKER_SHUTDOWN_DRAIN_S,
 )
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
@@ -195,6 +196,12 @@ CALL_LIMIT_UNAVAILABLE_DEFER_S = 30
 # ---------------------------------------------------------------------------
 
 
+# Worker._phase values — see Worker.stop().
+_IDLE = "idle"
+_PRE_DIAL = "pre_dial"
+_COMMITTED = "committed"
+
+
 class Worker:
     """
     Long-lived asyncio task that consumes from ``bb:ready:leads`` and
@@ -206,6 +213,10 @@ class Worker:
         self._task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._stopping = asyncio.Event()
+        # Where the current dispatch stands. Past ``_COMMITTED`` a dial may
+        # be on the wire, so stop() must wait for it instead of cancelling.
+        self._phase = _IDLE
+        self._lead_in_flight: Optional[str] = None
 
     @property
     def uuid(self) -> str:
@@ -221,14 +232,38 @@ class Worker:
         self._task = asyncio.create_task(self._loop(), name=f"bb-worker-{self._uuid}")
 
     async def stop(self) -> None:
+        """Stop taking leads, then drain.
+
+        An idle worker (BLPOP) or one still in the pre-dial checks holds
+        nothing on the wire and is cancelled at once. A dispatch that has
+        reached the commit point (inside or past ``make_call``) is waited
+        for, never cancelled: cancelling would leave ``make_call`` running in
+        its thread while the ``finally`` unlocks a lead whose call may exist
+        (a re-dial) and the token + DB channel leak. The wait is bounded by
+        ``BB_WORKER_SHUTDOWN_DRAIN_S``; past it we stop waiting but still do
+        not cancel.
+        """
         self._stopping.set()
-        if self._task is not None:
-            try:
-                await asyncio.wait_for(
-                    self._task, timeout=BB_WORKER_BLPOP_TIMEOUT_S + 5
-                )
-            except asyncio.TimeoutError:
-                self._task.cancel()
+        task = self._task
+        if task is not None:
+            deadline = asyncio.get_running_loop().time() + BB_WORKER_SHUTDOWN_DRAIN_S
+            while not task.done():
+                if self._phase != _COMMITTED:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    break
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    logger.error(
+                        f"Worker {self._uuid}: dial for lead "
+                        f"{self._lead_in_flight} still in flight after "
+                        f"{BB_WORKER_SHUTDOWN_DRAIN_S}s of shutdown drain; "
+                        "NOT cancelling it (its call may exist)"
+                    )
+                    break
+                # Re-check the phase often: a dispatch that ends (or a worker
+                # that never committed) must not wait out the full budget.
+                await asyncio.wait({task}, timeout=min(remaining, 0.25))
             self._task = None
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
@@ -243,16 +278,21 @@ class Worker:
         treat us as dead — which is the correct conservative behaviour.
         """
         key = worker_heartbeat_key(self._uuid)
-        while not self._stopping.is_set():
+        # Keep beating while a committed dial drains after stop(): a silent
+        # heartbeat would let the reaper requeue the lead that is mid-dial.
+        while not self._stopping.is_set() or self._phase == _COMMITTED:
             try:
                 redis = await get_redis_service()
                 await redis.setex(key, "1", ttl_seconds=BB_WORKER_HEARTBEAT_TTL_S)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Worker {self._uuid} heartbeat write failed: {e}")
             try:
-                await asyncio.wait_for(
-                    self._stopping.wait(), timeout=BB_WORKER_HEARTBEAT_REFRESH_S
-                )
+                if self._stopping.is_set():
+                    await asyncio.sleep(BB_WORKER_HEARTBEAT_REFRESH_S)
+                else:
+                    await asyncio.wait_for(
+                        self._stopping.wait(), timeout=BB_WORKER_HEARTBEAT_REFRESH_S
+                    )
             except asyncio.TimeoutError:
                 pass
 
@@ -301,12 +341,18 @@ class Worker:
         if lead_id is None:
             return  # timeout — loop back so we can check stop signal
 
+        # No await between the pop and this line: a stop() that sees
+        # _PRE_DIAL may cancel, one that sees _IDLE found nothing in flight.
+        self._phase = _PRE_DIAL
+        self._lead_in_flight = lead_id
         # Track in-flight for crash recovery.
         await self._rpush_processing(lead_id)
         try:
             await self._dispatch(lead_id, session)
         finally:
             await self._lrem_processing(lead_id)
+            self._phase = _IDLE
+            self._lead_in_flight = None
 
     async def _blpop_ready(self) -> Optional[str]:
         try:
@@ -672,6 +718,10 @@ class Worker:
                     await _release_number(number.id, number.provider)
                     raise
 
+            # Commit point for shutdown: from here a dial may reach the wire,
+            # so Worker.stop() drains this dispatch instead of cancelling it.
+            self._phase = _COMMITTED
+
             # The merchant's per-customer rule — the authoritative RECORD,
             # atomic with its count. The LAST step before the phone rings:
             # after the greeting pre-warm (up to ~60s on Gemini Live), so a
@@ -931,7 +981,7 @@ async def start_workers(count: Optional[int] = None) -> List[Worker]:
 
 
 async def stop_workers() -> None:
-    """Stop all workers. Graceful drain up to BLPOP timeout per worker."""
+    """Stop all workers: idle ones at once, committed dials drained (bounded)."""
     global _workers
     if not _workers:
         return

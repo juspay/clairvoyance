@@ -481,6 +481,15 @@ BB_PROMOTER_LEADER_RENEW_S = int(os.environ.get("BB_PROMOTER_LEADER_RENEW_S", 2)
 _BB_WORKER_COUNT_DEFAULT = 2 if ENVIRONMENT == "dev" else 20
 BB_WORKER_COUNT = int(os.environ.get("BB_WORKER_COUNT", _BB_WORKER_COUNT_DEFAULT))
 BB_WORKER_BLPOP_TIMEOUT_S = int(os.environ.get("BB_WORKER_BLPOP_TIMEOUT_S", 30))
+# How long Worker.stop() waits for a dial that is already on the wire
+# (inside or past make_call) before giving up on it — it is never cancelled.
+# Must stay below the dialler pod's terminationGracePeriodSeconds minus the
+# rest of the lifespan shutdown (k8s default grace is 30s, so 20 leaves
+# room); raise it together with the grace period. A dial normally ends in
+# seconds, but the Plivo request timeout is 15s per connect/read, so a slow
+# dial can outlast this budget: stop() then returns WITHOUT cancelling, which
+# is the same outcome as the pod being SIGKILLed at the end of its grace.
+BB_WORKER_SHUTDOWN_DRAIN_S = float(os.environ.get("BB_WORKER_SHUTDOWN_DRAIN_S", 20))
 BB_WORKER_HEARTBEAT_TTL_S = int(os.environ.get("BB_WORKER_HEARTBEAT_TTL_S", 60))
 BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_S", 10))
 
