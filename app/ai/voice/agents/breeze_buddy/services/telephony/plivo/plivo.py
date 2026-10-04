@@ -1,8 +1,10 @@
+import asyncio
 from typing import Any, Optional
 from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
+from plivo.exceptions import ResourceNotFoundError
 from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.accounts import (
@@ -26,6 +28,7 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 )
 from app.core.config.static import (
     APP_BASE_URL,
+    BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S,
     OUTBOUND_RING_TIMEOUT_SECONDS,
     PLIVO_REST_TIMEOUT_SECONDS,
 )
@@ -86,6 +89,23 @@ class PlivoProvider(VoiceCallProvider):
         if serializer is not None:
             serializer._auth_id = self.PLIVO_AUTH_ID
             serializer._auth_token = self.PLIVO_AUTH_TOKEN
+
+    async def is_call_live(self, lead: Any) -> Optional[bool]:
+        """True while Plivo lists the lead's call as live; False once it
+        answers "not found". Any other failure raises."""
+        self._use(await lead_plivo_account(lead))
+        # Its own short client timeout: a thread cannot be cancelled, so the
+        # caller's wait_for alone would leave it running for the 15 s default.
+        client = plivo.RestClient(
+            self.PLIVO_AUTH_ID,
+            self.PLIVO_AUTH_TOKEN,
+            timeout=BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S,
+        )
+        try:
+            await asyncio.to_thread(client.live_calls.get, lead.call_id)
+        except ResourceNotFoundError:
+            return False
+        return True
 
     async def handle_websocket(self, websocket: WebSocket, provider: CallProvider):
         logger.info("Using template flow for Plivo WebSocket connection")
