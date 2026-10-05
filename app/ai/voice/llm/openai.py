@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from pipecat.services.openai.llm import OpenAILLMService
 
+from app.ai.voice.llm._request_id import log_request_ids
 from app.core.logger import logger
 
 __all__ = ["OpenAIConfig", "build_openai_llm"]
@@ -103,4 +104,5 @@ def build_openai_llm(config: OpenAIConfig) -> OpenAILLMService:
     if config.base_url:
         service.supports_developer_role = False
 
+    log_request_ids(service, label="OpenAI")
     return service
