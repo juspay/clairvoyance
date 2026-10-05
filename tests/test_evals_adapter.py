@@ -1,23 +1,28 @@
 """The eval adapter: dispatch, gating and storage.
 
 Companion to tests/test_evals_evaluation.py — these tests cover
-the run-time half (engine dispatch, channel gating, result storage) and
-travel with evals/evaluator.py. Nothing calls the adapter yet;
+the run-time half (engine dispatch, channel gating, result storage, and
+each step on its own) and travel with evals/evaluator.py. Nothing calls the adapter yet;
 the call site is a separate decision.
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
+from typing import cast
 from unittest.mock import AsyncMock
 
-from app.ai.voice.agents.breeze_buddy.services.evals import (
-    evaluator,
-)
-from app.ai.voice.agents.breeze_buddy.services.evals.engines.common import (
-    Verdict,
-)
+import pytest
+
 from app.schemas.breeze_buddy.conversation_analysis import (
     ConversationChannel,
+)
+from app.services.evals import (
+    evaluator,
+)
+from app.services.evals.engines.base import EvalEngine
+from app.services.evals.engines.common import (
+    Verdict,
 )
 from tests.test_evals_evaluation import (
     LEAD_META_DATA,
@@ -135,3 +140,70 @@ async def test_adapter_failure_logs_and_skips(monkeypatch):
     await evaluator.analyze_evals(_context(), _evaluation(), ConversationChannel.VOICE)
     assert engine.calls == 1  # one attempt; retries live in the provider
     save.assert_not_awaited()
+
+
+# --- the steps, each callable on its own ------------------------------------
+
+
+def test_get_engine_resolves_or_refuses():
+    assert evaluator.get_engine("prompt") is evaluator.ENGINES["prompt"]
+    assert evaluator.get_engine("structured") is evaluator.ENGINES["structured"]
+    for bad in ("nope", None, ["prompt"]):
+        with pytest.raises(ValueError, match="unknown engine"):
+            evaluator.get_engine(bad)
+
+
+async def test_run_evaluation_returns_the_verdict_and_stores_nothing(monkeypatch):
+    # a caller that only wants the verdict: no DB, no channel gate
+    engine = FakeEngine()
+    save = AsyncMock()
+    monkeypatch.setattr(evaluator, "save_evaluation_results", save)
+
+    verdict = await evaluator.run_evaluation(
+        cast(EvalEngine, engine), _context(), {"engine": "fake"}
+    )
+
+    assert verdict is engine.verdict
+    assert engine.calls == 1
+    save.assert_not_awaited()
+
+
+async def test_run_evaluation_raises_so_the_caller_owns_the_fail_posture(
+    monkeypatch,
+):
+    with pytest.raises(RuntimeError, match="vendor down"):
+        await evaluator.run_evaluation(
+            cast(EvalEngine, FakeEngine(error=RuntimeError("vendor down"))),
+            _context(),
+            {},
+        )
+
+    class SlowEngine(FakeEngine):
+        async def evaluate(self, context, configuration):
+            await asyncio.sleep(1)
+            return self.verdict
+
+    monkeypatch.setattr(evaluator, "_EVALUATION_TIMEOUT_SECONDS", 0.01)
+    with pytest.raises(asyncio.TimeoutError):
+        await evaluator.run_evaluation(cast(EvalEngine, SlowEngine()), _context(), {})
+
+
+async def test_save_verdict_stores_one_row_stamped_with_the_type(monkeypatch):
+    save = AsyncMock()
+    monkeypatch.setattr(evaluator, "save_evaluation_results", save)
+    verdict = Verdict(engine="prompt", provider="openrouter", model="m", result=[])
+
+    await evaluator.save_verdict("eval-id", "CONVERSATION_EVALS", _context(), verdict)
+
+    save.assert_awaited_once()
+    assert save.await_args is not None
+    assert save.await_args.args == (
+        "eval-id",
+        "CONVERSATION_EVALS",
+        "lead-1",
+        "reseller",
+        "merchant",
+        TEMPLATE_ID,
+        _context()["started_at"],
+        [{"type": "CONVERSATION_EVALS", **verdict.model_dump()}],
+    )

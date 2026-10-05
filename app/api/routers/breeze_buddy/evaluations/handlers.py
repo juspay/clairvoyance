@@ -20,9 +20,6 @@ from fastapi import HTTPException, status
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.extractor import (
     resolve_topic_evaluation_configuration,
 )
-from app.ai.voice.agents.breeze_buddy.services.evals.definition import (
-    validate_evals_configuration,
-)
 from app.api.routers.breeze_buddy.templates.rbac import validate_template_access
 from app.core.security.authorization import require_admin
 from app.database.accessor.breeze_buddy.evaluation_config import (
@@ -38,6 +35,9 @@ from app.schemas.breeze_buddy.evals import (
     EvaluationEnableRequest,
     EvaluationType,
     SaveEvaluationConfigurationRequest,
+)
+from app.services.evals.definition import (
+    validate_evals_configuration,
 )
 from app.utils.common import parse_json
 

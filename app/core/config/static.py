@@ -830,14 +830,24 @@ LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_BASEURL = os.environ.get("LANGFUSE_BASEURL", "https://us.cloud.langfuse.com")
 
-# TypeSafe Jev (evals provider, evals/providers/typesafe.py).
-# Empty key = every evaluation on it fails with a logged error
+# TypeSafe Jev (model provider, app/services/model_provider/typesafe.py).
+# Empty key = every call on it fails with a logged error
 # (a deployment mistake should be loud); nothing else is affected.
 TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY", "")
 TYPESAFE_API_URL = os.environ.get(
     "TYPESAFE_API_URL", "https://api.typesafe.ai/v1/systemone"
 )
 TYPESAFE_TIMEOUT_SECONDS = _positive_float("TYPESAFE_TIMEOUT_SECONDS", 30.0)
+
+# OpenRouter (model provider, app/services/model_provider/openrouter.py): one
+# key and one chat-completions URL front every model it routes; ``model`` is
+# the OpenRouter model id. Empty key = every call on it fails with a logged
+# error; nothing else is affected.
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_API_URL = os.environ.get(
+    "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
+)
+OPENROUTER_TIMEOUT_SECONDS = _positive_float("OPENROUTER_TIMEOUT_SECONDS", 60.0)
 
 BREEZE_BUDDY_SONIOX_MODEL = os.environ.get("BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-v4")
 BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(

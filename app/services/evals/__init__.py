@@ -1,4 +1,4 @@
-"""The eval engine: validator, adapter, pluggable engines and providers.
+"""The eval engine: validator, adapter and pluggable engines.
 
 Generic by design — any Buddy service may judge anything through it, and
 the evaluation type is the caller's: the row handed to the adapter names

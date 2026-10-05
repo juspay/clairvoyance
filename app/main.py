@@ -30,9 +30,6 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.worker impo
     start_analysis_worker,
     stop_analysis_worker,
 )
-from app.ai.voice.agents.breeze_buddy.services.evals.providers import (
-    close_eval_provider_pools,
-)
 from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
     monitor_dragontts_health,
 )
@@ -81,6 +78,7 @@ from app.services.knowledge_base import (
     process_pending_documents as process_pending_kb_documents,
 )
 from app.services.langfuse.tasks.task import initialize_langfuse_tasks
+from app.services.model_provider import close_all as close_model_provider_pools
 from app.services.redis import (
     close_redis_connections,
     get_redis_service,
@@ -384,8 +382,8 @@ async def lifespan(_app: FastAPI):
     # Close shared httpx pools used by chat LLM clients (Azure today).
     # Drains keep-alive connections cleanly so we don't leak fds on SIGTERM.
     await close_llm_http_pools()
-    # Same for the evals providers' pooled vendor clients.
-    await close_eval_provider_pools()
+    # Same for the model providers' pooled vendor clients.
+    await close_model_provider_pools()
     # Close database pool
     await close_db_pool()
     # Close Redis connections
