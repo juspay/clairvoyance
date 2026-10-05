@@ -13,7 +13,11 @@ import random
 from datetime import datetime
 from typing import Any, Optional, cast
 
-from app.ai.voice.agents.breeze_buddy.dispatch.keys import SCHEDULE_ZSET
+from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
+    SCHEDULE_ZSET,
+    lead_tier_key,
+)
+from app.core.config import dynamic as dyn_cfg
 from app.core.config.static import BB_DISPATCH_QPS_JITTER_MS
 from app.core.logger import logger
 from app.schemas import ExecutionMode
@@ -53,10 +57,35 @@ def _apply_jitter(score_ms: int, jitter_ms: Optional[int] = None) -> int:
     return score_ms + random.randint(-j, j)
 
 
+# Long enough for a lead to be dialled after its first schedule (leads are
+# dialled within a day), so defers keep the tier without every defer path
+# having to know the merchant. A lead waiting longer falls back to normal.
+_LEAD_TIER_TTL_S = 48 * 3600
+
+TIER_HIGH = "high"
+TIER_MEDIUM = "medium"
+
+
+async def merchant_tier(merchant_id: Optional[str]) -> Optional[str]:
+    """``high`` / ``medium`` for a merchant in a priority list, else None.
+    Config errors read as None (normal), never as a crash on the dial path."""
+    if not merchant_id:
+        return None
+    try:
+        if merchant_id in await dyn_cfg.BB_PRIORITY_HIGH_MERCHANT_IDS():
+            return TIER_HIGH
+        if merchant_id in await dyn_cfg.BB_PRIORITY_MEDIUM_MERCHANT_IDS():
+            return TIER_MEDIUM
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"merchant_tier: config unavailable, treating as normal: {e}")
+    return None
+
+
 async def schedule_lead(
     lead_id: str,
     next_attempt_at: datetime,
     jitter_ms: Optional[int] = None,
+    merchant_id: Optional[str] = None,
 ) -> bool:
     """
     ZADD a lead onto the schedule.
@@ -69,16 +98,37 @@ async def schedule_lead(
         lead_id: lead_call_tracker row id
         next_attempt_at: when this lead should fire (timezone-aware)
         jitter_ms: override default jitter; pass 0 for "no jitter" (operator)
+        merchant_id: when given, refreshes the lead's tier hint so the
+            promoter routes it to the high / medium ready list. Callers
+            without the lead row (defers) omit it and the existing hint,
+            if any, stays.
     """
     score = _apply_jitter(_to_unix_ms(next_attempt_at), jitter_ms)
     try:
         redis = await get_redis_service()
         client: Any = cast(Any, await redis.get_client())
+    except Exception as e:  # noqa: BLE001 — best-effort; reconciler heals
+        logger.error(f"schedule_lead: Redis unavailable for {lead_id}: {e}")
+        return False
+
+    # Hint before the ZADD: a lead that is already due can be promoted the
+    # moment it is on the schedule, and must find its tier already there.
+    if merchant_id is not None:
+        tier = await merchant_tier(merchant_id)
+        try:
+            if tier is None:
+                await client.delete(lead_tier_key(lead_id))
+            else:
+                await client.set(lead_tier_key(lead_id), tier, ex=_LEAD_TIER_TTL_S)
+        except Exception as e:  # noqa: BLE001 — the lead still dispatches, as normal
+            logger.warning(f"schedule_lead: tier hint write failed for {lead_id}: {e}")
+
+    try:
         await client.zadd(SCHEDULE_ZSET, {lead_id: score})
-        return True
     except Exception as e:  # noqa: BLE001 — best-effort; reconciler heals
         logger.error(f"schedule_lead: ZADD failed for {lead_id} (score={score}): {e}")
         return False
+    return True
 
 
 async def cancel_scheduled_lead(lead_id: str) -> bool:

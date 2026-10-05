@@ -12,7 +12,10 @@ from app.ai.voice.agents.breeze_buddy.dispatch import promoter as p
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     PROMOTER_PAUSED,
     READY_LIST,
+    READY_LIST_HIGH,
+    READY_LIST_MEDIUM,
     SCHEDULE_ZSET,
+    lead_tier_key,
 )
 
 
@@ -54,8 +57,8 @@ async def test_promoter_moves_due_leads_when_leader(fake_redis):
 
     assert moved == 3
     assert fake_redis.client.zsets.get(SCHEDULE_ZSET, {}) == {}
-    # Order from LPUSH is reversed.
-    assert set(fake_redis.client.lists.get(READY_LIST, [])) == {"a", "b", "c"}
+    # RPUSH keeps due order: head is the earliest-due lead.
+    assert fake_redis.client.lists.get(READY_LIST, []) == ["a", "b", "c"]
 
     await prom._leader.stop()
 
@@ -112,3 +115,47 @@ async def test_promoter_promotion_is_atomic_when_zrem_loses(fake_redis):
     assert fake_redis.client.lists.get(READY_LIST, []) == ["b"]
 
     await prom._leader.stop()
+
+
+async def test_promoter_keeps_due_order_first_in_first_out(fake_redis):
+    """Earlier-due leads are picked first. A lead promoted in a later tick
+    joins the tail and cannot overtake one already waiting."""
+    fake_redis.client.zsets[SCHEDULE_ZSET] = {"a": 1_000, "b": 2_000, "c": 3_000}
+    prom = p.Promoter()
+    await prom._leader.start()
+    prom._leader._is_leader = True
+
+    moved = await prom._tick_once()
+    assert moved == 3
+    assert fake_redis.client.lists[READY_LIST] == ["a", "b", "c"]
+
+    # Next tick: a newly due lead goes behind the ones still waiting.
+    fake_redis.client.zsets[SCHEDULE_ZSET] = {"d": 4_000}
+    await prom._tick_once()
+    assert fake_redis.client.lists[READY_LIST] == ["a", "b", "c", "d"]
+
+    # Workers pop the head: the earliest-due lead goes first.
+    assert (await fake_redis.client.blpop(READY_LIST))[1] == "a"
+    await prom._leader.stop()
+
+
+async def test_promoter_routes_by_tier_hint(fake_redis):
+    """high / medium hints go to their lists; no hint goes to the normal list,
+    and the hint is read at promote time, not at schedule time."""
+    fake_redis.client.kv[lead_tier_key("h1")] = "high"
+    fake_redis.client.kv[lead_tier_key("m1")] = "medium"
+    fake_redis.client.kv[lead_tier_key("junk")] = "platinum"  # unknown value
+    z = fake_redis.client.zsets.setdefault(SCHEDULE_ZSET, {})
+    z.update({"h1": 1_000, "m1": 2_000, "n1": 3_000, "junk": 4_000})
+
+    prom = p.Promoter()
+    await prom._leader.start()
+    prom._leader._is_leader = True
+    moved = await prom._tick_once()
+    await prom._leader.stop()
+
+    assert moved == 4
+    assert fake_redis.client.lists[READY_LIST_HIGH] == ["h1"]
+    assert fake_redis.client.lists[READY_LIST_MEDIUM] == ["m1"]
+    assert fake_redis.client.lists[READY_LIST] == ["n1", "junk"]
+    assert fake_redis.client.zsets.get(SCHEDULE_ZSET, {}) == {}
