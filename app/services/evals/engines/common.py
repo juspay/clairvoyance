@@ -107,9 +107,11 @@ class ScoreResult(BaseModel):
     key: str
     label: str
     value: Optional[float]
-    # the scale, so a value reads good or bad without the configuration
-    min: float
-    max: float
+    # the scale, so a value reads good or bad without the configuration;
+    # None when the configuration declares none — the prompt judge's scale
+    # lives in the question's instructions
+    min: Optional[float]
+    max: Optional[float]
     confidence: Optional[float] = None
 
 
