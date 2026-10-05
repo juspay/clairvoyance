@@ -11,6 +11,7 @@ from app.crm.outreach.schemas import (
     DayCount,
     EnrollmentRun,
     RunRow,
+    WorkflowOpenRuns,
     WorkflowRunSummary,
 )
 from app.crm.shared.decode import jsonb_value as _jsonb
@@ -92,6 +93,7 @@ def decode_run_summary(
     split_rows: Optional[Iterable[Mapping[str, Any]]] = None,
     day_rows: Optional[Iterable[Mapping[str, Any]]] = None,
     node_rows: Optional[Iterable[Mapping[str, Any]]] = None,
+    version_rows: Optional[Iterable[Mapping[str, Any]]] = None,
 ) -> WorkflowRunSummary:
     """Fold workflow_summary_query's grouping-set rows into one summary.
     grouping_level 0 rows are one (status, exit_reason) each; the level-3
@@ -131,4 +133,27 @@ def decode_run_summary(
         by_split=decode_split_counts(split_rows or ()),
         runs_per_day=decode_day_counts(day_rows or ()),
         open_by_node=decode_node_counts(node_rows or ()),
+        runs_by_version=decode_version_counts(version_rows or ()),
     )
+
+
+def decode_version_counts(rows: Iterable[Mapping[str, Any]]) -> Dict[int, int]:
+    """runs_by_version_query's rows as {version: runs}."""
+    return {
+        int(row["workflow_version"]): int(row["runs"] or 0)
+        for row in rows
+        if row["workflow_version"] is not None
+    }
+
+
+def decode_open_runs(
+    status_rows: Iterable[Mapping[str, Any]],
+    node_rows: Iterable[Mapping[str, Any]],
+) -> WorkflowOpenRuns:
+    """open_by_status_query + open_by_node_query as the Publish dialog's
+    shape. Both open statuses are always present, like the summary's."""
+    open_runs = {"waiting": 0, "parked": 0}
+    for row in status_rows:
+        if row["status"] in open_runs:
+            open_runs[row["status"]] += int(row["runs"] or 0)
+    return WorkflowOpenRuns(open=open_runs, open_by_node=decode_node_counts(node_rows))

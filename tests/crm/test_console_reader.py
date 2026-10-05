@@ -80,6 +80,9 @@ def pools(monkeypatch: pytest.MonkeyPatch) -> Tuple[FakePool, FakePool]:
 # customer's journey — each is called by the console routes and nothing else.
 CONSOLE_READS = [
     ("summary", lambda: enrollment.workflow_summary("m1", "wf", None, None), 4),
+    # a windowed summary also counts the window's runs per version (Runs tab)
+    ("windowed summary", lambda: enrollment.workflow_summary("m1", "wf", T0, None), 5),
+    ("open runs", lambda: enrollment.workflow_open_runs("m1", "wf"), 2),
     ("report runs", lambda: enrollment.run_endings_in_window("m1", "wf", T0, None), 1),
     ("call stats", lambda: get_call_stats_by_runs("m1", RUNS), 1),
     ("call facts", lambda: get_call_facts_by_runs("m1", RUNS), 1),
@@ -146,6 +149,8 @@ async def test_with_no_replica_the_console_reads_the_primary_still_bounded(
         ("walker's pinned document", lambda: version.get_definition("m1", "wf", 3)),
         ("event worker's live plans", lambda: workflow.live_workflows("m1")),
         ("editor after a save", lambda: workflow.get_workflow("m1", "wf")),
+        # rides the editor's detail read, so it must not wait on the replica
+        ("detail read's has runs", lambda: enrollment.workflow_has_runs("m1", "wf")),
     ],
 )
 async def test_the_workers_and_the_editor_never_read_the_replica(

@@ -36,6 +36,7 @@ from app.crm.outreach.schemas import (
     VersionMigration,
     Workflow,
     WorkflowCallSummary,
+    WorkflowOpenRuns,
     WorkflowPage,
     WorkflowReport,
     WorkflowRunSummary,
@@ -101,6 +102,14 @@ async def get_workflow_route(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
         )
+    # The console's empty states ("no runs yet") ride the detail read: one
+    # EXISTS on the primary (never the replica, so a replica problem cannot
+    # hold up opening a workflow) instead of an all-time summary. Fail OPEN:
+    # None tells the console to fall back to the summary.
+    try:
+        workflow.has_runs = await analytics.workflow_has_runs(merchant_id, workflow_id)
+    except Exception:
+        workflow.has_runs = None
     return workflow
 
 
@@ -264,6 +273,11 @@ async def workflow_report_route(
     until: Optional[datetime] = Query(
         None, description="Window end on entered_at (default: now); at most 92 days"
     ),
+    include_calls: bool = Query(
+        False,
+        description="Also return calls_summary (= GET /calls/summary for the "
+        "same window) from the same reads",
+    ),
     merchant_id: str = Depends(
         merchant_scope("read a workflow report", "crm.workflows.summary")
     ),
@@ -272,7 +286,9 @@ async def workflow_report_route(
     customer table (how each journey stands, and whether we spoke to them
     before it ended) and the call table (what the dialler did)."""
     try:
-        report = await analytics.workflow_report(merchant_id, workflow_id, since, until)
+        report = await analytics.workflow_report(
+            merchant_id, workflow_id, since, until, include_calls
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
@@ -372,6 +388,18 @@ def _timezone(tz: str) -> str:
             detail=f"unknown timezone: {tz}",
         )
     return tz
+
+
+@router.get("/{workflow_id}/open", response_model=WorkflowOpenRuns)
+async def workflow_open_runs_route(
+    workflow_id: str,
+    merchant_id: str = Depends(
+        merchant_scope("read a workflow summary", "crm.workflows.summary")
+    ),
+) -> WorkflowOpenRuns:
+    """The runs in flight now, by status and by square — what the Publish
+    dialog shows before a migrate, without the all-time summary."""
+    return await analytics.workflow_open_runs(merchant_id, workflow_id)
 
 
 @router.post("/{workflow_id}/validate", response_model=PublishCheck)
