@@ -22,6 +22,7 @@ from openai import AsyncAzureOpenAI
 from pipecat.services.azure.llm import AzureLLMService, AzureLLMSettings
 
 from app.ai.voice.llm._pools import get_azure_httpx_client
+from app.ai.voice.llm._request_id import log_request_ids
 from app.core.logger import logger
 
 __all__ = ["AzureConfig", "build_azure_llm"]
@@ -90,7 +91,7 @@ def build_azure_llm(config: AzureConfig, *, pooled: bool = False) -> AzureLLMSer
         settings_kwargs["max_completion_tokens"] = config.max_tokens
 
     cls = _PooledAzureLLMService if pooled else AzureLLMService
-    return cls(
+    service = cls(
         api_key=config.api_key,
         endpoint=config.endpoint,
         model=config.model,
@@ -98,3 +99,8 @@ def build_azure_llm(config: AzureConfig, *, pooled: bool = False) -> AzureLLMSer
         settings=AzureLLMSettings(**settings_kwargs),
         function_call_timeout_secs=config.function_call_timeout_secs,
     )
+    # Skipped for the pooled client: it outlives the call and is shared
+    # across sessions, so a per-build hook would stack on every build.
+    if not pooled:
+        log_request_ids(service, label="Azure")
+    return service

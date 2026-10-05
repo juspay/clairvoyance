@@ -21,6 +21,7 @@ from botocore.config import Config
 from botocore.tokens import ScopedEnvTokenProvider
 from pipecat.services.aws.llm import AWSBedrockLLMService, AWSBedrockLLMSettings
 
+from app.ai.voice.llm._request_id import log_request_ids
 from app.core.logger import logger
 
 __all__ = ["BedrockConfig", "build_bedrock_llm", "is_openai_model"]
@@ -98,6 +99,7 @@ def build_bedrock_llm(config: BedrockConfig) -> AWSBedrockLLMService:
         service._aws_params["config"] = service._aws_params["config"].merge(
             Config(signature_version="bearer")
         )
+    log_request_ids(service, label="Bedrock")
     return service
 
 
