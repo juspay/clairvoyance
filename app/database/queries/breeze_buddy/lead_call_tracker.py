@@ -324,7 +324,14 @@ def _run_leads_cte() -> str:
     The retry join is an EQUALITY on the stamped lead's request_id, carried
     through ``s`` (one row per run × request_id): the earlier correlated
     ``IN (SELECT ... WHERE s2.run_id = s.run_id)`` was quadratic in runs
-    and is what held prod's CPU on 21 Sep 2026."""
+    and is what held prod's CPU on 21 Sep 2026.
+
+    Both joins are LATERAL probes fenced with OFFSET 0, so each stays one
+    index lookup per row (059 per run, 004 per run × request_id). As plain
+    joins, the prepared statement (array params, rows overestimated ~5x)
+    planned a hash join over EVERY linked lead of the merchant (875k rows,
+    8.2 s for 15k runs) and, for the retries, a parallel seq scan of the
+    whole table (4 GB read for 0 rows at 21k runs). Same rows either way."""
     retry = _RETRY_OF_RUN.format(
         l="l.",
         parent_request_id="s.request_id",
@@ -338,15 +345,22 @@ def _run_leads_cte() -> str:
         ), stamped AS (
             SELECT r.id AS run_id, r.entered_at, r.exited_at, l.*
             FROM runs r
-            JOIN "{LEAD_CALL_TRACKER_TABLE}" l ON l."enrollment_id" = r.id
-            WHERE l."merchant_id" = $1 AND l.{_PRODUCTION}
+            CROSS JOIN LATERAL (
+                SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}" l
+                WHERE l."enrollment_id" = r.id
+                  AND l."merchant_id" = $1 AND l.{_PRODUCTION}
+                OFFSET 0
+            ) l
         ), retries AS (
             SELECT s.run_id, s.entered_at, s.exited_at, l.*
             FROM (SELECT DISTINCT run_id, entered_at, exited_at, "request_id"
                   FROM stamped) s
-            JOIN "{LEAD_CALL_TRACKER_TABLE}" l
-              ON l."merchant_id" = $1 AND l.{_PRODUCTION}
-             AND {retry}
+            CROSS JOIN LATERAL (
+                SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}" l
+                WHERE l."merchant_id" = $1 AND l.{_PRODUCTION}
+                  AND {retry}
+                OFFSET 0
+            ) l
         ), mine AS (
             SELECT * FROM stamped
             UNION ALL
