@@ -30,6 +30,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
     reconcilers as recon_mod,
     worker as worker_mod,
 )
+from app.ai.voice.agents.breeze_buddy.managers.calls import NumberAcquire
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
 from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.core import (
@@ -487,6 +488,10 @@ class DispatchHarness:
         # simulates the number being full in the DB while Redis still handed
         # out a token (a phantom).
         self.acquire_number_succeeds: bool = True
+        # Takes priority over ``acquire_number_succeeds`` when set: ERROR
+        # simulates Postgres not answering (or a Twilio refusal), which is
+        # NOT "full" — the worker must hand the token back.
+        self.acquire_number_outcome: Optional[NumberAcquire] = None
         # Captured alerts so tests can assert no-telephony-number throttled
         # alerts fired without needing a real Slack/Redis round-trip.
         self.no_telephony_number_alerts: list[dict[str, str]] = []
@@ -609,8 +614,12 @@ class DispatchHarness:
             return None
         return self.number
 
-    async def _acquire_number(self, number: TelephonyNumber) -> bool:
-        return self.acquire_number_succeeds
+    async def _acquire_number(self, number: TelephonyNumber) -> NumberAcquire:
+        if self.acquire_number_outcome is not None:
+            return self.acquire_number_outcome
+        if self.acquire_number_succeeds:
+            return NumberAcquire.ACQUIRED
+        return NumberAcquire.FULL
 
     async def _release_number(self, number_id: str, provider) -> None:
         self.released_numbers.append(number_id)

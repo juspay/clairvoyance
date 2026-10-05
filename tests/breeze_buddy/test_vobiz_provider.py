@@ -41,6 +41,7 @@ import requests
 # keeps this line above the next one on its own.
 from app.ai.voice.agents.breeze_buddy import dispatch as _dispatch  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
+from app.ai.voice.agents.breeze_buddy.managers.calls import NumberAcquire
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import (
     get_voice_provider,
 )
@@ -135,7 +136,7 @@ class ChannelSpy:
         self.calls: List[Tuple[str, Any]] = []
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> "ChannelSpy":
-        async def increment(number_id: str):
+        async def increment(number_id: str, raise_errors: bool = False):
             self.calls.append(("increment", number_id))
             return self.row
 
@@ -408,12 +409,15 @@ def test_a_base_url_that_would_leak_the_token_refuses_to_boot(base_url):
 
 
 @pytest.mark.parametrize("provider", [CallProvider.PLIVO, CallProvider.VOBIZ])
-@pytest.mark.parametrize("row,acquired", [(True, True), (None, False)])
+@pytest.mark.parametrize(
+    "row,acquired",
+    [(True, NumberAcquire.ACQUIRED), (None, NumberAcquire.FULL)],
+)
 async def test_a_vobiz_number_takes_a_channel_exactly_like_plivo(
     monkeypatch, provider, row, acquired
 ):
-    """One atomic channel increment; the accessor's None (at capacity or the
-    UPDATE failed) means the number was NOT acquired."""
+    """One atomic channel increment; the accessor's None (no row matched)
+    means the number is FULL."""
     spy = ChannelSpy(row=row).install(monkeypatch)
     assert await calls_mod._acquire_number(make_number(provider)) is acquired
     assert spy.calls == [("increment", "num-1")]
@@ -433,7 +437,7 @@ async def test_an_unknown_provider_is_never_acquired(monkeypatch):
     is refused, so it can never be dialled past its ceiling."""
     spy = ChannelSpy().install(monkeypatch)
     stranger = TelephonyNumber.model_construct(id="num-1", provider="SIGNALWIRE")
-    assert await calls_mod._acquire_number(stranger) is False
+    assert await calls_mod._acquire_number(stranger) is NumberAcquire.ERROR
     assert spy.calls == []
 
 

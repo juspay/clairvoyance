@@ -14,6 +14,7 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import Any, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
@@ -514,25 +515,49 @@ async def _get_available_number(
     return number
 
 
-async def _acquire_number(number: TelephonyNumber) -> bool:
+class NumberAcquire(str, Enum):
+    """Result of ``_acquire_number``."""
+
+    ACQUIRED = "ACQUIRED"
+    FULL = "FULL"  # the capacity UPDATE matched no row
+    ERROR = "ERROR"  # the DB could not answer; the line's state is unknown
+
+
+async def _acquire_number(number: TelephonyNumber) -> NumberAcquire:
     """
-    Marks an telephony number as in use.
+    Marks a telephony number as in use.
     Uses atomic increment to avoid race conditions.
-    For Exotel, only succeeds if channels < maximum_channels.
-    Returns True if acquisition succeeded, False if at capacity.
+
+    The dispatch worker drops its Redis token on FULL and pushes it back on
+    ERROR. Exotel/Plivo/Vobiz: 0 rows is FULL, a DB error is ERROR. Twilio's
+    status flip has no capacity check, so any refusal is ERROR.
     """
-    if number.provider == CallProvider.TWILIO:
-        result = await update_telephony_number_status(
-            number.id, TelephonyNumberStatus.IN_USE
+    try:
+        if number.provider == CallProvider.TWILIO:
+            result = await update_telephony_number_status(
+                number.id, TelephonyNumberStatus.IN_USE
+            )
+            return NumberAcquire.ACQUIRED if result else NumberAcquire.ERROR
+        if number.provider in (
+            CallProvider.EXOTEL,
+            CallProvider.PLIVO,
+            CallProvider.VOBIZ,
+        ):
+            result = await increment_telephony_number_channels(
+                number.id, raise_errors=True
+            )
+            return NumberAcquire.ACQUIRED if result else NumberAcquire.FULL
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"Could not acquire telephony number {number.id} "
+            f"({number.provider.value}): DB error: {e}"
         )
-        return result is not None
-    elif number.provider == CallProvider.EXOTEL:
-        result = await increment_telephony_number_channels(number.id)
-        return result is not None
-    elif number.provider in (CallProvider.PLIVO, CallProvider.VOBIZ):
-        result = await increment_telephony_number_channels(number.id)
-        return result is not None
-    return False
+        return NumberAcquire.ERROR
+    logger.error(
+        f"Could not acquire telephony number {number.id}: "
+        f"unknown provider {number.provider!r}"
+    )
+    return NumberAcquire.ERROR
 
 
 async def _release_number(number_id: str, provider: CallProvider):

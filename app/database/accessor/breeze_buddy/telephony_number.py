@@ -145,12 +145,16 @@ async def update_telephony_number_status(
 
 async def increment_telephony_number_channels(
     telephony_number_id: str,
+    raise_errors: bool = False,
 ) -> Optional[TelephonyNumber]:
     """
     Atomically increment telephony number channels by 1.
     Only succeeds if channels < maximum_channels (enforces capacity limit).
     Returns None if the number is at capacity or doesn't exist.
     This avoids race conditions by using database-level atomic increment with constraint.
+
+    With raise_errors=True, a query failure re-raises instead of folding into
+    None, so a caller can tell "at capacity" from a transient DB error.
     """
     logger.info(f"Incrementing telephony number channels for ID: {telephony_number_id}")
 
@@ -174,6 +178,8 @@ async def increment_telephony_number_channels(
 
     except Exception as e:
         logger.error(f"Error incrementing telephony number channels: {e}")
+        if raise_errors:
+            raise
         return None
 
 
