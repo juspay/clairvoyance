@@ -51,6 +51,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
     schedule_lead,
 )
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
+    NumberAcquire,
     _acquire_number,
     _get_available_number,
     _get_lead_config,
@@ -99,7 +100,7 @@ from app.database.accessor import (
     update_lead_call_completion_details,
     update_lead_call_details,
 )
-from app.schemas import ExecutionMode, LeadCallStatus
+from app.schemas import ExecutionMode, LeadCallStatus, TelephonyNumber
 from app.services.redis import get_redis_service
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,19 @@ _GREETING_PREWARM_ATTEMPTS = 2
 _GREETING_PREWARM_RETRY_PAUSE_S = 0.5
 _GREETING_PREWARM_TIMEOUT_S = 15.0
 _GREETING_PREWARM_LIVE_TIMEOUT_S = 30.0
+
+
+async def _return_capacity(number: TelephonyNumber, token: str) -> None:
+    """
+    Return capacity taken before a dial: DB line first, then the Redis token.
+
+    Returning the token first wakes a BLPOP'd worker whose ``channels + 1``
+    can land before our ``channels - 1``; it is refused, drops the token,
+    and the line idles until the reconciler. Same order as
+    ``_release_call_resources``.
+    """
+    await _release_number(number.id, number.provider)
+    await release_channel_token(number.id, token)
 
 
 async def _prewarm_initial_greeting_with_retry(
@@ -587,18 +601,28 @@ class Worker:
                 return
 
             # DB-side bookkeeping: ``telephony_number.status`` (Twilio) or
-            # ``channels`` (Exotel/Plivo). The ``+1 WHERE channels < max`` is
-            # atomic, so a refusal means the token matched no free line.
+            # ``channels`` (Exotel/Plivo/Vobiz).
+            # FULL: the token matched no free line. Drop it, or
+            # the next worker pops it and is refused again. Only the
+            # reconciler restores it; no call was placed, so no call-end
+            # release will.
+            # ERROR: the DB could not answer, so the line may be free. Push
+            # the token back.
             acquired_db = await _acquire_number(number)
-            if not acquired_db:
-                # Drop the token rather than push it back: pushed back, the
-                # next worker pops the same stale token and is refused
-                # again. The line returns via the call-end release, and the
-                # reconciler tops the list up if the token was real.
-                logger.warning(
-                    f"Worker {self._uuid}: DB capacity denied for number "
-                    f"{number.id} despite Redis token. Dropping token, deferring."
-                )
+            if acquired_db is not NumberAcquire.ACQUIRED:
+                if acquired_db is NumberAcquire.FULL:
+                    logger.warning(
+                        f"Worker {self._uuid}: number {number.id} is full in "
+                        f"the DB despite a Redis token. Dropping the token, "
+                        "deferring."
+                    )
+                else:
+                    logger.error(
+                        f"Worker {self._uuid}: DB acquire of number "
+                        f"{number.id} failed ({acquired_db.value}); the line "
+                        "may be free. Returning the token, deferring."
+                    )
+                    await release_channel_token(number.id, token)
                 lock_released = await self._defer_and_release(
                     locked.id, await capacity_defer_seconds(number.id, locked.id)
                 )
@@ -610,8 +634,7 @@ class Worker:
                     f"Worker {self._uuid}: invalid customer_mobile_number "
                     f"for lead {locked.id}"
                 )
-                await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _return_capacity(number, token)
                 lock_released = await self._fail_and_release(locked.id, "INVALID_PHONE")
                 return
 
@@ -640,8 +663,7 @@ class Worker:
                         f"record). Releasing channel token + number, "
                         f"deferring {rl_defer}s."
                     )
-                    await release_channel_token(number.id, token)
-                    await _release_number(number.id, number.provider)
+                    await _return_capacity(number, token)
                     lock_released = await self._defer_and_release(locked.id, rl_defer)
                     return
 
@@ -671,8 +693,7 @@ class Worker:
                         f"prewarm for lead {locked.id}; releasing channel "
                         "token + number"
                     )
-                    await release_channel_token(number.id, token)
-                    await _release_number(number.id, number.provider)
+                    await _return_capacity(number, token)
                     raise
 
             # The merchant's per-customer rule — the authoritative RECORD,
@@ -694,8 +715,7 @@ class Worker:
                         rules=call_limits,
                     )
                 except CallLimitUnavailable as e:
-                    await release_channel_token(number.id, token)
-                    await _release_number(number.id, number.provider)
+                    await _return_capacity(number, token)
                     lock_released = await self._defer_call_limit_unavailable(
                         locked.id, e
                     )
@@ -703,8 +723,7 @@ class Worker:
                 if not verdict.allowed:
                     # Lost the race to another worker dialling the same
                     # customer, or the window filled since the peek.
-                    await release_channel_token(number.id, token)
-                    await _release_number(number.id, number.provider)
+                    await _return_capacity(number, token)
                     await finish_lead_call_limit_reached(locked, verdict, session)
                     lock_released = await self._release(locked.id)
                     return
@@ -728,8 +747,7 @@ class Worker:
                 await self._unrecord_call_limit(
                     locked, customer_mobile, call_limit_member
                 )
-                await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _return_capacity(number, token)
                 # Backoff retry. Use defer_seconds derived from attempt_count.
                 backoff = min(60, 5 * (locked.attempt_count + 1))
                 lock_released = await self._defer_and_release(locked.id, backoff)
@@ -748,8 +766,7 @@ class Worker:
                     await self._unrecord_call_limit(
                         locked, customer_mobile, call_limit_member
                     )
-                await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _return_capacity(number, token)
                 lock_released = await self._defer_and_release(locked.id, 10)
                 return
 
@@ -792,8 +809,7 @@ class Worker:
                     f"{locked.id} (call_sid={call_sid}). Releasing resources; "
                     "the call may be orphaned."
                 )
-                await release_channel_token(number.id, token)
-                await _release_number(number.id, number.provider)
+                await _return_capacity(number, token)
                 lock_released = await self._release(locked.id)
                 return
 

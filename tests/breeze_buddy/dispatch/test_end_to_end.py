@@ -41,12 +41,14 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
+from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
 from app.core.config.static import BB_CHANNEL_WAIT_BACKOFF_MAX_S
-from app.schemas import LeadCallStatus
+from app.schemas import CallProvider, LeadCallStatus
 from tests.breeze_buddy.dispatch.conftest import (
     AlwaysLeader,
     CallRecorder,
     make_lead,
+    make_number,
 )
 
 # ---------------------------------------------------------------------------
@@ -689,7 +691,7 @@ async def test_pile_behind_full_number_costs_one_round_per_phantom(
 
     async def _counting_acquire(number):
         refusals.append(number.id)
-        return False
+        return w.NumberAcquire.FULL
 
     monkeypatch.setattr(w, "_acquire_number", _counting_acquire)
 
@@ -775,3 +777,222 @@ async def test_dial_path_unchanged_when_capacity_exists(
     assert harness.deferred == []
     assert await channel_tokens_available(harness.number.id) == 1
     assert not any(k.startswith("bb:capwait:") for k in fake_redis.client.hlls)
+
+
+# ---------------------------------------------------------------------------
+# #1258 follow-up — a real token is never thrown away
+# ---------------------------------------------------------------------------
+
+
+def _record_capacity_returns(monkeypatch, harness) -> list[str]:
+    """Spy on the two halves of a pre-dial capacity return, in call order."""
+    order: list[str] = []
+
+    async def _release_number(number_id, provider):
+        order.append("db")
+        harness.released_numbers.append(number_id)
+
+    async def _release_token(number_id, token=None):
+        order.append("token")
+        return await cs_mod.release_channel_token(number_id, token)
+
+    monkeypatch.setattr(w, "_release_number", _release_number)
+    monkeypatch.setattr(w, "release_channel_token", _release_token)
+    return order
+
+
+async def test_make_call_error_frees_db_line_before_token(
+    harness, fake_redis, monkeypatch
+):
+    """
+    make_call raises after the worker holds a token and the DB line.
+
+    The LPUSH wakes a BLPOP'd worker at once; if it ran before our
+    ``channels - 1`` it would be refused and drop the token, leaving a free
+    line with nothing to dial on it until the reconciler. So the DB line is
+    freed first, the token second — the call-end order.
+    """
+    order = _record_capacity_returns(monkeypatch, harness)
+    harness.call_recorder = CallRecorder(raise_exc=RuntimeError("provider down"))
+    lead = make_lead("lead-dial-error")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-dial-error")
+    await worker._iteration(session=None)
+
+    assert order == ["db", "token"]
+    assert harness.released_numbers == [harness.number.id]
+    assert await channel_tokens_available(harness.number.id) == 1
+    assert len(harness.deferred) == 1 and harness.deferred[0][0] == lead.id
+    assert lead.status == LeadCallStatus.BACKLOG
+
+
+async def test_no_sid_frees_db_line_before_token(harness, fake_redis, monkeypatch):
+    """Same order on the no-SID reply path."""
+    order = _record_capacity_returns(monkeypatch, harness)
+    harness.call_recorder = CallRecorder(sid=None)
+    lead = make_lead("lead-no-sid")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-no-sid")
+    await worker._iteration(session=None)
+
+    assert order == ["db", "token"]
+    assert harness.released_numbers == [harness.number.id]
+    assert await channel_tokens_available(harness.number.id) == 1
+    assert harness.deferred == [(lead.id, 10)]
+
+
+async def test_every_pre_dial_failure_path_returns_capacity_in_one_place():
+    """
+    The eight pre-dial failure paths all go through ``_return_capacity``;
+    no path pairs the two releases by hand, so the order cannot drift.
+    """
+    import inspect
+
+    src = inspect.getsource(w.Worker._dispatch)
+    assert "release_channel_token(number.id, token)" in src  # the ERROR branch
+    assert src.count("_return_capacity(number, token)") == 8
+    assert "_release_number(" not in src
+
+
+async def test_full_number_still_drops_the_token(harness, fake_redis, monkeypatch):
+    """
+    Exotel/Plivo/Vobiz: ``channels + 1 WHERE channels < max`` matched 0
+    rows. The token matched no free line, so it is a phantom and is dropped
+    (#1258), and the lead is deferred.
+    """
+    _pin_pile_config(monkeypatch, threshold=50, long_defer=60)
+    harness.number = harness.number.model_copy(update={"provider": CallProvider.PLIVO})
+    harness.acquire_number_outcome = w.NumberAcquire.FULL
+    lead = make_lead("lead-full")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-full")
+    await worker._iteration(session=None)
+
+    assert await channel_tokens_available(harness.number.id) == 0
+    assert harness.call_recorder.calls == []
+    assert harness.released_numbers == []
+    assert len(harness.deferred) == 1 and harness.deferred[0][0] == lead.id
+    assert lead.status == LeadCallStatus.BACKLOG
+
+
+async def test_db_error_on_acquire_returns_the_token(harness, fake_redis, monkeypatch):
+    """
+    Postgres could not be asked. That says nothing about the line, so the
+    token goes back (count returns to 1) and the lead is deferred, as the
+    code did before #1258. Dropping it would idle a real line for up to a
+    reconciler interval.
+    """
+    _pin_pile_config(monkeypatch, threshold=50, long_defer=60)
+    harness.number = harness.number.model_copy(update={"provider": CallProvider.PLIVO})
+    harness.acquire_number_outcome = w.NumberAcquire.ERROR
+    lead = make_lead("lead-db-error")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-db-error")
+    await worker._iteration(session=None)
+
+    assert await channel_tokens_available(harness.number.id) == 1
+    assert harness.call_recorder.calls == []
+    assert harness.released_numbers == []  # nothing was acquired
+    assert len(harness.deferred) == 1 and harness.deferred[0][0] == lead.id
+    assert 1 <= harness.deferred[0][1] <= BB_CHANNEL_WAIT_BACKOFF_MAX_S
+    assert lead.status == LeadCallStatus.BACKLOG
+
+
+async def test_twilio_refusal_returns_the_token(harness, fake_redis, monkeypatch):
+    """
+    Twilio's status flip has no capacity clause: its only refusals are a DB
+    error or a missing row, so a refused Twilio acquire never means "full"
+    and the token is pushed back.
+    """
+    _pin_pile_config(monkeypatch, threshold=50, long_defer=60)
+    assert harness.number.provider == CallProvider.TWILIO
+    seen: list[str] = []
+
+    async def _status_fails(number_id, status):
+        seen.append(number_id)
+        return None
+
+    monkeypatch.setattr(calls_mod, "update_telephony_number_status", _status_fails)
+    monkeypatch.setattr(w, "_acquire_number", calls_mod._acquire_number)
+    lead = make_lead("lead-twilio-refused")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    worker = w.Worker(worker_uuid="w-twilio-refused")
+    await worker._iteration(session=None)
+
+    assert seen == [harness.number.id]
+    assert await channel_tokens_available(harness.number.id) == 1
+    assert harness.call_recorder.calls == []
+    assert len(harness.deferred) == 1 and harness.deferred[0][0] == lead.id
+
+
+# ---- the three-way acquire itself -----------------------------------------
+
+
+def _plivo_number():
+    return make_number("num-plivo").model_copy(update={"provider": CallProvider.PLIVO})
+
+
+async def test_acquire_outcome_full_is_zero_rows(monkeypatch):
+    async def _no_rows(number_id, raise_errors=False):
+        return None
+
+    monkeypatch.setattr(calls_mod, "increment_telephony_number_channels", _no_rows)
+    assert await calls_mod._acquire_number(_plivo_number()) is (w.NumberAcquire.FULL)
+
+
+async def test_acquire_outcome_error_is_a_raised_db_error(monkeypatch):
+    async def _boom(number_id, raise_errors=False):
+        assert raise_errors is True
+        raise ConnectionError("pool exhausted")
+
+    monkeypatch.setattr(calls_mod, "increment_telephony_number_channels", _boom)
+    assert await calls_mod._acquire_number(_plivo_number()) is (w.NumberAcquire.ERROR)
+
+
+async def test_acquire_outcome_acquired(monkeypatch):
+    number = _plivo_number()
+
+    async def _row(number_id, raise_errors=False):
+        return number
+
+    monkeypatch.setattr(calls_mod, "increment_telephony_number_channels", _row)
+    assert await calls_mod._acquire_number(number) is (w.NumberAcquire.ACQUIRED)
+
+
+async def test_acquire_outcome_twilio_never_full(monkeypatch):
+    async def _none(number_id, status):
+        return None
+
+    monkeypatch.setattr(calls_mod, "update_telephony_number_status", _none)
+    assert await calls_mod._acquire_number(make_number()) is (w.NumberAcquire.ERROR)
+
+
+async def test_default_accessor_still_swallows_db_errors(monkeypatch):
+    """
+    Without ``raise_errors`` the accessor still folds a DB error into None
+    (inbound admission reads that as "at capacity", as before), while the
+    worker's acquire sees the error and answers ERROR.
+    """
+    from app.database.accessor.breeze_buddy import telephony_number as tn_mod
+
+    async def _boom(query_text, values):
+        raise ConnectionError("pool exhausted")
+
+    monkeypatch.setattr(tn_mod, "run_parameterized_query", _boom)
+    assert await tn_mod.increment_telephony_number_channels("num-x") is None
+    assert await calls_mod._acquire_number(_plivo_number()) is (w.NumberAcquire.ERROR)
