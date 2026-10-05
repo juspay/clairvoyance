@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from app.ai.voice.agents.breeze_buddy.dispatch import queue
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import SCHEDULE_ZSET
 
@@ -114,6 +112,69 @@ async def test_schedule_lead_does_not_raise_on_redis_error(monkeypatch):
     ok = await queue.schedule_lead("lead-x", when)
 
     assert ok is False
+
+
+async def test_schedule_leads_writes_every_lead_in_batches(fake_redis, monkeypatch):
+    """One ZADD per batch."""
+    monkeypatch.setattr(queue, "SCHEDULE_BATCH_SIZE", 2)
+    calls = []
+    real_zadd = fake_redis.client.zadd
+
+    async def counting_zadd(key, mapping):
+        calls.append(len(mapping))
+        return await real_zadd(key, mapping)
+
+    monkeypatch.setattr(fake_redis.client, "zadd", counting_zadd)
+    when = datetime(2026, 5, 14, 9, 0, tzinfo=timezone.utc)
+    items = [(f"lead-{i}", when) for i in range(5)]
+
+    written = await queue.schedule_leads(items, jitter_ms=0)
+
+    assert written == 5
+    assert calls == [2, 2, 1]  # one ZADD per batch
+    expected_ms = int(when.timestamp() * 1000)
+    for lead_id, _ in items:
+        assert await queue.get_scheduled_score(lead_id) == expected_ms
+
+
+async def test_schedule_leads_jitters_each_lead_within_bounds(fake_redis):
+    when = datetime(2026, 5, 14, 9, 0, tzinfo=timezone.utc)
+    base = int(when.timestamp() * 1000)
+    await queue.schedule_leads([(f"lead-{i}", when) for i in range(50)], jitter_ms=200)
+    for i in range(50):
+        score = await queue.get_scheduled_score(f"lead-{i}")
+        assert score is not None and abs(score - base) <= 200
+
+
+async def test_schedule_leads_failed_batch_does_not_stop_the_rest(
+    fake_redis, monkeypatch
+):
+    """A failed batch is skipped; later batches are still written."""
+    monkeypatch.setattr(queue, "SCHEDULE_BATCH_SIZE", 2)
+    real_zadd = fake_redis.client.zadd
+    attempts = {"n": 0}
+
+    async def flaky_zadd(key, mapping):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("simulated blip")
+        return await real_zadd(key, mapping)
+
+    monkeypatch.setattr(fake_redis.client, "zadd", flaky_zadd)
+    when = datetime(2026, 5, 14, 9, 0, tzinfo=timezone.utc)
+
+    written = await queue.schedule_leads(
+        [(f"lead-{i}", when) for i in range(4)], jitter_ms=0
+    )
+
+    assert written == 2
+    assert await queue.get_scheduled_score("lead-0") is None
+    assert await queue.get_scheduled_score("lead-2") is not None
+
+
+async def test_schedule_leads_empty_is_a_no_op(fake_redis):
+    assert await queue.schedule_leads([]) == 0
+    assert await queue.get_schedule_size() == 0
 
 
 # ---------------------------------------------------------------------------

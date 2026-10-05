@@ -8,6 +8,9 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.dispatch.calling_window import (
+    wake_leads_for_new_window,
+)
 from app.core.logger import logger
 from app.database.accessor import (
     calling_activation_for_merchant,
@@ -370,6 +373,8 @@ async def update_configuration_handler(
 
         if updated_config:
             logger.info(f"Configuration {config_id} updated successfully")
+            # Move leads parked for the old calling window. Best-effort.
+            await wake_leads_for_new_window(existing_config, updated_config)
             return updated_config
         else:
             raise HTTPException(
