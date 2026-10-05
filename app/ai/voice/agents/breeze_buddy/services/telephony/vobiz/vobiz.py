@@ -20,6 +20,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
 )
 from app.core.config.static import (
     APP_BASE_URL,
+    OUTBOUND_RING_TIMEOUT_SECONDS,
     VOBIZ_API_BASE_URL,
     VOBIZ_AUTH_ID,
     VOBIZ_AUTH_TOKEN,
@@ -84,6 +85,11 @@ class VobizProvider(VoiceCallProvider):
             "hangup_url": f"{APP_BASE_URL}/agent/voice/breeze-buddy/vobiz/callback/status",
             "hangup_method": "POST",
         }
+        if OUTBOUND_RING_TIMEOUT_SECONDS > 0:
+            # ring_timeout, not hangup_on_ring: Vobiz documents the latter as
+            # "max duration from start of ringing to hangup", which could also
+            # end an answered call. A string, as in Vobiz's make-call example.
+            payload["ring_timeout"] = str(OUTBOUND_RING_TIMEOUT_SECONDS)
         url = f"{VOBIZ_API_BASE_URL}/Account/{VOBIZ_AUTH_ID}/Call/"
         headers = {"X-Auth-ID": VOBIZ_AUTH_ID, "X-Auth-Token": VOBIZ_AUTH_TOKEN}
         proxy_url = get_proxy_config()

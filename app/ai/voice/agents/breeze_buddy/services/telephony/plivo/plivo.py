@@ -24,7 +24,11 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.conference import
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
 )
-from app.core.config.static import APP_BASE_URL, PLIVO_REST_TIMEOUT_SECONDS
+from app.core.config.static import (
+    APP_BASE_URL,
+    OUTBOUND_RING_TIMEOUT_SECONDS,
+    PLIVO_REST_TIMEOUT_SECONDS,
+)
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_call_id
 from app.schemas import CallProvider, TelephonyConfig
@@ -123,6 +127,12 @@ class PlivoProvider(VoiceCallProvider):
             params["template"] = template_name
         if params:
             answer_url += "?" + urlencode(params)
+        # Off (0) = the SDK's own ring_timeout, 120 s.
+        ring = (
+            {"ring_timeout": OUTBOUND_RING_TIMEOUT_SECONDS}
+            if OUTBOUND_RING_TIMEOUT_SECONDS > 0
+            else {}
+        )
 
         try:
             response = self.client.calls.create(
@@ -130,6 +140,7 @@ class PlivoProvider(VoiceCallProvider):
                 to_=customer_mobile_number,
                 answer_url=answer_url,
                 hangup_url=f"{self.APP_BASE_URL}/agent/voice/breeze-buddy/plivo/callback/status",
+                **ring,
             )
 
             logger.info(f"Plivo call initiated with answer_url: {answer_url}")

@@ -739,6 +739,13 @@ AWS_VAYU_WRITE_API_KEY = os.environ.get("AWS_VAYU_WRITE_API_KEY")
 EXOTEL_SUBDOMAIN = os.getenv("EXOTEL_SUBDOMAIN", "api.exotel.com")
 EXOTEL_TEMPLATE_APPLET_APP_ID = os.getenv("EXOTEL_TEMPLATE_APPLET_APP_ID", "")
 
+# Outbound ring timeout (seconds) for Plivo and Vobiz dials: how long the
+# customer's phone rings before the provider gives up and sends the hang-up
+# callback (the lead ends NO_ANSWER). Unset or 0 = off, i.e. each provider's
+# own default (Plivo's SDK sends 120 s; Vobiz documents none); either way the
+# mobile network stops ringing first today, at roughly 45-55 s.
+OUTBOUND_RING_TIMEOUT_SECONDS = int(os.getenv("OUTBOUND_RING_TIMEOUT_SECONDS") or 0)
+
 # Plivo Configuration
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID", "")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN", "")
