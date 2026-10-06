@@ -232,6 +232,47 @@ async def test_a_failing_or_slow_job_is_contained(rv, monkeypatch):
     await sw.tick()  # and the next tick spawns them again
 
 
+async def test_after_a_recovery_or_a_failed_tick_the_jobs_that_free_lines_wait(
+    rv, monkeypatch
+):
+    """BB_V2_RECONNECT_GRACE_S (0 = off): what they would read may not be whole yet."""
+    ran = {name: AsyncMock() for name in ("ledger", "lease_reaper", "backlog")}
+    monkeypatch.setattr(
+        SW, "JOBS", tuple(SW.Job(name, 1, fn, 5) for name, fn in ran.items())
+    )
+    monkeypatch.setattr(SW, "recover_after_flush", AsyncMock(return_value=True))
+    monkeypatch.setattr(SW, "SWEEP_INTERVAL_S", 0.01)
+    assert SW.BB_V2_RECONNECT_GRACE_S == 0  # off by default
+    monkeypatch.setattr(SW, "BB_V2_RECONNECT_GRACE_S", 60)
+
+    def counts():
+        return [fn.await_count for fn in ran.values()]
+
+    sw = SW.Sweeper(redis_client=rv)
+    await sw.tick()
+    await _settle()
+    assert counts() == [1, 1, 1]  # nothing went wrong: no wait
+    await rv.delete("bb:epoch")
+    await sw.tick()  # Redis lost its data: recovered (the backlog job is spawned)
+    await rv.set("bb:epoch", "x")
+    await sw.tick()
+    await _settle()
+    assert counts() == [1, 1, 3]
+    sw._grace_until = 0.0  # the wait is over
+    await sw.tick()
+    await _settle()
+    assert counts() == [2, 2, 4]
+
+    failing = SW.Sweeper(redis_client=rv)
+    leader = NS(is_leader=True, start=AsyncMock(), stop=AsyncMock())
+    monkeypatch.setattr(failing, "_leader", leader)
+    monkeypatch.setattr(failing, "tick", AsyncMock(side_effect=ConnectionError))
+    failing.start()
+    await asyncio.sleep(0.05)
+    await failing.stop()
+    assert failing._grace_until > time.monotonic() + 50
+
+
 async def test_only_the_leader_ticks(monkeypatch):
     monkeypatch.setattr(SW, "v2_seen", AsyncMock(return_value=True))
     monkeypatch.setattr(SW, "SWEEP_INTERVAL_S", 0.01)
@@ -341,6 +382,77 @@ async def test_unreadable_ranked_config_changes_no_flag(rv, monkeypatch):
     assert await rv.hmget("bb:num:N1", "ranked", "max") == ["1", "7"]
 
 
+async def test_intents_flag_follows_its_list_for_a_merchants_own_number(
+    rv, monkeypatch
+):
+    rows = {}
+    for n, merchant in (("N1", "M1"), ("N2", "M1"), ("N3", None)):
+        await seed_number(rv, n, 2, {f"T{n}": {}})
+        await rv.sadd("bb:v2:active", n)
+        rows[n] = NS(id=n, status="AVAILABLE", provider="PLIVO", maximum_channels=2)
+        rows[n].merchant_id = merchant
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value=rows)
+    )
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", AsyncMock(side_effect=ConnectionError)
+    )
+    listed = AsyncMock(return_value=["N1", "N3"])
+    monkeypatch.setattr(SW.dyn_cfg, "BB_V2_INTENT_NUMBERS", listed, raising=False)
+
+    async def flags():
+        return [await rv.hget(f"bb:num:{n}", "intents") for n in ("N1", "N2", "N3")]
+
+    await SW.refresh_number_facts()
+    listed.assert_awaited_once_with(strict=True)
+    # N3 is listed but is a shared number (no merchant): never
+    assert await flags() == ["1", "0", "0"]
+    listed.side_effect = ConnectionError  # unreadable: no flag changes
+    await SW.refresh_number_facts()
+    assert await flags() == ["1", "0", "0"]
+    listed.side_effect, listed.return_value = None, []
+    await SW.refresh_number_facts()
+    assert await flags() == ["0", "0", "0"]
+
+
+async def test_a_number_that_takes_calls_with_no_lead_row_is_always_ranked(
+    rv, monkeypatch
+):
+    """Else ENQUEUE would drop, without a word, the rank the CRM passes with the call."""
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import scripts
+    from tests.breeze_buddy.dispatch.v2.test_rank_scripts import band
+
+    await seed_number(rv, "N1", 0, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    row = NS(id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=0)
+    row.merchant_id = "M1"
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    ranked = AsyncMock(side_effect=ConnectionError)
+    intents = AsyncMock(return_value=["N1"])
+    monkeypatch.setattr(SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", ranked)
+    monkeypatch.setattr(SW.dyn_cfg, "BB_V2_INTENT_NUMBERS", intents, raising=False)
+
+    async def flags():
+        return await rv.hmget("bb:num:N1", "intents", "ranked", "backfill")
+
+    await SW.refresh_number_facts()
+    # even with the ranked list unread; marked for the backfill like any switch-on
+    assert await flags() == ["1", "1", "1"]
+    rank = scripts.Rank(2, "f", 0)
+    assert await scripts.enqueue("T1", "L1", NOW() - 5, rank=rank, run_id="R1") == 0
+    assert band(await rv.zscore("bb:q:T1", "L1")) == 2
+    # the ranked list is read and does not name it; the intents list is unread
+    ranked.side_effect, ranked.return_value = None, []
+    intents.side_effect = ConnectionError
+    await SW.refresh_number_facts()
+    assert (await flags())[:2] == ["1", "1"]
+    intents.side_effect, intents.return_value = None, []
+    await SW.refresh_number_facts()
+    assert (await flags())[:2] == ["0", "0"]
+
+
 async def test_leads_queued_before_a_number_is_ranked_get_their_rows_rank(
     rv, monkeypatch
 ):
@@ -391,6 +503,39 @@ async def test_leads_queued_before_a_number_is_ranked_get_their_rows_rank(
     await scripts.match("N1")
     # "none" takes the default rank, 1
     assert await tickets_of(rv, "N1") == ["first", "none", "P2", "P3"]
+
+
+async def test_a_queued_lead_with_no_rank_on_its_row_gets_its_runs_rank(
+    rv, monkeypatch
+):
+    from app.database.accessor.breeze_buddy.dispatch import LeadDispatchState as St
+    from tests.breeze_buddy.dispatch.v2.test_rank_scripts import band
+
+    await seed_number(rv, "N1", 0, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.hset("bb:num:N1", mapping={"ranked": "1", "backfill": "1"})
+    now = NOW()
+    await rv.zadd(
+        "bb:q:T1", {"row": now - 4, "run": now - 3, "gone": now - 2, "norun": now - 1}
+    )
+    pri = {"rank": 2, "order": "newest_event", "event_ms": now}
+    states = {
+        "row": St("BACKLOG", False, "T1", None, pri, "E0"),
+        "run": St("BACKLOG", False, "T1", None, None, "E1"),
+        "gone": St("BACKLOG", False, "T1", None, None, "E2"),  # its run gives no rank
+        "norun": St("BACKLOG", False, "T1", None, None),
+    }
+    monkeypatch.setattr(RC, "get_lead_dispatch_states", AsyncMock(return_value=states))
+    asked = AsyncMock(return_value={"run": {**pri, "rank": 3}})
+    monkeypatch.setattr(RC, "ranks_for_leads", asked)
+    await RC.backfill_ranks()
+    # one ask for the chunk, as (lead id, run id); a lead with a rank on its row not asked
+    asked.assert_awaited_once_with([("run", "E1"), ("gone", "E2")])
+    assert band(await rv.zscore("bb:q:T1", "row")) == 2
+    assert band(await rv.zscore("bb:q:T1", "run")) == 3
+    # no run, or a run with no rank: left for the default
+    assert await rv.zscore("bb:q:T1", "gone") == now - 2
+    assert await rv.zscore("bb:q:T1", "norun") == now - 1
 
 
 async def test_route_refresh_reresolves_templates_with_waiting_leads(rv, monkeypatch):

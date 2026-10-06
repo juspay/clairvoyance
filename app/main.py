@@ -25,9 +25,17 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
     stop_promoter,
     stop_workers,
 )
+
+# Registers the call-queue hooks (a workflow call that waits for its line). Explicit
+# for the same reason: the walker queues the call, the entry consumer re-ranks it.
+from app.ai.voice.agents.breeze_buddy.dispatch.v2 import intents  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.acceptor import (
     start_acceptor,
     stop_acceptor,
+)
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.grants import (
+    start_grant_worker,
+    stop_grant_worker,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.redis_client import close_v2_redis
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.sweep import Sweeper
@@ -68,6 +76,7 @@ from app.core.config.static import (
     BB_RECONCILE_BACKLOG_INTERVAL_S,
     BB_RECONCILE_CHANNELS_INTERVAL_S,
     BB_RECONCILE_STUCK_PROCESSING_INTERVAL_S,
+    BB_V2_GRANT_ROLE,
     BLOCKING_THREAD_POOL_SIZE,
     BOT_MAX_DRAIN_SECONDS,
     CHAT_SESSION_END_TIMEOUT_LOOP_INTERVAL_SECONDS,
@@ -349,13 +358,22 @@ async def lifespan(_app: FastAPI):
         logger.info(f"CRM worker role '{CRM_ROLE}' started")
     else:
         logger.info("CRM_ROLE=api: no CRM worker loop started")
+    # v2: the grant worker makes a workflow call's lead once it has a line. It runs on
+    # one CRM role's pods, never on a dialler pod, and idles until v2 is used.
+    if CRM_ROLE != "api" and CRM_ROLE == BB_V2_GRANT_ROLE:
+        await start_grant_worker()
 
     yield
 
     logger.info("Application shutdown event triggered...")
 
     # Stop the CRM worker role before scheduler/db close so an in-flight
-    # batch finishes (or times out) with the pool still open.
+    # batch finishes (or times out) with the pool still open. The grant worker
+    # first (a no-op where it never started): a grant it leaves is sent again.
+    try:
+        await stop_grant_worker()
+    except Exception as e:
+        logger.error(f"Error stopping v2 grant worker: {e}", exc_info=True)
     if CRM_ROLE != "api":
         try:
             logger.info(f"Stopping CRM worker role '{CRM_ROLE}'...")

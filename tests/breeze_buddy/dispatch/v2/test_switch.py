@@ -1031,3 +1031,18 @@ async def test_a_hand_back_overtaken_while_moving_rooms_does_not_flip(
     assert num["mode"] == "v2" and "handback_pending" not in num
     assert await rv.smembers("bb:busy:N1") == {"lead:LIVE"}  # not wiped
     db.channels.assert_not_awaited()
+
+
+async def test_handover_waits_while_a_call_with_no_lead_row_is_queued(rv, db):
+    # today's dialler would drop an id that has no lead row: the number stays with v2
+    await seed_number(rv, "N1", 5, {"T1": {}}, mode="draining")
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.zadd("bb:q:T1", {"L1": 111})
+    await rv.hset("bb:qi:T1", "L1", "R1")
+    await SWT.apply_handover(rv, "N1", _number(), T0)
+    assert await rv.hget("bb:num:N1", "mode") == "draining"
+    assert await rv.zrange("bb:q:T1", 0, -1) == ["L1"]
+    assert not await rv.exists("bb:schedule:leads")
+    await rv.delete("bb:qi:T1")  # granted or withdrawn since
+    await SWT.apply_handover(rv, "N1", _number(), T0)
+    assert await rv.hget("bb:num:N1", "mode") == "legacy"

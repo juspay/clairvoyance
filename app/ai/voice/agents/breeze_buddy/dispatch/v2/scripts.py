@@ -122,6 +122,7 @@ local function put_ranked(t, l, due_ms, now_ms, rank, order, event_ms, live_day,
     redis.call('HSET', 'bb:qp:' .. t, l,
                string.format('%.0f', pscore(rank, order, due_ms, event_ms, live_day)))
   end
+  return order
 end
 
 -- The room's leads whose time has come get their ready score: the remembered one, else
@@ -272,8 +273,19 @@ local function v2_match(n, cap)
        and redis.call('HEXISTS', inflight, best_l) == 0 then
       redis.call('SADD', busy, 'lead:' .. best_l)
       local tk = redis.call('HINCRBY', num, 'seq', 1)                   -- ticket id (rule 15)
-      redis.call('HSET', inflight, best_l, cjson.encode({t = best.t, issued_ms = now_ms, tk = tk}))
-      redis.call('RPUSH', 'bb:tickets', n .. '|' .. best_l .. '|' .. tk .. '|' .. best.t .. '|' .. now_ms)
+      local lease, list = {t = best.t, issued_ms = now_ms, tk = tk}, 'bb:tickets'
+      local entry = n .. '|' .. best_l .. '|' .. tk .. '|' .. best.t .. '|' .. now_ms
+      -- A call with no lead row yet (bb:qi; N's intents flag only stops new ones, so
+      -- it is not read here): its line waits in bb:grants until the grant worker has
+      -- made the row (PUBLISH); g = waiting for the row, r = its run, ps = the score
+      -- it had, should it have to wait again.
+      local run = redis.call('HGET', 'bb:qi:' .. best.t, best_l)
+      if run then
+        lease.g, lease.r, lease.ps = 1, run, string.format('%%.0f', best.s)
+        list, entry = 'bb:grants', entry .. '|' .. run
+      end
+      redis.call('HSET', inflight, best_l, cjson.encode(lease))
+      redis.call('RPUSH', list, entry)
       free = free - 1
       issued = issued + 1
     end
@@ -348,10 +360,10 @@ def _rank_argv(rank: Optional[Rank]) -> List[Any]:
     return [*rank[:3], rank.next_rank or "", rank.next_order]
 
 
-def _enqueue_rank_argv(rank: Optional[Rank]) -> List[Any]:
-    """ENQUEUE's ARGV 6-11; ARGV 9 is kept for a run id (lead at grant)."""
+def _enqueue_rank_argv(rank: Optional[Rank], run_id: str = "") -> List[Any]:
+    """ENQUEUE's ARGV 6-11: the rank, the run id (ARGV 9), the next-day rank."""
     r = _rank_argv(rank)
-    return [*r[:3], "", *r[3:]]
+    return [*r[:3], run_id, *r[3:]]
 
 
 class Enqueue(IntEnum):
@@ -365,7 +377,9 @@ class Enqueue(IntEnum):
 
 # ARGV: template_id, lead_id, due_ms, cap, only_if_absent ('1'|'0'),
 #       rank ('' not given | '0' none | '1'..'99'), order ('f'|'n'), event_ms (ranked numbers),
-#       ARGV 9 kept for a run id (lead at grant), next_rank ('' none), next_order
+#       run_id ('' = the lead has a row; else the member is the id its lead WILL have and
+#       bb:qi:{T} remembers the run: only on a number whose bb:num:{N}.intents is 1),
+#       next_rank ('' none), next_order
 # -> tickets issued, or an ``Enqueue`` refusal.
 # only_if_absent (the backlog reconciler): a lead already in its room is left as it is,
 # score untouched and no match run, so re-reading a big pile writes nothing and a stale
@@ -377,9 +391,13 @@ local t, l = ARGV[1], ARGV[2]
 local n = redis.call('HGET', 'bb:route:' .. t, 'number')
 if not n then return -1 end                  -- Enqueue.ROUTE_MISSING
 if n == '' then return -3 end                -- Enqueue.NOT_V2: no number resolved
-local nf = redis.call('HMGET', 'bb:num:' .. n, 'mode', 'ranked', 'live_day')
+local nf = redis.call('HMGET', 'bb:num:' .. n, 'mode', 'ranked', 'live_day', 'intents')
 local mode = nf[1]
 if mode ~= 'v2_pending' and mode ~= 'v2' and mode ~= 'draining' then return -3 end  -- NOT_V2
+local run = ARGV[9] or ''
+-- NOT_V2: N takes no rowless calls, or is switching (its rooms may go to today's
+-- schedule, which needs a lead row)
+if run ~= '' and (nf[4] ~= '1' or mode ~= 'v2') then return -3 end
 -- Enqueue.HOLDS_LINE
 if redis.call('SISMEMBER', 'bb:busy:' .. n, 'lead:' .. l) == 1 then return -2 end
 if redis.call('HEXISTS', 'bb:inflight:' .. n, l) == 1 then return -2 end
@@ -393,6 +411,7 @@ else
   -- unranked number, or a lead with no rank ('0'): promote gives it the default rank
   redis.call('ZADD', 'bb:q:' .. t, ARGV[3], l)
 end
+if run ~= '' then redis.call('HSET', 'bb:qi:' .. t, l, run) end
 redis.call('SADD', 'bb:numtpl:' .. n, t)     -- a non-empty room is always listed on its number
 -- due when the lead is (an earlier entry stays): match rewrites it on a v2 number, and a
 -- v2_pending or draining number keeps it for when its mode is v2
@@ -426,7 +445,7 @@ end
 # exactly one coroutine through (design card rule 49). O(1).
 CLAIM_LUA = _LEASE_FN + """
 local o = lease_if(ARGV[1], ARGV[2], ARGV[3])
-if not o then return 0 end
+if not o or o.g then return 0 end  -- g: no lead row yet, so no ticket was written
 if o.owner then
   if o.owner == ARGV[4] then return 1 end
   return 0
@@ -556,7 +575,7 @@ return v2_match(n, tonumber(ARGV[6]))
 REPUSH_TICKET_LUA = _LEASE_FN + """
 if redis.call('GET', 'bb:dispatch:enabled') == '0' then return 0 end
 local o = lease_if(ARGV[1], ARGV[2], ARGV[3])
-if not o or o.owner or o.dialling_ms then return 0 end
+if not o or o.owner or o.dialling_ms or o.g then return 0 end
 local now = redis_now_ms()
 if now - tonumber(o.repushed_ms or o.issued_ms) < tonumber(ARGV[4]) then return 0 end
 if ARGV[5] ~= '' then
@@ -569,6 +588,76 @@ end
 o.repushed_ms = now
 redis.call('HSET', 'bb:inflight:' .. ARGV[1], ARGV[2], cjson.encode(o))
 redis.call('LPUSH', 'bb:tickets', ARGV[1] .. '|' .. ARGV[2] .. '|' .. ARGV[3] .. '|' .. o.t .. '|' .. o.issued_ms)
+return 1
+"""
+
+# The four scripts of a call with no lead row yet (a lease marked g, its entry in bb:grants).
+
+# ARGV: number_id, lead_id, ticket -> 1 = the lead row exists now and its ticket is on
+# bb:tickets; 0 = the lease is gone or is no longer waiting (nothing written). The issue
+# time is set to now, because bb:tickets is in issue order (REPUSH_TICKET, the monitor).
+PUBLISH_LUA = _LEASE_FN + """
+local n, l = ARGV[1], ARGV[2]
+local o = lease_if(n, l, ARGV[3])
+if not o or not o.g then return 0 end
+o.g, o.r, o.ps, o.repushed_ms = nil, nil, nil, nil
+o.issued_ms = redis_now_ms()
+redis.call('HSET', 'bb:inflight:' .. n, l, cjson.encode(o))
+redis.call('HDEL', 'bb:qi:' .. o.t, l)
+redis.call('RPUSH', 'bb:tickets', n .. '|' .. l .. '|' .. ARGV[3] .. '|' .. o.t .. '|' .. o.issued_ms)
+return 1
+"""
+
+# ARGV: number_id, lead_id, ticket, older_than_ms, max_ms, cap -> for a lease still
+# waiting for its row: 2 = older than max_ms: the line is freed and the member waits
+# again at the score it had (unless it was withdrawn); 1 = its entry is on bb:grants
+# again (not sent for older_than_ms); 0 = nothing (too young, or not such a lease).
+REGRANT_LUA = _MATCH_FN + _LEASE_FN + """
+local n, l = ARGV[1], ARGV[2]
+local o = lease_if(n, l, ARGV[3])
+if not o or not o.g then return 0 end
+local now = redis_now_ms()
+if now - o.issued_ms >= tonumber(ARGV[5]) then
+  redis.call('HDEL', 'bb:inflight:' .. n, l)
+  redis.call('SREM', 'bb:busy:' .. n, 'lead:' .. l)
+  if redis.call('HEXISTS', 'bb:qi:' .. o.t, l) == 1 then
+    redis.call('ZADD', 'bb:q:' .. o.t, tonumber(o.ps), l)
+  end
+  v2_match(n, tonumber(ARGV[6]))
+  return 2
+end
+if now - (o.repushed_ms or o.issued_ms) < tonumber(ARGV[4]) then return 0 end
+o.repushed_ms = now
+redis.call('HSET', 'bb:inflight:' .. n, l, cjson.encode(o))
+redis.call('LPUSH', 'bb:grants', n .. '|' .. l .. '|' .. ARGV[3] .. '|' .. o.t .. '|' .. o.issued_ms .. '|' .. o.r)
+return 1
+"""
+
+# ARGV: template_id, lead_id -> 1 = it was waiting in the room. A lease it already holds
+# is the grant worker's to give back (the CRM refuses the call).
+WITHDRAW_LUA = """
+redis.call('HDEL', 'bb:qp:' .. ARGV[1], ARGV[2])
+redis.call('HDEL', 'bb:qi:' .. ARGV[1], ARGV[2])
+return redis.call('ZREM', 'bb:q:' .. ARGV[1], ARGV[2])
+"""
+
+# ARGV: template_id, lead_id, rank, order, event_ms, next_rank, next_order -> 1 = a member
+# still in its room on a ranked number has its new rank (ready: scored now; waiting:
+# remembered), else 0. A ready member that stays in its rank, first ready first, keeps
+# its place: ranking it again is not a new arrival.
+RERANK_LUA = _MATCH_FN + """
+local t, l = ARGV[1], ARGV[2]
+local s, rank = tonumber(redis.call('ZSCORE', 'bb:q:' .. t, l)), rank_or(ARGV[3], nil)
+local n = s and rank and redis.call('HGET', 'bb:route:' .. t, 'number')
+local nf = n and redis.call('HMGET', 'bb:num:' .. n, 'ranked', 'live_day')
+if not nf or nf[1] ~= '1' then return 0 end
+local now = now_ms_and_ist()
+local order = put_ranked(t, l, math.max(s, 0), now, rank, ARGV[4], tonumber(ARGV[5]) or 0,
+                         nf[2] ~= '0', rank_or(ARGV[6], nil), ARGV[7])
+local ns = tonumber(redis.call('ZSCORE', 'bb:q:' .. t, l))
+if s < 0 and order ~= 'n' and math.floor(ns / BAND) == math.floor(s / BAND) then
+  redis.call('ZADD', 'bb:q:' .. t, s, l)
+end
 return 1
 """
 
@@ -709,8 +798,10 @@ async def enqueue(
     due_ms: int,
     only_if_absent: bool = False,
     rank: Optional[Rank] = None,
+    run_id: str = "",
 ) -> Optional[int]:
-    """Tickets issued (>= 0), or an ``Enqueue`` refusal."""
+    """Tickets issued (>= 0), or an ``Enqueue`` refusal. ``run_id``: the lead has no row
+    yet; ``lead_id`` is the id it will have (an intents number only)."""
     return await _run(
         ENQUEUE_LUA,
         [
@@ -719,7 +810,7 @@ async def enqueue(
             due_ms,
             BB_V2_MATCH_CAP,
             "1" if only_if_absent else "0",
-            *_enqueue_rank_argv(rank),
+            *_enqueue_rank_argv(rank, run_id),
         ],
         int,
     )
@@ -911,6 +1002,36 @@ async def repush_ticket(
     return await _run(
         REPUSH_TICKET_LUA, [number_id, lead_id, ticket, older_than_ms, *where], int
     )
+
+
+def parse_grant(raw: Optional[str]) -> Optional[Tuple[Ticket, str]]:
+    """A ``bb:grants`` entry (a ticket's five fields, then the run id), or None."""
+    head, _, run_id = (raw or "").rpartition("|")
+    ticket = parse_ticket(head)
+    return (ticket, run_id) if ticket and run_id else None
+
+
+async def publish(number_id: str, lead_id: str, ticket: int) -> Optional[int]:
+    """1 = the ticket is on ``bb:tickets``; 0 = the lease is gone or not waiting."""
+    return await _run(PUBLISH_LUA, [number_id, lead_id, ticket], int)
+
+
+async def regrant(
+    number_id: str, lead_id: str, ticket: int, older_than_ms: int, max_ms: int
+) -> Optional[int]:
+    """2 = line freed, member waiting again; 1 = sent to ``bb:grants`` again; 0 = nothing."""
+    args = [number_id, lead_id, ticket, older_than_ms, max_ms, BB_V2_MATCH_CAP]
+    return await _run(REGRANT_LUA, args, int)
+
+
+async def withdraw(template_id: str, lead_id: str) -> Optional[int]:
+    """Take a waiting member out of its room (and forget its rank and its run)."""
+    return await _run(WITHDRAW_LUA, [template_id, lead_id], int)
+
+
+async def rerank(template_id: str, lead_id: str, rank: Rank) -> Optional[int]:
+    """1 = a member still waiting on a ranked number has its new rank, else 0."""
+    return await _run(RERANK_LUA, [template_id, lead_id, *rank], int)
 
 
 async def release_stale(number_id: str, lead_id: str) -> Optional[int]:

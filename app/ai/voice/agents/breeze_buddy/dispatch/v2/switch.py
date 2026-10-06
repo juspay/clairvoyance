@@ -374,8 +374,17 @@ async def apply_handover(
     elif not _same_mode(await _state(c, number_id), expected):
         logger.warning(f"v2 switch: handover for {number_id} skipped, mode changed")
         return
+    templates = sorted(await c.smembers(k.numtpl_key(number_id)))
+    for template_id in templates:
+        # today's dialler would drop an id that has no lead row (bb:qi)
+        if await c.hlen(k.qi_key(template_id)):
+            logger.warning(
+                f"v2 switch: {number_id} not handed back, calls with no lead row "
+                f"still wait in the room of {template_id}"
+            )
+            return
     # 1. rooms to today's schedule while v2 still owns the number
-    await _move_rooms(await c.smembers(k.numtpl_key(number_id)))
+    await _move_rooms(templates)
     # 2. legacy first: from here calls release, inbound admits and enqueues use today's
     #    path, so the count below includes no call that will later release through v2
     num = k.num_key(number_id)

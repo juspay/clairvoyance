@@ -612,6 +612,30 @@ async def test_ledger_frees_a_call_holder_with_no_lead_row_on_the_second_check(
 # -- orphan prune -------------------------------------------------------------------------
 
 
+async def test_prune_keeps_a_call_with_no_lead_row_while_its_run_wants_it(
+    rv, monkeypatch
+):
+    # "kept" and "unwanted" wait for a line with no lead row yet (bb:qi remembers their
+    # runs); "plain" is an ordinary lead whose row is gone
+    await rv.zadd("bb:q:T1", {"kept": 1, "unwanted": 2, "plain": 3})
+    await rv.hset("bb:qi:T1", mapping={"kept": "R1", "unwanted": "R2"})
+    await rv.hset("bb:qp:T1", "unwanted", "-1")
+    monkeypatch.setattr(RC, "get_lead_dispatch_states", AsyncMock(return_value={}))
+    wanted = AsyncMock(side_effect=ConnectionError)
+    monkeypatch.setattr(RC, "calls_still_wanted", wanted)
+    with pytest.raises(ConnectionError):  # the CRM can't say: nothing is dropped
+        await RC._drop_finished(rv, "bb:q:T1")
+    assert await rv.zcard("bb:q:T1") == 3
+    wanted.side_effect = None
+    wanted.return_value = {"kept"}
+    assert await RC._drop_finished(rv, "bb:q:T1") == 2
+    assert wanted.await_args is not None
+    assert sorted(wanted.await_args.args[0]) == [("R1", "kept"), ("R2", "unwanted")]
+    assert await rv.zrange("bb:q:T1", 0, -1) == ["kept"]
+    assert await rv.hgetall("bb:qi:T1") == {"kept": "R1"}
+    assert await rv.exists("bb:qp:T1") == 0
+
+
 async def test_prune_moves_rooms_without_a_v2_number_and_drops_finished_leads(
     rv, monkeypatch
 ):
@@ -633,6 +657,17 @@ async def test_prune_moves_rooms_without_a_v2_number_and_drops_finished_leads(
         ("Y", 200.0),
     ]
     assert await rv.zrange("bb:q:TU", 0, -1) == ["U"]
+
+
+async def test_prune_never_moves_a_call_with_no_lead_row_to_todays_schedule(
+    rv, monkeypatch
+):
+    await rv.zadd("bb:q:TO", {"X": 100})
+    await rv.hset("bb:qi:TO", "X", "R1")
+    monkeypatch.setattr(RC, "_is_v2_template", AsyncMock(return_value=False))
+    assert await RC.prune_orphans() == 0
+    assert await rv.zrange("bb:q:TO", 0, -1) == ["X"]
+    assert not await rv.exists("bb:schedule:leads")
 
 
 async def test_move_room_keeps_scores_and_unlinks_the_room(rv):
@@ -668,3 +703,47 @@ async def test_ledger_reads_every_numbers_mode_in_one_round_trip(rv, monkeypatch
     await RC.ledger_check()
     await RC.ledger_check()  # missing on two checks in a row
     alert.assert_awaited_once_with("N1", ["P1"])
+
+
+# -- the mass-free breaker (BB_V2_BREAKER_SHARE; off unless set) ---------------------------
+
+
+async def _hundred_held(rv, monkeypatch) -> AsyncMock:
+    """N1 holds 100 lines; 60 of them (S0..S59) look free-able. Returns the alert."""
+    await seed_number(rv, "N1", 100, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.sadd("bb:busy:N1", *[f"lead:S{i}" for i in range(60)])
+    await rv.sadd("bb:busy:N1", *[f"lead:K{i}" for i in range(40)])
+    monkeypatch.setattr(RC, "get_live_calls_on_numbers", AsyncMock(return_value={}))
+    alert = AsyncMock()
+    monkeypatch.setattr(RC, "raise_v2_mass_free_stopped", alert)
+    monkeypatch.setattr(RC, "BB_V2_BREAKER_SHARE", AsyncMock(return_value=0.5))
+    return alert
+
+
+async def test_the_breaker_stops_a_ledger_run_that_would_free_too_many(rv, monkeypatch):
+    alert = await _hundred_held(rv, monkeypatch)
+    states = {f"S{i}": S("FINISHED", False, "T1", None) for i in range(60)}
+    states.update({f"K{i}": S("PROCESSING", False, "T1", None) for i in range(40)})
+    monkeypatch.setattr(RC, "get_lead_dispatch_states", AsyncMock(return_value=states))
+    assert await RC.ledger_check() == {"removed": 0}
+    assert await rv.scard("bb:busy:N1") == 100
+    alert.assert_awaited_once_with("ledger", 60, 100)
+    monkeypatch.setattr(RC, "BREAKER_FLOOR", 60)  # 60 is not more than the floor
+    assert await RC.ledger_check() == {"removed": 60}
+    assert await rv.scard("bb:busy:N1") == 40
+
+
+async def test_the_breaker_stops_a_reaper_run_that_would_free_too_many(rv, monkeypatch):
+    alert = await _hundred_held(rv, monkeypatch)
+    old = NOW() - RC.LEASE_MAX_AGE_MS - 1000
+    await rv.hset(
+        "bb:inflight:N1", mapping={f"S{i}": _lease(i + 1, old) for i in range(60)}
+    )
+    monkeypatch.setattr(RC, "get_lead_dispatch_states", AsyncMock(return_value={}))
+    assert await RC.reap_leases() == 0
+    assert await rv.scard("bb:busy:N1") == 100 and await rv.hlen("bb:inflight:N1") == 60
+    alert.assert_awaited_once_with("lease_reaper", 60, 100)
+    monkeypatch.setattr(RC, "BB_V2_BREAKER_SHARE", AsyncMock(return_value=0))  # off
+    assert await RC.reap_leases() == 60
+    assert await rv.scard("bb:busy:N1") == 40 and await rv.hlen("bb:inflight:N1") == 0

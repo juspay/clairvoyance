@@ -227,3 +227,25 @@ async def test_a_popped_and_lost_ticket_goes_back_to_the_head(rv, monkeypatch):
     _states(monkeypatch)
     assert await RC.reap_leases() == 1
     assert await rv.lrange("bb:tickets", 0, -1) == entries  # oldest first, as issued
+
+
+async def test_a_lease_waiting_for_its_row_is_sent_again_then_its_line_is_freed(
+    rv, monkeypatch
+):
+    # L1 has a line but no lead row yet, and the grant worker that took its entry died
+    await seed_number(rv, "N1", 1, {"T1": {}})
+    await rv.hset("bb:num:N1", "intents", "1")
+    assert await scripts.enqueue("T1", "L1", NOW() - 1, run_id="R1") == 1
+    assert await rv.lpop("bb:grants") is not None
+    tk = json.loads(await rv.hget("bb:inflight:N1", "L1"))["tk"]
+    _states(monkeypatch)
+    await _age(rv, "issued_ms", 4_000)
+    assert await RC.reap_leases() == 0  # not yet
+    await _age(rv, "issued_ms", 6_000)
+    assert await RC.reap_leases() == 1  # after 5 s: its entry again, for another worker
+    again = scripts.parse_grant(await rv.lpop("bb:grants"))
+    assert again is not None and (again[0].tk, again[1]) == (tk, "R1")
+    assert await rv.llen("bb:tickets") == 0  # never a ticket for a call with no row
+    await _age(rv, "issued_ms", 31_000)
+    assert await RC.reap_leases() == 1  # after 30 s: the line is freed, L1 waits again
+    assert json.loads(await rv.hget("bb:inflight:N1", "L1"))["tk"] != tk  # and matched

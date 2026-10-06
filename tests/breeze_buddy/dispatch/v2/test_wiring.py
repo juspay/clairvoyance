@@ -191,6 +191,22 @@ async def test_app_starts_v2_with_todays_dispatcher_and_stops_them_together():
     )
 
 
+async def test_app_registers_the_call_queue_hooks_and_starts_the_grant_worker_off_the_dialler():
+    import app.main as main
+    from app.core import call_queue
+
+    # importing app.main is enough for every role: the walker can queue a call
+    assert call_queue._hooks is not None
+    src = inspect.getsource(main.lifespan)
+    # never on a dialler pod (CRM_ROLE=api), only on the configured CRM role
+    assert 'if CRM_ROLE != "api" and CRM_ROLE == BB_V2_GRANT_ROLE:' in src
+    start = src.index("await start_grant_worker()")
+    # it stops before the CRM role and the DB pool do
+    stop = src.index("await stop_grant_worker()")
+    assert start < src.index("yield") < stop < src.index("await stop_worker_role()")
+    assert stop < src.index("await close_db_pool()")
+
+
 async def test_app_main_imports_in_a_fresh_interpreter():
     code = (
         "import app.main as m\n"
