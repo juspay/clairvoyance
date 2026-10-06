@@ -200,14 +200,47 @@ def source_event_used_query(
     return query, [merchant_id, workflow_id, customer_id, source_event_id]
 
 
-def claim_due_runs_query(limit: int, lease_seconds: int) -> Tuple[str, List[Any]]:
+def claim_due_runs_query(
+    limit: int, lease_seconds: int, fresh: int = 0
+) -> Tuple[str, List[Any]]:
     """The walker's claim — canon T20: wake_at is the timer AND the lease.
     One statement: lock due tokens (SKIP LOCKED — replicas never collide),
     push wake_at one lease window (a dead worker's row self-heals when the
     clock passes again; no reaper), and count the claim against the run
     (attempts++ BY the claim — a poison run that crashes its worker counts
     against itself). A paused plan's rows are skipped, not claimed (canon
-    T19: "the sweeper skips its rows"), so a pause never burns attempts."""
+    T19: "the sweeper skips its rows"), so a pause never burns attempts.
+
+    ``fresh`` of the ``limit`` are the NEWEST due runs, the rest the oldest:
+    a run that just became due is not kept behind a pile that all came due
+    at one instant (a calling window opening). Both halves read the same
+    due index, one from each end; a run inside both is claimed once. A
+    subselect per half, because FOR UPDATE is refused on a UNION's arm."""
+    if fresh > 0:
+        due = f"""
+            SELECT e.id FROM {ENROLLMENT_TABLE} e
+            WHERE e.status = 'waiting' AND e.wake_at <= now()
+              AND NOT EXISTS (
+                  SELECT 1 FROM {WORKFLOW_TABLE} w
+                  WHERE w.merchant_id = e.merchant_id AND w.id = e.workflow_id
+                    AND w.status = 'paused'
+              )"""
+        query = f"""
+            UPDATE {ENROLLMENT_TABLE}
+            SET wake_at = now() + make_interval(secs => $2),
+                attempts = attempts + 1
+            WHERE id IN (
+                SELECT id FROM ({due}
+                    ORDER BY wake_at DESC, id DESC LIMIT $3
+                    FOR UPDATE SKIP LOCKED) newest
+                UNION ALL
+                SELECT id FROM ({due}
+                    ORDER BY wake_at, id LIMIT $1
+                    FOR UPDATE SKIP LOCKED) oldest
+            )
+            RETURNING {_RUN_COLUMNS}
+        """
+        return query, [limit - fresh, lease_seconds, fresh]
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET wake_at = now() + make_interval(secs => $2),

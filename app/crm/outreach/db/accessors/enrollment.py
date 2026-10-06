@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
+from app.core.config.static import CRM_WALKER_FRESH_SHARE_PERCENT
 from app.crm.outreach.db.decoders.enrollment import (
     decode_customer_run,
     decode_open_runs,
@@ -168,7 +169,9 @@ async def insert_enrollment(
 async def claim_due_runs(limit: int, lease_seconds: int) -> List[EnrollmentRun]:
     """One statement — the lock, the lease push and the attempts count
     commit together; Postgres runs it atomically, no wrapper needed."""
-    query, values = claim_due_runs_query(limit, lease_seconds)
+    query, values = claim_due_runs_query(
+        limit, lease_seconds, limit * CRM_WALKER_FRESH_SHARE_PERCENT // 100
+    )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_run(row) for row in rows]

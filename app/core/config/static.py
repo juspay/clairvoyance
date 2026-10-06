@@ -1076,6 +1076,15 @@ HTTP_REQUEST_MAX_REDIRECTS = int(os.environ.get("HTTP_REQUEST_MAX_REDIRECTS", "3
 # The claim pushes wake_at this far ahead: the timer IS the lease (canon T20).
 CRM_WALKER_LEASE_SECONDS = int(os.environ.get("CRM_WALKER_LEASE_SECONDS", 300))
 
+# Percent of each claim batch taken from the NEWEST due runs, the rest from the
+# oldest. 0 (default) = oldest first only, today's claim. Raise it when a pile
+# comes due at one instant (a calling window opening), so a run that became due
+# just now is not walked after the whole pile. The newest part of each batch
+# must outpace the runs becoming due, or the ones in the middle wait.
+CRM_WALKER_FRESH_SHARE_PERCENT = min(
+    100, _positive_int("CRM_WALKER_FRESH_SHARE_PERCENT", 0)
+)
+
 # Consecutive failed claims before a run parks for a human.
 CRM_WALKER_MAX_ATTEMPTS = int(os.environ.get("CRM_WALKER_MAX_ATTEMPTS", 3))
 # Exited runs age out (canon T20 exited_at: the retention sweep is most
