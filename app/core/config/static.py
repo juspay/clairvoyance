@@ -535,6 +535,12 @@ for _name, _val in (
 BB_V2_UNCLAIMED_REPUSH_S = 30
 BB_V2_CLAIMED_MAX_AGE_S = 180
 BB_V2_DIAL_STUCK_S = 600
+# After a Redis loss that took the v2 flags too, today's dialling is held and its counters
+# are rebuilt from the DB this long after the loss is seen, so any dial in flight at the
+# loss has returned by then: the slowest provider's request timeout, Vobiz's 30 s
+# (vobiz.py _REQUEST_TIMEOUT_SECONDS; Plivo's is PLIVO_REST_TIMEOUT_SECONDS, 15 s).
+# Not an env knob: lowering it below either timeout reopens the over-dial window.
+BB_V2_LOSS_RECOVERY_WAIT_S = 30
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the
