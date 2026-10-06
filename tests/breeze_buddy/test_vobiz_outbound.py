@@ -127,7 +127,7 @@ def outbound_call(monkeypatch: pytest.MonkeyPatch, noise_cancellation: bool) -> 
         return "high"
 
     monkeypatch.setattr(ans_mod, "get_lead_by_call_id", get_lead)
-    monkeypatch.setattr(ans_mod, "get_template_by_id", get_template)
+    monkeypatch.setattr(ans_mod, "get_template_by_id_cached", get_template)
     monkeypatch.setattr(ans_mod, "safe_allocate_pod", no_pod)
     monkeypatch.setattr(ans_mod, "BB_NOISE_CANCELLATION_ENABLED", nc_enabled)
     monkeypatch.setattr(ans_mod, "BB_NOISE_CANCELLATION_LEVEL", nc_level)

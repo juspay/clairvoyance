@@ -38,7 +38,7 @@ def test_after_the_call_the_lead_runs_on_its_templates_account(
     async def get_template_by_id(template_id: str) -> Any:
         return templates.get(template_id)
 
-    monkeypatch.setattr(plivo_account, "get_template_by_id", get_template_by_id)
+    monkeypatch.setattr(plivo_account, "get_template_by_id_cached", get_template_by_id)
 
     def lead(template_id: Any) -> LeadCallTracker:
         return LeadCallTracker(

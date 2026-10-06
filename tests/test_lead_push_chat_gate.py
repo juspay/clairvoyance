@@ -55,7 +55,7 @@ def _template(channels: list[str]) -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_chat_template_rejected(monkeypatch, channels):
     monkeypatch.setattr(
-        lead_handlers, "get_template_by_id", _fake_get(_template(channels))
+        lead_handlers, "get_template_by_id_cached", _fake_get(_template(channels))
     )
     with pytest.raises(HTTPException) as exc:
         await lead_handlers.push_lead_handler(_req(), _user())
@@ -67,7 +67,7 @@ async def test_chat_template_rejected(monkeypatch, channels):
 async def test_voice_template_passes_the_gate(monkeypatch):
     """A voice template sails past the gate (next stop: blacklist check)."""
     monkeypatch.setattr(
-        lead_handlers, "get_template_by_id", _fake_get(_template(["voice"]))
+        lead_handlers, "get_template_by_id_cached", _fake_get(_template(["voice"]))
     )
 
     async def _boom(*_a, **_k):

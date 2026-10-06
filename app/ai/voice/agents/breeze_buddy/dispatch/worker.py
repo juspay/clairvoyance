@@ -75,6 +75,7 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     unrecord_call_limit,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
+from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import _gemini_realtime_config
 from app.ai.voice.agents.breeze_buddy.utils.playground import (
@@ -94,7 +95,6 @@ from app.database.accessor import (
     acquire_lock_on_lead_by_id,
     defer_lead_next_attempt_and_release_lock,
     get_lead_by_id,
-    get_template_by_id,
     is_number_blacklisted,
     release_lock_on_lead_by_id,
     update_lead_call_completion_details,
@@ -444,7 +444,7 @@ class Worker:
             # id-only resolution: leads always carry the template_id they
             # resolved to at push time; name fallback was removed.
             template = (
-                await get_template_by_id(locked.template_id)
+                await get_template_by_id_cached(locked.template_id)
                 if locked.template_id
                 else None
             )

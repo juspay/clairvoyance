@@ -65,6 +65,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import 
 from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.recording import (
     vobiz_record_xml,
 )
+from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
 from app.core.concurrency import spawn_background_task
 from app.core.config.dynamic import (
@@ -87,7 +88,6 @@ from app.database.accessor.breeze_buddy.telephony_number import (
 )
 from app.database.accessor.breeze_buddy.template import (
     get_all_templates_by_telephony_number_id,
-    get_template_by_id,
 )
 from app.schemas import (
     IVR_OPTIONS_TEMPLATE,
@@ -159,7 +159,9 @@ async def resolve_call_templates(
         # id-only resolution: the lead stores the template_id it resolved
         # to at push time; name fallback was removed.
         template = (
-            await get_template_by_id(lead.template_id) if lead.template_id else None
+            await get_template_by_id_cached(lead.template_id)
+            if lead.template_id
+            else None
         )
         if not template:
             logger.error(f"[Answer] Template not found for lead: {lead.id}")
