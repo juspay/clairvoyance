@@ -7,6 +7,7 @@ the Pydantic models — no env/dynamic config needed (except API keys).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from pipecat.services.elevenlabs.stt import CommitStrategy
@@ -51,6 +52,7 @@ from app.ai.voice.stt.elevenlabs import (
     resolve_languages as resolve_elevenlabs_languages,
 )
 from app.core.config.dynamic import (
+    BB_SARVAM_STT_FINALIZE_ON_SEGMENT,
     BB_SARVAM_STT_HIGH_VAD_SENSITIVITY,
     BB_SARVAM_STT_LANGUAGE_CODE,
     BB_SARVAM_STT_MODEL,
@@ -255,13 +257,29 @@ async def create_stt_from_config(
         # auto-detected), so they pin only one the TEMPLATE names. The global
         # Redis default keeps reaching saarika only, as it always has: a key
         # set in an environment must not silently lock every saaras template.
-        if sv and sv.language_code:
-            bb_lang = sv.language_code
-        elif "saaras" in bb_model.lower():
-            bb_lang = None
-        else:
-            bb_lang = await BB_SARVAM_STT_LANGUAGE_CODE()
+        needs_global_lang = not (sv and sv.language_code) and (
+            "saaras" not in bb_model.lower()
+        )
 
+        async def _no_language() -> Optional[str]:
+            return None
+
+        # Independent dynamic-config reads, together: each is a round trip
+        # on the call-setup path.
+        global_lang, prompt, vad_signals, high_vad_sensitivity, finalize_on_segment = (
+            await asyncio.gather(
+                (
+                    BB_SARVAM_STT_LANGUAGE_CODE()
+                    if needs_global_lang
+                    else _no_language()
+                ),
+                BB_SARVAM_STT_PROMPT(),
+                BB_SARVAM_STT_VAD_SIGNALS(),
+                BB_SARVAM_STT_HIGH_VAD_SENSITIVITY(),
+                BB_SARVAM_STT_FINALIZE_ON_SEGMENT(),
+            )
+        )
+        bb_lang = sv.language_code if sv and sv.language_code else global_lang
         return build_sarvam_stt(
             SarvamConfig(
                 # Sarvam's own barge-in fires on the first sound; off when the
@@ -271,9 +289,12 @@ async def create_stt_from_config(
                 model=bb_model,
                 sample_rate=SAMPLE_RATE,
                 language_code=bb_lang,
-                prompt=await BB_SARVAM_STT_PROMPT(),
-                vad_signals=await BB_SARVAM_STT_VAD_SIGNALS(),
-                high_vad_sensitivity=await BB_SARVAM_STT_HIGH_VAD_SENSITIVITY(),
+                prompt=prompt,
+                vad_signals=vad_signals,
+                high_vad_sensitivity=high_vad_sensitivity,
+                negative_frames_count=sv.negative_frames_count if sv else None,
+                negative_frames_window=sv.negative_frames_window if sv else None,
+                finalize_on_segment=finalize_on_segment,
             )
         )
 
