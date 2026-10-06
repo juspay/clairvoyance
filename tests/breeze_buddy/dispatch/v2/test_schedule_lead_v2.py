@@ -8,6 +8,11 @@ import pytest
 
 from app.ai.voice.agents.breeze_buddy.dispatch import queue, reconcilers as rc
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import SCHEDULE_ZSET
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import (
+    Rank,
+    rank_from_priority,
+)
+from tests.breeze_buddy.dispatch.v2.conftest import seed_number
 
 pytestmark = pytest.mark.asyncio
 
@@ -138,3 +143,98 @@ async def test_legacy_reconciler_does_not_check_v2_before_it_is_seen(v2, monkeyp
     await rc.reconcile_backlog_to_zset()
     assert _zset(v2) == {"A": 1000}
     check.assert_not_awaited()
+
+
+# -- ranks (a number whose bb:num:{N}.ranked is 1) --------------------------------------------
+
+NEED_RANK = -4
+
+
+def _row(monkeypatch, meta):
+    """The lead row ``_lead_rank`` reads: its meta_data, or None for no (readable) row."""
+    import app.database.accessor as accessor
+
+    read = AsyncMock(return_value=None if meta is None else NS(metaData=meta))
+    monkeypatch.setattr(accessor, "get_lead_by_id", read)
+    return read
+
+
+async def test_a_rank_is_passed_to_the_enqueue(v2):
+    rank = Rank(2, "n", 1_700_000_000_000)
+    assert await queue.schedule_lead("L1", NOW, template_id="T1", rank=rank) is True
+    v2.enqueue.assert_awaited_once_with(
+        "T1", "L1", queue._to_unix_ms(NOW), False, rank=rank
+    )
+
+
+async def test_unranked_number_makes_no_db_read(v2, monkeypatch):
+    read = _row(monkeypatch, {"priority": {"rank": 2}})
+    assert await queue.schedule_lead("L1", NOW, template_id="T1") is True
+    read.assert_not_awaited()
+
+
+async def test_need_rank_reads_the_lead_row_once(v2, monkeypatch):
+    priority = {"rank": 3, "order": "newest_event", "event_ms": 1_791_522_600_123}
+    read = _row(monkeypatch, {"workflow_id": "W", "priority": priority})
+    v2.enqueue.side_effect = [-1, NEED_RANK, 1]  # route missing, then the rank question
+    assert await queue.schedule_lead("L1", NOW, template_id="T1") is True
+    read.assert_awaited_once_with("L1")
+    assert v2.enqueue.await_count == 3
+    assert v2.enqueue.await_args.kwargs == {"rank": Rank(3, "n", 1_791_522_600_123)}
+
+
+async def test_lead_without_priority_meta_gets_default(v2, monkeypatch):
+    _row(monkeypatch, {"workflow_id": "W"})  # the row exists, it carries no rank
+    v2.enqueue.side_effect = [NEED_RANK, 1]
+    assert await queue.schedule_lead("L1", NOW, template_id="T1") is True
+    assert v2.enqueue.await_args.kwargs == {"rank": Rank(0, "f", 0)}
+    assert (
+        rank_from_priority({"rank": "x"})
+        == rank_from_priority("junk")
+        == Rank(0, "f", 0)
+    )
+    assert rank_from_priority({"rank": 2, "order": "n", "event_ms": 5}) == Rank(
+        2, "n", 5
+    )
+
+
+async def test_unreadable_lead_row_is_not_queued_at_the_default_rank(v2, monkeypatch):
+    # no row, or the DB could not be read: a pile lead must not become rank 1 by accident
+    _row(monkeypatch, None)
+    v2.enqueue.return_value = NEED_RANK
+    assert await queue.schedule_lead("L1", NOW, jitter_ms=0, template_id="T1") is False
+    v2.enqueue.assert_awaited_once()
+    assert _zset(v2) == {}  # never today's schedule: v2 owns the number
+
+
+async def test_cancel_clears_the_remembered_score(fake_redis, monkeypatch):
+    monkeypatch.setattr(queue, "v2_seen", AsyncMock(return_value=True))
+    fake_redis.client.hdel = AsyncMock(return_value=1)
+    fake_redis.client.zsets["bb:q:T1"] = {"L1": 1.0}
+    assert await queue.cancel_scheduled_lead("L1", template_id="T1") is True
+    assert fake_redis.client.zsets["bb:q:T1"] == {}
+    fake_redis.client.hdel.assert_awaited_once_with("bb:qp:T1", "L1")
+
+
+async def test_backlog_rows_carry_ranks_and_need_rank_goes_alone(v2, monkeypatch):
+    many = AsyncMock(return_value=[0, NEED_RANK])
+    monkeypatch.setattr(queue.v2_scripts, "enqueue_many", many)
+    rows = [("L1", NOW, "T1", Rank(2, "n", 4)), ("L2", NOW, "T1")]
+    assert await queue.schedule_backlog_v2(rows) == 2
+    ms = queue._to_unix_ms(NOW)
+    many.assert_awaited_once_with(
+        [("T1", "L1", ms, Rank(2, "n", 4)), ("T1", "L2", ms)], only_if_absent=True
+    )
+    v2.enqueue.assert_awaited_once_with("T1", "L2", ms, True)  # schedule_lead, alone
+
+
+async def test_ranked_number_end_to_end_queues_the_lead_in_its_rows_band(
+    rr, monkeypatch
+):
+    await seed_number(rr, "N1", 0, {"T1": {}})
+    await rr.hset("bb:num:N1", mapping={"ranked": "1", "live_day": "0"})
+    monkeypatch.setattr(queue, "v2_seen", AsyncMock(return_value=True))
+    read = _row(monkeypatch, {"priority": {"rank": 3, "order": "n", "event_ms": 9}})
+    assert await queue.schedule_lead("L1", NOW, template_id="T1") is True
+    read.assert_awaited_once_with("L1")
+    assert await rr.zscore("bb:q:T1", "L1") == (3 - 100) * 10**13 + (10**13 - 1) - 9

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.ai.voice.agents.breeze_buddy.dispatch import created_hook
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import Rank
 from app.database.accessor.breeze_buddy import lead_call_tracker as lct
 from app.schemas import ExecutionMode, LeadCallStatus, LeadCallTracker
 
@@ -63,12 +64,24 @@ async def test_create_runs_through_fire_hooks_and_schedules(scheduled) -> None:
     lct._fire_hooks([created_hook._created_lead_hook], _lead(), "created-lead")
     await asyncio.sleep(0)  # let the spawned task run
     await asyncio.sleep(0)
-    scheduled.assert_awaited_once_with("lead-1", WHEN, template_id="tmpl-1")
+    scheduled.assert_awaited_once_with(
+        "lead-1", WHEN, template_id="tmpl-1", rank=Rank(0, "f", 0)
+    )
 
 
 async def test_workflow_backlog_lead_is_scheduled(scheduled) -> None:
     await created_hook._schedule_created_lead(_lead())
-    scheduled.assert_awaited_once_with("lead-1", WHEN, template_id="tmpl-1")
+    scheduled.assert_awaited_once_with(
+        "lead-1", WHEN, template_id="tmpl-1", rank=Rank(0, "f", 0)
+    )
+
+
+async def test_the_rank_on_the_lead_is_passed_so_its_row_is_not_read(scheduled) -> None:
+    meta = {"workflow_id": "wf-1", "priority": {"rank": 2, "order": "n", "event_ms": 5}}
+    await created_hook._schedule_created_lead(_lead(metaData=meta))
+    scheduled.assert_awaited_once_with(
+        "lead-1", WHEN, template_id="tmpl-1", rank=Rank(2, "n", 5)
+    )
 
 
 @pytest.mark.parametrize(

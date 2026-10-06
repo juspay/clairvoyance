@@ -28,6 +28,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.v2 import routes
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.latch import v2_seen
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import rank_from_priority
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy import lead_call_tracker as lct_accessor
@@ -59,7 +60,13 @@ async def _schedule_created_lead(lead: LeadCallTracker) -> None:
         return
     if not await _on_v2_number(lead.template_id):
         return  # today's path, unchanged: the backlog reconciler schedules it
-    await schedule_lead(str(lead.id), when, template_id=lead.template_id)
+    priority = (lead.metaData or {}).get("priority")
+    await schedule_lead(
+        str(lead.id),
+        when,
+        template_id=lead.template_id,
+        rank=rank_from_priority(priority),  # held already: no re-read of the row
+    )
 
 
 def _created_lead_hook(lead: LeadCallTracker) -> None:

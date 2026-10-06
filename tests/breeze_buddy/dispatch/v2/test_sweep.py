@@ -298,6 +298,102 @@ async def test_number_facts_refresh_rewrites_max_and_keeps_mode(rv, monkeypatch)
     assert await rv.hget("bb:num:N1", "mode") == "v2"
 
 
+async def test_ranked_flag_follows_the_config_for_a_merchants_own_number(
+    rv, monkeypatch
+):
+    rows = {}
+    for n, merchant in (("N1", "M1"), ("N2", "M1"), ("N3", None)):
+        await seed_number(rv, n, 2, {f"T{n}": {}})
+        await rv.sadd("bb:v2:active", n)
+        rows[n] = NS(id=n, status="AVAILABLE", provider="PLIVO", maximum_channels=2)
+        rows[n].merchant_id = merchant
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value=rows)
+    )
+    listed = AsyncMock(return_value=["N1", "N3"])
+    monkeypatch.setattr(SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", listed)
+
+    async def flags():
+        return [await rv.hget(f"bb:num:{n}", "ranked") for n in ("N1", "N2", "N3")]
+
+    await SW.refresh_number_facts()
+    listed.assert_awaited_once_with(strict=True)
+    # N3 is listed but belongs to no merchant: ranks are one merchant's, so never
+    assert await flags() == ["1", "0", "0"]
+    listed.return_value = []
+    await SW.refresh_number_facts()
+    assert await flags() == ["0", "0", "0"]
+
+
+async def test_unreadable_ranked_config_changes_no_flag(rv, monkeypatch):
+    await seed_number(rv, "N1", 2, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.hset("bb:num:N1", "ranked", "1")
+    row = NS(id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=7)
+    row.merchant_id = "M1"
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", AsyncMock(side_effect=ConnectionError)
+    )
+    await SW.refresh_number_facts()
+    assert await rv.hmget("bb:num:N1", "ranked", "max") == ["1", "7"]
+
+
+async def test_leads_queued_before_a_number_is_ranked_get_their_rows_rank(
+    rv, monkeypatch
+):
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import scripts
+    from app.database.accessor.breeze_buddy.dispatch import LeadDispatchState as St
+    from tests.breeze_buddy.dispatch.v2.conftest import tickets_of
+    from tests.breeze_buddy.dispatch.v2.test_rank_scripts import band
+
+    await seed_number(rv, "N1", 0, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    now = NOW()
+    await rv.zadd(
+        "bb:q:T1", {"first": now - 9, "P3": now - 3, "P2": now - 2, "none": now - 1}
+    )
+    row = NS(id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=0)
+    row.merchant_id = "M1"
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", AsyncMock(return_value=["N1"])
+    )
+    await SW.refresh_number_facts()
+    # ranked, and marked: until the rows' ranks are in, match issues nobody (a call
+    # queued now, ranked, must not beat an older one whose rank is not in yet)
+    assert await rv.hmget("bb:num:N1", "ranked", "backfill") == ["1", "1"]
+    await rv.hset("bb:num:N1", "max", 1)
+    assert await scripts.match("N1") == 0
+    assert await tickets_of(rv, "N1") == []
+    assert await rv.zscore("bb:q:T1", "P3") == now - 3
+
+    def pri(rank):
+        return {"rank": rank, "order": "newest_event", "event_ms": now}
+
+    states = {
+        "P3": St("BACKLOG", False, "T1", None, pri(3)),
+        "P2": St("BACKLOG", False, "T1", None, pri(2)),
+        "none": St("BACKLOG", False, "T1", None, None),
+    }
+    monkeypatch.setattr(RC, "get_lead_dispatch_states", AsyncMock(return_value=states))
+    await RC.backfill_ranks()
+    assert band(await rv.zscore("bb:q:T1", "P3")) == 3
+    assert band(await rv.zscore("bb:q:T1", "P2")) == 2
+    assert await rv.zscore("bb:q:T1", "none") == now - 1  # no rank on its row
+    assert await rv.hget("bb:num:N1", "backfill") is None
+    await SW.refresh_number_facts()
+    assert await rv.hget("bb:num:N1", "backfill") is None  # once per switch-on
+    await rv.hset("bb:num:N1", "max", 4)
+    await scripts.match("N1")
+    # "none" takes the default rank, 1
+    assert await tickets_of(rv, "N1") == ["first", "none", "P2", "P3"]
+
+
 async def test_route_refresh_reresolves_templates_with_waiting_leads(rv, monkeypatch):
     await seed_number(rv, "N1", 2, {"T1": {}, "T2": {}, "T3": {}})
     await seed_number(rv, "N9", 2, {"T9": {}}, mode=None)  # legacy: not refreshed
@@ -466,3 +562,84 @@ async def test_a_sweeper_that_loses_the_lead_cancels_its_running_jobs(rv, monkey
     await asyncio.wait_for(sw._loop(), timeout=2)
     await _settle()
     assert job.done() and not gate.is_set()  # cancelled, not finished
+
+
+async def test_the_rank_backfill_never_brings_back_a_lead_that_left_its_room(
+    rv, monkeypatch
+):
+    from app.database.accessor.breeze_buddy.dispatch import LeadDispatchState as St
+    from tests.breeze_buddy.dispatch.v2.test_rank_scripts import band
+
+    await seed_number(rv, "N1", 0, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.hset("bb:num:N1", mapping={"ranked": "1", "backfill": "1"})
+    now = NOW()
+    await rv.zadd("bb:q:T1", {"stays": now - 2, "gone": now - 1})
+    pri = {"rank": 2, "order": "newest_event", "event_ms": now}
+
+    async def states(_ids):
+        # read while the page was being ranked: "gone" got a line (or was cancelled)
+        await rv.zrem("bb:q:T1", "gone")
+        return {
+            "stays": St("BACKLOG", False, "T1", None, pri),
+            "gone": St("BACKLOG", False, "T1", None, pri),
+        }
+
+    monkeypatch.setattr(RC, "get_lead_dispatch_states", states)
+    await RC.backfill_ranks()
+    assert band(await rv.zscore("bb:q:T1", "stays")) == 2
+    assert await rv.zscore("bb:q:T1", "gone") is None
+
+
+async def test_ranks_off_gives_the_room_back_its_due_times(rv, monkeypatch):
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import scripts
+    from tests.breeze_buddy.dispatch.v2.conftest import tickets_of
+
+    await seed_number(rv, "N1", 0, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.hset("bb:num:N1", "ranked", "1")
+    now = NOW()
+    # a ranked pile call, a call waiting for its time, and (after ranks go off) a plain
+    # lead due an hour ago
+    await scripts.enqueue("T1", "pile", now - 5, rank=scripts.Rank(3, "n", now))
+    await scripts.enqueue("T1", "later", now + 60_000, rank=scripts.Rank(1, "f", 0))
+    row = NS(id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=0)
+    row.merchant_id = "M1"
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    monkeypatch.setattr(SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_V2_INTENT_NUMBERS", AsyncMock(return_value=[]), raising=False
+    )
+    await SW.refresh_number_facts()
+    assert await rv.hget("bb:num:N1", "ranked") == "0"
+    assert 0 <= await rv.zscore("bb:q:T1", "pile") <= NOW()
+    assert await rv.zscore("bb:q:T1", "later") == now + 60_000
+    assert not await rv.exists("bb:qp:T1", "bb:qn:T1", "bb:qnd:T1")
+    await scripts.enqueue("T1", "old", now - 3_600_000)
+    await rv.hset("bb:num:N1", "max", 1)
+    await scripts.match("N1")
+    assert await tickets_of(rv, "N1") == ["old"]  # due first, as today's v2
+
+
+async def test_a_ranks_off_pass_that_failed_is_retried_by_the_next_refresh(
+    rv, monkeypatch
+):
+    """Ranks already off, but a ranked score is still in a room (the pass after the flag
+    write failed): the next refresh re-scores it."""
+    await seed_number(rv, "N1", 0, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.hset("bb:num:N1", "ranked", "0")
+    await rv.zadd("bb:q:T1", {"stuck": -97 * 10**13 + NOW()})
+    row = NS(id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=0)
+    row.merchant_id = "M1"
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    monkeypatch.setattr(SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_V2_INTENT_NUMBERS", AsyncMock(return_value=[]), raising=False
+    )
+    await SW.refresh_number_facts()
+    assert await rv.zscore("bb:q:T1", "stuck") >= 0
