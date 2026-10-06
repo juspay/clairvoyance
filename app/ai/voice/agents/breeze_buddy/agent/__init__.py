@@ -130,6 +130,7 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
 from app.ai.voice.llm.realtime.gemini.realtime import has_realtime_llm
+from app.ai.voice.stt import STT_UNAVAILABLE_EVENT
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
@@ -1252,6 +1253,41 @@ class Agent:
             track_error(self.errors, error_msg)
             self.root_span.end()
 
+    def _end_call_when_stt_is_lost(self, stt: Any) -> None:
+        """End the call cleanly when the STT's connection is gone for good.
+
+        An STT that reconnects on its own (Sarvam) fires
+        ``STT_UNAVAILABLE_EVENT`` once its attempts run out. The caller can
+        no longer be heard, so the call ends through the same path as an
+        idle timeout (outcome, transcript, hang-up) rather than the bot
+        talking to nobody. The STT already pushed the error, which
+        ``on_pipeline_error`` records on the call.
+        """
+        if not getattr(stt, "emits_stt_unavailable", False):
+            return
+
+        @stt.event_handler(STT_UNAVAILABLE_EVENT)
+        async def _on_stt_unavailable(_stt: Any, reason: str) -> None:
+            # A call already ending, or a transfer tearing this generation
+            # down, is not this outage's to end: stamping the lead here would
+            # leak into the next generation's real end.
+            if self.conversation_ended or self.pending_transfer:
+                logger.info(f"[STT_UNAVAILABLE] {reason}; call already ending")
+                return
+            logger.error(f"[STT_UNAVAILABLE] {reason}; ending the call")
+            if self.approval_manager:
+                self.approval_manager.deny_all("stt_unavailable")
+            # As on_client_disconnected: no post-greeting nudge into a call
+            # that is ending.
+            if self._post_greeting_task and not self._post_greeting_task.done():
+                self._post_greeting_task.cancel()
+                self._post_greeting_task = None
+            if self._rtvi_processor:
+                await self._emit_rtvi_event(
+                    "conversation-end", {"reason": "stt_unavailable"}
+                )
+            await self._handle_unexpected_disconnect("stt_unavailable")
+
     def _suppress_realtime_initial_inference(self) -> None:
         """Gemini Live + played greeting: don't generate on context init.
 
@@ -1428,6 +1464,7 @@ class Agent:
         # transport setup, before this generation was built.
         self.llm_service = llm
         self.stt_service = stt
+        self._end_call_when_stt_is_lost(stt)
         self._suppress_realtime_initial_inference()
 
         # Knowledge base runtime resolution (fail-open). Stream mode goes
@@ -1655,6 +1692,15 @@ class Agent:
                 self.lead.metaData["call_ended_by"] = "system"
             elif reason == "client_disconnected":
                 self.lead.metaData["call_ended_by"] = "customer"
+            elif reason == "stt_unavailable":
+                # The outage is always recorded, whatever labels the call
+                # already carries. The ender/reason labels are filled only if
+                # unset: a reason set earlier stays (end_conversation_global
+                # records the LLM's reason before it mutes the STT, so an
+                # outage during its mute cannot overtake it).
+                self.lead.metaData["stt_unavailable"] = True
+                self.lead.metaData.setdefault("call_ended_by", "system")
+                self.lead.metaData.setdefault("call_end_reason", "stt_unavailable")
             else:
                 self.lead.metaData["call_ended_by"] = "agent"
                 logger.warning(f"Unexpected disconnect reason: {reason}")

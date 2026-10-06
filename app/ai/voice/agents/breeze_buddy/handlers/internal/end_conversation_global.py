@@ -43,18 +43,14 @@ async def end_conversation_global(
     Returns:
         Result from end_conversation (empty dict)
     """
-    # Mute STT immediately so any customer speech during the goodbye
-    # does not trigger another LLM turn.  In normal (node-based) mode
-    # this is handled by the end_conversation_node's mute_stt pre_action;
-    # in direct mode no such node exists, so we do it here.
-    await mute_stt(context, {})
-
     if context.lead:
         if context.lead.metaData is None:
             context.lead.metaData = {}
 
         # Capture the LLM-provided reason only if call_end_reason is not already
         # set by a prior path (e.g., user_idle_timeout, client_disconnected).
+        # Recorded before the first await, so an end racing this one (an STT
+        # outage ending the call during the mute below) keeps this reason.
         if "call_end_reason" not in context.lead.metaData:
             reason = args.get("reason", "end_conversation_global_function")
             context.lead.metaData["call_end_reason"] = reason
@@ -73,5 +69,11 @@ async def end_conversation_global(
                 f"'{context.lead.outcome}' for call {context.call_sid} "
                 f"(reason: {reason})"
             )
+
+    # Mute STT immediately so any customer speech during the goodbye
+    # does not trigger another LLM turn.  In normal (node-based) mode
+    # this is handled by the end_conversation_node's mute_stt pre_action;
+    # in direct mode no such node exists, so we do it here.
+    await mute_stt(context, {})
 
     return await end_conversation(context, args)

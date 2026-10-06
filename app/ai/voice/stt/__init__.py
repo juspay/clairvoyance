@@ -15,6 +15,7 @@ from .deepgram_flux import (
     build_deepgram_flux_stt,
 )
 from .elevenlabs import ElevenLabsConfig, build_elevenlabs_stt
+from .events import STT_UNAVAILABLE_EVENT
 from .google import build_google_stt
 from .openai import build_openai_stt
 from .sarvam import SarvamConfig, build_sarvam_stt, get_sarvam_language
@@ -43,6 +44,8 @@ __all__ = [
     "build_google_stt",
     # OpenAI
     "build_openai_stt",
+    # Events an STT fires for the agent
+    "STT_UNAVAILABLE_EVENT",
     # Sarvam
     "SarvamConfig",
     "build_sarvam_stt",
