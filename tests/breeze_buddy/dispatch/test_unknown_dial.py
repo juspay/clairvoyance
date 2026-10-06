@@ -689,7 +689,12 @@ def test_a_dial_that_never_connected_is_not_placed(
     assert plivo.make_call("+919999999999", "+918000000000", dial_ref=DIAL_REF) is None
 
 
-def test_a_non_transport_error_is_still_not_placed(plivo: PlivoProvider) -> None:
+def test_a_non_transport_error_before_any_reply_is_raised(
+    plivo: PlivoProvider,
+) -> None:
+    """Nothing reached Plivo: make_call raises and the caller's failure path treats the
+    dial as not placed (spec 2026-10-05 §10.3)."""
     _plivo_returns(plivo, ValueError("bad number"))
 
-    assert plivo.make_call("+919999999999", "+918000000000", dial_ref=DIAL_REF) is None
+    with pytest.raises(ValueError):
+        plivo.make_call("+919999999999", "+918000000000", dial_ref=DIAL_REF)
