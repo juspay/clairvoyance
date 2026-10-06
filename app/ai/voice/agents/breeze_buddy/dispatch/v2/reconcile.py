@@ -93,14 +93,16 @@ async def reconcile_backlog_v2(page_size: int = 1000, max_pages: int = 5) -> int
     is_v2: Dict[str, Optional[bool]] = {}
     for _ in range(max_pages):
         page = await get_due_backlog_page(_backlog_after, page_size)
-        leads: List[Tuple[str, datetime, str]] = []
-        for lead_id, template_id, next_attempt_at in page:
+        leads: List[Tuple[Any, ...]] = []
+        for lead_id, template_id, next_attempt_at, *priority in page:
             if not template_id:
                 continue
             if template_id not in is_v2:
                 is_v2[template_id] = await _is_v2_template(template_id)
             if is_v2[template_id] is True:  # else today's number, or unreadable: skip
-                leads.append((lead_id, next_attempt_at, template_id))
+                # with the row's rank (none = the number's default), read with the page
+                rank = map(scripts.rank_from_priority, priority)
+                leads.append((lead_id, next_attempt_at, template_id, *rank))
         # One round trip per page. enqueue's Lua skips a lead that holds a line, and
         # (only_if_absent) one already in its room: a big waiting pile costs a ZSCORE per
         # lead, not a write + match, and a stale page never moves a due time (Fable M2).
@@ -193,8 +195,13 @@ async def _free_stale_lead(
         return 0
     if state.status == BACKLOG and state.next_attempt_at is not None:
         # back to its room at once, not after the backlog reconciler (Fable M6)
+        ranked: Dict[str, Any] = (
+            {"rank": scripts.rank_from_priority(state.priority)}
+            if state.priority
+            else {}
+        )
         await schedule_lead(
-            lead_id, state.next_attempt_at, template_id=state.template_id
+            lead_id, state.next_attempt_at, template_id=state.template_id, **ranked
         )
     return 1
 
@@ -424,6 +431,7 @@ async def _reap(
         requeue,
         due,
         allow_dialling="dialling_ms" in lease,
+        rank=scripts.rank_from_priority(state and state.priority),
     )
     if reply is None or reply == scripts.Reap.LEASE_CHANGED:
         return False
@@ -521,6 +529,57 @@ async def seed_holders(number_id: str, locked: Optional[Set[str]] = None) -> Set
 
 
 # ---------------------------------------------------------------------------
+# Rank backfill
+# ---------------------------------------------------------------------------
+
+
+async def _rank_chunk(template_id: str, chunk: List[Tuple[str, int]]) -> int:
+    if not chunk:
+        return 0
+    states = await get_lead_dispatch_states([lead_id for lead_id, _ in chunk])
+    rows = [
+        (template_id, lead_id, due_ms, rank)
+        for lead_id, due_ms in chunk
+        for rank in [
+            scripts.rank_from_priority(getattr(states.get(lead_id), "priority", None))
+        ]
+        if rank.rank
+    ]
+    await scripts.enqueue_many(rows, only_if_present=True)
+    return len(rows)
+
+
+async def backfill_ranks() -> int:
+    """Leads queued before their number became ranked get the rank on their rows. The
+    number-facts job marks such a number (bb:num:{N}.backfill) and match promotes nobody
+    on it meanwhile, so none of them takes the default rank first; a lead with no rank on
+    its row is left for promote. Rooms are read in ZSCAN chunks, like the prune; a run
+    that fails leaves the mark and the next one goes on. Returns the leads ranked."""
+    c = await _client()
+    ranked = 0
+    for number_id in sorted(await c.smembers(k.V2_ACTIVE_KEY)):
+        if await c.hget(k.num_key(number_id), "backfill") != "1":
+            continue
+        for template_id in sorted(await c.smembers(k.numtpl_key(number_id))):
+            chunk: List[Tuple[str, int]] = []
+            async for lead_id, score in c.zscan_iter(
+                k.room_key(template_id), count=BB_V2_PRUNE_CHUNK
+            ):
+                if score >= 0:  # not ranked yet: its score is its due time
+                    chunk.append((lead_id, int(score)))
+                if len(chunk) >= BB_V2_PRUNE_CHUNK:
+                    ranked += await _rank_chunk(template_id, chunk)
+                    chunk = []
+            ranked += await _rank_chunk(template_id, chunk)
+        await c.hdel(k.num_key(number_id), "backfill")
+        # match issued nothing while the mark was set: the number is due at once
+        await c.zadd(k.DUE_KEY, {number_id: int(time.time() * 1000)}, lt=True)
+    if ranked:
+        logger.info(f"v2 rank backfill ranked {ranked} queued leads")
+    return ranked
+
+
+# ---------------------------------------------------------------------------
 # Orphan prune
 # ---------------------------------------------------------------------------
 
@@ -545,6 +604,8 @@ async def _drop_finished(c: Any, room: str) -> int:
 async def _drop_chunk(c: Any, room: str, members: List[str]) -> int:
     states = await get_lead_dispatch_states(members)
     gone = [m for m in members if m not in states or states[m].status != BACKLOG]
+    if gone:  # with the ready score a ranked number remembered for it
+        await c.hdel(k.qp_key(room[len(k.room_key("")) :]), *gone)
     return await c.zrem(room, *gone) if gone else 0
 
 

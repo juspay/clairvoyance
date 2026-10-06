@@ -223,6 +223,15 @@ async def BB_DISPATCH_V2_NUMBERS(strict: bool = False) -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+async def BB_V2_RANKED_NUMBERS(strict: bool = False) -> list[str]:
+    """Comma-separated telephony_number ids whose v2 waiting rooms are ranked (a number
+    that belongs to one merchant). Set it only once every pod runs the ranked scripts.
+    ``strict``: a failed Redis read raises instead of reading as "none"."""
+    read = get_config_strict if strict else get_config
+    raw = await read("BB_V2_RANKED_NUMBERS", "", str)
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
 async def BB_V2_TIER_HIGH_MERCHANT_IDS() -> list[str]:
     """Comma-separated merchant IDs for high-tier v2 prioritization."""
     raw = await get_config("BB_V2_TIER_HIGH_MERCHANT_IDS", "", str)
