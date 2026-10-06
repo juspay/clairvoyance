@@ -7,7 +7,7 @@ Distinct module so the dispatcher's needs don't bloat the main
 """
 
 from datetime import datetime
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     LEAD_CALL_TRACKER_TABLE,
@@ -28,7 +28,8 @@ def get_unscheduled_backlog_leads_query(
     reconciler ticks as their firing time approaches.
     """
     text = f"""
-        SELECT id, reseller_id, EXTRACT(EPOCH FROM next_attempt_at) * 1000 AS score_ms
+        SELECT id, reseller_id, EXTRACT(EPOCH FROM next_attempt_at) * 1000 AS score_ms,
+               template_id
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = 'BACKLOG'
           AND "is_locked" = FALSE
@@ -150,3 +151,174 @@ def update_lead_next_attempt_at_query(
         RETURNING *;
     """
     return text, [lead_id, next_attempt_at]
+
+
+# ---------------------------------------------------------------------------
+# v2 event dialler (docs/dispatch-v2/design-card.md §5, §6b)
+# ---------------------------------------------------------------------------
+
+
+def get_due_backlog_page_query(
+    after: Optional[Tuple[datetime, str]], limit: int, lookahead_seconds: int
+) -> Tuple[str, List[Any]]:
+    """
+    For the v2 backlog reconciler: one keyset page of due BACKLOG, unlocked,
+    dispatchable rows, ordered by ``(next_attempt_at, id)`` and starting after
+    ``after`` (None = from the oldest). Paging by key, not OFFSET, lets the
+    reconciler resume where it stopped instead of re-reading the oldest rows.
+    """
+    after_at, after_id = after if after is not None else (None, None)
+    text = f"""
+        SELECT "id", "template_id"::text AS template_id, "next_attempt_at"
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "status" = 'BACKLOG'
+          AND "is_locked" = FALSE
+          AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+          AND "next_attempt_at" <= NOW() + make_interval(secs => $4::int)
+          AND ($1::timestamptz IS NULL OR ("next_attempt_at", "id") > ($1::timestamptz, $2::text))
+        ORDER BY "next_attempt_at", "id"
+        LIMIT $3;
+    """
+    return text, [after_at, after_id, limit, lookahead_seconds]
+
+
+def get_lead_dispatch_states_query(lead_ids: List[str]) -> Tuple[str, List[Any]]:
+    """For the v2 ledger, lease reaper and prune: where each lead stands now.
+    ``call_attached_at``: when a placed call was stamped on the lead after the
+    merchant finished it mid-dial (CALL_ATTACHED_AFTER_FINISH) and its line has not
+    been released yet (``released_at`` absent), else NULL."""
+    text = f"""
+        SELECT "id", "status", "is_locked", "template_id"::text AS template_id,
+               "next_attempt_at",
+               CASE WHEN ("meta_data" -> $2) ? 'released_at' THEN NULL
+                    ELSE ("meta_data" -> $2 ->> 'at')::timestamptz
+               END AS call_attached_at
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "id" = ANY($1::text[]);
+    """
+    return text, [list(lead_ids), CALL_ATTACHED_AFTER_FINISH]
+
+
+def _live_calls_predicate(number_param: str) -> str:
+    """The calls holding a line on the numbers ``number_param`` selects: the set
+    ``count_processing_by_telephony_number_query`` counts. PROCESSING outbound
+    (dispatchable modes) and inbound calls, plus a placed call stamped on a lead the
+    merchant finished mid-dial whose end has not released the line yet ($2 = the
+    window in minutes, $3 = the marker key)."""
+    return f"""
+        {number_param}
+          AND (
+               (
+                    "status" = 'PROCESSING'
+                AND (
+                     (
+                          "call_direction" = 'OUTBOUND'
+                      AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+                     )
+                  OR "call_direction" = 'INBOUND'
+                )
+               )
+            OR (
+                    "status" = 'FINISHED'
+                AND "call_direction" = 'OUTBOUND'
+                AND "execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+                AND "call_initiated_time" > NOW() - make_interval(mins => $2)
+                AND "meta_data" ? $3::text
+                AND NOT (("meta_data" -> $3::text) ? 'released_at')
+               )
+          )"""
+
+
+def get_live_calls_on_number_query(
+    number_id: str, attached_window_minutes: int
+) -> Tuple[str, List[Any]]:
+    """For v2 seeding: the calls holding a line on one number."""
+    text = f"""
+        SELECT "id", "call_direction", "call_id"
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE {_live_calls_predicate('"telephony_number_id" = $1')};
+    """
+    return text, [number_id, attached_window_minutes, CALL_ATTACHED_AFTER_FINISH]
+
+
+def get_live_calls_on_numbers_query(
+    number_ids: List[str], attached_window_minutes: int
+) -> Tuple[str, List[Any]]:
+    """For the v2 ledger: ``get_live_calls_on_number_query``'s set for many numbers in
+    one statement, with the number of each row."""
+    text = f"""
+        SELECT "telephony_number_id", "id", "call_direction", "call_id"
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE {_live_calls_predicate('"telephony_number_id" = ANY($1::text[])')};
+    """
+    return text, [
+        list(number_ids),
+        attached_window_minutes,
+        CALL_ATTACHED_AFTER_FINISH,
+    ]
+
+
+def get_finished_inbound_calls_query(call_ids: List[str]) -> Tuple[str, List[Any]]:
+    """For the v2 ledger: which of these inbound calls have ended."""
+    text = f"""
+        SELECT "call_id"
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "call_id" = ANY($1::text[])
+          AND "call_direction" = 'INBOUND'
+        GROUP BY "call_id"
+        HAVING bool_and("status" = 'FINISHED');
+    """
+    return text, [list(call_ids)]
+
+
+def get_known_inbound_calls_query(call_ids: List[str]) -> Tuple[str, List[Any]]:
+    """For the v2 ledger: which of these inbound calls have a lead row at all."""
+    text = f"""
+        SELECT DISTINCT "call_id"
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "call_id" = ANY($1::text[])
+          AND "call_direction" = 'INBOUND';
+    """
+    return text, [list(call_ids)]
+
+
+def get_legacy_inflight_leads_query(lead_ids: List[str]) -> Tuple[str, List[Any]]:
+    """
+    For the v2 switch-on: BACKLOG leads today's dialler may be working on —
+    every locked one, plus any of the given ids. The switch passes no ids: only
+    a locked lead can be mid-dial past the worker's v2 redirect.
+    """
+    text = f"""
+        SELECT "id", "template_id"::text AS template_id, "is_locked"
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "status" = 'BACKLOG'
+          AND ("is_locked" = TRUE OR "id" = ANY($1::text[]));
+    """
+    return text, [list(lead_ids)]
+
+
+def get_telephony_numbers_by_ids_query(number_ids: List[str]) -> Tuple[str, List[Any]]:
+    """For the v2 switch and number-facts refresh."""
+    text = f"""
+        SELECT *
+        FROM "{TELEPHONY_NUMBER_TABLE}"
+        WHERE "id" = ANY($1::text[]);
+    """
+    return text, [list(number_ids)]
+
+
+def set_telephony_number_channels_query(
+    number_id: str, channels: int
+) -> Tuple[str, List[Any]]:
+    """
+    For the v2 hand-back to today's dialler (the DB's own PROCESSING count)
+    and the v2 channels mirror. Today's code only ever moves ``channels`` by
+    +1/-1; this sets it outright.
+    """
+    text = f"""
+        UPDATE "{TELEPHONY_NUMBER_TABLE}"
+        SET "channels" = $2, "updated_at" = NOW()
+        WHERE "id" = $1
+        RETURNING "id";
+    """
+    return text, [number_id, channels]
