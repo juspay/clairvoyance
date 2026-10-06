@@ -31,7 +31,7 @@ from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
 )
-from app.crm.outreach.definitions import definition_for
+from app.crm.outreach.definitions import definition_for, live_definition
 from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
 from app.crm.outreach.nodes import listens
 from app.crm.outreach.nodes.context import (
@@ -45,11 +45,11 @@ from app.crm.outreach.repeat import _as_number, apply_repeat
 from app.crm.outreach.reply_attribution import Addressed, addressed_run
 from app.crm.outreach.schemas import (
     EnrollmentRun,
-    Workflow,
     WorkflowDefinition,
     WorkflowEntry,
     WorkflowEntryAt,
     WorkflowNode,
+    WorkflowSummary,
 )
 from app.crm.outreach.steps import as_rows, closing
 from app.crm.record.contracts import (
@@ -167,9 +167,30 @@ async def consume_attributed_event(
             continue  # exited: there is nothing left to wake
         await _wake_on_reply(run, definition, event, variables, addressed)
 
-    flows = await workflow_accessor.live_workflows(event.merchant_id)
-    for flow in flows:
-        definition = WorkflowDefinition.model_validate(flow.definition)
+    # Routing first, document second: ask which plans are live (two small
+    # columns, always fresh so a publish or pause lands on the next event),
+    # and open a document only for the plan whose door this letter names.
+    # For most letters no door matches, and the document is never read.
+    plans = await workflow_accessor.live_plan_versions(event.merchant_id)
+    for flow in plans:
+        definition = await live_definition(
+            event.merchant_id, str(flow.id), flow.version
+        )
+        if definition is None:
+            # The version moved under us (a publish between the routing read
+            # and this one). Named, because "no runs started for merchant X"
+            # otherwise has no line to search for.
+            logger.bind(
+                component=ENROL_LOG_COMPONENT,
+                merchant_id=event.merchant_id,
+                workflow_id=str(flow.id),
+                workflow_version=flow.version,
+                skip_reason="live_definition_missing",
+            ).warning(
+                f"entry: plan {flow.id} v{flow.version} is no longer the live "
+                "version; skipping it for this letter"
+            )
+            continue
         for door in definition.entries:
             if door.topic == event.topic and _where_matches(door, event):
                 await _try_enrol(
@@ -422,7 +443,7 @@ def _answer_for(node: WorkflowNode, event: RawEvent) -> Optional[str]:
 
 async def _answered_by(
     open_runs: Sequence[EnrollmentRun],
-    flow: Workflow,
+    flow: WorkflowSummary,
     enrollment_key: str,
     event: RawEvent,
     addressed: Optional[Addressed] = None,
@@ -532,7 +553,7 @@ def _context_from_payload(payload: dict, max_chars: int) -> dict:
 
 
 async def _try_enrol(
-    flow: Workflow,
+    flow: WorkflowSummary,
     definition: WorkflowDefinition,
     door: WorkflowEntryAt,
     event: RawEvent,
@@ -561,6 +582,7 @@ async def _try_enrol(
     run = await enrol(
         merchant_id=event.merchant_id,
         workflow=flow,
+        definition=definition,
         customer_id=customer_id,
         context=context,
         enrollment_key=enrollment_key,
@@ -602,7 +624,7 @@ async def _try_enrol(
 
 async def _repeat_door(
     open_runs: Sequence[EnrollmentRun],
-    flow: Workflow,
+    flow: WorkflowSummary,
     enrollment_key: str,
     topic: str,
     latest: WorkflowEntryAt,
