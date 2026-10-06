@@ -369,12 +369,25 @@ def open_runs_for_customer_query(
     return query, [merchant_id, customer_id]
 
 
+# When the run's stamps were last moved (the founding letter's time before that).
+_STAMPED_AT = "COALESCE(context->>'latest_event_at', context->>'entered_event_at')"
+
+
+def _not_older(at: str) -> str:
+    """SQL: the letter at ``at`` (text; NULL = not stamped) is no older than the run's stamps."""
+    return (
+        f"({at} IS NULL OR {_STAMPED_AT} IS NULL"
+        f" OR {_STAMPED_AT}::timestamptz <= ({at})::timestamptz)"
+    )
+
+
 def resume_run_by_id_query(
     merchant_id: str,
     run_id: str,
     node_id: str,
     context_patch: Dict[str, Any],
     facts: Optional[Dict[str, Any]] = None,
+    stamp: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Any]]:
     """W5: the reply reaches the token — by run id (phase 13), because
     the listening square is the RUN'S version's, and a sibling run on
@@ -394,10 +407,11 @@ def resume_run_by_id_query(
     parked run that hears it is no longer stuck on the thing that parked
     it — it becomes waiting with its failure counter forgiven (the human
     resume's semantics, now event-driven) and, as for any reply, its
-    last_error cleared: the letter IS the step that unstuck it."""
+    last_error cleared: the letter IS the step that unstuck it.
+    A letter older than the run's stamps (priority plans) changes nothing."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
-        SET context = context || $4::jsonb
+        SET context = context || $4::jsonb || $6::jsonb
                 || jsonb_build_object('facts',
                        CASE WHEN jsonb_typeof(context->'facts') = 'object' THEN context->'facts' ELSE '{{}}'::jsonb END
                        || jsonb_build_object($3::text, $5::jsonb)),
@@ -407,6 +421,7 @@ def resume_run_by_id_query(
             attempts = CASE WHEN status = 'parked' THEN 0 ELSE attempts END
         WHERE merchant_id = $1 AND id = $2
           AND status IN ('waiting', 'parked') AND current_node = $3
+          AND {_not_older("$6::jsonb->>'latest_event_at'")}
         RETURNING id
     """
     return query, [
@@ -415,6 +430,7 @@ def resume_run_by_id_query(
         node_id,
         json.dumps(context_patch),
         json.dumps(facts or {}),
+        json.dumps(stamp or {}),
     ]
 
 
@@ -424,6 +440,7 @@ def refresh_run_facts_query(
     node_id: str,
     facts: Dict[str, Any],
     cut_short_by: Optional[str] = None,
+    stamp: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Any]]:
     """A letter that finds the run on a square that listens to NOTHING —
     the door's start square before the walker's first visit, or an
@@ -440,24 +457,67 @@ def refresh_run_facts_query(
     level, deliberately not folded into ``facts``: on the reply path the
     same-shaped dict becomes ``context.facts.<square>``, and ``run_facts``
     flattens that namespace into template variables — a marker that drifted
-    in there would ride into a customer's message. It stays here."""
+    in there would ride into a customer's message. It stays here.
+    A letter older than the run's stamps (priority plans) changes nothing."""
     marker = ""
-    params: List[Any] = [merchant_id, run_id, node_id, json.dumps(facts)]
+    params: List[Any] = [
+        merchant_id,
+        run_id,
+        node_id,
+        json.dumps(facts),
+        json.dumps(stamp or {}),
+    ]
     if cut_short_by:
-        marker = "|| jsonb_build_object('cut_short_by', $5::text)"
+        marker = "|| jsonb_build_object('cut_short_by', $6::text)"
         params.append(cut_short_by)
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
-        SET context = context || $4::jsonb {marker},
+        SET context = context || $4::jsonb || $5::jsonb {marker},
             wake_at = now(),
             last_error = NULL,
             status = 'waiting',
             attempts = CASE WHEN status = 'parked' THEN 0 ELSE attempts END
         WHERE merchant_id = $1 AND id = $2
           AND status IN ('waiting', 'parked') AND current_node = $3
+          AND {_not_older("$5::jsonb->>'latest_event_at'")}
         RETURNING id
     """
     return query, params
+
+
+def remember_stage_facts_query(
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    heard_by: str,
+    facts: Dict[str, Any],
+    context_patch: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """Stage memory: a letter the run's square (``node_id``) is not listening
+    for. Its facts land under context.facts.<heard_by> (the reply's shape) and
+    ``context_patch`` merges at the top level. Only when the run holds no later
+    letter. wake_at moves by 1 ms: the square's timer is kept, and a walker visit
+    in flight is refused at its write (lease) and redone with these facts."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET context = context || $4::jsonb
+                || jsonb_build_object('facts',
+                       CASE WHEN jsonb_typeof(context->'facts') = 'object' THEN context->'facts' ELSE '{{}}'::jsonb END
+                       || jsonb_build_object($5::text, $6::jsonb)),
+            wake_at = wake_at + interval '1 millisecond'
+        WHERE merchant_id = $1 AND id = $2
+          AND status IN ('waiting', 'parked') AND current_node = $3
+          AND {_not_older("$4::jsonb->>'latest_event_at'")}
+        RETURNING id
+    """
+    return query, [
+        merchant_id,
+        run_id,
+        node_id,
+        json.dumps(context_patch),
+        heard_by,
+        json.dumps(facts),
+    ]
 
 
 def cancel_run_query(

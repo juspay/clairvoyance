@@ -55,6 +55,7 @@ from .breeze_buddy.lead_call_tracker import (
     update_lead_call_recording_url,
     update_lead_enrollment_id,
     update_lead_template,
+    update_waiting_lead_priority,
 )
 from .breeze_buddy.telephony_number import (
     check_number_purchase_conflict,
@@ -110,6 +111,7 @@ __all__ = [
     "calling_activation_for_merchant",
     "create_lead_call_tracker",
     "update_lead_enrollment_id",
+    "update_waiting_lead_priority",
     "append_metadata_field",
     "acquire_lock_on_lead_by_id",
     "release_lock_on_lead_by_id",
