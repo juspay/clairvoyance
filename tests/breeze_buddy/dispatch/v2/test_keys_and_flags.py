@@ -25,3 +25,25 @@ async def test_flags_default_off(monkeypatch):
     monkeypatch.setattr(dynamic, "get_config", fake_get_config)
     assert await dynamic.BB_DISPATCH_V2_ENABLED() is False
     assert await dynamic.BB_DISPATCH_V2_NUMBERS() == []
+
+
+def test_one_redis_client_getter_and_one_ist_offset_for_the_v2_modules():
+    # Fable M7: one shared helper and one constant, not a copy per module. (The latch and
+    # the v2 scripts keep their own client so tests can trap them separately.)
+    import app.ai.voice.agents.breeze_buddy.dispatch  # noqa: F401  (import order)
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import (
+        hooks,
+        monitor,
+        reconcile,
+        routes,
+        scripts,
+        sweep,
+        switch,
+    )
+
+    for module in (hooks, monitor, reconcile, sweep, switch):
+        assert module._client is routes._client, module.__name__
+    # calling hours are match's alone: the monitor reads bb:due, which match writes
+    assert scripts.IST_OFFSET_S == 19800 and not hasattr(monitor, "IST_OFFSET_S")
+    assert not hasattr(routes, "number_mode")  # number_mode_or_none is the API
+    assert not hasattr(routes, "is_v2_accounted")

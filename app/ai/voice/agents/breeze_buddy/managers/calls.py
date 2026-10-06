@@ -608,6 +608,13 @@ def _releases_capacity(lead: LeadCallTracker, provider: CallProvider) -> bool:
     return inbound_holds_channel(lead, provider)
 
 
+async def _v2_release(lead: LeadCallTracker) -> Optional[bool]:
+    # lazy: the dispatch package imports this module (import cycle); tests patch this wrapper
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.release import release_lead_line
+
+    return await release_lead_line(lead)
+
+
 async def _release_call_resources(lead: LeadCallTracker) -> None:
     """Give the telephony number its channel back once the call is over."""
     # Inbound accounting lives in its own module so the IVR deferred-policy
@@ -621,6 +628,12 @@ async def _release_call_resources(lead: LeadCallTracker) -> None:
 
     if not lead.telephony_number_id:
         logger.info(f"No telephony number id for lead: {lead.id}")
+        return
+
+    if is_dispatchable(lead.execution_mode) and await _v2_release(lead) is not None:
+        # v2-accounted number: the busy list is the only count (DB channels is a mirror).
+        # A non-dispatchable outbound lead never took a line in either dialler; today's
+        # capacity rule below says so.
         return
 
     telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
@@ -729,7 +742,11 @@ async def _retry_call(
         # web-mode flow, not by phantom-dialling via Plivo/Twilio.
         # See docs/BACKLOG_DISPATCHER_REDESIGN.md §4 (retry semantics).
         if is_dispatchable(lead.execution_mode):
-            await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
+            await schedule_lead(
+                lead_id=retry_id,
+                next_attempt_at=next_attempt_at,
+                template_id=lead.template_id,
+            )
 
 
 async def reconcile_stuck_processing_leads():

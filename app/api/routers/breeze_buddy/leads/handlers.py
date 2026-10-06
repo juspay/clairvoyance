@@ -437,7 +437,11 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         # See docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 1.
         lead_execution_mode = req.execution_mode or ExecutionMode.TELEPHONY
         if next_attempt_at is not None and is_dispatchable(lead_execution_mode):
-            await schedule_lead(lead_id=uuid, next_attempt_at=next_attempt_at)
+            await schedule_lead(
+                lead_id=uuid,
+                next_attempt_at=next_attempt_at,
+                template_id=str(template.id),
+            )
 
         # CRM identity stamp + event mirror (ADR 0017). Backgrounded: the
         # push response never waits on CRM work, and a CRM failure cannot
@@ -705,9 +709,11 @@ async def delete_lead_handler(
                     f"Lead {lead_id} successfully aborted by user {current_user.username}"
                 )
 
-                # Event-driven dispatch: ZREM from bb:schedule:leads so the
-                # promoter doesn't pull a zombie. Safe if not present.
-                await cancel_scheduled_lead(lead_id)
+                # Event-driven dispatch: ZREM from bb:schedule:leads (and the
+                # lead's v2 room) so nothing pulls a zombie. Safe if not present.
+                await cancel_scheduled_lead(
+                    lead_id, template_id=aborted_lead.template_id
+                )
 
                 lead_responses.append(
                     {
@@ -903,7 +909,12 @@ async def dispatch_now_lead_handler(lead_id: str, current_user: UserInfo) -> Dic
         )
 
     # No jitter — operator intent is literally "now".
-    await schedule_lead(lead_id=lead_id, next_attempt_at=now, jitter_ms=0)
+    await schedule_lead(
+        lead_id=lead_id,
+        next_attempt_at=now,
+        jitter_ms=0,
+        template_id=lead.template_id,
+    )
 
     logger.info(
         f"User {current_user.username} (role: {current_user.role}) "
