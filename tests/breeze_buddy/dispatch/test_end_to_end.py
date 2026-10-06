@@ -333,6 +333,13 @@ async def test_post_cas_lost_keeps_the_line_for_the_live_call(
     async def _retry(*a, **k):
         retries.append(a)
 
+    async def _claim_release(lead_id):  # claim_attached_call_release_query's rule
+        marker = (lead.metaData or {})[CALL_ATTACHED_AFTER_FINISH]
+        if "released_at" in marker:
+            return False
+        marker["released_at"] = "now"
+        return True
+
     async def _get():
         return fake_redis
 
@@ -345,8 +352,10 @@ async def test_post_cas_lost_keeps_the_line_for_the_live_call(
     monkeypatch.setattr(calls_mod, "_get_lead_config", harness._get_lead_config)
     monkeypatch.setattr(calls_mod, "update_lead_call_completion_details", _complete)
     monkeypatch.setattr(calls_mod, "_retry_call", _retry)
+    monkeypatch.setattr(calls_mod, "claim_attached_call_release", _claim_release)
 
     await calls_mod.handle_call_completion("CA-test-sid", outcome="NO_ANSWER")
+    await calls_mod.handle_call_completion("CA-test-sid", outcome="NO_ANSWER")  # dup
 
     assert released == [harness.number.id]  # the line comes back once
     assert tokens == [harness.number.id]

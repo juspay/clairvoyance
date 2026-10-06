@@ -84,6 +84,7 @@ from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
+    claim_attached_call_release,
     claim_unknown_dial,
     create_lead_call_tracker,
     decrement_telephony_number_channels,
@@ -653,6 +654,26 @@ async def _release_call_resources(lead: LeadCallTracker) -> None:
         await release_channel_token(telephony_number.id)
 
 
+async def _release_attached_call_once(lead: LeadCallTracker, source: str) -> None:
+    """
+    End of a call stamped on a lead the merchant finished mid-dial
+    (``CALL_ATTACHED_AFTER_FINISH``). The lead is terminal, so the only thing
+    any end-of-call path owes is the line; every path (completion, unanswered,
+    the ``completed`` reconcile) comes here, and the claim lets exactly one of
+    them, duplicate webhooks included, give it back.
+    """
+    if await claim_attached_call_release(lead.id):
+        await _release_call_resources(lead)
+        logger.info(
+            f"Call {lead.call_id} on finished lead {lead.id}: line released ({source})"
+        )
+    else:
+        logger.info(
+            f"Call {lead.call_id} on finished lead {lead.id}: line already "
+            f"released, nothing to do ({source})"
+        )
+
+
 async def _retry_call(
     lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
 ):
@@ -1086,21 +1107,19 @@ async def handle_call_completion(
             f"Failed to delete greeting audio from Redis for lead {lead.id}"
         )
 
+    # A call placed for a lead the merchant had already aborted (the dispatcher
+    # stamped the call on the finished lead): the line comes back (once, across
+    # every end-of-call path) and that is all this webhook may do. No
+    # completion UPDATE (it would overwrite the ABORT outcome and replace
+    # meta_data), no CRM mirror, no retry.
+    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
+        await _release_attached_call_once(lead, "call_completion")
+        return lead
+
     # Always release telephony number (including transfers — bot leaves, cleanup happens here).
     # Runs before the completion UPDATE below so the inbound guard in
     # _releases_capacity still sees this lead as PROCESSING.
     await _release_call_resources(lead)
-
-    # A call placed for a lead the merchant had already aborted (the dispatcher
-    # stamped the call on the finished lead): the line is back, and that is all
-    # this webhook may do. No completion UPDATE (it would overwrite the ABORT
-    # outcome and replace meta_data), no CRM mirror, no retry.
-    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
-        logger.info(
-            f"Call {call_id} was attached to aborted lead {lead.id}; "
-            "line released, lead left as the merchant finished it."
-        )
-        return lead
 
     # Check if this is a transfer — for outcome override only
     is_transfer = (
@@ -1188,6 +1207,12 @@ async def handle_unanswered_calls(call_id: str):
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
 
+    # A call stamped on a lead the merchant finished mid-dial: return its line
+    # once (shared claim with the other end-of-call paths); nothing else to do.
+    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
+        await _release_attached_call_once(lead, "unanswered")
+        return
+
     # Release telephony number channel — for outbound this runs before the FINISHED
     # guard because the channel must be freed regardless of lead status, and
     # _release_number is idempotent (SQL uses GREATEST(0, ...)). For inbound the
@@ -1254,6 +1279,13 @@ async def reconcile_completed_call(call_id: str) -> None:
     lead = await get_lead_by_call_id(call_id)
     if not lead:
         logger.info(f"No lead for completed call {call_id}; nothing to reconcile.")
+        return
+
+    # Answered calls on a lead the merchant finished mid-dial are hung up at
+    # answer (no agent, so no completion handler): this ``completed`` is their
+    # only end-of-call signal, and the lead is not PROCESSING. Return the line.
+    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
+        await _release_attached_call_once(lead, "completed")
         return
 
     if lead.status != LeadCallStatus.PROCESSING:

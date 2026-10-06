@@ -414,6 +414,34 @@ def attach_placed_call_to_lead_query(
     return text, values
 
 
+def claim_attached_call_release_query(id: str) -> Tuple[str, List[Any]]:
+    """
+    Claim the one line release owed by a call stamped on a lead the merchant
+    finished mid-dial (``attach_placed_call_to_lead_query``).
+
+    Stamps ``released_at`` inside the marker, only while the marker is there
+    and not yet released, so of every end-of-call path for that call
+    (completion, unanswered, the ``completed`` reconcile) and their duplicate
+    webhooks exactly one gets the row back and returns the line. The marker
+    itself stays: the answer path keeps hanging up and the completion path
+    keeps leaving the merchant's outcome alone (dropping it would let a late
+    duplicate treat the row as a normal call and overwrite that outcome).
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "meta_data" = jsonb_set(
+                "meta_data", ARRAY[$2::text, 'released_at'], to_jsonb(NOW())
+            ),
+            "updated_at" = NOW()
+        WHERE "id" = $1
+          AND "meta_data" ? $2::text
+          AND NOT (("meta_data" -> $2::text) ? 'released_at')
+        RETURNING "id";
+    """
+    values = [id, CALL_ATTACHED_AFTER_FINISH]
+    return text, values
+
+
 def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     """
     Generate query to get lead by call ID.

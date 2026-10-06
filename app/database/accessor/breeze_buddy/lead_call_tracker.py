@@ -16,6 +16,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     acquire_lock_on_lead_by_id_query,
     append_metadata_field_query,
     attach_placed_call_to_lead_query,
+    claim_attached_call_release_query,
     claim_unknown_dial_query,
     count_recent_contacted_leads_query,
     defer_lead_next_attempt_and_release_lock_query,
@@ -428,6 +429,23 @@ async def revert_dial_to_backlog(
         return bool(result) and get_row_count(result) > 0
     except Exception as e:
         logger.error(f"Error reverting dial row of lead {lead_id}: {e}")
+        return False
+
+
+async def claim_attached_call_release(id: str) -> bool:
+    """
+    True for the one end-of-call path that owes the line back for a call
+    stamped on a lead the merchant finished mid-dial (see
+    ``claim_attached_call_release_query``); False for every other path,
+    duplicates included. False on error too: a line kept is a lost line until
+    someone looks, a line given back twice lets the number over-dial.
+    """
+    try:
+        query_text, values = claim_attached_call_release_query(id)
+        result = await run_parameterized_query(query_text, values)
+        return bool(result) and get_row_count(result) > 0
+    except Exception as e:
+        logger.error(f"Error claiming the line release for attached call on {id}: {e}")
         return False
 
 
