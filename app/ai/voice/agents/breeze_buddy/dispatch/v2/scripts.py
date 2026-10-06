@@ -401,7 +401,12 @@ if run ~= '' and (nf[4] ~= '1' or mode ~= 'v2') then return -3 end
 -- Enqueue.HOLDS_LINE
 if redis.call('SISMEMBER', 'bb:busy:' .. n, 'lead:' .. l) == 1 then return -2 end
 if redis.call('HEXISTS', 'bb:inflight:' .. n, l) == 1 then return -2 end
-if ARGV[5] == '1' and redis.call('ZSCORE', 'bb:q:' .. t, l) then return 0 end
+-- already queued: nothing moves, but the room is listed again (a route write cut short
+-- could have left its number without it)
+if ARGV[5] == '1' and redis.call('ZSCORE', 'bb:q:' .. t, l) then
+  redis.call('SADD', 'bb:numtpl:' .. n, t)
+  return 0
+end
 if nf[2] == '1' and ARGV[6] ~= '0' then
   local rank = rank_or(ARGV[6], nil)
   if not rank then return -4 end               -- Enqueue.NEED_RANK

@@ -654,6 +654,15 @@ async def _try_enrol(
             )
             return
         repeat_facts = {k: v for k, v in context.items() if k not in _FOUNDING_KEYS}
+        # A repeat that only arrived late never moves the open run's stamps back.
+        for held in open_runs:
+            if (
+                str(held.workflow_id) == str(flow.id)
+                and held.enrollment_key == key
+                and not _latest_stamp(definition, event, held.context)
+            ):
+                repeat_facts.pop(LATEST_TOPIC_KEY, None)
+                repeat_facts.pop(LATEST_EVENT_AT_KEY, None)
         await apply_repeat(
             event.merchant_id,
             str(flow.id),

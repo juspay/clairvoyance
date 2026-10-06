@@ -63,6 +63,10 @@ from app.database.accessor.breeze_buddy.dispatch import (
 
 SWEEP_INTERVAL_S = 1.0
 LEADER_CHECK_EVERY = 5  # loops; every pod, since a missing leader can't report itself
+# A bb:due entry this far ahead of the pod's clock is still "listed": the scripts write
+# it by Redis TIME, a round trip passes before match runs, and a window's opening is
+# listed in whole seconds (up to 999 ms late).
+DUE_MISSED_MARGIN_MS = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +297,8 @@ class Sweeper:
         missed = [
             n
             for n, score in unlisted.items()
-            if issued_by.get(n) and (score is None or score > now_ms)
+            if issued_by.get(n)
+            and (score is None or score > now_ms + DUE_MISSED_MARGIN_MS)
         ]
         if missed:
             logger.warning(

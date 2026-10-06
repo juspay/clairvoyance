@@ -605,14 +605,15 @@ def update_waiting_lead_priority_query(
 ) -> Tuple[str, List[Any]]:
     """
     Replace meta_data.priority (the rank a call waits at) on a lead that is
-    still BACKLOG. A lead being dialled or finished keeps the rank it had.
+    still BACKLOG and that no dialler holds (is_locked). A lead being dialled
+    or finished keeps the rank it had. updated_at is left alone: it is the
+    stale-lock clock (clean_stale_bb_locks_query).
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET "meta_data" = COALESCE("meta_data", '{{}}')::jsonb
-                || jsonb_build_object('priority', $1::jsonb),
-            "updated_at" = NOW()
-        WHERE "id" = $2 AND "status" = $3
+                || jsonb_build_object('priority', $1::jsonb)
+        WHERE "id" = $2 AND "status" = $3 AND "is_locked" = FALSE
         RETURNING "id";
     """
     return text, [json.dumps(priority), lead_id, LeadCallStatus.BACKLOG.value]

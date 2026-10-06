@@ -2,6 +2,7 @@
 matches only the numbers due now, so every write that can make a number dialable must
 list it, and match keeps its own number's entry exact."""
 
+import asyncio
 import time
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
@@ -314,3 +315,138 @@ async def test_a_full_pass_that_finds_nothing_missed_logs_nothing(sweep, monkeyp
     assert await r.smembers("bb:busy:N1") == {"lead:L1"}
     assert warn == []
     alert.assert_not_awaited()
+
+
+# -- a correct bb:due entry is not a missed write --------------------------------------------
+# The entries are written by Redis TIME inside the scripts; the sweep reads the pod's
+# clock. An entry a moment ahead of the pod's clock is an index doing its job.
+
+
+async def _full_pass(r, monkeypatch):
+    """One full-pass tick; returns the P1 alert mock."""
+    alert = AsyncMock()
+    monkeypatch.setattr(SW, "raise_v2_due_write_missed", alert)
+    sw = SW.Sweeper(redis_client=r)
+    sw._ticks = SW.BB_V2_DUE_FULL_PASS_TICKS - 1
+    await sw.tick()
+    return alert
+
+
+async def test_a_pod_clock_behind_redis_is_not_a_missed_write(sweep, monkeypatch):
+    r, _ = sweep
+    await seed_number(r, "N1", 1, {"T1": {}})
+    await r.sadd("bb:v2:active", "N1")
+    assert await scripts.enqueue("T1", "L0", NOW() - 1) == 1  # takes the only line
+    await scripts.enqueue("T1", "L1", NOW() - 1)
+    await r.srem("bb:busy:N1", "lead:L0")  # the line is free again
+    await r.zadd("bb:due", {"N1": NOW()})  # listed as due now, by Redis's clock
+    real = time.time
+    monkeypatch.setattr(
+        SW.time, "time", lambda: real() - 0.05
+    )  # the pod is 50 ms behind
+    alert = await _full_pass(r, monkeypatch)
+    assert await r.sismember("bb:busy:N1", "lead:L1")  # the full pass did issue
+    alert.assert_not_awaited()
+
+
+async def test_a_due_time_inside_the_round_trip_is_not_a_missed_write(
+    sweep, monkeypatch
+):
+    r, _ = sweep
+    await seed_number(r, "N1", 1, {"T1": {}})
+    await r.sadd("bb:v2:active", "N1")
+    soon = NOW() + 40
+    assert await scripts.enqueue("T1", "L1", soon) == 0
+    assert await _due(r, "N1") == soon  # the index is exact
+    spy = SW.scripts.match_many
+
+    async def slow(ids):  # the round trip takes longer than the lead has left
+        await asyncio.sleep(0.08)
+        return await spy(ids)
+
+    monkeypatch.setattr(SW.scripts, "match_many", slow)
+    alert = await _full_pass(r, monkeypatch)
+    assert await r.smembers("bb:busy:N1") == {"lead:L1"}
+    alert.assert_not_awaited()
+
+
+async def test_a_window_that_just_opened_is_not_a_missed_write(sweep, monkeypatch):
+    # a closed room lists its number at now + WHOLE seconds to the opening, so the entry
+    # lands up to 999 ms after the window really opens
+    r, _ = sweep
+    await seed_number(r, "N1", 1, {"T1": {}})
+    await r.sadd("bb:v2:active", "N1")
+    await r.zadd("bb:q:T1", {"L1": NOW() - 1})
+    await r.zadd("bb:due", {"N1": NOW() + 700})
+    alert = await _full_pass(r, monkeypatch)
+    assert await r.smembers("bb:busy:N1") == {"lead:L1"}
+    alert.assert_not_awaited()
+
+
+async def test_an_entry_far_ahead_on_a_dialable_number_is_a_missed_write(
+    sweep, monkeypatch
+):
+    r, _ = sweep
+    await seed_number(r, "N1", 1, {"T1": {}})
+    await r.sadd("bb:v2:active", "N1")
+    await r.zadd("bb:q:T1", {"L1": NOW() - 1})
+    await r.zadd("bb:due", {"N1": NOW() + 60_000})  # a stale entry: nothing woke N1
+    alert = await _full_pass(r, monkeypatch)
+    assert await r.smembers("bb:busy:N1") == {"lead:L1"}
+    alert.assert_awaited_once_with(["N1"])
+
+
+# -- a room is always listed on its number ---------------------------------------------------
+# match reads a number's rooms from bb:numtpl:{N}. A route that names N while N does not
+# list the template gives that template no lines, and nothing said so.
+
+
+async def _stranded(r) -> None:
+    """The route says N2, a lead waits, and N2 does not list T1 (a route write cut short)."""
+    await seed_number(r, "N2", 1, {"T1": {}})
+    await r.zadd("bb:q:T1", {"L1": NOW() - 1})
+    await r.srem("bb:numtpl:N2", "T1")
+    assert await scripts.match("N2") == 0  # a free line and a due lead, and no ticket
+
+
+async def test_a_route_write_lists_the_template_in_the_same_step_as_the_route(
+    rr, monkeypatch
+):
+    use_redis(monkeypatch, rr)
+    await seed_number(rr, "N1", 1, {"T1": {}})
+    await seed_number(rr, "N2", 1, {})
+
+    async def cut(*a, **k):  # the task is cancelled right after the route is written
+        raise asyncio.CancelledError()
+
+    for step in ("srem", "sadd", "zcard"):
+        monkeypatch.setattr(rr, step, cut)
+    with pytest.raises(asyncio.CancelledError):
+        await routes._write(
+            routes.Route("T1", "N2", "normal", None, None, True, "R1"), None
+        )
+    monkeypatch.undo()
+    assert await rr.hget("bb:route:T1", "number") == "N2"
+    assert await rr.smembers("bb:numtpl:N2") == {"T1"}
+    assert await rr.smembers("bb:numtpl:N1") == set()
+
+
+async def test_the_next_route_write_lists_a_template_its_number_lost(rr, monkeypatch):
+    use_redis(monkeypatch, rr)
+    await _stranded(rr)
+    # the route is unchanged (N2 before, N2 now): the write lists the template all the same
+    await routes._write(
+        routes.Route("T1", "N2", "normal", None, None, True, "R1"), None
+    )
+    assert await rr.smembers("bb:numtpl:N2") == {"T1"}
+    assert await _due(rr, "N2") <= NOW()
+    assert await scripts.match("N2") == 1
+
+
+async def test_the_backlog_job_lists_a_room_its_number_lost(rr):
+    await _stranded(rr)
+    # the backlog job re-reads a lead that is already in its room: nothing moves, but the
+    # room is listed again
+    assert await scripts.enqueue("T1", "L1", NOW() - 1, only_if_absent=True) == 0
+    assert await rr.smembers("bb:numtpl:N2") == {"T1"}
+    assert await scripts.match("N2") == 1

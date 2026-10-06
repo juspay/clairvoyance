@@ -135,12 +135,14 @@ async def _write(route: Route, number) -> None:
                 },
             )
             pipe.expire(rk, k.ROUTE_TTL_S)
-            await pipe.execute()
-        if old != route.number_id:
-            if old:
-                await client.srem(k.numtpl_key(old), route.template_id)
+            # In the route's own MULTI, and listed on every write: a write cut short
+            # between the two left the template routed to a number that did not list
+            # it, and the next write (old == new) never repaired that.
+            if old and old != route.number_id:
+                pipe.srem(k.numtpl_key(old), route.template_id)
             if route.number_id:
-                await client.sadd(k.numtpl_key(route.number_id), route.template_id)
+                pipe.sadd(k.numtpl_key(route.number_id), route.template_id)
+            await pipe.execute()
         # Leads already waiting in the room: their number looks again now (a move must not
         # strand them on the new number; a route enabled again has no other timer).
         if route.number_id and await client.zcard(k.room_key(route.template_id)) > 0:

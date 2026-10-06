@@ -403,6 +403,45 @@ def test_a_letter_of_the_same_moment_moves_the_stamps(world) -> None:
     assert w.refreshes[0][1]["latest_topic"] == "LINE_KYC_COMPLETED"
 
 
+@pytest.mark.parametrize("hours, moved", [(-9, False), (1, True)])
+def test_a_late_older_repeat_never_moves_the_open_runs_stamps_back(
+    world, monkeypatch: pytest.MonkeyPatch, hours: int, moved: bool
+) -> None:
+    """The door's own topic arriving again is offered to the open run as a
+    repeat, and a refresh merges those facts into the run. A repeat that
+    HAPPENED before the letter the run already carries (KYC at 11:00) offers
+    its facts without the stamps; one that happened after carries them."""
+    w = world(node="after-call-1")
+    offered: List[Dict[str, Any]] = []
+
+    async def open_runs(*_args: Any) -> List[EnrollmentRun]:
+        (run,) = await w.open_runs_for_customer()
+        run.context.update(STAMP)
+        return [run]
+
+    async def live(_merchant: str) -> List[Workflow]:
+        return [w.flow]
+
+    async def refused(**_kwargs: Any) -> None:
+        return None
+
+    async def repeat(*args: Any) -> None:
+        offered.append(args[-1])
+
+    monkeypatch.setattr(entry.enrollment_accessor, "open_runs_for_customer", open_runs)
+    monkeypatch.setattr(entry.workflow_accessor, "live_workflows", live)
+    monkeypatch.setattr(entry, "enrol", refused)
+    monkeypatch.setattr(entry, "apply_repeat", repeat)
+
+    _consume(
+        _event("LINE_OFFERED", {"offer": "5 lakh"}, at=KYC_AT + timedelta(hours=hours))
+    )
+
+    (facts,) = offered
+    assert facts["offer"] == "5 lakh"  # the repeat's own facts are still offered
+    assert ("latest_topic" in facts, "latest_event_at" in facts) == (moved, moved)
+
+
 def test_enrolment_stamps_the_founding_letter_on_a_priority_plan_only(world) -> None:
     for definition, stamped in ((PLAN, True), (PLAIN_PLAN, False)):
         w = world(definition, node=None)
@@ -442,6 +481,15 @@ def test_the_lead_statement_touches_only_a_waiting_lead() -> None:
 
     assert '"id" = $2 AND "status" = $3' in sql
     assert params == [json.dumps(LIVE), "lead-1", "BACKLOG"]
+
+
+def test_the_lead_statement_leaves_a_held_lead_and_the_lock_clock_alone() -> None:
+    """`updated_at` is the stale-lock clock (clean_stale_bb_locks_query), and a
+    locked lead is one a dialler holds: the rank write touches neither."""
+    sql, _ = update_waiting_lead_priority_query("lead-1", LIVE)
+
+    assert '"is_locked" = FALSE' in sql
+    assert "updated_at" not in sql
 
 
 @needs_db
@@ -503,7 +551,8 @@ async def test_on_postgres_the_rank_is_merged_into_a_waiting_leads_meta() -> Non
     try:
         await conn.execute(
             "CREATE TEMP TABLE lead_call_tracker (id text, status text,"
-            " meta_data jsonb, updated_at timestamptz)"
+            " meta_data jsonb, updated_at timestamptz,"
+            " is_locked boolean DEFAULT FALSE)"
         )
         for lead_id, status in (("waiting", "BACKLOG"), ("dialling", "PROCESSING")):
             await conn.execute(
@@ -522,3 +571,38 @@ async def test_on_postgres_the_rank_is_merged_into_a_waiting_leads_meta() -> Non
         await conn.close()
 
     assert after == {"waiting": {**meta, "priority": LIVE}, "dialling": meta}
+
+
+@needs_db
+async def test_on_postgres_a_held_lead_keeps_its_rank_and_no_clock_moves() -> None:
+    """A BACKLOG lead a dialler holds (is_locked) keeps the rank it had; a free
+    one takes the new rank. Neither `updated_at` moves: it is the lock's age."""
+    import asyncpg
+
+    then = datetime(2026, 10, 9, 5, 0, tzinfo=timezone.utc)
+    conn = await asyncpg.connect(DSN)
+    try:
+        await conn.execute(
+            "CREATE TEMP TABLE lead_call_tracker (id text, status text,"
+            " meta_data jsonb, updated_at timestamptz, is_locked boolean)"
+        )
+        for lead_id, locked in (("free", False), ("held", True)):
+            await conn.execute(
+                "INSERT INTO lead_call_tracker VALUES"
+                " ($1, 'BACKLOG', '{}'::jsonb, $2, $3)",
+                lead_id,
+                then,
+                locked,
+            )
+            sql, params = update_waiting_lead_priority_query(lead_id, LIVE)
+            await conn.execute(sql, *params)
+        after = {
+            r["id"]: (json.loads(r["meta_data"]), r["updated_at"])
+            for r in await conn.fetch(
+                "SELECT id, meta_data, updated_at FROM lead_call_tracker"
+            )
+        }
+    finally:
+        await conn.close()
+
+    assert after == {"free": ({"priority": LIVE}, then), "held": ({}, then)}
