@@ -185,7 +185,7 @@ def test_a_late_report_finding_the_run_on_a_deaf_square_refreshes_nothing(
         return True
 
     async def resume_run_by_id(
-        merchant: str, run_id: str, square: str, *a: Any
+        merchant: str, run_id: str, square: str, *a: Any, **k: Any
     ) -> bool:
         return square == run.current_node  # the statement's own condition
 

@@ -23,6 +23,7 @@ stays pending and returns next poll. Our writes commit on their own
 source-event check and the open-run unique — not by that rollback.
 """
 
+from datetime import datetime
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
@@ -34,9 +35,12 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
 from app.crm.outreach.nodes import listens
+from app.crm.outreach.nodes.call import rerank_waiting_call
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
+    LATEST_EVENT_AT_KEY,
     LATEST_LETTER_KEY,
+    LATEST_TOPIC_KEY,
     is_bookkeeping,
     reply_key,
 )
@@ -319,6 +323,7 @@ async def _wake_on_reply(
             node.id,
             _reply_patch(node, event, answer),
             facts,
+            stamp=_latest_stamp(definition, event, run.context),
         )
     # The run may be standing on a square that listens to NOTHING: the
     # door's start square before the walker's first visit (a condition, a
@@ -332,7 +337,10 @@ async def _wake_on_reply(
     # its topic, its match, its key), so a letter the squares would ignore
     # is ignored here too.
     current = next((n for n in definition.nodes if n.id == run.current_node), None)
-    if current is None or listens(current):
+    if current is None:
+        return
+    if listens(current):
+        await _remember_stage(run, definition, current, event, facts)
         return
     if event.source in CALL_REPORT_SOURCES:
         # A report answers its own square or nothing (Swaroop, 23 Sep 2026):
@@ -352,11 +360,68 @@ async def _wake_on_reply(
             str(run.id),
             current.id,
             facts,
+            stamp=_latest_stamp(definition, event, run.context),
             # Its own argument, never folded into `facts`: the same dict on
             # the reply path becomes context.facts.<square>, which run_facts
             # flattens into template variables (canon T26).
             cut_short_by=str(event.id),
         )
+
+
+def _latest_stamp(
+    definition: WorkflowDefinition,
+    event: RawEvent,
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """PURE: what a producer's letter leaves on a run for a call's rank to be
+    judged from (priority.py). Nothing on a plan with no `priority`, and
+    nothing for our own call reports: a call finishing is not the customer
+    doing something. Nothing either when the run (`context`) already carries a
+    letter that happened later: one that only arrived late never moves the
+    stamps back."""
+    if definition.priority is None or event.source in CALL_REPORT_SOURCES:
+        return {}
+    # never later than our receipt: one future-dated letter must not freeze the stamps
+    at = min(event.occurred_at or event.received_at, event.received_at)
+    ctx = context or {}
+    seen = ctx.get(LATEST_EVENT_AT_KEY) or ctx.get("entered_event_at")
+    if isinstance(seen, str) and datetime.fromisoformat(seen) > at:
+        return {}
+    return {LATEST_TOPIC_KEY: event.topic, LATEST_EVENT_AT_KEY: at.isoformat()}
+
+
+async def _remember_stage(
+    run: EnrollmentRun,
+    definition: WorkflowDefinition,
+    current: WorkflowNode,
+    event: RawEvent,
+    facts: Dict[str, Any],
+) -> None:
+    """Stage memory (priority plans only): the run stands on a listening
+    square that is not listening for THIS letter, in practice the wait after
+    a call. The letter used to be dropped. Now its facts are kept under the
+    square that would have heard it and the stamps move, WITHOUT waking the
+    run (the square still waits for what it was waiting for), and the call
+    still in the queue is ranked again."""
+
+    def hears(node: WorkflowNode) -> bool:
+        return _answer_for(node, event) is not None and _is_about(node, event, run)
+
+    if not _latest_stamp(definition, event) or hears(current):
+        return  # no priority, a call report, or this square's own answer
+    stamp = _latest_stamp(definition, event, run.context)
+    if not stamp:
+        return  # an older letter that arrived late: the newer one's facts stand
+    heard_by = next((n for n in definition.nodes if hears(n)), None)
+    if heard_by is not None and await enrollment_accessor.remember_stage_facts(
+        run.merchant_id,
+        str(run.id),
+        current.id,
+        heard_by.id,
+        facts,
+        {LATEST_LETTER_KEY: heard_by.id, **stamp},
+    ):
+        await rerank_waiting_call(run, definition, current, {**run.context, **stamp})
 
 
 def _reply_patch(node: WorkflowNode, event: RawEvent, answer: str) -> Dict[str, str]:
@@ -555,6 +620,7 @@ async def _try_enrol(
     # When the founding letter HAPPENED (its own claim, else the envelope's
     # receipt): goals compare against this, not the row's insert time (G7).
     context["entered_event_at"] = (event.occurred_at or event.received_at).isoformat()
+    context.update(_latest_stamp(definition, event))
     phone = (handles or {}).get("phone") or _phone_from_payload(event.payload)
     if phone:
         context["phone"] = phone
@@ -590,6 +656,15 @@ async def _try_enrol(
             )
             return
         repeat_facts = {k: v for k, v in context.items() if k not in _FOUNDING_KEYS}
+        # A repeat that only arrived late never moves the open run's stamps back.
+        for held in open_runs:
+            if (
+                str(held.workflow_id) == str(flow.id)
+                and held.enrollment_key == key
+                and not _latest_stamp(definition, event, held.context)
+            ):
+                repeat_facts.pop(LATEST_TOPIC_KEY, None)
+                repeat_facts.pop(LATEST_EVENT_AT_KEY, None)
         await apply_repeat(
             event.merchant_id,
             str(flow.id),
