@@ -1,0 +1,36 @@
+-- 086: outreach — crm_workflow_enrollment: vacuum at ~2% dead rows
+-- instead of ~20%.
+--
+-- Why (prod, measured 2 Oct 2026, audit DB-03): autovacuum runs at the
+-- server default autovacuum_vacuum_scale_factor = 0.2, so a table is
+-- vacuumed only once dead rows exceed 50 + 0.2 x reltuples. On
+-- crm_workflow_enrollment (~417 k rows) that is roughly 83 k dead rows; it
+-- sat at 14% dead. Every step a run takes updates its row, so dead rows
+-- keep coming. pg_class.reloptions was empty: nothing overrides the
+-- default today.
+--
+-- What: one per-table storage parameter. At 0.02, vacuum triggers at
+-- roughly 8 k dead rows. Same change as 084 (lead_call_tracker); one file
+-- per table owner (docs/crm/migrations.md rule 3) — this table is
+-- outreach's.
+--
+-- Storage parameter only: no data change, no schema change, no table
+-- rewrite. It changes when autovacuum chooses to run, nothing else.
+--
+-- Lock: SHARE UPDATE EXCLUSIVE (PostgreSQL 14 docs, ALTER TABLE: "SHARE
+-- UPDATE EXCLUSIVE lock will be taken for fillfactor, toast and autovacuum
+-- storage parameters"). It does not conflict with ACCESS SHARE (SELECT) or
+-- ROW EXCLUSIVE (INSERT/UPDATE/DELETE), so reads and writes keep running.
+-- It does conflict with a running VACUUM/ANALYZE on this table: if one is
+-- in progress the ALTER waits for it (a regular autovacuum is cancelled
+-- automatically after deadlock_timeout; an anti-wraparound one is not), so
+-- the wait is capped at 10 s below. Reads and writes are not blocked even
+-- while it waits.
+--
+-- Rollback (same lock, same instant effect):
+--   ALTER TABLE crm_workflow_enrollment RESET (autovacuum_vacuum_scale_factor);
+
+-- The runner wraps each file in its own transaction, so SET LOCAL ends with it.
+-- If a vacuum holds the table this errors after 10 s and can simply be re-run.
+SET LOCAL lock_timeout = '10s';
+ALTER TABLE crm_workflow_enrollment SET (autovacuum_vacuum_scale_factor = 0.02);

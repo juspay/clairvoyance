@@ -1,0 +1,37 @@
+-- 085: record — crm_event_raw: vacuum every 30 k dead rows, not once a day.
+--
+-- Why (prod, docs/10x/02-crm-pipeline.md C3): the event claim walks the
+-- partial index crm_event_raw_pending_ix (WHERE processed_at IS NULL), and
+-- every processed event leaves its dead entries there until VACUUM. At the
+-- server default (scale_factor 0.2, ~2 M dead rows on ~10.2 M) autovacuum
+-- runs about once a day, so the claim climbs all day (28 Sep hourly mean:
+-- 22 -> 33 -> 41 ms, then 5 ms after the 18:17 vacuum): 21 ms mean x 160 k
+-- claims/day = 11.6% of DB time. pg_class.reloptions was empty.
+--
+-- Why a fixed threshold, not a scale factor (measured locally, PG 14 at
+-- 2 vCPU, real claim/stamp SQL; docs/bbd/bench/sawtooth/):
+--   claim p50 by dead rows: 0 -> 0.24 ms, 30 k -> 0.28, 200 k -> 6.8,
+--   1 M -> 37, 2 M -> 60 ms.
+--   one vacuum at 30 k: 1-4 s, 0.5-2.6 s CPU (index pass usually bypassed,
+--   claim still drops to ~0.3 ms); at 2 M: ~250 s, ~60 s CPU.
+--   claim + vacuum CPU per day: default ~5,400 s, scale 0.02 ~540 s,
+--   fixed 30 k ~400 s; at 10x ~54,000 / ~5,400 / ~4,000 s.
+-- A fixed 30 k also does not drift up as the table grows (a scale factor
+-- would), and keeps the worst claim under ~5 ms.
+-- Locking, under 10x traffic through a vacuum (sampled every 50 ms): no
+-- blocked sessions, no lock waits on claim or stamp.
+--
+-- Storage parameters only: no data change, no schema change, no rewrite.
+-- Lock: SHARE UPDATE EXCLUSIVE (PostgreSQL 14 docs, ALTER TABLE: "SHARE
+-- UPDATE EXCLUSIVE lock will be taken for fillfactor, toast and autovacuum
+-- storage parameters"). It does not conflict with SELECT or
+-- INSERT/UPDATE/DELETE. It does conflict with a running VACUUM/ANALYZE on
+-- this table, so the wait is capped at 10 s below.
+--
+-- Rollback (same lock, same instant effect):
+--   ALTER TABLE crm_event_raw RESET (autovacuum_vacuum_scale_factor, autovacuum_vacuum_threshold);
+
+-- The runner wraps each file in its own transaction, so SET LOCAL ends with it.
+-- If a vacuum holds the table this errors after 10 s and can simply be re-run.
+SET LOCAL lock_timeout = '10s';
+ALTER TABLE crm_event_raw SET (autovacuum_vacuum_scale_factor = 0, autovacuum_vacuum_threshold = 30000);
