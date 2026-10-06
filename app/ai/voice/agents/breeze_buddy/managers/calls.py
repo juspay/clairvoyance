@@ -15,7 +15,7 @@ import asyncio
 import uuid
 from datetime import datetime, time as time_of_day, timedelta, timezone
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Any, Awaitable, Callable, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
 # the circular import via ``dispatch/__init__.py`` -> ``dispatch.worker`` ->
@@ -156,6 +156,7 @@ async def _run_pre_checks_for_lead(
     lead: LeadCallTracker,
     template: Optional[TemplateModel],
     session,
+    still_ours: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> Tuple[PreCheckDecision, int]:
     """
     Run pre-checks for a lead and handle failure cases.
@@ -269,6 +270,11 @@ async def _run_pre_checks_for_lead(
     }
     if exhausted_reason:
         meta_data["pre_check_defer_exhausted"] = exhausted_reason
+
+    if still_ours is not None and not await still_ours():
+        # a v2 dispatch the reaper already took over: the lead (maybe on a call by now)
+        # is its new holder's, so it is neither finished nor reported here
+        return PreCheckDecision.ABORT, 0
 
     await update_lead_call_completion_details(
         id=lead.id,
