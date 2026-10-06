@@ -13,6 +13,11 @@ from app.schemas import CallProvider, TelephonyConfig
 # settles it, matched to the lead through ``dial_ref``.
 DIAL_OUTCOME_UNKNOWN = "unknown"
 
+# ``make_call``'s ``status`` for Plivo's 429 when the caller asked with
+# ``report_throttle=True`` (the v2 dialler): nothing was placed, and the same request
+# may be sent again. Every other caller gets None for a 429, as before.
+DIAL_OUTCOME_THROTTLED = "throttled"
+
 # The lead's meta_data key that marks it held after such a dial, until a
 # webhook claims it or the stuck sweep puts it back to be dialled again.
 UNKNOWN_DIAL_META_KEY = "unknown_dial"
@@ -73,6 +78,7 @@ class VoiceCallProvider(ABC):
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
         dial_ref: Optional[Dict[str, str]] = None,
+        report_throttle: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Initiate a call.
@@ -90,6 +96,9 @@ class VoiceCallProvider(ABC):
                 webhooks, so a dial whose reply was lost can still be matched
                 to its lead. Plivo puts them on its answer + hangup URLs;
                 providers that never return DIAL_OUTCOME_UNKNOWN ignore them.
+            report_throttle: the v2 dialler sends the same request again after
+                a 429, so it asks for DIAL_OUTCOME_THROTTLED instead of None.
+                Plivo only; the other providers answer None, as always.
         """
 
     async def make_call_async(
@@ -99,6 +108,7 @@ class VoiceCallProvider(ABC):
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
         dial_ref: Optional[Dict[str, str]] = None,
+        report_throttle: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Await-able wrapper around ``make_call`` that keeps it off the event loop.
@@ -119,6 +129,7 @@ class VoiceCallProvider(ABC):
             reseller_id,
             template_name,
             dial_ref=dial_ref,
+            report_throttle=report_throttle,
         )
 
     async def is_call_live(self, lead: Any) -> Optional[bool]:

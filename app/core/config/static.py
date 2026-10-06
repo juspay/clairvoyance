@@ -565,6 +565,18 @@ BB_V2_DIAL_STUCK_S = 600
 # (vobiz.py _REQUEST_TIMEOUT_SECONDS; Plivo's is PLIVO_REST_TIMEOUT_SECONDS, 15 s).
 # Not an env knob: lowering it below either timeout reopens the over-dial window.
 BB_V2_LOSS_RECOVERY_WAIT_S = 30
+
+# A Plivo 5xx on a dial (spec 2026-10-05 §10.3, decision D1, open). "unknown" (default):
+# held like a lost reply (#1280), never re-queued, because Plivo may have placed it.
+# "body_decides": a 5xx carrying Plivo's JSON error body (api_id + error) counts as not
+# placed, any other 5xx is held. "not_placed": today's reading (re-queued; may double
+# dial), without the SDK's re-send.
+BB_PLIVO_5XX_OUTCOME = os.getenv("BB_PLIVO_5XX_OUTCOME", "unknown")
+if BB_PLIVO_5XX_OUTCOME not in ("unknown", "body_decides", "not_placed"):
+    raise ValueError(
+        "BB_PLIVO_5XX_OUTCOME must be unknown, body_decides or not_placed, "
+        f"got {BB_PLIVO_5XX_OUTCOME!r}"
+    )
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the
