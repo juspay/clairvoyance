@@ -100,8 +100,11 @@ async def _call_anthropic(
     context.set_tools(ToolsSchema(standard_tools=tools))
 
     adapter = svc.get_llm_adapter()
+    # pipecat's Anthropic adapter requires the caching flag; a one-shot check
+    # with a short prompt has nothing worth caching.
     invocation_params = adapter.get_llm_invocation_params(
         context,
+        enable_prompt_caching=False,
         system_instruction=system_prompt,
     )
 

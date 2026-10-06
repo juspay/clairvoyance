@@ -60,6 +60,10 @@ class UpdateTopicConfigurationRequest(BaseModel):
     region: Optional[str] = Field(None, max_length=100)
     system_prompt: Optional[str] = Field(None, max_length=50000)
     settings: Optional[Dict[str, Any]] = None
+    # Not refused as null below: null names no account (the provider's
+    # default one) and clears the extra request fields.
+    account: Optional[str] = Field(None, max_length=100)
+    extra_body: Optional[Dict[str, Any]] = None
 
     @field_validator(
         "provider",
@@ -87,6 +91,8 @@ class TopicConfigurationResponse(BaseModel):
     region: Optional[str] = None
     system_prompt: str
     settings: Dict[str, Any]
+    account: Optional[str] = None
+    extra_body: Optional[Dict[str, Any]] = None
 
 
 class ConversationTopicsResponse(BaseModel):

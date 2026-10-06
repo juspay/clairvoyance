@@ -9,16 +9,19 @@ from typing import Any, Dict, List, Mapping, Optional, cast
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 
-from app.ai.voice.agents.breeze_buddy.accounts.types import KeyAccount
-from app.ai.voice.agents.breeze_buddy.llm import get_llm_service, resolve_openai
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
+from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.ai.voice.llm import LLMConfiguration, LLMProvider, LLMSdk
 from app.ai.voice.llm._pools import get_openai_httpx_client
-from app.core.config import static
 from app.core.logger import logger
 from app.schemas.breeze_buddy.conversation_analysis import TopicExtractionResult
-from app.services.live_config.store import get_config
 
 _FIRST_TOKEN_TIMEOUT_SECONDS = 30
+# A topic config on the openai provider that names no account runs where
+# every topic evaluation ran before accounts: the Grid gateway on its own key.
+_DEFAULT_ACCOUNT = "grid-topics"
+# The request is built around these; the rest of the body is the config's.
+_OWNED_BODY_FIELDS = {"model", "messages", "stream", "stream_options"}
 
 
 class TopicModelResponseError(ValueError):
@@ -62,6 +65,17 @@ def resolve_topic_evaluation_configuration(
         raise ValueError(
             "evaluation_config.region is required for google_vertex provider"
         )
+    account = str(raw.get("account") or "").strip() or None
+    if provider == LLMProvider.OPENAI and not account:
+        account = _DEFAULT_ACCOUNT
+    if account and provider != LLMProvider.OPENAI:
+        raise ValueError("evaluation_config.account needs the openai provider")
+    extra_body = raw.get("extra_body")
+    if extra_body is not None and not isinstance(extra_body, Mapping):
+        raise ValueError("evaluation_config.extra_body must be an object")
+    owned = sorted(_OWNED_BODY_FIELDS & set(extra_body or {}))
+    if owned:
+        raise ValueError(f"evaluation_config.extra_body may not set {', '.join(owned)}")
     settings = raw.get("settings")
     settings = dict(settings) if isinstance(settings, Mapping) else {}
 
@@ -109,6 +123,8 @@ def resolve_topic_evaluation_configuration(
         "model": model,
         "system_prompt": system_prompt,
         "region": region,
+        "account": account,
+        "extra_body": dict(extra_body) if extra_body else None,
         "settings": {
             "temperature": temperature,
             "max_output_tokens": max_output_tokens,
@@ -148,39 +164,21 @@ async def _request_llm(
     transcript: str,
     runtime: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    endpoint = None
-    api_key_name = None
-    on_grid = False
-    if runtime["provider"] == LLMProvider.OPENAI.value:
-        endpoint = (await get_config("LITELLM_BASE_URL", "", str)).strip()
-        on_grid = bool(endpoint)
-        if not endpoint:
-            endpoint = (await get_config("OPENAI_GATEWAY_BASE_URL", "", str)).strip()
-            api_key_name = "OPENAI_GATEWAY_API_KEY"
-        if not endpoint:
-            raise ValueError(
-                "OpenAI gateway base URL is not configured; set OPENAI_GATEWAY_BASE_URL"
-            )
-        endpoint = endpoint.rstrip("/").removesuffix("/chat/completions")
-    llm_config = LLMConfiguration(
-        provider=runtime["provider"],
-        sdk=runtime.get("sdk"),
-        model=runtime["model"],
-        region=runtime.get("region"),
-        endpoint=endpoint,
-        api_key_name=api_key_name,
-        temperature=runtime["settings"]["temperature"],
-        max_tokens=runtime["settings"]["max_output_tokens"],
+    # The account and every provider are the LLM factory's; this job only
+    # says which. It is the one caller the grid-topics account serves.
+    llm = await get_llm_service(
+        LLMConfiguration(
+            provider=runtime["provider"],
+            sdk=runtime.get("sdk"),
+            model=runtime["model"],
+            region=runtime.get("region"),
+            account=runtime["account"],
+            extra_body=runtime["extra_body"],
+            temperature=runtime["settings"]["temperature"],
+            max_tokens=runtime["settings"]["max_output_tokens"],
+        ),
+        accounts=Accounts(for_topics=True),
     )
-    if on_grid:
-        if not static.GRID_TOPICS_API_KEY:
-            raise ValueError("GRID_TOPICS_API_KEY is not set in the pod environment")
-        llm = await resolve_openai(
-            llm_config,
-            KeyAccount(api_key=static.GRID_TOPICS_API_KEY, endpoint=endpoint),
-        )
-    else:
-        llm = await get_llm_service(llm_config)
     # AzureLLMService subclasses OpenAILLMService, so Azure evaluations share
     # this pool too, on purpose: without it each one leaks its own client.
     if isinstance(llm, OpenAILLMService):
