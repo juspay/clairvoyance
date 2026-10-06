@@ -5,6 +5,7 @@ Accessor functions for the event-driven dispatcher.
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from app.core.config.static import BB_STUCK_SWEEP_MAX_CALL_MINUTES
 from app.core.logger import logger
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
 from app.database.queries import run_parameterized_query
@@ -41,7 +42,9 @@ async def get_unscheduled_backlog_leads(
 async def count_processing_by_telephony_number() -> Dict[str, int]:
     """Return ``{telephony_number_id: in_flight_count}`` for active calls."""
     try:
-        query, values = count_processing_by_telephony_number_query()
+        query, values = count_processing_by_telephony_number_query(
+            attached_window_minutes=BB_STUCK_SWEEP_MAX_CALL_MINUTES
+        )
         rows = await run_parameterized_query(query, values)
         if not rows:
             return {}
