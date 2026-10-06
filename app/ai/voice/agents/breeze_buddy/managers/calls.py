@@ -13,7 +13,7 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as time_of_day, timedelta, timezone
 from enum import Enum
 from typing import Any, Optional, Tuple
 
@@ -128,22 +128,27 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     return config
 
 
+def hours_open(start: time_of_day, end: time_of_day, current_time: time_of_day) -> bool:
+    """
+    The calling-hours rule: ``start``..``end`` inclusive at both ends, wrapping
+    past midnight when ``start`` is after ``end``. The v2 dialler's Lua
+    (``dispatch/v2/scripts.py``) applies the same rule to whole seconds.
+    """
+    if start <= end:
+        # Normal case (e.g., 09:00–17:00)
+        return start <= current_time <= end
+    else:
+        # Overnight case (e.g., 22:00–06:00)
+        return current_time >= start or current_time <= end
+
+
 def _is_within_calling_hours(config: CallExecutionConfig) -> bool:
     """
     Checks if the current time is within the allowed calling hours.
     """
     IST = timezone(timedelta(hours=5, minutes=30))
     current_time = datetime.now(IST).time()
-
-    if config.call_start_time <= config.call_end_time:
-        # Normal case (e.g., 09:00–17:00)
-        return config.call_start_time <= current_time <= config.call_end_time
-    else:
-        # Overnight case (e.g., 22:00–06:00)
-        return (
-            current_time >= config.call_start_time
-            or current_time <= config.call_end_time
-        )
+    return hours_open(config.call_start_time, config.call_end_time, current_time)
 
 
 async def _run_pre_checks_for_lead(
