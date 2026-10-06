@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Awaitable, Callable, Dict, NamedTuple, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Optional, Set
 
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import raise_v2_due_write_missed
 from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
@@ -29,6 +29,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.v2.monitor import (
     run_monitors,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.reconcile import (
+    backfill_ranks,
     ledger_check,
     prune_orphans,
     reap_leases,
@@ -82,12 +83,38 @@ async def refresh_enabled_mirror() -> None:
             await c.zadd(k.DUE_KEY, {n: now_ms for n in active}, lt=True)
 
 
+_warned_shared: Set[str] = set()  # numbers of no merchant listed as ranked: said once
+
+
 async def refresh_number_facts() -> None:
-    """``max`` / status / provider of every v2-accounted number, from the DB (rule 13)."""
+    """``max`` / status / provider of every v2-accounted number, from the DB (rule 13),
+    and its ``ranked`` flag from BB_V2_RANKED_NUMBERS: unreadable, no flag changes."""
     c = await _client()
     active = sorted(await c.smembers(k.V2_ACTIVE_KEY))
-    for number in (await get_telephony_numbers_by_ids(active)).values():
+    try:
+        listed: Optional[List[str]] = await dyn_cfg.BB_V2_RANKED_NUMBERS(strict=True)
+    except Exception as e:  # noqa: BLE001 — a blip must not unrank every number
+        listed = None
+        logger.warning(f"v2 ranked numbers unread, flags unchanged: {e}")
+    for number_id, number in (await get_telephony_numbers_by_ids(active)).items():
         await refresh_number(number)
+        if listed is None:
+            continue
+        ranked = number_id in listed
+        if ranked and not getattr(number, "merchant_id", None):
+            # ranks are one merchant's: on a shared number they would starve the others
+            ranked = False
+            if number_id not in _warned_shared:
+                _warned_shared.add(number_id)
+                logger.warning(
+                    f"v2: {number_id} is listed in BB_V2_RANKED_NUMBERS but belongs "
+                    "to no merchant; it stays unranked"
+                )
+        if ranked and await c.hget(k.num_key(number_id), "ranked") != "1":
+            # leads already queued get their rows' ranks first (backfill_ranks)
+            await c.hset(k.num_key(number_id), mapping={"ranked": "1", "backfill": "1"})
+        else:
+            await c.hset(k.num_key(number_id), "ranked", "1" if ranked else "0")
 
 
 async def refresh_routes() -> None:
@@ -152,6 +179,7 @@ JOBS = (
     Job("switch", 5, run_switch_step, 30),
     Job("enabled_mirror", 5, refresh_enabled_mirror, 5),
     Job("number_facts", 5, refresh_number_facts, 5),
+    Job("rank_backfill", 5, backfill_ranks, 120),
     Job("ledger", 30, ledger_check, 25),
     Job("lease_reaper", 30, reap_leases, 25),
     Job("channels_mirror", 30, write_channels_mirror, 25),

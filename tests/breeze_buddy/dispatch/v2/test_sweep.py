@@ -298,6 +298,101 @@ async def test_number_facts_refresh_rewrites_max_and_keeps_mode(rv, monkeypatch)
     assert await rv.hget("bb:num:N1", "mode") == "v2"
 
 
+async def test_ranked_flag_follows_the_config_for_a_merchants_own_number(
+    rv, monkeypatch
+):
+    rows = {}
+    for n, merchant in (("N1", "M1"), ("N2", "M1"), ("N3", None)):
+        await seed_number(rv, n, 2, {f"T{n}": {}})
+        await rv.sadd("bb:v2:active", n)
+        rows[n] = NS(id=n, status="AVAILABLE", provider="PLIVO", maximum_channels=2)
+        rows[n].merchant_id = merchant
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value=rows)
+    )
+    listed = AsyncMock(return_value=["N1", "N3"])
+    monkeypatch.setattr(SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", listed)
+
+    async def flags():
+        return [await rv.hget(f"bb:num:{n}", "ranked") for n in ("N1", "N2", "N3")]
+
+    await SW.refresh_number_facts()
+    listed.assert_awaited_once_with(strict=True)
+    # N3 is listed but belongs to no merchant: ranks are one merchant's, so never
+    assert await flags() == ["1", "0", "0"]
+    listed.return_value = []
+    await SW.refresh_number_facts()
+    assert await flags() == ["0", "0", "0"]
+
+
+async def test_unreadable_ranked_config_changes_no_flag(rv, monkeypatch):
+    await seed_number(rv, "N1", 2, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.hset("bb:num:N1", "ranked", "1")
+    row = NS(id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=7)
+    row.merchant_id = "M1"
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", AsyncMock(side_effect=ConnectionError)
+    )
+    await SW.refresh_number_facts()
+    assert await rv.hmget("bb:num:N1", "ranked", "max") == ["1", "7"]
+
+
+async def test_leads_queued_before_a_number_is_ranked_get_their_rows_rank(
+    rv, monkeypatch
+):
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import scripts
+    from app.database.accessor.breeze_buddy.dispatch import LeadDispatchState as St
+    from tests.breeze_buddy.dispatch.v2.conftest import tickets_of
+    from tests.breeze_buddy.dispatch.v2.test_rank_scripts import band
+
+    await seed_number(rv, "N1", 0, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    now = NOW()
+    await rv.zadd(
+        "bb:q:T1", {"first": now - 9, "P3": now - 3, "P2": now - 2, "none": now - 1}
+    )
+    row = NS(id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=0)
+    row.merchant_id = "M1"
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_V2_RANKED_NUMBERS", AsyncMock(return_value=["N1"])
+    )
+    await SW.refresh_number_facts()
+    # ranked, and marked: until the rows' ranks are in, match gives nobody the default
+    assert await rv.hmget("bb:num:N1", "ranked", "backfill") == ["1", "1"]
+    await rv.hset("bb:num:N1", "max", 1)
+    await scripts.match("N1")
+    assert await tickets_of(rv, "N1") == ["first"]
+    assert await rv.zscore("bb:q:T1", "P3") == now - 3
+
+    def pri(rank):
+        return {"rank": rank, "order": "newest_event", "event_ms": now}
+
+    states = {
+        "P3": St("BACKLOG", False, "T1", None, pri(3)),
+        "P2": St("BACKLOG", False, "T1", None, pri(2)),
+        "none": St("BACKLOG", False, "T1", None, None),
+    }
+    monkeypatch.setattr(RC, "get_lead_dispatch_states", AsyncMock(return_value=states))
+    await RC.backfill_ranks()
+    assert band(await rv.zscore("bb:q:T1", "P3")) == 3
+    assert band(await rv.zscore("bb:q:T1", "P2")) == 2
+    assert await rv.zscore("bb:q:T1", "none") == now - 1  # no rank on its row
+    assert await rv.hget("bb:num:N1", "backfill") is None
+    await SW.refresh_number_facts()
+    assert await rv.hget("bb:num:N1", "backfill") is None  # once per switch-on
+    await rv.hset("bb:num:N1", "max", 4)
+    await scripts.match("N1")
+    # "none" takes the default rank, 1
+    assert await tickets_of(rv, "N1") == ["first", "none", "P2", "P3"]
+
+
 async def test_route_refresh_reresolves_templates_with_waiting_leads(rv, monkeypatch):
     await seed_number(rv, "N1", 2, {"T1": {}, "T2": {}, "T3": {}})
     await seed_number(rv, "N9", 2, {"T9": {}}, mode=None)  # legacy: not refreshed

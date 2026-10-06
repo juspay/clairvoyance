@@ -40,6 +40,11 @@ def room_key(template_id: str) -> str:
     return f"bb:q:{template_id}"
 
 
+def qp_key(template_id: str) -> str:
+    # not bb:q:*: the orphan prune reads the rest of such a name as a template id
+    return f"bb:qp:{template_id}"
+
+
 def busy_key(number_id: str) -> str:
     return f"bb:busy:{number_id}"
 

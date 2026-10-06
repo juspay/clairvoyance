@@ -500,7 +500,7 @@ BB_V2_MATCH_CAP = int(os.environ.get("BB_V2_MATCH_CAP", 100))
 # rest on the next tick), and every BB_V2_DUE_FULL_PASS_TICKS ticks every v2-accounted
 # number too (the safety net for a missed bb:due write or a change by hand).
 BB_V2_DUE_BATCH = int(os.environ.get("BB_V2_DUE_BATCH", 5000))
-BB_V2_DUE_FULL_PASS_TICKS = int(os.environ.get("BB_V2_DUE_FULL_PASS_TICKS", 30))
+BB_V2_DUE_FULL_PASS_TICKS = int(os.environ.get("BB_V2_DUE_FULL_PASS_TICKS", 5))
 # A number match can't act on yet is looked at again this long later: one whose room's
 # reseller is paused (today's key, set and removed by hand: no write tells v2; the most an
 # unpause waits) and one still switching (v2_pending / draining: match issues nothing until
