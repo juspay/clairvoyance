@@ -7,7 +7,7 @@ from typing import Any, Optional, Tuple
 import pytest
 import redis.asyncio as aioredis
 
-from app.ai.voice.agents.breeze_buddy.dispatch.v2 import redis_client, scripts
+from app.ai.voice.agents.breeze_buddy.dispatch.v2 import redis_client, routes, scripts
 
 OWNER = "own-1"  # the dial coroutine that claimed a test's ticket
 
@@ -61,13 +61,14 @@ async def seed_number(c, n, max_lines, templates, *, mode="v2"):
 
 
 def use_redis(monkeypatch, client, *modules) -> None:
-    """Point ``get_redis_service`` at ``client``, like ``rr`` does for scripts, in each of
-    ``modules`` that has its own getter (e.g. today's channel semaphore)."""
+    """Point ``get_redis_service`` at ``client``, like ``rr`` does for scripts: in
+    ``routes`` (whose ``_client`` every v2 job and hook shares) and in each of ``modules``
+    that has its own getter (e.g. today's channel semaphore)."""
 
     async def _get():
         return _Svc(client)
 
-    for m in modules:
+    for m in (routes, *modules):
         if hasattr(m, "get_redis_service"):
             monkeypatch.setattr(m, "get_redis_service", _get)
 

@@ -223,6 +223,18 @@ async def BB_DISPATCH_V2_NUMBERS(strict: bool = False) -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+async def BB_V2_TIER_HIGH_MERCHANT_IDS() -> list[str]:
+    """Comma-separated merchant IDs for high-tier v2 prioritization."""
+    raw = await get_config("BB_V2_TIER_HIGH_MERCHANT_IDS", "", str)
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+async def BB_V2_TIER_MEDIUM_MERCHANT_IDS() -> list[str]:
+    """Comma-separated merchant IDs for medium-tier v2 prioritization."""
+    raw = await get_config("BB_V2_TIER_MEDIUM_MERCHANT_IDS", "", str)
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
 async def BB_ANALYSIS_CONSUMER_COUNT() -> int:
     """How many post-conversation evaluation consumers each api pod runs.
 
