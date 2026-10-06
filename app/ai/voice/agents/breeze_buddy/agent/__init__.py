@@ -868,6 +868,17 @@ class Agent:
         @self.transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected: {client}")
+            try:  # v2: early line release; later releases are no-ops
+                from app.ai.voice.agents.breeze_buddy.dispatch.v2.release import (
+                    release_lead_line,
+                )
+
+                if self.lead is not None:
+                    await release_lead_line(self.lead)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"v2 early release failed for {getattr(self.lead, 'id', None)}: {e}"
+                )
             if self.approval_manager:
                 self.approval_manager.deny_all("client_disconnected")
             if self._rtvi_processor:

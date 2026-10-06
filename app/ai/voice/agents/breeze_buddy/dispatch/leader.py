@@ -40,8 +40,14 @@ class LeaderElection:
         await leader.stop()
     """
 
-    def __init__(self, key: str = PROMOTER_LEADER, instance_id: Optional[str] = None):
+    def __init__(
+        self,
+        key: str = PROMOTER_LEADER,
+        instance_id: Optional[str] = None,
+        task_name: str = "bb-promoter-leader",
+    ):
         self._key = key
+        self._task_name = task_name
         self._instance_id = instance_id or str(uuid.uuid4())
         self._is_leader = False
         self._task: Optional[asyncio.Task] = None
@@ -59,7 +65,7 @@ class LeaderElection:
         if self._task is not None:
             return
         self._stopping.clear()
-        self._task = asyncio.create_task(self._loop(), name="bb-promoter-leader")
+        self._task = asyncio.create_task(self._loop(), name=self._task_name)
         logger.info(f"LeaderElection started (instance_id={self._instance_id})")
 
     async def stop(self) -> None:

@@ -260,14 +260,25 @@ async def test_make_call_returns_no_sid_defers(harness, fake_redis):
     assert lead.status == LeadCallStatus.BACKLOG
 
 
-async def test_post_cas_lost_releases_all_resources(harness, fake_redis):
+async def test_post_cas_lost_keeps_the_line_for_the_live_call(
+    harness, fake_redis, monkeypatch
+):
     """
-    CAS lost after make_call → token returned, number released, lock released.
-    The call is placed but the lead row already moved on (e.g., aborted).
+    CAS lost after make_call because the merchant aborted the lead during the
+    dial: the call is LIVE, so the line belongs to it. The DB channel stays
+    taken, the lead is stamped with the call id + number + marker (meta_data
+    merged, not replaced), and the real handle_call_completion then returns
+    the line exactly once WITHOUT touching the aborted lead.
     """
+    from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
+    from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
+
     lead = make_lead("lead-cas")
+    lead.metaData = {"aborted_at": "t0", "cancellation_reason": "merchant"}
+    lead.outcome = "ABORT"
     harness.add_lead(lead)
     harness.cas_succeeds = False
+    harness.cas_lost_status = LeadCallStatus.FINISHED  # merchant abort
 
     await init_channel_semaphore(harness.number.id, 1)
     await fake_redis.client.rpush(READY_LIST, lead.id)
@@ -278,10 +289,117 @@ async def test_post_cas_lost_releases_all_resources(harness, fake_redis):
     # Call WAS placed (CAS happens after make_call).
     assert len(harness.call_recorder.calls) == 1
 
-    # All resources cleaned up despite orphaning the call.
+    # The line stays with the live call: no DB channel given back, no token
+    # returned, no re-defer; the lead keeps its terminal status and outcome.
+    assert await channel_tokens_available(harness.number.id) == 0
+    assert harness.released_numbers == []
+    assert harness.deferred == []
+    assert lead.status == LeadCallStatus.FINISHED
+    assert lead.outcome == "ABORT"
+    assert lead.id in harness.released_locks
+    assert lead.call_id == "CA-test-sid"
+    assert lead.telephony_number_id == harness.number.id
+    assert lead.metaData["aborted_at"] == "t0"  # merged, not replaced
+    assert lead.metaData[CALL_ATTACHED_AFTER_FINISH]["call_id"] == "CA-test-sid"
+
+    # The call-end webhook, for real, with a NO_ANSWER outcome.
+    released: list = []
+    tokens: list = []
+    completions: list = []
+    retries: list = []
+
+    async def _by_call(call_id):
+        return lead if call_id == lead.call_id else None
+
+    async def _noop(*a, **k):
+        return None
+
+    async def _get_number(number_id):
+        return harness.number
+
+    async def _release_number(number_id, provider):
+        released.append(number_id)
+
+    async def _release_token(number_id, token=None):
+        tokens.append(number_id)
+        return True
+
+    async def _complete(**kw):
+        completions.append(kw)
+        return lead
+
+    async def _retry(*a, **k):
+        retries.append(a)
+
+    async def _claim_release(lead_id):  # claim_attached_call_release_query's rule
+        marker = (lead.metaData or {})[CALL_ATTACHED_AFTER_FINISH]
+        if "released_at" in marker:
+            return False
+        marker["released_at"] = "now"
+        return True
+
+    async def _get():
+        return fake_redis
+
+    monkeypatch.setattr(calls_mod, "get_lead_by_call_id", _by_call)
+    monkeypatch.setattr(calls_mod, "safe_release_pod", _noop)
+    monkeypatch.setattr(calls_mod, "get_redis_service", _get)
+    monkeypatch.setattr(calls_mod, "get_telephony_number_by_id", _get_number)
+    monkeypatch.setattr(calls_mod, "_release_number", _release_number)
+    monkeypatch.setattr(calls_mod, "release_channel_token", _release_token)
+    monkeypatch.setattr(calls_mod, "_get_lead_config", harness._get_lead_config)
+    monkeypatch.setattr(calls_mod, "update_lead_call_completion_details", _complete)
+    monkeypatch.setattr(calls_mod, "_retry_call", _retry)
+    monkeypatch.setattr(calls_mod, "claim_attached_call_release", _claim_release)
+
+    await calls_mod.handle_call_completion("CA-test-sid", outcome="NO_ANSWER")
+    await calls_mod.handle_call_completion("CA-test-sid", outcome="NO_ANSWER")  # dup
+
+    assert released == [harness.number.id]  # the line comes back once
+    assert tokens == [harness.number.id]
+    assert completions == []  # ABORT outcome / meta_data not overwritten, no CRM mirror
+    assert retries == []  # an aborted lead is not retried
+
+
+async def test_post_cas_lost_on_a_db_error_releases_the_line(harness, fake_redis):
+    """update_lead_call_details also returns None on a DB error, leaving the
+    row BACKLOG. Stamping a call id on it and unlocking would let it be
+    re-dialled, and the new dial would overwrite call_id and strand this
+    call's line. The attach refuses a non-FINISHED row, so the worker falls
+    back to releasing the line."""
+    lead = make_lead("lead-cas-err")
+    harness.add_lead(lead)
+    harness.cas_succeeds = False  # lead stays BACKLOG
+
+    await init_channel_semaphore(harness.number.id, 1)
+    await fake_redis.client.rpush(READY_LIST, lead.id)
+
+    await w.Worker(worker_uuid="w-cas-err")._iteration(session=None)
+
+    assert len(harness.call_recorder.calls) == 1
+    assert lead.call_id is None  # nothing stamped on a BACKLOG row
     assert await channel_tokens_available(harness.number.id) == 1
     assert harness.released_numbers == [harness.number.id]
     assert lead.id in harness.released_locks
+
+
+def test_attach_query_only_stamps_a_finished_lead_without_a_call():
+    """The SQL guard behind the two tests above, and a merge (not replace) of
+    meta_data."""
+    from datetime import datetime, timezone
+
+    from app.database.queries.breeze_buddy.lead_call_tracker import (
+        attach_placed_call_to_lead_query,
+    )
+
+    sql, values = attach_placed_call_to_lead_query(
+        "lead-1", "CA-1", datetime.now(timezone.utc), "num-1"
+    )
+    assert "\"status\" = 'FINISHED'" in sql
+    assert '"call_id" IS NULL' in sql
+    assert "COALESCE(\"meta_data\", '{}')::jsonb ||" in sql
+    assert '"outcome"' not in sql.split("SET")[1].split("WHERE")[0]
+    assert "call_attached_after_finish" in values[4]
 
 
 async def test_status_not_backlog_skips_dispatch(harness, fake_redis):

@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI
@@ -9,6 +10,10 @@ from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.ai.voice.agents.breeze_buddy.chat.cleanup import end_idle_chat_sessions
+
+# Registers the created-lead schedule hook. Explicit because every CRM_ROLE
+# (the workflow walker included) boots through this module.
+from app.ai.voice.agents.breeze_buddy.dispatch import created_hook  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.dispatch import (
     clean_stale_bb_locks,
     monitor_dispatch_health,
@@ -20,6 +25,12 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
     stop_promoter,
     stop_workers,
 )
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.acceptor import (
+    start_acceptor,
+    stop_acceptor,
+)
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.redis_client import close_v2_redis
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.sweep import Sweeper
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     reconcile_stuck_processing_leads,
 )
@@ -92,6 +103,9 @@ _is_draining = False
 # Background task scheduler
 _background_scheduler = None
 
+# v2 event dialler sweep (started with today's dispatcher; idle until v2 is used)
+_v2_sweeper: Optional[Sweeper] = None
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -161,7 +175,7 @@ async def lifespan(_app: FastAPI):
     # services/daily helper.
 
     # Start background task scheduler if enabled
-    global _background_scheduler
+    global _background_scheduler, _v2_sweeper
     if CRM_ROLE == "api" and await ENABLE_BACKGROUND_TASKS():
         try:
             # Create scheduler instance with configurable loop interval
@@ -305,6 +319,16 @@ async def lifespan(_app: FastAPI):
             logger.info("Event-driven dispatcher started")
         except Exception as e:
             logger.error(f"Failed to start event-driven dispatcher: {e}", exc_info=True)
+        # v2 event dialler: the acceptor + the 1 s sweep. They start with today's
+        # dispatcher and idle until v2 is first used, so v2 is switched on and off live
+        # by dynamic config (BB_DISPATCH_V2_ENABLED / BB_DISPATCH_V2_NUMBERS), never by
+        # a restart. Today's workers keep running for every number not on v2.
+        try:
+            await start_acceptor()
+            _v2_sweeper = Sweeper()
+            _v2_sweeper.start()
+        except Exception as e:
+            logger.error(f"Failed to start v2 dialler: {e}", exc_info=True)
         try:
             await start_analysis_worker()
         except Exception as e:
@@ -345,9 +369,24 @@ async def lifespan(_app: FastAPI):
     # in-flight workers get their locks/tokens released cleanly. Mirrors
     # the startup gate — only an api pod ever started these.
     if CRM_ROLE == "api" and ENABLE_DISPATCHER:
+        # v2 first: this pod stops sweeping and taking tickets; a ticket still in its
+        # checks gives its line back and is re-queued, and a dial past its commit gets
+        # up to 25 s (one still running keeps its lease for the lease reaper).
+        try:
+            if _v2_sweeper is not None:
+                await _v2_sweeper.stop()
+        except Exception as e:
+            logger.error(f"Error stopping v2 sweep: {e}", exc_info=True)
+        # v2's acceptor and today's workers drain in parallel, so today's shutdown
+        # takes no longer than it did before v2 (each is bounded on its own).
+        results = await asyncio.gather(
+            stop_acceptor(grace_s=25), stop_workers(), return_exceptions=True
+        )
+        for name, res in zip(("v2 acceptor", "dispatcher workers"), results):
+            if isinstance(res, Exception):
+                logger.error(f"Error stopping {name}: {res}", exc_info=res)
         try:
             logger.info("Stopping event-driven dispatcher...")
-            await stop_workers()
             await stop_promoter()
         except Exception as e:
             logger.error(f"Error stopping dispatcher: {e}", exc_info=True)
@@ -389,6 +428,8 @@ async def lifespan(_app: FastAPI):
     await close_db_pool()
     # Close Redis connections
     await close_redis_connections()
+    # The v2 dialler's own client: every pod runs v2 scripts (enqueue, call-end release).
+    await close_v2_redis()
 
     # LAST: flush + stop loguru's enqueue=True sinks. Each enqueued sink
     # owns a multiprocessing SimpleQueue/Event/Lock; if their worker

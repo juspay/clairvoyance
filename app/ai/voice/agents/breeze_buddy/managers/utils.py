@@ -220,11 +220,10 @@ async def prepare_and_store_initial_greeting(
             return resolved_greeting
 
         else:
-            # Static greeting - check if template audio already exists
+            # Static greeting - check if template audio already exists (EXISTS:
+            # the audio itself, ~100 KB, is read only by the call that plays it)
             template_audio_key = f"greeting:template:{template.id}"
-            existing_audio = await redis.get(template_audio_key)
-
-            if existing_audio:
+            if await redis.exists(template_audio_key):
                 logger.info(
                     f"Using existing static greeting audio for template {template.id}"
                 )
@@ -275,7 +274,7 @@ async def ensure_realtime_opening_line_cached(
     ``force=True`` skips the cache check and regenerates — used by the
     template-save path so voice/model/greeting edits always re-synthesize.
     The dispatch worker AWAITS the cache check (and, on a miss, generation)
-    before make_call; a hit is a single Redis GET, so the pre-dial wait is
+    before make_call; a hit is a single Redis EXISTS, so the pre-dial wait is
     ~milliseconds for every call after the first. Generation is bounded by
     the generator's 30s timeout and blocks only that worker's dial.
 
@@ -311,7 +310,7 @@ async def ensure_realtime_opening_line_cached(
 
     if not force:
         try:
-            if await (await get_redis_service()).get(template_key):
+            if await (await get_redis_service()).exists(template_key):
                 return initial_greeting
         except Exception as e:  # noqa: BLE001 - fail open to LLM-speaks-first
             logger.opt(exception=e).warning(

@@ -49,6 +49,9 @@ from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     prepare_goodbye_audio,
     prepare_ivr_menu_audio,
 )
+from app.ai.voice.agents.breeze_buddy.managers.calls import (
+    claim_unknown_dial_from_webhook,
+)
 from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import admit_inbound_call
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_allocate_pod,
@@ -98,6 +101,7 @@ from app.schemas import (
     LeadCallStatus,
     TelephonyNumber,
 )
+from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
 from app.services.redis.client import get_redis_service
 
 _GATED_INBOUND_PROVIDERS = {"plivo": CallProvider.PLIVO, "vobiz": CallProvider.VOBIZ}
@@ -155,6 +159,19 @@ async def resolve_call_templates(
     if lead:
         # Outbound call - look up template using template_id from lead (preferred) or fall back to name
         logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
+
+        # The merchant aborted this lead while the dial was in flight; the
+        # call exists but must not be served: hang up, no agent.
+        if (getattr(lead, "metaData", None) or {}).get(CALL_ATTACHED_AFTER_FINISH):
+            logger.warning(
+                f"[Answer] Call {call_sid} belongs to aborted lead {lead.id}; "
+                "hanging up without an agent"
+            )
+            return {
+                "error": "Lead was aborted",
+                "error_status": 410,
+                "hangup_silently": True,
+            }
 
         # id-only resolution: the lead stores the template_id it resolved
         # to at push time; name fallback was removed.
@@ -811,7 +828,7 @@ async def _gate_inbound_channel(
         return None
 
     with timed_phase("acquire_inbound_channel"):
-        admitted = await admit_inbound_call(str(telephony_number.id))
+        admitted = await admit_inbound_call(str(telephony_number.id), call_id=call_id)
 
     if admitted:
         return None
@@ -912,9 +929,23 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
         logger.error(f"[{tag}] Missing call ID")
         return _error_response(provider, "Missing call identifier", 400)
 
+    # A dial whose reply timed out is held with no call_id; link this call to
+    # it first. Otherwise the lookup below misses, the call is taken for an
+    # inbound one, and the customer who answered hears "not configured".
+    if provider == "plivo":
+        await claim_unknown_dial_from_webhook(str(call_id), request.query_params)
+
     # Resolve templates
     with timed_phase("resolve_call_templates"):
         result = await resolve_call_templates(call_id, from_number, to_number)
+
+    if result.get("hangup_silently"):
+        if provider == "exotel":
+            return _error_response(provider, result["error"], result["error_status"])
+        return HTMLResponse(
+            content='<?xml version="1.0" encoding="UTF-8"?>\n<Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
 
     if "error" in result:
         logger.error(f"[{tag}] {result['error']}")
