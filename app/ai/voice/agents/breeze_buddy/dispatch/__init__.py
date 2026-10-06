@@ -7,6 +7,8 @@ ZSET-as-schedule + leader-elected promoter + worker-pool design.
 See docs/BACKLOG_DISPATCHER_REDESIGN.md for the architecture.
 """
 
+# Imported for its side effect: registers the created-lead schedule hook.
+from app.ai.voice.agents.breeze_buddy.dispatch import created_hook  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     acquire_channel_token,
     init_channel_semaphore,

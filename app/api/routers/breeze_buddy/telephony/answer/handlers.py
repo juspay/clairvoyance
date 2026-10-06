@@ -828,7 +828,7 @@ async def _gate_inbound_channel(
         return None
 
     with timed_phase("acquire_inbound_channel"):
-        admitted = await admit_inbound_call(str(telephony_number.id))
+        admitted = await admit_inbound_call(str(telephony_number.id), call_id=call_id)
 
     if admitted:
         return None

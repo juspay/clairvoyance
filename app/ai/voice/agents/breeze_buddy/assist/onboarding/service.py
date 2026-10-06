@@ -294,6 +294,15 @@ async def _create_template(template: TemplateModel) -> TemplateModel:
     return created
 
 
+async def _v2_template_saved(template_id: str) -> None:
+    """Re-resolve the template's v2 route, as the templates API does on save (a no-op
+    until v2 is used; never raises)."""
+    # lazy: the dispatch package imports managers.calls (import cycle)
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.hooks import on_template_saved
+
+    await on_template_saved(template_id)
+
+
 async def _update_template(template: TemplateModel) -> TemplateModel:
     # The save-time provider-account check the templates API makes, so a
     # block naming a row that cannot serve is refused here too, never first
@@ -330,6 +339,7 @@ async def _update_template(template: TemplateModel) -> TemplateModel:
             "Could not update the Assist template.",
             True,
         )
+    await _v2_template_saved(updated.id)
     return updated
 
 

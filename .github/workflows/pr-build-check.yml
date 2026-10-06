@@ -142,3 +142,49 @@ jobs:
           fi
 
           echo "Commit count is 1. Build successful."
+
+  # The dialler's dispatch tests, Lua scripts included, against a real Redis.
+  # Without BB_TEST_REDIS_URL about 280 of them skip, so they never ran in CI
+  # (review #1287 finding 7). Full history: the legacy-parity test reads the
+  # base commit's dialler with `git show`.
+  dispatch-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv sync --extra dev
+
+      - name: Run dispatch tests (real Redis)
+        env:
+          BB_TEST_REDIS_URL: redis://localhost:6379/15
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          uv run pytest tests/breeze_buddy/dispatch -q
+        continue-on-error: false

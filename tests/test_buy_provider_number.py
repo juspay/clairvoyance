@@ -237,6 +237,18 @@ async def test_successful_buy_registers_and_does_not_release(patch_flow):
     assert provider.unrent_calls == []
 
 
+async def test_successful_buy_tells_the_v2_dialler(patch_flow, monkeypatch):
+    # a new number can change today's fallback rule for unpinned templates (v2 rule 2)
+    hook = AsyncMock()
+    monkeypatch.setattr(provider_handlers, "_v2_number_saved", hook)
+    patch_flow(FakeProvider())
+    response = await buy_provider_number_handler(
+        CallProvider.PLIVO, make_request(), make_user()
+    )
+    hook.assert_awaited_once()
+    assert hook.await_args_list[0].args[0].number == response.telephony_number["number"]
+
+
 # ---------------------------------------------------------------------------
 # Step 1: duplicate pre-check
 #

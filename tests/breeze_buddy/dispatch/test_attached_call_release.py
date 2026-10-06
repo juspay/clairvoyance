@@ -226,3 +226,88 @@ async def test_the_release_claim_and_the_token_count_on_postgres() -> None:
     finally:
         await conn.execute("DROP TABLE IF EXISTS lead_call_tracker, telephony_numbers")
         await conn.close()
+
+
+async def test_v2_seed_ledger_and_states_hold_the_same_lines_as_the_count() -> None:
+    """The v2 seed and ledger read the same calls as holding a line as the channel
+    count does: a call attached to a lead finished mid-dial holds one until its end
+    releases it (``released_at``). Skipped unless CAPGATE_TEST_DSN is set."""
+    dsn = os.environ.get("CAPGATE_TEST_DSN")
+    if not dsn:
+        pytest.skip("set CAPGATE_TEST_DSN to run the attached-call SQL on Postgres")
+
+    import json
+
+    import asyncpg
+
+    from app.database.queries.breeze_buddy.dispatch import (
+        get_lead_dispatch_states_query,
+        get_live_calls_on_number_query,
+        get_live_calls_on_numbers_query,
+    )
+
+    conn = await asyncpg.connect(dsn)
+    now = datetime.now(timezone.utc)
+    try:
+        await conn.execute("DROP TABLE IF EXISTS lead_call_tracker, telephony_numbers")
+        await conn.execute("""CREATE TABLE telephony_numbers (
+                id VARCHAR(255) PRIMARY KEY, number VARCHAR(20) NOT NULL,
+                provider VARCHAR(50) NOT NULL, status VARCHAR(50) NOT NULL,
+                channels INTEGER NOT NULL DEFAULT 0,
+                maximum_channels INTEGER NOT NULL DEFAULT 1)""")
+        await conn.execute("""CREATE TABLE lead_call_tracker (
+                id VARCHAR(255) PRIMARY KEY, telephony_number_id VARCHAR(255),
+                status VARCHAR(50), call_direction VARCHAR(20),
+                execution_mode VARCHAR(50), meta_data JSONB, call_id VARCHAR(255),
+                is_locked BOOLEAN DEFAULT FALSE, template_id UUID,
+                next_attempt_at TIMESTAMPTZ, call_initiated_time TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ)""")
+        await conn.execute(
+            "INSERT INTO telephony_numbers (id,number,provider,status) "
+            "VALUES ('n-1','+15550001','PLIVO','AVAILABLE')"
+        )
+        attached = {
+            CALL_ATTACHED_AFTER_FINISH: {"at": now.isoformat(), "call_id": "c1"}
+        }
+        released = {
+            CALL_ATTACHED_AFTER_FINISH: {
+                "at": now.isoformat(),
+                "call_id": "c2",
+                "released_at": now.isoformat(),
+            }
+        }
+        rows = [
+            # id, status, meta, dialled minutes ago -> holds a line?
+            ("live", "FINISHED", attached, 2, True),
+            ("released", "FINISHED", released, 2, False),
+            ("too-old", "FINISHED", attached, 300, False),
+            ("plain-finished", "FINISHED", {"x": 1}, 2, False),
+            ("processing", "PROCESSING", {}, 2, True),
+        ]
+        for lid, status, meta, ago, _ in rows:
+            await conn.execute(
+                "INSERT INTO lead_call_tracker (id, telephony_number_id, status, "
+                "call_direction, execution_mode, meta_data, call_id, "
+                "call_initiated_time, updated_at) "
+                "VALUES ($1,'n-1',$2,'OUTBOUND','TELEPHONY',$3::jsonb,$1,$4,NOW())",
+                lid,
+                status,
+                json.dumps(meta),
+                now - timedelta(minutes=ago),
+            )
+        holding = {lid for lid, *_, held in rows if held}
+
+        text, values = get_live_calls_on_number_query("n-1", 240)
+        assert {r["id"] for r in await conn.fetch(text, *values)} == holding
+        text, values = get_live_calls_on_numbers_query(["n-1"], 240)
+        assert {r["id"] for r in await conn.fetch(text, *values)} == holding
+
+        text, values = get_lead_dispatch_states_query(["live", "released"])
+        attached_at = {
+            r["id"]: r["call_attached_at"] for r in await conn.fetch(text, *values)
+        }
+        assert attached_at["live"] is not None  # still owns its line
+        assert attached_at["released"] is None  # its end released the line
+    finally:
+        await conn.execute("DROP TABLE IF EXISTS lead_call_tracker, telephony_numbers")
+        await conn.close()

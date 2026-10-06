@@ -15,6 +15,7 @@ from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.utils.secrets import mask_template_secrets
 from app.api.routers.breeze_buddy.templates.handlers import (
     refuse_bad_provider_accounts,
+    v2_template_saved,
 )
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
@@ -145,6 +146,9 @@ async def rollback_template_handler(
         logger.warning(
             f"Template cache invalidation failed for {template_id}: {cache_exc}"
         )
+    # As PUT: the restored version can pin another number or change hours or calling,
+    # so its v2 route is re-resolved now, not at the next routes refresh.
+    await v2_template_saved(template_id)
 
     # Same two side effects as PUT. Invalidation also dropped
     # greeting:template:{id}, and connect-time paths never generate it — so

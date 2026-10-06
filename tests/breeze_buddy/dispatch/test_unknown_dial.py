@@ -371,6 +371,7 @@ class _Sweep:
         self.released: List[str] = []
         self.unrecorded: List[Dict[str, Any]] = []
         self.scheduled: List[str] = []
+        self.scheduled_templates: List[Any] = []
         self.closed: List[str] = []
         self.unlocked: List[str] = []
 
@@ -394,8 +395,11 @@ class _Sweep:
         async def unrecord(**kwargs: Any) -> None:
             self.unrecorded.append(kwargs)
 
-        async def schedule(lead_id: str, next_attempt_at: datetime) -> None:
+        async def schedule(
+            lead_id: str, next_attempt_at: datetime, template_id: Any = None
+        ) -> None:
             self.scheduled.append(lead_id)
+            self.scheduled_templates.append(template_id)
 
         async def close(**kwargs: Any) -> None:
             self.closed.append(kwargs["id"])
@@ -437,6 +441,8 @@ async def test_an_unclaimed_dial_is_dialled_again_not_closed(
         }
     ]
     assert sweep.scheduled == ["lead-1"]
+    # with its template, so a v2 number's lead goes straight to its room
+    assert sweep.scheduled_templates == ["tmpl-1"]
     # The requeue unlocked the row; a worker may own it by now.
     assert sweep.unlocked == []
 
@@ -689,7 +695,12 @@ def test_a_dial_that_never_connected_is_not_placed(
     assert plivo.make_call("+919999999999", "+918000000000", dial_ref=DIAL_REF) is None
 
 
-def test_a_non_transport_error_is_still_not_placed(plivo: PlivoProvider) -> None:
+def test_a_non_transport_error_before_any_reply_is_raised(
+    plivo: PlivoProvider,
+) -> None:
+    """Nothing reached Plivo: make_call raises and the caller's failure path treats the
+    dial as not placed (spec 2026-10-05 §10.3)."""
     _plivo_returns(plivo, ValueError("bad number"))
 
-    assert plivo.make_call("+919999999999", "+918000000000", dial_ref=DIAL_REF) is None
+    with pytest.raises(ValueError):
+        plivo.make_call("+919999999999", "+918000000000", dial_ref=DIAL_REF)

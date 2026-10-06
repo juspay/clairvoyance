@@ -15,7 +15,7 @@ import asyncio
 import random
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as time_of_day, timedelta, timezone
 from typing import Any, Mapping, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
@@ -142,22 +142,27 @@ async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfi
     return config
 
 
+def hours_open(start: time_of_day, end: time_of_day, current_time: time_of_day) -> bool:
+    """
+    The calling-hours rule: ``start``..``end`` inclusive at both ends, wrapping
+    past midnight when ``start`` is after ``end``. The v2 dialler's Lua
+    (``dispatch/v2/scripts.py``) applies the same rule to whole seconds.
+    """
+    if start <= end:
+        # Normal case (e.g., 09:00–17:00)
+        return start <= current_time <= end
+    else:
+        # Overnight case (e.g., 22:00–06:00)
+        return current_time >= start or current_time <= end
+
+
 def _is_within_calling_hours(config: CallExecutionConfig) -> bool:
     """
     Checks if the current time is within the allowed calling hours.
     """
     IST = timezone(timedelta(hours=5, minutes=30))
     current_time = datetime.now(IST).time()
-
-    if config.call_start_time <= config.call_end_time:
-        # Normal case (e.g., 09:00–17:00)
-        return config.call_start_time <= current_time <= config.call_end_time
-    else:
-        # Overnight case (e.g., 22:00–06:00)
-        return (
-            current_time >= config.call_start_time
-            or current_time <= config.call_end_time
-        )
+    return hours_open(config.call_start_time, config.call_end_time, current_time)
 
 
 async def _run_pre_checks_for_lead(
@@ -593,6 +598,13 @@ def _releases_capacity(lead: LeadCallTracker, provider: CallProvider) -> bool:
     return inbound_holds_channel(lead, provider)
 
 
+async def _v2_release(lead: LeadCallTracker) -> Optional[bool]:
+    # lazy: the dispatch package imports this module (import cycle); tests patch this wrapper
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.release import release_lead_line
+
+    return await release_lead_line(lead)
+
+
 async def _release_call_resources(lead: LeadCallTracker) -> None:
     """Give the telephony number its channel back once the call is over."""
     # Inbound accounting lives in its own module so the IVR deferred-policy
@@ -606,6 +618,12 @@ async def _release_call_resources(lead: LeadCallTracker) -> None:
 
     if not lead.telephony_number_id:
         logger.info(f"No telephony number id for lead: {lead.id}")
+        return
+
+    if is_dispatchable(lead.execution_mode) and await _v2_release(lead) is not None:
+        # v2-accounted number: the busy list is the only count (DB channels is a mirror).
+        # A non-dispatchable outbound lead never took a line in either dialler; today's
+        # capacity rule below says so.
         return
 
     telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
@@ -734,7 +752,11 @@ async def _retry_call(
         # web-mode flow, not by phantom-dialling via Plivo/Twilio.
         # See docs/BACKLOG_DISPATCHER_REDESIGN.md §4 (retry semantics).
         if is_dispatchable(lead.execution_mode):
-            await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
+            await schedule_lead(
+                lead_id=retry_id,
+                next_attempt_at=next_attempt_at,
+                template_id=lead.template_id,
+            )
 
 
 async def requeue_unclaimed_unknown_dial(lead: LeadCallTracker) -> bool:
@@ -765,7 +787,12 @@ async def requeue_unclaimed_unknown_dial(lead: LeadCallTracker) -> bool:
         )
 
     if is_dispatchable(lead.execution_mode):
-        await schedule_lead(lead_id=lead.id, next_attempt_at=datetime.now(timezone.utc))
+        # with its template: a v2 number's lead goes straight back to its room
+        await schedule_lead(
+            lead_id=lead.id,
+            next_attempt_at=datetime.now(timezone.utc),
+            template_id=lead.template_id,
+        )
     logger.warning(
         f"Unknown-outcome dial for lead {lead.id} got no webhook within the hold: "
         "the provider never placed it; lead put back to be dialled"

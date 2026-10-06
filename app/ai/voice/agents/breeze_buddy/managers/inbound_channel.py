@@ -19,6 +19,8 @@ holding a channel, the other who hands one back, and any disagreement silently
 miscounts free capacity.
 """
 
+from typing import Optional
+
 from app.core.logger import logger
 from app.database.accessor import (
     decrement_telephony_number_channels,
@@ -28,8 +30,47 @@ from app.database.accessor import (
 from app.schemas import CallDirection, CallProvider, LeadCallStatus
 from app.schemas.breeze_buddy.core import LeadCallTracker
 
+# The v2 hooks import the dispatch package, which imports ``managers.calls``, which
+# imports this module -- so they are imported lazily inside these tiny wrappers
+# (tests patch the wrappers), never at module scope.
 
-async def admit_inbound_call(telephony_number_id: str) -> bool:
+
+async def _v2_admit(telephony_number_id: str, call_id: Optional[str]) -> Optional[bool]:
+    """None = today's gate decides (the number is not v2-accounted, or is still
+    ``v2_pending``: its busy list is seeded only at the end of that phase, so today's
+    accounting stays the truth until then); else the busy-list verdict.
+
+    Refuses (False) whenever v2 may own the number but cannot admit: unreadable mode,
+    missing call id, Redis error or any exception.
+    """
+    try:
+        from app.ai.voice.agents.breeze_buddy.dispatch.v2 import latch, routes, scripts
+
+        if not await latch.v2_seen():
+            return None
+        mode = await routes.number_mode_or_none(telephony_number_id)
+        if mode is None:  # cannot tell who owns the number: refuse like a full number
+            return False
+        if mode == "v2_pending" or mode not in routes.V2_ACCOUNTED_MODES:
+            return None
+        if not call_id:
+            return False
+        # None (Redis error) refuses, like a full number
+        return bool(await scripts.admit_inbound(telephony_number_id, call_id))
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"v2 inbound admit failed on {telephony_number_id}: {e}")
+        return False
+
+
+async def _v2_release(lead: LeadCallTracker) -> Optional[bool]:
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.release import release_lead_line
+
+    return await release_lead_line(lead)
+
+
+async def admit_inbound_call(
+    telephony_number_id: str, call_id: Optional[str] = None
+) -> bool:
     """Take one channel for an inbound call on a gated number (Plivo, Vobiz).
 
     Same gate outbound uses in ``_acquire_number``: the atomic
@@ -54,7 +95,14 @@ async def admit_inbound_call(telephony_number_id: str) -> bool:
     ``reconcile_stuck_processing_leads`` sweeps it. Closing that properly needs
     a uniqueness guarantee on inbound ``call_id`` (the column has a plain,
     non-unique index today), which is a bigger change than this gate.
+
+    On a v2-accounted number (and only once v2 has been seen) the busy list is the
+    gate instead: ``scripts.admit_inbound`` is idempotent per ``call_id`` and capped
+    by the number's max, and no DB counter is touched.
     """
+    verdict = await _v2_admit(str(telephony_number_id), call_id)
+    if verdict is not None:
+        return verdict
     return await increment_telephony_number_channels(telephony_number_id) is not None
 
 
@@ -102,6 +150,10 @@ async def release_inbound_channel(lead: LeadCallTracker) -> bool:
     if not lead.telephony_number_id:
         logger.info(f"No telephony number id for inbound lead: {lead.id}")
         return False
+
+    v2 = await _v2_release(lead)  # busy list on v2-accounted numbers (holder call:<id>)
+    if v2 is not None:
+        return v2
 
     telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
     if not telephony_number:

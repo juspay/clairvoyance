@@ -311,6 +311,15 @@ class FakeRedisService:
         raise NotImplementedError(f"FakeRedisService.run_script: {script}")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_dial_memo(monkeypatch):
+    """Every test starts with an empty v2 dial memo: one test's template, config or
+    number must not answer for the next test's dial."""
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.memo import TTLMemo
+
+    monkeypatch.setattr(worker_mod, "_DIAL_MEMO", TTLMemo(ttl_s=10))
+
+
 @pytest.fixture
 def fake_redis(monkeypatch) -> FakeRedisService:
     """
@@ -410,6 +419,10 @@ class CallRecorder:
         # Twilio number, it has none unless a test makes it a Plivo provider.
         self.accounts: List[Any] = []
         self.takes_accounts = False
+        # v2 dials (report_throttle=True), one entry per request, and the answers to
+        # give them in order; "place" (or none left) = answer as make_call always does.
+        self.dials: List[Dict[str, Any]] = []
+        self.dial_replies: List[Any] = []
 
     async def use_template_credentials(
         self, accounts: Any, configurations: Any
@@ -420,6 +433,12 @@ class CallRecorder:
         return True
 
     def make_call(self, to: str, from_number: str, **kwargs: Any) -> Dict[str, Any]:
+        if kwargs.pop("report_throttle", False):
+            self.dials.append({"to": to, "from": from_number, **kwargs})
+            if self.dial_replies:
+                reply = self.dial_replies.pop(0)
+                if reply != "place":
+                    return reply
         if self._raise_exc is not None:
             raise self._raise_exc
         self.calls.append({"to": to, "from": from_number, **kwargs})
@@ -485,6 +504,7 @@ class DispatchHarness:
         self.cas_succeeds: bool = True
         # What a lost CAS means for the row (e.g. FINISHED = merchant abort).
         self.cas_lost_status: Optional[LeadCallStatus] = None
+        self.within_hours: bool = True
         # The pre-dial write of a Plivo dial (hold_unknown_dial) finds the row BACKLOG.
         self.premark_succeeds: bool = True
         self.get_available_returns_none: bool = False
@@ -686,7 +706,7 @@ class DispatchHarness:
         return self.config
 
     def _is_within_calling_hours(self, config: CallExecutionConfig) -> bool:
-        return True
+        return self.within_hours
 
     async def _run_pre_checks_for_lead(
         self, *args, **kwargs

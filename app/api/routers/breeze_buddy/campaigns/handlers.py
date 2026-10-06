@@ -223,7 +223,7 @@ async def stop_campaign_handler(
             )
             if result:
                 aborted += 1
-                await cancel_scheduled_lead(lead_id)
+                await cancel_scheduled_lead(lead_id, template_id=result.template_id)
         except Exception as e:
             logger.error(
                 f"Failed to abort lead {lead_id} for campaign {campaign_id}: {e}"
