@@ -236,6 +236,14 @@ class DeepgramSTTConfig(BaseModel):
         return self
 
 
+# Upper bound on Sarvam's silence window, in audio frames (~32 ms each, so
+# ~2 s): beyond it the caller waits longer than any turn timeout we run.
+SARVAM_NEGATIVE_FRAMES_MAX = 64
+# Lower bound on the silent-frame count (~128 ms): shorter ends a segment at
+# every breath, the way high_vad_sensitivity's 2/2 cuts sentences in half.
+SARVAM_NEGATIVE_FRAMES_MIN_COUNT = 4
+
+
 class SarvamSTTConfig(BaseModel):
     """Sarvam-specific STT settings."""
 
@@ -248,6 +256,63 @@ class SarvamSTTConfig(BaseModel):
         "models that accept one (saaras:v3, saarika); unset = auto-detect. "
         "Defaults from dynamic config.",
     )
+    negative_frames_count: Optional[int] = Field(
+        None,
+        ge=SARVAM_NEGATIVE_FRAMES_MIN_COUNT,
+        le=SARVAM_NEGATIVE_FRAMES_MAX,
+        description="Sarvam's silence window, with negative_frames_window "
+        "(set both or neither; saaras:v3 only): Sarvam's VAD ends a speech "
+        "segment when this many of the last negative_frames_window audio "
+        "frames are silent, e.g. 12 of 16 ≈ 384 ms. Measured on 94 real "
+        "sentences, 12/16 brought the final ~217 ms sooner (p50 615 ms vs "
+        "832 ms) but split more sentences at pauses (22% vs 14%). Do not "
+        "shorten it with the dynamic-config key "
+        "BB_SARVAM_STT_HIGH_VAD_SENSITIVITY: its 2/2 frames ≈ 64 ms cuts "
+        "sentences in half. Unset = Sarvam's own default (nothing is sent).",
+    )
+    negative_frames_window: Optional[int] = Field(
+        None,
+        ge=SARVAM_NEGATIVE_FRAMES_MIN_COUNT,
+        le=SARVAM_NEGATIVE_FRAMES_MAX,
+        description="The window, in audio frames, that negative_frames_count "
+        "counts silent frames over; >= negative_frames_count (itself at "
+        f"least {SARVAM_NEGATIVE_FRAMES_MIN_COUNT}), at most "
+        f"{SARVAM_NEGATIVE_FRAMES_MAX}. Set both or neither; saaras:v3 only. "
+        "Unset = Sarvam's own default.",
+    )
+
+    @model_validator(mode="after")
+    def _check_silence_window(self) -> "SarvamSTTConfig":
+        """Refuse a silence window Sarvam would ignore or reject.
+
+        Only a model the template names is checked here; one that resolves
+        from the dynamic-config default is checked when the service is built.
+        """
+        count, window = self.negative_frames_count, self.negative_frames_window
+        if count is None and window is None:
+            return self
+        if count is None or window is None:
+            raise ValueError(
+                "sarvam: set negative_frames_count and negative_frames_window "
+                "together, or neither"
+            )
+        if count > window:
+            raise ValueError(
+                f"sarvam: negative_frames_count ({count}) must not exceed "
+                f"negative_frames_window ({window})"
+            )
+        if self.model:  # blank resolves to the default, checked at build
+            # Local import: the schema module stays free of pipecat at load time.
+            from pipecat.services.sarvam.stt import MODEL_CONFIGS
+
+            capabilities = MODEL_CONFIGS.get(self.model)
+            if capabilities is None or not capabilities.supports_vad_params:
+                raise ValueError(
+                    f"sarvam: model {self.model!r} does not take "
+                    "negative_frames_count / negative_frames_window "
+                    "(saaras:v3 only)"
+                )
+        return self
 
 
 class SmallestSTTConfig(BaseModel):
@@ -686,6 +751,21 @@ class STTConfiguration(BaseModel):
                 "deepgram Flux ends turns itself and ignores SmartTurn: use "
                 "turn_detection='stt_native' (tune eot_threshold / "
                 "eot_timeout_ms) or 'timeout'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_a_sarvam_window_elsewhere(self) -> "STTConfiguration":
+        """A Sarvam silence window under another provider would be saved
+        and silently do nothing."""
+        if (
+            self.provider != STTProvider.SARVAM
+            and self.sarvam is not None
+            and self.sarvam.negative_frames_count is not None
+        ):
+            raise ValueError(
+                f"sarvam.negative_frames_count / negative_frames_window apply "
+                f"only to provider='sarvam', not {self.provider.value!r}"
             )
         return self
 
