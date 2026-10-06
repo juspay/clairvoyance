@@ -49,6 +49,9 @@ from app.ai.voice.agents.breeze_buddy.ivr.selection import (
     prepare_goodbye_audio,
     prepare_ivr_menu_audio,
 )
+from app.ai.voice.agents.breeze_buddy.managers.calls import (
+    claim_unknown_dial_from_webhook,
+)
 from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import admit_inbound_call
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     safe_allocate_pod,
@@ -925,6 +928,12 @@ async def _handle_provider_answer(request: Request, provider: str) -> Response:
     if not call_id:
         logger.error(f"[{tag}] Missing call ID")
         return _error_response(provider, "Missing call identifier", 400)
+
+    # A dial whose reply timed out is held with no call_id; link this call to
+    # it first. Otherwise the lookup below misses, the call is taken for an
+    # inbound one, and the customer who answered hears "not configured".
+    if provider == "plivo":
+        await claim_unknown_dial_from_webhook(str(call_id), request.query_params)
 
     # Resolve templates
     with timed_phase("resolve_call_templates"):

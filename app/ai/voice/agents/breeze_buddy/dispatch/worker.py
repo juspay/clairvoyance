@@ -74,6 +74,11 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     record_outbound_call_attempt,
     unrecord_call_limit,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    DIAL_OUTCOME_UNKNOWN,
+    UNKNOWN_DIAL_META_KEY,
+    dial_ref_time,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.utils.common import _gemini_realtime_config
@@ -97,12 +102,15 @@ from app.database.accessor import (
     defer_lead_next_attempt_and_release_lock,
     get_lead_by_id,
     get_template_by_id,
+    hold_unknown_dial,
     is_number_blacklisted,
     release_lock_on_lead_by_id,
+    revert_dial_to_backlog,
+    stamp_dialled_call,
     update_lead_call_completion_details,
     update_lead_call_details,
 )
-from app.schemas import ExecutionMode, LeadCallStatus, TelephonyNumber
+from app.schemas import CallProvider, ExecutionMode, LeadCallStatus, TelephonyNumber
 from app.services.redis import get_redis_service
 
 # ---------------------------------------------------------------------------
@@ -212,8 +220,13 @@ CALL_LIMIT_UNAVAILABLE_DEFER_S = 30
 
 # Worker._phase values — see Worker.stop().
 _IDLE = "idle"
-_PRE_DIAL = "pre_dial"
+_PRE_DIAL = "pre_dial"  # checks before the channel is taken: nothing held
+_HOLDING = "holding"  # channel token / DB channel taken (short steps, never cancelled)
+_PREWARM = "prewarm"  # greeting pre-warm: gives its channel back if cancelled
 _COMMITTED = "committed"
+# stop() cancels a dispatch in these phases (it holds nothing a cancel would leak)
+# and waits for the others.
+_CANCELLABLE = frozenset({_IDLE, _PRE_DIAL, _PREWARM})
 
 
 class Worker:
@@ -262,7 +275,7 @@ class Worker:
         if task is not None:
             deadline = asyncio.get_running_loop().time() + BB_WORKER_SHUTDOWN_DRAIN_S
             while not task.done():
-                if self._phase != _COMMITTED:
+                if self._phase in _CANCELLABLE:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
                     break
@@ -294,7 +307,7 @@ class Worker:
         key = worker_heartbeat_key(self._uuid)
         # Keep beating while a committed dial drains after stop(): a silent
         # heartbeat would let the reaper requeue the lead that is mid-dial.
-        while not self._stopping.is_set() or self._phase == _COMMITTED:
+        while not self._stopping.is_set() or self._phase not in _CANCELLABLE:
             try:
                 redis = await get_redis_service()
                 await redis.setex(key, "1", ttl_seconds=BB_WORKER_HEARTBEAT_TTL_S)
@@ -359,10 +372,20 @@ class Worker:
         # _PRE_DIAL may cancel, one that sees _IDLE found nothing in flight.
         self._phase = _PRE_DIAL
         self._lead_in_flight = lead_id
-        # Track in-flight for crash recovery.
-        await self._rpush_processing(lead_id)
         try:
+            # Track in-flight for crash recovery. Inside the try: a stop() that
+            # cancels during this RPUSH (the phase is already cancellable) must
+            # still put the popped lead back on the schedule below.
+            await self._rpush_processing(lead_id)
             await self._dispatch(lead_id, session)
+        except asyncio.CancelledError:
+            # stop() cancelled a dispatch that held nothing (see _CANCELLABLE; the
+            # pre-warm gives its channel back itself). The lead was popped off the
+            # ready list and its lock is released, so put it back on the schedule:
+            # nothing else would soon (the backlog reconciler sees only the oldest
+            # due rows, so under a pile it could wait for hours).
+            await schedule_lead(lead_id, datetime.now(timezone.utc))
+            raise
         finally:
             await self._lrem_processing(lead_id)
             self._phase = _IDLE
@@ -637,6 +660,10 @@ class Worker:
                 )
                 return
 
+            # From here a channel is (being) taken: stop() waits instead of
+            # cancelling, so a cancel can never land between taking it and the
+            # explicit give-back paths below.
+            self._phase = _HOLDING
             # Channel token gate (Redis). Held until call-end webhook releases.
             token = await acquire_channel_token(number.id)
             if token is None:
@@ -723,6 +750,7 @@ class Worker:
             # generator never blocks the dial; the answer-time path
             # retries synthesis as a cache miss.
             if template:
+                self._phase = _PREWARM  # long (up to ~60 s) and cancel-safe
                 try:
                     await _prewarm_initial_greeting_with_retry(
                         lead_id=locked.id,
@@ -742,6 +770,7 @@ class Worker:
                     )
                     await _return_capacity(number, token)
                     raise
+                self._phase = _HOLDING
 
             # Commit point for shutdown: from here a dial may reach the wire,
             # so Worker.stop() drains this dispatch instead of cancelling it.
@@ -780,6 +809,38 @@ class Worker:
                     return
                 call_limit_member = verdict.member
 
+            # The provider echoes these back on the call's webhooks — the only
+            # link to this lead if its reply (with the call id) never arrives.
+            # dial_at is also the call_initiated_time an unknown dial is held
+            # under, so a webhook matches this exact dial and no other.
+            dialled_at = datetime.now(timezone.utc)
+            dial_ref = {"lead_id": str(locked.id), "dial_at": dial_ref_time(dialled_at)}
+            unknown_marker = {
+                UNKNOWN_DIAL_META_KEY: {
+                    "dial_at": dial_ref["dial_at"],
+                    "call_limit_member": call_limit_member,
+                }
+            }
+
+            # Plivo: write the dial's row BEFORE the request (PROCESSING, no call
+            # id, call_initiated_time = dial_at, the unknown-dial marker), so a
+            # webhook that beats Plivo's reply (an answer or hangup inside our
+            # read timeout, or after a slow reply) claims this lead by its
+            # dial_ref instead of matching nothing. The reply then only stamps
+            # the call id; a lost reply needs nothing more (the row is the hold).
+            premarked = number.provider == CallProvider.PLIVO
+            if premarked and not await hold_unknown_dial(
+                locked.id, dialled_at, number.id, unknown_marker
+            ):
+                # The row left BACKLOG before we dialled (the merchant finished
+                # it): nothing rang.
+                await self._unrecord_call_limit(
+                    locked, customer_mobile, call_limit_member
+                )
+                await _return_capacity(number, token)
+                lock_released = await self._release(locked.id)
+                return
+
             try:
                 call = await call_provider.make_call_async(
                     customer_mobile,
@@ -788,6 +849,7 @@ class Worker:
                     # answer-url observability tag only (never parsed back);
                     # id-only convention — no template names in routing.
                     template_name=locked.template_id or "",
+                    dial_ref=dial_ref,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.error(
@@ -798,10 +860,46 @@ class Worker:
                 await self._unrecord_call_limit(
                     locked, customer_mobile, call_limit_member
                 )
-                await _return_capacity(number, token)
                 # Backoff retry. Use defer_seconds derived from attempt_count.
                 backoff = min(60, 5 * (locked.attempt_count + 1))
-                lock_released = await self._defer_and_release(locked.id, backoff)
+                lock_released = await self._not_placed(
+                    locked, number, token, dialled_at, backoff, premarked
+                )
+                return
+
+            if call and call.get("status") == DIAL_OUTCOME_UNKNOWN:
+                # Sent, but no reply: the provider may have placed the call,
+                # so this is neither a failure nor a dial to repeat. Hold the
+                # lead exactly as a placed call — PROCESSING, lock + channel
+                # + call-limit record kept — just without a call_id. The
+                # provider's webhook fills it in (claim_unknown_dial) and the
+                # call runs its normal course; if no webhook ever comes, the
+                # provider never placed it, and the stuck-PROCESSING sweep puts
+                # this same lead back to be dialled (requeue_unclaimed_unknown_dial)
+                # after releasing the channel once and taking back the
+                # call-limit entry recorded here.
+                # A Plivo dial's row was written before the request: it already
+                # is the hold.
+                held = premarked or await hold_unknown_dial(
+                    locked.id, dialled_at, number.id, unknown_marker
+                )
+                if not held:
+                    # Same as the CAS loss below: the row moved on under us.
+                    logger.error(
+                        f"Worker {self._uuid}: dial outcome unknown and CAS "
+                        f"lost for lead {locked.id}. Releasing resources; the "
+                        "call may be orphaned."
+                    )
+                    await _return_capacity(number, token)
+                    lock_released = await self._release(locked.id)
+                    return
+                lock_released = True
+                logger.warning(
+                    f"Worker {self._uuid}: dial outcome unknown for lead "
+                    f"{locked.id} via {number.provider.value} number "
+                    f"{number.id}; held PROCESSING until the provider's "
+                    "webhook claims it or the stuck sweep closes it"
+                )
                 return
 
             if not call or not call.get("sid"):
@@ -817,8 +915,9 @@ class Worker:
                     await self._unrecord_call_limit(
                         locked, customer_mobile, call_limit_member
                     )
-                await _return_capacity(number, token)
-                lock_released = await self._defer_and_release(locked.id, 10)
+                lock_released = await self._not_placed(
+                    locked, number, token, dialled_at, 10, premarked
+                )
                 return
 
             call_sid = str(call.get("sid"))
@@ -845,14 +944,27 @@ class Worker:
                     name=f"crm-call-attempted-{call_sid}",
                 )
 
-            call_initiated_time = datetime.now(timezone.utc)
-            updated = await update_lead_call_details(
-                locked.id,
-                LeadCallStatus.PROCESSING,
-                call_sid,
-                call_initiated_time,
-                number.id,
-            )
+            if premarked:
+                call_initiated_time = dialled_at
+                updated = await stamp_dialled_call(
+                    locked.id, dialled_at, call_sid, UNKNOWN_DIAL_META_KEY
+                )
+                if not updated:
+                    current = await get_lead_by_id(str(locked.id))
+                    if current is not None and str(current.call_id) == call_sid:
+                        # Its webhooks claimed it and the call already ended:
+                        # the end webhook released the line and the lock.
+                        lock_released = True
+                        return
+            else:
+                call_initiated_time = datetime.now(timezone.utc)
+                updated = await update_lead_call_details(
+                    locked.id,
+                    LeadCallStatus.PROCESSING,
+                    call_sid,
+                    call_initiated_time,
+                    number.id,
+                )
             if not updated:
                 # CAS lost. Two very different causes:
                 #  (a) the lead really left BACKLOG (the merchant aborted it
@@ -952,6 +1064,48 @@ class Worker:
             except Exception as alert_exc:  # noqa: BLE001 — never blocks
                 logger.warning(f"call-limit unavailable alert failed: {alert_exc}")
         return await self._defer_and_release(lead_id, CALL_LIMIT_UNAVAILABLE_DEFER_S)
+
+    async def _not_placed(
+        self,
+        locked: Any,
+        number: Any,
+        token: Any,
+        dialled_at: datetime,
+        defer_s: int,
+        premarked: bool,
+    ) -> bool:
+        """The provider placed no call: give the line back and defer the lead.
+
+        A dial row written before the request goes back to BACKLOG (deferred,
+        unlocked) in one statement, unless a webhook claimed it meanwhile: then
+        a call exists after all and keeps its line and lock. Returns whether
+        the lock is released (or now owned by someone else).
+        """
+        if not premarked:
+            await _return_capacity(number, token)
+            return await self._defer_and_release(locked.id, defer_s)
+        if await revert_dial_to_backlog(
+            locked.id, dialled_at, defer_s, UNKNOWN_DIAL_META_KEY
+        ):
+            await _return_capacity(number, token)
+            # The revert unlocked and deferred the row; put it back on the
+            # schedule like _defer_and_release does (the backlog reconciler only
+            # sees the oldest due rows).
+            await schedule_lead(
+                locked.id, datetime.now(timezone.utc) + timedelta(seconds=defer_s)
+            )
+            return True
+        current = await get_lead_by_id(str(locked.id))
+        if current is not None and current.call_id:
+            logger.error(
+                f"Worker {self._uuid}: provider said not placed for lead "
+                f"{locked.id}, but a webhook claimed call {current.call_id}: "
+                "keeping its line"
+            )
+            return True
+        # The row moved on without a call (the merchant finished it mid-dial).
+        await _return_capacity(number, token)
+        return await self._release(locked.id)
 
     async def _defer_and_release(self, lead_id: str, defer_seconds: int) -> bool:
         """Defer next_attempt_at in DB, ZADD onto the schedule, release lock.

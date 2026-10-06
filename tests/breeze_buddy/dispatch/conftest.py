@@ -486,6 +486,8 @@ class DispatchHarness:
         self.cas_succeeds: bool = True
         # What a lost CAS means for the row (e.g. FINISHED = merchant abort).
         self.cas_lost_status: Optional[LeadCallStatus] = None
+        # The pre-dial write of a Plivo dial (hold_unknown_dial) finds the row BACKLOG.
+        self.premark_succeeds: bool = True
         self.get_available_returns_none: bool = False
         # Postgres ``channels + 1 WHERE channels < maximum_channels``. False
         # simulates the number being full in the DB while Redis still handed
@@ -563,6 +565,74 @@ class DispatchHarness:
         lead.call_initiated_time = call_initiated_time
         lead.telephony_number_id = telephony_number_id
         return lead
+
+    async def hold_unknown_dial(
+        self,
+        lead_id: str,
+        dialled_at: datetime,
+        telephony_number_id: str,
+        marker: Dict[str, Any],
+    ) -> Optional[LeadCallTracker]:
+        # Mirrors hold_unknown_dial_query: BACKLOG -> PROCESSING, no call id.
+        lead = self.leads.get(lead_id)
+        if (
+            not self.premark_succeeds
+            or not lead
+            or lead.status != LeadCallStatus.BACKLOG
+        ):
+            return None
+        lead.status = LeadCallStatus.PROCESSING
+        lead.call_id = None
+        lead.call_initiated_time = dialled_at
+        lead.telephony_number_id = telephony_number_id
+        lead.metaData = {**(lead.metaData or {}), **marker}
+        return lead
+
+    async def stamp_dialled_call(
+        self, lead_id: str, dialled_at: datetime, call_id: str, marker_key: str
+    ) -> Optional[LeadCallTracker]:
+        # Mirrors stamp_dialled_call_query; cas_succeeds / cas_lost_status model
+        # the row moving on during the dial (e.g. the merchant finished it).
+        if not self.cas_succeeds:
+            if self.cas_lost_status is not None and lead_id in self.leads:
+                self.leads[lead_id].status = self.cas_lost_status
+            return None
+        lead = self.leads.get(lead_id)
+        if (
+            not lead
+            or lead.status != LeadCallStatus.PROCESSING
+            or lead.call_initiated_time != dialled_at
+            or lead.call_id not in (None, call_id)
+        ):
+            return None
+        lead.call_id = call_id
+        lead.metaData = {
+            k: v for k, v in (lead.metaData or {}).items() if k != marker_key
+        }
+        return lead
+
+    async def revert_dial_to_backlog(
+        self, lead_id: str, dialled_at: datetime, defer_seconds: int, marker_key: str
+    ) -> bool:
+        # Mirrors revert_dial_to_backlog_query: only an unclaimed dial row.
+        lead = self.leads.get(lead_id)
+        if (
+            not lead
+            or lead.status != LeadCallStatus.PROCESSING
+            or lead.call_id
+            or lead.call_initiated_time != dialled_at
+        ):
+            return False
+        lead.status = LeadCallStatus.BACKLOG
+        lead.next_attempt_at = datetime.now(timezone.utc) + timedelta(
+            seconds=defer_seconds
+        )
+        lead.metaData = {
+            k: v for k, v in (lead.metaData or {}).items() if k != marker_key
+        }
+        self.locked_lead_ids.discard(lead_id)
+        self.deferred.append((lead_id, defer_seconds))
+        return True
 
     async def attach_placed_call_to_lead(
         self,
@@ -728,6 +798,9 @@ def harness(monkeypatch, fake_redis) -> DispatchHarness:
     monkeypatch.setattr(
         worker_mod, "attach_placed_call_to_lead", h.attach_placed_call_to_lead
     )
+    monkeypatch.setattr(worker_mod, "hold_unknown_dial", h.hold_unknown_dial)
+    monkeypatch.setattr(worker_mod, "stamp_dialled_call", h.stamp_dialled_call)
+    monkeypatch.setattr(worker_mod, "revert_dial_to_backlog", h.revert_dial_to_backlog)
     monkeypatch.setattr(
         worker_mod,
         "update_lead_call_completion_details",

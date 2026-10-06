@@ -63,6 +63,7 @@ class ExotelProvider(VoiceCallProvider):
         telephony_number: str,
         reseller_id: Optional[str] = None,
         template_name: Optional[str] = None,
+        dial_ref: Optional[Dict[str, str]] = None,  # unused: Plivo-only (base_provider)
     ) -> Optional[Dict[str, Any]]:
         """
         Initiate an outbound call via Exotel.

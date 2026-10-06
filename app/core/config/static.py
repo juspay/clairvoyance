@@ -504,6 +504,13 @@ BB_INBOUND_STUCK_LEAD_MINUTES = int(
     os.environ.get("BB_INBOUND_STUCK_LEAD_MINUTES", 240)
 )
 
+# Minutes an UNCLAIMED unknown-outcome dial (Plivo read timeout, no webhook yet)
+# is held before the sweep re-dials it. Covers Plivo's late callbacks: no-answer
+# p99 72 s, busy p99 184 s (2 Oct). Capped at 10 (the stuck-lead rule), at least 1.
+BB_UNKNOWN_DIAL_HOLD_MINUTES = max(
+    1, min(10, int(os.environ.get("BB_UNKNOWN_DIAL_HOLD_MINUTES", 5)))
+)
+
 # Stuck-call sweep: provider live-call lookups per run, and each one's timeout
 BB_STUCK_SWEEP_MAX_LOOKUPS = int(os.environ.get("BB_STUCK_SWEEP_MAX_LOOKUPS", 50))
 BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S = float(
