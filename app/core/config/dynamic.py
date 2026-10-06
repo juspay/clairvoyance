@@ -3,7 +3,7 @@ import time
 from typing import Optional, Tuple
 
 from app.core.logger import logger
-from app.services.live_config.store import get_config
+from app.services.live_config.store import get_config, get_config_strict
 
 # -----------------------
 # Dynamic runtime configs
@@ -206,6 +206,21 @@ async def BB_RECONCILE_BACKLOG_LIMIT() -> int:
     Crank up to drain a Redis-loss event faster; lower if the DB is under
     pressure and the scan is expensive."""
     return await get_config("BB_RECONCILE_BACKLOG_LIMIT", 1000, int)
+
+
+async def BB_DISPATCH_V2_ENABLED(strict: bool = False) -> bool:
+    """Master switch for the v2 event dialler. Off = today's dialler only.
+    ``strict``: a failed Redis read raises instead of reading as "off" (the switch)."""
+    read = get_config_strict if strict else get_config
+    return await read("BB_DISPATCH_V2_ENABLED", False, bool)
+
+
+async def BB_DISPATCH_V2_NUMBERS(strict: bool = False) -> list[str]:
+    """Comma-separated telephony_number ids served by v2. Others stay on today's path.
+    ``strict``: a failed Redis read raises instead of reading as "none" (the switch)."""
+    read = get_config_strict if strict else get_config
+    raw = await read("BB_DISPATCH_V2_NUMBERS", "", str)
+    return [x.strip() for x in raw.split(",") if x.strip()]
 
 
 async def BB_ANALYSIS_CONSUMER_COUNT() -> int:

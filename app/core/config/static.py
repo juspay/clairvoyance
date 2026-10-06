@@ -495,6 +495,14 @@ BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_
 
 # Channel semaphore
 BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10))
+
+# v2 event dialler (dispatch/v2/; off unless BB_DISPATCH_V2_ENABLED)
+# The v2 dialler's own Redis client (dispatch/v2/redis_client.py): no library retries, so
+# a reply that does not come within the socket timeout is "not done" (every v2 script is
+# idempotent by ticket id + owner). Well above the acceptor's 1 s BLPOP and an event-loop
+# stall under load; a pool wait for a free connection is bounded the same way.
+BB_V2_REDIS_SOCKET_TIMEOUT_S = float(os.environ.get("BB_V2_REDIS_SOCKET_TIMEOUT_S", 10))
+BB_V2_REDIS_MAX_CONNECTIONS = int(os.environ.get("BB_V2_REDIS_MAX_CONNECTIONS", 200))
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the
