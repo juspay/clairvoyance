@@ -20,9 +20,11 @@ in-flight pick visible to the reaper.
 from __future__ import annotations
 
 import asyncio
+import functools
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, cast
 
 import aiohttp
 
@@ -48,8 +50,12 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
     is_dispatchable,
+    requeue_in_room,
     schedule_lead,
+    v2_owns_number,
 )
+from app.ai.voice.agents.breeze_buddy.dispatch.v2 import scripts as v2_scripts
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.memo import TTLMemo
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
     NumberAcquire,
     _acquire_number,
@@ -83,6 +89,9 @@ from app.ai.voice.agents.breeze_buddy.utils.playground import (
 from app.core.concurrency import spawn_background_task
 from app.core.config import dynamic as dyn_cfg
 from app.core.config.static import (
+    BB_V2_DIAL_MEMO_TTL_S,
+    BB_V2_PREWARM_WAIT_S,
+    BB_V2_TTS_CONCURRENCY,
     BB_WORKER_BLPOP_TIMEOUT_S,
     BB_WORKER_COUNT,
     BB_WORKER_HEARTBEAT_REFRESH_S,
@@ -102,6 +111,73 @@ from app.database.accessor import (
 )
 from app.schemas import ExecutionMode, LeadCallStatus, TelephonyNumber
 from app.services.redis import get_redis_service
+
+# A held-line lead whose lock a stale ticket's task still holds is retried this far out.
+V2_LOCK_RETRY_S = 30
+# A lead picked this much before its row's next_attempt_at is re-scheduled, not dialled
+# (stale queue copies); small jitter in schedules stays well inside it.
+EARLY_PICK_TOLERANCE_S = 5
+# A lead on a v2 number that can't go back to its room (mode unreadable, no route) is
+# deferred this far, so it is never bounced in a loop.
+V2_REDIRECT_RETRY_S = 30
+
+
+@dataclass
+class ClaimedTicket:
+    """The v2 ticket an acceptor coroutine claimed for a lead, i.e. a line it holds: its
+    number, its ticket id, the owner id the ticket was claimed under (mark_dialling and
+    the give-back act only on a lease that owner holds), and its acceptor's stop signal.
+    """
+
+    number_id: str
+    tk: int  # the ticket id, as on ``scripts.Ticket``
+    owner: str
+    stopping: asyncio.Event
+
+
+class _DispatchLine:
+    """The v2 line a dispatch holds (its ticket's lease), so every give-back is one call."""
+
+    def __init__(self, ticket: ClaimedTicket, lead_id: str):
+        self._ticket = ticket
+        self._lead_id = lead_id
+        self._given = False
+        # the provider call is (about to be) placed; the line now belongs to it.
+        self.dialling = False
+        # the give-back found the lease no longer this ticket's (reaped or
+        # re-issued): the lead's lock and schedule belong to its new holder.
+        self.not_ours = False
+
+    async def give_back(self, not_placed: bool = False) -> None:
+        """``not_placed``: the provider said no call was placed (after the dial was
+        marked, any other give-back is refused and the line stays held)."""
+        if self._given or (self.dialling and not not_placed):
+            return
+        # Conditional on our ticket id: a no-op if the lease was reaped or re-issued.
+        # None = Redis failed: retry once, and only then count it as given back
+        # (a later plain give-back is refused once the dial is marked).
+        for _ in range(2):
+            result = await v2_scripts.return_line(
+                self._ticket.number_id,
+                self._lead_id,
+                self._ticket.tk,
+                self._ticket.owner,
+                not_placed=not_placed,
+            )
+            if result is not None:
+                self._given = True
+                self.not_ours = result == v2_scripts.GiveBack.NOT_OURS
+                return
+
+
+async def _invalidate_route(template_id: Optional[str]) -> None:
+    if not template_id:
+        return
+    # lazy: routes -> managers.calls -> dispatch (import cycle)
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.routes import invalidate_route
+
+    await invalidate_route(template_id)
+
 
 # ---------------------------------------------------------------------------
 # Greeting pre-warm
@@ -198,6 +274,70 @@ async def _prewarm_initial_greeting_with_retry(
             await asyncio.sleep(_GREETING_PREWARM_RETRY_PAUSE_S)
 
 
+# v2 (spec 2026-10-05 §4.7, decision D10): greeting syntheses at once per pod. Without
+# the dial-task pool a burst could start one per ticket; past the limit a prewarm waits
+# its timeout, then is skipped (fail-open: the answer path synthesises on a cache miss).
+_TTS_SLOTS = asyncio.Semaphore(BB_V2_TTS_CONCURRENCY)
+
+# v2 (spec 2026-10-05 §4.10): a held dial's template, call config and number, kept
+# BB_V2_DIAL_MEMO_TTL_S per pod. Today's path reads them per dial, as before.
+_DIAL_MEMO = TTLMemo(ttl_s=BB_V2_DIAL_MEMO_TTL_S)
+
+
+_R = TypeVar("_R")
+
+
+async def _dial_read(
+    memo_tid: Optional[str], key: Tuple[Any, ...], load: Callable[[], Awaitable[_R]]
+) -> _R:
+    """One of ``_dispatch_lead``'s per-template reads: through the pod's memo under
+    ``key`` on a held v2 line (``memo_tid`` set), else read now (today's path)."""
+    if memo_tid:
+        return await _DIAL_MEMO.get(key, load)
+    return await load()
+
+
+async def _template_by_id(template_id: Optional[str]) -> Any:
+    return await get_template_by_id(template_id) if template_id else None
+
+
+def _forget_dial_memo(lead: Any) -> None:
+    """Drop a template's memo entries (the keys ``_dispatch_lead`` reads them under)."""
+    _DIAL_MEMO.forget(("cfg", lead.template_id, lead.template))
+    _DIAL_MEMO.forget(("tpl", lead.template_id))
+    _DIAL_MEMO.forget(("num", lead.template_id))
+
+
+async def _prewarm_in_slot(
+    lead_id: str, payload: Dict[str, Any], template: Any
+) -> None:
+    try:
+        await asyncio.wait_for(
+            _TTS_SLOTS.acquire(), timeout=_GREETING_PREWARM_TIMEOUT_S
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Greeting prewarm skipped for lead {lead_id}: TTS slots busy")
+        return
+    try:
+        await _prewarm_initial_greeting_with_retry(
+            lead_id=lead_id, payload=payload, template=template
+        )
+    finally:
+        _TTS_SLOTS.release()
+
+
+async def _prewarm_beside_the_dial(
+    lead_id: str, payload: Dict[str, Any], template: Any
+) -> None:
+    """v2 (spec §4.7, decision D2): the prewarm starts where today's does (after every
+    gate, so TTS spend stays proportional to dials), but the dial waits for it at most
+    BB_V2_PREWARM_WAIT_S; it goes on through the dial and the ring."""
+    task = spawn_background_task(
+        _prewarm_in_slot(lead_id, payload, template), name=f"bb-prewarm-{lead_id}"
+    )
+    await asyncio.wait({task}, timeout=BB_V2_PREWARM_WAIT_S)
+
+
 # How long a lead waits when the merchant's call rule can't be evaluated
 # (Redis down, rule unreadable). Short: it is a transient, not a verdict.
 CALL_LIMIT_UNAVAILABLE_DEFER_S = 30
@@ -206,6 +346,41 @@ CALL_LIMIT_UNAVAILABLE_DEFER_S = 30
 # ---------------------------------------------------------------------------
 # Single dispatch worker
 # ---------------------------------------------------------------------------
+
+# Worker._phase values of a held-line dispatch — see Worker.v2_cancel_safe.
+_IDLE = "idle"
+_PRE_DIAL = "pre_dial"  # checks before the line is committed
+_HOLDING = "holding"  # short steps, never cancelled
+_PREWARM = "prewarm"  # greeting pre-warm: gives its line back if cancelled
+_COMMITTED = "committed"
+
+
+def _settle_held_line(dispatch: Callable[..., Awaitable[bool]]) -> Any:
+    """Wraps ``Worker._dispatch``. ``held`` is the v2 line an acceptor coroutine holds
+    for the lead (design card §4); without it the lead takes today's channel token +
+    DB channel. Any exit that did not place a call gives a held v2 line back, so no
+    path can leave one held (a no-op once the lease isn't this ticket's)."""
+
+    @functools.wraps(dispatch)
+    async def run(
+        self: "Worker",
+        lead_id: str,
+        session: Optional[aiohttp.ClientSession],
+        held: Optional[ClaimedTicket] = None,
+    ) -> bool:
+        self._v2_line = _DispatchLine(held, str(lead_id)) if held is not None else None
+        if held is not None:
+            self._phase = _PRE_DIAL
+        self._current_template_id = None
+        dialled = False
+        try:
+            dialled = await dispatch(self, lead_id, session, held)
+            return dialled
+        finally:
+            if not dialled:
+                await self._give_back_v2()
+
+    return run
 
 
 class Worker:
@@ -219,10 +394,24 @@ class Worker:
         self._task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._stopping = asyncio.Event()
+        # Where a held-line dispatch stands (see ``v2_cancel_safe``).
+        self._phase = _IDLE
+        # Template of the lead being dispatched (a worker handles one lead at a time).
+        self._current_template_id: Optional[str] = None
+        # The v2 line held by the lead being dispatched, if it came from the acceptor.
+        self._v2_line: Optional[_DispatchLine] = None
 
     @property
     def uuid(self) -> str:
         return self._uuid
+
+    @property
+    def v2_cancel_safe(self) -> bool:
+        """Whether a stopping acceptor may cancel this held-line dispatch: it is in its
+        checks or its greeting wait, which give the line back on a cancel. Not before
+        them (its claim, which a cancel could leave owned by nobody), nor from the
+        line's commit on."""
+        return self._phase in (_PRE_DIAL, _PREWARM)
 
     async def start(self) -> None:
         if self._task is not None:
@@ -356,9 +545,36 @@ class Worker:
 
     # -- dispatch -----------------------------------------------------------
 
-    async def _dispatch(
-        self, lead_id: str, session: Optional[aiohttp.ClientSession]
+    async def _give_back_v2(self) -> None:
+        """Give the held v2 line back. Before any ``schedule_lead`` of the current
+        lead: ``enqueue`` skips a lead that still holds a line (design card rule 17)."""
+        if self._v2_line is not None:
+            await self._v2_line.give_back()
+
+    async def _lead_is_ours(self) -> bool:
+        """True on today's path, or while this v2 dispatch's ticket still owns the lead.
+        The held line is given back first (a no-op once given, or while it is the
+        call's): a lease no longer this ticket's was reaped or re-issued, and the lead's
+        lock and schedule are its new holder's, so this dispatch must not unlock, defer,
+        finish or re-queue it."""
+        if self._v2_line is None:
+            return True
+        await self._v2_line.give_back()
+        return not self._v2_line.not_ours
+
+    async def _schedule_if_ours(
+        self, lead_id: str, when: datetime, **kwargs: Any
     ) -> None:
+        if await self._lead_is_ours():
+            await schedule_lead(lead_id, when, **kwargs)
+
+    @_settle_held_line
+    async def _dispatch(
+        self,
+        lead_id: str,
+        session: Optional[aiohttp.ClientSession],
+        held: Optional[ClaimedTicket] = None,
+    ) -> bool:
         """
         Run the full dispatch flow for one lead. All exit paths leave the
         lead row in a consistent state (lock released, status correct).
@@ -368,13 +584,13 @@ class Worker:
         lead = await get_lead_by_id(lead_id)
         if not lead:
             logger.warning(f"Worker {self._uuid}: lead {lead_id} not found in DB")
-            return
+            return False
         if lead.status != LeadCallStatus.BACKLOG:
             logger.info(
                 f"Worker {self._uuid}: lead {lead_id} status is "
                 f"{lead.status.value}, skipping"
             )
-            return
+            return False
         if not is_dispatchable(lead.execution_mode):
             # Defensive backstop. The ingest paths (handler, retry,
             # dispatch-now) and the reconciler query all filter non-
@@ -386,17 +602,19 @@ class Worker:
                 f"execution_mode={lead.execution_mode.value}; dropping without "
                 "dispatch (someone bypassed the schedule_lead gate)."
             )
-            return
+            return False
         if await self._reseller_paused(lead.reseller_id):
             logger.info(
                 f"Worker {self._uuid}: reseller {lead.reseller_id} paused, "
                 f"re-scheduling lead {lead_id}"
             )
             # Defer 30s; operator unpauses by removing the key.
-            await schedule_lead(
-                lead_id, datetime.now(timezone.utc) + timedelta(seconds=30)
+            await self._schedule_if_ours(
+                lead_id,
+                datetime.now(timezone.utc) + timedelta(seconds=30),
+                template_id=lead.template_id,
             )
-            return
+            return False
 
         locked = await acquire_lock_on_lead_by_id(
             lead_id, expected_status=LeadCallStatus.BACKLOG
@@ -404,49 +622,91 @@ class Worker:
         if not locked:
             logger.info(
                 f"Worker {self._uuid}: lead {lead_id} could not be locked "
-                "(another worker or status changed). Dropping."
+                "(another worker or status changed)."
+                + (" Giving the held line back." if held is not None else " Dropping.")
             )
-            return
+            if held is not None:
+                # A re-issued ticket whose lock a stale ticket's task still holds:
+                # give the line back, and re-queue (30 s out) only a lead that is
+                # still BACKLOG, so a finished or dialling lead is never looped.
+                if not await self._lead_is_ours():
+                    return False
+                again = await get_lead_by_id(lead_id)
+                if again is not None and again.status == LeadCallStatus.BACKLOG:
+                    # Never earlier than the DB's next_attempt_at.
+                    retry_at = datetime.now(timezone.utc) + timedelta(
+                        seconds=V2_LOCK_RETRY_S
+                    )
+                    if again.next_attempt_at is not None:
+                        retry_at = max(again.next_attempt_at, retry_at)
+                    await schedule_lead(lead_id, retry_at, template_id=lead.template_id)
+            return False
 
+        self._current_template_id = locked.template_id
+        if (
+            held is not None  # v2 only: today's worker is left as it was
+            and locked.next_attempt_at is not None
+            and locked.next_attempt_at
+            > datetime.now(timezone.utc) + timedelta(seconds=EARLY_PICK_TOLERANCE_S)
+        ):
+            # A stale queue copy (e.g. a backlog page read before this lead was
+            # deferred) picked it before its due time: never dial early. The row
+            # just locked is the truth; put the lead back at its own time.
+            logger.info(
+                f"Worker {self._uuid}: lead {lead_id} picked before its due time "
+                f"{locked.next_attempt_at.isoformat()}; re-scheduled, not dialled"
+            )
+            if await self._release(locked.id) and await self._lead_is_ours():
+                await schedule_lead(
+                    locked.id, locked.next_attempt_at, template_id=locked.template_id
+                )
+            return False
         lock_released = False
+        # held: per-template reads come from the pod's memo (see _DIAL_MEMO)
+        memo_tid = locked.template_id if held is not None else None
         try:
-            config = await _get_lead_config(locked)
+            config = await _dial_read(
+                memo_tid,
+                ("cfg", memo_tid, locked.template),
+                lambda: _get_lead_config(locked),
+            )
             if not config:
                 lock_released = await self._fail_and_release(locked.id, "NO_CONFIG")
-                return
+                return False
 
             if not config.enable_calling:
                 logger.info(f"Worker {self._uuid}: calling disabled for lead {lead_id}")
                 lock_released = await self._release(locked.id)
-                return
+                return False
 
             customer_phone = (locked.payload or {}).get("customer_mobile_number")
             if customer_phone and await is_number_blacklisted(
                 customer_phone, locked.reseller_id
             ):
-                await update_lead_call_completion_details(
-                    id=locked.id,
-                    status=LeadCallStatus.FINISHED,
-                    outcome="BLACKLISTED",
-                    meta_data={"reason": "Phone number is blacklisted"},
-                    call_end_time=datetime.now(timezone.utc),
-                )
+                if await self._lead_is_ours():
+                    await update_lead_call_completion_details(
+                        id=locked.id,
+                        status=LeadCallStatus.FINISHED,
+                        outcome="BLACKLISTED",
+                        meta_data={"reason": "Phone number is blacklisted"},
+                        call_end_time=datetime.now(timezone.utc),
+                    )
                 lock_released = await self._release(locked.id)
-                return
+                return False
 
             if not _is_within_calling_hours(config):
                 # Defer until window opens — we approximate by deferring 5 min
                 # and letting the reconciler/promoter re-pick. Cheaper than
                 # computing the exact next window here.
                 lock_released = await self._defer_and_release(locked.id, 300)
-                return
+                return False
 
             # id-only resolution: leads always carry the template_id they
             # resolved to at push time; name fallback was removed.
-            template = (
-                await get_template_by_id(locked.template_id)
-                if locked.template_id
-                else None
+            template = await _dial_read(
+                memo_tid,
+                ("tpl", memo_tid),
+                lambda: _template_by_id(locked.template_id),
             )
             if not template:
                 logger.error(
@@ -463,14 +723,14 @@ class Worker:
                 # _run_pre_checks_for_lead already set status to FINISHED on
                 # failure; we just need to release the lock.
                 lock_released = await self._release(locked.id)
-                return
+                return False
             if pre_check_decision is PreCheckDecision.DEFER:
                 # Transient block (cooldown, quota). Lead stays BACKLOG and
                 # comes back after pre_check_defer seconds.
                 lock_released = await self._defer_and_release(
                     locked.id, pre_check_defer
                 )
-                return
+                return False
 
             if template:
                 template = apply_playground_overrides(locked, template)
@@ -496,7 +756,7 @@ class Worker:
                     lock_released = await self._defer_and_release(
                         locked.id, defer_seconds
                     )
-                    return
+                    return False
 
             # The merchant's per-customer call rule (ADR 0025) — PEEK, before
             # a channel token is held, so a customer already at the limit
@@ -534,14 +794,18 @@ class Worker:
                                 locked, verdict, session
                             )
                             lock_released = await self._release(locked.id)
-                            return
+                            return False
                 except CallLimitUnavailable as e:
                     lock_released = await self._defer_call_limit_unavailable(
                         locked.id, e
                     )
-                    return
+                    return False
 
-            number = await _get_available_number(config, template)
+            number = await _dial_read(
+                memo_tid,
+                ("num", memo_tid),
+                lambda: _get_available_number(config, template),
+            )
             if not number:
                 # Permanent / semi-permanent failure: misconfigured template
                 # or no number in the fallback pool. Retrying every 10s would
@@ -567,7 +831,16 @@ class Worker:
                 lock_released = await self._fail_and_release(
                     locked.id, "NUMBER_UNAVAILABLE"
                 )
-                return
+                return False
+
+            if held is None:
+                owned = await v2_owns_number(str(number.id))
+                if owned is not False:
+                    # v2 owns this number or is switching it (or its mode can't be
+                    # read, or Redis lost v2's state): today's worker never dials on it
+                    # (design card rule 21).
+                    lock_released = await self._redirect_to_v2(locked, owned)
+                    return False
 
             call_provider = get_voice_provider(
                 number.provider, session, config.telephony_config
@@ -588,45 +861,72 @@ class Worker:
                 lock_released = await self._fail_and_release(
                     locked.id, "NUMBER_UNAVAILABLE"
                 )
-                return
+                return False
 
-            # Channel token gate (Redis). Held until call-end webhook releases.
-            token = await acquire_channel_token(number.id)
-            if token is None:
-                # No capacity right now — re-schedule (see
-                # capacity_defer_seconds for the delay).
-                lock_released = await self._defer_and_release(
-                    locked.id, await capacity_defer_seconds(number.id, locked.id)
-                )
-                return
+            # From here a line is (being) taken: a stopping acceptor waits
+            # instead of cancelling (see ``v2_cancel_safe``).
+            self._phase = _HOLDING
+            # The held v2 line (None on today's path) / today's channel token.
+            line = cast(_DispatchLine, self._v2_line)
+            token = ""
+            if held is not None:
+                if str(number.id) != held.number_id:
+                    # The template's number changed while the ticket waited: give
+                    # the old line back and re-queue on the current route (design
+                    # card §6 rule 1). The memo may be what still names the old
+                    # number: drop it first, or every ticket on the new route would
+                    # bounce here until it expires.
+                    await self._give_back_v2()
+                    _forget_dial_memo(locked)
+                    await _invalidate_route(locked.template_id)
+                    lock_released = await self._release(locked.id)
+                    await self._schedule_if_ours(
+                        locked.id,
+                        datetime.now(timezone.utc),
+                        jitter_ms=0,
+                        template_id=locked.template_id,
+                    )
+                    return False
+                # The coroutine already holds the line (token and DB channel are
+                # v2's busy list), so today's gates are skipped.
+            else:
+                # Channel token gate (Redis). Held until call-end webhook releases.
+                token = await acquire_channel_token(number.id)
+                if token is None:
+                    # No capacity right now — re-schedule (see
+                    # capacity_defer_seconds for the delay).
+                    lock_released = await self._defer_and_release(
+                        locked.id, await capacity_defer_seconds(number.id, locked.id)
+                    )
+                    return False
 
-            # DB-side bookkeeping: ``telephony_number.status`` (Twilio) or
-            # ``channels`` (Exotel/Plivo/Vobiz).
-            # FULL: the token matched no free line. Drop it, or
-            # the next worker pops it and is refused again. Only the
-            # reconciler restores it; no call was placed, so no call-end
-            # release will.
-            # ERROR: the DB could not answer, so the line may be free. Push
-            # the token back.
-            acquired_db = await _acquire_number(number)
-            if acquired_db is not NumberAcquire.ACQUIRED:
-                if acquired_db is NumberAcquire.FULL:
-                    logger.warning(
-                        f"Worker {self._uuid}: number {number.id} is full in "
-                        f"the DB despite a Redis token. Dropping the token, "
-                        "deferring."
+                # DB-side bookkeeping: ``telephony_number.status`` (Twilio) or
+                # ``channels`` (Exotel/Plivo/Vobiz).
+                # FULL: the token matched no free line. Drop it, or
+                # the next worker pops it and is refused again. Only the
+                # reconciler restores it; no call was placed, so no call-end
+                # release will.
+                # ERROR: the DB could not answer, so the line may be free. Push
+                # the token back.
+                acquired_db = await _acquire_number(number)
+                if acquired_db is not NumberAcquire.ACQUIRED:
+                    if acquired_db is NumberAcquire.FULL:
+                        logger.warning(
+                            f"Worker {self._uuid}: number {number.id} is full in "
+                            f"the DB despite a Redis token. Dropping the token, "
+                            "deferring."
+                        )
+                    else:
+                        logger.error(
+                            f"Worker {self._uuid}: DB acquire of number "
+                            f"{number.id} failed ({acquired_db.value}); the line "
+                            "may be free. Returning the token, deferring."
+                        )
+                        await release_channel_token(number.id, token)
+                    lock_released = await self._defer_and_release(
+                        locked.id, await capacity_defer_seconds(number.id, locked.id)
                     )
-                else:
-                    logger.error(
-                        f"Worker {self._uuid}: DB acquire of number "
-                        f"{number.id} failed ({acquired_db.value}); the line "
-                        "may be free. Returning the token, deferring."
-                    )
-                    await release_channel_token(number.id, token)
-                lock_released = await self._defer_and_release(
-                    locked.id, await capacity_defer_seconds(number.id, locked.id)
-                )
-                return
+                    return False
 
             customer_mobile = (locked.payload or {}).get("customer_mobile_number")
             if not customer_mobile or not isinstance(customer_mobile, str):
@@ -634,9 +934,9 @@ class Worker:
                     f"Worker {self._uuid}: invalid customer_mobile_number "
                     f"for lead {locked.id}"
                 )
-                await _return_capacity(number, token)
+                await (line.give_back() if held else _return_capacity(number, token))
                 lock_released = await self._fail_and_release(locked.id, "INVALID_PHONE")
-                return
+                return False
 
             # Atomic check-and-record — the authoritative cap. Placement
             # constraints (see record_outbound_call_attempt docstring):
@@ -663,9 +963,11 @@ class Worker:
                         f"record). Releasing channel token + number, "
                         f"deferring {rl_defer}s."
                     )
-                    await _return_capacity(number, token)
+                    await (
+                        line.give_back() if held else _return_capacity(number, token)
+                    )
                     lock_released = await self._defer_and_release(locked.id, rl_defer)
-                    return
+                    return False
 
             # Greeting pre-warm as late as possible — after every gate,
             # immediately before the dial — so TTS/generation spend is
@@ -676,12 +978,18 @@ class Worker:
             # generator never blocks the dial; the answer-time path
             # retries synthesis as a cache miss.
             if template:
+                self._phase = _PREWARM  # long (up to ~60 s) and cancel-safe
                 try:
-                    await _prewarm_initial_greeting_with_retry(
-                        lead_id=locked.id,
-                        payload=locked.payload or {},
-                        template=template,
-                    )
+                    if held is None:
+                        await _prewarm_initial_greeting_with_retry(
+                            lead_id=locked.id,
+                            payload=locked.payload or {},
+                            template=template,
+                        )
+                    else:
+                        await _prewarm_beside_the_dial(
+                            locked.id, locked.payload or {}, template
+                        )
                 except asyncio.CancelledError:
                     # Cancellation (worker shutdown) mid-prewarm: none of
                     # the explicit release paths below ran, and the outer
@@ -693,8 +1001,15 @@ class Worker:
                         f"prewarm for lead {locked.id}; releasing channel "
                         "token + number"
                     )
-                    await _return_capacity(number, token)
+                    await (
+                        line.give_back() if held else _return_capacity(number, token)
+                    )
                     raise
+                self._phase = _HOLDING
+
+            # Commit point for shutdown: from here a dial may reach the wire,
+            # so a stopping acceptor drains this dispatch instead of cancelling it.
+            self._phase = _COMMITTED
 
             # The merchant's per-customer rule — the authoritative RECORD,
             # atomic with its count. The LAST step before the phone rings:
@@ -715,19 +1030,53 @@ class Worker:
                         rules=call_limits,
                     )
                 except CallLimitUnavailable as e:
-                    await _return_capacity(number, token)
+                    await (
+                        line.give_back() if held else _return_capacity(number, token)
+                    )
                     lock_released = await self._defer_call_limit_unavailable(
                         locked.id, e
                     )
-                    return
+                    return False
                 if not verdict.allowed:
                     # Lost the race to another worker dialling the same
                     # customer, or the window filled since the peek.
-                    await _return_capacity(number, token)
-                    await finish_lead_call_limit_reached(locked, verdict, session)
+                    await (
+                        line.give_back() if held else _return_capacity(number, token)
+                    )
+                    if await self._lead_is_ours():
+                        await finish_lead_call_limit_reached(locked, verdict, session)
                     lock_released = await self._release(locked.id)
-                    return
+                    return False
                 call_limit_member = verdict.member
+
+            if held is not None:
+                mark = await v2_scripts.mark_dialling(
+                    held.number_id, str(locked.id), held.tk, held.owner
+                )
+                if mark is not v2_scripts.Mark.DIAL:
+                    # The line is not provably ours, so never dial (rule 15).
+                    await self._unrecord_call_limit(
+                        locked, customer_mobile, call_limit_member
+                    )
+                    if mark is v2_scripts.Mark.SUPERSEDED:
+                        # The reaper freed our line while the checks ran, unlocked the
+                        # lead and re-issued it: the newer ticket's coroutine may hold
+                        # the lock now. Neither the lock nor a re-queue is ours.
+                        lock_released = True
+                        return False
+                    # No lease left, the kill switch, or Redis failed: line back (refused
+                    # if the lease was in fact marked: the stuck-dial reap bounds it),
+                    # unlock, and the lead back in its room now.
+                    await line.give_back()
+                    lock_released = await self._release(locked.id)
+                    await self._schedule_if_ours(
+                        locked.id,
+                        datetime.now(timezone.utc),
+                        jitter_ms=0,
+                        template_id=locked.template_id,
+                    )
+                    return False
+                line.dialling = True
 
             try:
                 call = await call_provider.make_call_async(
@@ -747,11 +1096,15 @@ class Worker:
                 await self._unrecord_call_limit(
                     locked, customer_mobile, call_limit_member
                 )
-                await _return_capacity(number, token)
+                await (
+                    line.give_back(not_placed=True)
+                    if held
+                    else _return_capacity(number, token)
+                )
                 # Backoff retry. Use defer_seconds derived from attempt_count.
                 backoff = min(60, 5 * (locked.attempt_count + 1))
                 lock_released = await self._defer_and_release(locked.id, backoff)
-                return
+                return False
 
             if not call or not call.get("sid"):
                 logger.error(
@@ -766,9 +1119,15 @@ class Worker:
                     await self._unrecord_call_limit(
                         locked, customer_mobile, call_limit_member
                     )
-                await _return_capacity(number, token)
+                # A SID-less reply may have rung, so a v2 line stays held (the
+                # give-back is refused); a None reply is "not placed".
+                await (
+                    line.give_back(not_placed=call is None)
+                    if held
+                    else _return_capacity(number, token)
+                )
                 lock_released = await self._defer_and_release(locked.id, 10)
-                return
+                return False
 
             call_sid = str(call.get("sid"))
 
@@ -809,9 +1168,12 @@ class Worker:
                     f"{locked.id} (call_sid={call_sid}). Releasing resources; "
                     "the call may be orphaned."
                 )
-                await _return_capacity(number, token)
+                if held is None:
+                    # A v2 line belongs to the placed call (its id), not to
+                    # this ticket: it is not given back here.
+                    await _return_capacity(number, token)
                 lock_released = await self._release(locked.id)
-                return
+                return True
 
             # Success — token stays held until call-end webhook fires.
             # Lock stays held too; the call-end webhook releases it. Setting
@@ -822,6 +1184,7 @@ class Worker:
                 f"Worker {self._uuid}: dialled lead {locked.id} via "
                 f"{number.provider.value} number {number.id} (call_sid={call_sid})"
             )
+            return True
         finally:
             if not lock_released:
                 # Defensive: any path that didn't already release the lock
@@ -836,7 +1199,34 @@ class Worker:
 
     # -- exit helpers -------------------------------------------------------
 
+    async def _redirect_to_v2(self, lead: Any, owned: Optional[bool]) -> bool:
+        """Hand a lead on a v2-accounted number back to its v2 room, due as before,
+        without dialling. If its mode can't be read (or Redis lost v2's state), or it
+        can't go to a room (its template's route can't be resolved), defer it instead of
+        bouncing it in a loop.
+        """
+        if owned and not lead.template_id:
+            # no room to put it in (today would dial it "without a template")
+            logger.warning(
+                f"Worker {self._uuid}: lead {lead.id} has no template_id and its "
+                f"number is on v2; deferring {V2_REDIRECT_RETRY_S}s"
+            )
+        elif owned:
+            await self._release(lead.id)  # first, so a ticket for it can lock it
+            when = lead.next_attempt_at or datetime.now(timezone.utc)
+            if await requeue_in_room(lead.id, when, lead.template_id) is not None:
+                logger.info(
+                    f"Worker {self._uuid}: lead {lead.id} is on a v2 number; "
+                    "back to its v2 room"
+                )
+                return True
+        return await self._defer_and_release(lead.id, V2_REDIRECT_RETRY_S)
+
     async def _release(self, lead_id: str) -> bool:
+        """Unlock the lead. True also when there is nothing of ours to unlock (a v2
+        ticket that no longer owns the lead: see ``_lead_is_ours``)."""
+        if not await self._lead_is_ours():
+            return True
         try:
             await release_lock_on_lead_by_id(lead_id)
         except Exception as e:  # noqa: BLE001
@@ -887,6 +1277,8 @@ class Worker:
         DB-returned timestamp for the ZADD so the promoter doesn't fire
         earlier than the DB schedule.
         """
+        if not await self._lead_is_ours():
+            return True
         deferred = None
         try:
             deferred = await defer_lead_next_attempt_and_release_lock(
@@ -911,11 +1303,13 @@ class Worker:
         next_at = deferred.next_attempt_at or (
             datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
         )
-        await schedule_lead(lead_id, next_at)
+        await schedule_lead(lead_id, next_at, template_id=self._current_template_id)
         return True
 
     async def _fail_and_release(self, lead_id: str, outcome: str) -> bool:
         """Mark FINISHED with a terminal outcome and release the lock."""
+        if not await self._lead_is_ours():
+            return True
         try:
             await update_lead_call_completion_details(
                 id=lead_id,
