@@ -36,6 +36,7 @@ from app.crm.outreach.db.queries.enrollment import (
     patch_open_run_query,
     record_run_error_query,
     refresh_run_facts_query,
+    remember_stage_facts_query,
     repin_open_runs_query,
     repin_runs_on_version_query,
     resume_run_by_id_query,
@@ -288,6 +289,24 @@ async def refresh_run_facts(
     non-listening square and took the letter's facts as its newest."""
     query, values = refresh_run_facts_query(
         merchant_id, run_id, node_id, facts, cut_short_by
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
+
+
+async def remember_stage_facts(
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    heard_by: str,
+    facts: Dict[str, Any],
+    context_patch: Dict[str, Any],
+) -> bool:
+    """True when the run was standing on ``node_id`` and took the letter's
+    facts; it is not woken."""
+    query, values = remember_stage_facts_query(
+        merchant_id, run_id, node_id, heard_by, facts, context_patch
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)

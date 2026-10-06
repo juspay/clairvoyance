@@ -8,10 +8,11 @@ mints its own lead.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
+from app.crm.outreach import priority
 from app.crm.outreach.ceiling import (
     CALLS_TODAY_KEY,
     calls_today,
@@ -34,6 +35,7 @@ from app.database.accessor import (
     get_lead_by_id,
     get_template_by_id,
     update_lead_enrollment_id,
+    update_waiting_lead_priority,
 )
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 
@@ -48,6 +50,23 @@ MAX_CALLS_OUTCOME = "max_calls"
 # terminal) reaches the wait after this square the way every call's report
 # does, and the run walks on by that wait's own arrows.
 ABORTED_OUTCOME = "ABORTED"
+
+
+# Filled by the dialler at start-up (contracts.register_call_rerank) and told
+# (template_id, lead_id, priority) when a waiting call's rank changes. Unfilled,
+# the new rank still reaches the lead row, which a later re-queue reads.
+_rerank_hook: Optional[Callable[[str, str, Dict[str, Any]], Awaitable[None]]] = None
+
+
+def register_call_rerank(
+    hook: Optional[Callable[[str, str, Dict[str, Any]], Awaitable[None]]],
+) -> None:
+    global _rerank_hook
+    _rerank_hook = hook
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
@@ -74,6 +93,37 @@ def _visits_so_far(context: Dict[str, Any], node_id: str) -> int:
     """
     value = context.get(_visits_key(node_id))
     return value if isinstance(value, int) and value >= 0 else 0
+
+
+async def rerank_waiting_call(
+    run: EnrollmentRun,
+    definition: WorkflowDefinition,
+    waiting_on: WorkflowNode,
+    context: Dict[str, Any],
+) -> None:
+    """A letter changed this run's rank while its call still waits: write the
+    new rank on the lead (taken only while the lead is BACKLOG), then tell the
+    queue. The call is the one whose report `waiting_on` listens for: its
+    `match` names lead_<call square>. Never raises: a rank must not fail the
+    letter that caused it."""
+    try:
+        field = waiting_on.match.run if waiting_on.match else ""
+        call = next(
+            (
+                n
+                for n in definition.nodes
+                if n.type == "call" and f"lead_{n.id}" == field
+            ),
+            None,
+        )
+        lead_id = run.context.get(field)
+        rank = priority.rank_for(definition, context, _now())
+        if call is None or not lead_id or rank is None:
+            return
+        if await update_waiting_lead_priority(str(lead_id), rank) and _rerank_hook:
+            await _rerank_hook(str(call.template_id), str(lead_id), rank)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"run {run.id}: waiting call not re-ranked: {e}")
 
 
 async def execute(
@@ -150,6 +200,13 @@ async def execute(
         **rendered,
         "customer_mobile_number": phone,
     }
+    meta_data: Dict[str, Any] = {
+        "workflow_id": str(run.workflow_id),
+        "enrollment_id": str(run.id),
+    }
+    rank = priority.rank_for(definition, run.context, _now())
+    if rank is not None:
+        meta_data["priority"] = rank  # the dialler reads the call's rank here
 
     try:
         lead = await create_lead_call_tracker(
@@ -161,10 +218,7 @@ async def execute(
             next_attempt_at=next_attempt_at,
             payload=payload,
             attempt_count=0,
-            meta_data={
-                "workflow_id": str(run.workflow_id),
-                "enrollment_id": str(run.id),
-            },
+            meta_data=meta_data,
             request_id=lead_request_id(
                 run.context,
                 str(run.id),

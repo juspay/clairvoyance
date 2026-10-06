@@ -42,6 +42,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_payload_query,
     update_lead_request_id_query,
     update_lead_template_query,
+    update_waiting_lead_priority_query,
 )
 from app.schemas import (
     TEMPLATELESS_PLACEHOLDER_TEMPLATES,
@@ -561,6 +562,20 @@ async def update_lead_enrollment_id(lead_id: str, enrollment_id: str) -> bool:
         return bool(result and get_row_count(result) > 0)
     except Exception as e:
         logger.error(f"Error stamping enrollment_id on lead {lead_id}: {e}")
+        return False
+
+
+async def update_waiting_lead_priority(lead_id: str, priority: Dict[str, Any]) -> bool:
+    """
+    Write a new rank on a lead still waiting to be dialled. False = it is no
+    longer waiting (or the write failed): there is no queued call to move.
+    """
+    try:
+        query_text, values = update_waiting_lead_priority_query(lead_id, priority)
+        result = await run_parameterized_query(query_text, values)
+        return bool(result and get_row_count(result) > 0)
+    except Exception as e:
+        logger.error(f"Error writing the rank on lead {lead_id}: {e}")
         return False
 
 

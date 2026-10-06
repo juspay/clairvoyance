@@ -31,6 +31,8 @@ _BOOKKEEPING_KEYS = (
     "repeat_items",  # repeat.py: accumulate's list — never a template variable
     "facts",  # entry.py: each square's letter, by square (phase 16) — flattened below
     "latest_letter",  # entry.py: which square heard the most recent letter (phase 17)
+    "latest_topic",  # entry.py: the latest producer letter's name (priority.py)
+    "latest_event_at",  # entry.py: when that letter happened
     "cut_short_by",  # entry.py: the letter that re-armed the run (canon T26)
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
@@ -49,6 +51,10 @@ CUT_SHORT_BY_KEY = "cut_short_by"
 # LEAVES, and the action then executes as its own square, so "the current
 # square's facts" would never be the latest stage's.
 LATEST_LETTER_KEY = "latest_letter"
+# What a call's rank is judged from (outreach/priority.py): written by
+# entry.py with every producer letter, on plans that declare `priority`.
+LATEST_TOPIC_KEY = "latest_topic"
+LATEST_EVENT_AT_KEY = "latest_event_at"
 # How a PLAIN square was left, when it has something to say (phase 20): a
 # call square at the plan's ceiling returns it in its patch, the walker pops
 # it BEFORE the context write and records it as the step's outcome (canon

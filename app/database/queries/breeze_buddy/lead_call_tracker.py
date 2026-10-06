@@ -594,6 +594,24 @@ def update_lead_enrollment_id_query(
     return text, [enrollment_id, lead_id]
 
 
+def update_waiting_lead_priority_query(
+    lead_id: str, priority: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """
+    Replace meta_data.priority (the rank a call waits at) on a lead that is
+    still BACKLOG. A lead being dialled or finished keeps the rank it had.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "meta_data" = COALESCE("meta_data", '{{}}')::jsonb
+                || jsonb_build_object('priority', $1::jsonb),
+            "updated_at" = NOW()
+        WHERE "id" = $2 AND "status" = $3
+        RETURNING "id";
+    """
+    return text, [json.dumps(priority), lead_id, LeadCallStatus.BACKLOG.value]
+
+
 def update_lead_customer_id_query(
     lead_id: str, customer_id: str
 ) -> Tuple[str, List[Any]]:

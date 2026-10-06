@@ -460,6 +460,40 @@ def refresh_run_facts_query(
     return query, params
 
 
+def remember_stage_facts_query(
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    heard_by: str,
+    facts: Dict[str, Any],
+    context_patch: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """Stage memory: a letter the run's square (``node_id``) is not listening
+    for. Its facts land under context.facts.<heard_by> (the reply's shape) and
+    ``context_patch`` merges at the top level. Nothing else is written:
+    wake_at is NOT moved, so the square's timer and a parked run's state stay
+    as they are. That also means a walker visit in flight is not refused and
+    may overwrite this write; the next letter writes again."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET context = context || $4::jsonb
+                || jsonb_build_object('facts',
+                       CASE WHEN jsonb_typeof(context->'facts') = 'object' THEN context->'facts' ELSE '{{}}'::jsonb END
+                       || jsonb_build_object($5::text, $6::jsonb))
+        WHERE merchant_id = $1 AND id = $2
+          AND status IN ('waiting', 'parked') AND current_node = $3
+        RETURNING id
+    """
+    return query, [
+        merchant_id,
+        run_id,
+        node_id,
+        json.dumps(context_patch),
+        heard_by,
+        json.dumps(facts),
+    ]
+
+
 def cancel_run_query(
     merchant_id: str,
     run_id: str,
