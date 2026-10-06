@@ -764,7 +764,7 @@ async def reconcile_stuck_processing_leads():
         for lead in stale_leads
         if lead.call_direction == CallDirection.INBOUND
         and lead.call_initiated_time is not None
-        and False
+        and lead.call_initiated_time > inbound_stale_time
     ]
     if live_inbound:
         stale_leads = [lead for lead in stale_leads if lead not in live_inbound]
