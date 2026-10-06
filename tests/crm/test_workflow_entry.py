@@ -192,6 +192,7 @@ class _Spine:
         node_id: str,
         patch: Dict[str, Any],
         facts: Optional[Dict[str, Any]] = None,
+        stamp: Optional[Dict[str, Any]] = None,
     ) -> bool:
         self.resumes.append((run_id, node_id, patch))
         self.facts.append((run_id, node_id, facts))
@@ -204,6 +205,7 @@ class _Spine:
         node_id: str,
         facts: Dict[str, Any],
         cut_short_by: Optional[str] = None,
+        stamp: Optional[Dict[str, Any]] = None,
     ) -> bool:
         self.refreshes.append((run_id, node_id, facts))
         # canon T26: the marker travels apart from the facts, because the

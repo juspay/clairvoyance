@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
-from app.crm.outreach import playbook
+from app.crm.outreach import playbook, priority
 from app.crm.outreach.catalog_laws import (
     Catalogs,
     WorkflowValidationError,
@@ -116,6 +116,7 @@ def validate_definition(
             )
 
     problems.extend(playbook.laws(definition))
+    problems.extend(priority.laws(definition))
 
     # The doors (phase 15): one per topic, each starting on a real square.
     # Repeat-entry words per door (repeat.py owns the vocabulary); debounce
@@ -420,6 +421,7 @@ async def _publish_in_txn(
         txn, merchant_id, definition.send_templates()
     )
     problems = await _template_problems(merchant_id, definition)
+    problems += await _rank_order_problems(merchant_id, workflow_id, definition)
     if problems:
         raise WorkflowValidationError(problems)
     published = await workflow_accessor.apply_publish(txn, merchant_id, workflow_id)
@@ -502,9 +504,10 @@ async def _check_draft_in_txn(
             "draft is a ladder saved without its board — save the draft "
             "again (PUT /draft) before publishing; publish copies it verbatim"
         ]
+    definition = WorkflowDefinition.model_validate(draft)
     return True, await _template_problems(
-        merchant_id, WorkflowDefinition.model_validate(draft)
-    )
+        merchant_id, definition
+    ) + await _rank_order_problems(merchant_id, workflow_id, definition)
 
 
 async def _template_problems(
@@ -531,6 +534,45 @@ async def _template_problems(
             problems.append(
                 f"send node {node.id}: template '{node.template}' {verdict.reason}"
             )
+    return problems
+
+
+async def _rank_order_problems(
+    merchant_id: str, workflow_id: str, definition: WorkflowDefinition
+) -> List[str]:
+    """GATHER for the publish atom: plans of one merchant that call the same
+    template share its waiting queue, and a rank's calls are compared there by
+    ONE order. Two orders under one rank would send all of one plan's calls
+    first, so a live plan's order for a rank is the law for the next plan."""
+    if definition.priority is None:
+        return []
+    mine = definition.priority
+    calls = {n.template_id for n in definition.nodes if n.type == "call"}
+    problems: List[str] = []
+    for other in await workflow_accessor.live_workflows(merchant_id):
+        document = other.definition or {}
+        their = document.get("priority") or {}
+        theirs = their.get("ranks") or {}
+        shared = calls & {
+            n.get("template_id")
+            for n in document.get("nodes") or []
+            if n.get("type") == "call"
+        }
+        if str(other.id) == workflow_id or not shared:
+            continue
+        # the ranks both plans can give a call; one a plan does not list has
+        # the default order
+        both = {str(r.rank) for r in mine.rules} | {str(mine.else_)}
+        both &= {str(r.get("rank")) for r in their.get("rules") or []} | {
+            str(their.get("else"))
+        }
+        problems += [
+            f"priority: rank {rank} is {priority.order_of(mine.ranks, rank)} here "
+            f"but {priority.order_of(theirs, rank)} in live plan '{other.name}', "
+            "which calls the same template"
+            for rank in sorted(both)
+            if priority.order_of(mine.ranks, rank) != priority.order_of(theirs, rank)
+        ]
     return problems
 
 
