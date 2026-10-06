@@ -10,7 +10,7 @@ runs each reconciler per interval. No new locking primitives needed.
 from __future__ import annotations
 
 import time
-from typing import Any, List, cast
+from typing import Any, Dict, List, Optional, cast
 
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
     clear_throttle,
@@ -36,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
     is_dispatchable,
     schedule_lead,
 )
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.latch import v2_seen
 from app.core.config import dynamic as dyn_cfg
 from app.core.logger import logger
 from app.database.accessor import (
@@ -54,6 +55,19 @@ from app.services.redis import get_redis_service
 # ---------------------------------------------------------------------------
 # reconcile_backlog_to_zset
 # ---------------------------------------------------------------------------
+
+
+async def _is_v2_template(template_id: Optional[str]) -> Optional[bool]:
+    """True if the template's number is v2-accounted: its leads belong in v2 rooms,
+    so today's schedule must not take them (the v2 backlog reconciler heals those).
+    None if that could not be read: a legacy ZADD is not safe for a v2 number (R-ERR).
+    """
+    # lazy: routes -> managers.calls -> dispatch (import cycle)
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.routes import (
+        template_is_v2_accounted,
+    )
+
+    return await template_is_v2_accounted(template_id)
 
 
 async def reconcile_backlog_to_zset() -> None:
@@ -79,8 +93,16 @@ async def reconcile_backlog_to_zset() -> None:
     client: Any = cast(Any, await redis.get_client())
 
     fixed = 0
-    for lead_id, _reseller_id, score_ms in leads:
+    check_v2 = await v2_seen()
+    v2_templates: Dict[Optional[str], Optional[bool]] = {}
+    for lead_id, _reseller_id, score_ms, *rest in leads:
         try:
+            if check_v2:
+                template_id = rest[0] if rest else None
+                if template_id not in v2_templates:
+                    v2_templates[template_id] = await _is_v2_template(template_id)
+                if v2_templates[template_id] is not False:
+                    continue  # v2 number, or unknown: skip this run, the next retries
             existing = await client.zscore(SCHEDULE_ZSET, lead_id)
             if existing is None:
                 await client.zadd(SCHEDULE_ZSET, {lead_id: score_ms})
@@ -184,7 +206,9 @@ async def reap_stuck_processing_lists() -> None:
                 if lead.next_attempt_at is not None and is_dispatchable(
                     lead.execution_mode
                 ):
-                    await schedule_lead(lead_id, lead.next_attempt_at)
+                    await schedule_lead(
+                        lead_id, lead.next_attempt_at, template_id=lead.template_id
+                    )
                     rescheduled += 1
                 await client.lrem(proc_key, 1, lead_id)
                 continue

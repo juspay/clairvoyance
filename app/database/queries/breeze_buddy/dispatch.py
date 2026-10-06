@@ -28,7 +28,8 @@ def get_unscheduled_backlog_leads_query(
     reconciler ticks as their firing time approaches.
     """
     text = f"""
-        SELECT id, reseller_id, EXTRACT(EPOCH FROM next_attempt_at) * 1000 AS score_ms
+        SELECT id, reseller_id, EXTRACT(EPOCH FROM next_attempt_at) * 1000 AS score_ms,
+               template_id
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "status" = 'BACKLOG'
           AND "is_locked" = FALSE
