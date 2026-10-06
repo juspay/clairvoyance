@@ -155,11 +155,16 @@ async def _write(route: Route, number: Any) -> None:
         await refresh_number(number)
 
 
-async def invalidate_route(template_id: str) -> None:
-    """Re-resolve today's number rule for the template and rewrite its route."""
+async def invalidate_route(template_id: str, *, strict: bool = False) -> None:
+    """Re-resolve today's number rule for the template and rewrite its route. ``strict``:
+    raise instead of logging, also when the template or its config can't be read (those
+    reads answer None on a DB error too)."""
     try:
-        await _resolve_and_write(template_id, None, None)
+        if await _resolve_and_write(template_id, None, None) is None and strict:
+            raise RuntimeError(f"v2 route of {template_id} not resolved")
     except Exception as e:  # noqa: BLE001
+        if strict:
+            raise
         logger.error(f"v2 invalidate_route failed {template_id}: {e}")
 
 
@@ -190,6 +195,21 @@ async def refresh_number(number: Any) -> None:
             await client.zadd(k.DUE_KEY, {number_id: now_ms}, lt=True)
     except Exception as e:  # noqa: BLE001
         logger.error(f"v2 refresh_number failed {getattr(number, 'id', None)}: {e}")
+
+
+async def handback_pending_or_none(number_id: str) -> Optional[bool]:
+    """``bb:num:{N}.handback_pending``: a hand-back to today's path whose DB and room steps
+    are not done yet; None when the read failed (callers wait)."""
+    try:
+        client = await _client()
+        flag = await asyncio.wait_for(
+            client.hget(k.num_key(number_id), "handback_pending"),
+            timeout=TODAYS_PATH_TIMEOUT_S,
+        )
+        return flag == "1"
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"v2 handback_pending_or_none failed {number_id}: {e}")
+        return None
 
 
 async def number_mode_or_none(number_id: str) -> Optional[str]:
