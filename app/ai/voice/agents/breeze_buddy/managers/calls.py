@@ -12,10 +12,12 @@ docs/BACKLOG_DISPATCHER_REDESIGN.md.
 """
 
 import asyncio
+import random
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 # Dispatch imports use submodule paths (not the ``dispatch`` package) to avoid
 # the circular import via ``dispatch/__init__.py`` -> ``dispatch.worker`` ->
@@ -46,6 +48,10 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     CALL_LIMIT_OUTCOME,
     CallLimitVerdict,
     describe_call_limit,
+    unrecord_call_limit,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
+    UNKNOWN_DIAL_META_KEY,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
@@ -67,12 +73,19 @@ from app.ai.voice.agents.breeze_buddy.utils.common import send_webhook_with_retr
 from app.core.config.static import (
     BB_INBOUND_STUCK_LEAD_MINUTES,
     BB_STUCK_CALL_STALE_MINUTES,
+    BB_STUCK_SWEEP_LOOKUP_DEADLINE_S,
+    BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S,
+    BB_STUCK_SWEEP_MAX_CALL_MINUTES,
+    BB_STUCK_SWEEP_MAX_LOOKUPS,
+    BB_UNKNOWN_DIAL_HOLD_MINUTES,
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
+    claim_attached_call_release,
+    claim_unknown_dial,
     create_lead_call_tracker,
     decrement_telephony_number_channels,
     get_call_execution_config_by_template_id,
@@ -82,6 +95,7 @@ from app.database.accessor import (
     get_telephony_number_by_id,
     increment_telephony_number_channels,
     release_lock_on_lead_by_id,
+    requeue_unknown_dial,
     update_lead_call_completion_details,
     update_lead_call_recording_url,
     update_telephony_number_status,
@@ -102,6 +116,7 @@ from app.schemas import (
     TelephonyNumber,
     TelephonyNumberStatus,
 )
+from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
 from app.services.gcp.storage.storage import upload_file_to_gcs
 from app.services.redis.client import get_redis_service
 
@@ -639,6 +654,26 @@ async def _release_call_resources(lead: LeadCallTracker) -> None:
         await release_channel_token(telephony_number.id)
 
 
+async def _release_attached_call_once(lead: LeadCallTracker, source: str) -> None:
+    """
+    End of a call stamped on a lead the merchant finished mid-dial
+    (``CALL_ATTACHED_AFTER_FINISH``). The lead is terminal, so the only thing
+    any end-of-call path owes is the line; every path (completion, unanswered,
+    the ``completed`` reconcile) comes here, and the claim lets exactly one of
+    them, duplicate webhooks included, give it back.
+    """
+    if await claim_attached_call_release(lead.id):
+        await _release_call_resources(lead)
+        logger.info(
+            f"Call {lead.call_id} on finished lead {lead.id}: line released ({source})"
+        )
+    else:
+        logger.info(
+            f"Call {lead.call_id} on finished lead {lead.id}: line already "
+            f"released, nothing to do ({source})"
+        )
+
+
 async def _retry_call(
     lead: LeadCallTracker, config: CallExecutionConfig, outcome: Optional[str] = None
 ):
@@ -727,6 +762,72 @@ async def _retry_call(
             await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
 
 
+async def requeue_unclaimed_unknown_dial(lead: LeadCallTracker) -> bool:
+    """
+    Undo the hold on a lead whose dial got no reply and that no webhook ever
+    claimed: back to BACKLOG, due now, scheduled — the same lead and attempt,
+    so no retry is spent on a call that never happened. Releases the channel
+    + number held for it (once) and takes back its call-limit entry.
+
+    The requeue runs first and is conditional on the lead still being held,
+    so a webhook claiming it at the same moment wins and nothing is released
+    under a live call. False in that case.
+    """
+    dialled_at = lead.call_initiated_time
+    if dialled_at is None or not await requeue_unknown_dial(
+        lead.id, dialled_at, UNKNOWN_DIAL_META_KEY
+    ):
+        return False
+
+    await _release_call_resources(lead)
+
+    hold = (lead.metaData or {}).get(UNKNOWN_DIAL_META_KEY) or {}
+    member = hold.get("call_limit_member")
+    phone = (lead.payload or {}).get("customer_mobile_number")
+    if member and phone and lead.merchant_id:
+        await unrecord_call_limit(
+            merchant_id=lead.merchant_id, phone=phone, member=member
+        )
+
+    if is_dispatchable(lead.execution_mode):
+        await schedule_lead(lead_id=lead.id, next_attempt_at=datetime.now(timezone.utc))
+    logger.warning(
+        f"Unknown-outcome dial for lead {lead.id} got no webhook within the hold: "
+        "the provider never placed it; lead put back to be dialled"
+    )
+    return True
+
+
+def _is_unclaimed_unknown_dial(lead: LeadCallTracker) -> bool:
+    return (
+        lead.call_id is None
+        and UNKNOWN_DIAL_META_KEY in (lead.metaData or {})
+        and lead.call_initiated_time is not None
+    )
+
+
+async def _provider_says_call_live(lead: LeadCallTracker) -> Optional[bool]:
+    """Ask the lead's telephony provider whether its call is still live.
+
+    True = live, False = ended, None = the provider cannot say. Raises when
+    the lookup fails or times out; the sweep treats that as "possibly live".
+    """
+    if not lead.call_id or not lead.telephony_number_id:
+        return None
+    number = await get_telephony_number_by_id(lead.telephony_number_id)
+    if not number:
+        return None
+    # Imported here: the provider modules import the agent, which imports us.
+    from app.ai.voice.agents.breeze_buddy.services.telephony.utils import (
+        get_voice_provider,
+    )
+
+    provider = get_voice_provider(number.provider, None)
+    return await asyncio.wait_for(
+        provider.is_call_live(lead), timeout=BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S
+    )
+
+
 async def reconcile_stuck_processing_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state — call placed
@@ -740,12 +841,27 @@ async def reconcile_stuck_processing_leads():
     docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 5.
     """
     logger.info("Cleaning up stuck leads...")
-    stale_time = datetime.now(timezone.utc) - timedelta(
-        minutes=BB_STUCK_CALL_STALE_MINUTES
+    now = datetime.now(timezone.utc)
+    stale_time = now - timedelta(minutes=BB_STUCK_CALL_STALE_MINUTES)
+    # Unclaimed unknown-outcome dials wait only BB_UNKNOWN_DIAL_HOLD_MINUTES;
+    # everything else keeps the BB_STUCK_CALL_STALE_MINUTES rule. The hold is
+    # never longer than that window, so the query's cutoff (the shorter of the
+    # two) still returns every stale lead.
+    hold_minutes = max(
+        1, min(BB_STUCK_CALL_STALE_MINUTES, BB_UNKNOWN_DIAL_HOLD_MINUTES)
     )
-    stale_leads = await get_leads_by_status_and_time_before(
-        LeadCallStatus.PROCESSING, stale_time, include_locked=True
-    )
+    hold_time = now - timedelta(minutes=hold_minutes)
+    stale_leads = [
+        lead
+        for lead in await get_leads_by_status_and_time_before(
+            LeadCallStatus.PROCESSING, hold_time, include_locked=True
+        )
+        if _is_unclaimed_unknown_dial(lead)
+        or (
+            lead.call_initiated_time is not None
+            and lead.call_initiated_time < stale_time
+        )
+    ]
 
     # Inbound needs a far longer grace period. An outbound lead PROCESSING past
     # the stale window is wedged; an inbound one is usually a customer still talking.
@@ -771,9 +887,53 @@ async def reconcile_stuck_processing_leads():
 
     logger.info(f"Found {len(stale_leads)} stuck leads to clean up.")
 
+    # The query has no ORDER BY; shuffle so the capped lookups cannot starve
+    # the same leads behind a pile of long live calls.
+    random.shuffle(stale_leads)
+    lookups = 0
+    lookup_deadline = time.monotonic() + BB_STUCK_SWEEP_LOOKUP_DEADLINE_S
+    max_call_age = timedelta(minutes=BB_STUCK_SWEEP_MAX_CALL_MINUTES)
     for lead in stale_leads:
         locked_lead = None
         try:
+            # A call can outlive the stale window (a long conversation). Closing
+            # it would free its line while it is still live, so ask the
+            # provider first; skip whenever we cannot be sure it has ended.
+            # Past the age ceiling no call can still be live (Plivo's default
+            # time limit), so a lookup that never clears cannot hold the line
+            # forever: close it without asking.
+            call_age_exceeded = (
+                lead.call_initiated_time is not None
+                and datetime.now(timezone.utc) - lead.call_initiated_time > max_call_age
+            )
+            if lead.call_id and not call_age_exceeded:
+                if (
+                    lookups >= BB_STUCK_SWEEP_MAX_LOOKUPS
+                    or time.monotonic() >= lookup_deadline
+                ):
+                    logger.info(
+                        f"Stuck lead {lead.id}: per-run provider lookup budget "
+                        f"({BB_STUCK_SWEEP_MAX_LOOKUPS} lookups / "
+                        f"{BB_STUCK_SWEEP_LOOKUP_DEADLINE_S}s) used up, "
+                        "checking next run."
+                    )
+                    continue
+                lookups += 1
+                try:
+                    live = await _provider_says_call_live(lead)
+                except Exception as e:  # noqa: BLE001 - fail safe: keep the line
+                    logger.warning(
+                        f"Stuck lead {lead.id}: provider live-call lookup failed "
+                        f"({type(e).__name__}: {e}); skipping this run."
+                    )
+                    continue
+                if live:
+                    logger.info(
+                        f"Stuck lead {lead.id} (call {lead.call_id}) is still "
+                        "live at the provider; leaving it, checking next run."
+                    )
+                    continue
+
             # Forcefully acquire the lock — the lead may still be marked
             # is_locked=TRUE from a crashed pod. Safe here because the
             # BackgroundTaskScheduler distributed lock ensures only one
@@ -790,9 +950,38 @@ async def reconcile_stuck_processing_leads():
 
             logger.info(f"Successfully locked stuck lead {lead.id} for cleanup.")
 
+            # The SELECT was a moment ago: a webhook may have claimed the lead
+            # since. Only an unclaimed unknown dial may be swept before the
+            # BB_STUCK_CALL_STALE_MINUTES stuck rule.
+            if (
+                not _is_unclaimed_unknown_dial(locked_lead)
+                and locked_lead.call_initiated_time is not None
+                and locked_lead.call_initiated_time >= stale_time
+            ):
+                logger.info(
+                    f"Lead {lead.id} was claimed before the sweep locked it, skipping."
+                )
+                continue
+
+            if (
+                locked_lead.call_id is None
+                and UNKNOWN_DIAL_META_KEY in (locked_lead.metaData or {})
+                and locked_lead.call_initiated_time is not None
+            ):
+                # Held after a dial whose reply never arrived, and no webhook
+                # within the hold: the provider never placed it. Dial it again
+                # rather than closing it — most templates allow no retry, so
+                # closing would mean this customer is never called.
+                if await requeue_unclaimed_unknown_dial(locked_lead):
+                    # The requeue unlocked the row; a worker may own it now.
+                    locked_lead = None
+                continue
+
             # Page on it: a lead this old is either a lost call-end webhook or
             # a real call still running, and closing a live one loses its
-            # outcome (call.completed dedupes on call_id).
+            # outcome (call.completed dedupes on call_id). After the checks
+            # above: a lead a webhook claimed meanwhile, or an unknown dial put
+            # back on the schedule, is not a stuck call and pages nobody.
             await raise_long_running_call(
                 lead_id=str(locked_lead.id),
                 call_id=locked_lead.call_id,
@@ -843,6 +1032,41 @@ async def reconcile_stuck_processing_leads():
                 await release_lock_on_lead_by_id(locked_lead.id)
 
 
+async def claim_unknown_dial_from_webhook(
+    call_id: Optional[str], url_params: Mapping[str, str]
+) -> bool:
+    """
+    Link a provider webhook to the lead whose dial got no reply.
+
+    When the provider's reply to a dial times out, the worker holds the lead
+    PROCESSING with no call_id (the call may have been placed). The provider
+    then calls back with a call id we never stored — but on URLs that carry
+    the ``lead_id`` + ``dial_at`` the worker put on them. Attaching the call
+    id here, before anything looks the lead up by it, lets the call run its
+    normal course: answered calls reach the agent, outcomes land on the lead,
+    the channel is released once at the end.
+
+    A no-op (and False) for every webhook not answering such a dial. Never
+    raises — a webhook must carry on exactly as before.
+    """
+    lead_id = url_params.get("lead_id")
+    dial_at = url_params.get("dial_at")
+    if not (call_id and lead_id and dial_at):
+        return False
+    try:
+        dialled_at = datetime.fromisoformat(dial_at)
+    except ValueError:
+        logger.warning(f"Unreadable dial_at {dial_at!r} on webhook for {call_id}")
+        return False
+    claimed = await claim_unknown_dial(lead_id, dialled_at, call_id)
+    if claimed:
+        logger.warning(
+            f"Unknown-outcome dial resolved: lead {lead_id} is call {call_id} "
+            "(the provider placed it although its reply never arrived)"
+        )
+    return claimed
+
+
 async def handle_call_completion(
     call_id: str,
     outcome: str | None = None,
@@ -882,6 +1106,15 @@ async def handle_call_completion(
         logger.opt(exception=e).warning(
             f"Failed to delete greeting audio from Redis for lead {lead.id}"
         )
+
+    # A call placed for a lead the merchant had already aborted (the dispatcher
+    # stamped the call on the finished lead): the line comes back (once, across
+    # every end-of-call path) and that is all this webhook may do. No
+    # completion UPDATE (it would overwrite the ABORT outcome and replace
+    # meta_data), no CRM mirror, no retry.
+    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
+        await _release_attached_call_once(lead, "call_completion")
+        return lead
 
     # Always release telephony number (including transfers — bot leaves, cleanup happens here).
     # Runs before the completion UPDATE below so the inbound guard in
@@ -974,6 +1207,12 @@ async def handle_unanswered_calls(call_id: str):
             f"Failed to delete greeting audio from Redis for lead {lead.id}: {e}"
         )
 
+    # A call stamped on a lead the merchant finished mid-dial: return its line
+    # once (shared claim with the other end-of-call paths); nothing else to do.
+    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
+        await _release_attached_call_once(lead, "unanswered")
+        return
+
     # Release telephony number channel — for outbound this runs before the FINISHED
     # guard because the channel must be freed regardless of lead status, and
     # _release_number is idempotent (SQL uses GREATEST(0, ...)). For inbound the
@@ -1040,6 +1279,13 @@ async def reconcile_completed_call(call_id: str) -> None:
     lead = await get_lead_by_call_id(call_id)
     if not lead:
         logger.info(f"No lead for completed call {call_id}; nothing to reconcile.")
+        return
+
+    # Answered calls on a lead the merchant finished mid-dial are hung up at
+    # answer (no agent, so no completion handler): this ``completed`` is their
+    # only end-of-call signal, and the lead is not PROCESSING. Return the line.
+    if (lead.metaData or {}).get(CALL_ATTACHED_AFTER_FINISH):
+        await _release_attached_call_once(lead, "completed")
         return
 
     if lead.status != LeadCallStatus.PROCESSING:

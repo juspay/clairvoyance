@@ -481,11 +481,32 @@ BB_PROMOTER_LEADER_RENEW_S = int(os.environ.get("BB_PROMOTER_LEADER_RENEW_S", 2)
 _BB_WORKER_COUNT_DEFAULT = 2 if ENVIRONMENT == "dev" else 20
 BB_WORKER_COUNT = int(os.environ.get("BB_WORKER_COUNT", _BB_WORKER_COUNT_DEFAULT))
 BB_WORKER_BLPOP_TIMEOUT_S = int(os.environ.get("BB_WORKER_BLPOP_TIMEOUT_S", 30))
+# How long Worker.stop() waits for a dial that is already on the wire
+# (inside or past make_call) before giving up on it — it is never cancelled.
+# Must stay below the dialler pod's terminationGracePeriodSeconds minus the
+# rest of the lifespan shutdown (k8s default grace is 30s, so 20 leaves
+# room); raise it together with the grace period. A dial normally ends in
+# seconds, but the Plivo request timeout is 15s per connect/read, so a slow
+# dial can outlast this budget: stop() then returns WITHOUT cancelling, which
+# is the same outcome as the pod being SIGKILLed at the end of its grace.
+BB_WORKER_SHUTDOWN_DRAIN_S = float(os.environ.get("BB_WORKER_SHUTDOWN_DRAIN_S", 20))
 BB_WORKER_HEARTBEAT_TTL_S = int(os.environ.get("BB_WORKER_HEARTBEAT_TTL_S", 60))
 BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_S", 10))
 
 # Channel semaphore
 BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10))
+
+# A Plivo 5xx on a dial (spec 2026-10-05 §10.3, decision D1, open). "unknown" (default):
+# held like a lost reply (#1280), never re-queued, because Plivo may have placed it.
+# "body_decides": a 5xx carrying Plivo's JSON error body (api_id + error) counts as not
+# placed, any other 5xx is held. "not_placed": today's reading (re-queued; may double
+# dial), without the SDK's re-send.
+BB_PLIVO_5XX_OUTCOME = os.getenv("BB_PLIVO_5XX_OUTCOME", "unknown")
+if BB_PLIVO_5XX_OUTCOME not in ("unknown", "body_decides", "not_placed"):
+    raise ValueError(
+        "BB_PLIVO_5XX_OUTCOME must be unknown, body_decides or not_placed, "
+        f"got {BB_PLIVO_5XX_OUTCOME!r}"
+    )
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the
@@ -493,6 +514,28 @@ BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_
 # call, not a wedged one.
 BB_INBOUND_STUCK_LEAD_MINUTES = int(
     os.environ.get("BB_INBOUND_STUCK_LEAD_MINUTES", 240)
+)
+
+# Minutes an UNCLAIMED unknown-outcome dial (Plivo read timeout, no webhook yet)
+# is held before the sweep re-dials it. Covers Plivo's late callbacks: no-answer
+# p99 72 s, busy p99 184 s (2 Oct). Capped at 10 (the stuck-lead rule), at least 1.
+BB_UNKNOWN_DIAL_HOLD_MINUTES = max(
+    1, min(10, int(os.environ.get("BB_UNKNOWN_DIAL_HOLD_MINUTES", 5)))
+)
+
+# Stuck-call sweep: provider live-call lookups per run, and each one's timeout
+BB_STUCK_SWEEP_MAX_LOOKUPS = int(os.environ.get("BB_STUCK_SWEEP_MAX_LOOKUPS", 50))
+BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S = float(
+    os.environ.get("BB_STUCK_SWEEP_LOOKUP_TIMEOUT_S", 5)
+)
+# Stop looking up after this long in one run (the sweep runs every 60 s).
+BB_STUCK_SWEEP_LOOKUP_DEADLINE_S = float(
+    os.environ.get("BB_STUCK_SWEEP_LOOKUP_DEADLINE_S", 40)
+)
+# A call older than this is closed without asking: no call outlives Plivo's
+# default time limit, and a lookup that always fails must not hold a line forever.
+BB_STUCK_SWEEP_MAX_CALL_MINUTES = int(
+    os.environ.get("BB_STUCK_SWEEP_MAX_CALL_MINUTES", 240)
 )
 
 # Reconcilers
