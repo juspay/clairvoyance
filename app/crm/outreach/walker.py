@@ -37,10 +37,12 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
+from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
+from app.crm.outreach.nodes.call import undialled_call, withdraw_waiting_call
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     OUTCOME_KEY,
+    PARK_UNTIL_KEY,
     dispatch_id,
     reply_key,
     without_reply,
@@ -162,6 +164,7 @@ async def walk_run(run: EnrollmentRun) -> None:
                 steps=as_rows(closing(run, ejected, "ejected")),
             ):
                 _log_exit(run, "ejected")
+                await withdraw_waiting_call(run, ejected)
             else:
                 _deferred(run, "eject")
             return
@@ -258,6 +261,7 @@ async def _advance(
             steps=as_rows(closing(run, definition, "timed_out")),
         ):
             _log_exit(run, "timed_out")
+            await withdraw_waiting_call(run, definition)
         else:
             _deferred(run, "timed_out")
         return
@@ -285,8 +289,27 @@ async def _advance(
                 steps=as_rows(closing(run, definition, tier.exit_reason)),
             ):
                 _log_exit(run, tier.exit_reason)
+                await withdraw_waiting_call(run, definition)
             else:
                 _deferred(run, tier.exit_reason)
+            return
+
+    # A call that got its line but is not dialled yet keeps its run on the wait
+    # after it: the timer starts over, so the run never queues its next call
+    # beside one still to be placed. A letter is never held.
+    stood = nodes.get(run.current_node)
+    if (
+        stood is not None
+        and is_wait(stood)
+        and run.context.get(reply_key(stood.id)) is None
+        and await undialled_call(run, definition)
+    ):
+        again = alarm(stood, now, run.entered_at + max_age)
+        if again > now:
+            if not await enrollment_accessor.advance_run(
+                str(run.id), stood.id, again, run.context, lease
+            ):
+                _deferred(run, f"hold on {stood.id}")
             return
 
     current_id = run.current_node
@@ -380,6 +403,21 @@ async def _advance(
             # at the plan's ceiling). The word is for the trail row below —
             # popped here so it is never written into the run's context.
             said = patch.pop(OUTCOME_KEY, None)
+            park_until = patch.pop(PARK_UNTIL_KEY, None)
+            if park_until is not None:
+                # A call waiting for its line: the run holds on this square,
+                # listening, as the window hold above does (TRAP 1 applies).
+                if not await enrollment_accessor.advance_run(
+                    str(run.id),
+                    node.id,
+                    park_until,
+                    context,
+                    lease,
+                    node_arrived_at=None if first else arrived_at,
+                    steps=as_rows(walked),
+                ):
+                    _deferred(run, f"hold on {node.id}")
+                return
             context.update(patch)
             dispatched = dispatch_id(patch, node.id)
 
@@ -392,7 +430,7 @@ async def _advance(
             # which is the whole reason a condition's branch reaches disk
             # nowhere else.
             answer = context.get(reply_key(node.id))
-            outcome = TIMEOUT if answer is None else str(answer)
+            outcome = (_unanswered(node) or outcome) if answer is None else str(answer)
             # Leaving a branching square: its answer is spent (phase 15).
             # A door may start a run on any square, so this one can be
             # revisited — a stale reply would resolve the revisit at once.
@@ -500,6 +538,13 @@ def goal_since(run: EnrollmentRun) -> datetime:
     return run.entered_at
 
 
+def _unanswered(node: WorkflowNode) -> Optional[str]:
+    """PURE: the label a branching square leaves by when no letter answered
+    it: a wait's "timeout"; a call that waited for its line leaves by its
+    unlabelled arrow (the call is placed)."""
+    return None if listens(node) and not is_wait(node) else TIMEOUT
+
+
 def pick_next(
     node: WorkflowNode, arrows: List[Tuple[str, Optional[str]]], context: Dict[str, Any]
 ) -> Optional[str]:
@@ -511,7 +556,7 @@ def pick_next(
     if not branches(node):
         return arrows[0][0] if arrows else None
     answer = context.get(reply_key(node.id))
-    wanted = TIMEOUT if answer is None else answer
+    wanted = _unanswered(node) if answer is None else answer
     for dst, on in arrows:
         if on == wanted:
             return dst

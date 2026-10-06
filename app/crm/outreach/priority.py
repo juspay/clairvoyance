@@ -42,30 +42,57 @@ def in_todays_window(at: datetime, window: WaitWindow, now: datetime) -> bool:
     return opens <= at < closes
 
 
+def _call_hours(config: Any) -> Optional[WaitWindow]:
+    """PURE: a template's call hours (its call_execution_config) as a window,
+    on the clock the dialler reads them by (IST, managers/calls.py)."""
+    if config is None or config.call_start_time == config.call_end_time:
+        return None
+    return WaitWindow(
+        opens=f"{config.call_start_time:%H:%M}",
+        closes=f"{config.call_end_time:%H:%M}",
+        timezone="Asia/Kolkata",
+    )
+
+
 def rank_for(
-    definition: WorkflowDefinition, context: Dict[str, Any], now: datetime
+    definition: WorkflowDefinition,
+    context: Dict[str, Any],
+    now: datetime,
+    config: Any = None,
 ) -> Optional[Dict[str, Any]]:
     """PURE: this run's call rank judged at `now`, in the shape the lead
     carries it (meta_data.priority): {rank, order, event_ms}. None when the
     plan declares no `priority`. The first rule that holds names the rank,
-    none names `else`. A run older than the stamps is read from its founding
-    letter's time; with no time at all `today` holds for nobody."""
+    none names `else`. A live call also carries next_rank / next_order.
+    "Today" is the call hours of `config` (the call template's
+    call_execution_config) unless the plan names its own window. A run older
+    than the stamps is read from its founding letter's time; with no time or
+    no hours at all `today` holds for nobody."""
     block = definition.priority
     if block is None:
         return None
     raw = context.get(LATEST_EVENT_AT_KEY) or context.get("entered_event_at")
     event_at = datetime.fromisoformat(raw) if isinstance(raw, str) else None
-    today = in_todays_window(event_at, block.window, now) if event_at else None
+    window = block.window or _call_hours(config)
+    today = in_todays_window(event_at, window, now) if event_at and window else None
     facts = dict(zip(FACTS, (context.get(LATEST_TOPIC_KEY), raw, today)))
-    rank = next(
-        (rule.rank for rule in block.rules if matches(rule.if_, facts.get)),
-        block.else_,
-    )
-    return {
+    # Judged twice: as it is, and as if the letter were not today's.
+    rank, later = [
+        next(
+            (rule.rank for rule in block.rules if matches(rule.if_, seen.get)),
+            block.else_,
+        )
+        for seen in (facts, {**facts, FACTS[2]: False})
+    ]
+    answer: Dict[str, Any] = {
         "rank": rank,
         "order": order_of(block.ranks, rank),
         "event_ms": int(event_at.timestamp() * 1000) if event_at else 0,
     }
+    # A live call not placed by closing is pile tomorrow: what it falls to.
+    if later != rank:
+        answer.update(next_rank=later, next_order=order_of(block.ranks, later))
+    return answer
 
 
 def laws(definition: WorkflowDefinition) -> List[str]:

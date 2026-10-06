@@ -35,7 +35,7 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
 from app.crm.outreach.nodes import listens
-from app.crm.outreach.nodes.call import rerank_waiting_call
+from app.crm.outreach.nodes.call import rerank_waiting_call, withdraw_waiting_call
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     LATEST_EVENT_AT_KEY,
@@ -244,6 +244,7 @@ async def _end_on_goal(
                 # would otherwise forge a log line (CWE-117).
                 f"run {run.id} exited {tier.exit_reason} on {event.topic!r}"
             )
+            await withdraw_waiting_call(run, definition)
             return True
     return False
 

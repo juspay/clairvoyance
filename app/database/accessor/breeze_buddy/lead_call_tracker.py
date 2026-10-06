@@ -24,6 +24,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_lead_by_call_id_query,
     get_lead_by_id_query,
     get_lead_call_trackers_count_query,
+    get_lead_status_query,
     get_leads_by_enrollment_id_query,
     get_leads_by_request_id_query,
     get_leads_by_status_and_time_before_query,
@@ -371,6 +372,15 @@ async def get_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
     except Exception as e:
         logger.error(f"Error getting lead: {e}")
         return None
+
+
+async def get_lead_status(lead_id: str) -> Optional[LeadCallStatus]:
+    """The lead's status, or None when it has no row. Says nothing: on the
+    grant path a lead that is not there yet is the usual answer. A failed
+    read raises."""
+    query_text, values = get_lead_status_query(lead_id)
+    result = await run_parameterized_query(query_text, values)
+    return LeadCallStatus(result[0]["status"]) if result else None
 
 
 async def get_leads_by_request_id(

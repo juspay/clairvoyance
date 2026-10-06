@@ -19,7 +19,7 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.nodes.call as call_node
-from app.crm.outreach.contracts import register_call_rerank
+from app.core import call_queue
 from app.crm.outreach.db.queries.enrollment import remember_stage_facts_query
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.schemas import EnrollmentRun, Workflow
@@ -28,7 +28,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_waiting_lead_priority_query,
 )
 from tests.crm.conftest import CRM_WEBHOOK_TEST_DSN as DSN
-from tests.crm.test_call_priority import _plan
+from tests.crm.test_call_priority import HOURS, NO_WINDOW, _plan
 
 IST = ZoneInfo("Asia/Kolkata")
 PLAN = _plan()
@@ -38,7 +38,13 @@ NIGHT = datetime(2026, 10, 9, 2, 0, tzinfo=IST)  # the offer that founded the ru
 KYC_AT = datetime(2026, 10, 9, 11, 0, tzinfo=IST)  # KYC done, inside the window
 NOW = KYC_AT + timedelta(seconds=5)
 STAMP = {"latest_topic": "LINE_KYC_COMPLETED", "latest_event_at": KYC_AT.isoformat()}
-LIVE = {"rank": 1, "order": "first_ready", "event_ms": int(KYC_AT.timestamp() * 1000)}
+LIVE = {
+    "rank": 1,
+    "order": "first_ready",
+    "event_ms": int(KYC_AT.timestamp() * 1000),
+    "next_rank": 2,  # not called by closing: the KYC pile tomorrow
+    "next_order": "newest_event",
+}
 
 needs_db = pytest.mark.skipif(
     not DSN, reason="set CRM_WEBHOOK_TEST_DSN to run against Postgres"
@@ -88,7 +94,8 @@ class _World:
         self.remembered: List[Tuple[str, str, Dict[str, Any], Dict[str, Any]]] = []
         self.enrolled: List[Dict[str, Any]] = []
         self.lead_writes: List[Tuple[str, Dict[str, Any]]] = []
-        self.reranks: List[Tuple[str, str, Dict[str, Any]]] = []
+        self.reranks: List[Tuple[Any, ...]] = []
+        self.reranks_later: List[Dict[str, Any]] = []
 
     async def live_workflows(self, _merchant: str) -> List[Workflow]:
         return [self.flow] if self.node is None else []
@@ -163,10 +170,9 @@ class _World:
         self.lead_writes.append((lead_id, priority))
         return self.still_waiting
 
-    async def rerank(
-        self, template_id: str, lead_id: str, priority: Dict[str, Any]
-    ) -> None:
-        self.reranks.append((template_id, lead_id, priority))
+    async def rerank(self, *args: Any, **later: Any) -> None:
+        self.reranks.append(args)  # app.core.call_queue.rerank_call's arguments
+        self.reranks_later.append(later)
 
 
 @pytest.fixture
@@ -196,8 +202,7 @@ def world(monkeypatch: pytest.MonkeyPatch):
             call_node, "update_waiting_lead_priority", w.update_waiting_lead_priority
         )
         monkeypatch.setattr(call_node, "_now", lambda: NOW)
-        monkeypatch.setattr(call_node, "_rerank_hook", None)  # put back after
-        register_call_rerank(w.rerank)
+        monkeypatch.setattr(call_node, "rerank_call", w.rerank)
         return w
 
     return _install
@@ -235,12 +240,47 @@ def test_stage_memory_reranks_the_waiting_call(world) -> None:
     _consume(_event())
 
     assert w.lead_writes == [("lead-1", LIVE)]
-    assert w.reranks == [("tpl-1", "lead-1", LIVE)]
+    assert w.reranks == [("tpl-1", "lead-1", 1, "first_ready", KYC_AT)]
 
 
-def test_with_no_hook_registered_only_the_lead_row_learns_the_rank(world) -> None:
+def test_the_rerank_says_what_a_live_call_falls_to_tomorrow(world) -> None:
+    """She is live today; not called by closing she is KYC pile tomorrow. The
+    queue is told both, so it can move her at the next opening."""
     w = world()
-    register_call_rerank(None)
+
+    _consume(_event())
+
+    assert w.reranks_later == [{"next_rank": 2, "next_order": "newest_event"}]
+
+
+def test_a_rerank_reads_the_templates_hours_only_when_the_plan_has_no_window(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Today is the template's call hours: the re-rank reads that template's
+    call config once. A plan that still names its own window reads nothing."""
+    asked: List[str] = []
+
+    async def config(template_id: str) -> Any:
+        asked.append(template_id)
+        return HOURS
+
+    monkeypatch.setattr(call_node, "get_call_execution_config_by_template_id", config)
+
+    w = world(_plan(priority=NO_WINDOW))
+    _consume(_event())
+    assert w.lead_writes == [("lead-1", LIVE)] and asked == ["tpl-1"]
+
+    w = world()
+    _consume(_event())
+    assert w.lead_writes == [("lead-1", LIVE)] and asked == ["tpl-1"]
+
+
+def test_with_no_hook_registered_only_the_lead_row_learns_the_rank(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = world()
+    monkeypatch.setattr(call_node, "rerank_call", call_queue.rerank_call)
+    monkeypatch.setattr(call_queue, "_hooks", None)
 
     _consume(_event())
 
@@ -260,13 +300,15 @@ def test_a_call_no_longer_waiting_is_not_reranked(world) -> None:
     assert w.reranks == []
 
 
-def test_a_failing_rank_change_never_fails_the_letter(world) -> None:
+def test_a_failing_rank_change_never_fails_the_letter(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
     w = world()
 
     async def broken(*_args: Any) -> None:
         raise RuntimeError("the queue is away")
 
-    register_call_rerank(broken)
+    monkeypatch.setattr(call_node, "rerank_call", broken)
 
     _consume(_event())
 

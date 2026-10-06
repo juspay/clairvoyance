@@ -33,7 +33,11 @@ def test_a_wait_listens_and_branches_exactly_when_it_lists_topics() -> None:
     assert (listens(timer), branches(timer)) == (False, False)
     assert (listens(hearing), branches(hearing)) == (True, True)
     # topics on a word that cannot wait make it neither
-    assert listens(WorkflowNode(id="c", type="call", topics=["x"])) is False
+    assert listens(WorkflowNode(id="s", type="send", topics=["x"])) is False
+    # a call that lists topics waits on its square for a line, listening
+    waiting_call = WorkflowNode(id="c", type="call", topics=["x"], key="$topic")
+    assert (listens(waiting_call), branches(waiting_call)) == (True, True)
+    assert listens(WorkflowNode(id="c", type="call")) is False
 
 
 def test_a_wait_has_no_action_and_an_action_is_not_a_wait() -> None:

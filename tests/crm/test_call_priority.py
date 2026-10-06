@@ -5,7 +5,8 @@ lead's meta_data, where the dialler reads it. A plan with no `priority` block is
 exactly as it was.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -105,10 +106,13 @@ def test_rank_for_live_kyc_offer() -> None:
     now = _ist(9, 10, 30)
     live, kyc, offer = _ist(9, 10, 5), _ist(9, 2, 0), _ist(9, 6, 0)
 
+    # A live call also says what it falls to if it is not called by closing.
     assert rank_for(DEFINITION, _context("LINE_KYC_COMPLETED", live), now) == {
         "rank": 1,
         "order": "first_ready",
         "event_ms": _ms(live),
+        "next_rank": 2,
+        "next_order": "newest_event",
     }
     assert rank_for(DEFINITION, _context("LINE_KYC_COMPLETED", kyc), now) == {
         "rank": 2,
@@ -153,12 +157,50 @@ def test_a_run_older_than_the_stamps_is_read_from_its_founding_letter() -> None:
         "rank": 1,
         "order": "first_ready",
         "event_ms": _ms(founded),
+        "next_rank": 3,  # no stamped topic: the plan's `else` tomorrow
+        "next_order": "newest_event",
     }
     assert rank_for(DEFINITION, {}, _ist(9, 10, 30)) == {
         "rank": 3,
         "order": "newest_event",
         "event_ms": 0,
     }
+
+
+NO_WINDOW = {k: v for k, v in PRIORITY.items() if k != "window"}
+# The template's call hours, as its call_execution_config carries them (IST).
+HOURS = SimpleNamespace(
+    initial_offset=0, call_start_time=time(10, 0), call_end_time=time(20, 56)
+)
+
+
+def test_today_is_read_from_the_templates_call_hours() -> None:
+    """A plan carries no call window: "today" is the template's call hours, on
+    the dialler's clock (IST). With no hours at hand nobody is live. Publish
+    does not ask for a window."""
+    plan = WorkflowDefinition.model_validate(_plan(priority=NO_WINDOW))
+    now = _ist(9, 10, 30)
+    live = _context("LINE_KYC_COMPLETED", _ist(9, 10, 5))
+    night = _context("LINE_KYC_COMPLETED", _ist(9, 9, 30))
+
+    assert rank_for(plan, live, now, HOURS) == {
+        "rank": 1,
+        "order": "first_ready",
+        "event_ms": _ms(_ist(9, 10, 5)),
+        "next_rank": 2,
+        "next_order": "newest_event",
+    }
+    assert (rank_for(plan, night, now, HOURS) or {})["rank"] == 2
+    assert (rank_for(plan, live, now) or {})["rank"] == 2
+    assert validate_definition(_plan(priority=NO_WINDOW)) == []
+
+
+def test_a_window_the_plan_still_names_is_the_one_used() -> None:
+    lunch = SimpleNamespace(call_start_time=time(12, 0), call_end_time=time(13, 0))
+
+    assert _rank("LINE_OFFERED", _ist(9, 10, 5), _ist(9, 10, 30)) == 1
+    live = _context("LINE_OFFERED", _ist(9, 10, 5))
+    assert (rank_for(DEFINITION, live, _ist(9, 10, 30), lunch) or {})["rank"] == 1
 
 
 def test_a_rank_the_plan_does_not_list_is_newest_event() -> None:
@@ -172,6 +214,7 @@ def test_a_rank_the_plan_does_not_list_is_newest_event() -> None:
     assert (pile["rank"], pile["order"]) == (9, "newest_event")
     live = rank_for(definition, _context("X", _ist(9, 10, 5)), _ist(9, 10, 30)) or {}
     assert (live["rank"], live["order"]) == (1, "first_ready")
+    assert (live["next_rank"], live["next_order"]) == (9, "newest_event")
 
 
 def test_publish_refuses_a_rule_on_a_fact_that_does_not_exist() -> None:
@@ -239,7 +282,10 @@ def _run(context: Dict[str, Any]) -> EnrollmentRun:
 
 
 async def _minted(
-    monkeypatch: pytest.MonkeyPatch, definition: WorkflowDefinition, run: EnrollmentRun
+    monkeypatch: pytest.MonkeyPatch,
+    definition: WorkflowDefinition,
+    run: EnrollmentRun,
+    config: Any = None,
 ) -> Dict[str, Any]:
     """Run the call square at 10:30 on 9 Oct; return the lead it inserted."""
     minted: List[Dict[str, Any]] = []
@@ -256,7 +302,7 @@ async def _minted(
         )()
 
     async def fake_config(_id: str) -> Any:
-        return type("C", (), {"initial_offset": 0})()
+        return config or type("C", (), {"initial_offset": 0})()
 
     async def nothing(*_args: Any) -> None:
         return None
@@ -306,3 +352,15 @@ async def test_a_plan_with_no_priority_writes_the_meta_it_always_did(
         "workflow_id": str(run.workflow_id),
         "enrollment_id": str(run.id),
     }
+
+
+async def test_the_call_node_ranks_on_its_templates_hours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The square has the template's call config at hand: no window in the plan."""
+    plan = WorkflowDefinition.model_validate(_plan(priority=NO_WINDOW))
+    run = _run(_context("LINE_OFFERED", _ist(9, 10, 7)))
+
+    lead = await _minted(monkeypatch, plan, run, HOURS)
+
+    assert lead["meta_data"]["priority"]["rank"] == 1

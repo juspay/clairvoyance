@@ -7,10 +7,12 @@ customer stamp + lead.pushed mirror for free). Each visit to the square
 mints its own lead.
 """
 
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import NAMESPACE_URL, uuid5
 
+from app.core.call_queue import CallRequest, queue_call, rerank_call, withdraw_call
 from app.core.logger import logger
 from app.crm.outreach import priority
 from app.crm.outreach.ceiling import (
@@ -23,16 +25,20 @@ from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.nodes.blocks import blocks_for
 from app.crm.outreach.nodes.context import (
     OUTCOME_KEY,
+    PARK_UNTIL_KEY,
     lead_request_id,
     playbook_key,
+    reply_key,
     run_facts,
 )
 from app.crm.outreach.nodes.spec import NodeParked
+from app.crm.outreach.nodes.wait import TOPIC_KEY
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.database.accessor import (
     create_lead_call_tracker,
     get_call_execution_config_by_template_id,
     get_lead_by_id,
+    get_lead_status,
     get_template_by_id,
     update_lead_enrollment_id,
     update_waiting_lead_priority,
@@ -52,17 +58,11 @@ MAX_CALLS_OUTCOME = "max_calls"
 ABORTED_OUTCOME = "ABORTED"
 
 
-# Filled by the dialler at start-up (contracts.register_call_rerank) and told
-# (template_id, lead_id, priority) when a waiting call's rank changes. Unfilled,
-# the new rank still reaches the lead row, which a later re-queue reads.
-_rerank_hook: Optional[Callable[[str, str, Dict[str, Any]], Awaitable[None]]] = None
-
-
-def register_call_rerank(
-    hook: Optional[Callable[[str, str, Dict[str, Any]], Awaitable[None]]],
-) -> None:
-    global _rerank_hook
-    _rerank_hook = hook
+# Set by grant.py around the one visit that mints a lead the dialler holds a
+# line for: {"lead_id": ...}. The square then leaves its insert under "mint" for
+# grant.py to run AFTER the run has moved, so a run an event moved first leaves
+# no lead row behind.
+GRANT: ContextVar[Optional[Dict[str, Any]]] = ContextVar("crm_call_grant", default=None)
 
 
 def _now() -> datetime:
@@ -70,9 +70,15 @@ def _now() -> datetime:
 
 
 def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
+    problems = []
     if not node.template_id:
-        return [f"call node {node.id} needs a template_id"]
-    return []
+        problems.append(f"call node {node.id} needs a template_id")
+    if node.topics and not node.key:
+        problems.append(
+            f"call node {node.id} lists topics, so it needs a key "
+            f"({TOPIC_KEY} to branch on the event's name)"
+        )
+    return problems
 
 
 def _visits_key(node_id: str) -> str:
@@ -95,6 +101,63 @@ def _visits_so_far(context: Dict[str, Any], node_id: str) -> int:
     return value if isinstance(value, int) and value >= 0 else 0
 
 
+def next_lead_id(run: EnrollmentRun, node_id: str) -> str:
+    """PURE: the id of the lead this run's NEXT visit to this call square mints;
+    a call waiting for its line is queued under it."""
+    visit = _visits_so_far(run.context, node_id) + 1
+    return str(uuid5(NAMESPACE_URL, f"crm-workflow-lead:{run.id}:{node_id}:{visit}"))
+
+
+def _event_at(rank: Dict[str, Any]) -> Optional[datetime]:
+    ms = rank.get("event_ms")
+    return datetime.fromtimestamp(ms / 1000, timezone.utc) if ms else None
+
+
+def placed_calls(
+    run: EnrollmentRun, definition: WorkflowDefinition
+) -> Dict[str, WorkflowNode]:
+    """PURE: lead id -> its call square, for each call whose placed (unlabelled)
+    arrow leads to the square this run waits on: where a grant leaves its run."""
+    if run.status != "waiting":
+        return {}
+    arrows = definition.outgoing()
+    return {
+        run.context[f"lead_{node.id}"]: node
+        for node in definition.nodes
+        if f"lead_{node.id}" in run.context
+        and (run.current_node, None) in arrows.get(node.id, [])
+    }
+
+
+async def undialled_call(run: EnrollmentRun, definition: WorkflowDefinition) -> bool:
+    """True when the run waits right after a call that waited for its line and
+    that call's lead is still to be dialled (BACKLOG)."""
+    for lead_id, node in placed_calls(run, definition).items():
+        if node.topics and await get_lead_status(lead_id) == LeadCallStatus.BACKLOG:
+            return True
+    return False
+
+
+async def withdraw_waiting_call(
+    run: EnrollmentRun, definition: Optional[WorkflowDefinition]
+) -> None:
+    """The run is ending on its square: if that is a call waiting for its
+    line, the ask is taken back. Never raises (the hook is fail-open)."""
+    nodes = definition.nodes if definition else []
+    node = next((n for n in nodes if n.id == run.current_node), None)
+    if node is not None and node.type == "call" and node.topics:
+        await withdraw_call(str(node.template_id), next_lead_id(run, node.id))
+
+
+async def hours_config(definition: WorkflowDefinition, template_id: Any) -> Any:
+    """The template's call config for priority.rank_for, read only when the plan
+    names no window of its own ("today" is then that template's call hours)."""
+    block = definition.priority
+    if block is None or block.window is not None:
+        return None
+    return await get_call_execution_config_by_template_id(str(template_id))
+
+
 async def rerank_waiting_call(
     run: EnrollmentRun,
     definition: WorkflowDefinition,
@@ -107,21 +170,43 @@ async def rerank_waiting_call(
     `match` names lead_<call square>. Never raises: a rank must not fail the
     letter that caused it."""
     try:
-        field = waiting_on.match.run if waiting_on.match else ""
-        call = next(
-            (
-                n
-                for n in definition.nodes
-                if n.type == "call" and f"lead_{n.id}" == field
-            ),
-            None,
-        )
-        lead_id = run.context.get(field)
-        rank = priority.rank_for(definition, context, _now())
-        if call is None or not lead_id or rank is None:
+        # A call square waiting for its line: its queued id has no lead row.
+        call: Optional[WorkflowNode] = waiting_on
+        lead_id: Any = next_lead_id(run, waiting_on.id)
+        if waiting_on.type != "call":
+            field = waiting_on.match.run if waiting_on.match else ""
+            call = next(
+                (
+                    n
+                    for n in definition.nodes
+                    if n.type == "call" and f"lead_{n.id}" == field
+                ),
+                None,
+            )
+            lead_id = run.context.get(field)
+        if call is None or not lead_id:
             return
-        if await update_waiting_lead_priority(str(lead_id), rank) and _rerank_hook:
-            await _rerank_hook(str(call.template_id), str(lead_id), rank)
+        rank = priority.rank_for(
+            definition,
+            context,
+            _now(),
+            await hours_config(definition, call.template_id),
+        )
+        if rank is None:
+            return
+        if waiting_on.type != "call" and not await update_waiting_lead_priority(
+            str(lead_id), rank
+        ):
+            return
+        await rerank_call(
+            str(call.template_id),
+            str(lead_id),
+            rank["rank"],
+            rank["order"],
+            _event_at(rank),
+            next_rank=rank.get("next_rank"),
+            next_order=rank.get("next_order"),
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"run {run.id}: waiting call not re-ranked: {e}")
 
@@ -134,7 +219,15 @@ async def execute(
     Idempotent per VISIT: a lease retry re-issues the same insert and the
     existing row is adopted. The accessor turns a duplicate key into None
     like every failure, so the square asks whether its own row is there.
+
+    A square that lists topics waits here for a line instead (PARK_UNTIL_KEY):
+    the dialler queues the id this visit would mint and asks grant.py when it
+    holds a line; a listed letter meanwhile takes its own arrow.
     """
+    if node.topics and run.context.get(reply_key(node.id)) is not None:
+        # A listed letter moved the run: its arrow is taken, the ask taken back.
+        await withdraw_call(str(node.template_id), next_lead_id(run, node.id))
+        return {}
     # The plan's daily ceiling, judged before anything is read (phase 20):
     # at it, this square dials nothing — the lead it mints is born FINISHED
     # with outcome ABORTED (25 Sep 2026), so the row says why no call was
@@ -181,11 +274,33 @@ async def execute(
     # context, so a retry of one visit re-derives its own id and a revisit
     # gets a new one.
     visit = _visits_so_far(run.context, node.id) + 1
-    lead_id = str(uuid5(NAMESPACE_URL, f"crm-workflow-lead:{run.id}:{node.id}:{visit}"))
+    lead_id = next_lead_id(run, node.id)
+    grant = GRANT.get() or {}
+    granted = grant.get("lead_id") == lead_id  # the dialler holds a line for it
 
+    # A granted call is due now: its waiting already happened.
     next_attempt_at = datetime.now(timezone.utc) + timedelta(
-        seconds=config.initial_offset
+        seconds=0 if granted else config.initial_offset
     )
+    rank = priority.rank_for(definition, run.context, _now(), config)
+    if node.topics and not capped and not granted:
+        asked = rank or {}
+        queued = await queue_call(
+            CallRequest(
+                lead_id=lead_id,
+                template_id=str(template.id),
+                run_id=str(run.id),
+                ready_at=next_attempt_at,
+                rank=asked.get("rank", 0),  # 0: the number's default rank
+                order=asked.get("order", "first_ready"),
+                event_at=_event_at(asked),
+                next_rank=asked.get("next_rank"),
+                next_order=asked.get("next_order"),
+            )
+        )
+        if queued is not None:  # None: no line queue takes it, mint it now
+            max_age = timedelta(days=definition.exits.max_age_days)
+            return {PARK_UNTIL_KEY: run.entered_at + max_age}
     # The template-variable bridge: every small fact the entry processor
     # carried (item, cart_value, ...) reaches the agent via the lead
     # payload — {placeholder}s in the template resolve from these keys.
@@ -204,62 +319,68 @@ async def execute(
         "workflow_id": str(run.workflow_id),
         "enrollment_id": str(run.id),
     }
-    rank = priority.rank_for(definition, run.context, _now())
     if rank is not None:
         meta_data["priority"] = rank  # the dialler reads the call's rank here
 
-    try:
-        lead = await create_lead_call_tracker(
-            id=lead_id,
-            reseller_id=template.reseller_id,
-            template=template.name,
-            template_id=str(template.id),
-            merchant_id=run.merchant_id,
-            next_attempt_at=next_attempt_at,
-            payload=payload,
-            attempt_count=0,
-            meta_data=meta_data,
-            request_id=lead_request_id(
-                run.context,
-                str(run.id),
-                (
-                    run.enrollment_key
-                    if any(door.key for door in definition.entries)
-                    else None
+    async def mint() -> None:
+        assert template is not None
+        try:
+            lead = await create_lead_call_tracker(
+                id=lead_id,
+                reseller_id=template.reseller_id,
+                template=template.name,
+                template_id=str(template.id),
+                merchant_id=run.merchant_id,
+                next_attempt_at=next_attempt_at,
+                payload=payload,
+                attempt_count=0,
+                meta_data=meta_data,
+                request_id=lead_request_id(
+                    run.context,
+                    str(run.id),
+                    (
+                        run.enrollment_key
+                        if any(door.key for door in definition.entries)
+                        else None
+                    ),
                 ),
-            ),
-            execution_mode=ExecutionMode.TELEPHONY,
-            status=LeadCallStatus.FINISHED if capped else LeadCallStatus.BACKLOG,
-            outcome=ABORTED_OUTCOME if capped else None,
-            call_end_time=datetime.now(timezone.utc) if capped else None,
-        )
-    except UniqueViolation:
-        # Same meaning as None, so it falls to the same lookup. The accessor
-        # swallows this today; kept for the day it narrows.
-        lead = None
+                execution_mode=ExecutionMode.TELEPHONY,
+                status=LeadCallStatus.FINISHED if capped else LeadCallStatus.BACKLOG,
+                outcome=ABORTED_OUTCOME if capped else None,
+                call_end_time=datetime.now(timezone.utc) if capped else None,
+            )
+        except UniqueViolation:
+            # Same meaning as None, so it falls to the same lookup. The accessor
+            # swallows this today; kept for the day it narrows.
+            lead = None
 
-    if lead is None:
-        # None means every failure, a duplicate key included, so the row's
-        # existence tells them apart: ours means this visit already ran under
-        # a lost lease — adopt it. Absent means a real failure.
-        lead = await get_lead_by_id(lead_id)
         if lead is None:
-            raise RuntimeError(f"call node {node.id}: lead insert returned None")
+            # None means every failure, a duplicate key included, so the row's
+            # existence tells them apart: ours means this visit already ran under
+            # a lost lease — adopt it. Absent means a real failure.
+            lead = await get_lead_by_id(lead_id)
+            if lead is None:
+                raise RuntimeError(f"call node {node.id}: lead insert returned None")
+            logger.bind(lead_id=lead_id).info(
+                f"walker: run {run.id} lead {lead_id} already exists "
+                f"(lease retry of visit {visit}) — continuing"
+            )
+
+        await update_lead_enrollment_id(lead_id, str(run.id))
+        # lead_id as a FIELD — the join to Buddy's dial line needs a column.
         logger.bind(lead_id=lead_id).info(
-            f"walker: run {run.id} lead {lead_id} already exists "
-            f"(lease retry of visit {visit}) — continuing"
+            f"walker: run {run.id} "
+            + (
+                f"minted aborted lead {lead_id} (node {node.id}, no call placed)"
+                if capped
+                else f"pushed lead {lead_id} (node {node.id})"
+            )
         )
 
-    await update_lead_enrollment_id(lead_id, str(run.id))
-    # lead_id as a FIELD — the join to Buddy's dial line needs a column.
-    logger.bind(lead_id=lead_id).info(
-        f"walker: run {run.id} "
-        + (
-            f"minted aborted lead {lead_id} (node {node.id}, no call placed)"
-            if capped
-            else f"pushed lead {lead_id} (node {node.id})"
-        )
-    )
+    if granted and not capped:
+        grant["mint"] = mint  # the run moves first; grant.py mints after
+    else:
+        await mint()
     written: Dict[str, Any] = {
         f"lead_{node.id}": lead_id,
         _visits_key(node.id): visit,

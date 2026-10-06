@@ -511,6 +511,12 @@ def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
+def get_lead_status_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """One lead's status, or no row."""
+    text = f'SELECT "status" FROM "{LEAD_CALL_TRACKER_TABLE}" WHERE "id" = $1;'
+    return text, [lead_id]
+
+
 def update_lead_call_recording_url_query(
     call_id: str, recording_url: str
 ) -> Tuple[str, List[Any]]:

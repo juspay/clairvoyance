@@ -37,6 +37,7 @@ _BOOKKEEPING_KEYS = (
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
     "_outcome",  # OUTCOME_KEY: a square's word for the trail, popped by the walker
+    "_park_until",  # PARK_UNTIL_KEY: a call waiting for its line, popped likewise
     "calls_today",  # ceiling.CALLS_TODAY_KEY (pinned by test); the call ledger
 )
 # The letter that woke a run in place, left for the flush that follows
@@ -62,6 +63,10 @@ LATEST_EVENT_AT_KEY = "latest_event_at"
 # leak could not reach a template either. A branching square never uses it:
 # its answer already rides reply_<node>.
 OUTCOME_KEY = "_outcome"
+# A call square that lists topics waits on itself for its line: it returns the
+# alarm (the end of the run's life) here, and the walker holds the run on the
+# square, popping this as it pops the outcome.
+PARK_UNTIL_KEY = "_park_until"
 
 
 # The bookkeeping keys whose value is the ID OF WHAT THIS SQUARE HANDED

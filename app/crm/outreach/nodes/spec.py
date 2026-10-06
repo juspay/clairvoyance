@@ -47,3 +47,6 @@ class NodeSpec:
     # listens — and so branches — is a property of the NODE (its topics),
     # answered by nodes.listens / nodes.branches (ruled 17 Sep 2026).
     branches: bool = False
+    # The word may wait on its own square, listening, when the node lists
+    # topics: a call waiting for its line.
+    parks: bool = False
