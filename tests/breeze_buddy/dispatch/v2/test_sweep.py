@@ -1,0 +1,468 @@
+"""The 1 s sweep (design card §5; Fable I3): cheap tick, spawned jobs, leader only."""
+
+import asyncio
+import time
+from types import SimpleNamespace as NS
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import app.ai.voice.agents.breeze_buddy.dispatch  # noqa: F401  (import order)
+from app.ai.voice.agents.breeze_buddy.dispatch.v2 import (
+    latch,
+    reconcile as RC,
+    routes,
+    sweep as SW,
+)
+from tests.breeze_buddy.dispatch.v2.conftest import seed_number, use_redis
+
+pytestmark = pytest.mark.asyncio
+
+
+def NOW() -> int:
+    return int(time.time() * 1000)
+
+
+@pytest.fixture
+async def rv(rr, monkeypatch):
+    use_redis(monkeypatch, rr, SW, RC, routes)
+    monkeypatch.setattr(SW, "v2_seen", AsyncMock(return_value=True))
+    monkeypatch.setattr(SW, "JOBS", ())
+    await rr.set("bb:epoch", "x")
+    yield rr
+
+
+async def _settle() -> None:
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+# -- the tick -----------------------------------------------------------------------------
+
+
+async def test_tick_does_nothing_while_v2_was_never_used(monkeypatch):
+    monkeypatch.setattr(SW, "v2_seen", AsyncMock(return_value=False))
+    client = MagicMock(side_effect=AssertionError("touched"))
+    await SW.Sweeper(redis_client=client).tick()
+    assert client.method_calls == []
+
+
+async def test_tick_matches_a_lead_whose_time_arrived(rv):
+    await seed_number(rv, "N1", 1, {"T1": {}})
+    await rv.zadd("bb:q:T1", {"L1": NOW() - 1})
+    await rv.zadd("bb:due", {"N1": NOW() - 1})
+    await SW.Sweeper(redis_client=rv).tick()
+    assert await rv.smembers("bb:busy:N1") == {"lead:L1"}
+
+
+async def test_tick_matches_every_due_number_in_one_call(rv, monkeypatch):
+    for n in ("N1", "N2", "N3"):
+        await seed_number(rv, n, 1, {f"T-{n}": {}})
+        await rv.zadd(f"bb:q:T-{n}", {f"{n}-L": NOW() - 1})
+        await rv.zadd("bb:due", {n: NOW() - 1})
+    calls = []
+    real = SW.scripts.match_many
+
+    async def spy(ids):
+        calls.append(sorted(ids))
+        return await real(ids)
+
+    monkeypatch.setattr(SW.scripts, "match_many", spy)
+    await SW.Sweeper(redis_client=rv).tick()
+    assert calls == [["N1", "N2", "N3"]]
+    for n in ("N1", "N2", "N3"):
+        assert await rv.scard(f"bb:busy:{n}") == 1
+
+
+async def test_tick_fills_every_free_line_of_a_big_number(rv):
+    await seed_number(rv, "N1", 1_000, {"T1": {}})
+    await rv.zadd("bb:q:T1", {f"L{i}": NOW() - 1 for i in range(1_000)})
+    await rv.zadd("bb:due", {"N1": NOW() - 1})
+    await SW.Sweeper(redis_client=rv).tick()
+    assert await rv.scard("bb:busy:N1") == 1_000  # not 100: the cap loop ran
+
+
+async def test_tick_never_scans_the_keyspace(rv, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("SCAN on the 1 s path")
+
+    monkeypatch.setattr(rv, "scan_iter", boom)
+    monkeypatch.setattr(rv, "scan", boom)
+    noop = AsyncMock()
+    monkeypatch.setattr(SW, "JOBS", tuple(SW.Job(f"j{n}", n, noop, 5) for n in (1, 5)))
+    await seed_number(rv, "N1", 1, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.zadd("bb:due", {"N1": NOW() - 1})
+    sw = SW.Sweeper(redis_client=rv)
+    for _ in range(10):
+        await sw.tick()
+    await _settle()
+    assert noop.await_count == 12  # 10 + 2
+
+
+async def test_epoch_missing_recovers_in_the_same_tick_then_refills_rooms(
+    rv, monkeypatch
+):
+    await rv.delete("bb:epoch")
+    recover = AsyncMock()
+    monkeypatch.setattr(SW, "recover_after_flush", recover)
+    backlog = AsyncMock()
+    other = AsyncMock()
+    monkeypatch.setattr(
+        SW, "JOBS", (SW.Job("backlog", 60, backlog, 5), SW.Job("j", 1, other, 5))
+    )
+    await SW.Sweeper(redis_client=rv).tick()
+    await _settle()
+    recover.assert_awaited_once()
+    backlog.assert_awaited_once()  # rooms refilled now, not in up to 60 s
+    other.assert_not_awaited()
+
+
+async def test_epoch_missing_tells_recovery_how_long_since_the_loss_was_seen(
+    rv, monkeypatch
+):
+    """Fix 1-B: the legacy recovery waits 30 s from the first tick that saw the epoch
+    missing; the sweeper keeps that time in memory and starts it again on the next loss.
+    The epoch was seen set before it went missing: a loss, not first use."""
+    clock = [100.0]
+    monkeypatch.setattr(SW, "time", NS(monotonic=lambda: clock[0], time=time.time))
+    recover = AsyncMock(side_effect=[False, False, True, False])
+    monkeypatch.setattr(SW, "recover_after_flush", recover)
+    backlog = AsyncMock()
+    monkeypatch.setattr(SW, "JOBS", (SW.Job("backlog", 60, backlog, 5),))
+    sw = SW.Sweeper(redis_client=rv)
+    await sw.tick()  # bb:epoch is set (fixture): seen
+    await rv.delete("bb:epoch")  # the loss
+    for t in (100.0, 115.0, 130.0):
+        clock[0] = t
+        await sw.tick()
+        await _settle()
+        if t < 130.0:
+            backlog.assert_not_awaited()  # rooms only once the epoch is back
+    assert [c.kwargs for c in recover.await_args_list] == [
+        {"lost_for_ms": 0, "first_use": False},
+        {"lost_for_ms": 15_000, "first_use": False},
+        {"lost_for_ms": 30_000, "first_use": False},
+    ]
+    backlog.assert_awaited_once()
+    clock[0] = 500.0  # a later loss starts its own wait
+    await sw.tick()
+    assert recover.await_args_list[-1].kwargs["lost_for_ms"] == 0
+
+
+async def test_a_sweeper_that_stops_leading_forgets_when_it_saw_the_loss(
+    rv, monkeypatch
+):
+    """Should it lead again later, a stale time must not cut a new loss's 30 s short."""
+    sw = SW.Sweeper(redis_client=rv)
+    sw._lost_since = 1.0
+    sw._leader._is_leader = False
+
+    async def one_loop():
+        sw._stopping.set()
+
+    monkeypatch.setattr(sw._leader, "start", one_loop)
+    monkeypatch.setattr(SW, "check_sweep_leader", AsyncMock())
+    await asyncio.wait_for(sw._loop(), timeout=2)
+    assert sw._lost_since is None
+
+
+async def test_every_pod_learns_the_epoch_not_only_the_leader(rv, monkeypatch):
+    """A pod whose workers only meet v2 numbers never reads bb:epoch on the dial path; its
+    sweeper loop reads it until seen once, so a later loss holds that pod too."""
+    sw = SW.Sweeper(redis_client=rv)
+    sw._leader._is_leader = False
+
+    async def one_loop():
+        sw._stopping.set()
+
+    monkeypatch.setattr(sw._leader, "start", one_loop)
+    monkeypatch.setattr(SW, "check_sweep_leader", AsyncMock())
+    assert not latch.epoch_seen()
+    await asyncio.wait_for(sw._loop(), timeout=2)  # bb:epoch is set (fixture)
+    assert latch.epoch_seen()
+
+
+async def test_switch_runs_every_5_ticks_and_every_job_has_a_timeout():
+    jobs = {job.name: job for job in SW.JOBS}
+    assert jobs["switch"].every == 5
+    assert all(0 < job.timeout_s <= job.every * 30 for job in SW.JOBS)
+
+
+# -- jobs ---------------------------------------------------------------------------------
+
+
+async def test_jobs_are_spawned_never_awaited_and_never_doubled(rv, monkeypatch):
+    gate = asyncio.Event()
+    calls = []
+
+    async def slow():
+        calls.append(1)
+        await gate.wait()
+
+    monkeypatch.setattr(SW, "JOBS", (SW.Job("slow", 1, slow, 5),))
+    sw = SW.Sweeper(redis_client=rv)
+    await asyncio.wait_for(sw.tick(), timeout=1)  # returns while the job still runs
+    await _settle()
+    await sw.tick()
+    await _settle()
+    assert calls == [1]  # still running: no second copy
+    gate.set()
+    await _settle()
+    await sw.tick()
+    await _settle()
+    assert calls == [1, 1]
+    gate.set()
+
+
+async def test_a_failing_or_slow_job_is_contained(rv, monkeypatch):
+    async def bad():
+        raise RuntimeError("boom")
+
+    async def hang():
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(
+        SW, "JOBS", (SW.Job("bad", 1, bad, 5), SW.Job("hang", 1, hang, 0.01))
+    )
+    sw = SW.Sweeper(redis_client=rv)
+    await sw.tick()
+    await asyncio.sleep(0.05)
+    assert all(t.done() for t in sw._running.values())  # timed out, not stuck
+    await sw.tick()  # and the next tick spawns them again
+
+
+async def test_only_the_leader_ticks(monkeypatch):
+    monkeypatch.setattr(SW, "v2_seen", AsyncMock(return_value=True))
+    monkeypatch.setattr(SW, "SWEEP_INTERVAL_S", 0.01)
+    sw = SW.Sweeper(redis_client=MagicMock())
+    leader = NS(is_leader=False, start=AsyncMock(), stop=AsyncMock())
+    monkeypatch.setattr(sw, "_leader", leader)
+    tick = AsyncMock()
+    monkeypatch.setattr(sw, "tick", tick)
+    sw.start()
+    await asyncio.sleep(0.05)
+    tick.assert_not_awaited()
+    leader.is_leader = True
+    await asyncio.sleep(0.05)
+    await sw.stop()
+    assert tick.await_count >= 1
+    leader.stop.assert_awaited_once()
+
+
+async def test_leader_election_waits_until_v2_is_first_used(monkeypatch):
+    seen = AsyncMock(return_value=False)
+    monkeypatch.setattr(SW, "v2_seen", seen)
+    monkeypatch.setattr(SW, "SWEEP_INTERVAL_S", 0.01)
+    sw = SW.Sweeper(redis_client=MagicMock())
+    leader = NS(is_leader=False, start=AsyncMock(), stop=AsyncMock())
+    monkeypatch.setattr(sw, "_leader", leader)
+    sw.start()
+    await asyncio.sleep(0.05)
+    leader.start.assert_not_awaited()  # today's path: no leader key written at all
+    seen.return_value = True
+    await asyncio.sleep(0.05)
+    await sw.stop()
+    leader.start.assert_awaited()
+
+
+# -- refresh jobs -------------------------------------------------------------------------
+
+
+async def test_enabled_mirror_follows_the_kill_switch_and_never_scans(rv, monkeypatch):
+    # Fable M2: match reads today's pause keys itself, so nothing SCANs for them
+    monkeypatch.setattr(rv, "scan", AsyncMock(side_effect=AssertionError("SCAN")))
+    monkeypatch.setattr(rv, "scan_iter", MagicMock(side_effect=AssertionError("SCAN")))
+    monkeypatch.setattr(
+        SW.dyn_cfg, "BB_DISPATCH_ENABLED", AsyncMock(return_value=False)
+    )
+    await SW.refresh_enabled_mirror()
+    assert await rv.get("bb:dispatch:enabled") == "0"
+    monkeypatch.setattr(SW.dyn_cfg, "BB_DISPATCH_ENABLED", AsyncMock(return_value=True))
+    await SW.refresh_enabled_mirror()
+    assert await rv.get("bb:dispatch:enabled") == "1"
+    assert not await rv.exists("bb:paused_resellers")
+
+
+async def test_number_facts_refresh_rewrites_max_and_keeps_mode(rv, monkeypatch):
+    await seed_number(rv, "N1", 2, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    row = NS(
+        id="N1", status="AVAILABLE", provider="PLIVO", maximum_channels=7, channels=0
+    )
+    monkeypatch.setattr(
+        SW, "get_telephony_numbers_by_ids", AsyncMock(return_value={"N1": row})
+    )
+    await SW.refresh_number_facts()
+    assert await rv.hget("bb:num:N1", "max") == "7"
+    assert await rv.hget("bb:num:N1", "mode") == "v2"
+
+
+async def test_route_refresh_reresolves_templates_with_waiting_leads(rv, monkeypatch):
+    await seed_number(rv, "N1", 2, {"T1": {}, "T2": {}, "T3": {}})
+    await seed_number(rv, "N9", 2, {"T9": {}}, mode=None)  # legacy: not refreshed
+    await rv.sadd("bb:v2:active", "N1")
+    for t in ("T1", "T2", "T9"):
+        await rv.zadd(f"bb:q:{t}", {f"L-{t}": NOW() + 60_000})
+    inv = AsyncMock()
+    monkeypatch.setattr(SW, "invalidate_route", inv)
+    await SW.refresh_routes()
+    # T3's room is empty: its next lead is routed by the route as it is then
+    assert sorted(c.args[0] for c in inv.await_args_list) == ["T1", "T2"]
+
+
+async def test_the_routes_job_runs_every_routes_refresh_interval():
+    job = next(j for j in SW.JOBS if j.name == "routes")
+    assert (job.every, job.timeout_s) == (600, 300)  # BB_V2_ROUTES_REFRESH_S default
+
+
+async def test_channels_mirror_writes_the_db_processing_count_for_v2_numbers_only(
+    rv, monkeypatch
+):
+    """Fable I3: DB ``channels`` is today's gate the moment v2 lets go of a number without
+    a hand-back (Redis flush, code rollback), and today's code only moves it by +-1. So the
+    mirror writes the DB's own count of calls holding a line (the hand-back's query), never
+    the busy list's size, which also counts tickets not dialled yet."""
+    await seed_number(rv, "N1", 5, {"T1": {}})
+    await seed_number(rv, "N2", 5, {"T2": {}}, mode="draining")
+    await rv.sadd("bb:v2:active", "N1", "N2")
+    # a ticket (not dialled yet), a live outbound call and a live inbound call
+    await rv.sadd("bb:busy:N1", "lead:ticket", "lead:live", "call:in")
+    await rv.sadd("bb:busy:N2", "lead:d")
+    count = AsyncMock(return_value={"N1": 2, "N2": 1})
+    monkeypatch.setattr(SW, "count_processing_by_telephony_number", count)
+    put = AsyncMock(return_value=True)
+    monkeypatch.setattr(SW, "set_telephony_number_channels", put)
+    await SW.write_channels_mirror()
+    count.assert_awaited_once_with()  # one query for every number
+    put.assert_awaited_once_with("N1", 2)  # draining: the hand-back owns it
+
+
+async def test_channels_mirror_skips_a_number_handed_back_while_it_ran(rv, monkeypatch):
+    # once a hand-back flips the mode it owns DB channels: never overwrite its count
+    await seed_number(rv, "N1", 5, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+
+    async def count():
+        await rv.hset("bb:num:N1", "mode", "legacy")  # the hand-back flips it meanwhile
+        return {"N1": 1}
+
+    monkeypatch.setattr(SW, "count_processing_by_telephony_number", count)
+    put = AsyncMock()
+    monkeypatch.setattr(SW, "set_telephony_number_channels", put)
+    await SW.write_channels_mirror()
+    put.assert_not_awaited()
+
+
+async def test_channels_mirror_never_overwrites_a_hand_back_that_finished_mid_loop(
+    rv, monkeypatch
+):
+    """At the 09:00 DB peak one UPDATE per number can take ~170 ms, so with ~30 v2 numbers
+    the write loop can outlast a global off's drain + hand-back. A number handed back after
+    the mirror read its mode (mode legacy, the hand-back's own count written) must not get
+    the mirror's older count on top: today's gate would stay wrong for good (like I3).
+    """
+    for n in ("N1", "N2"):
+        await seed_number(rv, n, 5, {f"T{n}": {}})
+        await rv.sadd("bb:v2:active", n)
+    monkeypatch.setattr(
+        SW,
+        "count_processing_by_telephony_number",
+        AsyncMock(return_value={"N1": 1, "N2": 4}),
+    )
+    channels = {}
+
+    async def put(number_id, value):
+        channels[number_id] = value
+        if number_id == "N1":  # while N1's slow UPDATE runs, N2 is handed back
+            await rv.hset("bb:num:N2", "mode", "legacy")
+            channels["N2"] = 2  # the hand-back's fresh PROCESSING count
+        return True
+
+    monkeypatch.setattr(SW, "set_telephony_number_channels", put)
+    await SW.write_channels_mirror()
+    assert channels == {"N1": 1, "N2": 2}  # N2 keeps the hand-back's count
+
+
+async def test_after_a_flush_todays_gate_counts_live_calls_not_v2_tickets(
+    rv, monkeypatch
+):
+    """Fable I3, end to end: N1 on v2 with 2 lines, one live call and one ticket being
+    dialled. Redis is flushed (the dynamic config with it, so v2 reads as off) and today's
+    path takes the number back with no hand-back. Its DB gate must hold the live call only:
+    1 of 2 lines taken, not 2 of 2 (a refused-token storm) and never a stale low."""
+    await seed_number(rv, "N1", 2, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.sadd("bb:busy:N1", "lead:live", "lead:ticket")
+    channels = {}
+
+    async def put(number_id, value):
+        channels[number_id] = value
+        return True
+
+    monkeypatch.setattr(
+        SW, "count_processing_by_telephony_number", AsyncMock(return_value={"N1": 1})
+    )
+    monkeypatch.setattr(SW, "set_telephony_number_channels", put)
+    await SW.write_channels_mirror()
+    await rv.flushdb()
+    assert await routes.number_mode_or_none("N1") == "legacy"  # today's path owns it
+    assert channels == {"N1": 1}
+
+
+async def test_backlog_job_runs_only_while_a_number_is_v2_accounted(rv, monkeypatch):
+    backlog = AsyncMock(return_value=0)
+    monkeypatch.setattr(SW, "reconcile_backlog_v2", backlog)
+    await SW.backlog_job()
+    backlog.assert_not_awaited()
+    await rv.sadd("bb:v2:active", "N1")
+    await SW.backlog_job()
+    backlog.assert_awaited_once()
+
+
+async def test_the_sweep_leader_task_is_named_for_the_sweep(monkeypatch):
+    # Fable M12: the sweep's election ran as a task named "bb-promoter-leader"
+    from app.ai.voice.agents.breeze_buddy.dispatch import leader as leader_mod
+
+    monkeypatch.setattr(
+        leader_mod, "get_redis_service", AsyncMock(side_effect=RuntimeError("no redis"))
+    )
+    sweep_leader = SW.Sweeper(redis_client=MagicMock())._leader
+    promoter_leader = leader_mod.LeaderElection()
+    for election in (sweep_leader, promoter_leader):
+        await election.start()
+    try:
+        names = [e._task.get_name() for e in (sweep_leader, promoter_leader) if e._task]
+        assert names == [
+            "bb-v2-sweep-leader",
+            "bb-promoter-leader",
+        ]  # today's unchanged
+    finally:
+        for election in (sweep_leader, promoter_leader):
+            await election.stop()
+
+
+async def test_a_sweeper_that_loses_the_lead_cancels_its_running_jobs(rv, monkeypatch):
+    """Review #1287 finding 3: a deposed leader's switch step (or counter rewrite) must
+    not run on next to its successor's; the new leader re-runs every job."""
+    gate, started = asyncio.Event(), asyncio.Event()
+
+    async def slow():
+        started.set()
+        await gate.wait()
+
+    monkeypatch.setattr(SW, "JOBS", (SW.Job("slow", 1, slow, 30),))
+    sw = SW.Sweeper(redis_client=rv)
+    await sw.tick()
+    await asyncio.wait_for(started.wait(), timeout=1)
+    job = sw._running["slow"]
+    sw._leader._is_leader = False  # the lock expired
+
+    async def one_loop():
+        sw._stopping.set()
+
+    monkeypatch.setattr(sw._leader, "start", one_loop)
+    monkeypatch.setattr(SW, "check_sweep_leader", AsyncMock())
+    await asyncio.wait_for(sw._loop(), timeout=2)
+    await _settle()
+    assert job.done() and not gate.is_set()  # cancelled, not finished

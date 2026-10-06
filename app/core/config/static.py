@@ -495,6 +495,12 @@ BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10
 BB_V2_REDIS_SOCKET_TIMEOUT_S = float(os.environ.get("BB_V2_REDIS_SOCKET_TIMEOUT_S", 10))
 BB_V2_REDIS_MAX_CONNECTIONS = int(os.environ.get("BB_V2_REDIS_MAX_CONNECTIONS", 200))
 BB_V2_MATCH_CAP = int(os.environ.get("BB_V2_MATCH_CAP", 100))
+# bb:due (dispatch/v2/sweep.py, design card rule 55): each 1 s tick matches only the
+# numbers whose bb:due time has come, at most BB_V2_DUE_BATCH of them (the earliest; the
+# rest on the next tick), and every BB_V2_DUE_FULL_PASS_TICKS ticks every v2-accounted
+# number too (the safety net for a missed bb:due write or a change by hand).
+BB_V2_DUE_BATCH = int(os.environ.get("BB_V2_DUE_BATCH", 5000))
+BB_V2_DUE_FULL_PASS_TICKS = int(os.environ.get("BB_V2_DUE_FULL_PASS_TICKS", 30))
 # A number match can't act on yet is looked at again this long later: one whose room's
 # reseller is paused (today's key, set and removed by hand: no write tells v2; the most an
 # unpause waits) and one still switching (v2_pending / draining: match issues nothing until
@@ -506,6 +512,50 @@ if not math.isfinite(BB_V2_DUE_RECHECK_S) or BB_V2_DUE_RECHECK_S < 1:
         "BB_V2_DUE_RECHECK_S must be a finite number >= 1, got "
         f"{BB_V2_DUE_RECHECK_S!r}"
     )
+# The ledger check (dispatch/v2/reconcile.py) reads every v2 number's holders in one
+# round trip and the DB in queries of at most this many ids each, not per number.
+BB_V2_LEDGER_CHUNK = int(os.environ.get("BB_V2_LEDGER_CHUNK", 1000))
+# The 5-min orphan prune reads each room in ZSCAN chunks of this many leads (and asks the
+# DB about one chunk at a time): a 100k-lead room is never one multi-MB reply.
+BB_V2_PRUNE_CHUNK = int(os.environ.get("BB_V2_PRUNE_CHUNK", 1000))
+# The 15 s monitor looks for the oldest live ticket in bb:tickets in LRANGE chunks of
+# BB_V2_MONITOR_SCAN_CHUNK, reading at most BB_V2_MONITOR_SCAN_MAX entries (a longer void
+# run at the head means no acceptor is popping: the head's age is reported).
+BB_V2_MONITOR_SCAN_CHUNK = int(os.environ.get("BB_V2_MONITOR_SCAN_CHUNK", 100))
+BB_V2_MONITOR_SCAN_MAX = int(os.environ.get("BB_V2_MONITOR_SCAN_MAX", 1000))
+# The v2 route refresh (dispatch/v2/sweep.py) re-resolves, this often, the routes of the
+# templates with waiting leads. Only a backstop: the template / config / number save hooks
+# re-resolve a route the moment it changes. At thousands of templates every 60 s would be
+# tens of DB queries a second for nothing; set 60 to get the old pace.
+BB_V2_ROUTES_REFRESH_S = int(os.environ.get("BB_V2_ROUTES_REFRESH_S", 600))
+if BB_V2_ROUTES_REFRESH_S < 10:
+    raise ValueError(
+        f"BB_V2_ROUTES_REFRESH_S must be >= 10, got {BB_V2_ROUTES_REFRESH_S!r}"
+    )
+for _name, _val in (
+    ("BB_V2_DUE_BATCH", BB_V2_DUE_BATCH),
+    ("BB_V2_DUE_FULL_PASS_TICKS", BB_V2_DUE_FULL_PASS_TICKS),
+    ("BB_V2_LEDGER_CHUNK", BB_V2_LEDGER_CHUNK),
+    ("BB_V2_PRUNE_CHUNK", BB_V2_PRUNE_CHUNK),
+    ("BB_V2_MONITOR_SCAN_CHUNK", BB_V2_MONITOR_SCAN_CHUNK),
+    ("BB_V2_MONITOR_SCAN_MAX", BB_V2_MONITOR_SCAN_MAX),
+):
+    if _val < 1:
+        raise ValueError(f"{_name} must be >= 1, got {_val!r}")
+# The v2 lease reaper's tiers (dispatch/v2/reconcile.py, design card rule 14): a ticket
+# popped but not claimed is delivered again; a claimed one that never dials frees its
+# line; a dial whose lease was never cleared frees it (or only the lease, if its lead is
+# PROCESSING). Not env knobs: each outlasts the longest wait of a live coroutine in that
+# state (180 s: 3x a slow pre-check plus the greeting wait).
+BB_V2_UNCLAIMED_REPUSH_S = 30
+BB_V2_CLAIMED_MAX_AGE_S = 180
+BB_V2_DIAL_STUCK_S = 600
+# After a Redis loss that took the v2 flags too, today's dialling is held and its counters
+# are rebuilt from the DB this long after the loss is seen, so any dial in flight at the
+# loss has returned by then: the slowest provider's request timeout, Vobiz's 30 s
+# (vobiz.py _REQUEST_TIMEOUT_SECONDS; Plivo's is PLIVO_REST_TIMEOUT_SECONDS, 15 s).
+# Not an env knob: lowering it below either timeout reopens the over-dial window.
+BB_V2_LOSS_RECOVERY_WAIT_S = 30
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the
