@@ -504,6 +504,12 @@ BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10
 BB_V2_REDIS_SOCKET_TIMEOUT_S = float(os.environ.get("BB_V2_REDIS_SOCKET_TIMEOUT_S", 10))
 BB_V2_REDIS_MAX_CONNECTIONS = int(os.environ.get("BB_V2_REDIS_MAX_CONNECTIONS", 200))
 BB_V2_MATCH_CAP = int(os.environ.get("BB_V2_MATCH_CAP", 100))
+# bb:due (dispatch/v2/sweep.py, design card rule 55): each 1 s tick matches only the
+# numbers whose bb:due time has come, at most BB_V2_DUE_BATCH of them (the earliest; the
+# rest on the next tick), and every BB_V2_DUE_FULL_PASS_TICKS ticks every v2-accounted
+# number too (the safety net for a missed bb:due write or a change by hand).
+BB_V2_DUE_BATCH = int(os.environ.get("BB_V2_DUE_BATCH", 5000))
+BB_V2_DUE_FULL_PASS_TICKS = int(os.environ.get("BB_V2_DUE_FULL_PASS_TICKS", 30))
 # A number match can't act on yet is looked at again this long later: one whose room's
 # reseller is paused (today's key, set and removed by hand: no write tells v2; the most an
 # unpause waits) and one still switching (v2_pending / draining: match issues nothing until
@@ -521,9 +527,27 @@ BB_V2_LEDGER_CHUNK = int(os.environ.get("BB_V2_LEDGER_CHUNK", 1000))
 # The 5-min orphan prune reads each room in ZSCAN chunks of this many leads (and asks the
 # DB about one chunk at a time): a 100k-lead room is never one multi-MB reply.
 BB_V2_PRUNE_CHUNK = int(os.environ.get("BB_V2_PRUNE_CHUNK", 1000))
+# The 15 s monitor looks for the oldest live ticket in bb:tickets in LRANGE chunks of
+# BB_V2_MONITOR_SCAN_CHUNK, reading at most BB_V2_MONITOR_SCAN_MAX entries (a longer void
+# run at the head means no acceptor is popping: the head's age is reported).
+BB_V2_MONITOR_SCAN_CHUNK = int(os.environ.get("BB_V2_MONITOR_SCAN_CHUNK", 100))
+BB_V2_MONITOR_SCAN_MAX = int(os.environ.get("BB_V2_MONITOR_SCAN_MAX", 1000))
+# The v2 route refresh (dispatch/v2/sweep.py) re-resolves, this often, the routes of the
+# templates with waiting leads. Only a backstop: the template / config / number save hooks
+# re-resolve a route the moment it changes. At thousands of templates every 60 s would be
+# tens of DB queries a second for nothing; set 60 to get the old pace.
+BB_V2_ROUTES_REFRESH_S = int(os.environ.get("BB_V2_ROUTES_REFRESH_S", 600))
+if BB_V2_ROUTES_REFRESH_S < 10:
+    raise ValueError(
+        f"BB_V2_ROUTES_REFRESH_S must be >= 10, got {BB_V2_ROUTES_REFRESH_S!r}"
+    )
 for _name, _val in (
+    ("BB_V2_DUE_BATCH", BB_V2_DUE_BATCH),
+    ("BB_V2_DUE_FULL_PASS_TICKS", BB_V2_DUE_FULL_PASS_TICKS),
     ("BB_V2_LEDGER_CHUNK", BB_V2_LEDGER_CHUNK),
     ("BB_V2_PRUNE_CHUNK", BB_V2_PRUNE_CHUNK),
+    ("BB_V2_MONITOR_SCAN_CHUNK", BB_V2_MONITOR_SCAN_CHUNK),
+    ("BB_V2_MONITOR_SCAN_MAX", BB_V2_MONITOR_SCAN_MAX),
 ):
     if _val < 1:
         raise ValueError(f"{_name} must be >= 1, got {_val!r}")

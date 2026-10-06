@@ -582,6 +582,28 @@ async def test_first_use_with_no_desired_number_just_sets_the_epoch(
         assert await rv.lrange(f"bb:channel:{n}", 0, -1) == ["stale"]
 
 
+async def test_first_enable_with_no_number_listed_holds_nothing_and_sets_the_epoch(
+    rv, db, monkeypatch
+):
+    """End to end: BB_DISPATCH_V2_ENABLED first turned on with an empty list. Today's
+    worker is not held while the epoch is missing, and the leader's first tick sets it.
+    """
+    from app.ai.voice.agents.breeze_buddy.dispatch import queue as queue_mod
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import sweep as SW
+
+    _config(monkeypatch, enabled=True, numbers=())
+    _fleet(db, monkeypatch)
+    monkeypatch.setattr(queue_mod, "v2_seen", AsyncMock(return_value=True))
+    monkeypatch.setattr(SW, "v2_seen", AsyncMock(return_value=True))
+    monkeypatch.setattr(SW, "JOBS", ())
+    monkeypatch.setattr(SWT, "_now_ms", lambda: T0)
+    assert await queue_mod.v2_owns_number("P") is False  # dialled as today
+    await SW.Sweeper(redis_client=rv).tick()
+    assert await rv.get("bb:epoch") == str(T0)
+    db.channels.assert_not_awaited()
+    assert await queue_mod.v2_owns_number("P") is False
+
+
 async def test_flags_gone_recovery_waits_while_the_numbers_are_unreadable(
     rv, db, monkeypatch
 ):
@@ -595,6 +617,48 @@ async def test_flags_gone_recovery_waits_while_the_numbers_are_unreadable(
     with pytest.raises(RuntimeError):
         await SWT.recover_after_flush(lost_for_ms=30_000)
     assert not await rv.exists("bb:epoch")
+
+
+async def test_a_new_leader_repeats_an_unfinished_recovery(rv, db, monkeypatch):
+    """The leader dies half-way through the recount: the epoch is still missing, so every
+    pod keeps holding. The next leader waits its own 30 s and recounts every number again
+    (the same writes: idempotent), then sets the epoch."""
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import sweep as SW
+
+    _config(monkeypatch, enabled=False)
+    _fleet(db, monkeypatch)
+    monkeypatch.setattr(SW, "v2_seen", AsyncMock(return_value=True))
+    monkeypatch.setattr(SW, "JOBS", ())
+    clock = [100.0]
+    monkeypatch.setattr(SW, "time", NS(monotonic=lambda: clock[0], time=time.time))
+
+    first = SW.Sweeper(redis_client=rv)
+    await rv.set("bb:epoch", "x")
+    await first.tick()  # the epoch is seen set ...
+    await rv.delete("bb:epoch")  # ... then lost
+    await first.tick()  # the loss is seen
+    clock[0] = 130.0
+    db.channels.side_effect = [True, RuntimeError("leader died")]
+    with pytest.raises(RuntimeError):
+        await first.tick()
+    assert db.channels.await_count == 2 and not await rv.exists("bb:epoch")
+
+    db.channels.reset_mock(side_effect=True)
+    db.channels.return_value = True
+    second = SW.Sweeper(redis_client=rv)  # took the lead, knows nothing of the first
+    await second.tick()
+    clock[0] = 159.9
+    await second.tick()
+    db.channels.assert_not_awaited()  # its own 30 s
+    assert not await rv.exists("bb:epoch")
+    clock[0] = 160.0
+    await second.tick()
+    assert _channels_written(db) == [("D", 0), ("P", 2)]
+    assert await rv.llen("bb:channel:P") == 3
+    assert (await rv.get("bb:epoch")).startswith("legacy-recovery:")
+
+
+# -- end to end: on with live legacy calls, then off --------------------------------------
 
 
 async def test_switch_on_with_live_legacy_calls_then_off(rv, db, monkeypatch):

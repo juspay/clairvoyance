@@ -199,6 +199,103 @@ async def raise_v2_ledger_missing(
     )
 
 
+async def raise_v2_tickets_waiting(telephony_number_id: str, age_s: int) -> None:
+    """P1 — a v2 ticket (a line already reserved) waits with no acceptor taking it."""
+    await _send(
+        alert_name=f"v2_tickets_waiting:{telephony_number_id}",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy v2: tickets waiting for an acceptor",
+        fields=[
+            {"name": "Telephony number id", "value": telephony_number_id},
+            {"name": "Oldest ticket age (s)", "value": str(age_s)},
+            {
+                "name": "Action",
+                "value": (
+                    "Acceptors are down or behind: check the dispatcher pods are up "
+                    "and `LLEN bb:tickets`; at `BB_V2_MAX_INFLIGHT_PER_POD` dials in "
+                    "flight a pod takes no more, so scale dispatcher pods (HPA). There "
+                    "is no task count to raise."
+                ),
+            },
+        ],
+    )
+
+
+async def raise_v2_idle_with_due_lead(telephony_number_id: str) -> None:
+    """P1 — a v2 number's bb:due time passed and no match has run on it since."""
+    await _send(
+        alert_name=f"v2_idle_with_due_lead:{telephony_number_id}",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy v2: free line next to a due lead",
+        fields=[
+            {"name": "Telephony number id", "value": telephony_number_id},
+            {
+                "name": "Action",
+                "value": (
+                    "Nothing has matched this number since its due time: check the "
+                    "v2 sweep leader (`GET bb:v2:sweep:leader`) and `ZSCORE bb:due "
+                    f"{telephony_number_id}` (ms; the tick matches entries <= now)."
+                ),
+            },
+        ],
+    )
+
+
+async def raise_v2_due_write_missed(number_ids: List[str]) -> None:
+    """P1 — the sweep's full pass found numbers dialable that bb:due did not list: a
+    code path that makes a number dialable forgot its bb:due write (design card rule
+    55). The full pass recovers them; nothing else would notice the bug."""
+    await _send(
+        alert_name="v2_due_write_missed",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy v2: a dialable number was missing from bb:due",
+        fields=[
+            {"name": "Telephony number ids", "value": ", ".join(number_ids[:20])},
+            {
+                "name": "Effect",
+                "value": (
+                    "Their due leads waited for the sweep's full pass (up to "
+                    "BB_V2_DUE_FULL_PASS_TICKS seconds) instead of the next tick."
+                ),
+            },
+            {
+                "name": "Action",
+                "value": (
+                    "A code bug, not an operator action: grep the dialler logs for "
+                    "'did not list as due' and find which write (enqueue, release, a "
+                    "route or number change) left the number out of bb:due."
+                ),
+            },
+        ],
+    )
+
+
+async def raise_v2_no_sweep_leader() -> None:
+    """P0 — no pod runs the v2 sweep: due leads on v2 numbers are not matched."""
+    await _send(
+        alert_name="v2_no_sweep_leader",
+        throttle_seconds=_THROTTLE_P0,
+        title="[P0] Breeze Buddy v2: no sweep leader",
+        fields=[
+            {
+                "name": "Effect",
+                "value": (
+                    "Retries, delayed leads and calling-hours openings on v2 numbers "
+                    "are not dialled; switching numbers on/off is paused."
+                ),
+            },
+            {
+                "name": "Action",
+                "value": (
+                    "Check dispatcher pods and Redis. If it persists, turn "
+                    "`BB_DISPATCH_V2_ENABLED` off: numbers drain back to today's path "
+                    "once a leader runs again."
+                ),
+            },
+        ],
+    )
+
+
 async def raise_no_telephony_number(
     reseller_id: str,
     template: str,
