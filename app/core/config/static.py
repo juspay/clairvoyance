@@ -507,6 +507,25 @@ if BB_PLIVO_5XX_OUTCOME not in ("unknown", "body_decides", "not_placed"):
         "BB_PLIVO_5XX_OUTCOME must be unknown, body_decides or not_placed, "
         f"got {BB_PLIVO_5XX_OUTCOME!r}"
     )
+# v2 event dialler (dispatch/v2/; off unless BB_DISPATCH_V2_ENABLED)
+# The v2 dialler's own Redis client (dispatch/v2/redis_client.py): no library retries, so
+# a reply that does not come within the socket timeout is "not done" (every v2 script is
+# idempotent by ticket id + owner). Well above the acceptor's 1 s BLPOP and an event-loop
+# stall under load; a pool wait for a free connection is bounded the same way.
+BB_V2_REDIS_SOCKET_TIMEOUT_S = float(os.environ.get("BB_V2_REDIS_SOCKET_TIMEOUT_S", 10))
+BB_V2_REDIS_MAX_CONNECTIONS = int(os.environ.get("BB_V2_REDIS_MAX_CONNECTIONS", 200))
+BB_V2_MATCH_CAP = int(os.environ.get("BB_V2_MATCH_CAP", 100))
+# A number match can't act on yet is looked at again this long later: one whose room's
+# reseller is paused (today's key, set and removed by hand: no write tells v2; the most an
+# unpause waits) and one still switching (v2_pending / draining: match issues nothing until
+# the switch flips it, and the flip runs match itself).
+BB_V2_DUE_RECHECK_S = float(os.environ.get("BB_V2_DUE_RECHECK_S", 5))
+if not math.isfinite(BB_V2_DUE_RECHECK_S) or BB_V2_DUE_RECHECK_S < 1:
+    # under 1 s the paused number would be matched on every tick
+    raise ValueError(
+        "BB_V2_DUE_RECHECK_S must be a finite number >= 1, got "
+        f"{BB_V2_DUE_RECHECK_S!r}"
+    )
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the
