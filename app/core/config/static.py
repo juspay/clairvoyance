@@ -515,6 +515,26 @@ if not math.isfinite(BB_V2_DUE_RECHECK_S) or BB_V2_DUE_RECHECK_S < 1:
         "BB_V2_DUE_RECHECK_S must be a finite number >= 1, got "
         f"{BB_V2_DUE_RECHECK_S!r}"
     )
+# The ledger check (dispatch/v2/reconcile.py) reads every v2 number's holders in one
+# round trip and the DB in queries of at most this many ids each, not per number.
+BB_V2_LEDGER_CHUNK = int(os.environ.get("BB_V2_LEDGER_CHUNK", 1000))
+# The 5-min orphan prune reads each room in ZSCAN chunks of this many leads (and asks the
+# DB about one chunk at a time): a 100k-lead room is never one multi-MB reply.
+BB_V2_PRUNE_CHUNK = int(os.environ.get("BB_V2_PRUNE_CHUNK", 1000))
+for _name, _val in (
+    ("BB_V2_LEDGER_CHUNK", BB_V2_LEDGER_CHUNK),
+    ("BB_V2_PRUNE_CHUNK", BB_V2_PRUNE_CHUNK),
+):
+    if _val < 1:
+        raise ValueError(f"{_name} must be >= 1, got {_val!r}")
+# The v2 lease reaper's tiers (dispatch/v2/reconcile.py, design card rule 14): a ticket
+# popped but not claimed is delivered again; a claimed one that never dials frees its
+# line; a dial whose lease was never cleared frees it (or only the lease, if its lead is
+# PROCESSING). Not env knobs: each outlasts the longest wait of a live coroutine in that
+# state (180 s: 3x a slow pre-check plus the greeting wait).
+BB_V2_UNCLAIMED_REPUSH_S = 30
+BB_V2_CLAIMED_MAX_AGE_S = 180
+BB_V2_DIAL_STUCK_S = 600
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the

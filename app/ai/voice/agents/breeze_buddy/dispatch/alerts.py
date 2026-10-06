@@ -174,6 +174,31 @@ async def raise_channel_drift(
     )
 
 
+async def raise_v2_ledger_missing(
+    telephony_number_id: str, lead_ids: List[str]
+) -> None:
+    """P1 — live v2 calls missing from their number's busy list on two checks in a
+    row: the number may dial more calls than it has lines."""
+    await _send(
+        alert_name=f"v2_ledger_missing:{telephony_number_id}",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy v2: live calls missing from the busy list",
+        fields=[
+            {"name": "Telephony number id", "value": telephony_number_id},
+            {"name": "Leads (first 20)", "value": ", ".join(lead_ids[:20])},
+            {
+                "name": "Action",
+                "value": (
+                    f"Compare `SMEMBERS bb:busy:{telephony_number_id}` with the "
+                    "number's PROCESSING leads. The ledger never adds holders; if "
+                    "the gap persists, switch the number off v2 (its hand-back "
+                    "recounts lines from the DB)."
+                ),
+            },
+        ],
+    )
+
+
 async def raise_no_telephony_number(
     reseller_id: str,
     template: str,
