@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Protocol
+from typing import Dict, List, Mapping, Protocol, Sequence
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import SkeletonSpec
+from app.ai.voice.agents.breeze_buddy.assist.verticals.fields import FieldProfile
 
 
 class Vertical(Protocol):
@@ -14,6 +15,8 @@ class Vertical(Protocol):
     # The reseller-level blueprint template this vertical's agents are built from.
     blueprint_name: str
     skeleton: SkeletonSpec
+    # The form this vertical's assistants are built from and edited through.
+    fields: FieldProfile
 
     def research_prompt(self) -> str:
         """The brief handed to the site reader (facts only, never instructions)."""
@@ -23,6 +26,18 @@ class Vertical(Protocol):
         self, assistant_name: str, brand_name: str, website_context: str
     ) -> str:
         """What replaces the skeleton's brand marker for one merchant."""
+        ...
+
+    def brand_block_from_fields(self, fields: Mapping[str, Sequence[str]]) -> str:
+        """The brand block written from this vertical's form."""
+        ...
+
+    def widget_values(self, fields: Mapping[str, Sequence[str]]) -> Dict[str, object]:
+        """Configuration entries the form implies, already config-shaped."""
+        ...
+
+    def fields_from_template(self, prompt: str) -> Dict[str, List[str]]:
+        """The form read back out of a built template's prompt."""
         ...
 
     def unpersonalized_context(self) -> str:
