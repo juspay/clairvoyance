@@ -37,6 +37,7 @@ from app.services.redis.locks import LockAcquireError, RedisLock
 from app.services.telephony.numbers.factory import get_number_provider
 from app.services.telephony.numbers.provider import NumberProvider
 
+from .handlers import v2_number_saved
 from .rbac import resolve_buy_scope
 
 # Covers the pre-check + provider round-trip + DB register worst case. No
@@ -289,6 +290,7 @@ async def buy_provider_number_handler(
         f"[{ref}] Registered {provider_name.value} number {request.number} "
         f"as telephony_number {telephony_number.id}"
     )
+    await v2_number_saved(telephony_number)
 
     return TelephonyNumberBuyResponse(
         provider_status=provider_result.status,

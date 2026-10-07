@@ -1,16 +1,8 @@
 """
 Inbound channel accounting — the single place that takes and returns the
-channel an inbound call holds.
-
-Why this is its own module rather than part of ``managers.calls``: that module
-imports from the ``dispatch`` package, and importing any ``dispatch`` submodule
-executes ``dispatch/__init__.py``, which imports ``dispatch.worker``, which
-imports ``managers.calls`` straight back. Anything that wants to import
-``managers.calls`` is therefore hostage to whichever module the process happens
-to load first. This file imports only the data layer and schemas, so every
-caller — the call-end handlers here in ``managers`` and the IVR
-deferred-policy block in ``ivr/selection.py`` — can import it normally at
-module scope, with no cycle and no deferred import inside a function body.
+channel an inbound call holds: v2's busy list on a v2-accounted number,
+today's DB counter otherwise. Its own module so the call-end handlers and the
+IVR deferred-policy block (``ivr/selection.py``) can import it at module scope.
 
 The rule and the act live together on purpose. ``inbound_holds_channel`` is
 also the predicate the reconciler's in-flight count must agree with
@@ -19,6 +11,10 @@ holding a channel, the other who hands one back, and any disagreement silently
 miscounts free capacity.
 """
 
+from typing import Optional
+
+from app.ai.voice.agents.breeze_buddy.dispatch.v2 import latch, routes, scripts
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.release import release_lead_line
 from app.core.logger import logger
 from app.database.accessor import (
     decrement_telephony_number_channels,
@@ -28,8 +24,52 @@ from app.database.accessor import (
 from app.schemas import CallDirection, CallProvider, LeadCallStatus
 from app.schemas.breeze_buddy.core import LeadCallTracker
 
+# Thin wrappers around the v2 calls, so tests can patch them.
 
-async def admit_inbound_call(telephony_number_id: str) -> bool:
+
+def _todays_gate(mode: str) -> bool:
+    """legacy, or v2_pending (its busy list is seeded only at the end of that phase)."""
+    return mode == "v2_pending" or mode not in routes.V2_ACCOUNTED_MODES
+
+
+async def _v2_admit(telephony_number_id: str, call_id: Optional[str]) -> Optional[bool]:
+    """None = today's gate decides (the number is not v2-accounted, or is still
+    ``v2_pending``: its busy list is seeded only at the end of that phase, so today's
+    accounting stays the truth until then); else the busy-list verdict.
+
+    Refuses (False) whenever v2 may own the number but cannot admit: missing call id,
+    Redis error or any exception. A cached mode never puts a call on a busy list.
+    """
+    try:
+        if not await latch.v2_seen():
+            return None
+        mode = await routes.number_mode_or_none(telephony_number_id)
+        if mode is not None and _todays_gate(mode):
+            return None
+        # the script reads the mode itself: a failed read above, or a switch since, is safe
+        verdict = (
+            await scripts.admit_inbound(telephony_number_id, call_id)
+            if call_id
+            else None
+        )
+        if verdict is not None:
+            return None if verdict < 0 else verdict == 1
+        # no call id, or Redis failed: today's gate only if the last good read says so
+        cached = mode or routes.last_good_mode(telephony_number_id)
+        return None if cached is not None and _todays_gate(cached) else False
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"v2 inbound admit failed on {telephony_number_id}: {e}")
+        return False
+
+
+async def _v2_release(lead: LeadCallTracker) -> Optional[bool]:
+
+    return await release_lead_line(lead)
+
+
+async def admit_inbound_call(
+    telephony_number_id: str, call_id: Optional[str] = None
+) -> bool:
     """Take one channel for an inbound call on a gated number (Plivo, Vobiz).
 
     Same gate outbound uses in ``_acquire_number``: the atomic
@@ -54,7 +94,14 @@ async def admit_inbound_call(telephony_number_id: str) -> bool:
     ``reconcile_stuck_processing_leads`` sweeps it. Closing that properly needs
     a uniqueness guarantee on inbound ``call_id`` (the column has a plain,
     non-unique index today), which is a bigger change than this gate.
+
+    On a v2-accounted number (and only once v2 has been seen) the busy list is the
+    gate instead: ``scripts.admit_inbound`` is idempotent per ``call_id`` and capped
+    by the number's max, and no DB counter is touched.
     """
+    verdict = await _v2_admit(str(telephony_number_id), call_id)
+    if verdict is not None:
+        return verdict
     return await increment_telephony_number_channels(telephony_number_id) is not None
 
 
@@ -102,6 +149,10 @@ async def release_inbound_channel(lead: LeadCallTracker) -> bool:
     if not lead.telephony_number_id:
         logger.info(f"No telephony number id for inbound lead: {lead.id}")
         return False
+
+    v2 = await _v2_release(lead)  # busy list on v2-accounted numbers (holder call:<id>)
+    if v2 is not None:
+        return v2
 
     telephony_number = await get_telephony_number_by_id(lead.telephony_number_id)
     if not telephony_number:

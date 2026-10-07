@@ -212,6 +212,23 @@ async def handback_pending_or_none(number_id: str) -> Optional[bool]:
         return None
 
 
+# Per process: each number's mode at its last good read, and when (monotonic s).
+_last_mode: Dict[str, Tuple[str, float]] = {}
+LAST_MODE_MAX_AGE_S = 60.0
+
+
+def _remember_mode(number_id: str, mode: str) -> None:
+    _last_mode[number_id] = (mode, time.monotonic())
+
+
+def last_good_mode(number_id: str) -> Optional[str]:
+    """The mode the last good read saw, if it is at most ``LAST_MODE_MAX_AGE_S`` old."""
+    seen = _last_mode.get(number_id)
+    if seen is None or time.monotonic() - seen[1] > LAST_MODE_MAX_AGE_S:
+        return None
+    return seen[0]
+
+
 async def number_mode_or_none(number_id: str) -> Optional[str]:
     """``bb:num:{N}.mode`` ("legacy" when absent); None when the read failed, so callers
     can take a safe default instead of guessing (R-ERR)."""
@@ -221,6 +238,7 @@ async def number_mode_or_none(number_id: str) -> Optional[str]:
         mode = await asyncio.wait_for(
             client.hget(k.num_key(number_id), "mode"), timeout=TODAYS_PATH_TIMEOUT_S
         )
+        _remember_mode(number_id, mode or LEGACY)
         return mode or LEGACY
     except Exception as e:  # noqa: BLE001
         logger.error(f"v2 number_mode_or_none failed {number_id}: {e}")

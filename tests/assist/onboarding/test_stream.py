@@ -232,6 +232,25 @@ def test_first_onboarding_creates_template_and_widget(monkeypatch) -> None:
     )
 
 
+def test_updating_a_template_re_resolves_its_v2_route(monkeypatch) -> None:
+    # The templates API's save hook, on onboarding's template update too
+    template = _default_template()
+
+    class _NoProblems:
+        def __init__(self, *_):
+            pass
+
+        async def problems(self, _configurations):
+            return []
+
+    monkeypatch.setattr(service, "Accounts", _NoProblems)
+    monkeypatch.setattr(service, "replace_template", AsyncMock(return_value=template))
+    hook = AsyncMock()
+    monkeypatch.setattr(service, "_v2_template_saved", hook)
+    asyncio.run(service._update_template(template))
+    hook.assert_awaited_once_with(template.id)
+
+
 def test_existing_widget_updates_its_referenced_template(monkeypatch) -> None:
     default = _default_template()
     existing = service.build_merchant_template(
