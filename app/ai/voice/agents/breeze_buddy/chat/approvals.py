@@ -20,6 +20,11 @@ from typing import Any, Dict, List, Optional
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     tool_results_to_user_blocks,
 )
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    CLIENT_TOOL_EXPIRED_RESULT,
+    as_tool_result,
+    is_client_tool,
+)
 from app.ai.voice.agents.breeze_buddy.template.approval import (
     LLM_STATUS_DENIED,
     LLM_STATUS_NOT_DECIDED,
@@ -58,6 +63,15 @@ EXPIRED_RESULT: Dict[str, Any] = {
     "status": LLM_STATUS_TIMEOUT,
     "reason": "the user did not approve in time",
 }
+
+
+def _expired_result(function_name: str) -> Dict[str, Any]:
+    """A client tool expires because the browser never answered, not
+    because the user said nothing."""
+    if is_client_tool(function_name):
+        return dict(CLIENT_TOOL_EXPIRED_RESULT)
+    return dict(EXPIRED_RESULT)
+
 
 # DB status -> wire status (SSE/RTVI enum: approved|denied|timeout|
 # cancelled|superseded). PENDING has no wire mapping by design.
@@ -98,6 +112,7 @@ async def claim_tool_approval(
     tool_call_id: str,
     approved: bool,
     reason: Optional[str],
+    client_tool_result: Any = None,
 ) -> ApprovalClaim:
     """Atomically claim a pending HITL decision (the load-bearing DB step).
 
@@ -107,6 +122,12 @@ async def claim_tool_approval(
     synthetic tool_result NOW so the history load sees a fully-answered batch;
     lazily expire other pending rows past their TTL; collect the still-pending
     sibling ids the resume turn must keep unanswered.
+
+    A client tool (see ``chat/tools/client_tools.py``) already ran in the
+    browser: its approve carries ``client_tool_result``, which is persisted as
+    the call's tool_result the same way a denial's synthetic result is —
+    nothing executes server-side. ``client_tool_result`` is ignored for every
+    other tool, so a browser can never stand in for a server tool's answer.
 
     Returns an :class:`ApprovalClaim`; the caller maps a non-``proceed``
     outcome to its transport (HTTP status vs RTVI event) and, on ``proceed``,
@@ -154,15 +175,21 @@ async def claim_tool_approval(
     )
 
     synthetic_result: Optional[Dict[str, Any]] = None
-    if not effective_approved:
+    if effective_approved and is_client_tool(claimed.function_name):
+        # The browser already ran it: its answer becomes the tool_result and
+        # the server runs nothing — the same path a denial takes.
+        effective_approved = False
+        synthetic_result = as_tool_result(claimed.function_name, client_tool_result)
+    elif not effective_approved:
         synthetic_result = (
-            dict(EXPIRED_RESULT)
+            _expired_result(claimed.function_name)
             if is_expired
             else {
                 "status": LLM_STATUS_DENIED,
                 "reason": reason or "the user did not approve this action",
             }
         )
+    if synthetic_result is not None:
         await insert_chat_message(
             session_id=session_id,
             role=ChatMessageRole.USER,
@@ -232,7 +259,13 @@ async def resolve_dangling_approvals(
     # One coalesced USER row answers the whole batch — all pending rows
     # always belong to the latest gate turn's single assistant batch, so
     # the replayed tool messages stay contiguous with their tool_calls.
-    pairs = [(row.tool_call_id, payload) for row in claimed]
+    pairs = [
+        (
+            row.tool_call_id,
+            _expired_result(row.function_name) if only_expired else payload,
+        )
+        for row in claimed
+    ]
     await insert_chat_message(
         session_id=session_id,
         role=ChatMessageRole.USER,
