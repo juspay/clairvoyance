@@ -30,6 +30,21 @@ callback_map = {
 }
 
 
+def hold_transfer_status(meta_data: Dict[str, Any]) -> str:
+    """The hold-transfer result for the waiting inbound leg.
+
+    "success" if the LLM/agent ended the call; "incomplete" if the customer
+    hung up mid-way, our STT was lost mid-consult, or nothing says who
+    ended it (an unexpected disconnect).
+    """
+    call_ended_by = meta_data.get("call_ended_by")
+    if call_ended_by == "customer":
+        return "incomplete"
+    if meta_data.get("stt_unavailable"):
+        return "incomplete"
+    return "success" if call_ended_by else "incomplete"
+
+
 async def end_conversation(context: TemplateContext, args, transition_to=None):
     """
     End the conversation by finalizing the call.
@@ -197,16 +212,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         pub_channel = payload.get("_hold_transfer_pub_channel")
         if pub_channel:
             try:
-                # Determine status: "success" if LLM/agent ended the call,
-                # "incomplete" if the customer hung up mid-way.
-                call_ended_by = context.lead.metaData.get("call_ended_by")
-                if call_ended_by == "customer":
-                    status = "incomplete"
-                elif call_ended_by:
-                    status = "success"
-                else:
-                    # No explicit ender — unexpected disconnect
-                    status = "incomplete"
+                status = hold_transfer_status(context.lead.metaData)
 
                 result_payload: Dict[str, Any] = {"status": status}
 
