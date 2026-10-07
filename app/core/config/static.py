@@ -491,6 +491,140 @@ BB_WORKER_HEARTBEAT_REFRESH_S = int(os.environ.get("BB_WORKER_HEARTBEAT_REFRESH_
 
 # Channel semaphore
 BB_CHANNEL_BLPOP_TIMEOUT_S = int(os.environ.get("BB_CHANNEL_BLPOP_TIMEOUT_S", 10))
+
+# v2 event dialler (dispatch/v2/; off unless BB_DISPATCH_V2_ENABLED)
+# The v2 dialler's own Redis client (dispatch/v2/redis_client.py): no library retries, so
+# a reply that does not come within the socket timeout is "not done" (every v2 script is
+# idempotent by ticket id + owner). Well above the acceptor's 1 s BLPOP and an event-loop
+# stall under load; a pool wait for a free connection is bounded the same way.
+BB_V2_REDIS_SOCKET_TIMEOUT_S = float(os.environ.get("BB_V2_REDIS_SOCKET_TIMEOUT_S", 10))
+BB_V2_REDIS_MAX_CONNECTIONS = int(os.environ.get("BB_V2_REDIS_MAX_CONNECTIONS", 200))
+BB_V2_MATCH_CAP = int(os.environ.get("BB_V2_MATCH_CAP", 100))
+# bb:due (dispatch/v2/sweep.py, design card rule 55): each 1 s tick matches only the
+# numbers whose bb:due time has come, at most BB_V2_DUE_BATCH of them (the earliest; the
+# rest on the next tick), and every BB_V2_DUE_FULL_PASS_TICKS ticks every v2-accounted
+# number too (the safety net for a missed bb:due write or a change by hand).
+BB_V2_DUE_BATCH = int(os.environ.get("BB_V2_DUE_BATCH", 5000))
+BB_V2_DUE_FULL_PASS_TICKS = int(os.environ.get("BB_V2_DUE_FULL_PASS_TICKS", 5))
+# A number match can't act on yet is looked at again this long later: one whose room's
+# reseller is paused (today's key, set and removed by hand: no write tells v2; the most an
+# unpause waits) and one still switching (v2_pending / draining: match issues nothing until
+# the switch flips it, and the flip runs match itself).
+BB_V2_DUE_RECHECK_S = float(os.environ.get("BB_V2_DUE_RECHECK_S", 5))
+if not math.isfinite(BB_V2_DUE_RECHECK_S) or BB_V2_DUE_RECHECK_S < 1:
+    # under 1 s the paused number would be matched on every tick
+    raise ValueError(
+        "BB_V2_DUE_RECHECK_S must be a finite number >= 1, got "
+        f"{BB_V2_DUE_RECHECK_S!r}"
+    )
+# The ledger check (dispatch/v2/reconcile.py) reads every v2 number's holders in one
+# round trip and the DB in queries of at most this many ids each, not per number.
+BB_V2_LEDGER_CHUNK = int(os.environ.get("BB_V2_LEDGER_CHUNK", 1000))
+# The 5-min orphan prune reads each room in ZSCAN chunks of this many leads (and asks the
+# DB about one chunk at a time): a 100k-lead room is never one multi-MB reply.
+BB_V2_PRUNE_CHUNK = int(os.environ.get("BB_V2_PRUNE_CHUNK", 1000))
+# The 15 s monitor looks for the oldest live ticket in bb:tickets in LRANGE chunks of
+# BB_V2_MONITOR_SCAN_CHUNK, reading at most BB_V2_MONITOR_SCAN_MAX entries (a longer void
+# run at the head means no acceptor is popping: the head's age is reported).
+BB_V2_MONITOR_SCAN_CHUNK = int(os.environ.get("BB_V2_MONITOR_SCAN_CHUNK", 100))
+BB_V2_MONITOR_SCAN_MAX = int(os.environ.get("BB_V2_MONITOR_SCAN_MAX", 1000))
+# The v2 route refresh (dispatch/v2/sweep.py) re-resolves, this often, the routes of the
+# templates with waiting leads. Only a backstop: the template / config / number save hooks
+# re-resolve a route the moment it changes. At thousands of templates every 60 s would be
+# tens of DB queries a second for nothing; set 60 to get the old pace.
+BB_V2_ROUTES_REFRESH_S = int(os.environ.get("BB_V2_ROUTES_REFRESH_S", 600))
+if BB_V2_ROUTES_REFRESH_S < 10:
+    raise ValueError(
+        f"BB_V2_ROUTES_REFRESH_S must be >= 10, got {BB_V2_ROUTES_REFRESH_S!r}"
+    )
+for _name, _val in (
+    ("BB_V2_DUE_BATCH", BB_V2_DUE_BATCH),
+    ("BB_V2_DUE_FULL_PASS_TICKS", BB_V2_DUE_FULL_PASS_TICKS),
+    ("BB_V2_LEDGER_CHUNK", BB_V2_LEDGER_CHUNK),
+    ("BB_V2_PRUNE_CHUNK", BB_V2_PRUNE_CHUNK),
+    ("BB_V2_MONITOR_SCAN_CHUNK", BB_V2_MONITOR_SCAN_CHUNK),
+    ("BB_V2_MONITOR_SCAN_MAX", BB_V2_MONITOR_SCAN_MAX),
+):
+    if _val < 1:
+        raise ValueError(f"{_name} must be >= 1, got {_val!r}")
+# The v2 lease reaper's tiers (dispatch/v2/reconcile.py, design card rule 14): a ticket
+# popped but not claimed is delivered again; a claimed one that never dials frees its
+# line; a dial whose lease was never cleared frees it (or only the lease, if its lead is
+# PROCESSING). Not env knobs: each outlasts the longest wait of a live coroutine in that
+# state (180 s: 3x a slow pre-check plus the greeting wait).
+BB_V2_UNCLAIMED_REPUSH_S = 30
+BB_V2_CLAIMED_MAX_AGE_S = 180
+BB_V2_DIAL_STUCK_S = 600
+# The v2 acceptor (dispatch/v2/acceptor.py): one per dialler pod, one coroutine per
+# ticket. 1 s: a stopping acceptor leaves its BLPOP within 1 s, so shutdown never cancels
+# a pop whose reply is on the wire (that entry would wait 30 s for the reaper's re-push).
+BB_V2_TICKET_BLPOP_TIMEOUT_S = float(os.environ.get("BB_V2_TICKET_BLPOP_TIMEOUT_S", 1))
+BB_V2_ACCEPT_BATCH = int(os.environ.get("BB_V2_ACCEPT_BATCH", 100))
+# Out-of-memory guard per pod (~50-100 KB per dial in flight), not a merchant cap: a full
+# pod stops popping and the other pods take the next tickets (decision D8).
+BB_V2_MAX_INFLIGHT_PER_POD = int(os.environ.get("BB_V2_MAX_INFLIGHT_PER_POD", 2000))
+# The acceptor's pauses, each cut short by stop(). After an unexpected error in a round
+# (e.g. a Redis blip):
+BB_V2_ACCEPT_ERROR_BACKOFF_S = float(
+    os.environ.get("BB_V2_ACCEPT_ERROR_BACKOFF_S", 1.0)
+)
+# After pushing a batch back because the kill switch is off (today's worker waits too):
+BB_V2_ACCEPT_DISABLED_SLEEP_S = float(
+    os.environ.get("BB_V2_ACCEPT_DISABLED_SLEEP_S", 2.0)
+)
+# While the pod is at BB_V2_MAX_INFLIGHT_PER_POD (a finishing dial frees room at once):
+BB_V2_ACCEPT_FULL_SLEEP_S = float(os.environ.get("BB_V2_ACCEPT_FULL_SLEEP_S", 0.05))
+for _name, _val in (
+    ("BB_V2_ACCEPT_BATCH", BB_V2_ACCEPT_BATCH),
+    ("BB_V2_MAX_INFLIGHT_PER_POD", BB_V2_MAX_INFLIGHT_PER_POD),
+):
+    if _val < 1:
+        raise ValueError(f"{_name} must be >= 1, got {_val!r}")
+for _name, _secs in (
+    ("BB_V2_ACCEPT_ERROR_BACKOFF_S", BB_V2_ACCEPT_ERROR_BACKOFF_S),
+    ("BB_V2_ACCEPT_DISABLED_SLEEP_S", BB_V2_ACCEPT_DISABLED_SLEEP_S),
+    ("BB_V2_ACCEPT_FULL_SLEEP_S", BB_V2_ACCEPT_FULL_SLEEP_S),
+):
+    # 0 turns a pause into a busy loop; over a minute leaves tickets unpopped that long
+    if not math.isfinite(_secs) or not 0 < _secs <= 60:
+        raise ValueError(f"{_name} must be a number > 0 and <= 60, got {_secs!r}")
+# After a Redis loss that took the v2 flags too, today's dialling is held and its counters
+# are rebuilt from the DB this long after the loss is seen, so any dial in flight at the
+# loss has returned by then: the slowest provider's request timeout, Vobiz's 30 s
+# (vobiz.py _REQUEST_TIMEOUT_SECONDS; Plivo's is PLIVO_REST_TIMEOUT_SECONDS, 15 s).
+# Not an env knob: lowering it below either timeout reopens the over-dial window.
+BB_V2_LOSS_RECOVERY_WAIT_S = 95
+# A BLPOP blocks on the server for its own timeout: one at or past the socket timeout (or
+# 0 = forever) times out on the client while the server may still pop and reply, and the
+# popped ticket is lost until the reaper's 30 s re-push.
+if not 0 < BB_V2_TICKET_BLPOP_TIMEOUT_S < BB_V2_REDIS_SOCKET_TIMEOUT_S:
+    raise ValueError(
+        "need 0 < BB_V2_TICKET_BLPOP_TIMEOUT_S < BB_V2_REDIS_SOCKET_TIMEOUT_S, got "
+        f"{BB_V2_TICKET_BLPOP_TIMEOUT_S!r} and {BB_V2_REDIS_SOCKET_TIMEOUT_S!r}"
+    )
+# The v2 dial waits at most this long for its greeting prewarm, which goes on through the
+# dial and the ring (spec 2026-10-05 §4.7, decision D2).
+BB_V2_PREWARM_WAIT_S = float(os.environ.get("BB_V2_PREWARM_WAIT_S", 2.0))
+# Greeting syntheses at once per dialler pod (decision D10): past it a v2 prewarm waits,
+# then is skipped (fail-open). Bounds TTS load, never a dial.
+BB_V2_TTS_CONCURRENCY = int(os.environ.get("BB_V2_TTS_CONCURRENCY", 32))
+if not math.isfinite(BB_V2_PREWARM_WAIT_S) or not 0 <= BB_V2_PREWARM_WAIT_S <= 10:
+    raise ValueError(
+        f"BB_V2_PREWARM_WAIT_S must be a number from 0 to 10, got {BB_V2_PREWARM_WAIT_S!r}"
+    )
+if BB_V2_TTS_CONCURRENCY < 1:
+    raise ValueError(
+        f"BB_V2_TTS_CONCURRENCY must be at least 1, got {BB_V2_TTS_CONCURRENCY!r}"
+    )
+# A v2 dial's template, call config and number are kept this long per pod
+# (dispatch/v2/memo.py): an edit reaches every dial of the template within it (the route,
+# and so which leads get a line, changes at once through the save hooks). 0 = off.
+BB_V2_DIAL_MEMO_TTL_S = float(os.environ.get("BB_V2_DIAL_MEMO_TTL_S", 10))
+if not math.isfinite(BB_V2_DIAL_MEMO_TTL_S) or not 0 <= BB_V2_DIAL_MEMO_TTL_S <= 60:
+    raise ValueError(
+        "BB_V2_DIAL_MEMO_TTL_S must be a number from 0 to 60, got "
+        f"{BB_V2_DIAL_MEMO_TTL_S!r}"
+    )
 BB_CHANNEL_WAIT_BACKOFF_MAX_S = int(os.environ.get("BB_CHANNEL_WAIT_BACKOFF_MAX_S", 3))
 # Staleness threshold for sweeping a stuck INBOUND lead, in minutes. Far
 # longer than the outbound BB_STUCK_CALL_STALE_MINUTES: the sweep releases the

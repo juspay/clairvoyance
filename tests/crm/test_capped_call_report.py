@@ -62,7 +62,7 @@ def _consume(monkeypatch: pytest.MonkeyPatch, run: EnrollmentRun) -> List[str]:
     refreshed: List[str] = []
 
     async def resume_run_by_id(
-        merchant: str, run_id: str, square: str, *a: Any
+        merchant: str, run_id: str, square: str, *a: Any, **k: Any
     ) -> bool:
         hit = square == run.current_node  # the statement's own WHERE
         if hit:
