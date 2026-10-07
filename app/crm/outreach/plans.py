@@ -25,7 +25,8 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
-from app.crm.outreach.nodes.wait import TIMEOUT
+from app.crm.outreach.nodes.spec import ELSE
+from app.crm.outreach.nodes.wait import TIMEOUT, TOPIC_KEY
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
     GOAL_EXIT_REASONS,
@@ -177,7 +178,28 @@ def validate_definition(
         labels = [on for _, on in arrows]
         node = nodes_by_id.get(src)
         if node is not None and branches(node):
-            if None in labels:
+            # A call that lists topics waits for its line: one arrow per listed
+            # topic, and exactly one unlabelled arrow, taken when it is placed.
+            parks = not is_wait(node) and listens(node)
+            if parks and None not in labels:
+                problems.append(
+                    f"call {src} lists topics, so it needs one edge with no on: "
+                    "the path taken when the call is placed"
+                )
+            placed = [dst for dst, on in arrows if on is None]
+            if parks and placed and not is_wait(nodes_by_id.get(placed[0], node)):
+                # its run is held there, and found again after a crashed grant
+                problems.append(
+                    f"call {src} lists topics, so its edge with no on must lead "
+                    "straight to a wait"
+                )
+            if parks and node.key == TOPIC_KEY and ELSE not in labels:
+                problems.extend(
+                    f"call {src} lists topic {topic!r} but has no edge for it"
+                    for topic in node.topics
+                    if topic not in labels
+                )
+            if None in labels and not parks:
                 problems.append(f"every edge out of {node.type} {src} needs an on")
             if len(set(labels)) != len(labels):
                 problems.append(f"{node.type} {src} has two edges with the same on")
@@ -438,14 +460,22 @@ async def _publish_in_txn(
         definition.on_publish,
         published_by,
     )
-    repinned = 0
+    repinned = woken = 0
     if definition.on_publish == "migrate":
         repinned = await enrollment_accessor.repin_open_runs(
             txn, merchant_id, workflow_id, published.version
         )
+        # rollback of "a call waits for its line": a call square that no longer
+        # lists topics wakes the runs parked on it, so they are called today's way
+        plain = [n.id for n in definition.nodes if n.type == "call" and not n.topics]
+        if plain:
+            woken = await enrollment_accessor.wake_parked_calls(
+                txn, merchant_id, workflow_id, plain
+            )
     logger.info(
         f"workflow published: {workflow_id} v{published.version} "
-        f"({definition.on_publish}; {repinned} open runs re-pinned; "
+        f"({definition.on_publish}; {repinned} open runs re-pinned, {woken} parked "
+        f"calls woken; "
         f"merchant {merchant_id})"
     )
     return published

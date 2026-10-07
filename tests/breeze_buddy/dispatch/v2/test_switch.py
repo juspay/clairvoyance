@@ -19,7 +19,6 @@ from app.ai.voice.agents.breeze_buddy.dispatch.v2 import (
     switch as SWT,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.switch import (
-    DRAIN,
     HANDOVER,
     NONE,
     OBSERVE,
@@ -37,7 +36,7 @@ from app.schemas import CallProvider, TelephonyNumber, TelephonyNumberStatus
 from app.services.live_config import store as cfg_store
 from tests.breeze_buddy.dispatch.v2.conftest import (
     OWNER,
-    claim_next,
+    pop_ticket,
     seed_number,
     tickets_of,
     use_redis,
@@ -96,8 +95,8 @@ def test_pending_never_seeds_before_15_s_or_on_a_changed_signature():
 
 def test_pending_not_desired_hands_back_at_once():
     assert decide(_pending(), False, Facts(T0, drained=True)) == Step(HANDOVER)
-    # a leftover ticket still out: drain it first
-    assert decide(_pending(), False, Facts(T0, drained=False)) == Step(DRAIN)
+    # a hard stop: a ticket still out does not delay it
+    assert decide(_pending(), False, Facts(T0, drained=False)) == Step(HANDOVER)
 
 
 def test_v2_reseeds_once_then_rests_and_drains_when_not_desired():
@@ -105,7 +104,7 @@ def test_v2_reseeds_once_then_rests_and_drains_when_not_desired():
     assert decide(v2, True, Facts(T0 + 19_999)) == Step(NONE)
     assert decide(v2, True, Facts(T0 + 20_000)) == Step(RESEED)
     assert decide(NumState(mode="v2"), True, Facts(T0 + 99_000)) == Step(NONE)
-    assert decide(v2, False, Facts(T0)) == Step(DRAIN)
+    assert decide(v2, False, Facts(T0)) == Step(HANDOVER)  # off: back at once
 
 
 def test_an_unfinished_hand_back_is_finished_before_anything_else():
@@ -115,13 +114,13 @@ def test_an_unfinished_hand_back_is_finished_before_anything_else():
     assert NumState.from_hash({"mode": "legacy", "handback_pending": "1"}) == pending
 
 
-def test_draining_waits_for_tickets_then_hands_back_even_if_desired_again():
+def test_a_leftover_draining_number_is_handed_back_at_once_even_if_desired_again():
     draining = NumState(mode="draining")
-    assert decide(draining, False, Facts(T0, drained=False)) == Step(NONE)
-    assert decide(draining, False, Facts(T0, drained=True)) == Step(HANDOVER)
-    # flapping: desired again mid-drain -> finish the drain first ...
-    assert decide(draining, True, Facts(T0, drained=False)) == Step(NONE)
-    assert decide(draining, True, Facts(T0, drained=True)) == Step(HANDOVER)
+    for desired in (False, True):
+        for drained in (False, True):
+            assert decide(draining, desired, Facts(T0, drained=drained)) == Step(
+                HANDOVER
+            )
     # ... then switch on from legacy
     assert decide(NumState(mode="legacy"), True, Facts(T0)) == Step(TURN_ON)
 
@@ -416,7 +415,7 @@ async def test_global_off_drains_every_v2_number_in_one_step(rv, db, monkeypatch
         db.numbers[n] = _number(n)
     await SWT.run_switch_step()
     for n in ("N1", "N2", "N3"):
-        assert await rv.hget(f"bb:num:{n}", "mode") == "draining"
+        assert await rv.hget(f"bb:num:{n}", "mode") == "legacy"  # a ticket out or not
 
 
 async def test_a_number_that_stops_being_available_drains_to_todays_path(
@@ -426,10 +425,7 @@ async def test_a_number_that_stops_being_available_drains_to_todays_path(
     await seed_number(rv, "N1", 2, {"T1": {}})
     await rv.sadd("bb:v2:active", "N1")
     db.numbers["N1"] = _number(status=TelephonyNumberStatus.DISABLED)
-    await SWT.run_switch_step()
-    assert await rv.hget("bb:num:N1", "mode") == "draining"
-    db.processing = {}
-    await SWT.run_switch_step()  # nothing in flight: handed back
+    await SWT.run_switch_step()  # handed back at once
     assert await rv.hget("bb:num:N1", "mode") == "legacy"
 
 
@@ -718,19 +714,11 @@ async def test_switch_on_with_live_legacy_calls_then_off(rv, db, monkeypatch):
     assert await rv.scard("bb:busy:N1") == 5  # never more than max
     assert await tickets_of(rv, "N1") == ["W1"]  # only the 1 free line
 
-    # off: no new tickets; the ticket already out is dialled, then the hand-back
+    # off: a hard stop. Handed back in one step, today's counts from the DB; the
+    # ticket already out is never dialled by v2 (its lease is gone)
     _config(monkeypatch, enabled=False)
+    db.processing = {"N1": 3}  # P1, I1, K1 still on the phone; P2's release was lost
     clock[0] = T0 + 20_000
-    await SWT.run_switch_step()
-    assert await rv.hget("bb:num:N1", "mode") == "draining"
-    ticket = await claim_next("N1")
-    assert ticket is not None and ticket[0] == "W1"
-    # dialled: W1's call holds the line
-    assert await scripts.clear_lease("N1", "W1", ticket[1], OWNER)
-    assert await scripts.release("N1", "lead:P1") == [1, 0]  # a legacy call ended
-    # P2 ended too, but its release was lost: busy still lists it (SCARD 4)
-    db.processing = {"N1": 3}  # I1, K1 (now dialled) and W1
-    clock[0] = T0 + 25_000
     await SWT.run_switch_step()
     assert await rv.hget("bb:num:N1", "mode") == "legacy"
     db.channels.assert_awaited_with("N1", 3)  # the DB's count, not SCARD (Fable C3)
@@ -741,6 +729,8 @@ async def test_switch_on_with_live_legacy_calls_then_off(rv, db, monkeypatch):
         "W2",
         "W3",
     ]
+    out = await pop_ticket("N1")
+    assert out is None or not await scripts.claim("N1", out[0], out[1], OWNER)
     assert await rv.scard("bb:v2:active") == 0
     assert not await rv.exists("bb:busy:N1")
     # a v2-dialled call ending from now on releases through today's path
@@ -1106,3 +1096,33 @@ def test_the_full_pass_runs_every_5_ticks_by_default():
     from app.core.config import static
 
     assert static.BB_V2_DUE_FULL_PASS_TICKS == 5
+
+
+async def test_handover_sets_calls_with_no_lead_row_aside_and_hands_back(rv, db):
+    """A hard stop: a call with no lead row is not handed to today's dialler (it would
+    drop it) and does not hold the number on v2; its bb:qi record stays for a manual
+    recovery. A lead with a row goes to today's schedule as always."""
+    await seed_number(rv, "N1", 5, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    await rv.zadd("bb:q:T1", {"L1": 111, "W1": 222})
+    await rv.hset("bb:qi:T1", "L1", "R1")
+    await SWT.apply_handover(rv, "N1", _number(), T0)
+    assert await rv.hget("bb:num:N1", "mode") == "legacy"
+    assert await rv.zrange("bb:schedule:leads", 0, -1) == ["W1"]
+    assert await rv.hgetall("bb:qi:T1") == {"L1": "R1"}
+
+
+async def test_v2_off_hands_back_at_once_even_with_calls_waiting_for_a_lead_row(
+    rv, db, monkeypatch
+):
+    """v2 off is a hard stop: calls with no lead row do not keep the number on v2."""
+    _config(monkeypatch, enabled=False)
+    await seed_number(rv, "N1", 2, {"T1": {}})
+    await rv.sadd("bb:v2:active", "N1")
+    db.numbers["N1"] = _number()
+    await rv.zadd("bb:q:T1", {"L1": 111})
+    await rv.hset("bb:qi:T1", "L1", "R1")
+    await SWT.run_switch_step()
+    assert await rv.hget("bb:num:N1", "mode") == "legacy"
+    assert not await rv.exists("bb:schedule:leads")  # L1 has no row: set aside
+    assert await rv.hgetall("bb:qi:T1") == {"L1": "R1"}

@@ -47,6 +47,8 @@ from app.crm.outreach.db.queries.enrollment import (
     runs_referencing_template_query,
     source_event_used_query,
     sweep_exited_runs_query,
+    wake_parked_calls_query,
+    wake_run_on_query,
     workflow_has_runs_query,
     workflow_split_counts_query,
     workflow_summary_query,
@@ -76,6 +78,23 @@ async def repin_open_runs(
     """Runs inside the publish atom (conn param). Returns how many runs
     now execute the new version."""
     query, values = repin_open_runs_query(merchant_id, workflow_id, version)
+    rows = await conn.fetch(query, *values)
+    return len(rows)
+
+
+async def wake_run_on(run_id: str, node_id: str) -> bool:
+    """True when the run still waited on that square and now wakes."""
+    query, values = wake_run_on_query(run_id, node_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
+
+
+async def wake_parked_calls(
+    conn: asyncpg.Connection, merchant_id: str, workflow_id: str, nodes: List[str]
+) -> int:
+    """Inside the publish atom. Returns how many parked runs were woken."""
+    query, values = wake_parked_calls_query(merchant_id, workflow_id, nodes)
     rows = await conn.fetch(query, *values)
     return len(rows)
 

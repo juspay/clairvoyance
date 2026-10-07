@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from datetime import datetime
-from typing import Any, Optional, Sequence, Tuple, cast
+from typing import Any, Dict, Optional, Sequence, Tuple, cast
 
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import SCHEDULE_ZSET
 from app.ai.voice.agents.breeze_buddy.dispatch.v2 import (
@@ -20,9 +20,14 @@ from app.ai.voice.agents.breeze_buddy.dispatch.v2 import (
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.latch import epoch_lost, v2_seen
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.routes import V2_ACCOUNTED_MODES
-from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import Enqueue
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import (
+    Enqueue,
+    Rank,
+    rank_from_priority,
+)
 from app.core.config.static import BB_DISPATCH_QPS_JITTER_MS, BB_V2_MATCH_CAP
 from app.core.logger import logger
+from app.database import accessor
 from app.schemas import ExecutionMode
 from app.services.redis import get_redis_service
 
@@ -104,10 +109,17 @@ async def _epoch_present_or_none() -> Optional[bool]:
 
 
 async def _lead_template_id(lead_id: str) -> Optional[str]:
-    from app.database.accessor import get_lead_by_id
-
-    lead = await get_lead_by_id(lead_id)
+    lead = await accessor.get_lead_by_id(lead_id)
     return lead.template_id if lead is not None else None
+
+
+async def _lead_rank(lead_id: str) -> Optional[Rank]:
+    """The rank kept on the lead's row; None when the row is missing or unreadable, so
+    that a failed read never turns a lead into the default rank."""
+    lead = await accessor.get_lead_by_id(lead_id)
+    if lead is None:
+        return None
+    return rank_from_priority((lead.metaData or {}).get("priority"))
 
 
 async def _schedule_v2(
@@ -115,6 +127,7 @@ async def _schedule_v2(
     next_attempt_at: datetime,
     template_id: str,
     only_if_absent: bool = False,
+    rank: Optional[Rank] = None,
 ) -> Optional[bool]:
     """
     Put the lead in its template's v2 room. True/False is the final answer;
@@ -122,7 +135,14 @@ async def _schedule_v2(
     """
     # No jitter in v2 (design card rule 16): it only spread today's promoter batches.
     due_ms = _to_unix_ms(next_attempt_at)
-    issued = await v2_scripts.enqueue(template_id, lead_id, due_ms, only_if_absent)
+
+    async def enqueue() -> Optional[int]:
+        ranked: Dict[str, Any] = {} if rank is None else {"rank": rank}
+        return await v2_scripts.enqueue(
+            template_id, lead_id, due_ms, only_if_absent, **ranked
+        )
+
+    issued = await enqueue()
     if issued == Enqueue.ROUTE_MISSING:
         # The route is missing from Redis (first use, or a flush): resolve it, which
         # writes bb:route:{T}, and retry (rule 18). enqueue reads the route itself, so
@@ -131,7 +151,7 @@ async def _schedule_v2(
             await _ensure_route(template_id)
         except Exception as e:  # noqa: BLE001 — DB errors must not escape
             logger.error(f"schedule_lead: ensure_route failed for {template_id}: {e}")
-        issued = await v2_scripts.enqueue(template_id, lead_id, due_ms, only_if_absent)
+        issued = await enqueue()
         if issued == Enqueue.ROUTE_MISSING:
             # Still missing (that resolve failed): re-resolve once more, then give up.
             try:
@@ -140,9 +160,12 @@ async def _schedule_v2(
                 logger.error(
                     f"schedule_lead: invalidate_route failed for {template_id}: {e}"
                 )
-            issued = await v2_scripts.enqueue(
-                template_id, lead_id, due_ms, only_if_absent
-            )
+            issued = await enqueue()
+    if issued == Enqueue.NEED_RANK:
+        # a ranked number: the lead's rank comes from its row, read once
+        rank = await _lead_rank(lead_id)
+        if rank is not None:
+            issued = await enqueue()
     return await _enqueued(issued, template_id)
 
 
@@ -153,6 +176,8 @@ async def _enqueued(issued: Optional[int], template_id: str) -> Optional[bool]:
         return False  # Redis failed; a ZADD is not safe for a v2 number. Backlog reconciler heals.
     if issued == Enqueue.HOLDS_LINE:
         return True  # its holder re-queues it (rule 17)
+    if issued == Enqueue.NEED_RANK:
+        return False  # rank unreadable: never today's schedule; the backlog job heals
     if issued < 0:
         return None  # NOT_V2, or ROUTE_MISSING after the retries: today's schedule
     if issued == BB_V2_MATCH_CAP:
@@ -180,6 +205,8 @@ async def schedule_lead(
     jitter_ms: Optional[int] = None,
     template_id: Optional[str] = None,
     only_if_absent: bool = False,
+    *,
+    rank: Optional[Rank] = None,
 ) -> bool:
     """
     ZADD a lead onto the schedule (or, for a v2 number, into its template's room).
@@ -193,19 +220,20 @@ async def schedule_lead(
         next_attempt_at: when this lead should fire (timezone-aware)
         jitter_ms: override default jitter; pass 0 for "no jitter" (operator)
         template_id: the lead's template; lets v2 find the lead's number
+        rank: the lead's place on a ranked v2 number (default: read from its row)
     """
     if template_id and await v2_seen():
         queued = await _schedule_v2(
-            lead_id, next_attempt_at, template_id, only_if_absent
+            lead_id, next_attempt_at, template_id, only_if_absent, rank
         )
         if queued is not None:
             return queued
     return await _schedule_today(lead_id, next_attempt_at, jitter_ms)
 
 
-async def schedule_backlog_v2(leads: Sequence[Tuple[str, datetime, str]]) -> int:
+async def schedule_backlog_v2(leads: Sequence[Tuple[Any, ...]]) -> int:
     """``schedule_lead(lead_id, next_attempt_at, template_id=..., only_if_absent=True)``
-    for each (lead_id, next_attempt_at, template_id) of a backlog page, with their
+    for each (lead_id, next_attempt_at, template_id[, rank]) of a backlog page, with their
     enqueues in one round trip: each reply means what it does for one lead. A lead whose
     route is missing goes through ``schedule_lead`` alone, which resolves it (rule 18).
     How many ``schedule_lead`` would have answered True for."""
@@ -214,14 +242,15 @@ async def schedule_backlog_v2(leads: Sequence[Tuple[str, datetime, str]]) -> int
     # No v2_seen() gate: the caller read these templates' numbers as v2-accounted, and
     # enqueue re-checks the mode itself (NOT_V2: today's schedule).
     replies = await v2_scripts.enqueue_many(
-        [(t, lead_id, _to_unix_ms(at)) for lead_id, at, t in leads],
+        [(row[2], row[0], _to_unix_ms(row[1]), *row[3:]) for row in leads],
         only_if_absent=True,
     )
     queued = 0
-    for (lead_id, at, template_id), issued in zip(leads, replies, strict=True):
-        if issued == Enqueue.ROUTE_MISSING:
+    for (lead_id, at, template_id, *rank), issued in zip(leads, replies, strict=True):
+        if issued in (Enqueue.ROUTE_MISSING, Enqueue.NEED_RANK):
+            ranked: Dict[str, Any] = {"rank": rank[0]} if rank else {}
             ok = await schedule_lead(
-                lead_id, at, template_id=template_id, only_if_absent=True
+                lead_id, at, template_id=template_id, only_if_absent=True, **ranked
             )
         else:
             settled = await _enqueued(issued, template_id)
@@ -317,6 +346,7 @@ async def cancel_scheduled_lead(
             template_id = template_id or await _lead_template_id(lead_id)
             if template_id:
                 await client.zrem(v2_keys.room_key(template_id), lead_id)
+                await client.hdel(v2_keys.qp_key(template_id), lead_id)
     except Exception as e:  # noqa: BLE001 — a ticket for it gives the line back
         logger.error(f"cancel_scheduled_lead: v2 room ZREM failed for {lead_id}: {e}")
     return True

@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import app.ai.voice.agents.breeze_buddy.dispatch  # noqa: F401  (import order)
-from app.ai.voice.agents.breeze_buddy.dispatch.v2 import monitor as M, sweep as SW
+from app.ai.voice.agents.breeze_buddy.dispatch.v2 import (
+    monitor as M,
+    scripts,
+    sweep as SW,
+)
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import Rank
 from tests.breeze_buddy.dispatch.v2.conftest import seed_number, use_redis
 
 pytestmark = pytest.mark.asyncio
@@ -193,3 +198,42 @@ async def test_sweeper_runs_monitors_every_15_ticks_and_leader_check_on_every_po
         await asyncio.sleep(0.005)
     await sw.stop()
     assert check.await_count >= 1  # a non-leader pod watches the leader
+
+
+async def test_a_ranked_number_logs_each_ranks_depth_and_the_oldest_rank_1_wait(
+    rv, monkeypatch
+):
+    r, _ = rv
+    lines: list = []
+    monkeypatch.setattr(M.logger, "info", lines.append)
+    await M.run_monitors()
+    assert lines == []  # N1 is not ranked: no line, as before
+    await r.hset("bb:num:N1", mapping={"ranked": "1", "max": 0})  # full: leads stay
+    now = NOW()
+    assert await scripts.enqueue("T1", "A", now, rank=Rank(1, "f", 0)) == 0
+    for lead in ("B", "C"):
+        assert await scripts.enqueue("T1", lead, now, rank=Rank(3, "n", now)) == 0
+    assert await scripts.enqueue("T1", "D", now + 60_000, rank=Rank(1, "f", 0)) == 0
+    await M.run_monitors()
+    assert "number=N1 template=T1 ready={1: 1, 3: 2} later=1 " in lines[0]
+    assert 0 <= int(lines[0].rsplit("=", 1)[1]) < 5_000  # A became ready just now
+    # without live_day, a rank-1 score is the ms the lead became ready
+    await r.hset("bb:num:N1", "live_day", "0")
+    await r.zadd("bb:q:T1", {"A": (1 - 100) * 10**13 + now - 40_000})
+    await M.run_monitors()
+    assert 40_000 <= int(lines[1].rsplit("=", 1)[1]) < 45_000
+
+
+async def test_a_line_waiting_5_s_for_its_lead_row_alerts(rv, monkeypatch):
+    r, _ = rv
+    waiting = AsyncMock()
+    monkeypatch.setattr(M, "raise_v2_grants_waiting", waiting, raising=False)
+    await r.rpush("bb:grants", f"N1|L1|1|T1|{NOW() - 3_000}|R1")
+    await M.run_monitors()
+    waiting.assert_not_awaited()  # the grant worker is within its time
+    await r.lpush("bb:grants", f"N1|L0|2|T1|{NOW() - 7_000}|R0")  # the oldest: the head
+    await M.run_monitors()
+    waiting.assert_awaited_once()
+    assert waiting.await_args is not None
+    assert waiting.await_args.args[0] == "N1"
+    assert waiting.await_args.args[1:] == (7, 2)  # its age in seconds, lines waiting

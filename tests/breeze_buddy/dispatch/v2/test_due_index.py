@@ -253,6 +253,12 @@ async def test_switching_numbers_never_crowd_a_due_one_out_of_the_tick(
     assert await r.smembers("bb:busy:V") == {"lead:V-L"}
 
 
+def test_a_missed_due_write_is_repaired_within_five_seconds():
+    # the full pass is the only repair for a missed bb:due write: at 30 ticks a hole at
+    # window opening is ~400 late dials
+    assert SW.BB_V2_DUE_FULL_PASS_TICKS == 5
+
+
 async def test_the_full_pass_finds_a_number_bb_due_lost(sweep, monkeypatch):
     # the safety net: a missed bb:due write (here: deleted by hand) costs at most one pass
     r, calls = sweep

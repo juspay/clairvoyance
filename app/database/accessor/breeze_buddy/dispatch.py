@@ -3,7 +3,7 @@ Accessor functions for the event-driven dispatcher.
 """
 
 from datetime import datetime
-from typing import Dict, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from app.core.logger import logger
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
@@ -30,6 +30,7 @@ from app.database.queries.breeze_buddy.telephony_number import (
     get_all_telephony_numbers_query,
 )
 from app.schemas import LeadCallTracker, TelephonyNumber
+from app.utils.common import parse_json
 
 
 async def get_unscheduled_backlog_leads(
@@ -108,16 +109,27 @@ class LeadDispatchState(NamedTuple):
     is_locked: bool
     template_id: Optional[str]
     next_attempt_at: Optional[datetime]
+    priority: Optional[Dict[str, Any]] = None  # meta_data.priority: its rank, if any
+    enrollment_id: Optional[str] = None  # the workflow run that asked for the call
 
 
 async def get_due_backlog_page(
     after: Optional[Tuple[datetime, str]], limit: int, lookahead_seconds: int = 120
-) -> List[Tuple[str, Optional[str], datetime]]:
-    """``(id, template_id, next_attempt_at)`` of the next keyset page after ``after``."""
+) -> List[Tuple[str, Optional[str], datetime, Optional[Dict[str, Any]]]]:
+    """``(id, template_id, next_attempt_at, priority)`` of the next keyset page after
+    ``after``."""
     try:
         query, values = get_due_backlog_page_query(after, limit, lookahead_seconds)
         rows = await run_parameterized_query(query, values)
-        return [(r["id"], r["template_id"], r["next_attempt_at"]) for r in rows or []]
+        return [
+            (
+                r["id"],
+                r["template_id"],
+                r["next_attempt_at"],
+                parse_json(r, "priority"),
+            )
+            for r in rows or []
+        ]
     except Exception as e:
         logger.error(f"get_due_backlog_page failed: {e}", exc_info=True)
         raise
@@ -138,6 +150,8 @@ async def get_lead_dispatch_states(
                 bool(r["is_locked"]),
                 r["template_id"],
                 r["next_attempt_at"],
+                parse_json(r, "priority"),
+                r.get("enrollment_id"),
             )
             for r in rows or []
         }

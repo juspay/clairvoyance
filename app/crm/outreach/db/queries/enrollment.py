@@ -44,6 +44,33 @@ def repin_open_runs_query(
     return query, [merchant_id, workflow_id, version]
 
 
+def wake_run_on_query(run_id: str, node_id: str) -> Tuple[str, List[Any]]:
+    """The run wakes now if it still waits on this square (whatever its alarm)."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET wake_at = now()
+        WHERE id = $1 AND status = 'waiting' AND current_node = $2
+        RETURNING id
+    """
+    return query, [run_id, node_id]
+
+
+def wake_parked_calls_query(
+    merchant_id: str, workflow_id: str, nodes: List[str]
+) -> Tuple[str, List[Any]]:
+    """Runs parked on these call squares (waiting for a line) wake now: the
+    squares no longer list topics, so the walker makes their leads today's
+    way. A run anywhere else is not touched."""
+    query = f"""
+        UPDATE {ENROLLMENT_TABLE}
+        SET wake_at = now()
+        WHERE merchant_id = $1 AND workflow_id = $2 AND status = 'waiting'
+          AND current_node = ANY($3::text[])
+        RETURNING id
+    """
+    return query, [merchant_id, workflow_id, nodes]
+
+
 def occupied_nodes_on_version_query(
     merchant_id: str, workflow_id: str, version: int
 ) -> Tuple[str, List[Any]]:

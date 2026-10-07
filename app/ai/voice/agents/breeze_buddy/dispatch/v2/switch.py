@@ -51,6 +51,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.v2.reconcile import (
     locked_leads_by_number,
     locked_signature,
     seed_holders,
+    set_aside_parked,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.routes import _client, refresh_number
 from app.core.config import dynamic as dyn_cfg
@@ -160,20 +161,17 @@ def is_desired(
 
 def decide(state: NumState, desired: bool, facts: Facts) -> Step:
     """The next step for one number. Pure."""
+    # v2 off for a number: hand it back now, no draining (a hard stop, by rule)
+    if state.mode in (V2_PENDING, V2, DRAINING) and not desired:
+        return Step(HANDOVER)
     if state.mode == V2_PENDING:
-        if not desired:
-            # nothing is issued in v2_pending: hand back at once (drain a leftover first)
-            return Step(HANDOVER if facts.drained else DRAIN)
         return _pending_step(state, facts)
     if state.mode == V2:
-        if not desired:
-            return Step(DRAIN)
         if state.reseed_at_ms and facts.now_ms >= state.reseed_at_ms:
             return Step(RESEED)
         return Step(NONE)
-    if state.mode == DRAINING:
-        # desired again (flapping): finish the drain first, then switch on from legacy
-        return Step(HANDOVER if facts.drained else NONE)
+    if state.mode == DRAINING:  # a leftover of an older drain: finish it
+        return Step(HANDOVER)
     if state.handback_pending:
         return Step(HANDOVER)  # a hand-back failed half-way: finish it before anything
     return Step(TURN_ON if desired else NONE)  # legacy or absent
@@ -316,6 +314,16 @@ async def apply_drain(
     """-> draining: ``match`` stops issuing; tickets already out are dialled or given back."""
     if expected is None:
         expected = await _state(c, number_id)
+    for template_id in sorted(await c.smembers(k.numtpl_key(number_id))):
+        # a draining number gives out no lines: calls with no lead row (bb:qi) would
+        # never leave, and the hand-back would wait for them for ever
+        if await c.hlen(k.qi_key(template_id)):
+            logger.error(
+                f"v2 switch: {number_id} stays v2, calls with no lead row wait in the "
+                f"room of {template_id}: remove it from BB_V2_INTENT_NUMBERS and wait "
+                "for its waiting calls to be placed or withdrawn"
+            )
+            return
     num = k.num_key(number_id)
     ops = [
         ["HSET", num, "mode", DRAINING, "mode_since_ms", str(now_ms)],
@@ -382,8 +390,11 @@ async def apply_handover(
     elif not _same_mode(await _state(c, number_id), expected):
         logger.warning(f"v2 switch: handover for {number_id} skipped, mode changed")
         return
+    templates = sorted(await c.smembers(k.numtpl_key(number_id)))
+    for template_id in templates:
+        await set_aside_parked(c, template_id)
     # 1. rooms to today's schedule while v2 still owns the number
-    await _move_rooms(await c.smembers(k.numtpl_key(number_id)))
+    await _move_rooms(templates)
     # 2. legacy first: from here calls release, inbound admits and enqueues use today's
     #    path, so the count below includes no call that will later release through v2
     num = k.num_key(number_id)

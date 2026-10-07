@@ -537,8 +537,15 @@ if BB_V2_ROUTES_REFRESH_S < 10:
     raise ValueError(
         f"BB_V2_ROUTES_REFRESH_S must be >= 10, got {BB_V2_ROUTES_REFRESH_S!r}"
     )
+# The grant worker (dispatch/v2/grants.py) takes this many bb:grants entries at once.
+BB_V2_GRANT_BATCH = int(os.environ.get("BB_V2_GRANT_BATCH", 16))
+# The pods that run the grant worker: those of this CRM_ROLE. Never the dialler pods
+# (CRM_ROLE=api): making a lead is CRM work. "walker" shares the walker pods; "grant"
+# is a role of its own (a deployment with CRM_ROLE=grant). "" = no pod runs it.
+BB_V2_GRANT_ROLE = os.environ.get("BB_V2_GRANT_ROLE", "walker")
 for _name, _val in (
     ("BB_V2_DUE_BATCH", BB_V2_DUE_BATCH),
+    ("BB_V2_GRANT_BATCH", BB_V2_GRANT_BATCH),
     ("BB_V2_DUE_FULL_PASS_TICKS", BB_V2_DUE_FULL_PASS_TICKS),
     ("BB_V2_LEDGER_CHUNK", BB_V2_LEDGER_CHUNK),
     ("BB_V2_PRUNE_CHUNK", BB_V2_PRUNE_CHUNK),
@@ -555,6 +562,20 @@ for _name, _val in (
 BB_V2_UNCLAIMED_REPUSH_S = 30
 BB_V2_CLAIMED_MAX_AGE_S = 180
 BB_V2_DIAL_STUCK_S = 600
+# A line reserved for a workflow call with no lead row yet (dispatch/v2/grants.py): its
+# entry is sent to the grant workers again after the first, and after the second the
+# line is freed and the call waits again.
+BB_V2_GRANT_RESEND_S = 5
+BB_V2_GRANT_MAX_S = 30
+# A call whose line has been freed this many times without its lead row being made (the
+# CRM keeps failing for it) waits tries x BB_V2_GRANT_BACKOFF_S before its next line, so
+# it stops holding one line for ever while the calls behind it wait.
+BB_V2_GRANT_MAX_TRIES = int(os.environ.get("BB_V2_GRANT_MAX_TRIES", 3))
+BB_V2_GRANT_BACKOFF_S = int(os.environ.get("BB_V2_GRANT_BACKOFF_S", 60))
+# After a failed sweep tick or a Redis-loss recovery, the sweeper starts neither the ledger
+# check nor the lease reaper for this many seconds: what they read may not be whole yet.
+# 0 = off; start at 60 (twice the slowest provider's request timeout).
+BB_V2_RECONNECT_GRACE_S = float(os.environ.get("BB_V2_RECONNECT_GRACE_S", 0))
 # The v2 acceptor (dispatch/v2/acceptor.py): one per dialler pod, one coroutine per
 # ticket. 1 s: a stopping acceptor leaves its BLPOP within 1 s, so shutdown never cancels
 # a pop whose reply is on the wire (that entry would wait 30 s for the reaper's re-push).
@@ -759,6 +780,12 @@ CRM_DISPATCH_STALE_MINUTES = _positive_int("CRM_DISPATCH_STALE_MINUTES", 15)
 # Bounded so one undeliverable message cannot earn a provider rate-limit ban
 # for every other merchant sharing that sender.
 CRM_DISPATCH_MAX_ATTEMPTS = _positive_int("CRM_DISPATCH_MAX_ATTEMPTS", 3)
+
+# How long the CRM may take to make a lead while its line is held (outreach/grant.py);
+# past it the payload is built again from the raw values (no llm_call).
+CRM_GRANT_PAYLOAD_BUDGET_SECONDS = _positive_float(
+    "CRM_GRANT_PAYLOAD_BUDGET_SECONDS", 2.0
+)
 
 # Retry backoff: a provider answering "you are sending too fast" must be
 # obeyed, so each attempt waits twice as long as the last.

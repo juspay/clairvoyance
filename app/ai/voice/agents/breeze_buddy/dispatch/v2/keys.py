@@ -8,6 +8,10 @@ DUE_KEY = "bb:due"
 # Every ticket match issues, in issue order, as "number|lead|ticket id|template|issued_ms":
 # one list for all numbers, popped by each pod's acceptor (design card §4).
 TICKETS_KEY = "bb:tickets"
+# Lines reserved for a workflow call whose lead row does not exist yet, as a ticket's five
+# fields plus the run id; popped by the grant worker (grants.py), which makes the row and
+# then publishes the ticket.
+GRANTS_KEY = "bb:grants"
 ENABLED_MIRROR_KEY = "bb:dispatch:enabled"
 EPOCH_KEY = "bb:epoch"
 # Numbers in a v2-accounted mode (v2_pending, v2, draining), and numbers whose hand-back
@@ -38,6 +42,21 @@ def numtpl_key(number_id: str) -> str:
 
 def room_key(template_id: str) -> str:
     return f"bb:q:{template_id}"
+
+
+def qp_key(template_id: str) -> str:
+    # not bb:q:*: the orphan prune reads the rest of such a name as a template id
+    return f"bb:qp:{template_id}"
+
+
+def qi_key(template_id: str) -> str:
+    # member -> run id, for a workflow call that waits with no lead row yet
+    return f"bb:qi:{template_id}"
+
+
+def qa_key(template_id: str) -> str:
+    # member -> how many times its grant freed the line (REGRANT)
+    return f"bb:qa:{template_id}"
 
 
 def busy_key(number_id: str) -> str:

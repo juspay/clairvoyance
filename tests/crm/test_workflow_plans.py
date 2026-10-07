@@ -459,6 +459,10 @@ class _PublishAccessor:
     async def repin_open_runs(self, conn: Any, *args: Any) -> int:
         return 0
 
+    async def wake_parked_calls(self, conn: Any, m: str, w: str, nodes: Any) -> int:
+        self.woken = list(nodes)
+        return len(nodes)
+
 
 def _verdict(status: Optional[str]) -> TemplateVerdict:
     """The registry's verdict for a test's shorthand: None = never
@@ -546,6 +550,24 @@ async def test_a_plan_without_send_nodes_never_asks_the_registry(
     asked = _registry(monkeypatch, status=None)
     await _publish(accessor)
     assert asked == [] and accessor.published is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "on_publish, woken", [("migrate", ["rescue-call"]), ("pin", None)]
+)
+async def test_a_migrate_publish_wakes_the_runs_parked_on_a_call_without_topics(
+    monkeypatch: pytest.MonkeyPatch, on_publish: str, woken: Any
+) -> None:
+    """Rollback of "a call waits for its line": publishing the plan again with
+    no topics on the call square wakes the runs parked there (migrate only:
+    under pin they keep their version, topics included)."""
+    draft = {**_definition(), "on_publish": on_publish}
+    accessor = _PublishAccessor(draft)
+    patch_accessors(monkeypatch, plans, accessor)
+    _registry(monkeypatch, status=None)
+    await _publish(accessor)
+    assert getattr(accessor, "woken", None) == woken
 
 
 @pytest.mark.asyncio
