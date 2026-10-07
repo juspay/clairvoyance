@@ -37,10 +37,13 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
-from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
+from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
+from app.crm.outreach.nodes.call import GRANT, undialled_call, withdraw_waiting_call
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     OUTCOME_KEY,
+    PARK_UNTIL_KEY,
+    QUEUE_KEY,
     dispatch_id,
     reply_key,
     without_reply,
@@ -56,6 +59,7 @@ from app.crm.outreach.steps import (
     first_arrival,
     step,
 )
+from app.crm.outreach.waiting_calls import call_waits
 from app.crm.outreach.window import alarm, opens_at
 from app.crm.record.contracts import customer_has_event
 
@@ -162,8 +166,9 @@ async def walk_run(run: EnrollmentRun) -> None:
                 steps=as_rows(closing(run, ejected, "ejected")),
             ):
                 _log_exit(run, "ejected")
+                await withdraw_waiting_call(run, ejected)
             else:
-                _deferred(run, "eject")
+                await _deferred(run, "eject")
             return
         if status == "paused":
             return  # the lease push IS the snooze; re-checked next wake
@@ -184,7 +189,7 @@ async def walk_run(run: EnrollmentRun) -> None:
                 f"walker: run {run.id} parked — {e}"
             )
         else:
-            _deferred(run, "park")
+            await _deferred(run, "park")
     except Exception as e:
         if run.attempts >= CRM_WALKER_MAX_ATTEMPTS:
             if await enrollment_accessor.park_run(
@@ -196,7 +201,7 @@ async def walk_run(run: EnrollmentRun) -> None:
                     f"walker: run {run.id} parked after retries — {e}"
                 )
             else:
-                _deferred(run, "park")
+                await _deferred(run, "park")
         else:
             retry_in = retry_delay_seconds(run.attempts, CRM_WALKER_LEASE_SECONDS)
             if await enrollment_accessor.record_run_error(
@@ -208,7 +213,7 @@ async def walk_run(run: EnrollmentRun) -> None:
                     retry_in_s=retry_in, attempts=run.attempts, permanent=False
                 ).warning(f"walker: run {run.id} retries in {retry_in}s — {e}")
             else:
-                _deferred(run, "retry")
+                await _deferred(run, "retry")
 
 
 def _log_exit(run: EnrollmentRun, reason: str) -> None:
@@ -218,7 +223,7 @@ def _log_exit(run: EnrollmentRun, reason: str) -> None:
     logger.bind(exit_reason=reason).info(f"walker: run {run.id} exited {reason}")
 
 
-def _deferred(run: EnrollmentRun, write: str) -> None:
+async def _deferred(run: EnrollmentRun, write: str) -> None:
     """A CAS miss: the run moved under the lease (a reply or repeat landed
     mid-visit). Nothing to undo — the event side's alarm stands, the
     buffered history is discarded with the move it belonged to (the INSERT
@@ -228,6 +233,12 @@ def _deferred(run: EnrollmentRun, write: str) -> None:
         f"walker: run {run.id} changed under the lease ({write} skipped) — "
         f"deferring to the next wake"
     )
+    # Only a stage letter's nudge moved the lease: walk again now, not in 300 s.
+    # Not inside a grant, whose miss is answered ERROR and asked again.
+    if run.wake_at is not None and GRANT.get() is None:
+        await enrollment_accessor.rearm_after_nudge(
+            str(run.id), run.current_node, run.wake_at
+        )
 
 
 async def _advance(
@@ -258,8 +269,9 @@ async def _advance(
             steps=as_rows(closing(run, definition, "timed_out")),
         ):
             _log_exit(run, "timed_out")
+            await withdraw_waiting_call(run, definition)
         else:
-            _deferred(run, "timed_out")
+            await _deferred(run, "timed_out")
         return
 
     # Goal re-check at fire time — one indexed EXISTS per tier via
@@ -285,8 +297,27 @@ async def _advance(
                 steps=as_rows(closing(run, definition, tier.exit_reason)),
             ):
                 _log_exit(run, tier.exit_reason)
+                await withdraw_waiting_call(run, definition)
             else:
-                _deferred(run, tier.exit_reason)
+                await _deferred(run, tier.exit_reason)
+            return
+
+    # A call that got its line but is not dialled yet keeps its run on the wait
+    # after it: the timer starts over, so the run never queues its next call
+    # beside one still to be placed. A letter is never held.
+    stood = nodes.get(run.current_node)
+    if (
+        stood is not None
+        and is_wait(stood)
+        and run.context.get(reply_key(stood.id)) is None
+        and await undialled_call(run, definition)
+    ):
+        again = alarm(stood, now, run.entered_at + max_age)
+        if again > now:
+            if not await enrollment_accessor.advance_run(
+                str(run.id), stood.id, again, run.context, lease
+            ):
+                await _deferred(run, f"hold on {stood.id}")
             return
 
     current_id = run.current_node
@@ -355,7 +386,7 @@ async def _advance(
                     node_arrived_at=None if first else arrived_at,
                     steps=as_rows(walked),
                 ):
-                    _deferred(run, f"hold on {node.id}")
+                    await _deferred(run, f"hold on {node.id}")
                 return
 
         execute = NODE_TYPES[node.type].execute
@@ -380,6 +411,32 @@ async def _advance(
             # at the plan's ceiling). The word is for the trail row below —
             # popped here so it is never written into the run's context.
             said = patch.pop(OUTCOME_KEY, None)
+            park_until = patch.pop(PARK_UNTIL_KEY, None)
+            request = patch.pop(QUEUE_KEY, None)
+            if park_until is not None:
+                # A call waiting for its line: the run holds on this square,
+                # listening, as the window hold above does (TRAP 1 applies).
+                # One write, the hold to max age: a death between it and the
+                # queue's answer (milliseconds) leaves the call parked until max
+                # age. Not covered for now (a short hold first would double the
+                # writes per call); found by hand: parked runs vs bb:qi.
+                context.update(patch)
+                if not await enrollment_accessor.advance_run(
+                    str(run.id),
+                    node.id,
+                    park_until,
+                    context,
+                    lease,
+                    node_arrived_at=None if first else arrived_at,
+                    steps=as_rows(walked),
+                ):
+                    await _deferred(run, f"hold on {node.id}")
+                elif request is not None and not await call_waits(request):
+                    # No line queue takes it: woken, the square mints it as today.
+                    # Matched on the square, not the hold, so a stage letter's
+                    # 1 ms nudge to wake_at can't make this miss.
+                    await enrollment_accessor.wake_run_on(str(run.id), node.id)
+                return
             context.update(patch)
             dispatched = dispatch_id(patch, node.id)
 
@@ -392,7 +449,7 @@ async def _advance(
             # which is the whole reason a condition's branch reaches disk
             # nowhere else.
             answer = context.get(reply_key(node.id))
-            outcome = TIMEOUT if answer is None else str(answer)
+            outcome = (_unanswered(node) or outcome) if answer is None else str(answer)
             # Leaving a branching square: its answer is spent (phase 15).
             # A door may start a run on any square, so this one can be
             # revisited — a stale reply would resolve the revisit at once.
@@ -422,7 +479,7 @@ async def _advance(
             ):
                 _log_exit(run, "completed")
             else:
-                _deferred(run, "completed")
+                await _deferred(run, "completed")
             return
 
         next_node = nodes.get(next_id)
@@ -457,7 +514,7 @@ async def _advance(
                     node_arrived_at=left_at,
                     steps=as_rows(walked),
                 ):
-                    _deferred(run, f"advance to {next_id}")
+                    await _deferred(run, f"advance to {next_id}")
                 return
 
         walked += step(
@@ -500,6 +557,13 @@ def goal_since(run: EnrollmentRun) -> datetime:
     return run.entered_at
 
 
+def _unanswered(node: WorkflowNode) -> Optional[str]:
+    """PURE: the label a branching square leaves by when no letter answered
+    it: a wait's "timeout"; a call that waited for its line leaves by its
+    unlabelled arrow (the call is placed)."""
+    return None if listens(node) and not is_wait(node) else TIMEOUT
+
+
 def pick_next(
     node: WorkflowNode, arrows: List[Tuple[str, Optional[str]]], context: Dict[str, Any]
 ) -> Optional[str]:
@@ -511,7 +575,7 @@ def pick_next(
     if not branches(node):
         return arrows[0][0] if arrows else None
     answer = context.get(reply_key(node.id))
-    wanted = TIMEOUT if answer is None else answer
+    wanted = _unanswered(node) if answer is None else answer
     for dst, on in arrows:
         if on == wanted:
             return dst

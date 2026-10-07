@@ -341,6 +341,31 @@ class ConditionRule(BaseModel):
         return self
 
 
+class PriorityRule(BaseModel):
+    """One `priority` rule: when the conditions ALL hold, the call takes `rank`."""
+
+    if_: List[Condition] = Field(alias="if", min_length=1)
+    rank: int = Field(ge=1, le=99)
+
+    model_config = {"populate_by_name": True}
+
+
+class WorkflowPriority(BaseModel):
+    """How urgent this plan's calls are (outreach/priority.py). `ranks`
+    gives the order inside a rank ("1" goes first); a rank it does not list
+    is newest_event. `rules` are
+    judged in order when a call is queued, and none holding gives `else`.
+    "Today" is read against the call template's own call hours."""
+
+    ranks: Dict[str, Literal["first_ready", "newest_event"]] = Field(
+        default_factory=dict
+    )
+    rules: List[PriorityRule] = Field(default_factory=list)
+    else_: int = Field(alias="else", ge=1, le=99)
+
+    model_config = {"populate_by_name": True}
+
+
 #: Where a split square records the arm a run took (enh A/04). Spelled on
 #: the document's own vocabulary, not inside the node, because two layers
 #: read it and neither may import the other: nodes/split.py writes the key
@@ -541,6 +566,8 @@ class WorkflowDefinition(BaseModel):
     # (modules/05-outreach §The playbook; canon T19 col 6). Pinned with the
     # document at publish, unlike a registration, which is live under open runs.
     playbook: Optional[Playbook] = None
+    # Absent = no stamps on the run, no rank on the lead: the plan as it was.
+    priority: Optional[WorkflowPriority] = None
 
     def send_templates(self) -> List[Tuple[str, str]]:
         """PURE: every (channel, template name) a send node of this document

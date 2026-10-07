@@ -43,6 +43,7 @@ from .breeze_buddy.lead_call_tracker import (
     get_lead_by_call_id,
     get_lead_by_id,
     get_lead_call_trackers_count,
+    get_lead_status,
     get_leads_by_enrollment_id,
     get_leads_by_request_id,
     get_leads_by_status_and_time_before,
@@ -55,6 +56,7 @@ from .breeze_buddy.lead_call_tracker import (
     update_lead_call_recording_url,
     update_lead_enrollment_id,
     update_lead_template,
+    update_waiting_lead_priority,
 )
 from .breeze_buddy.telephony_number import (
     check_number_purchase_conflict,
@@ -110,6 +112,7 @@ __all__ = [
     "calling_activation_for_merchant",
     "create_lead_call_tracker",
     "update_lead_enrollment_id",
+    "update_waiting_lead_priority",
     "append_metadata_field",
     "acquire_lock_on_lead_by_id",
     "release_lock_on_lead_by_id",
@@ -117,6 +120,7 @@ __all__ = [
     "update_lead_call_details",
     "get_lead_by_call_id",
     "get_lead_by_id",
+    "get_lead_status",
     "get_call_facts_by_runs",
     "get_call_stats_by_runs",
     "get_leads_by_enrollment_id",

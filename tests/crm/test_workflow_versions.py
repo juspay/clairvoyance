@@ -23,6 +23,7 @@ from app.crm.outreach.db.queries.enrollment import (
     repin_open_runs_query,
     repin_runs_on_version_query,
     runs_referencing_template_query,
+    wake_parked_calls_query,
 )
 from app.crm.outreach.db.queries.version import (
     get_definition_query,
@@ -34,6 +35,7 @@ from app.crm.outreach.plans import validate_definition, validate_migration
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition
 from scripts.check_crm_boundaries import TABLE_OWNERS
 from tests.crm.doubles import patch_accessors
+from tests.crm.test_call_priority import PRIORITY as _PRIORITY, _plan as _priority_plan
 
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
@@ -83,6 +85,14 @@ def test_insert_version_is_merchant_first_and_immutable_by_shape() -> None:
     assert params[0] == "m1" and params[2] == 3
     assert json.loads(params[3]) == {"entry": {"topic": "t"}}
     assert params[4:] == ["pin", "ops@x"]
+
+
+def test_a_publish_without_topics_wakes_only_the_runs_parked_on_those_calls() -> None:
+    sql, params = wake_parked_calls_query("m1", "wf-1", ["call-1", "call-2"])
+    assert "SET wake_at = now()" in sql
+    assert "status = 'waiting'" in sql and "current_node = ANY($3::text[])" in sql
+    assert "merchant_id = $1 AND workflow_id = $2" in sql and "RETURNING id" in sql
+    assert params == ["m1", "wf-1", ["call-1", "call-2"]]
 
 
 def test_repin_moves_only_open_runs_of_this_plan() -> None:
@@ -183,6 +193,47 @@ async def test_a_pinned_publish_writes_the_version_row_and_touches_no_run(
     )
     assert definition == draft
     assert accessor.repins == []
+
+
+@pytest.mark.asyncio
+async def test_a_rank_ordered_differently_by_a_live_plan_on_the_same_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plans of one merchant that call the same template share its waiting
+    queue. One rank under two orders would send all of one plan's calls first,
+    so the live plan's order for a rank is the law. A plan on another template,
+    and the plan itself, are not compared."""
+    night = {**_PRIORITY, "ranks": {**_PRIORITY["ranks"], "3": "first_ready"}}
+    clash = _workflow({}, _priority_plan(priority=night))
+    clash.name = "night nudge"
+    far = _workflow({}, _priority_plan(priority=night))
+    assert far.definition is not None
+    far.definition["nodes"][1]["template_id"] = "tpl-9"
+    itself = _workflow({}, _priority_plan(priority=night))
+
+    async def live(merchant_id: str) -> List[Workflow]:
+        return [clash, far, itself, _workflow({}, _PLAN)]
+
+    monkeypatch.setattr(plans.workflow_accessor, "live_workflows", live)
+    definition = WorkflowDefinition.model_validate(_priority_plan())
+
+    problems = await plans._rank_order_problems("m1", str(itself.id), definition)
+
+    assert len(problems) == 1
+    assert "rank 3" in problems[0] and "night nudge" in problems[0]
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_what_the_rank_order_check_finds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def clash(*_args: Any) -> List[str]:
+        return ["priority: rank 3 is newest_event here but first_ready elsewhere"]
+
+    monkeypatch.setattr(plans, "_rank_order_problems", clash)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(monkeypatch, {**_PLAN, "on_publish": "migrate"}, ["wait-30m"])
+    assert any("rank 3" in p for p in refused.value.problems)
 
 
 @pytest.mark.asyncio

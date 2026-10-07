@@ -31,10 +31,14 @@ _BOOKKEEPING_KEYS = (
     "repeat_items",  # repeat.py: accumulate's list — never a template variable
     "facts",  # entry.py: each square's letter, by square (phase 16) — flattened below
     "latest_letter",  # entry.py: which square heard the most recent letter (phase 17)
+    "latest_topic",  # entry.py: the latest producer letter's name (priority.py)
+    "latest_event_at",  # entry.py: when that letter happened
     "cut_short_by",  # entry.py: the letter that re-armed the run (canon T26)
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
     "_outcome",  # OUTCOME_KEY: a square's word for the trail, popped by the walker
+    "_park_until",  # PARK_UNTIL_KEY: a call waiting for its line, popped likewise
+    "_queue",  # QUEUE_KEY: the call the walker queues after that hold, popped likewise
     "calls_today",  # ceiling.CALLS_TODAY_KEY (pinned by test); the call ledger
 )
 # The letter that woke a run in place, left for the flush that follows
@@ -49,6 +53,10 @@ CUT_SHORT_BY_KEY = "cut_short_by"
 # LEAVES, and the action then executes as its own square, so "the current
 # square's facts" would never be the latest stage's.
 LATEST_LETTER_KEY = "latest_letter"
+# What a call's rank is judged from (outreach/priority.py): written by
+# entry.py with every producer letter, on plans that declare `priority`.
+LATEST_TOPIC_KEY = "latest_topic"
+LATEST_EVENT_AT_KEY = "latest_event_at"
 # How a PLAIN square was left, when it has something to say (phase 20): a
 # call square at the plan's ceiling returns it in its patch, the walker pops
 # it BEFORE the context write and records it as the step's outcome (canon
@@ -56,6 +64,12 @@ LATEST_LETTER_KEY = "latest_letter"
 # leak could not reach a template either. A branching square never uses it:
 # its answer already rides reply_<node>.
 OUTCOME_KEY = "_outcome"
+# A call square that lists topics waits on itself for its line: it returns the
+# alarm (the end of the run's life) here, and the walker holds the run on the
+# square, popping this as it pops the outcome.
+PARK_UNTIL_KEY = "_park_until"
+# The call to queue once the walker has written that hold (a run arriving there).
+QUEUE_KEY = "_queue"
 
 
 # The bookkeeping keys whose value is the ID OF WHAT THIS SQUARE HANDED

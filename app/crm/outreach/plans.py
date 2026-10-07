@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.contracts import registers_templates_for, template_status
-from app.crm.outreach import playbook
+from app.crm.outreach import playbook, priority
 from app.crm.outreach.catalog_laws import (
     Catalogs,
     WorkflowValidationError,
@@ -25,7 +25,8 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
-from app.crm.outreach.nodes.wait import TIMEOUT
+from app.crm.outreach.nodes.spec import ELSE
+from app.crm.outreach.nodes.wait import TIMEOUT, TOPIC_KEY
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
     GOAL_EXIT_REASONS,
@@ -116,6 +117,7 @@ def validate_definition(
             )
 
     problems.extend(playbook.laws(definition))
+    problems.extend(priority.laws(definition))
 
     # The doors (phase 15): one per topic, each starting on a real square.
     # Repeat-entry words per door (repeat.py owns the vocabulary); debounce
@@ -172,11 +174,45 @@ def validate_definition(
             problems.append(f"edge from unknown node: {src}")
         if dst not in seen:
             problems.append(f"edge to unknown node: {dst}")
+    problems.extend(
+        f"call {node.id} lists topics, so it needs one edge with no on: "
+        "the path taken when the call is placed"
+        for node in definition.nodes
+        if node.type == "call" and node.topics and node.id not in definition.outgoing()
+    )
     for src, arrows in definition.outgoing().items():
         labels = [on for _, on in arrows]
         node = nodes_by_id.get(src)
         if node is not None and branches(node):
-            if None in labels:
+            # A call that lists topics waits for its line: one arrow per listed
+            # topic, and exactly one unlabelled arrow, taken when it is placed.
+            parks = not is_wait(node) and listens(node)
+            if parks and None not in labels:
+                problems.append(
+                    f"call {src} lists topics, so it needs one edge with no on: "
+                    "the path taken when the call is placed"
+                )
+            placed = [dst for dst, on in arrows if on is None]
+            after = nodes_by_id.get(placed[0], node) if placed else None
+            if parks and after is not None and not is_wait(after):
+                # its run is held there, and found again after a crashed grant
+                problems.append(
+                    f"call {src} lists topics, so its edge with no on must lead "
+                    "straight to a wait"
+                )
+            elif parks and after is not None and not (after.minutes or after.topics):
+                # a window alone is due at once in open hours: the grant walks on
+                problems.append(
+                    f"call {src} lists topics, so the wait after it needs minutes "
+                    "or topics"
+                )
+            if parks and node.key == TOPIC_KEY and ELSE not in labels:
+                problems.extend(
+                    f"call {src} lists topic {topic!r} but has no edge for it"
+                    for topic in node.topics
+                    if topic not in labels
+                )
+            if None in labels and not parks:
                 problems.append(f"every edge out of {node.type} {src} needs an on")
             if len(set(labels)) != len(labels):
                 problems.append(f"{node.type} {src} has two edges with the same on")
@@ -420,6 +456,7 @@ async def _publish_in_txn(
         txn, merchant_id, definition.send_templates()
     )
     problems = await _template_problems(merchant_id, definition)
+    problems += await _rank_order_problems(merchant_id, workflow_id, definition)
     if problems:
         raise WorkflowValidationError(problems)
     published = await workflow_accessor.apply_publish(txn, merchant_id, workflow_id)
@@ -436,14 +473,22 @@ async def _publish_in_txn(
         definition.on_publish,
         published_by,
     )
-    repinned = 0
+    repinned = woken = 0
     if definition.on_publish == "migrate":
         repinned = await enrollment_accessor.repin_open_runs(
             txn, merchant_id, workflow_id, published.version
         )
+        # rollback of "a call waits for its line": a call square that no longer
+        # lists topics wakes the runs parked on it, so they are called today's way
+        plain = [n.id for n in definition.nodes if n.type == "call" and not n.topics]
+        if plain:
+            woken = await enrollment_accessor.wake_parked_calls(
+                txn, merchant_id, workflow_id, plain
+            )
     logger.info(
         f"workflow published: {workflow_id} v{published.version} "
-        f"({definition.on_publish}; {repinned} open runs re-pinned; "
+        f"({definition.on_publish}; {repinned} open runs re-pinned, {woken} parked "
+        f"calls woken; "
         f"merchant {merchant_id})"
     )
     return published
@@ -502,9 +547,10 @@ async def _check_draft_in_txn(
             "draft is a ladder saved without its board — save the draft "
             "again (PUT /draft) before publishing; publish copies it verbatim"
         ]
+    definition = WorkflowDefinition.model_validate(draft)
     return True, await _template_problems(
-        merchant_id, WorkflowDefinition.model_validate(draft)
-    )
+        merchant_id, definition
+    ) + await _rank_order_problems(merchant_id, workflow_id, definition)
 
 
 async def _template_problems(
@@ -534,6 +580,45 @@ async def _template_problems(
     return problems
 
 
+async def _rank_order_problems(
+    merchant_id: str, workflow_id: str, definition: WorkflowDefinition
+) -> List[str]:
+    """GATHER for the publish atom: plans of one merchant that call the same
+    template share its waiting queue, and a rank's calls are compared there by
+    ONE order. Two orders under one rank would send all of one plan's calls
+    first, so a live plan's order for a rank is the law for the next plan."""
+    if definition.priority is None:
+        return []
+    mine = definition.priority
+    calls = {n.template_id for n in definition.nodes if n.type == "call"}
+    problems: List[str] = []
+    for other in await workflow_accessor.live_workflows(merchant_id):
+        document = other.definition or {}
+        their = document.get("priority") or {}
+        theirs = their.get("ranks") or {}
+        shared = calls & {
+            n.get("template_id")
+            for n in document.get("nodes") or []
+            if n.get("type") == "call"
+        }
+        if str(other.id) == workflow_id or not shared:
+            continue
+        # the ranks both plans can give a call; one a plan does not list has
+        # the default order
+        both = {str(r.rank) for r in mine.rules} | {str(mine.else_)}
+        both &= {str(r.get("rank")) for r in their.get("rules") or []} | {
+            str(their.get("else"))
+        }
+        problems += [
+            f"priority: rank {rank} is {priority.order_of(mine.ranks, rank)} here "
+            f"but {priority.order_of(theirs, rank)} in live plan '{other.name}', "
+            "which calls the same template"
+            for rank in sorted(both)
+            if priority.order_of(mine.ranks, rank) != priority.order_of(theirs, rank)
+        ]
+    return problems
+
+
 async def set_status(
     merchant_id: str, workflow_id: str, status: str
 ) -> Optional[Workflow]:
@@ -560,7 +645,23 @@ async def set_status(
             "archived": "archiving it",
         }
         raise WorkflowValidationError([f"publish a draft before {verb[status]}"])
-    return await workflow_accessor.set_workflow_status(merchant_id, workflow_id, status)
+    # calls refused while paused wait on their square: resume queues them
+    # again, archive lets the walker eject them
+    wake = status == "archived" or (status == "live" and workflow.status == "paused")
+    return await atomically(_set_status_in_txn, merchant_id, workflow_id, status, wake)
+
+
+async def _set_status_in_txn(
+    txn: DbTxn, merchant_id: str, workflow_id: str, status: str, wake: bool
+) -> Optional[Workflow]:
+    """ATOMIC: the status and the wake of its parked calls share one fate — an
+    archive whose wake failed could never be retried (an archived plan is a 404)."""
+    updated = await workflow_accessor.set_workflow_status(
+        txn, merchant_id, workflow_id, status
+    )
+    if updated is not None and wake:
+        await enrollment_accessor.wake_plan_parked_calls(txn, merchant_id, workflow_id)
+    return updated
 
 
 async def get_workflow(merchant_id: str, workflow_id: str) -> Optional[Workflow]:

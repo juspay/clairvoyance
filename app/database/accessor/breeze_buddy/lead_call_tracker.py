@@ -24,6 +24,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     get_lead_by_call_id_query,
     get_lead_by_id_query,
     get_lead_call_trackers_count_query,
+    get_lead_status_query,
     get_leads_by_enrollment_id_query,
     get_leads_by_request_id_query,
     get_leads_by_status_and_time_before_query,
@@ -42,6 +43,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_lead_payload_query,
     update_lead_request_id_query,
     update_lead_template_query,
+    update_waiting_lead_priority_query,
 )
 from app.schemas import (
     TEMPLATELESS_PLACEHOLDER_TEMPLATES,
@@ -372,6 +374,15 @@ async def get_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
         return None
 
 
+async def get_lead_status(lead_id: str) -> Optional[LeadCallStatus]:
+    """The lead's status, or None when it has no row. Says nothing: on the
+    grant path a lead that is not there yet is the usual answer. A failed
+    read raises."""
+    query_text, values = get_lead_status_query(lead_id)
+    result = await run_parameterized_query(query_text, values)
+    return LeadCallStatus(result[0]["status"]) if result else None
+
+
 async def get_leads_by_request_id(
     request_id: str,
 ) -> List[LeadCallTracker]:
@@ -562,6 +573,20 @@ async def update_lead_enrollment_id(lead_id: str, enrollment_id: str) -> bool:
     except Exception as e:
         logger.error(f"Error stamping enrollment_id on lead {lead_id}: {e}")
         return False
+
+
+async def update_waiting_lead_priority(lead_id: str, priority: Dict[str, Any]) -> bool:
+    """
+    Write a new rank on a lead still waiting to be dialled. False = it is no
+    longer waiting: there is no queued call to move. A failure raises.
+    """
+    try:
+        query_text, values = update_waiting_lead_priority_query(lead_id, priority)
+        result = await run_parameterized_query(query_text, values)
+        return bool(result and get_row_count(result) > 0)
+    except Exception as e:
+        logger.error(f"Error writing the rank on lead {lead_id}: {e}")
+        raise
 
 
 async def update_lead_call_recording_url(

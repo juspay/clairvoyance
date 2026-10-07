@@ -34,8 +34,10 @@ from app.crm.outreach.db.queries.enrollment import (
     open_runs_for_customer_query,
     park_run_query,
     patch_open_run_query,
+    rearm_after_nudge_query,
     record_run_error_query,
     refresh_run_facts_query,
+    remember_stage_facts_query,
     repin_open_runs_query,
     repin_runs_on_version_query,
     resume_run_by_id_query,
@@ -46,6 +48,9 @@ from app.crm.outreach.db.queries.enrollment import (
     runs_referencing_template_query,
     source_event_used_query,
     sweep_exited_runs_query,
+    wake_parked_calls_query,
+    wake_plan_parked_calls_query,
+    wake_run_on_query,
     workflow_has_runs_query,
     workflow_split_counts_query,
     workflow_summary_query,
@@ -75,6 +80,39 @@ async def repin_open_runs(
     """Runs inside the publish atom (conn param). Returns how many runs
     now execute the new version."""
     query, values = repin_open_runs_query(merchant_id, workflow_id, version)
+    rows = await conn.fetch(query, *values)
+    return len(rows)
+
+
+async def wake_run_on(run_id: str, node_id: str) -> bool:
+    """True when the run still waited on that square and now wakes."""
+    query, values = wake_run_on_query(run_id, node_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
+
+
+async def rearm_after_nudge(run_id: str, node_id: str, lease: datetime) -> bool:
+    query, values = rearm_after_nudge_query(run_id, node_id, lease)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
+
+
+async def wake_parked_calls(
+    conn: asyncpg.Connection, merchant_id: str, workflow_id: str, nodes: List[str]
+) -> int:
+    """Inside the publish atom. Returns how many parked runs were woken."""
+    query, values = wake_parked_calls_query(merchant_id, workflow_id, nodes)
+    rows = await conn.fetch(query, *values)
+    return len(rows)
+
+
+async def wake_plan_parked_calls(
+    conn: asyncpg.Connection, merchant_id: str, workflow_id: str
+) -> int:
+    """Inside the status atom. Returns how many parked calls were woken."""
+    query, values = wake_plan_parked_calls_query(merchant_id, workflow_id)
     rows = await conn.fetch(query, *values)
     return len(rows)
 
@@ -266,11 +304,12 @@ async def resume_run_by_id(
     node_id: str,
     context_patch: Dict[str, Any],
     facts: Optional[Dict[str, Any]] = None,
+    stamp: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """True when the run was standing on the listening square (waiting or
     parked) and took the answer and the letter's facts."""
     query, values = resume_run_by_id_query(
-        merchant_id, run_id, node_id, context_patch, facts
+        merchant_id, run_id, node_id, context_patch, facts, stamp
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
@@ -283,11 +322,30 @@ async def refresh_run_facts(
     node_id: str,
     facts: Dict[str, Any],
     cut_short_by: Optional[str] = None,
+    stamp: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """True when the run was standing (waiting or parked) on that
     non-listening square and took the letter's facts as its newest."""
     query, values = refresh_run_facts_query(
-        merchant_id, run_id, node_id, facts, cut_short_by
+        merchant_id, run_id, node_id, facts, cut_short_by, stamp
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return row is not None
+
+
+async def remember_stage_facts(
+    merchant_id: str,
+    run_id: str,
+    node_id: str,
+    heard_by: str,
+    facts: Dict[str, Any],
+    context_patch: Dict[str, Any],
+) -> bool:
+    """True when the run was standing on ``node_id`` and took the letter's
+    facts; it is not woken."""
+    query, values = remember_stage_facts_query(
+        merchant_id, run_id, node_id, heard_by, facts, context_patch
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
