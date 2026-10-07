@@ -304,10 +304,6 @@ async def lifespan(_app: FastAPI):
             logger.info("Event-driven dispatcher started")
         except Exception as e:
             logger.error(f"Failed to start event-driven dispatcher: {e}", exc_info=True)
-        try:
-            await start_analysis_worker()
-        except Exception as e:
-            logger.error(f"Failed to start conversation analysis worker: {e}")
     elif CRM_ROLE != "api":
         logger.info(
             f"CRM_ROLE={CRM_ROLE}: event-driven dispatcher not started "
@@ -315,6 +311,12 @@ async def lifespan(_app: FastAPI):
         )
     else:
         logger.info("Event-driven dispatcher disabled (ENABLE_DISPATCHER=false)")
+
+    if POD_ROLE == "main_server":
+        try:
+            await start_analysis_worker()
+        except Exception as e:
+            logger.error(f"Failed to start conversation analysis worker: {e}")
 
     # CRM worker roles (design/worker-runtime.md): one image, N pods. A
     # non-"api" CRM_ROLE runs its drain loop as an asyncio task in this
@@ -350,10 +352,11 @@ async def lifespan(_app: FastAPI):
             await stop_promoter()
         except Exception as e:
             logger.error(f"Error stopping dispatcher: {e}", exc_info=True)
-        try:
-            await stop_analysis_worker()
-        except Exception as e:
-            logger.error(f"Error stopping conversation analysis worker: {e}")
+
+    try:
+        await stop_analysis_worker()
+    except Exception as e:
+        logger.error(f"Error stopping conversation analysis worker: {e}")
 
     # Stop background task scheduler if running
     if _background_scheduler:
