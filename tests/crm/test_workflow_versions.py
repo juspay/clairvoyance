@@ -23,6 +23,7 @@ from app.crm.outreach.db.queries.enrollment import (
     repin_open_runs_query,
     repin_runs_on_version_query,
     runs_referencing_template_query,
+    wake_parked_calls_query,
 )
 from app.crm.outreach.db.queries.version import (
     get_definition_query,
@@ -84,6 +85,14 @@ def test_insert_version_is_merchant_first_and_immutable_by_shape() -> None:
     assert params[0] == "m1" and params[2] == 3
     assert json.loads(params[3]) == {"entry": {"topic": "t"}}
     assert params[4:] == ["pin", "ops@x"]
+
+
+def test_a_publish_without_topics_wakes_only_the_runs_parked_on_those_calls() -> None:
+    sql, params = wake_parked_calls_query("m1", "wf-1", ["call-1", "call-2"])
+    assert "SET wake_at = now()" in sql
+    assert "status = 'waiting'" in sql and "current_node = ANY($3::text[])" in sql
+    assert "merchant_id = $1 AND workflow_id = $2" in sql and "RETURNING id" in sql
+    assert params == ["m1", "wf-1", ["call-1", "call-2"]]
 
 
 def test_repin_moves_only_open_runs_of_this_plan() -> None:

@@ -9,16 +9,19 @@ waiting is ranked again. The run is not woken and its timer does not move.
 
 import asyncio
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+import asyncpg
 import pytest
 
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.nodes.call as call_node
+from app.crm.outreach import waiting_calls as call_queue
 from app.crm.outreach.db.queries.enrollment import (
     advance_run_query,
     refresh_run_facts_query,
@@ -28,11 +31,12 @@ from app.crm.outreach.db.queries.enrollment import (
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.schemas import EnrollmentRun, Workflow
 from app.crm.record.schemas import RawEvent
+from app.crm.shared import after_commit
 from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_waiting_lead_priority_query,
 )
 from tests.crm.conftest import CRM_WEBHOOK_TEST_DSN as DSN
-from tests.crm.test_call_priority import _plan
+from tests.crm.test_call_priority import HOURS, NO_WINDOW, _plan
 
 IST = ZoneInfo("Asia/Kolkata")
 PLAN = _plan()
@@ -42,7 +46,13 @@ NIGHT = datetime(2026, 10, 9, 2, 0, tzinfo=IST)  # the offer that founded the ru
 KYC_AT = datetime(2026, 10, 9, 11, 0, tzinfo=IST)  # KYC done, inside the window
 NOW = KYC_AT + timedelta(seconds=5)
 STAMP = {"latest_topic": "LINE_KYC_COMPLETED", "latest_event_at": KYC_AT.isoformat()}
-LIVE = {"rank": 1, "order": "first_ready", "event_ms": int(KYC_AT.timestamp() * 1000)}
+LIVE = {
+    "rank": 1,
+    "order": "first_ready",
+    "event_ms": int(KYC_AT.timestamp() * 1000),
+    "next_rank": 2,  # not called by closing: the KYC pile tomorrow
+    "next_order": "newest_event",
+}
 
 needs_db = pytest.mark.skipif(
     not DSN, reason="set CRM_WEBHOOK_TEST_DSN to run against Postgres"
@@ -97,6 +107,8 @@ class _World:
         self.remembered: List[Tuple[str, str, Dict[str, Any], Dict[str, Any]]] = []
         self.enrolled: List[Dict[str, Any]] = []
         self.lead_writes: List[Tuple[str, Dict[str, Any]]] = []
+        self.reranks: List[Tuple[Any, ...]] = []
+        self.reranks_later: List[Dict[str, Any]] = []
 
     async def live_workflows(self, _merchant: str) -> List[Workflow]:
         return [self.flow] if self.node is None else []
@@ -134,6 +146,13 @@ class _World:
     async def cancel_run(self, *_args: Any, **_kwargs: Any) -> bool:
         return False
 
+    def _older(self, stamp: Optional[Dict[str, Any]]) -> bool:
+        at = (stamp or {}).get("latest_event_at")
+        seen = self.stamps.get("latest_event_at") or self.stamps.get("entered_event_at")
+        if not (at and seen):
+            return False
+        return datetime.fromisoformat(str(seen)) > datetime.fromisoformat(str(at))
+
     async def resume_run_by_id(
         self,
         _merchant: str,
@@ -143,8 +162,8 @@ class _World:
         *_: Any,
         stamp: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        if node_id != self.node:
-            return False  # the statement's guard: only the square she stands on
+        if node_id != self.node or self._older(stamp):
+            return False  # the statement's guards: her square, and _not_older
         self.resumes.append((node_id, {**patch, **(stamp or {})}))
         return True
 
@@ -157,6 +176,8 @@ class _World:
         stamp: Optional[Dict[str, Any]] = None,
         **_: Any,
     ) -> bool:
+        if self._older(stamp):
+            return False  # the statement's _not_older guard
         self.refreshes.append((node_id, {**facts, **(stamp or {})}))
         return True
 
@@ -182,11 +203,15 @@ class _World:
         self.lead_writes.append((lead_id, priority))
         return self.still_waiting
 
+    async def rerank(self, *args: Any, **later: Any) -> None:
+        self.reranks.append(args)  # waiting_calls.call_reranked's arguments
+        self.reranks_later.append(later)
+
 
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch):
-    """`world(definition, node)`: her one open run stands on `node`, and
-    everything the consumer reaches is recorded."""
+    """`world(definition, node)`: her one open run stands on `node`, the queue's
+    hook is registered, and everything the consumer reaches is recorded."""
 
     def _install(
         definition: Dict[str, Any] = PLAN, node: Optional[str] = "after-call-1"
@@ -210,6 +235,14 @@ def world(monkeypatch: pytest.MonkeyPatch):
             call_node, "update_waiting_lead_priority", w.update_waiting_lead_priority
         )
         monkeypatch.setattr(call_node, "_now", lambda: NOW)
+        monkeypatch.setattr(call_node, "call_reranked", w.rerank)
+
+        async def hours(_template_id: str) -> Any:
+            return HOURS
+
+        monkeypatch.setattr(
+            call_node, "get_call_execution_config_by_template_id", hours
+        )
         return w
 
     return _install
@@ -241,32 +274,76 @@ def test_stage_memory_updates_facts_without_waking(world) -> None:
 def test_stage_memory_reranks_the_waiting_call(world) -> None:
     """Her offer was the night's (rank 3). KYC at 11:00 is inside today's
     window, so the call still waiting is a live customer's now: the lead row
-    learns it."""
+    learns it, then the queue is told."""
     w = world()
 
     _consume(_event())
 
     assert w.lead_writes == [("lead-1", LIVE)]
+    assert w.reranks == [("tpl-1", "lead-1", 1, "first_ready", KYC_AT)]
+
+
+def test_the_rerank_says_what_a_live_call_falls_to_tomorrow(world) -> None:
+    """She is live today; not called by closing she is KYC pile tomorrow. The
+    queue is told both, so it can move her at the next opening."""
+    w = world()
+
+    _consume(_event())
+
+    assert w.reranks_later == [{"next_rank": 2, "next_order": "newest_event"}]
+
+
+def test_a_rerank_reads_the_templates_hours(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Today is the template's call hours: the re-rank reads that template's
+    call config once."""
+    asked: List[str] = []
+
+    async def config(template_id: str) -> Any:
+        asked.append(template_id)
+        return HOURS
+
+    w = world(_plan(priority=NO_WINDOW))
+    monkeypatch.setattr(call_node, "get_call_execution_config_by_template_id", config)
+    _consume(_event())
+    assert w.lead_writes == [("lead-1", LIVE)] and asked == ["tpl-1"]
+
+
+def test_with_no_hook_registered_only_the_lead_row_learns_the_rank(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = world()
+    monkeypatch.setattr(call_node, "call_reranked", call_queue.call_reranked)
+    monkeypatch.setattr(call_queue, "_hooks", None)
+
+    _consume(_event())
+
+    assert w.lead_writes == [("lead-1", LIVE)]
+    assert w.reranks == []
 
 
 def test_a_call_no_longer_waiting_is_not_reranked(world) -> None:
     """The lead row takes the rank only while it is BACKLOG; a call already
-    dialling or finished keeps its rank."""
+    dialling or finished keeps its rank, and the queue is not told."""
     w = world()
     w.still_waiting = False
 
     _consume(_event())
 
     assert len(w.remembered) == 1 and len(w.lead_writes) == 1
+    assert w.reranks == []
 
 
-def test_a_failing_rank_change_never_fails_the_letter(world, monkeypatch) -> None:
+def test_a_failing_rank_change_never_fails_the_letter(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
     w = world()
 
-    async def broken(*_args: Any) -> bool:
-        raise RuntimeError("the database is away")
+    async def broken(*_args: Any) -> None:
+        raise RuntimeError("the queue is away")
 
-    monkeypatch.setattr(call_node, "update_waiting_lead_priority", broken)
+    monkeypatch.setattr(call_node, "call_reranked", broken)
 
     _consume(_event())
 
@@ -334,19 +411,16 @@ def test_a_letter_on_a_deaf_square_carries_the_stamps(world) -> None:
 @pytest.mark.parametrize("node", ["after-call-1", "quiet", "call-1"])
 def test_a_late_older_letter_never_moves_the_stamps_back(world, node: str) -> None:
     """A letter that HAPPENED before the one the run already carries, and only
-    arrived late, leaves the stamps alone on every path (stage memory, a
-    square's reply, a deaf square): a live call must not fall to the pile.
-    Stage memory drops it: its facts would replace the newer letter's."""
+    arrived late, writes nothing on any path (stage memory, a square's reply,
+    a deaf square): its answer and facts would replace the newer letter's,
+    and a live call must not fall to the pile."""
     w = world(node=node)
 
     _consume(_event(at=NIGHT - timedelta(hours=5)))
 
     patches = [p for *_, p in w.remembered] + [p for _, p in w.resumes + w.refreshes]
     assert not any("latest_topic" in p or "latest_event_at" in p for p in patches)
-    if node == "after-call-1":
-        assert w.remembered == [] and w.lead_writes == []
-    else:
-        assert patches  # a reply or a deaf square still takes the letter
+    assert patches == [] and w.lead_writes == [] and w.reranks == []
 
 
 def test_a_run_older_than_the_stamps_is_read_from_its_founding_letter(world) -> None:
@@ -358,6 +432,40 @@ def test_a_run_older_than_the_stamps_is_read_from_its_founding_letter(world) -> 
     _consume(_event(at=NIGHT - timedelta(hours=5)))
 
     assert w.remembered == [] and w.lead_writes == []
+
+
+def test_the_event_worker_tells_the_queue_after_its_commit(world) -> None:
+    """Inside the event worker's pass the re-rank's queue call is deferred: the
+    lead row learns the rank at once, the queue only after the commit."""
+
+    w = world(node="after-call-1")
+
+    with after_commit.collecting() as later:
+        _consume(_event())
+    assert len(w.lead_writes) == 1 and w.reranks == []
+    asyncio.run(after_commit.run(later))
+    assert len(w.reranks) == 1
+
+
+def test_a_slow_queue_cannot_hold_the_event_worker(world, monkeypatch) -> None:
+    """A slow queue gets HOOK_TIMEOUT_S and no more."""
+    w = world(node="after-call-1")
+
+    async def slow(*_args: Any, **_later: Any) -> None:
+        await asyncio.sleep(30)
+
+    async def never(*_args: Any) -> None:
+        return None
+
+    monkeypatch.setattr(call_node, "call_reranked", call_queue.call_reranked)
+    monkeypatch.setattr(call_queue, "_hooks", (never, never, slow))
+    monkeypatch.setattr(call_queue, "HOOK_TIMEOUT_S", 0.2)
+    started = time.monotonic()
+
+    _consume(_event())
+
+    assert time.monotonic() - started < 2
+    assert len(w.lead_writes) == 1  # the row has the new rank; the queue heals
 
 
 def test_a_letter_of_the_same_moment_moves_the_stamps(world) -> None:
@@ -464,8 +572,6 @@ async def test_on_postgres_the_run_keeps_its_timer_and_learns_the_stage() -> Non
     """Against a TEMP table shaped like the columns the statement touches: a
     waiting run and a parked run on the square learn the letter and keep their
     state, the timer moved 1 ms; a run that has left the square is not touched."""
-    import asyncpg
-
     wake = datetime(2026, 10, 10, 7, 0, tzinfo=timezone.utc)
     before = {"phone": "+91", "facts": {"quiet": {"stage": "offered"}}}
     rows = [
@@ -512,8 +618,6 @@ async def test_on_postgres_the_run_keeps_its_timer_and_learns_the_stage() -> Non
 
 @needs_db
 async def test_on_postgres_the_rank_is_merged_into_a_waiting_leads_meta() -> None:
-    import asyncpg
-
     meta = {"workflow_id": "w", "enrollment_id": "r"}
     conn = await asyncpg.connect(DSN)
     try:
@@ -545,8 +649,6 @@ async def test_on_postgres_the_rank_is_merged_into_a_waiting_leads_meta() -> Non
 async def test_on_postgres_a_held_lead_keeps_its_rank_and_no_clock_moves() -> None:
     """A BACKLOG lead a dialler holds (is_locked) keeps the rank it had; a free
     one takes the new rank. Neither `updated_at` moves: it is the lock's age."""
-    import asyncpg
-
     then = datetime(2026, 10, 9, 5, 0, tzinfo=timezone.utc)
     conn = await asyncpg.connect(DSN)
     try:
@@ -610,8 +712,6 @@ async def test_on_postgres_an_older_letter_never_moves_newer_stamps_back() -> No
     """Two replicas: the newer letter is written first, then the older one's write
     from a stale read. Each statement refuses the older letter whole (answer and
     facts too); a newer one still lands."""
-    import asyncpg
-
     wake = datetime(2026, 10, 10, 7, 0, tzinfo=timezone.utc)
     conn = await asyncpg.connect(DSN)
     try:
@@ -649,8 +749,6 @@ async def test_on_postgres_an_older_letter_never_moves_newer_stamps_back() -> No
 
 @needs_db
 async def test_on_postgres_an_older_letter_never_reranks_the_lead_back() -> None:
-    import asyncpg
-
     older = {**LIVE, "rank": 3, "event_ms": LIVE["event_ms"] - 1}
     conn = await asyncpg.connect(DSN)
     try:
@@ -676,8 +774,6 @@ async def test_on_postgres_a_walker_visit_in_flight_cannot_wipe_stage_memory() -
     """The walker read the run under its lease; stage memory lands; the walker's
     advance (whole context, old read) then matches nothing, so the stage facts
     stay and the run is redone from them at its next wake."""
-    import asyncpg
-
     lease = datetime(2026, 10, 10, 7, 0, tzinfo=timezone.utc)
     conn = await asyncpg.connect(DSN)
     try:
@@ -716,3 +812,51 @@ def test_a_future_dated_letter_is_stamped_at_its_receipt() -> None:
     stamp = entry._latest_stamp(definition, letter)
 
     assert stamp["latest_event_at"] == KYC_AT.isoformat()
+
+
+@needs_db
+async def test_on_postgres_a_rerank_keeps_the_calls_ready_time() -> None:
+    """A re-rank merges into priority: the place in the line (ready_ms) stays."""
+    queued = {"priority": {"rank": 3, "event_ms": 1, "ready_ms": 1700000000000}}
+    conn = await asyncpg.connect(DSN)
+    try:
+        await conn.execute(
+            "CREATE TEMP TABLE lead_call_tracker (id text, status text,"
+            " meta_data jsonb, updated_at timestamptz, is_locked boolean)"
+        )
+        await conn.execute(
+            "INSERT INTO lead_call_tracker VALUES ('l', 'BACKLOG', $1::jsonb, NULL, FALSE)",
+            json.dumps(queued),
+        )
+        sql, params = update_waiting_lead_priority_query("l", LIVE)
+        await conn.execute(sql, *params)
+        meta = await conn.fetchval("SELECT meta_data FROM lead_call_tracker")
+    finally:
+        await conn.close()
+
+    assert json.loads(meta)["priority"] == {**LIVE, "ready_ms": 1700000000000}
+
+
+@needs_db
+async def test_on_postgres_a_rerank_drops_a_next_rank_the_new_rank_has_not() -> None:
+    """Live (falls to 3 at closing) re-ranked to 2, which does not change
+    tomorrow: the old next_rank must not stay behind."""
+    queued = {"priority": {**LIVE, "next_rank": 3, "ready_ms": 1700000000000}}
+    kyc = {"rank": 2, "order": "newest_event", "event_ms": LIVE["event_ms"]}
+    conn = await asyncpg.connect(DSN)
+    try:
+        await conn.execute(
+            "CREATE TEMP TABLE lead_call_tracker (id text, status text,"
+            " meta_data jsonb, updated_at timestamptz, is_locked boolean)"
+        )
+        await conn.execute(
+            "INSERT INTO lead_call_tracker VALUES ('l', 'BACKLOG', $1::jsonb, NULL, FALSE)",
+            json.dumps(queued),
+        )
+        sql, params = update_waiting_lead_priority_query("l", kyc)
+        await conn.execute(sql, *params)
+        meta = await conn.fetchval("SELECT meta_data FROM lead_call_tracker")
+    finally:
+        await conn.close()
+
+    assert json.loads(meta)["priority"] == {**kyc, "ready_ms": 1700000000000}

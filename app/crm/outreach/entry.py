@@ -35,7 +35,7 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.definitions import definition_for
 from app.crm.outreach.enrol import LOG_COMPONENT as ENROL_LOG_COMPONENT, enrol
 from app.crm.outreach.nodes import listens
-from app.crm.outreach.nodes.call import rerank_waiting_call
+from app.crm.outreach.nodes.call import rerank_waiting_call, withdraw_waiting_call
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
     LATEST_EVENT_AT_KEY,
@@ -244,6 +244,7 @@ async def _end_on_goal(
                 # would otherwise forge a log line (CWE-117).
                 f"run {run.id} exited {tier.exit_reason} on {event.topic!r}"
             )
+            await withdraw_waiting_call(run, definition)
             return True
     return False
 
@@ -323,7 +324,7 @@ async def _wake_on_reply(
             node.id,
             _reply_patch(node, event, answer),
             facts,
-            stamp=_latest_stamp(definition, event, run.context),
+            stamp=_latest_stamp(definition, event),  # an older letter: no write (SQL)
         )
     # The run may be standing on a square that listens to NOTHING: the
     # door's start square before the walker's first visit (a condition, a
@@ -360,7 +361,7 @@ async def _wake_on_reply(
             str(run.id),
             current.id,
             facts,
-            stamp=_latest_stamp(definition, event, run.context),
+            stamp=_latest_stamp(definition, event),  # an older letter: no write (SQL)
             # Its own argument, never folded into `facts`: the same dict on
             # the reply path becomes context.facts.<square>, which run_facts
             # flattens into template variables (canon T26).

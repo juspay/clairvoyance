@@ -106,6 +106,7 @@ class _Writes:
         # The T26 flush rides as keyword arguments, so `args` keeps the
         # positional shape every assertion below already unpacks.
         self.flushes: List[Dict[str, Any]] = []
+        self.rearms: List[Tuple[Any, ...]] = []
 
     async def workflow_status(self, merchant_id: str, workflow_id: str) -> str:
         return "live"
@@ -133,6 +134,10 @@ class _Writes:
     async def record_run_error(self, *args: Any) -> bool:
         self.calls.append(("retry", args))
         return self.matched
+
+    async def rearm_after_nudge(self, *args: Any) -> bool:
+        self.rearms.append(args)
+        return False
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, writes: _Writes) -> None:
@@ -180,8 +185,11 @@ def test_a_missed_cas_on_advance_defers_without_raising_or_exiting(
     re-reads the run with the reply in it."""
     writes = _Writes(matched=False, definition=_TWO_WAITS)
     _install(monkeypatch, writes)
-    _advance(writes, _run())
+    run = _run()
+    _advance(writes, run)
     assert [verb for verb, _ in writes.calls] == ["advance"]
+    # a stage letter's nudge may be all that moved: the run is asked to wake now
+    assert writes.rearms == [(str(run.id), run.current_node, run.wake_at)]
 
 
 def test_a_missed_cas_on_exit_defers_too(

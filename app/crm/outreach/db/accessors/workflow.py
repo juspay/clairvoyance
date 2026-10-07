@@ -102,11 +102,11 @@ async def apply_publish(
 
 
 async def set_workflow_status(
-    merchant_id: str, workflow_id: str, status: str
+    conn: asyncpg.Connection, merchant_id: str, workflow_id: str, status: str
 ) -> Optional[Workflow]:
+    """Inside the caller's status atom (conn param)."""
     query, values = set_workflow_status_query(merchant_id, workflow_id, status)
-    async with crm_connection() as conn:
-        row = await conn.fetchrow(query, *values)
+    row = await conn.fetchrow(query, *values)
     return decode_workflow(row) if row else None
 
 

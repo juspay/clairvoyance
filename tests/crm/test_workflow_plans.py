@@ -295,6 +295,11 @@ def test_a_live_entry_that_no_longer_parses_is_compared_raw() -> None:
     assert any("entry rule changed" in p for p in problems)
 
 
+async def _no_txn(fn: Any, *args: Any) -> Any:
+    """set_status's atom, with no database: the body gets a stand-in handle."""
+    return await fn(None, *args)
+
+
 def _workflow(status: str, definition) -> Workflow:
     return Workflow(
         id=uuid4(),
@@ -368,15 +373,20 @@ async def test_a_published_plan_still_pauses_and_resumes(
         return published
 
     async def set_workflow_status(
-        merchant_id: str, workflow_id: str, status: str
+        _txn: Any, merchant_id: str, workflow_id: str, status: str
     ) -> Workflow:
         writes.append(status)
         return published
+
+    async def wake(*_args: Any) -> int:
+        return 0
 
     monkeypatch.setattr(plans.workflow_accessor, "get_workflow", get_workflow)
     monkeypatch.setattr(
         plans.workflow_accessor, "set_workflow_status", set_workflow_status
     )
+    monkeypatch.setattr(plans, "atomically", _no_txn)
+    monkeypatch.setattr(plans.enrollment_accessor, "wake_plan_parked_calls", wake)
     assert await plans.set_status("m1", "wf-1", "paused") is published
     assert await plans.set_status("m1", "wf-1", "live") is published
     assert writes == ["paused", "live"]
@@ -458,6 +468,10 @@ class _PublishAccessor:
 
     async def repin_open_runs(self, conn: Any, *args: Any) -> int:
         return 0
+
+    async def wake_parked_calls(self, conn: Any, m: str, w: str, nodes: Any) -> int:
+        self.woken = list(nodes)
+        return len(nodes)
 
 
 def _verdict(status: Optional[str]) -> TemplateVerdict:
@@ -546,6 +560,24 @@ async def test_a_plan_without_send_nodes_never_asks_the_registry(
     asked = _registry(monkeypatch, status=None)
     await _publish(accessor)
     assert asked == [] and accessor.published is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "on_publish, woken", [("migrate", ["rescue-call"]), ("pin", None)]
+)
+async def test_a_migrate_publish_wakes_the_runs_parked_on_a_call_without_topics(
+    monkeypatch: pytest.MonkeyPatch, on_publish: str, woken: Any
+) -> None:
+    """Rollback of "a call waits for its line": publishing the plan again with
+    no topics on the call square wakes the runs parked there (migrate only:
+    under pin they keep their version, topics included)."""
+    draft = {**_definition(), "on_publish": on_publish}
+    accessor = _PublishAccessor(draft)
+    patch_accessors(monkeypatch, plans, accessor)
+    _registry(monkeypatch, status=None)
+    await _publish(accessor)
+    assert getattr(accessor, "woken", None) == woken
 
 
 @pytest.mark.asyncio
@@ -1154,3 +1186,47 @@ def test_a_playbook_block_may_not_shadow_a_declared_fact() -> None:
     }
     problems = validate_definition(board, catalogs=catalogs)
     assert any("shadows a fact of topic" in p for p in problems), problems
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "before, status, woken",
+    [
+        ("paused", "live", True),
+        ("live", "archived", True),
+        ("paused", "archived", True),
+        ("live", "paused", False),
+        ("live", "live", False),  # already live: nothing was refused
+    ],
+)
+async def test_resume_or_archive_wakes_the_parked_calls_in_the_status_atom(
+    monkeypatch: pytest.MonkeyPatch, before: str, status: str, woken: bool
+) -> None:
+    """A call refused while paused waits on its square: resume queues it
+    again, archive lets the walker eject it. The wake shares the status
+    write's transaction, so an archive never lands without it."""
+    plan = _workflow(before, {"nodes": []})
+    calls: list = []
+
+    async def get_workflow(merchant_id: str, workflow_id: str) -> Workflow:
+        return plan
+
+    async def set_workflow_status(*args: object) -> Workflow:
+        calls.append(("status", args))
+        return plan
+
+    async def wake(*args: object) -> int:
+        calls.append(("wake", args))
+        return 1
+
+    monkeypatch.setattr(plans.workflow_accessor, "get_workflow", get_workflow)
+    monkeypatch.setattr(
+        plans.workflow_accessor, "set_workflow_status", set_workflow_status
+    )
+    monkeypatch.setattr(plans.enrollment_accessor, "wake_plan_parked_calls", wake)
+    monkeypatch.setattr(plans, "atomically", _no_txn)
+    assert await plans.set_status("m1", "wf-1", status) is plan
+    expected: List[Any] = [("status", (None, "m1", "wf-1", status))]
+    if woken:
+        expected.append(("wake", (None, "m1", "wf-1")))
+    assert calls == expected

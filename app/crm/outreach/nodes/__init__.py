@@ -49,7 +49,9 @@ from app.crm.outreach.schemas import WorkflowNode
 NODE_TYPES: Dict[str, NodeSpec] = {
     "wait": NodeSpec(validate=wait.validate, execute=None, is_wait=True),
     "send": NodeSpec(validate=send.validate, execute=send.execute, is_wait=False),
-    "call": NodeSpec(validate=call.validate, execute=call.execute, is_wait=False),
+    "call": NodeSpec(
+        validate=call.validate, execute=call.execute, is_wait=False, parks=True
+    ),
     "action": NodeSpec(validate=action.validate, execute=action.execute, is_wait=False),
     "condition": NodeSpec(
         validate=condition.validate,
@@ -75,9 +77,11 @@ def is_wait(node: WorkflowNode) -> bool:
 
 def listens(node: WorkflowNode) -> bool:
     """Does a letter wake this square? A wait that lists topics (ruled 17
-    Sep 2026) — a property of the node, not of the word: the entry consumer
-    wakes it, and `match` belongs to it."""
-    return NODE_TYPES[node.type].is_wait and bool(node.topics)
+    Sep 2026), or a call that does: it waits there for its line — a property
+    of the node, not of the word: the entry consumer wakes it, and `match`
+    belongs to it."""
+    spec = NODE_TYPES[node.type]
+    return (spec.is_wait or spec.parks) and bool(node.topics)
 
 
 def branches(node: WorkflowNode) -> bool:
