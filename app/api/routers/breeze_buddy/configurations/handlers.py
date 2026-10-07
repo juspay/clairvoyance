@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.hooks import on_config_saved
 from app.core.logger import logger
 from app.database.accessor import (
     calling_activation_for_merchant,
@@ -28,6 +29,11 @@ from app.schemas import (
 )
 
 from .rbac import validate_config_access
+
+
+async def _v2_config_saved(template_id: Optional[str]) -> None:
+    """Re-resolve the template's v2 route (a no-op until v2 is used)."""
+    await on_config_saved(template_id)
 
 
 async def create_configuration_handler(
@@ -370,6 +376,7 @@ async def update_configuration_handler(
 
         if updated_config:
             logger.info(f"Configuration {config_id} updated successfully")
+            await _v2_config_saved(updated_config.template_id)
             return updated_config
         else:
             raise HTTPException(
@@ -476,6 +483,8 @@ async def calling_activation_handler(
 
         if updated_configs:
             logger.info(f"Successfully updated {len(updated_configs)} config(s)")
+            for updated in updated_configs:
+                await _v2_config_saved(updated.template_id)
             return {
                 "status": "success",
                 "message": f"Updated {len(updated_configs)} config(s)",

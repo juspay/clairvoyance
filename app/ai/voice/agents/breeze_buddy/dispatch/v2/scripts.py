@@ -328,6 +328,9 @@ return 1
 
 # ARGV: number_id, call_id
 ADMIT_INBOUND_LUA = """
+-- -1: not v2 or draining now, today's gate decides (checked here, as RELEASE_LUA does)
+local mode = redis.call('HGET', 'bb:num:' .. ARGV[1], 'mode')
+if mode ~= 'v2' and mode ~= 'draining' then return -1 end
 local busy = 'bb:busy:' .. ARGV[1]
 local holder = 'call:' .. ARGV[2]
 if redis.call('SISMEMBER', busy, holder) == 1 then return 1 end
@@ -671,8 +674,9 @@ async def clear_lease(
     return bool(await _run(CLEAR_LEASE_LUA, [number_id, lead_id, ticket, owner], int))
 
 
-async def admit_inbound(number_id: str, call_id: str) -> Optional[bool]:
-    return await _run(ADMIT_INBOUND_LUA, [number_id, call_id], lambda r: bool(int(r)))
+async def admit_inbound(number_id: str, call_id: str) -> Optional[int]:
+    """1 admitted, 0 full, -1 not v2-accounted now (today's gate decides), None error."""
+    return await _run(ADMIT_INBOUND_LUA, [number_id, call_id], int)
 
 
 async def reap_lease(

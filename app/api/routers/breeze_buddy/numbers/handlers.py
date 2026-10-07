@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.hooks import on_number_saved
 from app.core.logger import logger
 from app.database.accessor import (
     check_number_purchase_conflict,
@@ -25,6 +26,11 @@ from app.schemas import (
 )
 
 from .rbac import resolve_ownership as _resolve_ownership
+
+
+async def v2_number_saved(number: TelephonyNumber) -> None:
+    """Refresh what the v2 dialler knows about the number (a no-op until v2 is used)."""
+    await on_number_saved(number)
 
 
 async def create_number_handler(
@@ -87,6 +93,7 @@ async def create_number_handler(
             logger.info(
                 f"Telephony number {number.number} created successfully with ID {telephony_number.id}"
             )
+            await v2_number_saved(telephony_number)
             return telephony_number
         else:
             raise HTTPException(
@@ -159,6 +166,7 @@ async def update_number_handler(
 
         if telephony_number:
             logger.info(f"Telephony number {number_id} updated successfully")
+            await v2_number_saved(telephony_number)
             return telephony_number
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -282,6 +290,7 @@ async def delete_number_handler(
 
         if telephony_number:
             logger.info(f"Telephony number {number_id} disabled successfully")
+            await v2_number_saved(telephony_number)
             return telephony_number
         else:
             raise HTTPException(

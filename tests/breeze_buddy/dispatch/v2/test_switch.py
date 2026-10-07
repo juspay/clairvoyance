@@ -1062,6 +1062,21 @@ async def test_a_handback_from_v2_pending_leaves_todays_counters_alone(rv, db):
     db.channels.assert_not_awaited()
 
 
+@pytest.mark.parametrize("began_in, recounts", [("v2_pending", False), ("", True)])
+async def test_a_retried_handback_remembers_where_it_began(rv, db, began_in, recounts):
+    """A hand-back cut short after its flip is re-run from legacy: one that began in
+    v2_pending still must not recount today's counters (Swaroop, #1319)."""
+    await seed_number(rv, "N1", 5, {"T1": {}}, mode="legacy")
+    await rv.hset("bb:num:N1", mapping={"handback_pending": "1", "mode_since_ms": T0})
+    if began_in:
+        await rv.hset("bb:num:N1", "handback_from", began_in)
+    state = await SWT._state(rv, "N1")
+    await SWT.apply_handover(rv, "N1", _number(max_lines=5), T0 + 10, state)
+    num = await rv.hgetall("bb:num:N1")
+    assert "handback_pending" not in num and "handback_from" not in num
+    assert db.channels.await_count == (1 if recounts else 0)
+
+
 async def test_todays_worker_waits_while_a_handback_is_unfinished(rv, monkeypatch):
     from app.ai.voice.agents.breeze_buddy.dispatch import queue as queue_mod
 

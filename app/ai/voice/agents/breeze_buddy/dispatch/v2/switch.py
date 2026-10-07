@@ -111,6 +111,7 @@ class NumState:
     stable_sig: str = ""
     reseed_at_ms: int = 0  # 0 = no re-seed due
     handback_pending: bool = False  # legacy, but the hand-back's DB/room steps not done
+    handback_from: str = ""  # v2_pending when that hand-back began there
 
     @classmethod
     def from_hash(cls, h: Mapping[str, str]) -> "NumState":
@@ -124,6 +125,7 @@ class NumState:
             stable_sig=h.get("stable_sig", ""),
             reseed_at_ms=num("reseed_at_ms"),
             handback_pending=h.get("handback_pending") == "1",
+            handback_from=h.get("handback_from", ""),
         )
 
 
@@ -393,10 +395,12 @@ async def apply_handover(
         # its entries left in bb:tickets fail claim (no lease): an acceptor drops them
         ["UNLINK", k.busy_key(number_id), k.inflight_key(number_id)],
     ]
+    if expected.mode == V2_PENDING:
+        flip.append(["HSET", num, "handback_from", V2_PENDING])  # a retry must know
     async with CHANNELS_LOCK:
         if not await _cas(number_id, expected, HANDOVER, flip):
             return
-        if expected.mode == V2_PENDING:
+        if V2_PENDING in (expected.mode, expected.handback_from):
             # v2 issued nothing and never moved today's counters, while today's dials it
             # waited for may still be in flight: recounting now would undercount them
             in_flight, tokens = None, None
@@ -408,7 +412,10 @@ async def apply_handover(
     await _move_rooms(await c.smembers(k.numtpl_key(number_id)))
     # 6. done, if the hand-back is still this step's (a newer re-run finishes its own)
     ours = NumState(mode=LEGACY, mode_since_ms=now_ms, handback_pending=True)
-    done = [["HDEL", num, "handback_pending"], ["SREM", k.V2_ACTIVE_KEY, number_id]]
+    done = [
+        ["HDEL", num, "handback_pending", "handback_from"],
+        ["SREM", k.V2_ACTIVE_KEY, number_id],
+    ]
     if not await _cas(number_id, ours, HANDOVER, done):
         return
     logger.info(
