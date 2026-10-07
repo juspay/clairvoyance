@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
-from app.ai.voice.agents.breeze_buddy.dispatch import cancel_scheduled_lead
+from app.ai.voice.agents.breeze_buddy.dispatch.queue import cancel_scheduled_lead
 from app.ai.voice.agents.breeze_buddy.types.models import PushLeadRequest
 from app.api.routers.breeze_buddy.leads.handlers import push_lead_handler
 from app.core.config.dynamic import CAMPAIGN_MAX_LEADS
@@ -223,7 +223,7 @@ async def stop_campaign_handler(
             )
             if result:
                 aborted += 1
-                await cancel_scheduled_lead(lead_id)
+                await cancel_scheduled_lead(lead_id, template_id=result.template_id)
         except Exception as e:
             logger.error(
                 f"Failed to abort lead {lead_id} for campaign {campaign_id}: {e}"

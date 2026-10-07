@@ -384,22 +384,70 @@ async def test_match_caps_tickets_per_call(rr):
 @pytest.mark.asyncio
 async def test_admit_inbound_respects_max_and_is_idempotent(rr):
     await seed_number(rr, "N1", 1, {"T1": {}})
-    assert await scripts.admit_inbound("N1", "C1") is True
-    assert await scripts.admit_inbound("N1", "C1") is True  # retried webhook
-    assert await scripts.admit_inbound("N1", "C2") is False
+    assert await scripts.admit_inbound("N1", "C1") == 1
+    assert await scripts.admit_inbound("N1", "C1") == 1  # retried webhook
+    assert await scripts.admit_inbound("N1", "C2") == 0
     assert await rr.smembers("bb:busy:N1") == {"call:C1"}
 
 
 @pytest.mark.asyncio
-async def test_admit_inbound_without_number_facts_refuses(rr):
-    assert await scripts.admit_inbound("N9", "C1") is False
+async def test_admit_inbound_without_number_facts_is_not_v2(rr):
+    assert await scripts.admit_inbound("N9", "C1") == -1
     assert await rr.scard("bb:busy:N9") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["legacy", "v2_pending"])
+async def test_admit_inbound_on_a_number_v2_does_not_count_is_not_v2(rr, mode):
+    """A number just handed back (or not seeded yet) keeps max in bb:num: the script
+    must not start a busy list there (Swaroop, #1319)."""
+    await seed_number(rr, "N1", 5, {"T1": {}}, mode=mode)
+    assert await scripts.admit_inbound("N1", "C1") == -1
+    assert await rr.scard("bb:busy:N1") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_hand_back_between_the_read_and_the_admit_goes_to_todays_gate(
+    rr, monkeypatch
+):
+    """The pod read 'draining', then the hand-back flipped the number to legacy."""
+    from unittest.mock import AsyncMock
+
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import latch, routes
+    from app.ai.voice.agents.breeze_buddy.managers import inbound_channel as IC
+
+    await seed_number(rr, "N1", 5, {"T1": {}}, mode="legacy")
+    monkeypatch.setattr(latch, "v2_seen", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        routes, "number_mode_or_none", AsyncMock(return_value="draining")
+    )
+    assert await IC._v2_admit("N1", "C1") is None
+    monkeypatch.setattr(routes, "number_mode_or_none", AsyncMock(return_value=None))
+    monkeypatch.setattr(routes, "last_good_mode", lambda _n: "draining")
+    assert await IC._v2_admit("N1", "C1") is None  # read failed: the script decides
+    assert await rr.scard("bb:busy:N1") == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_on_a_v2_number_still_counts_the_call(rr, monkeypatch):
+    """The pod's last good read was v2_pending; the number is v2 now."""
+    from unittest.mock import AsyncMock
+
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import latch, routes
+    from app.ai.voice.agents.breeze_buddy.managers import inbound_channel as IC
+
+    await seed_number(rr, "N1", 5, {"T1": {}}, mode="v2")
+    monkeypatch.setattr(latch, "v2_seen", AsyncMock(return_value=True))
+    monkeypatch.setattr(routes, "number_mode_or_none", AsyncMock(return_value=None))
+    monkeypatch.setattr(routes, "last_good_mode", lambda _n: "v2_pending")
+    assert await IC._v2_admit("N1", "C1") is True
+    assert await rr.smembers("bb:busy:N1") == {"call:C1"}
 
 
 @pytest.mark.asyncio
 async def test_release_of_inbound_call_hands_line_to_waiting_lead(rr):
     await seed_number(rr, "N1", 1, {"T1": {}})
-    assert await scripts.admit_inbound("N1", "C1") is True
+    assert await scripts.admit_inbound("N1", "C1") == 1
     assert await scripts.enqueue("T1", "L1", NOW() - 1) == 0  # full: waits
     assert await scripts.release("N1", "call:C1") == [1, 1]
     assert await rr.smembers("bb:busy:N1") == {"lead:L1"}
