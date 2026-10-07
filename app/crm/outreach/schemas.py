@@ -354,15 +354,16 @@ class WorkflowPriority(BaseModel):
     """How urgent this plan's calls are (outreach/priority.py). `ranks`
     gives the order inside a rank ("1" goes first); a rank it does not list
     is newest_event. `rules` are
-    judged in order when a call is queued, and none holding gives `else`;
-    `window` is the calling window "today" is read against."""
+    judged in order when a call is queued, and none holding gives `else`.
+    "Today" is read against the call template's own call hours; a plan that
+    still names a `window` is read against that instead."""
 
     ranks: Dict[str, Literal["first_ready", "newest_event"]] = Field(
         default_factory=dict
     )
     rules: List[PriorityRule] = Field(default_factory=list)
     else_: int = Field(alias="else", ge=1, le=99)
-    window: WaitWindow
+    window: Optional[WaitWindow] = None
 
     model_config = {"populate_by_name": True}
 

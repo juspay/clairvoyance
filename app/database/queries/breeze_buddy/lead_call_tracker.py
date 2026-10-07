@@ -511,6 +511,12 @@ def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
     return text, values
 
 
+def get_lead_status_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """One lead's status, or no row."""
+    text = f'SELECT "status" FROM "{LEAD_CALL_TRACKER_TABLE}" WHERE "id" = $1;'
+    return text, [lead_id]
+
+
 def update_lead_call_recording_url_query(
     call_id: str, recording_url: str
 ) -> Tuple[str, List[Any]]:
@@ -598,7 +604,7 @@ def update_waiting_lead_priority_query(
     lead_id: str, priority: Dict[str, Any]
 ) -> Tuple[str, List[Any]]:
     """
-    Replace meta_data.priority (the rank a call waits at) on a lead that is
+    Merge into meta_data.priority (the rank a call waits at; ready_ms is kept) on a lead that is
     still BACKLOG and that no dialler holds (is_locked), and only from a letter no
     older than the one its rank came from. A lead being dialled or finished keeps
     the rank it had. updated_at is left alone: it is the
@@ -607,7 +613,8 @@ def update_waiting_lead_priority_query(
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET "meta_data" = COALESCE("meta_data", '{{}}')::jsonb
-                || jsonb_build_object('priority', $1::jsonb)
+                || jsonb_build_object('priority',
+                       COALESCE("meta_data"->'priority', '{{}}'::jsonb) || $1::jsonb)
         WHERE "id" = $2 AND "status" = $3 AND "is_locked" = FALSE
           AND COALESCE(("meta_data"->'priority'->>'event_ms')::bigint, 0) <= $4
         RETURNING "id";

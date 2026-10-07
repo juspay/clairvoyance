@@ -18,6 +18,7 @@ from app.crm.record.db import DbTxn, accessor, atomically, savepoint
 from app.crm.record.extractors import EXTRACTORS, engine
 from app.crm.record.extractors.engine import EMPTY_SPEC, DecodeSpec
 from app.crm.record.schemas import ABOUT_MERCHANT, Extracted, RawEvent
+from app.crm.shared import after_commit
 
 
 async def run_pass(limit: int) -> List[RawEvent]:
@@ -29,9 +30,11 @@ async def run_pass(limit: int) -> List[RawEvent]:
     raise in that row must not be remembered as written, or the process
     never retries it (only a restart would)."""
     discovered: List[catalog.SchemaKey] = []
-    events = await atomically(_pass_in_txn, limit, discovered)
+    with after_commit.collecting() as later:
+        events = await atomically(_pass_in_txn, limit, discovered)
     for key in discovered:
         catalog.mark_known(key)
+    await after_commit.run(later)
     return events
 
 

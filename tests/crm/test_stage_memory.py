@@ -19,6 +19,7 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.nodes.call as call_node
+from app.crm.outreach import waiting_calls as call_queue
 from app.crm.outreach.db.queries.enrollment import (
     advance_run_query,
     refresh_run_facts_query,
@@ -32,7 +33,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     update_waiting_lead_priority_query,
 )
 from tests.crm.conftest import CRM_WEBHOOK_TEST_DSN as DSN
-from tests.crm.test_call_priority import _plan
+from tests.crm.test_call_priority import HOURS, NO_WINDOW, _plan
 
 IST = ZoneInfo("Asia/Kolkata")
 PLAN = _plan()
@@ -42,7 +43,13 @@ NIGHT = datetime(2026, 10, 9, 2, 0, tzinfo=IST)  # the offer that founded the ru
 KYC_AT = datetime(2026, 10, 9, 11, 0, tzinfo=IST)  # KYC done, inside the window
 NOW = KYC_AT + timedelta(seconds=5)
 STAMP = {"latest_topic": "LINE_KYC_COMPLETED", "latest_event_at": KYC_AT.isoformat()}
-LIVE = {"rank": 1, "order": "first_ready", "event_ms": int(KYC_AT.timestamp() * 1000)}
+LIVE = {
+    "rank": 1,
+    "order": "first_ready",
+    "event_ms": int(KYC_AT.timestamp() * 1000),
+    "next_rank": 2,  # not called by closing: the KYC pile tomorrow
+    "next_order": "newest_event",
+}
 
 needs_db = pytest.mark.skipif(
     not DSN, reason="set CRM_WEBHOOK_TEST_DSN to run against Postgres"
@@ -97,6 +104,8 @@ class _World:
         self.remembered: List[Tuple[str, str, Dict[str, Any], Dict[str, Any]]] = []
         self.enrolled: List[Dict[str, Any]] = []
         self.lead_writes: List[Tuple[str, Dict[str, Any]]] = []
+        self.reranks: List[Tuple[Any, ...]] = []
+        self.reranks_later: List[Dict[str, Any]] = []
 
     async def live_workflows(self, _merchant: str) -> List[Workflow]:
         return [self.flow] if self.node is None else []
@@ -182,11 +191,15 @@ class _World:
         self.lead_writes.append((lead_id, priority))
         return self.still_waiting
 
+    async def rerank(self, *args: Any, **later: Any) -> None:
+        self.reranks.append(args)  # waiting_calls.call_reranked's arguments
+        self.reranks_later.append(later)
+
 
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch):
-    """`world(definition, node)`: her one open run stands on `node`, and
-    everything the consumer reaches is recorded."""
+    """`world(definition, node)`: her one open run stands on `node`, the queue's
+    hook is registered, and everything the consumer reaches is recorded."""
 
     def _install(
         definition: Dict[str, Any] = PLAN, node: Optional[str] = "after-call-1"
@@ -210,6 +223,7 @@ def world(monkeypatch: pytest.MonkeyPatch):
             call_node, "update_waiting_lead_priority", w.update_waiting_lead_priority
         )
         monkeypatch.setattr(call_node, "_now", lambda: NOW)
+        monkeypatch.setattr(call_node, "call_reranked", w.rerank)
         return w
 
     return _install
@@ -241,32 +255,81 @@ def test_stage_memory_updates_facts_without_waking(world) -> None:
 def test_stage_memory_reranks_the_waiting_call(world) -> None:
     """Her offer was the night's (rank 3). KYC at 11:00 is inside today's
     window, so the call still waiting is a live customer's now: the lead row
-    learns it."""
+    learns it, then the queue is told."""
     w = world()
 
     _consume(_event())
 
     assert w.lead_writes == [("lead-1", LIVE)]
+    assert w.reranks == [("tpl-1", "lead-1", 1, "first_ready", KYC_AT)]
+
+
+def test_the_rerank_says_what_a_live_call_falls_to_tomorrow(world) -> None:
+    """She is live today; not called by closing she is KYC pile tomorrow. The
+    queue is told both, so it can move her at the next opening."""
+    w = world()
+
+    _consume(_event())
+
+    assert w.reranks_later == [{"next_rank": 2, "next_order": "newest_event"}]
+
+
+def test_a_rerank_reads_the_templates_hours_only_when_the_plan_has_no_window(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Today is the template's call hours: the re-rank reads that template's
+    call config once. A plan that still names its own window reads nothing."""
+    asked: List[str] = []
+
+    async def config(template_id: str) -> Any:
+        asked.append(template_id)
+        return HOURS
+
+    monkeypatch.setattr(call_node, "get_call_execution_config_by_template_id", config)
+
+    w = world(_plan(priority=NO_WINDOW))
+    _consume(_event())
+    assert w.lead_writes == [("lead-1", LIVE)] and asked == ["tpl-1"]
+
+    w = world()
+    _consume(_event())
+    assert w.lead_writes == [("lead-1", LIVE)] and asked == ["tpl-1"]
+
+
+def test_with_no_hook_registered_only_the_lead_row_learns_the_rank(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = world()
+    monkeypatch.setattr(call_node, "call_reranked", call_queue.call_reranked)
+    monkeypatch.setattr(call_queue, "_hooks", None)
+
+    _consume(_event())
+
+    assert w.lead_writes == [("lead-1", LIVE)]
+    assert w.reranks == []
 
 
 def test_a_call_no_longer_waiting_is_not_reranked(world) -> None:
     """The lead row takes the rank only while it is BACKLOG; a call already
-    dialling or finished keeps its rank."""
+    dialling or finished keeps its rank, and the queue is not told."""
     w = world()
     w.still_waiting = False
 
     _consume(_event())
 
     assert len(w.remembered) == 1 and len(w.lead_writes) == 1
+    assert w.reranks == []
 
 
-def test_a_failing_rank_change_never_fails_the_letter(world, monkeypatch) -> None:
+def test_a_failing_rank_change_never_fails_the_letter(
+    world, monkeypatch: pytest.MonkeyPatch
+) -> None:
     w = world()
 
-    async def broken(*_args: Any) -> bool:
-        raise RuntimeError("the database is away")
+    async def broken(*_args: Any) -> None:
+        raise RuntimeError("the queue is away")
 
-    monkeypatch.setattr(call_node, "update_waiting_lead_priority", broken)
+    monkeypatch.setattr(call_node, "call_reranked", broken)
 
     _consume(_event())
 
@@ -344,7 +407,7 @@ def test_a_late_older_letter_never_moves_the_stamps_back(world, node: str) -> No
     patches = [p for *_, p in w.remembered] + [p for _, p in w.resumes + w.refreshes]
     assert not any("latest_topic" in p or "latest_event_at" in p for p in patches)
     if node == "after-call-1":
-        assert w.remembered == [] and w.lead_writes == []
+        assert w.remembered == [] and w.lead_writes == [] and w.reranks == []
     else:
         assert patches  # a reply or a deaf square still takes the letter
 
@@ -358,6 +421,39 @@ def test_a_run_older_than_the_stamps_is_read_from_its_founding_letter(world) -> 
     _consume(_event(at=NIGHT - timedelta(hours=5)))
 
     assert w.remembered == [] and w.lead_writes == []
+
+
+def test_the_event_worker_tells_the_queue_after_its_commit(world) -> None:
+    """Inside the event worker's pass the re-rank's queue call is deferred: the
+    lead row learns the rank at once, the queue only after the commit."""
+    from app.crm.shared import after_commit
+
+    w = world(node="after-call-1")
+
+    with after_commit.collecting() as later:
+        _consume(_event())
+    assert len(w.lead_writes) == 1 and w.reranks == []
+    asyncio.run(after_commit.run(later))
+    assert len(w.reranks) == 1
+
+
+def test_a_slow_queue_cannot_hold_the_event_worker(world, monkeypatch) -> None:
+    """A slow queue gets RERANK_HOOK_TIMEOUT_S and no more."""
+    import time
+
+    w = world(node="after-call-1")
+
+    async def slow(*_args: Any, **_later: Any) -> None:
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(call_node, "call_reranked", slow)
+    monkeypatch.setattr(call_node, "RERANK_HOOK_TIMEOUT_S", 0.2)
+    started = time.monotonic()
+
+    _consume(_event())
+
+    assert time.monotonic() - started < 2
+    assert len(w.lead_writes) == 1  # the row has the new rank; the queue heals
 
 
 def test_a_letter_of_the_same_moment_moves_the_stamps(world) -> None:
@@ -716,3 +812,28 @@ def test_a_future_dated_letter_is_stamped_at_its_receipt() -> None:
     stamp = entry._latest_stamp(definition, letter)
 
     assert stamp["latest_event_at"] == KYC_AT.isoformat()
+
+
+@needs_db
+async def test_on_postgres_a_rerank_keeps_the_calls_ready_time() -> None:
+    """A re-rank merges into priority: the place in the line (ready_ms) stays."""
+    import asyncpg
+
+    queued = {"priority": {"rank": 3, "event_ms": 1, "ready_ms": 1700000000000}}
+    conn = await asyncpg.connect(DSN)
+    try:
+        await conn.execute(
+            "CREATE TEMP TABLE lead_call_tracker (id text, status text,"
+            " meta_data jsonb, updated_at timestamptz, is_locked boolean)"
+        )
+        await conn.execute(
+            "INSERT INTO lead_call_tracker VALUES ('l', 'BACKLOG', $1::jsonb, NULL, FALSE)",
+            json.dumps(queued),
+        )
+        sql, params = update_waiting_lead_priority_query("l", LIVE)
+        await conn.execute(sql, *params)
+        meta = await conn.fetchval("SELECT meta_data FROM lead_call_tracker")
+    finally:
+        await conn.close()
+
+    assert json.loads(meta)["priority"] == {**LIVE, "ready_ms": 1700000000000}
