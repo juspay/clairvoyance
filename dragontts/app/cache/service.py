@@ -34,12 +34,12 @@ from typing import Callable
 from app.audio.format import convert_audio
 from app.audio.text import normalize_for_tts, prepend_leading_dot
 from app.cache.key import canonical_params, hash_key, normalize_text, parse_model_id
-from app.cache.metrics import WriteBehindMetrics
+from app.cache.metrics import LiveCounted, WriteBehindMetrics
 from app.cache.resilience import get_gate
 from app.core.config import settings
 from app.core.logging import logger
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
-from app.providers.elevenlabs_pool import has_local_pipeline
+from app.providers.elevenlabs_pool import has_local_pipeline, is_flash_pipeline_model
 from app.providers.registry import ProviderNotConfigured
 from app.schemas.tts import CartesiaVoice, OutputFormat, TTSRequest
 from app.storage.base import CacheRecord, escape_like
@@ -181,7 +181,8 @@ def _same_format(encoding_a: str, rate_a: int, encoding_b: str, rate_b: int) -> 
 def _stores_final(model: str) -> bool:
     """True for models whose cached bytes are the END RESULT in the caller's
     requested output_format (tempo/hygiene/downsample baked in at synth
-    time): the ElevenLabs pipeline families (v3 conversational, v4). Their
+    time): the ElevenLabs pipeline families (v3 conversational, v4, the
+    suffixed flash variants). Their
     cache key includes the output format and hits are zero-processing serves.
     Everything else keeps the format-agnostic native-store architecture."""
     return has_local_pipeline(model)
@@ -201,7 +202,8 @@ class CacheService:
         # returns audio without awaiting a SQLite commit. Falls back to the raw
         # store (synchronous) when disabled. Correctness-critical writes
         # (put/put_with_totals/delete/adjust_totals) stay on self._metadata.
-        self._metrics = (
+        # LiveCounted also feeds cache hits / misses to the live metrics.
+        self._metrics = LiveCounted(
             WriteBehindMetrics(
                 metadata,
                 settings.metrics_flush_interval_ms / 1000.0,
@@ -248,7 +250,12 @@ class CacheService:
         # canonical_params can't key on a value the provider ignores (same
         # audio, two entries). Normalizing speed->tempo (rather than keying on
         # both) keeps {speed: 1.2} and {tempo: 1.2} on ONE cache entry.
-        if has_local_pipeline(model):
+        if is_flash_pipeline_model(model):
+            # Flash variants: flash honors ElevenLabs' own `speed` (better than
+            # a stretch afterwards), so speed stays native; only an explicit
+            # `tempo` adds atempo. Both key the entry.
+            pass
+        elif has_local_pipeline(model):
             speed = req.params.pop("speed", None)
             if req.params.get("tempo") is None and speed is not None:
                 req.params["tempo"] = speed

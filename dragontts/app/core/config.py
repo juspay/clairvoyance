@@ -264,6 +264,12 @@ class Settings(BaseSettings):
     # Clamped to >= 5 s where it's used (not validated here, so a bad value
     # can't crash startup while the refresh is off).
     elevenlabs_ttd_ws_refresh_interval: float = 30.0
+    # Live ElevenLabs connection metrics at GET /stats/elevenlabs/live (sockets
+    # open / busy / connecting, sentences in flight, peaks, counters), summed
+    # over the pod's workers. Each worker writes a small snapshot file under
+    # the temp dir at most once a second and only after something changed.
+    # False = no files and the endpoint returns 404.
+    elevenlabs_live_metrics: bool = True
     # ffmpeg atempo tempo stage kill switch. When False (or ffmpeg is missing
     # from PATH) every tempo value is ignored and audio passes through at
     # 1.0 — calls never fail because of the tempo feature.

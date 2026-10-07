@@ -57,13 +57,16 @@ from app.audio.hygiene import clean_utterance
 from app.audio.level import soften_end
 from app.core.config import PROVIDER_DEFAULTS, settings
 from app.core.logging import logger
-from app.providers import elevenlabs_pool
+from app.providers import elevenlabs_live as live, elevenlabs_pool
 from app.providers.base import AudioResult, BaseTTSProvider, ProviderError
 from app.providers.elevenlabs_accounts import load_account_budget
+from app.providers.elevenlabs_live import LIVE
 from app.providers.elevenlabs_pool import (
     has_local_pipeline,
     is_elevenlabs_ttd_model,
     is_elevenlabs_v4_model,
+    is_flash_pipeline_model,
+    needs_whole_clip,
     normalize_pipeline_model,
     pipeline_family,
     pipeline_variant,
@@ -74,6 +77,12 @@ from app.providers.elevenlabs_pool import (
 # 70+ languages; multilingual_v2 auto-detects; English-only models ignore it.
 # Mirrors pipecat's ELEVENLABS_MULTILINGUAL_MODELS.
 _ELEVENLABS_MULTILINGUAL_MODELS = {"eleven_flash_v2_5", "eleven_turbo_v2_5"}
+
+
+def pool_max_size(pool_size: int) -> int:
+    """Sockets one pool may open per worker (rotation off): ``pool_size`` is
+    the warm floor, this the ceiling."""
+    return max(pool_size * 2, pool_size + 4)
 
 
 class ElevenLabsProvider(BaseTTSProvider):
@@ -320,7 +329,7 @@ class ElevenLabsProvider(BaseTTSProvider):
                     else settings.elevenlabs_stream_idle_timeout
                 ),
                 min_size=pool_size,
-                max_size=max(pool_size * 2, pool_size + 4),
+                max_size=pool_max_size(pool_size),
                 accounts=accounts,
                 refresh_interval=(
                     max(5.0, settings.elevenlabs_ttd_ws_refresh_interval)
@@ -342,6 +351,15 @@ class ElevenLabsProvider(BaseTTSProvider):
             )
             self._pools[key] = pool
         return pool
+
+    def live_pools(self) -> list[elevenlabs_pool.ElevenLabsStreamPool]:
+        """Every socket pool of this worker (live metrics)."""
+        return list(self._pools.values())
+
+    @property
+    def account_budget(self):
+        """The rotation budget (None = rotation off)."""
+        return self._accounts
 
     async def warm(self) -> None:
         """Pre-warm the classic pool named by ELEVENLABS_WARM_* (at startup).
@@ -418,6 +436,10 @@ class ElevenLabsProvider(BaseTTSProvider):
                 params=params,
             )
 
+        # Flash pipeline variants (eleven_flash_v2_5_clean_tempo_v2 ...) are
+        # DragonTTS-local names: ElevenLabs gets the base id; the chain runs on
+        # the finished clip below. Every other classic model passes through.
+        upstream_model_id = normalize_pipeline_model(final_model_id) or final_model_id
         url = f"{self.base_url}/v1/text-to-speech/{final_voice_id}?output_format=pcm_16000"
         headers = {
             "xi-api-key": self.api_key,
@@ -426,16 +448,16 @@ class ElevenLabsProvider(BaseTTSProvider):
         }
         payload = {
             "text": text,
-            "model_id": final_model_id,
-            "voice_settings": self._voice_settings(params, final_model_id),
+            "model_id": upstream_model_id,
+            "voice_settings": self._voice_settings(params, upstream_model_id),
         }
         # language_code: the multilingual models (flash_v2_5/turbo_v2_5) and
         # the v3 models accept it; multilingual_v2 auto-detects, English-only
         # models ignore it. Send the base subtag ("en"/"hi") — matches
         # pipecat's use_base_code.
         if (
-            final_model_id in _ELEVENLABS_MULTILINGUAL_MODELS
-            or is_elevenlabs_ttd_model(final_model_id)
+            upstream_model_id in _ELEVENLABS_MULTILINGUAL_MODELS
+            or is_elevenlabs_ttd_model(upstream_model_id)
         ) and final_language:
             payload["language_code"] = final_language.split("-")[0]
         if params.get("enable_ssml_parsing"):
@@ -458,10 +480,24 @@ class ElevenLabsProvider(BaseTTSProvider):
             f"language={final_language}, base_url={self.base_url}]"
         )
 
-        response = await self._client.post(url, json=payload, headers=headers)
+        LIVE.count(live.HTTP_REQUESTS)
+        LIVE.add(live.HTTP_IN_FLIGHT, final_model_id, None, 1)
+        try:
+            response = await self._client.post(url, json=payload, headers=headers)
+        finally:
+            LIVE.add(live.HTTP_IN_FLIGHT, final_model_id, None, -1)
         response.raise_for_status()
+        audio = response.content
+        if is_flash_pipeline_model(final_model_id):
+            audio = await self._apply_pipeline(
+                audio,
+                16000,
+                model=final_model_id,
+                voice_id=final_voice_id,
+                tempo=self._tempo_for(params, final_model_id),
+            )
         return AudioResult(
-            audio=response.content,
+            audio=audio,
             container="raw",
             encoding="pcm_s16le",
             sample_rate=16000,
@@ -601,6 +637,31 @@ class ElevenLabsProvider(BaseTTSProvider):
                 encoding="pcm_s16le",
                 sample_rate=sample_rate,
             )
+        audio = await self._apply_pipeline(
+            audio, sample_rate, model=model, voice_id=voice_id, tempo=tempo
+        )
+        return AudioResult(
+            audio=audio,
+            container="raw",
+            encoding="pcm_s16le",
+            sample_rate=sample_rate,
+        )
+
+    async def _apply_pipeline(
+        self,
+        audio: bytes,
+        sample_rate: int,
+        *,
+        model: str,
+        voice_id: str,
+        tempo: float,
+    ) -> bytes:
+        """The local post-processing chain of a pipeline model, selected by its
+        variant — shared by the Text-to-Dialogue models (v3 conversational,
+        v4, plain eleven_v3) and the flash variants, so every family runs the
+        same code on the WHOLE clip at the rate it was generated at."""
+        variant = pipeline_variant(model)
+        v4 = is_elevenlabs_v4_model(model)
         # Hygiene runs ONLY where the variant asks for clean: _clean_tempo,
         # plain eleven_v3 (legacy chain), or the base model when its direct-8k
         # path is knob-disabled (then it runs the full-band chain instead).
@@ -657,12 +718,7 @@ class ElevenLabsProvider(BaseTTSProvider):
         boost = settings.elevenlabs_telephony_presence_boost_db
         if variant in ("tempo", "clean_tempo") and abs(boost) >= 0.05:
             audio = apply_presence_boost(audio, sample_rate, boost)
-        return AudioResult(
-            audio=audio,
-            container="raw",
-            encoding="pcm_s16le",
-            sample_rate=sample_rate,
-        )
+        return audio
 
     @staticmethod
     def _v2_join_chain(audio: bytes, sample_rate: int, voice_id: str) -> bytes:
@@ -708,6 +764,22 @@ class ElevenLabsProvider(BaseTTSProvider):
         final_voice_id = voice_id if voice_id else defaults["voice_id"]
         final_model_id = model if model else defaults["model"]
         final_language = language if language else defaults["language"]
+        if needs_whole_clip(final_model_id):
+            # _clean_tempo / _clean_tempo_v2 process the WHOLE clip (hygiene,
+            # end release, one level per sentence), so their chunks can't be
+            # forwarded raw as they arrive: synthesize + process, then yield
+            # the finished clip at the model's native rate. Live streaming
+            # here would serve — and cache — unprocessed audio under the
+            # clean variant's key.
+            result = await self.synth(
+                text=text,
+                voice_id=final_voice_id,
+                model=final_model_id,
+                language=final_language,
+                params=params,
+            )
+            yield result.audio
+            return
         # Variant suffixes (_tempo/_clean_tempo) are DragonTTS-local pipeline
         # selectors — ElevenLabs only knows the base id.
         upstream_model_id = normalize_pipeline_model(final_model_id)
@@ -751,7 +823,11 @@ class ElevenLabsProvider(BaseTTSProvider):
                 tempo = self._tempo_for(params, final_model_id)
                 if tempo != 1.0:
                     source = atempo_stream(
-                        source, self._v3_rate_for(final_model_id, params), tempo
+                        source,
+                        # The rate the socket actually speaks: the v3 / v4
+                        # request rate, or 16 kHz for flash.
+                        self.synth_native_format(final_model_id, params)[1],
+                        tempo,
                     )
                 async for chunk in source:
                     streamed_any = True
