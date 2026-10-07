@@ -30,10 +30,8 @@ ROLE_GET_PRODUCT = "get_product"
 ROLE_CREATE_CART = "create_cart"
 ROLE_UPDATE_CART = "update_cart"
 ROLE_GET_CART = "get_cart"
-# WISMO (order tracking): the order lookup and the courier-page read.
-# Both are template `flow.functions` HTTP tools, not UCP/MCP tools — the
-# roles exist so the annotator, step labels, read_only annotations and
-# the render_ui think-step follow whatever names a template gives them.
+# WISMO: the order lookup and the courier-page read — the order_tracking
+# flag's builtins or a template's own tools, under whatever names it gives.
 ROLE_ORDER_STATUS = "order_status"
 ROLE_PAGE_READ = "page_read"
 
@@ -55,7 +53,11 @@ def resolve_role_map(template: Any) -> Dict[str, str]:
     Unknown keys in the template block are ignored: it may carry roles for
     another flavor sharing the same template.
     """
-    configurations = getattr(template, "configurations", None)
+    return role_map_from_configurations(getattr(template, "configurations", None))
+
+
+def role_map_from_configurations(configurations: Any) -> Dict[str, str]:
+    """:func:`resolve_role_map` for a template's ``configurations``."""
     ui_intents = getattr(configurations, "ui_intents", None)
     overrides = getattr(ui_intents, "tools", None) or {}
     if not isinstance(overrides, dict):
@@ -110,4 +112,5 @@ __all__ = [
     "ROLE_UPDATE_CART",
     "pick_checkout_url",
     "resolve_role_map",
+    "role_map_from_configurations",
 ]

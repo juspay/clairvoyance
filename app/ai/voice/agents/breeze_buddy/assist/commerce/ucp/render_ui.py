@@ -237,6 +237,14 @@ def _summarize_commerce(
         ]
         if rendered_fields:
             result["fields"] = rendered_fields
+        elif order.get("tracking_url"):
+            # The model decides its next step from this result, so the
+            # page-read step is named here, not only in the lookup result.
+            result["next"] = (
+                "The card has no delivery date yet. Call read_page_content now, "
+                "then render OrderStatus again with the fields the page states. "
+                "Reply to the shopper only after that."
+            )
         return result
     products = props.get("products")
     if isinstance(products, list):

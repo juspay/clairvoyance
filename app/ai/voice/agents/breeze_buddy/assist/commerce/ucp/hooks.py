@@ -5,7 +5,7 @@ serves it. The protocol layer must stay platform-blind —
 so wherever a real gateway's data needs platform knowledge to interpret,
 the UCP module calls a hook here and connectors register into it.
 
-Three seams, each with the same contract: the chain is EMPTY by default
+Four seams. Three share one contract: the chain is EMPTY by default
 (pure-UCP behavior — the projections work with no connector loaded), each
 hook is asked in registration order, the first one to express an opinion
 wins, and a hook that raises is skipped with a log rather than failing the
@@ -22,12 +22,16 @@ whose product URLs are also ``/products/{handle}``) would pay a dead fetch
 per product view — that seam therefore accepts an ``allowed`` connector
 allowlist from the template's ``flavor.<protocol>.connectors``.
 
-All three chains are scoped by connector name. The media seam takes the
-allowlist as an argument; the variant and description seams run inside
+All four are scoped by connector name. The media and order-lookup seams
+take the allowlist as an argument; the variant and description seams run inside
 Pydantic validators with no template in scope, so they read the session's
 connectors from :func:`chat.flavors.active_connectors` (set per chat turn
 and per voice call from ``flavor.<protocol>.connectors``). An empty list keeps the zero-config
 default: every registered connector self-selects.
+
+The order-lookup seam differs: it returns the lookup of the first connector
+the template names, its errors reach the caller, and a template that names
+none gets none, since one platform owns a store's orders.
 """
 
 from __future__ import annotations
@@ -63,6 +67,39 @@ _DESCRIPTION_REPAIRS: List[Tuple[str, DescriptionRepairFn]] = []
 def _in_scope(connector: str) -> bool:
     allowed = active_connectors()
     return not allowed or connector in allowed
+
+
+# Order lookup: ``(context, order_number, phone, email) -> (status_code,
+# body)``. ``body`` is the platform's ``{found, orders: [...]}`` answer or
+# its error object; a connector raises OrderLookupUnavailable when it cannot
+# reach its backend or is not configured for this template.
+OrderLookupFn = Callable[..., Awaitable[Tuple[int, Any]]]
+
+_ORDER_LOOKUPS: List[Tuple[str, OrderLookupFn]] = []
+
+
+class OrderLookupUnavailable(RuntimeError):
+    """The connector cannot answer right now (unconfigured, unreachable)."""
+
+
+def register_order_lookup(connector: str, fn: OrderLookupFn) -> None:
+    """Add an order lookup under ``connector``'s name (idempotent for the
+    same function object)."""
+    if all(existing is not fn for _, existing in _ORDER_LOOKUPS):
+        _ORDER_LOOKUPS.append((connector, fn))
+
+
+def resolve_order_lookup(
+    allowed: Optional[Iterable[str]] = None,
+) -> Optional[Tuple[str, OrderLookupFn]]:
+    """The lookup of the first connector the template names that has one.
+    ``None`` when it names none: registration order follows import order,
+    so it must never pick the platform that owns a store's orders."""
+    lookups = dict(_ORDER_LOOKUPS)
+    for connector in allowed or ():
+        if connector in lookups:
+            return connector, lookups[connector]
+    return None
 
 
 def register_media_resolver(connector: str, fn: MediaResolverFn) -> None:
@@ -149,6 +186,10 @@ def repair_description(text: str) -> str:
 
 __all__ = [
     "MediaResolverFn",
+    "OrderLookupFn",
+    "OrderLookupUnavailable",
+    "register_order_lookup",
+    "resolve_order_lookup",
     "VariantNormalizerFn",
     "DescriptionRepairFn",
     "register_media_resolver",

@@ -24,6 +24,12 @@ from pydantic import (
 _EXACT_FIELDS = ConfigDict(extra="forbid")
 
 
+def _fields_present(value: str, info: ValidationInfo) -> str:
+    if not value or not value.strip():
+        raise ValueError(f"{info.field_name} is empty")
+    return value
+
+
 def _key_present(value: str) -> str:
     if not value or not value.strip():
         raise ValueError("api_key is empty")
@@ -126,12 +132,7 @@ class PlivoAccount(BaseModel):
     auth_id: str
     auth_token: str
 
-    @field_validator("auth_id", "auth_token")
-    @classmethod
-    def _present(cls, value: str, info: ValidationInfo) -> str:
-        if not value or not value.strip():
-            raise ValueError(f"{info.field_name} is empty")
-        return value
+    _present = field_validator("auth_id", "auth_token")(_fields_present)
 
     @field_validator("auth_id")
     @classmethod
@@ -143,6 +144,22 @@ class PlivoAccount(BaseModel):
         return value
 
 
+class WooCommerceAccount(BaseModel):
+    """A WooCommerce store's REST API key (read access is enough) and the
+    store it belongs to. The order lookup refuses a row whose ``endpoint``
+    host is not the template's store."""
+
+    model_config = _EXACT_FIELDS
+
+    consumer_key: str
+    consumer_secret: str
+    endpoint: str
+
+    _present = field_validator("consumer_key", "consumer_secret")(_fields_present)
+
+    _endpoint_required = field_validator("endpoint")(_endpoint_required)
+
+
 Account = Union[
     KeyAccount,
     AzureAccount,
@@ -151,6 +168,7 @@ Account = Union[
     VertexAccount,
     KeyOnlyAccount,
     PlivoAccount,
+    WooCommerceAccount,
 ]
 
 # vendor (a credential row's `provider`) -> the shape its value must have.
@@ -176,6 +194,8 @@ SHAPES: Dict[str, Type[BaseModel]] = {
     "smallest": KeyOnlyAccount,  # one fixed public host; endpoint refused at write
     # telephony
     "plivo": PlivoAccount,
+    # commerce
+    "woocommerce": WooCommerceAccount,
 }
 
 
