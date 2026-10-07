@@ -87,11 +87,17 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
                 "generation": bot.generation,
             }
         )
-        await update_lead_template(
+        persisted = await update_lead_template(
             lead_id=bot.lead.id,
             template=transfer.template.name,
             template_id=str(transfer.template.id),
         )
+        # The in-memory lead names the template its row now names: the end
+        # of the call reads it (evaluations, the post-call outcome check).
+        # Only these fields — the rest of bot.lead (metaData) is newer here.
+        if persisted is not None:
+            bot.lead.template = persisted.template
+            bot.lead.template_id = persisted.template_id
 
     # 3. Swap the template trio — everything downstream reads these.
     bot.template = transfer.template

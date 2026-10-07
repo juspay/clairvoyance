@@ -20,7 +20,9 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.routers.breeze_buddy.evaluations import handlers
 from app.database.queries.breeze_buddy.evaluation_config import (
+    OUTCOME_CORRECTNESS,
     get_evaluation_config_query,
+    get_outcome_correctness_query,
     save_evaluation_configuration_query,
     set_evaluation_enabled_query,
     update_evaluation_configuration_query,
@@ -1134,12 +1136,36 @@ def test_save_configuration_creates_disabled_or_replaces():
     # the one creation point — a missing row is born DISABLED: configuring
     # is not consenting to run; enable is a separate explicit flip
     assert "INSERT INTO evaluation_config" in query
-    assert "VALUES ($1::uuid, $2::evaluation_type, false, $3::jsonb)" in query
+    # the per-type endpoint's row is the one named after its type
+    assert (
+        "VALUES ($1::uuid, $2::evaluation_type, lower($2::text), false, $3::jsonb)"
+        in query
+    )
+    assert "ON CONFLICT (template_id, name)" in query
     # an existing row: configuration replaced wholesale, enabled untouched
     assert "DO UPDATE SET configuration = EXCLUDED.configuration" in query
     assert "EXCLUDED.enabled" not in query
     assert values[:2] == [TEMPLATE_ID, "CONVERSATION_EVALS"]
     assert json.loads(values[2]) == EXAMPLE_CONFIGURATION
+
+
+def test_the_preset_outcome_eval_is_a_default_an_agent_row_overrides():
+    query, values = get_outcome_correctness_query(TEMPLATE_ID)
+    # the preset row (no template) holds the engine, model and threshold ...
+    assert "builtin.template_id IS NULL" in query
+    # ... and the agent's own row of that name, when there is one, decides
+    # whether it runs, either way; without one the preset row's flag does
+    assert "LEFT JOIN evaluation_config own" in query
+    assert "COALESCE(own.enabled, builtin.enabled)" in query
+    assert values == [TEMPLATE_ID, OUTCOME_CORRECTNESS]
+
+
+def test_the_preset_outcome_eval_is_seeded_off():
+    migration = Path(
+        "app/database/migrations/083_evaluation_config_names.sql"
+    ).read_text()
+    seed = migration[migration.index("INSERT INTO evaluation_config") :]
+    assert "'outcome_correctness',\n    false," in seed
 
 
 # --- the API handlers ------------------------------------------------------

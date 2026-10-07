@@ -7,7 +7,8 @@ Three steps, each callable on its own:
   run_evaluation  run it once under a hard time bound (retries are the
                   provider's job) and return the ``Verdict`` — nothing stored
   save_verdict    store one evaluation_result row through the existing
-                  topics insert (the verdict as a one-element array)
+                  topics insert (the verdict as a one-element array),
+                  labelled with the eval's name
 
 ``analyze_evals`` composes them for a finished conversation: resolve, gate
 on the channels the engine supports, run, store. Scores go to the database
@@ -19,7 +20,7 @@ its own fail posture (they raise).
 
 import asyncio
 import time
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.evaluation_result import (
@@ -69,13 +70,15 @@ async def save_verdict(
     evaluation_type: str,
     context: Mapping[str, Any],
     verdict: Verdict,
+    label: Optional[str] = None,
 ) -> None:
     """Store ``verdict`` as one evaluation_result row for the conversation
     in ``context`` (source_id, reseller_id, merchant_id, template_id,
-    started_at). ``evaluation_type`` is the result column's label."""
-    # the identity CHECK compares ``type`` against metadata->>'type', so it
-    # rides in the stored JSON too
-    stored = {"type": evaluation_type, **verdict.model_dump()}
+    started_at). ``label`` (the eval's name; the type when absent) is the
+    result column's label: a call keeps one result per eval."""
+    # the identity CHECK compares ``result`` against metadata->>'type', so the
+    # label rides in the stored JSON too
+    stored = {"type": label or evaluation_type, **verdict.model_dump()}
     await save_evaluation_results(
         evaluation_id,
         evaluation_type,
@@ -92,13 +95,15 @@ async def analyze_evals(
     context: Dict[str, Any],
     evaluation: Dict[str, Any],
     channel: ConversationChannel,
-) -> None:
+) -> Optional[Verdict]:
     """Evaluate a finished conversation with the engine its evaluation row
-    names and store the verdict. Never raises: every failure logs and skips."""
+    names and store the verdict. Never raises: every failure logs and skips.
+    Returns the stored verdict, or None when nothing was stored."""
     source_id = context["source_id"]
-    # the row says which evaluation type this is: it names the result
-    # column's label and the stored ``type`` — this package never does
+    # the row says which evaluation this is: its type, and its name as the
+    # result column's label — this package never names either
     evaluation_type = str(evaluation["evaluation_type"])
+    label = str(evaluation.get("name") or evaluation_type)
     # asyncpg hands jsonb back as text; parse_json takes either form
     configuration = parse_json(evaluation, "configuration") or {}
 
@@ -120,13 +125,16 @@ async def analyze_evals(
     )
     try:
         verdict = await run_evaluation(engine, context, configuration)
-        await save_verdict(str(evaluation["id"]), evaluation_type, context, verdict)
+        await save_verdict(
+            str(evaluation["id"]), evaluation_type, context, verdict, label
+        )
         elapsed = time.monotonic() - started_at
         logger.info(
             f"{evaluation_type} evaluation {source_id} completed in {elapsed:.1f}s: "
             f"{len(verdict.result)} results stored "
             f"(engine={engine.name}, model={verdict.model})"
         )
+        return verdict
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -135,3 +143,4 @@ async def analyze_evals(
             f"{evaluation_type} evaluation {source_id} failed after "
             f"{elapsed:.1f}s: {type(exc).__name__}: {exc}"
         )
+    return None
