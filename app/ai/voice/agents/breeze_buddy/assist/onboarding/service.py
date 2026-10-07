@@ -38,11 +38,16 @@ from app.ai.voice.agents.breeze_buddy.assist.verticals import registry as vertic
 from app.ai.voice.agents.breeze_buddy.assist.verticals.base import Vertical
 from app.ai.voice.agents.breeze_buddy.assist.verticals.fields import (
     AssistFields,
+    apply_edits,
+    clean_value,
     fields_from_notes,
 )
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
-from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    TemplateModel,
+)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.merchants import (
     create_merchant,
@@ -54,6 +59,7 @@ from app.database.accessor.breeze_buddy.template import (
     get_template_by_id,
     get_template_in_scope,
     replace_template,
+    update_template_flow_and_configurations,
 )
 from app.database.accessor.breeze_buddy.widget_config import (
     create_widget_config,
@@ -198,8 +204,8 @@ def build_merchant_template(
     Platform-blind: the adapter decides which prompt sections, MCP servers,
     config entries and payload keys survive; everything another platform
     owns is dropped. With ``fields`` the brand block is written from the
-    vertical's form instead of ``website_context``, and the fields are kept
-    on the template for the merchant to edit.
+    vertical's form instead of ``website_context``; the Build page reads them
+    back out of the prompt.
     """
     flow = copy.deepcopy(default_template.flow)
     prompt = flow.get("system_prompt")
@@ -236,7 +242,7 @@ def build_merchant_template(
     for key in registry.foreign_tool_config_keys(adapter):
         configurations.pop(key, None)
     if fields is not None:
-        _merge_config(configurations, vertical.widget_values(fields))
+        _merge_config(configurations, vertical.update_chat_settings(fields))
 
     expected_payload_schema = copy.deepcopy(
         default_template.expected_payload_schema or {}
@@ -632,7 +638,7 @@ async def create_assist_template(body: AssistTemplateRequest) -> AssistTemplateR
 
     The findings are sorted into the vertical's fields and the brand block is
     written from them; the Build page reads the fields back out of the prompt
-    (``fields_from_template``), so nothing is stored beside it. Template and
+    (``read_brand_facts``), so nothing is stored beside it. Template and
     widget both start inactive, so shoppers see nothing until the merchant
     turns it on. A merchant that already has
     an assistant gets ``AssistantExistsError`` and nothing is written:
@@ -665,6 +671,10 @@ async def create_assist_template(body: AssistTemplateRequest) -> AssistTemplateR
     fields = fields_from_notes(
         ((note.field, note.value) for note in body.notes), vertical.fields
     )
+    # The names are the merchant's own, typed at create: the store is what it
+    # is called, the assistant "<store> Assist". Both editable on Build.
+    fields["brand_line"] = [clean_value(request.merchant_name)]
+    fields["assistant_name"] = [clean_value(f"{request.merchant_name} Assist")]
     try:
         candidate = build_merchant_template(
             default_template=default_template,
@@ -721,6 +731,64 @@ async def _has_assistant(
         request.reseller_id, request.merchant_id, template_name
     )
     return template is not None and template.id != own_template
+
+
+def read_fields(template: TemplateModel) -> Optional[AssistFields]:
+    """The form's values, read out of the assistant itself: the facts from
+    its prompt, the greeting, quick replies and tiles from its settings.
+    None when its prompt has no brand block."""
+    vertical = verticals.DEFAULT
+    facts = vertical.read_brand_facts((template.flow or {}).get("system_prompt") or "")
+    if facts is None:
+        return None
+    return {**vertical.read_chat_settings(_configuration_dict(template)), **facts}
+
+
+async def save_fields(
+    template: TemplateModel, edits: Mapping[str, List[str]]
+) -> TemplateModel:
+    """Apply a merchant's edits: the edited facts into the prompt's brand
+    block, the edited greeting, quick replies and tiles into the settings.
+    Everything else is kept as it is. ``ValueError`` for an edit to a field
+    the form does not have, or a prompt with no brand block.
+    """
+    vertical = verticals.DEFAULT
+    fields = apply_edits(read_fields(template) or {}, edits, vertical.fields)
+    prompt = vertical.update_brand_facts(
+        template.flow["system_prompt"], fields, edits.keys()
+    )
+    configurations = _configuration_dict(template)
+    edited = {key: fields.get(key, []) for key in edits}
+    _merge_config(configurations, vertical.update_chat_settings(edited, configurations))
+    edited_template = template.model_copy(
+        update={
+            "flow": {**copy.deepcopy(template.flow), "system_prompt": prompt},
+            "configurations": ConfigurationModel.model_validate(configurations),
+        }
+    )
+    # Only the prompt and settings are written: an is_active, name or secret
+    # changed since this template was read (Go live, a rename) stays. The
+    # form never touches a provider-account block, so there is none to check.
+    saved = await update_template_flow_and_configurations(
+        template.id,
+        edited_template.flow,
+        _persistable_config(edited_template),
+        datetime.now(timezone.utc),
+    )
+    if saved is None:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PERSISTENCE_FAILED",
+            "Could not update the Assist template.",
+            True,
+        )
+    try:
+        await invalidate_template(saved.id)
+    except Exception as cache_error:
+        logger.warning(
+            f"Assist template cache invalidation failed for {saved.id}: {cache_error}"
+        )
+    return saved
 
 
 async def stream_assist_onboarding(
@@ -945,8 +1013,10 @@ __all__ = [
     "OnboardingFailure",
     "SHOP_DOMAIN_PLACEHOLDER",
     "blueprint_shape_warnings",
+    "read_fields",
     "build_merchant_template",
     "create_assist_template",
     "onboard_assist_bare",
+    "save_fields",
     "stream_assist_onboarding",
 ]

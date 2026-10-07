@@ -65,8 +65,10 @@ class CommerceVertical:
         )
 
     brand_block_from_fields = staticmethod(fields_mapping.brand_block_from_fields)
-    widget_values = staticmethod(fields_mapping.widget_values)
-    fields_from_template = staticmethod(fields_mapping.fields_from_template)
+    update_chat_settings = staticmethod(fields_mapping.update_chat_settings)
+    read_brand_facts = staticmethod(fields_mapping.read_brand_facts)
+    read_chat_settings = staticmethod(fields_mapping.read_chat_settings)
+    update_brand_facts = staticmethod(fields_mapping.update_brand_facts)
 
     def unpersonalized_context(self) -> str:
         return UNPERSONALIZED_CONTEXT

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Mapping, Protocol, Sequence
+from typing import Any, Collection, Dict, List, Mapping, Optional, Protocol, Sequence
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import SkeletonSpec
 from app.ai.voice.agents.breeze_buddy.assist.verticals.fields import FieldProfile
@@ -32,12 +32,35 @@ class Vertical(Protocol):
         """The brand block written from this vertical's form."""
         ...
 
-    def widget_values(self, fields: Mapping[str, Sequence[str]]) -> Dict[str, object]:
-        """Configuration entries the form implies, already config-shaped."""
+    def update_chat_settings(
+        self,
+        fields: Mapping[str, Sequence[str]],
+        configurations: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, object]:
+        """Configuration entries the form implies, already config-shaped; an
+        entry the merchant did not change keeps what ``configurations`` holds."""
         ...
 
-    def fields_from_template(self, prompt: str) -> Dict[str, List[str]]:
-        """The form read back out of a built template's prompt."""
+    def read_brand_facts(self, prompt: str) -> Optional[Dict[str, List[str]]]:
+        """The form read back out of a built template's prompt; None when the
+        prompt has no brand block."""
+        ...
+
+    def read_chat_settings(
+        self, configurations: Mapping[str, Any]
+    ) -> Dict[str, List[str]]:
+        """The form's values for what the settings hold now (greeting, quick
+        replies, tiles): the reverse of ``update_chat_settings``."""
+        ...
+
+    def update_brand_facts(
+        self,
+        prompt: str,
+        fields: Mapping[str, Sequence[str]],
+        edited: Collection[str] = (),
+    ) -> str:
+        """``prompt`` with the brand lines of the ``edited`` fields written
+        from ``fields``; every other line kept as it is."""
         ...
 
     def unpersonalized_context(self) -> str:

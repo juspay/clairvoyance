@@ -33,8 +33,8 @@ MERCHANT = UserInfo(
 )
 NOTES = [
     {
-        "field": "brand_line",
-        "value": "Kosha: merino for Indian winters",
+        "field": "tagline",
+        "value": "Merino for Indian winters",
         "source_url": "https://kosha.example/",
     },
     {
@@ -156,7 +156,9 @@ async def test_the_assistant_is_built_from_the_findings_and_switched_off(
     assert widget["appearance"] == {"primary_color": "#c22126"}
 
     prompt = template["flow"]["system_prompt"]
-    assert "- **Brand:** Kosha: merino for Indian winters" in prompt
+    # The names are the store's own, from the request.
+    assert "- **Assistant name:** Kosha Assist\n- **Brand:** Kosha\n" in prompt
+    assert "- **Tagline / positioning:** Merino for Indian winters" in prompt
     assert "### Returns and exchanges\n\n- Easy 7-day returns" in prompt
     assert "### Delivery\n\n- Ships in 2-4 days" in prompt
     assert "### Trust signals" not in prompt  # nothing found, nothing shown
@@ -166,12 +168,10 @@ async def test_the_assistant_is_built_from_the_findings_and_switched_off(
     assert created.template_id == template["template_id"]
     # Nothing is stored beside the template: the facts read back out of it.
     config = template["configurations"]
-    facts = commerce_vertical.vertical.fields_from_template(prompt)
+    facts = commerce_vertical.vertical.read_brand_facts(prompt)
+    assert facts is not None
     assert facts["returns"] == ["Easy 7-day returns"]
     assert "assist_fields" not in config
-    # No assistant name is invented: the merchant sets it on the Build page.
-    assert "assistant_name" not in facts
-    assert "Assistant name" not in prompt
     # The WhatsApp link joins the blueprint's trusted links, it does not
     # replace them; the blueprint's greeting stays until the merchant sets one.
     trusted = config["render_ui"]["trusted_link_urls"]

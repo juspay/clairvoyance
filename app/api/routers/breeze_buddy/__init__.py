@@ -13,6 +13,9 @@ from app.api.routers.breeze_buddy.assist.blueprint import (
 from app.api.routers.breeze_buddy.assist.onboarding import (
     router as assist_onboarding_router,
 )
+from app.api.routers.breeze_buddy.assist.onboarding.fields import (
+    router as assist_fields_router,
+)
 from app.api.routers.breeze_buddy.assist.onboarding.preview import (
     router as assist_preview_router,
 )
@@ -142,6 +145,8 @@ router.include_router(assist_probe_router, prefix="", tags=["assist-onboarding"]
 router.include_router(assist_preview_router, prefix="", tags=["assist-onboarding"])
 # The merchant's assistant, built from the console's research, switched off.
 router.include_router(assist_template_router, prefix="", tags=["assist-onboarding"])
+# The Build page: the form a merchant edits on its assistant, and the save.
+router.include_router(assist_fields_router, prefix="", tags=["assist-onboarding"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])
