@@ -113,6 +113,7 @@ from app.schemas.breeze_buddy.outcomes import (
     initiated_call_outcome,
     is_web_session,
     not_initiated_call_outcome,
+    outcome_word,
     parse_enum,
     provider_from_status,
 )
@@ -290,13 +291,14 @@ async def _run_pre_checks_for_lead(
         # is its new holder's, so it is neither finished nor reported here
         return PreCheckDecision.ABORT, 0
 
+    refused = not_initiated_call_outcome(PlatformReason.PRECHECK_FAILED)
     await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
-        outcome="PRECHECK_FAILED",
+        outcome=outcome_word(refused),
         meta_data=meta_data,
         call_end_time=datetime.now(timezone.utc),
-        call_outcome=not_initiated_call_outcome(PlatformReason.PRECHECK_FAILED),
+        call_outcome=refused,
     )
 
     # Send webhook for pre-check failure
@@ -350,13 +352,14 @@ async def finish_lead_call_limit_reached(
         **(lead.metaData or {}),
         "call_limit": {**rule_meta, "calls_in_window": verdict.count},
     }
+    refused = not_initiated_call_outcome(PlatformReason.CALL_LIMIT_REACHED)
     finished = await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
-        outcome=CALL_LIMIT_OUTCOME,
+        outcome=outcome_word(refused),
         meta_data=meta_data,
         call_end_time=datetime.now(timezone.utc),
-        call_outcome=not_initiated_call_outcome(PlatformReason.CALL_LIMIT_REACHED),
+        call_outcome=refused,
     )
     if finished is None:
         logger.error(
@@ -754,11 +757,20 @@ async def _retry_call(
             await schedule_lead(lead_id=retry_id, next_attempt_at=next_attempt_at)
 
 
+def _pipeline_ran(lead: LeadCallTracker) -> bool:
+    """Whether a pipeline ran on this PROCESSING lead: something it records
+    mid-call reached the row — the agent's word, or an ending (an IVR system
+    error). ``outcome`` is checked too for a row written before mid-call
+    writes stopped carrying it."""
+    return bool(lead.agent_outcome or lead.session_end_reason or lead.outcome)
+
+
 async def reconcile_stuck_processing_leads():
     """
     Cleans up leads that are stuck in the PROCESSING state — call placed
     but no call-end webhook received within BB_STUCK_CALL_STALE_MINUTES.
-    Raises a P1 Slack alert per lead, closes the row with outcome=UNKNOWN,
+    Raises a P1 Slack alert per lead, closes the row (outcome: the word its
+    facts give — the pipeline's word if it recorded one, else UNKNOWN),
     releases the telephony number + channel token, and triggers a retry
     where applicable.
 
@@ -839,20 +851,19 @@ async def reconcile_stuck_processing_leads():
             # mid-call outcome hook recorded.
             cleanup_meta = dict(locked_lead.metaData or {})
             cleanup_meta["cleanup"] = "stuck_processing_timeout"
-            # An outcome proves a pipeline ran (so the call was answered) and
-            # died before finalising; without one, no signal says whether
-            # anyone picked up. An ending the pipeline already recorded is
-            # kept (REAPED only fills a missing one), so legacy_outcome gives
-            # the word the row already holds, as this write keeps it. A
-            # successful transfer is the ending when the row's word is
-            # TRANSFERRED — a hook that ran after the transfer wrote it, as
-            # handle_call_completion would have. After an observer has fired,
-            # the hook's observer guard keeps the earlier word instead, and
-            # so does the ending recorded here.
-            pipeline_ran = bool(locked_lead.outcome)
-            transferred = (locked_lead.metaData or {}).get("transfer", {}).get(
-                "status"
-            ) == "success" and locked_lead.outcome == "TRANSFERRED"
+            # A recorded word or ending proves a pipeline ran (so the call was
+            # answered) and died before finalising; without one, no signal
+            # says whether anyone picked up. An ending the pipeline already
+            # recorded is kept (REAPED only fills a missing one). A
+            # successful transfer is the ending once a hook that ran after it
+            # wrote the transfer mark, as handle_call_completion would have —
+            # unless an observer had fired and frozen an earlier word, which
+            # the word then stays.
+            pipeline_ran = _pipeline_ran(locked_lead)
+            meta = locked_lead.metaData or {}
+            transferred = meta.get("transfer", {}).get("status") == "success" and not (
+                meta.get("observer_triggered") and locked_lead.agent_outcome
+            )
             reaped_end_reason = (
                 SessionEndReason.TRANSFERRED
                 if transferred
@@ -877,10 +888,15 @@ async def reconcile_stuck_processing_leads():
                 initiated = initiated_call_outcome(web_session)
                 reaped.platform_status = initiated.platform_status
                 reaped.platform_reason = initiated.platform_reason
+            reaped_word = outcome_word(reaped, locked_lead)
+            if locked_lead.outcome and not locked_lead.agent_outcome:
+                # A row from before mid-call writes stopped carrying
+                # ``outcome`` (its word never reached agent_outcome): keep it.
+                reaped_word = locked_lead.outcome
             await update_lead_call_completion_details(
                 id=locked_lead.id,
                 status=LeadCallStatus.FINISHED,
-                outcome=locked_lead.outcome or "UNKNOWN",
+                outcome=reaped_word,
                 meta_data=cleanup_meta,
                 call_end_time=datetime.now(timezone.utc),
                 call_outcome=reaped,
@@ -911,7 +927,6 @@ async def reconcile_stuck_processing_leads():
 
 async def handle_call_completion(
     call_id: str,
-    outcome: str | None = None,
     call_end_time: datetime | None = None,
     meta_data: dict | None = None,
     call_outcome: Optional[CallOutcome] = None,
@@ -919,11 +934,11 @@ async def handle_call_completion(
     """
     Handles call completion events.
 
-    ``call_outcome`` carries the call outcome columns (connection, end
-    reason, agent outcome) beside the legacy ``outcome``, which is written
-    exactly as before.
+    ``call_outcome`` carries the facts the call recorded (the agent's word,
+    how the session ended); the completion adds what it knows (answered, a
+    transfer) and writes ``outcome`` as the word those facts give.
     """
-    logger.info(f"Call completed for call_id: {call_id} with outcome: {outcome}")
+    logger.info(f"Call completed for call_id: {call_id}")
 
     # Release pod early — even if the lead lookup fails (orphaned call_id),
     # the pod must be freed to avoid pod leaks when pod isolation is enabled.
@@ -959,7 +974,7 @@ async def handle_call_completion(
     # _releases_capacity still sees this lead as PROCESSING.
     await _release_call_resources(lead)
 
-    # Check if this is a transfer — for outcome override only
+    # A successful transfer is how the session ended (and the word).
     is_transfer = (
         meta_data
         and "transfer" in meta_data
@@ -972,9 +987,13 @@ async def handle_call_completion(
     if not config and lead.template not in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
         return
 
-    # Override outcome to "TRANSFERRED" for transfer calls
-    if is_transfer:
-        outcome = "TRANSFERRED"
+    completed = completed_call_outcome(
+        call_outcome,
+        bool(is_transfer),
+        web_session=is_web_session(lead.execution_mode),
+    )
+    outcome = outcome_word(completed)
+    logger.info(f"Call {call_id} for lead {lead.id} finished with outcome: {outcome}")
 
     # Persist the call record unconditionally — config lookup must not gate this.
     # _get_lead_config can fail (e.g. unknown provider enum value in the DB) for
@@ -985,11 +1004,7 @@ async def handle_call_completion(
         outcome=outcome,
         meta_data=meta_data,
         call_end_time=call_end_time,
-        call_outcome=completed_call_outcome(
-            call_outcome,
-            bool(is_transfer),
-            web_session=is_web_session(lead.execution_mode),
-        ),
+        call_outcome=completed,
     )
 
     # call.completed is mirrored to the CRM inside
@@ -1025,10 +1040,9 @@ async def handle_unanswered_calls(
     It releases the allocated pod (if pod isolation is enabled), cleans up
     resources, and schedules a retry if configured.
 
-    The legacy outcome is NO_ANSWER for every carrier status; the call
-    outcome columns record NOT_ANSWERED with what the carrier actually said:
+    Records NOT_ANSWERED with what the carrier actually said:
     ``provider_status`` mapped to one spelling (provider_reason), and its
-    ``hangup_cause``.
+    ``hangup_cause``. Every carrier status gives the outcome NO_ANSWER.
     """
     logger.info(f"Handling unanswered call for call_id: {call_id}")
 
@@ -1082,19 +1096,20 @@ async def handle_unanswered_calls(
     # Every unanswered result is NOT_ANSWERED; provider_reason says why, and
     # stays empty for a status the map does not know.
     _, provider_reason = provider_from_status(provider_status)
+    unanswered = CallOutcome(
+        platform_status=PlatformStatus.INITIATED,
+        platform_reason=PlatformReason.DIALED,
+        provider_status=ProviderStatus.NOT_ANSWERED,
+        provider_reason=provider_reason,
+        provider_hangup_cause=hangup_cause,
+    )
     await update_lead_call_completion_details(
         id=lead.id,
         status=LeadCallStatus.FINISHED,
-        outcome="NO_ANSWER",
+        outcome=outcome_word(unanswered),
         meta_data={},
         call_end_time=datetime.now(timezone.utc),
-        call_outcome=CallOutcome(
-            platform_status=PlatformStatus.INITIATED,
-            platform_reason=PlatformReason.DIALED,
-            provider_status=ProviderStatus.NOT_ANSWERED,
-            provider_reason=provider_reason,
-            provider_hangup_cause=hangup_cause,
-        ),
+        call_outcome=unanswered,
     )
 
     # call.completed is mirrored to the CRM inside
@@ -1157,13 +1172,15 @@ async def reconcile_completed_call(call_id: str) -> None:
 
     try:
         # PROCESSING has two causes that status cannot separate: no pipeline
-        # ever started, or one started and died mid-call. An outcome proves
-        # the latter — read off the claim, never the pre-claim snapshot.
-        if claimed.outcome:
+        # ever started, or one started and died mid-call. A recorded word or
+        # ending proves the latter — read off the claim, never the pre-claim
+        # snapshot.
+        if _pipeline_ran(claimed):
             logger.warning(
                 f"Completed call {call_id} left lead {lead.id} PROCESSING with "
-                f"outcome={claimed.outcome!r} — pipeline ran and did not "
-                "finalise. Leaving it to the reaper."
+                f"agent_outcome={claimed.agent_outcome!r}, "
+                f"session_end_reason={claimed.session_end_reason!r} — pipeline "
+                "ran and did not finalise. Leaving it to the reaper."
             )
             return
 
@@ -1182,18 +1199,19 @@ async def reconcile_completed_call(call_id: str) -> None:
         # was answered. How the session ended is not recorded: an empty
         # outcome is equally a pipeline that never started and one that died
         # before any outcome was set, and nothing on the row tells them apart.
+        reconciled = CallOutcome(
+            platform_status=PlatformStatus.INITIATED,
+            platform_reason=PlatformReason.DIALED,
+            provider_status=ProviderStatus.ANSWERED,
+            provider_reason=ProviderReason.COMPLETED,
+        )
         await update_lead_call_completion_details(
             id=claimed.id,
             status=LeadCallStatus.FINISHED,
-            outcome=claimed.outcome or "UNKNOWN",
+            outcome=outcome_word(reconciled, claimed),
             meta_data=cleanup_meta,
             call_end_time=datetime.now(timezone.utc),
-            call_outcome=CallOutcome(
-                platform_status=PlatformStatus.INITIATED,
-                platform_reason=PlatformReason.DIALED,
-                provider_status=ProviderStatus.ANSWERED,
-                provider_reason=ProviderReason.COMPLETED,
-            ),
+            call_outcome=reconciled,
         )
 
         await _release_call_resources(claimed)

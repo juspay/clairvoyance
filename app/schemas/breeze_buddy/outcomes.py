@@ -1,9 +1,9 @@
 """Call outcome facts, and the one function that turns them into ``outcome``.
 
-``lead_call_tracker.outcome`` is written today by about thirty places — the
+``lead_call_tracker.outcome`` used to be written by about thirty places — the
 dispatcher, the carrier callback, the pipeline's own fallbacks, the agent —
-and the last writer wins. The replacement records FACTS instead, each column
-named by who writes it:
+and the last writer won. Writers now record FACTS instead, each column named
+by who writes it:
 
   platform  platform_status, platform_reason — was the call set up, and how,
             or why not (dispatcher, inbound policy, Daily session start)
@@ -17,9 +17,10 @@ named by who writes it:
   eval      eval_outcome, eval_status, eval_result_id — the post-call eval
 
 and ``legacy_outcome(facts)`` computes the word, byte-for-byte the word the
-old writers produce. PR 1 records the facts beside the old writes and
-compares the two on every terminal write (the shadow check); PR 2 deletes
-the old writes and writes ``outcome`` only from this function (or the eval).
+old writers produced (PR 1's shadow check compared the two on every terminal
+write). ``outcome`` is written only by the writes that finish a lead, as
+``outcome_word``: this function over the facts the row then holds. Mid-call
+writes record facts only.
 
 The vocabulary lives here, never in CHECKs (repo rule): a value the code does
 not know is dropped at the writer, so it can never fail the write it rides
@@ -451,3 +452,18 @@ def legacy_outcome(facts: Any) -> Optional[str]:
         # pipeline finished the lead (reconcile).
         return "UNKNOWN" if provider is ProviderStatus.ANSWERED else None
     return _NO_WORD_ENDINGS.get(ending)
+
+
+def outcome_word(call_outcome: CallOutcome, lead: Any = None) -> Optional[str]:
+    """The ``outcome`` a write that finishes a lead records: ``legacy_outcome``
+    of the facts the row holds once ``call_outcome`` is written.
+
+    Only non-None facts are written, so the row keeps the rest of ``lead``'s
+    (the snapshot the writer holds). Without ``lead`` the write's own facts
+    are the whole story (a refusal, an abort, a carrier failure).
+    """
+    if lead is None:
+        return legacy_outcome(call_outcome)
+    return legacy_outcome(
+        call_outcome_from_lead(lead, **call_outcome.model_dump(exclude_none=True))
+    )

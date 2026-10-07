@@ -10,7 +10,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
-from app.database.accessor.breeze_buddy.call_outcome import call_outcome_writes_enabled
 from app.database.decoder.breeze_buddy.chat_session import (
     decode_agent_session_state,
     decode_chat_message,
@@ -149,10 +148,8 @@ async def update_chat_session_outcome(
     written outcome, or None if no row matched. Raises on DB error.
 
     ``agent_outcome`` / ``agent_outcome_source`` (call outcome columns) ride the same
-    statement only while CALL_OUTCOME_WRITES_ENABLED is on.
+    statement.
     """
-    if not await call_outcome_writes_enabled():
-        agent_outcome = agent_outcome_source = None
     query, values = update_chat_session_outcome_query(
         session_id, outcome, agent_outcome, agent_outcome_source
     )

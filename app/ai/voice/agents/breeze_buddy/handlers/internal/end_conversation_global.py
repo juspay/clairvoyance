@@ -23,8 +23,6 @@ from app.schemas.breeze_buddy.outcomes import (
     record_session_end_reason,
 )
 
-DEFAULT_OUTCOME = "BUSY"
-
 
 async def end_conversation_global(
     context: TemplateContext,
@@ -65,21 +63,11 @@ async def end_conversation_global(
         else:
             reason = context.lead.metaData["call_end_reason"]
 
-        # The ending, for legacy_outcome: with no agent word it gives the same
-        # BUSY this default writes.
+        # The ending: with no agent word it gives BUSY.
         record_session_end_reason(context.lead, SessionEndReason.GLOBAL_END)
-
-        if context.lead.outcome is None:
-            context.lead.outcome = DEFAULT_OUTCOME
-            logger.info(
-                f"[end_conversation_global] No outcome set for call {context.call_sid}, "
-                f"defaulting to '{DEFAULT_OUTCOME}' (reason: {reason})"
-            )
-        else:
-            logger.info(
-                f"[end_conversation_global] Preserving existing outcome "
-                f"'{context.lead.outcome}' for call {context.call_sid} "
-                f"(reason: {reason})"
-            )
+        logger.info(
+            f"[end_conversation_global] Ending call {context.call_sid} "
+            f"(agent outcome: {context.lead.agent_outcome!r}, reason: {reason})"
+        )
 
     return await end_conversation(context, args)

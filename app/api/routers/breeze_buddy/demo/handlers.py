@@ -22,6 +22,7 @@ from app.schemas import ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.outcomes import (
     PlatformReason,
     not_initiated_call_outcome,
+    outcome_word,
 )
 from app.services.redis import is_redis_configured
 from app.services.redis.client import get_redis_service
@@ -254,13 +255,14 @@ async def breeze_buddy_demo_connect_handler(
             )
             # Fallback: mark lead finished to avoid dangling BACKLOG demo leads
             try:
+                aborted = not_initiated_call_outcome(PlatformReason.ABORT)
                 await update_lead_call_completion_details(
                     id=lead_id,
                     status=LeadCallStatus.FINISHED,
-                    outcome="ABORT",
+                    outcome=outcome_word(aborted),
                     meta_data={"cleanup": "demo_start_failed"},
                     call_end_time=datetime.now(timezone.utc),
-                    call_outcome=not_initiated_call_outcome(PlatformReason.ABORT),
+                    call_outcome=aborted,
                 )
             except Exception as fallback_err:
                 logger.error(

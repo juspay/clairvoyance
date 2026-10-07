@@ -154,7 +154,8 @@ class RealtimeObserver:
 
         outcome = (action.args or {}).get("outcome")
         if lead and outcome:
-            lead.outcome = outcome
+            # Recorded as the agent outcome (source OBSERVER) by the outcome
+            # hook, which then freezes it against later LLM words.
             ctx = TemplateContext(self._agent_context)
             await set_outcome(ctx, outcome, triggered_by=self.name)
 

@@ -24,7 +24,11 @@ from app.database.accessor.breeze_buddy.chat_session import (
     flip_chat_session_to_chat,
 )
 from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
-from app.schemas.breeze_buddy.outcomes import ended_session_call_outcome
+from app.schemas.breeze_buddy.outcomes import (
+    completed_call_outcome,
+    ended_session_call_outcome,
+    outcome_word,
+)
 
 callback_map = {
     "service_callback": service_callback,
@@ -276,9 +280,9 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         is_daily_mode = getattr(context.bot, "transport_type", None) == "daily"
         updated_lead = None
 
-        # Call outcome columns beside the legacy outcome: the agent's own
-        # outcome and how the session ended. Best-effort: a failure here
-        # must not cost the legacy completion write below.
+        # The facts the completion writes and takes ``outcome`` from: the
+        # agent's own word and how the session ended. Best-effort: a failure
+        # here must not cost the completion write below.
         call_outcome = None
         try:
             call_outcome = ended_session_call_outcome(context.lead)
@@ -295,7 +299,6 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             )
             updated_lead = await context.completion_function(
                 call_id=context.lead.id,
-                outcome=context.lead.outcome,
                 call_end_time=datetime.now(),
                 meta_data=context.lead.metaData,
                 call_outcome=call_outcome,
@@ -310,7 +313,6 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             )
             updated_lead = await context.completion_function(
                 call_id=context.call_sid,
-                outcome=context.lead.outcome,
                 call_end_time=datetime.now(),
                 meta_data=context.lead.metaData,
                 call_outcome=call_outcome,
@@ -320,6 +322,13 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.info(f"Successfully updated database for call {context.call_sid}")
         else:
             logger.warning("No call_sid or lead found, skipping database update")
+
+        if not updated_lead and context.lead and call_outcome is not None:
+            # The completion did not land: the span and the callbacks below
+            # still get the word these facts give, as the row would hold it.
+            context.lead.outcome = outcome_word(
+                completed_call_outcome(call_outcome, web_session=is_daily_mode)
+            )
 
         if updated_lead and updated_lead.template_id:
             await enqueue_conversation_evaluation(

@@ -114,6 +114,7 @@ from app.schemas.breeze_buddy.outcomes import (
     PlatformReason,
     initiated_call_outcome,
     not_initiated_call_outcome,
+    outcome_word,
 )
 from app.services.redis import get_redis_service
 
@@ -685,7 +686,7 @@ class Worker:
             )
             if not config:
                 lock_released = await self._fail_and_release(
-                    locked.id, "NO_CONFIG", PlatformReason.NO_CONFIG
+                    locked.id, PlatformReason.NO_CONFIG
                 )
                 return False
 
@@ -699,15 +700,14 @@ class Worker:
                 customer_phone, locked.reseller_id
             ):
                 if await self._lead_is_ours():
+                    blacklisted = not_initiated_call_outcome(PlatformReason.BLACKLISTED)
                     await update_lead_call_completion_details(
                         id=locked.id,
                         status=LeadCallStatus.FINISHED,
-                        outcome="BLACKLISTED",
+                        outcome=outcome_word(blacklisted),
                         meta_data={"reason": "Phone number is blacklisted"},
                         call_end_time=datetime.now(timezone.utc),
-                        call_outcome=not_initiated_call_outcome(
-                            PlatformReason.BLACKLISTED
-                        ),
+                        call_outcome=blacklisted,
                     )
                 lock_released = await self._release(locked.id)
                 return False
@@ -857,9 +857,7 @@ class Worker:
                         f"failed for lead {locked.id}: {alert_exc}"
                     )
                 lock_released = await self._fail_and_release(
-                    locked.id,
-                    "NUMBER_UNAVAILABLE",
-                    PlatformReason.NUMBER_UNAVAILABLE,
+                    locked.id, PlatformReason.NUMBER_UNAVAILABLE
                 )
                 return False
 
@@ -889,9 +887,7 @@ class Worker:
                     f"{locked.id}: {e}. Marking FINISHED with NUMBER_UNAVAILABLE."
                 )
                 lock_released = await self._fail_and_release(
-                    locked.id,
-                    "NUMBER_UNAVAILABLE",
-                    PlatformReason.NUMBER_UNAVAILABLE,
+                    locked.id, PlatformReason.NUMBER_UNAVAILABLE
                 )
                 return False
 
@@ -968,7 +964,7 @@ class Worker:
                 )
                 await (line.give_back() if held else _return_capacity(number, token))
                 lock_released = await self._fail_and_release(
-                    locked.id, "INVALID_PHONE", PlatformReason.INVALID_PHONE
+                    locked.id, PlatformReason.INVALID_PHONE
                 )
                 return False
 
@@ -1359,16 +1355,16 @@ class Worker:
         await schedule_lead(lead_id, next_at, template_id=self._current_template_id)
         return True
 
-    async def _fail_and_release(
-        self, lead_id: str, outcome: str, reason: PlatformReason
-    ) -> bool:
+    async def _fail_and_release(self, lead_id: str, reason: PlatformReason) -> bool:
         """Mark FINISHED with a terminal outcome and release the lock.
 
-        The lead was never dialed: NOT_INITIATED with ``reason`` in the call
-        outcome columns, beside the legacy ``outcome``.
+        The lead was never dialed: NOT_INITIATED with ``reason``, and the
+        ``outcome`` those facts give (the reason itself).
         """
         if not await self._lead_is_ours():
             return True
+        refused = not_initiated_call_outcome(reason)
+        outcome = outcome_word(refused)
         try:
             await update_lead_call_completion_details(
                 id=lead_id,
@@ -1376,7 +1372,7 @@ class Worker:
                 outcome=outcome,
                 meta_data={"reason": f"Dispatcher: {outcome}"},
                 call_end_time=datetime.now(timezone.utc),
-                call_outcome=not_initiated_call_outcome(reason),
+                call_outcome=refused,
             )
         except Exception as e:  # noqa: BLE001
             logger.error(f"fail_and_release update_completion failed: {e}")

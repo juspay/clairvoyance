@@ -13,6 +13,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     STTConfiguration,
     TTSConfig,
 )
+from app.schemas.breeze_buddy.outcomes import SessionEndReason
 from tests.accounts.conftest import ROW, ROW2, Store, cred
 
 
@@ -181,7 +182,11 @@ def test_the_ivr_walker_ends_the_call_as_an_ivr_error_when_the_voice_check_raise
     )
     w = walker.IvrWalker(agent)  # type: ignore[arg-type]
     asyncio.run(w.run())
-    assert (agent.lead.outcome, closed["by"]) == (walker.IVR_ERROR_OUTCOME, "system")
+    # The ending is the fact; the completion takes the word IVR_ERROR from it.
+    assert (agent.lead.session_end_reason, closed["by"]) == (
+        SessionEndReason.IVR_ERROR,
+        "system",
+    )
     assert w.accounts is agent.accounts and isinstance(agent.accounts, Accounts)
 
 

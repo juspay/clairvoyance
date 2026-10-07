@@ -61,12 +61,11 @@ def _record_agent_outcome(
 ) -> None:
     """Set the lead's in-memory agent outcome (call outcome columns).
 
-    The agent's own word, taken BEFORE the legacy column's overrides: a
-    transfer is how the session ended (session_end_reason), not what the agent
-    decided. Mirrors the legacy observer guard exactly: once any observer
-    has fired (``metaData.observer_triggered``, set even by an alert that
-    carries no outcome), a later LLM function does not replace an agent
-    outcome that is already set, just as it does not replace the legacy one.
+    The agent's own word: a transfer is how the session ended
+    (session_end_reason), not what the agent decided. The observer guard:
+    once any observer has fired (``metaData.observer_triggered``, set even by
+    an alert that carries no outcome), a later LLM function does not replace
+    an agent outcome that is already set; the observer's own word does.
     """
     lead = context.lead
     agent_outcome = agent_word(outcome)
@@ -320,39 +319,12 @@ class UpdateOutcomeInDatabaseHook(Hook):
                     f"No additional properties found in final data for lead {context.lead.id}"
                 )
 
-            # Guard: if a transfer is in progress, preserve "TRANSFERRED" outcome
-            # instead of the LLM's value (e.g., "RESOLVED") to avoid a race
-            # condition with handle_call_completion's transfer override.
-            if meta_data.get("transfer", {}).get("status") == "success":
-                logger.info(
-                    f"Transfer detected for lead {context.lead.id}. "
-                    f"Overriding outcome from '{outcome}' to 'TRANSFERRED' "
-                    f"(function: '{function_name}')"
-                )
-                outcome = "TRANSFERRED"
-
-            # Guard: if an observer already set the outcome, preserve it.
-            # The observer runs in parallel and may detect voicemail before
-            # the main LLM calls user_busy — don't let user_busy overwrite.
-            if meta_data.get("observer_triggered") and context.lead.outcome:
-                existing = context.lead.outcome
-                if existing != outcome:
-                    logger.info(
-                        f"Observer already set outcome '{existing}' for lead "
-                        f"{context.lead.id}. Preserving over '{outcome}' "
-                        f"(function: '{function_name}')"
-                    )
-                    outcome = existing
-
-            # Set in-memory outcome AFTER transfer override but BEFORE the
-            # async DB write.  This prevents a race condition in Direct Mode
-            # where end_conversation_global checks context.lead.outcome and
-            # defaults to BUSY because the async DB write hasn't completed yet.
-            context.lead.outcome = outcome
-
-            # Update lead in database with outcome
+            # The word is a fact, not ``outcome``: the completion writes
+            # ``outcome`` from the facts once the call ends. A transfer is how
+            # the session ends (session_end_reason), and an observer's word is
+            # frozen in agent_outcome above, so neither touches it here.
             logger.info(
-                f"Updating lead {context.lead.id} in database with outcome: {outcome}, "
+                f"Recording agent outcome for lead {context.lead.id}: {outcome}, "
                 f"metadata: {meta_data}, via function '{function_name}'"
             )
 
@@ -371,7 +343,6 @@ class UpdateOutcomeInDatabaseHook(Hook):
             updated_lead = await update_lead_call_completion_details(
                 id=context.lead.id,
                 status=None,
-                outcome=outcome,
                 meta_data=meta_data,
                 call_end_time=None,
                 call_outcome=call_outcome,
@@ -386,12 +357,12 @@ class UpdateOutcomeInDatabaseHook(Hook):
                 # Update the lead in context so subsequent hook calls have the latest metadata
                 context.lead = updated_lead
                 logger.info(
-                    f"Successfully updated outcome in database for lead {context.lead.id}: "
+                    f"Recorded agent outcome for lead {context.lead.id}: "
                     f"{outcome} (function: '{function_name}') and refreshed context.lead"
                 )
             else:
                 logger.error(
-                    f"Failed to update outcome in database for lead {context.lead.id}. "
+                    f"Failed to record agent outcome for lead {context.lead.id}. "
                     f"update_lead_call_completion_details returned None (function: '{function_name}')"
                 )
 

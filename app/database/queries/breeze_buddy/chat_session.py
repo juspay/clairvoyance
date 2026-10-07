@@ -127,8 +127,7 @@ def update_chat_session_outcome_query(
     session's state.
 
     ``agent_outcome`` / ``agent_outcome_source`` are the call outcome columns
-    (migration 083), written in the same statement when given; None (the
-    CALL_OUTCOME_WRITES_ENABLED flag off) leaves the statement exactly today's.
+    (migration 083), written in the same statement when given.
     """
     values: List[Any] = [session_id, outcome]
     outcome_sets = ""

@@ -7,7 +7,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
-from app.schemas.breeze_buddy.outcomes import CALL_OUTCOME_COLUMNS, CallOutcome
+from app.schemas.breeze_buddy.outcomes import (
+    CALL_OUTCOME_COLUMNS,
+    CallOutcome,
+    legacy_outcome,
+)
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -21,8 +25,7 @@ def _call_outcome_set_clauses(
 
     Appends each value to ``values`` and returns the matching clauses; column
     names come from the CallOutcome model, never from input. No call outcome
-    (the CALL_OUTCOME_WRITES_ENABLED flag off) means no clause, so the
-    statement is exactly today's.
+    means no clause.
     """
     clauses: List[str] = []
     if call_outcome is None:
@@ -913,17 +916,17 @@ def update_langfuse_scores_query(
 def abort_lead_by_id_query(
     lead_id: str,
     cancellation_reason: str,
-    call_outcome: Optional[CallOutcome] = None,
+    call_outcome: CallOutcome,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to abort a lead by lead ID.
-    Sets status to FINISHED and outcome to ABORT.
+    Sets status to FINISHED, the call outcome columns (NOT_INITIATED / ABORT),
+    and ``outcome`` to the word they give.
 
     Args:
         lead_id: Lead UUID
         cancellation_reason: Optional reason for cancellation
-        call_outcome: Call outcome columns (NOT_INITIATED / ABORT). None writes
-            exactly today's columns.
+        call_outcome: Call outcome columns (NOT_INITIATED / ABORT).
     """
     metadata = {
         "aborted_at": datetime.now().isoformat(),
@@ -932,7 +935,7 @@ def abort_lead_by_id_query(
 
     values: List[Any] = [
         LeadCallStatus.FINISHED.value,
-        "ABORT",  # Outcome string literal
+        legacy_outcome(call_outcome),
         json.dumps(metadata),
         lead_id,
         LeadCallStatus.BACKLOG.value,
@@ -1074,7 +1077,6 @@ def reset_widget_voice_lead_query(
     payload: Dict[str, Any],
     meta_data_seed: Dict[str, Any],
     execution_mode: str,
-    clear_call_outcome: bool = False,
 ) -> Tuple[str, List[Any]]:
     """Reset a widget voice lead so the next /voice/connect can reuse it.
 
@@ -1097,14 +1099,11 @@ def reset_widget_voice_lead_query(
         before the stream pivot is upgraded on reuse instead of silently
         running the old agent-mode pipeline
       - call_id, call_initiated_time, call_end_time, outcome, cost,
-        recording_url are CLEARED so they don't leak from the prior
-        attempt's call into this one — and, with ``clear_call_outcome`` (the
-        CALL_OUTCOME_WRITES_ENABLED flag on), the call outcome columns too
+        recording_url and the call outcome columns are CLEARED so they don't
+        leak from the prior attempt's call into this one
     """
-    outcome_clears = (
-        "".join(f'\n            "{column}" = NULL,' for column in CALL_OUTCOME_COLUMNS)
-        if clear_call_outcome
-        else ""
+    outcome_clears = "".join(
+        f'\n            "{column}" = NULL,' for column in CALL_OUTCOME_COLUMNS
     )
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"

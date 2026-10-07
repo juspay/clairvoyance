@@ -39,6 +39,7 @@ from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.outcomes import (
     PlatformReason,
     not_initiated_call_outcome,
+    outcome_word,
 )
 
 # The ledger and the predicate live in outreach/ceiling.py, not here: a plan
@@ -155,6 +156,9 @@ async def execute(
         "customer_mobile_number": phone,
     }
 
+    capped_outcome = (
+        not_initiated_call_outcome(PlatformReason.ABORTED) if capped else None
+    )
     try:
         lead = await create_lead_call_tracker(
             id=lead_id,
@@ -180,12 +184,10 @@ async def execute(
             ),
             execution_mode=ExecutionMode.TELEPHONY,
             status=LeadCallStatus.FINISHED if capped else LeadCallStatus.BACKLOG,
-            outcome=ABORTED_OUTCOME if capped else None,
+            # Never dialed: the facts, and the word they give (ABORTED).
+            outcome=outcome_word(capped_outcome) if capped_outcome else None,
             call_end_time=datetime.now(timezone.utc) if capped else None,
-            # Never dialed: the call outcome facts beside the legacy word.
-            call_outcome=(
-                not_initiated_call_outcome(PlatformReason.ABORTED) if capped else None
-            ),
+            call_outcome=capped_outcome,
         )
     except UniqueViolation:
         # Same meaning as None, so it falls to the same lookup. The accessor

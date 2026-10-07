@@ -34,6 +34,7 @@ from app.schemas import (
 from app.schemas.breeze_buddy.outcomes import (
     PlatformReason,
     not_initiated_call_outcome,
+    outcome_word,
     parse_enum,
 )
 from app.services.redis.client import get_redis_service
@@ -271,6 +272,9 @@ async def log_blocked_call(
             "to_number": to_number,
         }
 
+        # The reason is the word itself (BLOCKED_REJECT / BLOCKED_REDIRECT /
+        # CAPACITY_REJECTED), so legacy_outcome copies it back.
+        refused = not_initiated_call_outcome(parse_enum(PlatformReason, outcome))
         await create_lead_call_tracker(
             id=str(uuid.uuid4()),
             reseller_id=reseller_id,
@@ -287,12 +291,8 @@ async def log_blocked_call(
             telephony_number_id=telephony_number_id,
             call_direction=CallDirection.INBOUND,
             execution_mode=ExecutionMode.TELEPHONY,
-            outcome=outcome,
-            # The reason is the word itself (BLOCKED_REJECT / BLOCKED_REDIRECT
-            # / CAPACITY_REJECTED), so legacy_outcome copies it back.
-            call_outcome=not_initiated_call_outcome(
-                parse_enum(PlatformReason, outcome)
-            ),
+            outcome=outcome_word(refused),
+            call_outcome=refused,
         )
 
         logger.info(

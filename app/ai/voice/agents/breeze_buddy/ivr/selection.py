@@ -53,6 +53,7 @@ from app.schemas import InboundBlockAction, LeadCallStatus
 from app.schemas.breeze_buddy.outcomes import (
     PlatformReason,
     not_initiated_call_outcome,
+    outcome_word,
     parse_enum,
 )
 from app.services.redis.client import get_redis_service
@@ -302,18 +303,17 @@ async def _check_deferred_inbound_policy(
             # terminal so no call-end path refunds it). A bounded over-admit
             # beats an unbounded leak. Fixing it properly needs the transfer to
             # own the channel for the life of its conference.
+            # The reason is the word itself (BLOCKED_REJECT /
+            # BLOCKED_REDIRECT), so legacy_outcome copies it back.
+            refused = not_initiated_call_outcome(parse_enum(PlatformReason, outcome))
             finished = await update_lead_call_completion_details(
                 id=existing.id,
                 status=LeadCallStatus.FINISHED,
-                outcome=outcome,
+                outcome=outcome_word(refused),
                 meta_data=meta_data,
                 call_end_time=datetime.now(timezone.utc),
                 expected_status=LeadCallStatus.PROCESSING,
-                # The reason is the word itself (BLOCKED_REJECT /
-                # BLOCKED_REDIRECT), so legacy_outcome copies it back.
-                call_outcome=not_initiated_call_outcome(
-                    parse_enum(PlatformReason, outcome)
-                ),
+                call_outcome=refused,
             )
             if finished:
                 await release_inbound_channel(existing)

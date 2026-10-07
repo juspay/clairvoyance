@@ -1,10 +1,10 @@
 """Call outcome columns on every write path (migration 083).
 
-Each write path keeps writing the legacy ``outcome`` exactly as before and
-carries the call outcome columns beside it, in the same statement. These
-tests pin both halves: the legacy value a path writes is unchanged, and the
-columns it adds say what the path actually knows. The switch
-(CALL_OUTCOME_WRITES_ENABLED) is covered at the accessor gate.
+Every write records the facts it knows. Only the writes that finish a lead
+write ``outcome``, and it is the word those facts give; a mid-call write
+(the outcome hook, the IVR walker) records facts only. These tests pin both
+halves: the facts each path records, and the word the finishing writes take
+from them.
 """
 
 from datetime import datetime, timezone
@@ -25,7 +25,6 @@ from app.ai.voice.agents.breeze_buddy.template import hooks as hooks_mod
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.template.types import HookConfig
 from app.database.accessor.breeze_buddy import (
-    call_outcome as gate_mod,
     chat_session as chat_acc,
     lead_call_tracker as lead_acc,
 )
@@ -82,17 +81,6 @@ def make_lead(**overrides: Any) -> LeadCallTracker:
     )
     values.update(overrides)
     return LeadCallTracker(**values)
-
-
-def set_writes(monkeypatch: pytest.MonkeyPatch, enabled: Any) -> None:
-    """Point the gate's flag at a fixed answer (or an exception)."""
-
-    async def flag() -> bool:
-        if isinstance(enabled, Exception):
-            raise enabled
-        return enabled
-
-    monkeypatch.setattr(gate_mod, "CALL_OUTCOME_WRITES_ENABLED", flag)
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +142,7 @@ def test_abort_query_adds_columns_after_its_fixed_parameters():
     assert '"platform_status" = $7' in text
     assert '"platform_reason" = $8' in text
     assert values[6:] == ["NOT_INITIATED", "ABORT"]
+    assert values[1] == "ABORT"  # the word its facts give
 
 
 # Today's statements, verbatim: with no call outcome the builders must
@@ -213,15 +202,11 @@ def test_session_start_query_records_a_web_session():
     assert values == [_STARTED, "INITIATED", "WEB_SESSION", "lead-1"]
 
 
-def test_widget_reset_clears_the_columns_only_when_asked():
-    cleared, _ = lead_q.reset_widget_voice_lead_query(
-        "lead-1", {}, {}, "DAILY_STREAM", clear_call_outcome=True
-    )
-    kept, _ = lead_q.reset_widget_voice_lead_query("lead-1", {}, {}, "DAILY_STREAM")
+def test_widget_reset_clears_the_columns():
+    cleared, _ = lead_q.reset_widget_voice_lead_query("lead-1", {}, {}, "DAILY_STREAM")
     assert '"platform_status" = NULL' in cleared
     assert '"agent_outcome" = NULL' in cleared
     assert '"eval_result_id" = NULL' in cleared
-    assert "agent_outcome" not in kept
 
 
 def test_chat_outcome_query_adds_the_agent_columns():
@@ -233,7 +218,7 @@ def test_chat_outcome_query_adds_the_agent_columns():
 
 
 # ---------------------------------------------------------------------------
-# The gate: off (the default) means a legacy-only statement
+# Accessors: the facts ride every statement
 # ---------------------------------------------------------------------------
 
 
@@ -250,45 +235,24 @@ async def _no_rows(*_args: Any, **_kwargs: Any) -> List[Any]:
     return []
 
 
-@pytest.mark.parametrize(
-    "enabled, forwarded",
-    [(True, True), (False, False), (RuntimeError("redis down"), False)],
-)
-async def test_completion_accessor_forwards_columns_only_when_on(
-    monkeypatch, enabled, forwarded
-):
+async def test_completion_accessor_forwards_the_facts(monkeypatch):
     spy = _QuerySpy()
     monkeypatch.setattr(lead_acc, "update_lead_call_completion_details_query", spy)
     monkeypatch.setattr(lead_acc, "run_parameterized_query", _no_rows)
-    set_writes(monkeypatch, enabled)
     outcome = CallOutcome(**ANSWERED)
 
     await lead_acc.update_lead_call_completion_details(
         id="lead-1", outcome="CONFIRM", call_outcome=outcome
     )
-    assert spy.kwargs["call_outcome"] == (outcome if forwarded else None)
+    assert spy.kwargs["call_outcome"] == outcome
 
 
-async def test_insert_accessor_forwards_columns_only_when_on(monkeypatch):
+async def test_insert_accessor_forwards_the_facts(monkeypatch):
     spy = _QuerySpy()
     monkeypatch.setattr(lead_acc, "insert_lead_call_tracker_query", spy)
     monkeypatch.setattr(lead_acc, "run_parameterized_query", _no_rows)
     outcome = not_initiated_call_outcome(PlatformReason.BLOCKED_REJECT)
 
-    set_writes(monkeypatch, False)
-    await lead_acc.create_lead_call_tracker(
-        "lead-1",
-        "breeze",
-        "tmpl",
-        "shop",
-        None,
-        None,
-        template_id="t",
-        call_outcome=outcome,
-    )
-    assert spy.kwargs["call_outcome"] is None
-
-    set_writes(monkeypatch, True)
     await lead_acc.create_lead_call_tracker(
         "lead-1",
         "breeze",
@@ -302,12 +266,10 @@ async def test_insert_accessor_forwards_columns_only_when_on(monkeypatch):
     assert spy.kwargs["call_outcome"] == outcome
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-async def test_dial_accessor_forwards_the_set_up_only_when_on(monkeypatch, enabled):
+async def test_dial_accessor_forwards_the_set_up(monkeypatch):
     spy = _QuerySpy()
     monkeypatch.setattr(lead_acc, "update_lead_call_details_query", spy)
     monkeypatch.setattr(lead_acc, "run_parameterized_query", _no_rows)
-    set_writes(monkeypatch, enabled)
 
     await lead_acc.update_lead_call_details(
         "lead-1",
@@ -317,51 +279,32 @@ async def test_dial_accessor_forwards_the_set_up_only_when_on(monkeypatch, enabl
         "num-1",
         call_outcome=initiated_call_outcome(),
     )
-    expected = initiated_call_outcome() if enabled else None
-    assert spy.kwargs["call_outcome"] == expected
+    assert spy.kwargs["call_outcome"] == initiated_call_outcome()
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-async def test_session_start_accessor_forwards_the_set_up_only_when_on(
-    monkeypatch, enabled
-):
+async def test_session_start_accessor_forwards_the_set_up(monkeypatch):
     spy = _QuerySpy()
     monkeypatch.setattr(lead_acc, "update_lead_call_initiated_time_by_id_query", spy)
     monkeypatch.setattr(lead_acc, "run_parameterized_query", _no_rows)
-    set_writes(monkeypatch, enabled)
     web = initiated_call_outcome(web_session=True)
 
     await lead_acc.update_lead_call_initiated_time_by_id(
         "lead-1", _STARTED, call_outcome=web
     )
-    assert spy.kwargs["call_outcome"] == (web if enabled else None)
+    assert spy.kwargs["call_outcome"] == web
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-async def test_abort_records_not_initiated_only_when_on(monkeypatch, enabled):
+async def test_abort_records_not_initiated(monkeypatch):
     spy = _QuerySpy()
     monkeypatch.setattr(lead_acc, "abort_lead_by_id_query", spy)
     monkeypatch.setattr(lead_acc, "run_parameterized_query", _no_rows)
-    set_writes(monkeypatch, enabled)
 
     await lead_acc.handle_lead_abort("lead-1", "customer asked")
     expected = not_initiated_call_outcome(PlatformReason.ABORT)
-    assert spy.kwargs["call_outcome"] == (expected if enabled else None)
+    assert spy.kwargs["call_outcome"] == expected
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-async def test_widget_reset_clears_columns_only_when_on(monkeypatch, enabled):
-    spy = _QuerySpy()
-    monkeypatch.setattr(lead_acc, "reset_widget_voice_lead_query", spy)
-    monkeypatch.setattr(lead_acc, "run_parameterized_query", _no_rows)
-    set_writes(monkeypatch, enabled)
-
-    await lead_acc.reset_widget_voice_lead("lead-1", {}, {})
-    assert spy.kwargs["clear_call_outcome"] is enabled
-
-
-@pytest.mark.parametrize("enabled", [True, False])
-async def test_chat_accessor_drops_agent_columns_when_off(monkeypatch, enabled):
+async def test_chat_accessor_forwards_the_agent_columns(monkeypatch):
     seen: Dict[str, Any] = {}
 
     def spy(session_id, outcome, agent_outcome=None, agent_outcome_source=None):
@@ -372,15 +315,11 @@ async def test_chat_accessor_drops_agent_columns_when_off(monkeypatch, enabled):
 
     monkeypatch.setattr(chat_acc, "update_chat_session_outcome_query", spy)
     monkeypatch.setattr(chat_acc, "run_parameterized_query", _no_rows)
-    set_writes(monkeypatch, enabled)
 
     await chat_acc.update_chat_session_outcome(
         "session-1", "confirmed", "CONFIRMED", "LLM"
     )
-    if enabled:
-        assert seen == {"agent_outcome": "CONFIRMED", "agent_outcome_source": "LLM"}
-    else:
-        assert seen == {"agent_outcome": None, "agent_outcome_source": None}
+    assert seen == {"agent_outcome": "CONFIRMED", "agent_outcome_source": "LLM"}
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +370,7 @@ class _CallsHarness:
         monkeypatch.setattr(calls_mod.asyncio, "sleep", noop)
 
 
-async def test_carrier_busy_stays_no_answer_in_legacy_and_says_busy(monkeypatch):
+async def test_carrier_busy_is_the_word_no_answer_and_says_busy(monkeypatch):
     harness = _CallsHarness(make_lead())
     harness.install(monkeypatch)
 
@@ -482,7 +421,6 @@ async def test_transfer_keeps_the_agents_word_and_records_how_it_ended(monkeypat
 
     await calls_mod.handle_call_completion(
         CALL_SID,
-        outcome="RESOLVED",
         call_outcome=CallOutcome(
             session_end_reason=SessionEndReason.AGENT_ENDED,
             agent_outcome="RESOLVED",
@@ -491,7 +429,7 @@ async def test_transfer_keeps_the_agents_word_and_records_how_it_ended(monkeypat
     )
 
     (write,) = harness.writes
-    assert write["outcome"] == "TRANSFERRED"  # legacy override, unchanged
+    assert write["outcome"] == "TRANSFERRED"  # the ending's word
     assert write["call_outcome"] == CallOutcome(
         **DIALED,
         **ANSWERED,
@@ -501,16 +439,49 @@ async def test_transfer_keeps_the_agents_word_and_records_how_it_ended(monkeypat
     )
 
 
-async def test_completion_from_an_old_caller_is_still_answered(monkeypatch):
+async def test_completion_writes_the_word_its_facts_give(monkeypatch):
     harness = _CallsHarness(make_lead())
     harness.install(monkeypatch)
 
-    await calls_mod.handle_call_completion(CALL_SID, outcome="BUSY")
+    await calls_mod.handle_call_completion(
+        CALL_SID,
+        call_outcome=CallOutcome(session_end_reason=SessionEndReason.CUSTOMER_HANGUP),
+    )
 
     (write,) = harness.writes
-    assert write["outcome"] == "BUSY"
-    assert write["call_outcome"] == CallOutcome(**DIALED, **ANSWERED)
-    assert harness.retries == ["BUSY"]  # today's retry, unchanged
+    assert write["outcome"] == "BUSY"  # a hangup with no agent word
+    assert write["call_outcome"] == CallOutcome(
+        **DIALED, **ANSWERED, session_end_reason=SessionEndReason.CUSTOMER_HANGUP
+    )
+    assert harness.retries == ["BUSY"]  # today's retry, on the computed word
+
+
+async def test_completion_with_the_agents_word_is_not_retried(monkeypatch):
+    harness = _CallsHarness(make_lead())
+    harness.install(monkeypatch)
+
+    await calls_mod.handle_call_completion(
+        CALL_SID,
+        call_outcome=CallOutcome(
+            session_end_reason=SessionEndReason.AGENT_ENDED,
+            agent_outcome="confirmed",
+            agent_outcome_source=AgentOutcomeSource.LLM,
+        ),
+    )
+
+    assert harness.writes[0]["outcome"] == "confirmed"
+    assert harness.retries == []
+
+
+async def test_completion_without_facts_is_unknown(monkeypatch):
+    """No facts reached the completion (building them failed): answered
+    with nothing recorded, the reconcile's UNKNOWN."""
+    harness = _CallsHarness(make_lead())
+    harness.install(monkeypatch)
+
+    await calls_mod.handle_call_completion(CALL_SID)
+
+    assert harness.writes[0]["outcome"] == "UNKNOWN"
 
 
 async def test_completion_keeps_the_set_up_the_row_already_has(monkeypatch):
@@ -518,9 +489,7 @@ async def test_completion_keeps_the_set_up_the_row_already_has(monkeypatch):
     harness.install(monkeypatch)
     recorded = CallOutcome(**WEB, session_end_reason=SessionEndReason.AGENT_ENDED)
 
-    await calls_mod.handle_call_completion(
-        CALL_SID, outcome=None, call_outcome=recorded
-    )
+    await calls_mod.handle_call_completion(CALL_SID, call_outcome=recorded)
 
     assert harness.writes[0]["call_outcome"].platform_reason is (
         PlatformReason.WEB_SESSION
@@ -533,13 +502,13 @@ async def test_completion_of_a_web_session_lead_has_no_provider_facts(monkeypatc
 
     await calls_mod.handle_call_completion(
         CALL_SID,
-        outcome="BUSY",
         call_outcome=CallOutcome(session_end_reason=SessionEndReason.CUSTOMER_HANGUP),
     )
 
     assert harness.writes[0]["call_outcome"] == CallOutcome(
         **WEB, session_end_reason=SessionEndReason.CUSTOMER_HANGUP
     )
+    assert harness.writes[0]["outcome"] == "BUSY"
 
 
 async def test_completed_call_with_no_pipeline_is_answered_without_an_ending(
@@ -602,12 +571,7 @@ async def _reap(
 async def test_reaper_records_what_it_can_still_tell(
     monkeypatch, mode, legacy, expected
 ):
-    lead = make_lead(
-        outcome=legacy,
-        agent_outcome=legacy,
-        execution_mode=mode,
-        is_locked=True,
-    )
+    lead = make_lead(agent_outcome=legacy, execution_mode=mode, is_locked=True)
     write = await _reap(monkeypatch, lead)
 
     assert write["outcome"] == (legacy or "UNKNOWN")
@@ -629,10 +593,9 @@ async def test_reaper_keeps_the_set_up_the_row_already_has(monkeypatch):
 
 
 async def test_reaper_after_a_transfer_records_the_transfer(monkeypatch):
-    # A hook that ran after the transfer wrote the legacy word TRANSFERRED
-    # (and the transfer mark) but no ending; completion never ran.
+    # A hook that ran after the transfer wrote the transfer mark (and the
+    # agent's word) but no ending of its own; completion never ran.
     lead = make_lead(
-        outcome="TRANSFERRED",
         agent_outcome="RESOLVED",
         session_end_reason=SessionEndReason.CUSTOMER_HANGUP,
         metaData={"transfer": {"status": "success"}},
@@ -647,10 +610,9 @@ async def test_reaper_after_a_transfer_records_the_transfer(monkeypatch):
 
 
 async def test_reaper_after_a_transfer_keeps_an_observer_frozen_word(monkeypatch):
-    # An observer fired before the transfer: the hook's observer guard kept
-    # the earlier word (legacy and agent_outcome alike) over TRANSFERRED.
+    # An observer fired before the transfer: its guard froze the earlier
+    # word, which stays the word over TRANSFERRED.
     lead = make_lead(
-        outcome="INTERESTED",
         agent_outcome="INTERESTED",
         metaData={
             "transfer": {"status": "success"},
@@ -716,7 +678,6 @@ async def test_daily_completion_is_a_web_session(monkeypatch):
 
     await daily_mod.daily_completion_function(
         call_id="lead-1",
-        outcome="BUSY",
         call_outcome=CallOutcome(session_end_reason=SessionEndReason.CUSTOMER_HANGUP),
     )
 
@@ -724,7 +685,7 @@ async def test_daily_completion_is_a_web_session(monkeypatch):
     assert written["call_outcome"] == CallOutcome(
         **WEB, session_end_reason=SessionEndReason.CUSTOMER_HANGUP
     )
-    assert legacy_outcome(written["call_outcome"]) == "BUSY"
+    assert written["outcome"] == "BUSY"
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +723,7 @@ class _HookHarness:
         )
 
 
-async def test_llm_outcome_is_recorded_exactly_as_the_legacy_word(monkeypatch):
+async def test_llm_outcome_is_recorded_as_a_fact_only(monkeypatch):
     lead = make_lead()
     harness = _HookHarness(lead)
     harness.install(monkeypatch)
@@ -770,31 +731,32 @@ async def test_llm_outcome_is_recorded_exactly_as_the_legacy_word(monkeypatch):
     await harness.fire("confirmed", "confirm_order")
 
     (write,) = harness.writes
-    assert write["outcome"] == "confirmed"  # legacy casing untouched
-    assert lead.agent_outcome == "confirmed"
+    assert "outcome" not in write  # a mid-call write: facts only
+    assert lead.outcome is None
+    assert lead.agent_outcome == "confirmed"  # casing untouched
     assert lead.agent_outcome_source == AgentOutcomeSource.LLM
     assert write["call_outcome"] == CallOutcome(
         agent_outcome="confirmed", agent_outcome_source=AgentOutcomeSource.LLM
     )
 
 
-async def test_transfer_override_is_legacy_only(monkeypatch):
+async def test_a_transfer_leaves_the_agents_word_alone(monkeypatch):
+    """The transfer is how the session ends; the completion makes it the
+    word. The hook records what the agent said."""
     lead = make_lead(metaData={"transfer": {"status": "success"}})
     harness = _HookHarness(lead)
     harness.install(monkeypatch)
 
     await harness.fire("RESOLVED", "mark_resolved")
 
-    assert harness.writes[0]["outcome"] == "TRANSFERRED"
+    assert "outcome" not in harness.writes[0]
     assert lead.agent_outcome == "RESOLVED"
 
 
 async def test_an_observers_outcome_is_not_replaced_by_a_later_llm_call(monkeypatch):
-    # observer.execute_action marks observer_triggered and sets the legacy
-    # outcome in memory before it fires the hook with its own name.
-    lead = make_lead(
-        metaData={"observer_triggered": "voicemail_detector"}, outcome="VOICEMAIL"
-    )
+    # observer.execute_action marks observer_triggered before it fires the
+    # hook with its own name.
+    lead = make_lead(metaData={"observer_triggered": "voicemail_detector"})
     harness = _HookHarness(lead)
     harness.install(monkeypatch)
 
@@ -803,14 +765,13 @@ async def test_an_observers_outcome_is_not_replaced_by_a_later_llm_call(monkeypa
 
     await harness.fire("BUSY", "customer_busy")
 
-    assert harness.writes[-1]["outcome"] == "VOICEMAIL"  # legacy guard
-    assert lead.agent_outcome == "VOICEMAIL"
+    assert lead.agent_outcome == "VOICEMAIL"  # the observer guard
     assert lead.agent_outcome_source == AgentOutcomeSource.OBSERVER
 
 
-async def test_an_alert_observer_freezes_both_columns_alike(monkeypatch):
+async def test_an_alert_observer_freezes_the_agents_word(monkeypatch):
     # An observer with no outcome (an alert) still marks observer_triggered,
-    # which freezes the legacy word; the agent outcome must freeze with it.
+    # which freezes the word the agent already set.
     lead = make_lead()
     harness = _HookHarness(lead)
     harness.install(monkeypatch)
@@ -820,9 +781,22 @@ async def test_an_alert_observer_freezes_both_columns_alike(monkeypatch):
     lead.metaData["observer_triggered"] = "angry_customer_alert"
     await harness.fire("CANCELLED", "cancel_order")
 
-    assert harness.writes[-1]["outcome"] == "CONFIRMED"  # legacy guard
     assert lead.agent_outcome == "CONFIRMED"
     assert lead.agent_outcome_source == AgentOutcomeSource.LLM
+
+
+async def test_an_observers_word_replaces_an_earlier_llm_word(monkeypatch):
+    lead = make_lead()
+    harness = _HookHarness(lead)
+    harness.install(monkeypatch)
+
+    await harness.fire("confirmed", "confirm_order")
+    assert lead.metaData is not None
+    lead.metaData["observer_triggered"] = "voicemail_detector"
+    await harness.fire("VOICEMAIL", "voicemail_detector")
+
+    assert lead.agent_outcome == "VOICEMAIL"
+    assert lead.agent_outcome_source == AgentOutcomeSource.OBSERVER
 
 
 async def test_chat_outcome_carries_the_agent_columns(monkeypatch):
@@ -865,10 +839,10 @@ async def test_ivr_option_outcome_is_the_agent_outcome(monkeypatch):
     walker._persist_outcome("confirmed", {"choice": "1"})
     await walker._drain_bg_tasks()
 
-    assert lead.outcome == "confirmed"
+    assert lead.outcome is None
     assert lead.agent_outcome == "confirmed"
     assert lead.agent_outcome_source == AgentOutcomeSource.IVR
-    assert writes[0]["outcome"] == "confirmed"
+    assert "outcome" not in writes[0]  # a mid-call write: facts only
     assert writes[0]["call_outcome"] == CallOutcome(
         agent_outcome="confirmed", agent_outcome_source=AgentOutcomeSource.IVR
     )
@@ -887,7 +861,8 @@ async def test_ivr_system_error_is_an_ending_not_an_agent_outcome(monkeypatch):
     walker._persist_system_error("IVR_LOOP_GUARD")
     await walker._drain_bg_tasks()
 
-    assert lead.outcome == "IVR_LOOP_GUARD"
+    assert lead.outcome is None
+    assert "outcome" not in writes[0]
     assert lead.agent_outcome is None
     assert lead.session_end_reason == SessionEndReason.IVR_LOOP_GUARD
     assert writes[0]["call_outcome"] == CallOutcome(

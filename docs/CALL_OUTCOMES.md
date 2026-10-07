@@ -1,6 +1,6 @@
 # Call Outcomes: Facts In, One Word Out
 
-Status: **PR 1 implemented** (branch `feat/call-outcome-columns`): facts recorded beside the legacy writes, plus the shadow check. PR 2 and the lifecycle and eval work are planned.
+Status: **PR 1 implemented** (branch `feat/call-outcome-columns`): facts recorded beside the legacy writes, plus the shadow check. **PR 2 implemented** (branch `feat/call-outcome-exposure`, released after PR 1's soak): the old writers removed; `outcome` written only by the writes that finish a lead, from the facts. The lifecycle and eval work are planned.
 Owners: outcome flow, this document and PRs 1–2 (Rahul P); call lifecycle (Anshu); eval engine (Ravi Prasad).
 Code: `app/schemas/breeze_buddy/outcomes.py` (vocabulary and `legacy_outcome()`), `app/database/accessor/breeze_buddy/call_outcome.py` (the write gate and the shadow check), migration `083_add_call_outcome_columns.sql`.
 
@@ -195,7 +195,7 @@ The eval engine fills these after the call.
 | Eval failed | `FAILED` | · | · | as in 6.1, or waits (open decision, section 10) |
 | Chat | as the eval engine sets them | | | the agent's word until a chat eval exists |
 
-Final `outcome` = `eval_outcome` whenever it is set, otherwise `legacy_outcome(facts)`. Until the eval engine and PR 2 land, the eval columns stay empty and the old writers still write `outcome`; the shadow check confirms it equals the `outcome` column in 6.1.
+Final `outcome` = `eval_outcome` whenever it is set, otherwise `legacy_outcome(facts)`. Until the eval engine lands, the eval columns stay empty: with PR 1 the old writers still write `outcome` and the shadow check confirms it equals the `outcome` column in 6.1; with PR 2 the writes that finish a lead write it from the facts.
 
 **Where the new flow differs from today, deliberately:** a few of today's words depend on timing races, which no pure function can reproduce. Each one now follows the precedence the code intends (decision 7):
 - a fire-and-forget outcome write landing after `FINISHED` and overwriting the word;
@@ -249,7 +249,7 @@ The shadow check counts how often each happens before PR 2.
 | Chat | hook chat branch → `update_chat_session_outcome` | agent word (`LLM`) |
 | Widget voice reuse | `reset_widget_voice_lead` | clears the facts with the legacy word |
 
-- **Switch:** `CALL_OUTCOME_WRITES_ENABLED` (dynamic, default off, off if it can't be read), checked in one place: `accessor/breeze_buddy/call_outcome.py`. While it's off, every statement is byte-identical to today's, so the code can deploy before 083 runs.
+- **Switch:** `CALL_OUTCOME_WRITES_ENABLED` (dynamic, default off, off if it can't be read), checked in one place: `accessor/breeze_buddy/call_outcome.py`. While it's off, every statement is byte-identical to today's, so the code can deploy before 083 runs. (PR 2 removes the switch and the shadow check.)
 - **Shadow check:** `check_legacy_outcome()` runs on every write that finishes a lead: the insert of a lead that is finished from the start, the completion, and the abort. It computes `legacy_outcome` from the row just written and compares it with the `outcome` there. The result is logged as `component=call_outcome_shadow`:
   - `shadow=match` (debug);
   - `shadow=mismatch` (warning, with both words and the facts);
@@ -270,25 +270,37 @@ The shadow check counts how often each happens before PR 2.
 
 **Done when:** mismatches are zero apart from the race cases (section 6), for at least 7 days of traffic. **Rollback:** switch off.
 
-## 9. PR 2: switch over (planned)
+## 9. PR 2: switch over (implemented)
 
-- Remove every direct legacy write, fallback and override:
-  - the `BUSY` / `TRANSFERRED` / `UNKNOWN` / `EARLY_HANGUP` / `ended_by_widget` / `IVR_*` writes;
-  - the fill-if-empty defaults;
-  - the observer override on the legacy column;
-  - the mid-call legacy DB writes.
+**Mid-call writes record facts only.** Nothing writes `outcome` while the call runs, in the database or in memory:
+- the outcome hook (`template/hooks.py`) records the agent's word; the transfer override and the observer guard on the legacy word are gone (a transfer is the session's ending; the observer guard lives on `agent_outcome`, where an observer's word replaces an earlier LLM word and freezes it);
+- the IVR walker's flushes record the option word and the system errors' endings; its `BUSY` / `IVR_ERROR` fills are gone (the endings give them);
+- observers, user idle, the disconnect handler and `end_conversation_global` record no word of their own (the endings give `BUSY`).
 
-  Mid-call writes record facts only.
-- Write `outcome` only at completion, from `legacy_outcome(facts)`, or from the eval's word once it exists.
-- Move the readers that drive behaviour onto facts:
-  - the retry decision (same `BUSY` / `NO_ANSWER` rule, on the computed word);
-  - the abort's "empty outcome" check → no agent word and no pipeline;
-  - reconcile and the reaper's "a pipeline ran";
-  - early hangup's empty check;
-  - `service_callback`'s mid-call `outcome` → `legacy_outcome(current facts)`.
-- Readers of the stored word don't change, because it's the same word: analytics, CRM plans and letters, the Slack digest, the analysis skip, the leads API.
-- The widget end's word follows the widget decision (section 12).
-- Remove the shadow check and the switch.
+**Writes that finish a lead write `outcome = outcome_word(facts)`** (`legacy_outcome` over the facts the row then holds):
+
+| Writer | Facts the word comes from |
+|---|---|
+| Dispatcher refusals, pre-check, call limit, aborts (API, demo, WooCommerce, CRM cap), inbound blocks | the `NOT_INITIATED` reason |
+| Carrier callback | `NOT_ANSWERED` |
+| `handle_call_completion`, `daily_completion_function` | the facts the call recorded plus the completion's own (answered, a transfer); they no longer take a word, and every caller (`end_conversation`, early hangup, `end_call_with_errors`, widget end) passes facts |
+| Reconcile, reaper | their own facts over the row they claimed |
+
+`end_conversation` keeps the computed word on the in-memory lead if the completion does not land, so the trace span and the end-of-call callbacks (`service_callback`) still read it.
+
+**Readers that drive behaviour:**
+- the retry decision: the same `BUSY` / `NO_ANSWER` rule, on the computed word;
+- reconcile and the reaper's "a pipeline ran": an agent word or an ending on the row (or a legacy word on a row from before PR 2);
+- the reaper's transfer: the transfer mark on the row, unless an observer froze an earlier word, which stays the word (rows 49 and 50);
+- a row from before PR 2 that the reaper closes keeps its legacy word when its word never reached `agent_outcome`.
+
+**Unchanged:** the early-hangup check (before the agent starts the only word a row can hold is a terminal one, which is still written), the abort's "empty `outcome`" check (only `BACKLOG` / `RETRY` rows, which hold no mid-call word), and every reader of the stored word: analytics, CRM plans and letters, the Slack digest, the analysis skip, the leads API. The widget end still writes facts only through its (dead) completion; its word follows the widget decision (section 12).
+
+**Removed:** the `CALL_OUTCOME_WRITES_ENABLED` switch and the shadow check (`accessor/breeze_buddy/call_outcome.py`). Facts are always written, so migration 083 must have run, which PR 1's release does.
+
+**Visible difference:** a live call's row has no `outcome` until it finishes (its facts show what is known so far). After that, `outcome` is today's word, except for the races in section 6.
+
+**Release:** after PR 1's soak (zero mismatches outside the race cases for at least 7 days). Rollback: revert the deploy; the facts stay valid for PR 1's code.
 
 ## 10. Call lifecycle (Anshu) and eval engine (Ravi Prasad)
 
