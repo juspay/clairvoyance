@@ -1,12 +1,22 @@
-"""SQL for per-template topic evaluation configuration."""
+"""SQL for per-template evaluation configuration.
+
+An agent can have many CONVERSATION_EVALS rows, each named, and one TOPIC row
+(always named 'topic'). The per-type endpoints address the row named after
+their type (``lower(evaluation_type)``); naming more evals comes with the
+merchant eval API.
+"""
 
 import json
 from typing import Any, Dict, List, Tuple
 
 _CONFIG_COLUMNS = (
-    "id, template_id, evaluation_type::text AS evaluation_type, "
+    "id, template_id, evaluation_type::text AS evaluation_type, name, "
     "enabled, topics, configuration"
 )
+
+#: The preset eval: a global row (the default for every agent) that an
+#: agent's own row of the same name overrides, enabled or disabled.
+OUTCOME_CORRECTNESS = "outcome_correctness"
 
 
 def get_evaluation_config_query(
@@ -20,6 +30,7 @@ def get_evaluation_config_query(
         FROM evaluation_config
         WHERE template_id IS NOT DISTINCT FROM NULLIF($1, 'default')::uuid
           AND evaluation_type = $2::evaluation_type
+          AND name = lower($2::text)
     """
     return query, [template_id, evaluation_type]
 
@@ -27,10 +38,11 @@ def get_evaluation_config_query(
 def initialize_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]]:
     query = """
         INSERT INTO evaluation_config (
-            template_id, evaluation_type, enabled, configuration
+            template_id, evaluation_type, name, enabled, configuration
         )
         SELECT
-            template.id, defaults.evaluation_type, true, defaults.configuration
+            template.id, defaults.evaluation_type, defaults.name, true,
+            defaults.configuration
         FROM template
         CROSS JOIN evaluation_config defaults
         WHERE template.id = $1::uuid
@@ -38,20 +50,40 @@ def initialize_evaluation_config_query(template_id: str) -> Tuple[str, List[Any]
                 -> 'enable_topic_evaluation' = 'true'::jsonb
           AND defaults.template_id IS NULL
           AND defaults.evaluation_type = 'TOPIC'
-        ON CONFLICT (template_id, evaluation_type) DO NOTHING
+        ON CONFLICT (template_id, name) DO NOTHING
     """
     return query, [template_id]
 
 
 def get_enabled_evaluations_query(template_id: str) -> Tuple[str, List[Any]]:
     query = """
-        SELECT id, evaluation_type::text AS evaluation_type, topics, configuration,
-               configuration ->> 'model' AS model
+        SELECT id, evaluation_type::text AS evaluation_type, name, topics,
+               configuration, configuration ->> 'model' AS model
         FROM evaluation_config
         WHERE template_id = $1::uuid
           AND enabled
     """
     return query, [template_id]
+
+
+def get_outcome_correctness_query(template_id: str) -> Tuple[str, List[Any]]:
+    """The preset outcome_correctness row (its engine, model and threshold)
+    when the eval is on for this agent: the agent's own row of that name
+    decides, enabled or disabled; without one, the preset row's own flag
+    (the default for every agent)."""
+    query = """
+        SELECT builtin.id, builtin.template_id,
+               builtin.evaluation_type::text AS evaluation_type, builtin.name,
+               builtin.enabled, builtin.topics, builtin.configuration
+        FROM evaluation_config builtin
+        LEFT JOIN evaluation_config own
+          ON own.template_id = $1::uuid
+         AND own.name = builtin.name
+        WHERE builtin.template_id IS NULL
+          AND builtin.name = $2
+          AND COALESCE(own.enabled, builtin.enabled)
+    """
+    return query, [template_id, OUTCOME_CORRECTNESS]
 
 
 def has_enabled_evaluations_query(template_id: str) -> Tuple[str, List[Any]]:
@@ -80,6 +112,7 @@ def set_evaluation_enabled_query(
         SET enabled = $3::boolean
         WHERE template_id = $1::uuid
           AND evaluation_type = $2::evaluation_type
+          AND name = lower($2::text)
         RETURNING {_CONFIG_COLUMNS}
     """
     return query, [template_id, evaluation_type, enabled]
@@ -100,6 +133,7 @@ def update_evaluation_configuration_query(
         SET configuration = configuration || $3::jsonb
         WHERE template_id IS NOT DISTINCT FROM NULLIF($1, 'default')::uuid
           AND evaluation_type = $2::evaluation_type
+          AND name = lower($2::text)
         RETURNING {_CONFIG_COLUMNS}
     """
     return query, [template_id, evaluation_type, json.dumps(patch)]
@@ -118,10 +152,10 @@ def save_evaluation_configuration_query(
     and keeps its enabled flag."""
     query = f"""
         INSERT INTO evaluation_config (
-            template_id, evaluation_type, enabled, configuration
+            template_id, evaluation_type, name, enabled, configuration
         )
-        VALUES ($1::uuid, $2::evaluation_type, false, $3::jsonb)
-        ON CONFLICT (template_id, evaluation_type)
+        VALUES ($1::uuid, $2::evaluation_type, lower($2::text), false, $3::jsonb)
+        ON CONFLICT (template_id, name)
             DO UPDATE SET configuration = EXCLUDED.configuration
         RETURNING {_CONFIG_COLUMNS}
     """

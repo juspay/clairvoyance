@@ -1,10 +1,14 @@
 """The evals configuration definition: validation only.
 
-WHAT runs for an agent lives in its ``evaluation_config`` row, never in
-code (Rabi's ruling), and there is NO default configuration anywhere: no
-seed in the DB, no fallback in code. An agent with no row (or a disabled
-one) simply does not run this evaluation; the admin configuration POST
-(create-or-replace) is the only write and passes through this validator.
+WHAT runs for an agent lives in its ``evaluation_config`` rows, never in
+code (Rabi's ruling), and there is no default configuration for the evals
+an agent configures: no fallback in code. An agent with no row (or a
+disabled one) simply does not run that evaluation; the admin configuration
+POST (create-or-replace) is the only write and passes through this
+validator. The one exception is the preset outcome_correctness eval, a
+global row seeded by migration 083 that is the default for every agent (off
+as seeded; an agent's own row of that name overrides it)
+(conversation_analysis/preset/outcome_eval.py).
 
 Code knows no question by name: whatever should be judged — the call's
 outcome, loops, anything — is a question in the agent's configuration,

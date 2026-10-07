@@ -495,7 +495,9 @@ def test_evaluation_config_initializes_from_explicit_template_flag() -> None:
     assert "enable_topic_evaluation" in query
     assert "defaults.template_id IS NULL" in query
     assert "defaults.evaluation_type = 'TOPIC'" in query
-    assert "ON CONFLICT (template_id, evaluation_type) DO NOTHING" in query
+    # TOPIC rows are always named 'topic': one per agent (migration 083)
+    assert "defaults.name" in query
+    assert "ON CONFLICT (template_id, name) DO NOTHING" in query
     assert values == ["template-id"]
 
 
