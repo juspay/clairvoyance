@@ -169,6 +169,16 @@ async def test_structured_truncated_raises() -> None:
         await provider.generate(_request(schema=_SCHEMA))
 
 
+async def test_reply_spent_on_thinking_is_a_truncated_reply() -> None:
+    thinking_only = _reply("", finish_reason="length")
+    thinking_only["choices"][0]["message"]["content"] = None
+    provider = _provider(lambda r: httpx.Response(200, json=thinking_only))
+    response = await provider.generate(_request())
+    assert (response.content, response.finish_reason) == ("", "length")
+    with pytest.raises(ProviderError, match="truncated"):
+        await provider.generate(_request(schema=_SCHEMA))
+
+
 async def test_retries_429_then_succeeds() -> None:
     replies = [
         httpx.Response(429, text="slow down"),

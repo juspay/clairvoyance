@@ -86,7 +86,7 @@ class OpenRouterProvider:
                     self._client = httpx.AsyncClient(
                         timeout=httpx.Timeout(self._config.timeout_seconds),
                         limits=httpx.Limits(
-                            max_connections=10, max_keepalive_connections=5
+                            max_connections=50, max_keepalive_connections=5
                         ),
                     )
         return self._client
@@ -222,9 +222,11 @@ class OpenRouterProvider:
                 for part in content
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )
+        finish_reason = first.get("finish_reason")
+        if content is None and finish_reason == "length":
+            content = ""
         if not isinstance(content, str):
             raise self._error(f"no content in reply: {str(first)[:300]}")
-        finish_reason = first.get("finish_reason")
 
         structured: Optional[object] = None
         if request.schema is not None:
