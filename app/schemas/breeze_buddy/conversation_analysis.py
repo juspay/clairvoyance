@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
-from app.ai.voice.llm import LLMProvider, LLMSdk
+from app.ai.voice.llm import LLMSdk
 
 
 class ConversationChannel(str, Enum):
@@ -54,7 +54,7 @@ class TopicCatalogChangeRequest(BaseModel):
 
 
 class UpdateTopicConfigurationRequest(BaseModel):
-    provider: Optional[LLMProvider] = None
+    provider: Optional[str] = Field(None, max_length=50)
     sdk: Optional[LLMSdk] = None
     model: Optional[str] = Field(None, max_length=200)
     region: Optional[str] = Field(None, max_length=100)
@@ -81,7 +81,7 @@ class UpdateTopicConfigurationRequest(BaseModel):
 
 class TopicConfigurationResponse(BaseModel):
     template_id: str
-    provider: LLMProvider
+    provider: str
     sdk: Optional[LLMSdk] = None
     model: str
     region: Optional[str] = None
