@@ -86,9 +86,9 @@ async def save_evaluation_configuration(
 
 
 async def add_discovered_topics(
-    template_id: str, labels: List[str]
+    template_id: str, labels: List[str], flat_only: bool = False
 ) -> Optional[Dict[str, Any]]:
-    query, values = add_discovered_topics_query(template_id, labels)
+    query, values = add_discovered_topics_query(template_id, labels, flat_only)
     rows = await run_parameterized_query(query, values)
     return dict(rows[0]) if rows else None
 

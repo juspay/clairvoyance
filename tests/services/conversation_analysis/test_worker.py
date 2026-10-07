@@ -422,7 +422,9 @@ async def test_auto_add_topics_decides_whether_new_labels_join_the_catalog(
     assert save.await_args is not None
     assert save.await_args.args[-1][0]["label"] == "Brand New"
     if appended:
-        catalog_write.assert_awaited_once_with(TEMPLATE_ID, ["Brand New"])
+        catalog_write.assert_awaited_once_with(
+            TEMPLATE_ID, ["Brand New"], flat_only=True
+        )
     else:
         catalog_write.assert_not_awaited()
 

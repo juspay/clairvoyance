@@ -86,12 +86,7 @@ async def get_analysis_context(
             "template_id": template_id,
             "started_at": lead.call_initiated_time or lead.created_at,
             "transcript": transcript,
-            # The agent's own evals (not live yet, see queue.py) also need
-            # what an eval judge sees beside the transcript; topics ignore it:
-            # "channel": job.channel.value,
-            # "payload": lead.payload or {},
-            # "meta_data": metadata,
-            # "recorded_outcome": lead.outcome,
+            "payload": lead.payload,
         }
     else:
         session = await get_chat_session_by_id(job.source_id)
