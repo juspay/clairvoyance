@@ -41,7 +41,7 @@ from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TextAggregationMode, TTSService
 from pipecat.transcriptions.language import Language
 
-from app.core.config.dynamic import DRAGONTTS_URL
+from app.core.config.dynamic import DRAGONTTS_TURN_END_PAD_MS, DRAGONTTS_URL
 from app.core.logger import logger
 
 if TYPE_CHECKING:
@@ -219,6 +219,8 @@ class DragonTTSService(TTSService):
         self._language = language or ""
         self._params = dict(params or {})
         self._client: httpx.AsyncClient | None = None
+        # Read once per call in start(); 0 = off (see on_turn_context_completed).
+        self._turn_end_pad_ms = 0
 
     def language_to_service_language(self, language: Language) -> str | None:
         """DragonTTS accepts a plain language code — no provider mapping needed."""
@@ -227,6 +229,11 @@ class DragonTTSService(TTSService):
     async def start(self, frame: StartFrame) -> None:
         await super().start(frame)
         self._client = httpx.AsyncClient(timeout=self._TIMEOUT)
+        try:
+            self._turn_end_pad_ms = await DRAGONTTS_TURN_END_PAD_MS()
+        except Exception as e:  # a config read must never break the call
+            logger.warning(f"{self}: DRAGONTTS_TURN_END_PAD_MS read failed: {e}")
+            self._turn_end_pad_ms = 0
 
     async def _close_client(self) -> None:
         if self._client is not None:
@@ -240,6 +247,33 @@ class DragonTTSService(TTSService):
     async def cancel(self, frame: CancelFrame) -> None:
         await super().cancel(frame)
         await self._close_client()
+
+    async def on_turn_context_completed(self) -> None:
+        """Pad the turn's last sentence with silence before TTSStoppedFrame.
+
+        pipecat's telephony output drops the end of every turn: the streaming
+        16k->8k resampler holds back audio that only the next input pushes out
+        (cleared before the next turn), and the <40 ms chunk remainder is
+        discarded at bot-stopped — 30-140 ms in all. Clean v3 clips end ~60 ms
+        after the last word, so that loss cut the last syllable on some calls.
+        Silence queued here (DRAGONTTS_TURN_END_PAD_MS) is dropped instead.
+        pipecat calls this once per LLM response / TTSSpeakFrame, not per
+        sentence, so gaps between sentences are unchanged. A turn that spoke
+        nothing (function call only) has no audio context and gets no pad.
+        At 0 this is pipecat's own method, untouched.
+        """
+        ctx = self._turn_context_id
+        if (
+            self._turn_end_pad_ms > 0
+            and ctx
+            and self._is_yielding_frames_synchronously
+            and self.audio_context_available(ctx)
+        ):
+            pad = b"\x00" * (self.sample_rate * self._turn_end_pad_ms // 1000) * 2
+            await self.append_to_audio_context(
+                ctx, TTSAudioRawFrame(pad, self.sample_rate, 1, context_id=ctx)
+            )
+        await super().on_turn_context_completed()
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         """Stream one aggregated sentence via DragonTTS, yielding a frame per chunk."""
