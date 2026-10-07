@@ -260,7 +260,9 @@ class WidgetVoiceBridge:
     async def _run_turn(self, user_content: str, gen: int) -> None:
         await self._drive(
             lambda: run_chat_turn(
-                session_id=self.session_id, user_content=user_content
+                session_id=self.session_id,
+                user_content=user_content,
+                client_tools=False,
             ),
             gen,
         )
@@ -274,6 +276,7 @@ class WidgetVoiceBridge:
                 tool_call_id=tool_call_id,
                 approved=approved,
                 reason=reason,
+                client_tools=False,
             ),
             gen,
         )

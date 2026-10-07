@@ -41,6 +41,7 @@ from app.ai.voice.agents.breeze_buddy.assist.verticals.fields import (
     fields_from_notes,
 )
 from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.hooks import on_template_saved
 from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
 from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.core.logger import logger
@@ -331,6 +332,12 @@ async def _create_template(template: TemplateModel) -> TemplateModel:
     return created
 
 
+async def _v2_template_saved(template_id: str) -> None:
+    """Re-resolve the template's v2 route, as the templates API does on save (a no-op
+    until v2 is used; never raises)."""
+    await on_template_saved(template_id)
+
+
 async def _update_template(template: TemplateModel) -> TemplateModel:
     # The save-time provider-account check the templates API makes, so a
     # block naming a row that cannot serve is refused here too, never first
@@ -367,6 +374,7 @@ async def _update_template(template: TemplateModel) -> TemplateModel:
             "Could not update the Assist template.",
             True,
         )
+    await _v2_template_saved(updated.id)
     return updated
 
 

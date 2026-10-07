@@ -13,6 +13,7 @@ from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
     emit_template_updated_alert,
 )
+from app.ai.voice.agents.breeze_buddy.dispatch.v2.hooks import on_template_saved
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
     spawn_realtime_opening_line_regeneration,
 )
@@ -53,6 +54,11 @@ from app.schemas.breeze_buddy.template import (
 )
 
 from .rbac import apply_hierarchical_template_filters, validate_template_access
+
+
+async def v2_template_saved(template_id: str) -> None:
+    """Re-resolve the template's v2 route (a no-op until v2 is used)."""
+    await on_template_saved(template_id)
 
 
 def _validate_static_realtime_greeting(configurations) -> None:
@@ -626,6 +632,7 @@ async def replace_template_handler(
             logger.warning(
                 f"Template cache invalidation failed for {template_id}: {cache_exc}"
             )
+        await v2_template_saved(template_id)
 
         # Re-generate the Gemini Live opening line in the background: voice,
         # model, or greeting edits must not keep serving the old audio. When
@@ -741,6 +748,7 @@ async def delete_template_handler(
             logger.warning(
                 f"Template cache invalidation failed for {template_id}: {cache_exc}"
             )
+        await v2_template_saved(template_id)
 
         logger.info(
             f"Admin {current_user.username} successfully deleted template: "

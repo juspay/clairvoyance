@@ -212,9 +212,26 @@ async def get_config(key: str, default_value: Any, return_type: type = str) -> A
     """Unified: Redis → Environment → Default (async version)
 
     When ENABLE_REDIS_DYNAMIC_CONFIG is False, the Redis step is skipped entirely
-    and config resolves from Environment → Default only.
+    and config resolves from Environment → Default only. A failed Redis read
+    falls back too.
     """
+    return await _resolve_config(key, default_value, return_type, strict=False)
 
+
+async def get_config_strict(
+    key: str, default_value: Any, return_type: type = str
+) -> Any:
+    """``get_config``, except that a failed Redis read raises instead of falling
+    back to the environment / default. For a caller that must never take the
+    default for a real value: the v2 dialler's switch would read a Redis blip as
+    "v2 off" and drain every number.
+    """
+    return await _resolve_config(key, default_value, return_type, strict=True)
+
+
+async def _resolve_config(
+    key: str, default_value: Any, return_type: type, strict: bool
+) -> Any:
     # Try Redis first, unless Redis dynamic config is disabled
     if ENABLE_REDIS_DYNAMIC_CONFIG:
         try:
@@ -231,6 +248,8 @@ async def get_config(key: str, default_value: Any, return_type: type = str) -> A
                     f"get_config({key}): Not found in Redis, checking environment"
                 )
         except Exception as e:
+            if strict:
+                raise
             logger.warning(
                 f"get_config({key}): Redis lookup failed: {e}, falling back to environment"
             )
@@ -250,19 +269,17 @@ async def get_config(key: str, default_value: Any, return_type: type = str) -> A
 
 
 async def _get_flag_from_redis(key: str) -> Optional[Any]:
-    try:
-        redis = await get_redis_service()
-        client = await redis.get_client()
+    """The flag's value from the flags blob; None if unset. Raises on a Redis or
+    decode error (``get_config`` falls back, ``get_config_strict`` re-raises)."""
+    redis = await get_redis_service()
+    client = await redis.get_client()
 
-        raw = await client.get(FEATURE_FLAGS_KEY)
-        if not raw:
-            return None
-
-        all_flags = json.loads(raw)
-        return all_flags.get(key)
-    except Exception as e:
-        logger.error(f"Redis get error for {key}: {e}")
+    raw = await client.get(FEATURE_FLAGS_KEY)
+    if not raw:
         return None
+
+    all_flags = json.loads(raw)
+    return all_flags.get(key)
 
 
 async def _get_all_flags_from_redis() -> Dict[str, Any]:

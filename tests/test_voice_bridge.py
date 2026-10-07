@@ -82,7 +82,11 @@ def _emitted(emit: _FakeEmit, event_type: str) -> list:
 def _stub_run_chat_turn(*events: SSEEvent):
     """Build a run_chat_turn replacement that yields ``events`` in order."""
 
-    async def _gen(*, session_id, user_content, llm=None, context_placement=None):
+    async def _gen(
+        *, session_id, user_content, llm=None, context_placement=None, client_tools=True
+    ):
+        # Nothing on a call answers a browser tool yet.
+        assert client_tools is False
         for ev in events:
             yield ev
 
@@ -244,7 +248,9 @@ async def test_no_filler_when_prose_came_first(monkeypatch):
 async def test_barge_in_cancel_drops_tail(monkeypatch):
     gate = asyncio.Event()
 
-    async def _gen(*, session_id, user_content, llm=None, context_placement=None):
+    async def _gen(
+        *, session_id, user_content, llm=None, context_placement=None, client_tools=True
+    ):
         yield SSEEvent(
             "assistant_token", {"delta": "This is the first sentence here. "}
         )
@@ -330,7 +336,9 @@ async def test_interrupted_turn_still_emits_terminal_turn_end(monkeypatch):
     the client is never left hanging (stuck 'Speaking' / streaming bubble)."""
     gate = asyncio.Event()
 
-    async def _gen(*, session_id, user_content, llm=None, context_placement=None):
+    async def _gen(
+        *, session_id, user_content, llm=None, context_placement=None, client_tools=True
+    ):
         yield SSEEvent("assistant_token", {"delta": "First sentence here. "})
         await gate.wait()  # cancelled before this releases
         yield SSEEvent("turn_end", {"session_status": "ACTIVE"})
@@ -511,10 +519,13 @@ async def test_handle_approval_decision_drives_resume(monkeypatch):
     captured: dict = {}
 
     async def _stub_approval(
-        *, session_id, tool_call_id, approved, reason=None, llm=None
+        *, session_id, tool_call_id, approved, reason=None, llm=None, client_tools=True
     ):
         captured.update(
-            session_id=session_id, tool_call_id=tool_call_id, approved=approved
+            session_id=session_id,
+            tool_call_id=tool_call_id,
+            approved=approved,
+            client_tools=client_tools,
         )
         yield SSEEvent(
             "function_approval_resolved",
@@ -530,7 +541,12 @@ async def test_handle_approval_decision_drives_resume(monkeypatch):
     assert inflight is not None
     await inflight
 
-    assert captured == {"session_id": "sess-1", "tool_call_id": "tc1", "approved": True}
+    assert captured == {
+        "session_id": "sess-1",
+        "tool_call_id": "tc1",
+        "approved": True,
+        "client_tools": False,
+    }
     resolved = _emitted(emit, "function-approval-resolved")
     assert resolved and resolved[0]["approval_id"] == "tc1"
     assert resolved[0]["status"] == "approved"

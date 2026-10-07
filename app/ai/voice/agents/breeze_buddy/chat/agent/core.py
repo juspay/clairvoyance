@@ -148,8 +148,11 @@ class ChatAgent(
         catalog_version: Optional[str] = None,
         merchant_id: Optional[str] = None,
         custom_components: Optional[Dict[str, "CustomComponentDef"]] = None,
+        client_tools: bool = True,
     ) -> None:
         self.session_id = session_id
+        # False on voice turns: nothing on the call answers a browser tool yet.
+        self._client_tools = client_tools
         self.template = template
         self.template_vars = template_vars or {}
         self._llm = llm

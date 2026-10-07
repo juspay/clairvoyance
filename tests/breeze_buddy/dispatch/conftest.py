@@ -311,6 +311,15 @@ class FakeRedisService:
         raise NotImplementedError(f"FakeRedisService.run_script: {script}")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_dial_memo(monkeypatch):
+    """Every test starts with an empty v2 dial memo: one test's template, config or
+    number must not answer for the next test's dial."""
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.memo import TTLMemo
+
+    monkeypatch.setattr(worker_mod, "_DIAL_MEMO", TTLMemo(ttl_s=10))
+
+
 @pytest.fixture
 def fake_redis(monkeypatch) -> FakeRedisService:
     """
@@ -483,6 +492,7 @@ class DispatchHarness:
         # generate_realtime_opening_line flag (see the greeting mock below).
         self.opening_line_calls: List[Any] = []
         self.cas_succeeds: bool = True
+        self.within_hours: bool = True
         self.get_available_returns_none: bool = False
         # Postgres ``channels + 1 WHERE channels < maximum_channels``. False
         # simulates the number being full in the DB while Redis still handed
@@ -596,7 +606,7 @@ class DispatchHarness:
         return self.config
 
     def _is_within_calling_hours(self, config: CallExecutionConfig) -> bool:
-        return True
+        return self.within_hours
 
     async def _run_pre_checks_for_lead(
         self, *args, **kwargs
