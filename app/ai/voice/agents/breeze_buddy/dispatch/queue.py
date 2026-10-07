@@ -137,7 +137,7 @@ async def _schedule_v2(
     due_ms = _to_unix_ms(next_attempt_at)
 
     async def enqueue() -> Optional[int]:
-        ranked = {} if rank is None else {"rank": rank}
+        ranked: Dict[str, Any] = {} if rank is None else {"rank": rank}
         return await v2_scripts.enqueue(
             template_id, lead_id, due_ms, only_if_absent, **ranked
         )

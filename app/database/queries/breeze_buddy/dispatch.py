@@ -163,7 +163,8 @@ def get_lead_dispatch_states_query(lead_ids: List[str]) -> Tuple[str, List[Any]]
     """For the v2 ledger, lease reaper and prune: where each lead stands now."""
     text = f"""
         SELECT "id", "status", "is_locked", "template_id"::text AS template_id,
-               "next_attempt_at", "meta_data" -> 'priority' AS priority
+               "next_attempt_at", "meta_data" -> 'priority' AS priority,
+               "enrollment_id"::text AS enrollment_id
         FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "id" = ANY($1::text[]);
     """

@@ -23,7 +23,11 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple, cast
 
-from app.ai.voice.agents.breeze_buddy.dispatch.alerts import raise_v2_ledger_missing
+from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    raise_v2_grants_waiting,
+    raise_v2_ledger_missing,
+    raise_v2_mass_free_stopped,
+)
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
     schedule_backlog_v2,
     schedule_lead,
@@ -37,14 +41,20 @@ from app.ai.voice.agents.breeze_buddy.dispatch.v2.routes import (
     template_is_v2_accounted as _is_v2_template,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import parse_ticket
+from app.core.config.dynamic import BB_V2_BREAKER_SHARE
 from app.core.config.static import (
     BB_V2_CLAIMED_MAX_AGE_S,
     BB_V2_DIAL_STUCK_S,
+    BB_V2_GRANT_MAX_S,
+    BB_V2_GRANT_RESEND_S,
     BB_V2_LEDGER_CHUNK,
     BB_V2_PRUNE_CHUNK,
     BB_V2_UNCLAIMED_REPUSH_S,
 )
 from app.core.logger import logger
+from app.crm.outreach.contracts import (
+    ranks_for_leads,
+)
 from app.database.accessor import release_lock_on_lead_by_id
 from app.database.accessor.breeze_buddy.dispatch import (
     LeadDispatchState,
@@ -63,6 +73,8 @@ from app.schemas import LeadCallStatus
 UNCLAIMED_REPUSH_MS = BB_V2_UNCLAIMED_REPUSH_S * 1000
 LEASE_MAX_AGE_MS = BB_V2_CLAIMED_MAX_AGE_S * 1000
 DIAL_STUCK_MS = BB_V2_DIAL_STUCK_S * 1000
+GRANT_RESEND_MS = BB_V2_GRANT_RESEND_S * 1000
+GRANT_MAX_MS = BB_V2_GRANT_MAX_S * 1000
 
 BACKLOG = LeadCallStatus.BACKLOG.value
 PROCESSING = LeadCallStatus.PROCESSING.value
@@ -264,6 +276,23 @@ async def _alert_missing(
             await raise_v2_ledger_missing(number_id, sorted(repeat))
 
 
+BREAKER_FLOOR = 50  # a run that would free no more lines than this is never stopped
+
+
+async def _breaker_stops(job: str, would_free: int, held: int) -> bool:
+    """The mass-free breaker (BB_V2_BREAKER_SHARE, 0 = off): a run that would free more
+    than that share of all lines held, and more than BREAKER_FLOOR, frees nothing. So
+    many at once is more likely a bad read than that many dead calls."""
+    if would_free <= BREAKER_FLOOR:
+        return False
+    share = await BB_V2_BREAKER_SHARE()
+    if not share or would_free <= held * share:
+        return False
+    logger.error(f"v2 {job}: would free {would_free} of {held} lines held; freed none")
+    await raise_v2_mass_free_stopped(job, would_free, held)
+    return True
+
+
 async def ledger_check() -> dict:
     """Remove stale holders from the busy list of every v2-accounted number, in a fixed
     number of round trips and DB queries per BB_V2_LEDGER_CHUNK ids, whatever the number
@@ -320,6 +349,16 @@ async def ledger_check() -> dict:
         for lead_id in lead_ids[number_id]
         if lead_id not in leases[number_id] and _stale(states.get(lead_id))
     ]
+    calls = sum(
+        call in ended or call not in known
+        for number_id in number_ids
+        for call in call_ids[number_id]
+        if call not in unread
+    )
+    held = sum(len(h) for h in holders.values())
+    if await _breaker_stops("ledger", len(candidates) + calls, held):
+        await _alert_missing(c, number_ids, modes)
+        return {"removed": 0}
     removed = await _free_stale_leads(c, candidates)
     for number_id in number_ids:
         try:
@@ -345,11 +384,14 @@ class _OldLeases(NamedTuple):
     unclaimed: List[_Lease]  # popped, never claimed (a pod died, a pop reply was lost)
     claimed: List[_Lease]  # claimed, never marked dialling
     stuck: List[_Lease]  # marked dialling, never cleared
+    granted: List[_Lease]  # waiting for its lead row (no ticket yet): scripts.regrant
 
 
 def _tier(lease: dict, now_ms: int, max_age_ms: int, dial_stuck_ms: int) -> str:
     """Which tier a lease has outgrown ("" = none yet). Raises KeyError / ValueError on a
     lease that lacks its fields."""
+    if lease.get("g"):
+        return "granted" if now_ms - int(lease["issued_ms"]) > GRANT_RESEND_MS else ""
     if "dialling_ms" in lease:
         stuck = now_ms - int(lease["dialling_ms"]) > dial_stuck_ms
         return "stuck" if stuck else ""
@@ -367,7 +409,7 @@ async def _old_leases(
     """Every lease past its tier: unclaimed for ``UNCLAIMED_REPUSH_MS`` since it was
     issued (or last re-pushed), claimed for ``max_age_ms`` without dialling, dialling for
     ``dial_stuck_ms``. A number has at most as many leases as lines."""
-    old = _OldLeases([], [], [])
+    old = _OldLeases([], [], [], [])
     numbers = sorted(await c.smembers(k.V2_ACTIVE_KEY))
     async with c.pipeline(transaction=False) as pipe:
         for number_id in numbers:
@@ -456,7 +498,26 @@ async def reap_leases(
     now_ms = _now_ms()
     old = await _old_leases(c, now_ms, max_age_ms, dial_stuck_ms)
     repushed = await _repush_unclaimed(c, old.unclaimed)
+    for number_id, lead_id, lease in old.granted:
+        # the grant worker lost it: sent again, or (BB_V2_GRANT_MAX_S) its line freed
+        if await scripts.regrant(
+            number_id, lead_id, lease["tk"], GRANT_RESEND_MS, GRANT_MAX_MS
+        ):
+            repushed += 1
+    if old.granted:
+        # every lease here waits for its lead row past BB_V2_GRANT_RESEND_S: the oldest
+        # is what the alert reports (the bb:grants head is re-stamped by each re-send)
+        number_id, _, lease = min(old.granted, key=lambda g: int(g[2]["issued_ms"]))
+        age_s = (now_ms - int(lease["issued_ms"])) // 1000
+        await raise_v2_grants_waiting(number_id, age_s, len(old.granted))
     dead = old.claimed + old.stuck
+    if len(dead) > BREAKER_FLOOR:
+        async with c.pipeline(transaction=False) as pipe:
+            for number_id in await c.smembers(k.V2_ACTIVE_KEY):
+                pipe.scard(k.busy_key(number_id))
+            held = sum(await pipe.execute())
+        if await _breaker_stops("lease_reaper", len(dead), held):
+            dead = []
     reaped = 0
     if dead:
         states = await get_lead_dispatch_states([lead for _, lead, _ in dead])
@@ -537,12 +598,24 @@ async def _rank_chunk(template_id: str, chunk: List[Tuple[str, int]]) -> int:
     if not chunk:
         return 0
     states = await get_lead_dispatch_states([lead_id for lead_id, _ in chunk])
+    priority = {lead_id: state.priority for lead_id, state in states.items()}
+    # no rank on its row: the rank its run gives it now, one ask for the chunk
+    runs = [
+        (lead_id, state.enrollment_id)
+        for lead_id, state in states.items()
+        if not state.priority and state.enrollment_id
+    ]
+    if runs:
+        try:
+            priority.update(await ranks_for_leads(runs))
+        except Exception as e:  # noqa: BLE001 — they are left for the default rank
+            # raising here would keep the number's backfill mark, and match promotes
+            # nobody on it while the mark is set
+            logger.error(f"v2 rank backfill: runs' ranks unread for {template_id}: {e}")
     rows = [
         (template_id, lead_id, due_ms, rank)
         for lead_id, due_ms in chunk
-        for rank in [
-            scripts.rank_from_priority(getattr(states.get(lead_id), "priority", None))
-        ]
+        for rank in [scripts.rank_from_priority(priority.get(lead_id))]
         if rank.rank
     ]
     await scripts.enqueue_many(rows, only_if_present=True)
@@ -604,9 +677,35 @@ async def _drop_finished(c: Any, room: str) -> int:
 async def _drop_chunk(c: Any, room: str, members: List[str]) -> int:
     states = await get_lead_dispatch_states(members)
     gone = [m for m in members if m not in states or states[m].status != BACKLOG]
-    if gone:  # with the ready score a ranked number remembered for it
-        await c.hdel(k.qp_key(room[len(k.room_key("")) :]), *gone)
-    return await c.zrem(room, *gone) if gone else 0
+    template_id = room[len(k.room_key("")) :]
+    # its lead row exists now (a woken run made it): it is no longer a call with no row
+    rowed = [m for m in members if m not in gone]
+    if rowed:
+        await c.hdel(k.qi_key(template_id), *rowed)
+    # a workflow call with no lead row yet (bb:qi) stays: the CRM says when it left
+    runs = await c.hmget(k.qi_key(template_id), gone) if gone else []
+    gone = [m for m, run in zip(gone, runs) if not run]
+    if not gone:
+        return 0
+    # with the ready score a ranked number remembered for it, and its run
+    await c.hdel(k.qp_key(template_id), *gone)
+    await c.hdel(k.qi_key(template_id), *gone)
+    await c.hdel(k.qa_key(template_id), *gone)
+    return await c.zrem(room, *gone)
+
+
+async def set_aside_parked(c: Any, template_id: str) -> int:
+    """Calls with no lead row leave the room (today's dialler cannot dial them); their
+    bb:qi record stays for a manual recovery. Returns how many were set aside."""
+    parked = await c.hkeys(k.qi_key(template_id))
+    if not parked:
+        return 0
+    await c.zrem(k.room_key(template_id), *parked)
+    logger.warning(
+        f"v2: {len(parked)} calls with no lead row set aside from {template_id} "
+        "(kept in bb:qi for a manual recovery)"
+    )
+    return len(parked)
 
 
 async def prune_orphans() -> int:
@@ -625,6 +724,7 @@ async def prune_orphans() -> int:
             if is_v2:
                 changed += await _drop_finished(c, room)
             else:
+                await set_aside_parked(c, template_id)  # recovered by hand, not here
                 changed += await scripts.move_room_to_schedule(template_id) or 0
         except Exception as e:  # noqa: BLE001 — one room must not stop the rest
             logger.error(f"v2 prune failed for {room}: {e}")

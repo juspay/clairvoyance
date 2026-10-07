@@ -129,3 +129,11 @@ async def test_hand_back_to_todays_schedule_leaves_no_negative_score(rv):
     assert await rv.zscore("bb:q:T1", "L1") == RANK3
     assert await scripts.move_room_to_schedule("T1") == 1
     assert 0 <= NOW() - await rv.zscore("bb:schedule:leads", "L1") < 5_000
+
+
+async def test_prune_drops_the_grant_tries_with_the_lead(rv, monkeypatch):
+    await _wait_for_later(rv)
+    await rv.hset("bb:qa:T1", "L1", 2)
+    _row(monkeypatch, "FINISHED")
+    assert await RC.prune_orphans() == 1
+    assert not await rv.exists("bb:qa:T1")

@@ -191,6 +191,34 @@ async def test_app_starts_v2_with_todays_dispatcher_and_stops_them_together():
     )
 
 
+async def test_app_registers_the_waiting_call_hooks_and_starts_the_grant_worker_off_the_dialler():
+    import app.main as main
+    from app.crm.outreach import waiting_calls
+
+    # importing app.main is enough for every role: the walker's call can wait for a line
+    assert waiting_calls._hooks is not None
+    src = inspect.getsource(main.lifespan)
+    # never on a dialler pod (CRM_ROLE=api), only on the configured CRM role
+    assert 'if CRM_ROLE != "api" and CRM_ROLE == BB_V2_GRANT_ROLE:' in src
+    start = src.index("await start_grant_worker()")
+    # it stops before the CRM role and the DB pool do
+    stop = src.index("await stop_grant_worker()")
+    assert start < src.index("yield") < stop < src.index("await stop_worker_role()")
+    assert stop < src.index("await close_db_pool()")
+
+
+async def test_a_grant_pod_runs_only_the_grant_worker_and_no_crm_file_knows_it():
+    """CRM_ROLE=grant is the dialler's own role: main.py starts no CRM loop for it
+    (worker_main would refuse an unknown role) and the grant worker on it."""
+    import app.main as main
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2 import grants
+    from app.crm import worker_main
+
+    assert grants.GRANT_ROLE == "grant" and "grant" not in worker_main.ROLES
+    src = inspect.getsource(main.lifespan)
+    assert 'if CRM_ROLE not in ("api", GRANT_ROLE):' in src
+
+
 async def test_app_main_imports_in_a_fresh_interpreter():
     code = (
         "import app.main as m\n"

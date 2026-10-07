@@ -45,6 +45,7 @@ from tests.breeze_buddy.dispatch.v2.conftest import (
     OWNER,
     _Svc,
     claim_next,
+    pop_ticket,
     seed_number,
     tickets_of,
     use_redis,
@@ -390,10 +391,12 @@ async def test_switch_on_ignores_todays_ready_list_and_tickets_a_bounced_lead_on
 
 
 async def test_switch_off_under_load_hands_back_exact_counts_and_loses_no_lead(env):
-    """Break 2: tickets out, leases mid-dial, a call ending during the drain, a ticket given
-    back as 'not placed', and an enqueue landing inside the hand-back. After the hand-back:
-    DB channels == DB PROCESSING count, tokens == max - that, no lead in any room, every
-    waiting lead in today's schedule with its score, every v2 key for N1 gone."""
+    """Break 2, hard stop: v2 off while calls are placed and two leases are mid-dial. One
+    switch step hands N1 back: DB channels == DB PROCESSING count, tokens == max - that,
+    every waiting lead in today's schedule with its score (an enqueue landing inside the
+    hand-back included), every v2 key for N1 gone. A dial still in flight afterwards gets
+    nothing from v2: its lease is gone, and a 'not placed' lead goes to today's queue.
+    """
     r, db = env.r, env.db
     await seed_number(r, "N1", 4, {"T1": {}, "T2": {}})
     await r.sadd("bb:v2:active", "N1")
@@ -419,28 +422,6 @@ async def test_switch_off_under_load_hands_back_exact_counts_and_loses_no_lead(e
         assert await scripts.clear_lease("N1", lead, tickets[lead], OWNER)
 
     _config(env.mp, enabled=False)
-    await step(env, T0 + 1_000)
-    assert await mode(env) == "draining"
-    assert await r.smembers("bb:v2:active") == {"N1"}
-
-    db.end("W1")
-    assert await call_ended("W1") is True  # a line frees during the drain ...
-    assert len(await tickets_of(r, "N1")) == 0  # ... and no new ticket is issued
-    assert await r.zrange("bb:q:T1", 0, -1) == ["W5", "W6"]
-    await step(env, T0 + 2_000)
-    assert await mode(env) == "draining"  # W3 and W4 still hold leases: wait
-    db.dial("W3", "N1")  # W3 placed late
-    assert await scripts.clear_lease("N1", "W3", tickets["W3"], OWNER)
-    # W4: the provider said "not placed" -> given back; today's worker re-queues it
-    assert (
-        await scripts.return_line("N1", "W4", tickets["W4"], OWNER, not_placed=True)
-        == 0
-    )
-    assert await queue_mod.schedule_lead(
-        "W4", db.leads["W4"].next_attempt_at, template_id="T1"
-    )
-    assert await r.zcard("bb:q:T1") == 3 and await leases(r) == []
-
     real_move = scripts.move_room_to_schedule
     raced = []
 
@@ -454,14 +435,20 @@ async def test_switch_off_under_load_hands_back_exact_counts_and_loses_no_lead(e
         return n
 
     env.mp.setattr(SWT.scripts, "move_room_to_schedule", move)
-    await step(env, T0 + 3_000)
+    await step(env, T0 + 1_000)
 
-    assert await mode(env) == "legacy"
-    assert db.channels_writes[-1] == ("N1", 2)  # W2 + W3, the DB's own count
+    assert await mode(env) == "legacy"  # at once: W3 and W4 still mid-dial
+    assert db.channels_writes[-1] == ("N1", 2)  # W1 + W2, the DB's own count
     assert await r.llen("bb:channel:N1") == 2  # 4 - 2
+    # the dials still in flight: v2 no longer owns their lines (the dialler's
+    # not-placed path then re-queues W4 the old way)
+    assert not await scripts.clear_lease("N1", "W3", tickets["W3"], OWNER)
+    assert (
+        await scripts.return_line("N1", "W4", tickets["W4"], OWNER, not_placed=True)
+        != 0
+    )
     today = dict(await r.zrange("bb:schedule:leads", 0, -1, withscores=True))
     assert today == {
-        "W4": float(ms(db.leads["W4"].next_attempt_at)),
         "W5": float(scores["W5"]),
         "W6": float(scores["W6"]),
         "X1": float(scores["X1"]),
@@ -542,9 +529,9 @@ async def test_handover_moves_a_room_whose_template_first_appeared_during_it(env
 
 
 async def test_global_off_drains_every_number_in_one_pass_and_dials_nothing_twice(env):
-    """Break 3: three numbers, 1000 waiting leads each, two tickets out per number. One switch
-    check turns every number to draining; after the tickets finish every room is drained to
-    today's schedule with its score, every lead exactly once, and nothing was taken twice.
+    """Break 3: three numbers, 1000 waiting leads each, two calls placed per number. One
+    switch check hands every number back: every room goes to today's schedule with its
+    score, every lead exactly once, and nothing is taken twice.
     """
     r, db = env.r, env.db
     nums = ("N1", "N2", "N3")
@@ -579,11 +566,9 @@ async def test_global_off_drains_every_number_in_one_pass_and_dials_nothing_twic
 
     _config(env.mp, enabled=False, numbers=nums)
     await step(env, T0 + 1_000)
-    assert [await mode(env, n) for n in nums] == ["draining"] * 3
+    assert [await mode(env, n) for n in nums] == ["legacy"] * 3  # one step: back
     for n in nums:
-        assert await scripts.match(n) == 0  # a free line issues nothing while draining
-    await step(env, T0 + 2_000)
-    assert [await mode(env, n) for n in nums] == ["legacy"] * 3
+        assert await scripts.match(n) == 0  # v2 issues nothing on a handed-back number
 
     today = dict(await r.zrange("bb:schedule:leads", 0, -1, withscores=True))
     assert today == expected
@@ -602,8 +587,8 @@ async def test_global_off_drains_every_number_in_one_pass_and_dials_nothing_twic
 
 async def test_flapping_on_off_on_in_both_directions_mid_step(env):
     """Break 4: on -> off while pending (straight hand-back) -> on -> seeded -> off with a
-    ticket out -> on again while draining (the drain finishes first, nothing new is issued)
-    -> hand-back -> on. Every hand-back leaves no v2 key for N1 and moves its rooms."""
+    ticket out (a hard stop: straight hand-back, the ticket gets nothing from v2) -> on.
+    Every hand-back leaves no v2 key for N1 and moves its rooms."""
     r, db = env.r, env.db
     await r.hset(
         "bb:route:T1", mapping={"number": "N1", "enabled": "1", "tier": "normal"}
@@ -632,25 +617,16 @@ async def test_flapping_on_off_on_in_both_directions_mid_step(env):
     lead, tk = await claimed("N1")
     assert await scripts.mark_dialling("N1", lead, tk, OWNER) is scripts.Mark.DIAL
 
-    _config(env.mp, enabled=False)
-    await step(env, T0 + 20_000)
-    assert await mode(env) == "draining"
-    _config(env.mp, enabled=True)  # desired again mid-drain
-    await step(env, T0 + 21_000)
-    assert await mode(env) == "draining"  # finish the drain first
-    assert await tickets_of(r, "N1") == ["W2"]  # untouched, not re-issued
-    lead2, tk2 = await claimed("N1")
-    assert (
-        await scripts.return_line("N1", lead2, tk2, OWNER) == 0
-    )  # given back: no re-issue
-    assert await queue_mod.schedule_lead(lead2, due(), template_id="T1")
-    db.dial(lead, "N1")
+    db.dial(lead, "N1")  # W1 placed: its call holds the line
     assert await scripts.clear_lease("N1", lead, tk, OWNER)
-    await step(env, T0 + 22_000)
-    assert await mode(env) == "legacy"
-    assert await r.zscore("bb:schedule:leads", lead2) is not None
+    _config(env.mp, enabled=False)  # off with W2's ticket still out
+    await step(env, T0 + 20_000)
+    assert await mode(env) == "legacy"  # a hard stop: no draining
     assert db.channels_writes[-1] == ("N1", 1) and await r.llen("bb:channel:N1") == 1
-    await step(env, T0 + 23_000)
+    out = await pop_ticket("N1")  # W2's ticket gets nothing from v2 any more
+    assert out is None or not await scripts.claim("N1", out[0], out[1], OWNER)
+    _config(env.mp, enabled=True)
+    await step(env, T0 + 21_000)
     assert await mode(env) == "v2_pending"  # ... then on again
     assert await r.smembers("bb:v2:active") == {"N1"}
 

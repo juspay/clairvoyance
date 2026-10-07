@@ -222,3 +222,18 @@ async def test_a_ranked_number_logs_each_ranks_depth_and_the_oldest_rank_1_wait(
     await r.zadd("bb:q:T1", {"A": (1 - 100) * 10**13 + now - 40_000})
     await M.run_monitors()
     assert 40_000 <= int(lines[1].rsplit("=", 1)[1]) < 45_000
+
+
+async def test_a_line_waiting_5_s_for_its_lead_row_alerts(rv, monkeypatch):
+    r, _ = rv
+    waiting = AsyncMock()
+    monkeypatch.setattr(M, "raise_v2_grants_waiting", waiting, raising=False)
+    await r.rpush("bb:grants", f"N1|L1|1|T1|{NOW() - 3_000}|R1")
+    await M.run_monitors()
+    waiting.assert_not_awaited()  # the grant worker is within its time
+    await r.lpush("bb:grants", f"N1|L0|2|T1|{NOW() - 7_000}|R0")  # the oldest: the head
+    await M.run_monitors()
+    waiting.assert_awaited_once()
+    assert waiting.await_args is not None
+    assert waiting.await_args.args[0] == "N1"
+    assert waiting.await_args.args[1:] == (7, 2)  # its age in seconds, lines waiting

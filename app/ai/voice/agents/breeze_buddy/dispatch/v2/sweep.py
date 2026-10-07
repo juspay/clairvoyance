@@ -51,6 +51,7 @@ from app.core.config.static import (
     BB_V2_DUE_BATCH,
     BB_V2_DUE_FULL_PASS_TICKS,
     BB_V2_MATCH_CAP,
+    BB_V2_RECONNECT_GRACE_S,
     BB_V2_ROUTES_REFRESH_S,
 )
 from app.core.logger import logger
@@ -93,7 +94,9 @@ _warned_shared: Set[str] = set()  # numbers of no merchant listed as ranked: sai
 
 async def refresh_number_facts() -> None:
     """``max`` / status / provider of every v2-accounted number, from the DB (rule 13),
-    and its ``ranked`` flag from BB_V2_RANKED_NUMBERS: unreadable, no flag changes."""
+    and its ``ranked`` and ``intents`` flags from BB_V2_RANKED_NUMBERS and
+    BB_V2_INTENT_NUMBERS: a list that can't be read changes no flag. An intents number
+    is always ranked too."""
     c = await _client()
     active = sorted(await c.smembers(k.V2_ACTIVE_KEY))
     try:
@@ -101,12 +104,26 @@ async def refresh_number_facts() -> None:
     except Exception as e:  # noqa: BLE001 — a blip must not unrank every number
         listed = None
         logger.warning(f"v2 ranked numbers unread, flags unchanged: {e}")
+    try:
+        intents: Optional[List[str]] = await dyn_cfg.BB_V2_INTENT_NUMBERS(strict=True)
+        # a number v2 is leaving (v2 off, or not listed) takes no new parked calls
+        if not await dyn_cfg.BB_DISPATCH_V2_ENABLED(strict=True):
+            intents = []
+        else:
+            v2_numbers = await dyn_cfg.BB_DISPATCH_V2_NUMBERS(strict=True)
+            intents = [n for n in intents or [] if n in v2_numbers]
+    except Exception as e:  # noqa: BLE001 — as above
+        intents = None
+        logger.warning(f"v2 intent numbers unread, flags unchanged: {e}")
     for number_id, number in (await get_telephony_numbers_by_ids(active)).items():
         await refresh_number(number)
-        if listed is None:
-            continue
-        ranked = number_id in listed
-        if ranked and not getattr(number, "merchant_id", None):
+        key = k.num_key(number_id)
+        own = bool(getattr(number, "merchant_id", None))
+        was_intents, was_ranked = await c.hmget(key, "intents", "ranked")
+        # new calls with no lead row: never on a number of no merchant (shared)
+        on = was_intents == "1" if intents is None else number_id in intents and own
+        ranked = was_ranked == "1" if listed is None else number_id in listed
+        if ranked and not own:
             # ranks are one merchant's: on a shared number they would starve the others
             ranked = False
             if number_id not in _warned_shared:
@@ -115,14 +132,22 @@ async def refresh_number_facts() -> None:
                     f"v2: {number_id} is listed in BB_V2_RANKED_NUMBERS but belongs "
                     "to no merchant; it stays unranked"
                 )
-        if ranked and await c.hget(k.num_key(number_id), "ranked") != "1":
+        if on and not ranked:
+            # a call with no lead row brings its rank, and only a ranked number keeps it
+            ranked = True
+            if was_ranked != "1":
+                logger.warning(
+                    f"v2: {number_id} is in BB_V2_INTENT_NUMBERS but not in "
+                    "BB_V2_RANKED_NUMBERS; it is ranked all the same"
+                )
+        flags = {"intents": "1" if on else "0", "ranked": "1" if ranked else "0"}
+        if ranked and was_ranked != "1":
             # leads already queued get their rows' ranks first (backfill_ranks)
-            await c.hset(k.num_key(number_id), mapping={"ranked": "1", "backfill": "1"})
-            continue
-        was_ranked = await c.hget(k.num_key(number_id), "ranked")
+            flags["backfill"] = "1"
         if was_ranked == "1" and not ranked and not await _unrank(c, number_id):
             continue  # still ranked: the next run tries again
-        await c.hset(k.num_key(number_id), "ranked", "1" if ranked else "0")
+        # one write: a number never takes calls with no lead row while unranked
+        await c.hset(key, mapping=flags)
         if not ranked and (was_ranked == "1" or await _still_ranked(c, number_id)):
             # calls ranked while the flag was being written; or a pass that failed: an
             # unranked number has no score below zero, so every refresh retries
@@ -215,7 +240,8 @@ JOBS = (
     Job("number_facts", 5, refresh_number_facts, 5),
     Job("rank_backfill", 5, backfill_ranks, 120),
     Job("ledger", 30, ledger_check, 25),
-    Job("lease_reaper", 30, reap_leases, 25),
+    # every 5 s: a line waiting for its lead row is sent again after BB_V2_GRANT_RESEND_S
+    Job("lease_reaper", 5, reap_leases, 25),
     Job("channels_mirror", 30, write_channels_mirror, 25),
     Job("backlog", 60, backlog_job, 55),
     # a run may take up to half its interval (thousands of templates, a DB read each)
@@ -243,6 +269,9 @@ class Sweeper:
         self._running: Dict[str, asyncio.Task] = {}
         # monotonic time this leader first saw bb:epoch missing; None while it is set
         self._lost_since: Optional[float] = None
+        # monotonic time until which the jobs that free lines are not started
+        # (BB_V2_RECONNECT_GRACE_S after a failed tick or a Redis-loss recovery)
+        self._grace_until = 0.0
 
     async def _client(self) -> Any:
         return self._redis if self._redis is not None else await _client()
@@ -259,8 +288,11 @@ class Sweeper:
         self._lost_since = None
         self._ticks += 1
         await self._match_due(c)
+        waiting = time.monotonic() < self._grace_until
         for job in JOBS:
-            if self._ticks % job.every == 0:
+            if self._ticks % job.every == 0 and not (
+                waiting and job.name in ("ledger", "lease_reaper")
+            ):
                 self._spawn(job)
 
     async def _match_due(self, c: Any) -> None:
@@ -313,6 +345,7 @@ class Sweeper:
         if not await recover_after_flush(lost_for_ms=lost_for_ms, first_use=first_use):
             return
         self._lost_since = None
+        self._grace_until = time.monotonic() + BB_V2_RECONNECT_GRACE_S
         for job in JOBS:
             if job.name == "backlog":
                 self._spawn(job)
@@ -370,6 +403,7 @@ class Sweeper:
                         await check_sweep_leader()
             except Exception as e:  # noqa: BLE001 — the clock must keep running
                 logger.error(f"v2 sweep tick failed: {e}")
+                self._grace_until = time.monotonic() + BB_V2_RECONNECT_GRACE_S
             try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=SWEEP_INTERVAL_S)
             except asyncio.TimeoutError:

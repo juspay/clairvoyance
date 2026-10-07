@@ -110,6 +110,7 @@ class LeadDispatchState(NamedTuple):
     template_id: Optional[str]
     next_attempt_at: Optional[datetime]
     priority: Optional[Dict[str, Any]] = None  # meta_data.priority: its rank, if any
+    enrollment_id: Optional[str] = None  # the workflow run that asked for the call
 
 
 async def get_due_backlog_page(
@@ -150,6 +151,7 @@ async def get_lead_dispatch_states(
                 r["template_id"],
                 r["next_attempt_at"],
                 parse_json(r, "priority"),
+                r.get("enrollment_id"),
             )
             for r in rows or []
         }

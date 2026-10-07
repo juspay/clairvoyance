@@ -199,6 +199,28 @@ async def raise_v2_ledger_missing(
     )
 
 
+async def raise_v2_mass_free_stopped(job: str, would_free: int, held: int) -> None:
+    """P1 — the mass-free breaker (BB_V2_BREAKER_SHARE) stopped a run of the ledger
+    check or the lease reaper: those lines stay held until a person looks."""
+    await _send(
+        alert_name=f"v2_mass_free_stopped:{job}",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy v2: a run that would free too many lines was stopped",
+        fields=[
+            {"name": "Job", "value": job},
+            {"name": "Lines", "value": f"{would_free} of the {held} held"},
+            {
+                "name": "Action",
+                "value": (
+                    "Check that Redis and the DB were whole (a failover, a restore). "
+                    "If the calls are really dead, set BB_V2_BREAKER_SHARE to 0 "
+                    "until one run has freed them, then set it back."
+                ),
+            },
+        ],
+    )
+
+
 async def raise_v2_tickets_waiting(telephony_number_id: str, age_s: int) -> None:
     """P1 — a v2 ticket (a line already reserved) waits with no acceptor taking it."""
     await _send(
@@ -215,6 +237,30 @@ async def raise_v2_tickets_waiting(telephony_number_id: str, age_s: int) -> None
                     "and `LLEN bb:tickets`; at `BB_V2_MAX_INFLIGHT_PER_POD` dials in "
                     "flight a pod takes no more, so scale dispatcher pods (HPA). There "
                     "is no task count to raise."
+                ),
+            },
+        ],
+    )
+
+
+async def raise_v2_grants_waiting(
+    telephony_number_id: str, age_s: int, waiting: int
+) -> None:
+    """P1 — a line reserved for a workflow call waits for its lead row (bb:grants)."""
+    await _send(
+        alert_name="v2_grants_waiting",
+        throttle_seconds=_THROTTLE_P1,
+        title="[P1] Breeze Buddy v2: lines waiting for a lead row",
+        fields=[
+            {"name": "Telephony number id", "value": telephony_number_id},
+            {"name": "Oldest wait (s)", "value": str(age_s)},
+            {"name": "Lines waiting", "value": str(waiting)},
+            {
+                "name": "Action",
+                "value": (
+                    "The grant worker is down or the CRM is slow making lead rows: "
+                    "check the pods that run it and `LLEN bb:grants`. A line is "
+                    "freed after 30 s and its call waits again."
                 ),
             },
         ],
