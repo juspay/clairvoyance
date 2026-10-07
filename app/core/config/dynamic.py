@@ -992,6 +992,23 @@ async def DRAGONTTS_HEALTH_TIMEOUT_S() -> float:
         return 3.0
 
 
+async def DRAGONTTS_TURN_END_PAD_MS() -> int:
+    """Silence (ms) queued after the last sentence of each bot turn on the
+    DragonTTS live stream (default 160; 0 disables; clamped to 0..500).
+
+    pipecat's telephony output drops the end of every turn — the streaming
+    16k->8k resampler's held-back samples and the <40 ms chunk remainder —
+    and clean v3 clips end ~60 ms after the last word, so the last syllable
+    was cut on some calls. The pad is dropped instead. Once per turn, never
+    between sentences. Defensive parse."""
+    value = await get_config("DRAGONTTS_TURN_END_PAD_MS", 160, int)
+    try:
+        return max(0, min(500, int(value)))
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid DRAGONTTS_TURN_END_PAD_MS value {value!r}; using 160")
+        return 160
+
+
 # --- Plivo number purchasing ---
 # Drifts with the market, unlike PLIVO_AUTH_ID/TOKEN (long-lived secrets) --
 # keeping it here means updating the rate doesn't need a pod restart.

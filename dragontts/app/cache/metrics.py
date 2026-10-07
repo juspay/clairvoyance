@@ -16,6 +16,42 @@ from __future__ import annotations
 import asyncio
 
 from app.core.logging import logger
+from app.providers import elevenlabs_live as live
+from app.providers.elevenlabs_live import LIVE
+
+
+class LiveCounted:
+    """The cache's metrics sink (write-behind or the store itself), plus every
+    cache hit / miss counted in the live metrics (O(1), no I/O). Everything
+    else is forwarded unchanged."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    @staticmethod
+    def _count(deltas: dict) -> None:
+        try:
+            if deltas.get("hits"):
+                LIVE.event(live.CACHE_HITS, int(deltas["hits"]))
+            if deltas.get("misses"):
+                LIVE.event(live.CACHE_MISSES, int(deltas["misses"]))
+        except Exception as e:  # live metrics must never hurt serving
+            logger.debug(f"live cache metrics failed: {e}")
+
+    async def touch_and_record(
+        self, key: str, deltas: dict, *, provider: str | None = None
+    ) -> None:
+        self._count(deltas)
+        await self._inner.touch_and_record(key, deltas, provider=provider)
+
+    async def record_metrics(
+        self, *, provider: str | None = None, **deltas: int
+    ) -> None:
+        self._count(deltas)
+        await self._inner.record_metrics(provider=provider, **deltas)
 
 
 class WriteBehindMetrics:

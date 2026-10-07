@@ -55,7 +55,9 @@ from websockets import connect
 from websockets.exceptions import ConnectionClosed
 
 from app.core.logging import logger
+from app.providers import elevenlabs_live as live
 from app.providers.base import ProviderError
+from app.providers.elevenlabs_live import LIVE
 
 if TYPE_CHECKING:
     from app.providers.elevenlabs_accounts import AccountBudget, ElevenLabsAccount
@@ -101,6 +103,13 @@ _V3CONV = "eleven_v3_conversational"
 # so a future eleven_v4_* model is never mistaken for a variant of eleven_v4.
 # v3 conversational keeps its prefix match (any unknown suffix = its base).
 _V4_PIPELINE_BASES = ("eleven_v4_turbo", "eleven_v4")
+# Classic-socket models with local pipeline variants. ONLY the suffixed ids
+# (base + _tempo / _clean_tempo / _clean_tempo_v2) are pipeline models: the
+# bare id is NOT — plain eleven_flash_v2_5 keeps today's path exactly
+# (format-agnostic cache, live streaming, native speed). Unlike v3/v4, flash
+# honors ElevenLabs' own `speed`, so its variants keep speed native and only
+# an explicit `tempo` param adds the atempo stretch.
+_FLASH_PIPELINE_BASES = ("eleven_flash_v2_5",)
 _PIPELINE_SUFFIXES = (
     # _clean_tempo_v2: _clean_tempo + end release, longer sentence tail and one
     # loudness per sentence, so cached sentences join like one speaker
@@ -125,22 +134,40 @@ def _split_pipeline_model(model_id: str | None) -> tuple[str, str] | None:
         for suffix in _PIPELINE_SUFFIXES:
             if m == base + suffix:
                 return base, suffix.lstrip("_")
+    for base in _FLASH_PIPELINE_BASES:
+        for suffix in _PIPELINE_SUFFIXES:  # suffixed ids only, never the bare base
+            if m == base + suffix:
+                return base, suffix.lstrip("_")
     return None
 
 
 def has_local_pipeline(model_id: str | None) -> bool:
     """True for the models that carry DragonTTS's local pipeline — the v3
     *Conversational* family and the v4 family (``eleven_v4_turbo``,
-    ``eleven_v4``), with or without a variant suffix. Only these ever take the
-    ffmpeg atempo stage; plain ``eleven_v3``, flash and v2 models are
-    unaffected even when a tempo param is sent (the cache layer strips it
-    before keying for them)."""
+    ``eleven_v4``), with or without a variant suffix, and the SUFFIXED flash
+    ids (``eleven_flash_v2_5_tempo`` / ``_clean_tempo`` / ``_clean_tempo_v2``).
+    Only these ever take the ffmpeg atempo stage; plain ``eleven_v3``, bare
+    flash and v2 models are unaffected even when a tempo param is sent (the
+    cache layer strips it before keying for them)."""
     return _split_pipeline_model(model_id) is not None
+
+
+def is_flash_pipeline_model(model_id: str | None) -> bool:
+    """True for the suffixed flash variants (classic socket + local chain)."""
+    return pipeline_family(model_id) in _FLASH_PIPELINE_BASES
+
+
+def needs_whole_clip(model_id: str | None) -> bool:
+    """True for the variants whose chain needs the WHOLE clip (hygiene, end
+    release, per-sentence level): they can't be forwarded chunk by chunk as
+    they arrive. ``_tempo`` streams through atempo; base models stream raw."""
+    return pipeline_variant(model_id) in ("clean_tempo", "clean_tempo_v2")
 
 
 def pipeline_family(model_id: str | None) -> str | None:
     """Upstream base model of a pipeline-family id (``eleven_v3_conversational``,
-    ``eleven_v4_turbo``, ``eleven_v4``), or None for any other model."""
+    ``eleven_v4_turbo``, ``eleven_v4``, ``eleven_flash_v2_5`` for its suffixed
+    variants), or None for any other model."""
     split = _split_pipeline_model(model_id)
     return split[0] if split else None
 
@@ -197,6 +224,13 @@ def _close_in_background(conn: _ElevenLabsConnection) -> None:
     task = asyncio.create_task(conn.stop())
     _CLOSING.add(task)
     task.add_done_callback(_CLOSING.discard)
+
+
+def _reserve(conn: _ElevenLabsConnection) -> _ElevenLabsConnection:
+    """Take one context slot on ``conn`` for a sentence (released in stream)."""
+    conn.inflight += 1
+    LIVE.add(live.WS_IN_FLIGHT, conn.model, conn.account, 1)
+    return conn
 
 
 class _Err:
@@ -276,8 +310,10 @@ class _ElevenLabsConnection:
         keepalive_voice: str | None = None,
         keepalive_interval: float = _KEEPALIVE_INTERVAL,
         account: str | None = None,
+        model: str = "",
     ):
         self._uri = uri
+        self.model = model  # live metrics label
         # Account rotation only: the account this socket's key belongs to
         # (None = the residency key), and when it last finished an utterance.
         self.account = account
@@ -346,6 +382,8 @@ class _ElevenLabsConnection:
                         )
                         keepalive_task = asyncio.create_task(self._keepalive_loop(ws))
                     self.ready.set()
+                    LIVE.add(live.SOCKETS_OPEN, self.model, self.account, 1)
+                    LIVE.count(live.SOCKETS_CONNECTED)
                     ready_at = time.monotonic()
                     self.connected_at = ready_at
                     self.last_used = ready_at
@@ -361,6 +399,12 @@ class _ElevenLabsConnection:
                     keepalive_task.cancel()
                 self.ready.clear()
                 self.ws = None
+                if ready_at is not None:
+                    LIVE.add(live.SOCKETS_OPEN, self.model, self.account, -1)
+                    if not self._closed and not self.retiring:
+                        LIVE.count(live.SOCKETS_DROPPED)
+                elif not self._closed:
+                    LIVE.count(live.CONNECT_FAILURES)
                 if (
                     ready_at is not None
                     and time.monotonic() - ready_at >= _HEALTHY_CONNECTION_SECS
@@ -652,11 +696,33 @@ class ElevenLabsStreamPool:
             keepalive_voice=self._voice_id if self._ttd else None,
             keepalive_interval=self._keepalive_interval,
             account=account,
+            model=self._model_id,
         )
         conn._task = asyncio.create_task(conn.run())
         self._conns.append(conn)
         if self._refresh_interval and self._refresh_task is None:
             self._refresh_task = asyncio.create_task(self._refresh_loop())
+
+    def live_counts(self) -> dict[str, dict[str, int]]:
+        """Socket states and context slots for the live metrics endpoint."""
+        now = time.monotonic()
+        sockets = dict.fromkeys(
+            ("connecting", "reconnecting", "busy", "idle", "retiring", "suspect"), 0
+        )
+        total = used = 0
+        for c in self._conns:
+            if c.retiring:
+                sockets["retiring"] += 1
+            elif not c.ready.is_set():
+                key = "connecting" if c.connected_at is None else "reconnecting"
+                sockets[key] += 1
+            elif c.suspect_until > now:
+                sockets["suspect"] += 1
+            else:
+                sockets["busy" if c.inflight else "idle"] += 1
+                total += c.max_contexts
+                used += c.inflight
+        return {"sockets": sockets, "slots": {"total": total, "used": used}}
 
     def _available(self) -> list[_ElevenLabsConnection]:
         """Ready sockets with a free context slot (under the per-connection
@@ -795,6 +861,7 @@ class ElevenLabsStreamPool:
     def _retire(self, conn: _ElevenLabsConnection, now: float, why: str) -> None:
         conn.retiring = True
         conn.retiring_since = now
+        LIVE.count(live.SOCKETS_REFRESHED)
         logger.info(
             f"ElevenLabs TTD socket refresh: retiring the old socket ({why})"
             f"{self._where(conn)}"
@@ -835,6 +902,13 @@ class ElevenLabsStreamPool:
         return f" [{self._model_id} language={self._language}{account}]"
 
     async def acquire(self) -> _ElevenLabsConnection:
+        try:
+            return await self._acquire()
+        except SocketUnavailable:
+            LIVE.count(live.SOCKET_UNAVAILABLE)
+            raise
+
+    async def _acquire(self) -> _ElevenLabsConnection:
         """Return the least-loaded ready socket with a free context slot,
         opening a new one up to ``max_size`` if all are saturated/cold.
 
@@ -852,8 +926,7 @@ class ElevenLabsStreamPool:
             if avail:
                 self._acquire_failures = 0
                 conn = min(avail, key=lambda c: c.inflight)
-                conn.inflight += 1  # reserve the slot NOW (under the lock)
-                return conn
+                return _reserve(conn)  # the slot is taken NOW (under the lock)
 
         if time.monotonic() < self._cooldown_until:
             raise SocketUnavailable("elevenlabs WS unavailable (circuit open)")
@@ -865,8 +938,7 @@ class ElevenLabsStreamPool:
                 if avail:
                     self._acquire_failures = 0
                     conn = min(avail, key=lambda c: c.inflight)
-                    conn.inflight += 1
-                    return conn
+                    return _reserve(conn)
             await asyncio.sleep(0.05)
 
         self._acquire_failures += 1
@@ -906,8 +978,7 @@ class ElevenLabsStreamPool:
                     if avail:
                         self._account_failures[name] = 0
                         conn = min(avail, key=lambda c: c.inflight)
-                        conn.inflight += 1
-                        return conn
+                        return _reserve(conn)
                     # Sockets still on their FIRST connect — their slots are
                     # about to open. One reconnecting after a drop is not
                     # counted: its backoff can run to 30 s, and counting it
@@ -1097,6 +1168,7 @@ class ElevenLabsStreamPool:
                                 f"{_SUSPECT_SOCKET_SECS:.0f}s"
                                 f"{self._where(conn)}"
                             )
+                        LIVE.count(live.FIRST_AUDIO_TIMEOUTS)
                         raise FirstAudioTimeout(
                             "elevenlabs stream timed out waiting for first audio chunk"
                         )
@@ -1160,6 +1232,7 @@ class ElevenLabsStreamPool:
         finally:
             conn.contexts.pop(ctx_id, None)
             conn.inflight -= 1
+            LIVE.add(live.WS_IN_FLIGHT, conn.model, conn.account, -1)
             conn.last_used = time.monotonic()
             # Free the server-side context (best effort); the socket stays warm.
             try:

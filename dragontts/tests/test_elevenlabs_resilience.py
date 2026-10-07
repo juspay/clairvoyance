@@ -15,9 +15,11 @@ import time
 
 import pytest
 from loguru import logger
+from websockets.exceptions import ConnectionClosed
 
-from app.providers import elevenlabs_pool
+from app.providers import elevenlabs_live as live, elevenlabs_pool
 from app.providers.elevenlabs import ElevenLabsProvider
+from app.providers.elevenlabs_live import LIVE
 from app.providers.elevenlabs_pool import ElevenLabsStreamPool, SocketUnavailable
 from tests.test_elevenlabs_accounts import ENV, RecordingConnect, _budget
 from tests.test_elevenlabs_v3 import BASE, V3_MODEL, VOICE, FakeConnect, _wait_for
@@ -280,6 +282,8 @@ class ChaosConnect:
 @pytest.mark.parametrize("seed", [1, 2, 3])
 async def test_chaos_rotation_refresh_and_drops(monkeypatch, seed):
     rng = random.Random(seed)
+    open0 = LIVE.current(live.SOCKETS_OPEN)
+    ws0 = LIVE.current(live.WS_IN_FLIGHT)
     budget = _budget(rng=rng.random, a_max=12, b_max=8)  # 3 + 2 per worker
     connect = ChaosConnect(rng, drop_p=0.08)
     provider = ElevenLabsProvider(api_key="k", base_url=BASE)
@@ -337,10 +341,23 @@ async def test_chaos_rotation_refresh_and_drops(monkeypatch, seed):
     assert over_cap == [], "an account went past its per-worker share"
     assert all(r == b"\x05\x06" * 30 for r in ok), "every clip complete, none empty"
     assert connect.drops > 10, "the chaos actually happened"
-    # A sentence only fails if BOTH attempts were dropped (~0.6 %).
-    assert len(failed) <= 9, [type(e).__name__ for e in failed][:5]
+    # A sentence fails only when its attempt AND its retry both hit a drop,
+    # and one drop kills every sentence in flight on that socket, so the count
+    # tracks the drops: measured 2-14 of 300 across many runs (timing varies
+    # run to run even with a fixed seed). The starvation bug this guards
+    # against failed 136 of 300 — 30 (10 %) separates the two with margin.
+    assert len(failed) <= 30, (len(failed), [type(e).__name__ for e in failed][:5])
+    # ConnectionClosed: the retry's socket dropped between pick and send (the
+    # pool re-raises it as-is; the router maps it to the same 502). Rare —
+    # about 1 in 50 suite runs — but a legitimate failure under drops.
     assert all(
-        isinstance(e, (elevenlabs_pool.ProviderError, SocketUnavailable))
+        isinstance(
+            e, (elevenlabs_pool.ProviderError, SocketUnavailable, ConnectionClosed)
+        )
         for e in failed
-    )
+    ), [type(e).__name__ for e in failed]
     assert budget.open == {"india": 0, "global": 0}, "every slot returned"
+    # The live metrics gauges survive drops, retries and refreshes: nothing
+    # left counted as open or in flight once everything is closed.
+    assert LIVE.current(live.WS_IN_FLIGHT) == ws0
+    await _wait_for(lambda: LIVE.current(live.SOCKETS_OPEN) == open0)

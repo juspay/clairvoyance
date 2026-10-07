@@ -18,11 +18,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.api.v1 import cache as cache_api, health, tts
+from app.api.v1 import cache as cache_api, health, live, tts
 from app.cache.service import CacheService
 from app.core.config import settings
 from app.core.logging import logger
 from app.drain import decr_inflight, incr_inflight, wait_for_inflight_drain
+from app.providers import elevenlabs_live as live_metrics
+from app.providers.elevenlabs import ElevenLabsProvider
+from app.providers.elevenlabs_live import LIVE
 from app.providers.registry import ProviderRegistry
 from app.storage.filesystem import FilesystemBlobStore
 from app.storage.sqlite import SQLiteMetadataStore
@@ -79,6 +82,9 @@ async def lifespan(app: FastAPI):
 
     registry = ProviderRegistry()
     registry.build()
+    elevenlabs = registry.get("elevenlabs")
+    if settings.elevenlabs_live_metrics and isinstance(elevenlabs, ElevenLabsProvider):
+        LIVE.start(elevenlabs.live_pools, elevenlabs.account_budget)
     await registry.warm()  # pre-warm the Cartesia streaming socket pool
 
     app.state.metadata = metadata
@@ -248,6 +254,7 @@ async def lifespan(app: FastAPI):
         await metadata.checkpoint()  # compact the WAL before worker conns close
     except Exception:
         pass
+    LIVE.stop()
     await registry.aclose_all()
     executor.shutdown(wait=False, cancel_futures=True)  # releases worker sqlite conns
 
@@ -256,6 +263,21 @@ app = FastAPI(title="DragonTTS", version="0.1.0", lifespan=lifespan)
 app.include_router(tts.router)
 app.include_router(cache_api.router)
 app.include_router(health.router)
+app.include_router(live.router)
+
+
+# Incoming synthesis requests counted by the live metrics.
+_LIVE_TTS_PATHS = frozenset({"/tts/bytes", "/tts/stream"})
+
+
+def _live_request(delta: int) -> None:
+    """A synthesis request started (+1) or finished (-1). Never raises."""
+    try:
+        LIVE.level(live_metrics.REQUESTS_IN_FLIGHT, delta)
+        if delta > 0:
+            LIVE.event(live_metrics.REQUESTS)
+    except Exception as e:  # live metrics must never fail a request
+        logger.debug(f"live request metrics failed: {e}")
 
 
 class InflightTrackingMiddleware:
@@ -288,20 +310,29 @@ class InflightTrackingMiddleware:
             return
 
         incr_inflight()
+        # Synthesis requests also feed the live metrics (in flight + rate),
+        # counted until their last byte is sent, like the drain gauge.
+        tts = scope.get("path") in _LIVE_TTS_PATHS
+        if tts:
+            _live_request(1)
         done = False
+
+        def finish() -> None:
+            nonlocal done
+            done = True
+            decr_inflight()
+            if tts:
+                _live_request(-1)
 
         async def send_wrapper(message: Message) -> None:
             await send(message)
-            nonlocal done
             if done:
                 return
             mtype = message.get("type")
             if mtype == "http.response.body" and not message.get("more_body", False):
-                done = True
-                decr_inflight()
+                finish()
             elif mtype == "http.disconnect":
-                done = True
-                decr_inflight()
+                finish()
 
         try:
             await self.app(scope, receive, send_wrapper)
@@ -309,7 +340,7 @@ class InflightTrackingMiddleware:
             if not done:
                 # App returned/raised without a terminal body message — never
                 # double-decr.
-                decr_inflight()
+                finish()
 
 
 # add_middleware applies LIFO: the last-added middleware is outermost, so this
