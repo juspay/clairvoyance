@@ -2498,6 +2498,14 @@ class ConfigurationModel(BaseModel):
             "empty allowlists = feature inert."
         ),
     )
+    client_tools: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Tools the widget runs in the browser instead of the server, "
+            "e.g. ['get_page_context']. The turn pauses at the call and "
+            "resumes with the browser's answer. Empty = none published."
+        ),
+    )
 
     # --- Generative-UI primitive selection (per-template, per-merchant) ---
     ui_catalog: Optional["UiCatalogConfig"] = Field(

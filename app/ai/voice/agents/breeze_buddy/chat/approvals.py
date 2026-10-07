@@ -20,6 +20,10 @@ from typing import Any, Dict, List, Optional
 from app.ai.voice.agents.breeze_buddy.chat.history.block_codec import (
     tool_results_to_user_blocks,
 )
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    client_tool_result,
+    is_client_tool,
+)
 from app.ai.voice.agents.breeze_buddy.template.approval import (
     LLM_STATUS_DENIED,
     LLM_STATUS_NOT_DECIDED,
@@ -98,6 +102,7 @@ async def claim_tool_approval(
     tool_call_id: str,
     approved: bool,
     reason: Optional[str],
+    result: Any = None,
 ) -> ApprovalClaim:
     """Atomically claim a pending HITL decision (the load-bearing DB step).
 
@@ -107,6 +112,12 @@ async def claim_tool_approval(
     synthetic tool_result NOW so the history load sees a fully-answered batch;
     lazily expire other pending rows past their TTL; collect the still-pending
     sibling ids the resume turn must keep unanswered.
+
+    A client tool (see ``chat/tools/client_tools.py``) already ran in the
+    browser: its approve carries ``result``, which is persisted as the call's
+    tool_result the same way a denial's synthetic result is — nothing executes
+    server-side. ``result`` is ignored for every other tool, so a browser can
+    never stand in for a server tool's answer.
 
     Returns an :class:`ApprovalClaim`; the caller maps a non-``proceed``
     outcome to its transport (HTTP status vs RTVI event) and, on ``proceed``,
@@ -154,7 +165,10 @@ async def claim_tool_approval(
     )
 
     synthetic_result: Optional[Dict[str, Any]] = None
-    if not effective_approved:
+    if effective_approved and is_client_tool(claimed.function_name):
+        effective_approved = False
+        synthetic_result = client_tool_result(claimed.function_name, result)
+    elif not effective_approved:
         synthetic_result = (
             dict(EXPIRED_RESULT)
             if is_expired
@@ -163,6 +177,7 @@ async def claim_tool_approval(
                 "reason": reason or "the user did not approve this action",
             }
         )
+    if synthetic_result is not None:
         await insert_chat_message(
             session_id=session_id,
             role=ChatMessageRole.USER,

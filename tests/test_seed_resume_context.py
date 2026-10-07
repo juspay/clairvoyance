@@ -4,7 +4,8 @@
 """_seed_resume_context — tool-message adjacency invariant.
 
 The resume seed must be [role, task, system_block?, *history] with NO new
-user message: the replayed history tail is an assistant tool_calls message
+user message (the client-context user_block re-rides the last replayed user
+message instead): the replayed history tail is an assistant tool_calls message
 (+ tool results), and wedging the client-context system message between a
 tool_calls and its tool responses is rejected by OpenAI and breaks the
 Anthropic adapter's role merge (plan review, adversary:chat-design).
@@ -111,12 +112,16 @@ def test_resume_seed_places_system_block_before_history(monkeypatch):
         i for i, m in enumerate(messages) if m.get("content") == "SYSTEM_BLOCK"
     ]
     first_history_pos = next(
-        i for i, m in enumerate(messages) if m.get("content") == "refund my order"
+        i
+        for i, m in enumerate(messages)
+        if str(m.get("content")).endswith("refund my order")
     )
     assert len(system_positions) == 1
     assert system_positions[0] < first_history_pos
-    # user_block never rides a resume turn (there is no user message).
-    assert all("USER_BLOCK" not in str(m.get("content")) for m in messages)
+    # user_block rides the replayed user message, as the original turn sent
+    # it, so the resumed answer keeps the client facts (e.g. current page).
+    assert messages[first_history_pos]["content"] == "USER_BLOCK\n\nrefund my order"
+    assert sum("USER_BLOCK" in str(m.get("content")) for m in messages) == 1
     # And nothing sits between the tool_calls message and the seed's end.
     assert messages[-1].get("tool_calls")
 

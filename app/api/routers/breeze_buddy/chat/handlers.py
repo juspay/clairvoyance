@@ -972,7 +972,7 @@ async def approve_chat_tool_handler(
         # synthetic deny/timeout result + sibling sweep persisted under the
         # lock). The SAME claim the voice bridge uses — see claim_tool_approval.
         claim = await claim_tool_approval(
-            session_id, req.tool_call_id, req.approved, req.reason
+            session_id, req.tool_call_id, req.approved, req.reason, req.result
         )
         if claim.outcome == "not_found":
             raise HTTPException(

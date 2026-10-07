@@ -37,6 +37,11 @@ from app.ai.voice.agents.breeze_buddy.chat.steps.verification import (
     verification_error_envelope,
 )
 from app.ai.voice.agents.breeze_buddy.chat.tools.annotations import is_read_only
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    build_client_tool_functions,
+    client_tool_approval,
+    enabled_client_tools,
+)
 from app.ai.voice.agents.breeze_buddy.chat.tools.result_annotators import (
     run_result_annotators,
 )
@@ -178,6 +183,23 @@ class ToolDispatchMixin:
                 )
         if self._plan_enforcement:
             global_funcs.append(build_revise_plan_schema(self._revise_plan_handler))
+
+        # Client tools run in the browser: gating them sends each call down
+        # the approval path, where the widget's answer arrives as the result.
+        existing_names = {fn.name for fn in global_funcs}
+        for fn in build_client_tool_functions(
+            enabled_client_tools(self.template.configurations)
+            if self._client_tools
+            else []
+        ):
+            if fn.name in existing_names:
+                logger.warning(
+                    f"[client_tools] '{fn.name}' collides with an existing "
+                    "function; not published."
+                )
+                continue
+            global_funcs.append(fn)
+            self._approval_map[fn.name] = client_tool_approval()
 
         # Aggregate per-tool context-retention policy across every MCP server
         # the template declares. Used by llm_driver to compact stale

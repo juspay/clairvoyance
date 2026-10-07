@@ -5,6 +5,7 @@ Outcome reuses the voice outcome convention (free-form string), so
 analytics over voice + chat use the same field semantics.
 """
 
+import json
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
@@ -83,6 +84,10 @@ class ToolApproval(BaseModel):
     expires_at: datetime
 
 
+# Page text is the bulk of a client tool answer; the widget trims to fit.
+CLIENT_TOOL_RESULT_MAX_BYTES = 16_384
+
+
 class ApproveToolRequest(BaseModel):
     """Body of ``POST .../session/{id}/approval`` (all three auth surfaces)."""
 
@@ -93,6 +98,22 @@ class ApproveToolRequest(BaseModel):
         max_length=500,
         description="Optional free-text reason shown to the LLM on denial.",
     )
+    result: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "A client tool's answer, run in the browser. Becomes the call's "
+            "tool_result; ignored for server tools."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _cap_result_size(self) -> "ApproveToolRequest":
+        if (
+            self.result is not None
+            and len(json.dumps(self.result, default=str)) > CLIENT_TOOL_RESULT_MAX_BYTES
+        ):
+            raise ValueError(f"result exceeds {CLIENT_TOOL_RESULT_MAX_BYTES} bytes")
+        return self
 
 
 class ChatSession(BaseModel):

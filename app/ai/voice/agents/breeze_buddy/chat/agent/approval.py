@@ -397,11 +397,12 @@ class ApprovalTurnMixin:
         tool_calls message (+ tool results), and wedging a system message
         between an assistant tool_calls and its tool responses is rejected
         by OpenAI and breaks the Anthropic adapter's role merge. The
-        ``user_block`` variant is dropped entirely — it rides user turns
-        and a resume turn has none.
+        ``user_block`` is re-attached to the last user message, as the
+        original turn sent it: the resumed answer must still know e.g. which
+        page the shopper is on.
         """
         role_messages, task_messages = self._render_node_messages(node)
-        _user_block, system_block = render_client_context(
+        user_block, system_block = render_client_context(
             self.agent_state,
             self._client_context_config,
             self._context_placement,
@@ -414,6 +415,13 @@ class ApprovalTurnMixin:
             messages.append(kb_message.message)
         if system_block:
             messages.append({"role": "system", "content": system_block})
+        if user_block:
+            history = list(history)
+            for i in range(len(history) - 1, -1, -1):
+                msg = history[i]
+                if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                    history[i] = {**msg, "content": f"{user_block}\n\n{msg['content']}"}
+                    break
         messages.extend(history)
         return LLMContext(
             messages=cast(List[LLMContextMessage], messages),

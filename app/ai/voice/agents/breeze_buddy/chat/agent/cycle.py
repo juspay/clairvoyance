@@ -62,6 +62,7 @@ from app.ai.voice.agents.breeze_buddy.chat.steps.labels import (
     summarize_step_result,
 )
 from app.ai.voice.agents.breeze_buddy.chat.tools.annotations import is_read_only
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import is_client_tool
 from app.ai.voice.agents.breeze_buddy.chat.ui.healer import (
     HealerContext,
     make_healer_fn,
@@ -982,6 +983,21 @@ class CycleLoopMixin:
                         expiry_secs=approval_cfg.chat_expiry_secs,
                     )
                     pending_ids.append(call.tool_call_id)
+                    if is_client_tool(call.function_name):
+                        # No card: the widget runs it and answers on the
+                        # approval endpoint with ``result``.
+                        yield SSEEvent(
+                            event="client_tool_requested",
+                            data={
+                                "tool_call_id": call.tool_call_id,
+                                "name": call.function_name,
+                                "args": injected_args,
+                                "expires_at": (
+                                    row.expires_at.isoformat() if row else None
+                                ),
+                            },
+                        )
+                        continue
                     yield SSEEvent(
                         event="function_approval_requested",
                         data={

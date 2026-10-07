@@ -426,6 +426,12 @@
         "trusted_facts": []
       }
     },
+    "client_tools": {
+      "description": "Tools the widget runs in the browser instead of the server. The turn pauses at the call; the widget answers on the approval endpoint with a result. Known: get_page_context (url, title, page type, product, main text of the open page). Empty = none published.",
+      "example": [
+        "get_page_context"
+      ]
+    },
     "quick_replies": {
       "description": "Quick-reply chicklet buttons shown on widget open. Each entry has 'label' (button text) and optional 'value' (payload sent to backend; defaults to label). Empty list = no chicklets, normal text composer shown.",
       "example": [

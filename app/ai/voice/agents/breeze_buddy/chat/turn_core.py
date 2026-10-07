@@ -174,6 +174,7 @@ async def run_chat_turn(
     llm: Optional[Any] = None,
     context_placement: Optional[str] = None,
     internal: bool = False,
+    client_tools: bool = True,
 ) -> AsyncIterator[SSEEvent]:
     """Drive one chat-brain turn for ``session_id`` and yield its SSE events.
 
@@ -298,6 +299,7 @@ async def run_chat_turn(
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
         custom_components=model_renderable(await resolve_custom_components(template)),
+        client_tools=client_tools,
     )
     async for event in agent.run_turn(
         user_content=user_content,
@@ -318,6 +320,7 @@ async def run_chat_approval_continuation(
     synthetic_result: Optional[Dict[str, Any]],
     pending_sibling_ids: List[str],
     llm: Optional[Any] = None,
+    client_tools: bool = True,
 ) -> AsyncIterator[SSEEvent]:
     """Drive the resume turn AFTER a HITL decision has been claimed.
 
@@ -395,6 +398,7 @@ async def run_chat_approval_continuation(
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
         custom_components=model_renderable(await resolve_custom_components(template)),
+        client_tools=client_tools,
     )
     async for event in agent.run_approval_turn(
         approval=claimed,
@@ -416,6 +420,7 @@ async def run_chat_approval_turn(
     approved: bool,
     reason: Optional[str] = None,
     llm: Optional[Any] = None,
+    client_tools: bool = True,
 ) -> AsyncIterator[SSEEvent]:
     """Self-contained HITL decision turn for the voice bridge.
 
@@ -469,6 +474,7 @@ async def run_chat_approval_turn(
         synthetic_result=claim.synthetic_result,
         pending_sibling_ids=claim.pending_sibling_ids,
         llm=llm,
+        client_tools=client_tools,
     ):
         yield event
 
