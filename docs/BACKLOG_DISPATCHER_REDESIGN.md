@@ -71,19 +71,19 @@ Single leader-elected promoter task runs in every pod; only the leader acts. Red
 ids = ZRANGEBYSCORE bb:schedule:leads 0 now LIMIT 0 500
 for id in ids:
   if ZREM bb:schedule:leads id == 1:
-    LPUSH bb:ready:leads id
+    ZADD bb:ready:leads:z NX <promote order> id
 ```
 
 `ZREM`-returns-0 absorbs any split-brain during leader hand-off. Bounded batch caps work per tick so a 100k-lead surge drains at `500 × 5/sec = 2500/sec` instead of one blocking scan.
 
-Single global ready list in v1. Sharding by reseller is **deferred** until production traffic shows tenant starvation; channel semaphores already provide per-number (≈per-tenant) isolation.
+Single global ready queue in v1: a ZSET scored by promote order, so it stays FIFO and a lead is in it at most once. The backlog reconciler cannot see a lead waiting here (off the schedule, not yet locked) and skips any lead found in it; as a LIST it re-added such leads and the queue held two copies. Sharding by reseller is **deferred** until production traffic shows tenant starvation; channel semaphores already provide per-number (≈per-tenant) isolation.
 
 ### Plane 4 — Dispatch
 
 Workers run on every pod as long-lived asyncio tasks. Loop:
 
 ```text
-lead_id = BLPOP bb:ready:leads timeout=30s
+lead_id = BZPOPMIN bb:ready:leads:z timeout=30s
 RPUSH bb:processing:leads:{worker_uuid} lead_id     # crash recovery
 lead = SELECT FROM lead_call_tracker WHERE id = lead_id
 if lead.status != BACKLOG: drop
@@ -136,7 +136,7 @@ Four reconcilers registered on the existing `BackgroundTaskScheduler` (`app/core
 
 | Reconciler | Interval | Purpose |
 |---|---|---|
-| `reconcile_backlog_to_zset` | 60s | Scan `WHERE status='BACKLOG' AND next_attempt_at <= NOW() + INTERVAL '2 minutes' AND is_locked=FALSE`. `ZADD` any missing from `bb:schedule:leads`. Heals ingest-time `ZADD` losses and Redis flushes. |
+| `reconcile_backlog_to_zset` | 60s | Scan `WHERE status='BACKLOG' AND next_attempt_at <= NOW() + INTERVAL '2 minutes' AND is_locked=FALSE`. `ZADD` any missing from `bb:schedule:leads` and not waiting in `bb:ready:leads:z`. Heals ingest-time `ZADD` losses and Redis flushes. |
 | `reap_stuck_processing_lists` | 30s | For each `bb:processing:leads:{worker_uuid}` whose worker heartbeat (`bb:worker:heartbeat:{uuid}`, TTL 60s) has expired: read DB status. If `PROCESSING`, drop the tracking entry. If `BACKLOG`, re-`ZADD` and `LREM`. |
 | `reconcile_channel_tokens` | 60s | For each active telephony number: if `EXISTS bb:channel:{id}` is 0, `RPUSH` all M tokens (cold-start initialisation). Else compute `M − in_flight_calls_from_db` vs `LLEN` and top up or trim. **This is the only place channel state is created or healed.** No boot-time init logic anywhere else. |
 | `clean_stale_bb_locks` | 300s | `UPDATE lead_call_tracker SET is_locked=FALSE WHERE is_locked=TRUE AND locked_at < NOW() − INTERVAL '10 minutes'`. |

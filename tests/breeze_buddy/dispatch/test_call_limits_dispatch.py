@@ -18,7 +18,6 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     channel_tokens_available,
     init_channel_semaphore,
 )
-from app.ai.voice.agents.breeze_buddy.dispatch.keys import READY_LIST
 from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
 from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
     CallLimitUnavailable,
@@ -26,7 +25,7 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
 )
 from app.schemas import ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.merchants import CallLimit
-from tests.breeze_buddy.dispatch.conftest import make_lead
+from tests.breeze_buddy.dispatch.conftest import make_lead, push_ready
 
 RULE = CallLimit(max_calls=2, window_hours=48)
 
@@ -91,7 +90,7 @@ def limiter(harness, monkeypatch):
 async def _dispatch(harness, fake_redis, lead):
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
     await w.Worker(worker_uuid="w-cl")._iteration(session=None)
 
 

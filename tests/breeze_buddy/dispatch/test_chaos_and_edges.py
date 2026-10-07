@@ -58,7 +58,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     init_channel_semaphore,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
-    READY_LIST,
+    READY_ZSET,
     SCHEDULE_ZSET,
     processing_list_for,
     worker_heartbeat_key,
@@ -70,6 +70,7 @@ from tests.breeze_buddy.dispatch.conftest import (
     AlwaysLeader,
     CallRecorder,
     make_lead,
+    push_ready,
 )
 
 # ===========================================================================
@@ -93,7 +94,7 @@ async def test_promoter_lua_no_movement_when_all_scores_in_future(fake_redis):
 
     assert moved == 0
     assert await fake_redis.client.zcard(SCHEDULE_ZSET) == 2
-    assert await fake_redis.client.llen(READY_LIST) == 0
+    assert await fake_redis.client.zcard(READY_ZSET) == 0
 
 
 async def test_promoter_lua_moves_only_due_leads(fake_redis):
@@ -110,7 +111,7 @@ async def test_promoter_lua_moves_only_due_leads(fake_redis):
     assert moved == 2
     assert await fake_redis.client.zcard(SCHEDULE_ZSET) == 1
     assert "future-1" in fake_redis.client.zsets[SCHEDULE_ZSET]
-    assert await fake_redis.client.llen(READY_LIST) == 2
+    assert await fake_redis.client.zcard(READY_ZSET) == 2
 
 
 async def test_promoter_lua_empty_schedule_returns_zero(fake_redis):
@@ -144,7 +145,7 @@ async def test_promoter_lua_zrem_race_loser_does_not_lpush(fake_redis, monkeypat
 
     # Did NOT move (ZREM lost the race ⇒ no LPUSH).
     assert moved == 0
-    assert await fake_redis.client.llen(READY_LIST) == 0
+    assert await fake_redis.client.zcard(READY_ZSET) == 0
 
 
 async def test_promoter_lua_script_body_is_stable(fake_redis):
@@ -154,8 +155,10 @@ async def test_promoter_lua_script_body_is_stable(fake_redis):
     this test.
     """
     # Required commands in order.
-    for cmd in ("ZRANGEBYSCORE", "ZREM", "RPUSH"):
+    for cmd in ("ZRANGEBYSCORE", "ZREM", "ZADD"):
         assert cmd in _PROMOTE_LUA, f"Promoter script missing {cmd}"
+    # NX: a lead already in ready must not be added twice or lose its place.
+    assert "'NX'" in _PROMOTE_LUA
 
     # Single KEYS[1]/KEYS[2] pair, single ARGV[1]/ARGV[2] pair.
     assert "KEYS[1]" in _PROMOTE_LUA and "KEYS[2]" in _PROMOTE_LUA
@@ -195,10 +198,10 @@ def _extract_hashtag(key: str) -> str:
 def test_promoter_lua_cluster_compat_static_check():
     """
     Multi-key Lua scripts under Redis cluster need shared {hashtags}.
-    The promoter script uses 2 keys: SCHEDULE_ZSET and READY_LIST.
+    The promoter script uses 2 keys: SCHEDULE_ZSET and READY_ZSET.
 
-    Current state: SCHEDULE_ZSET=``bb:schedule:leads`` and READY_LIST=
-    ``bb:ready:leads`` have NO ``{hashtag}`` so they hash by full key
+    Current state: SCHEDULE_ZSET=``bb:schedule:leads`` and READY_ZSET=
+    ``bb:ready:leads:z`` have NO ``{hashtag}`` so they hash by full key
     name and almost certainly land in different slots — CROSSSLOT error
     in cluster mode. Single-node Redis is unaffected.
 
@@ -206,7 +209,7 @@ def test_promoter_lua_cluster_compat_static_check():
     xfail marker is the gate for declaring cluster-mode support.
     """
     from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
-        READY_LIST,
+        READY_ZSET,
         SCHEDULE_ZSET,
     )
 
@@ -215,7 +218,7 @@ def test_promoter_lua_cluster_compat_static_check():
         pytest.skip("Single-key script — cluster-safe by definition")
 
     schedule_tag = _extract_hashtag(SCHEDULE_ZSET)
-    ready_tag = _extract_hashtag(READY_LIST)
+    ready_tag = _extract_hashtag(READY_ZSET)
 
     if schedule_tag == ready_tag and "{" in SCHEDULE_ZSET:
         # Cluster-compatible: explicit hashtags match.
@@ -279,7 +282,7 @@ async def test_worker_iteration_propagates_db_exception_with_cleanup(
     harness.get_lead_by_id_raises = Exception("connection pool exhausted")
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-db-fail")
 
@@ -305,7 +308,7 @@ async def test_worker_loop_recovers_from_db_exception(harness, fake_redis):
     harness.add_lead(lead)
     harness.get_lead_by_id_raises = Exception("pool exhausted")
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     # Mimic _loop's try/except wrapper around _iteration.
     worker = w.Worker(worker_uuid="w-loop-recover")
@@ -498,7 +501,7 @@ async def test_provider_rate_limit_exception_releases_resources(harness, fake_re
     w.get_voice_provider = harness.get_voice_provider
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-429")
     await worker._iteration(session=None)
@@ -520,7 +523,7 @@ async def test_provider_exception_backoff_scales_with_attempt_count(
     w.get_voice_provider = harness.get_voice_provider
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-burst-5")
     await worker._iteration(session=None)
@@ -538,7 +541,7 @@ async def test_provider_exception_backoff_caps_at_60s(harness, fake_redis):
     w.get_voice_provider = harness.get_voice_provider
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-burst-cap")
     await worker._iteration(session=None)
@@ -558,7 +561,7 @@ async def test_burst_of_provider_failures_all_release_tokens(harness, fake_redis
     leads = [make_lead(f"lead-burst-{i}") for i in range(3)]
     for lead in leads:
         harness.add_lead(lead)
-        await fake_redis.client.rpush(READY_LIST, lead.id)
+        await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-burst")
     for _ in range(3):

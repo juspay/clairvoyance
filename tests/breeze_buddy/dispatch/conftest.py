@@ -30,6 +30,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch import (
     reconcilers as recon_mod,
     worker as worker_mod,
 )
+from app.ai.voice.agents.breeze_buddy.dispatch.keys import READY_ZSET
 from app.ai.voice.agents.breeze_buddy.managers.calls import NumberAcquire
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
 from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
@@ -77,14 +78,26 @@ class FakeRedisClient:
 
     # -- ZSET ops -----------------------------------------------------------
 
-    async def zadd(self, key: str, mapping: Dict[str, float]) -> int:
+    async def zadd(self, key: str, mapping: Dict[str, float], nx: bool = False) -> int:
         z = self.zsets.setdefault(key, {})
         added = 0
         for m, s in mapping.items():
             if m not in z:
                 added += 1
+            elif nx:
+                continue
             z[m] = float(s)
         return added
+
+    async def bzpopmin(
+        self, key: str, timeout: int = 0
+    ) -> Optional[Tuple[str, str, float]]:
+        z = self.zsets.get(key, {})
+        if not z:
+            return None
+        score, member = min((s, m) for m, s in z.items())
+        del z[member]
+        return (key, member, score)
 
     async def zrem(self, key: str, *members: str) -> int:
         z = self.zsets.get(key, {})
@@ -275,18 +288,20 @@ class FakeRedisService:
         leader-election Lua bodies by content. Tests don't care about Lua
         execution — they care about the resulting state.
         """
-        if "ZRANGEBYSCORE" in script and "ZREM" in script and "RPUSH" in script:
+        if "ZRANGEBYSCORE" in script and "ZREM" in script and "ZADD" in script:
             schedule_key, ready_key = keys
             now_ms = int(args[0])
             batch = int(args[1])
             ids = await self.client.zrangebyscore(
                 schedule_key, 0, now_ms, start=0, num=batch
             )
+            ready = self.client.zsets.get(ready_key, {})
+            base = max([now_ms * 1000.0, *ready.values()])
             moved = 0
-            for i in ids:
+            for pos, i in enumerate(ids, start=1):
                 removed = await self.client.zrem(schedule_key, i)
                 if removed == 1:
-                    await self.client.rpush(ready_key, i)
+                    await self.client.zadd(ready_key, {i: base + pos}, nx=True)
                     moved += 1
             return moved
 
@@ -309,6 +324,22 @@ class FakeRedisService:
             return 0
 
         raise NotImplementedError(f"FakeRedisService.run_script: {script}")
+
+
+async def push_ready(fake: FakeRedisService, *lead_ids: str) -> None:
+    """Queue leads on the ready ZSET behind whatever is already waiting, as
+    the promoter does (ZADD NX, increasing score)."""
+    z = fake.client.zsets.setdefault(READY_ZSET, {})
+    nxt = max(z.values(), default=0.0)
+    for lead_id in lead_ids:
+        nxt += 1
+        await fake.client.zadd(READY_ZSET, {lead_id: nxt}, nx=True)
+
+
+def ready_members(fake: FakeRedisService) -> List[str]:
+    """The ready ZSET in pop order (lowest score first)."""
+    z = fake.client.zsets.get(READY_ZSET, {})
+    return [m for _s, m in sorted((s, m) for m, s in z.items())]
 
 
 @pytest.fixture

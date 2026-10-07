@@ -9,8 +9,8 @@ Redis usage in the app.
 # score = next_attempt_at unix-ms, member = lead_id
 SCHEDULE_ZSET = "bb:schedule:leads"
 
-# Global FIFO list of leads ready to dispatch right now.
-READY_LIST = "bb:ready:leads"
+# Global FIFO queue of leads ready to dispatch right now.
+READY_ZSET = "bb:ready:leads:z"
 
 # Per-worker reliability list. Workers RPUSH their in-flight lead_id here
 # so the reaper can recover work from a dead worker.

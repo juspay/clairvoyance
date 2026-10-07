@@ -29,6 +29,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     PROCESSING_LIST_PREFIX,
     PROMOTER_LEADER,
+    READY_ZSET,
     SCHEDULE_ZSET,
     worker_heartbeat_key,
 )
@@ -60,7 +61,11 @@ async def reconcile_backlog_to_zset() -> None:
     """
     Find BACKLOG rows that should be on ``bb:schedule:leads`` but aren't,
     and ZADD them. Heals lost ingest events, Redis flushes, and
-    worker-crash-before-RPUSH-processing windows.
+    worker-crash-before-RPUSH-processing windows. A lead already in the
+    ready ZSET is not lost, only waiting for a worker: skip it, or the
+    promoter would hand it out a second time. A lead a worker popped after
+    the DB read is still re-added; the worker's due check on the locked row
+    drops that copy.
 
     Bounded by ``BB_RECONCILE_BACKLOG_LIMIT`` (dynamic) per run; far-future
     leads are handled by subsequent ticks as their firing time approaches.
@@ -81,10 +86,15 @@ async def reconcile_backlog_to_zset() -> None:
     fixed = 0
     for lead_id, _reseller_id, score_ms in leads:
         try:
-            existing = await client.zscore(SCHEDULE_ZSET, lead_id)
-            if existing is None:
-                await client.zadd(SCHEDULE_ZSET, {lead_id: score_ms})
-                fixed += 1
+            # Schedule first: the promoter moves schedule -> ready atomically,
+            # so a lead missing here is already in ready by the next read.
+            # The other order misses a lead promoted between the two reads.
+            if await client.zscore(SCHEDULE_ZSET, lead_id) is not None:
+                continue
+            if await client.zscore(READY_ZSET, lead_id) is not None:
+                continue
+            await client.zadd(SCHEDULE_ZSET, {lead_id: score_ms})
+            fixed += 1
         except Exception as e:  # noqa: BLE001
             logger.warning(f"reconcile_backlog_to_zset: ZADD failed for {lead_id}: {e}")
 

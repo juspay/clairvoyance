@@ -15,6 +15,7 @@ import pytest
 
 from app.ai.voice.agents.breeze_buddy.dispatch import reconcilers as rc
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
+    READY_ZSET,
     SCHEDULE_ZSET,
     channel_key,
 )
@@ -59,6 +60,35 @@ async def test_reconcile_backlog_skips_already_present(fake_redis, monkeypatch):
     # lead-A keeps its original score (we only ZADD missing members).
     assert fake_redis.client.zsets[SCHEDULE_ZSET]["lead-A"] == 500
     assert fake_redis.client.zsets[SCHEDULE_ZSET]["lead-B"] == 2000
+
+
+async def test_reconcile_backlog_sees_a_lead_promoted_mid_check(
+    fake_redis, monkeypatch
+):
+    """The promoter moves a lead schedule -> ready between the reconciler's
+    two reads. Reading the schedule first still sees it, so it is not
+    re-added (the other order missed it in both places)."""
+    fake_redis.client.zsets[SCHEDULE_ZSET] = {"lead-A": 1000}
+
+    async def _fake_get(*a, **kw):
+        return [("lead-A", "res-1", 1000)]
+
+    monkeypatch.setattr(rc, "get_unscheduled_backlog_leads", _fake_get)
+    zscore = fake_redis.client.zscore
+
+    async def _zscore_then_promote(key, member):
+        score = await zscore(key, member)
+        if member in fake_redis.client.zsets.get(SCHEDULE_ZSET, {}):
+            del fake_redis.client.zsets[SCHEDULE_ZSET][member]
+            fake_redis.client.zsets.setdefault(READY_ZSET, {})[member] = 1.0
+        return score
+
+    monkeypatch.setattr(fake_redis.client, "zscore", _zscore_then_promote)
+
+    await rc.reconcile_backlog_to_zset()
+
+    assert "lead-A" not in fake_redis.client.zsets.get(SCHEDULE_ZSET, {})
+    assert "lead-A" in fake_redis.client.zsets[READY_ZSET]
 
 
 async def test_reconcile_backlog_handles_empty_input(fake_redis, monkeypatch):
