@@ -37,6 +37,11 @@ from app.ai.voice.agents.breeze_buddy.chat.steps.verification import (
     verification_error_envelope,
 )
 from app.ai.voice.agents.breeze_buddy.chat.tools.annotations import is_read_only
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    CLIENT_TOOL_APPROVAL,
+    CLIENT_TOOL_KEEP_PATHS,
+    build_client_tool_schemas,
+)
 from app.ai.voice.agents.breeze_buddy.chat.tools.result_annotators import (
     run_result_annotators,
 )
@@ -179,6 +184,21 @@ class ToolDispatchMixin:
         if self._plan_enforcement:
             global_funcs.append(build_revise_plan_schema(self._revise_plan_handler))
 
+        # Client tools run in the browser: gating them sends each call down
+        # the approval path, where the widget's answer arrives as the result.
+        existing_names = {fn.name for fn in global_funcs}
+        published_client_tools: List[str] = []
+        for fn in build_client_tool_schemas(self._client_tool_names):
+            if fn.name in existing_names:
+                logger.warning(
+                    f"[client_tools] '{fn.name}' collides with an existing "
+                    "function; not published."
+                )
+                continue
+            global_funcs.append(fn)
+            self._approval_map[fn.name] = CLIENT_TOOL_APPROVAL
+            published_client_tools.append(fn.name)
+
         # Aggregate per-tool context-retention policy across every MCP server
         # the template declares. Used by llm_driver to compact stale
         # tool_result blocks in the messages array before each LLM call —
@@ -199,6 +219,11 @@ class ToolDispatchMixin:
                     tool_retention.update(server.tool_context_retention)
                 if server.tool_context_projection:
                     tool_projection.update(server.tool_context_projection)
+        # A page read goes stale once the shopper moves: keep only the newest
+        # in full, older ones shrink to which page and product they were.
+        for name in published_client_tools:
+            tool_retention[name] = "last_turn_only"
+            tool_projection[name] = CLIENT_TOOL_KEEP_PATHS
 
         return _PreparedTools(
             flow_config=flow_config,
