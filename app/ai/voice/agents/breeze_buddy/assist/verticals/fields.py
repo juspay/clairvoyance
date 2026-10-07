@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
 
 # Field key → its values, in the order they were found. What a template keeps
 # and what the merchant edits.
@@ -29,10 +29,16 @@ FieldKind = Literal["line", "text", "list", "phone", "email"]
 _MAX_VALUES_PER_FIELD = 12
 # Longest value kept; research caps a note at the same length.
 _MAX_VALUE_CHARS = 500
+# A merchant's own edits may be longer: a hand-written section is often
+# more than research would ever return, and must not be cut on a save.
+_MAX_EDIT_VALUES = 50
+_MAX_EDIT_CHARS = 4000
 # A Markdown heading mark: "#"s and a space, anywhere ("Sale on. ## Operating
 # principles", "x## ..."). A lone "#" right after a letter or digit is not one
 # ("C# shop"), nor is "#1" or "#MadeInIndia" (no space after).
 _HEADING = re.compile(r"(?<![A-Za-z0-9])#+\s+|#{2,}\s+")
+# A question and its answer, written "Q: ... A: ...".
+_FAQ_QUESTION = re.compile(r"Q:\s*(.+?)\s+A:")
 
 
 @dataclass(frozen=True)
@@ -82,11 +88,12 @@ def fields_from_notes(
     """Research notes, as ``(note name, value)`` pairs, sorted into the form:
     a note fills the ``from_research`` field of the same name.
 
-    A one-value field takes the first note that fills it, except a ``text``
-    one, which joins its notes into one paragraph (research returns short
-    pieces: "Polos", "Shirts"). A many-value field keeps up to
-    ``_MAX_VALUES_PER_FIELD``, in order, without repeats (case, spaces and
-    punctuation ignored). Each value goes through ``clean_value``. Notes no
+    A one-value field takes the first note that fills it; a ``text`` one the
+    first that is a whole sentence (four words or more), the longest until
+    then, never a join of menu words ("Jumpsuits", "Leggings"). A many-value
+    field keeps up to ``_MAX_VALUES_PER_FIELD``, in order, without repeats
+    (case, spaces and punctuation ignored), and one answer per question: the
+    longer one ("14 days from delivery" over "Easy returns"). Each value goes through ``clean_value``. Notes no
     field takes, and values with no letter or digit ("...", "-"), are dropped.
     """
     out: AssistFields = {}
@@ -97,7 +104,21 @@ def fields_from_notes(
             continue
         values = out.setdefault(spec.key, [])
         if spec.kind == "text":
-            _join(values, value)
+            if not values or (
+                len(values[0].split()) < 4
+                and len(value) > len(values[0])
+                and _same(value) != _same(values[0])
+            ):
+                values[:] = [value]
+            continue
+        asked = _faq_question(value)
+        same = next(
+            (i for i, v in enumerate(values) if asked and _faq_question(v) == asked),
+            None,
+        )
+        if same is not None:
+            if len(value) > len(values[same]):
+                values[same] = value
             continue
         limit = _MAX_VALUES_PER_FIELD if spec.many else 1
         if len(values) < limit and _same(value) not in map(_same, values):
@@ -105,7 +126,51 @@ def fields_from_notes(
     return out
 
 
-def clean_value(raw: object) -> str:
+def apply_edits(
+    current: Mapping[str, Sequence[str]],
+    edits: Mapping[str, Sequence[str]],
+    profile: FieldProfile,
+) -> AssistFields:
+    """The fields after a merchant's edits.
+
+    Only fields the form has can be edited; ``ValueError`` names any other.
+    A field not sent keeps its value, so a console that does not know a field
+    yet cannot blank it; a field sent empty is cleared. A ``text`` field keeps
+    its line breaks and paragraphs (a two-line greeting); any other is made
+    one line. Each line goes through ``clean_value``, the rule research
+    findings go through, and repeats are dropped. A value too long or a list
+    too long is refused, never cut.
+    """
+    out: AssistFields = {key: list(values) for key, values in current.items()}
+    for key, values in edits.items():
+        spec = profile.spec(key)
+        if spec is None:
+            raise ValueError(f"{key} cannot be edited")
+        cleaned: List[str] = []
+        for raw in values:
+            # Refused before cleaning, which would cut it to the limit.
+            if len(str(raw or "")) > _MAX_EDIT_CHARS:
+                raise ValueError(f"{key} is longer than {_MAX_EDIT_CHARS} characters")
+            lines = [
+                clean_value(line, limit=_MAX_EDIT_CHARS)
+                for line in str(raw or "").splitlines()
+            ]
+            if spec.kind == "text":
+                value = "\n".join(lines).strip("\n")
+            else:
+                value = " ".join(line for line in lines if line)
+            if len(value) > _MAX_EDIT_CHARS:
+                raise ValueError(f"{key} is longer than {_MAX_EDIT_CHARS} characters")
+            if value and _same(value) not in map(_same, cleaned):
+                cleaned.append(value)
+        limit = _MAX_EDIT_VALUES if spec.many else 1
+        if len(cleaned) > limit:
+            raise ValueError(f"{key} takes at most {limit}")
+        out[key] = cleaned
+    return out
+
+
+def clean_value(raw: object, *, limit: int = _MAX_VALUE_CHARS) -> str:
     """One value as it may reach a prompt, from research or from the merchant.
 
     Every brace and every heading mark (``#``s then a space) removed, so a
@@ -113,13 +178,12 @@ def clean_value(raw: object) -> str:
     placeholder (``{openai_api_key}`` would be filled with a secret), start a
     prompt heading, or carry the "## Operating principles" line a prompt is
     split on. "#1 in India", "#MadeInIndia" and "C# shop" keep their ``#``.
-    Spaces collapsed; trimmed to ``_MAX_VALUE_CHARS``.
+    Spaces collapsed; trimmed to ``limit`` characters.
     """
     # Control characters become spaces first: "##\x01 x" would hide its mark
     # here and turn back into a heading once a later step drops the \x01.
     text = "".join(
-        " " if unicodedata.category(ch) == "Cc" else ch
-        for ch in str(raw or "")[:_MAX_VALUE_CHARS]
+        " " if unicodedata.category(ch) == "Cc" else ch for ch in str(raw or "")[:limit]
     )
     text = text.replace("{", "").replace("}", "")
     return " ".join(_HEADING.sub("", text).split())
@@ -130,22 +194,10 @@ def _same(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
-def _join(values: List[str], value: str) -> None:
-    """Add the new parts of ``value`` ("Shirts, Caps" adds "Caps" after
-    "Polos, Shirts") to the one paragraph in ``values``, whole or not at all."""
-    parts = values[0].split(", ") if values else []
-    seen = {_same(part) for part in parts}
-    added = False
-    # A part already there, or one with no letter or digit ("-"), adds nothing.
-    for part in value.rstrip(" .;,").split(", "):
-        key = _same(part)
-        if key and key not in seen:
-            seen.add(key)
-            parts.append(part)
-            added = True
-    joined = ", ".join(parts)
-    if added and len(joined) <= _MAX_VALUE_CHARS:
-        values[:] = [joined]
+def _faq_question(value: str) -> str:
+    """The question of a "Q: ... A: ..." value, as compared; "" for any other."""
+    asked = _FAQ_QUESTION.match(value)
+    return _same(asked.group(1)) if asked else ""
 
 
 __all__ = [
@@ -154,6 +206,7 @@ __all__ = [
     "FieldProfile",
     "FieldSection",
     "FieldSpec",
+    "apply_edits",
     "clean_value",
     "fields_from_notes",
 ]

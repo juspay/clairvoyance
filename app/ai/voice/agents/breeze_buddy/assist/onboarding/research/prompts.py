@@ -7,12 +7,18 @@ from typing import Any, Dict
 
 # The only fields a fact may be recorded under, and what each one means.
 FIELDS: Dict[str, str] = {
-    "brand_line": "Who the store is and what stands behind it, in one line.",
-    "what_we_sell": "What the store sells, in its own words.",
-    "hero_items": "Names of items the store features or calls best sellers.",
+    "what_we_sell": "What the store sells, in one sentence in its own words.",
+    "hero_items": (
+        "Names of items the store features or calls best sellers: an item's "
+        "own name, never a category or menu link ('Leggings')."
+    ),
     "offer_items": "Offers, discounts or sales running now.",
-    "trust_items": "Guarantees, certifications, years in business, awards.",
-    "vocabulary": "Words the store uses for its goods, and its tone.",
+    "trust_items": (
+        "Why shoppers can trust the store: guarantees, certifications, "
+        "awards, years in business, who founded it and why. Never shipping, "
+        "returns, payment or copyright lines."
+    ),
+    "vocabulary": "How the store talks to shoppers, its tone, in one sentence.",
     "tagline": "The store's tagline or slogan.",
     "compliance": "Legal or compliance notes shoppers must be told.",
     "whatsapp": "WhatsApp number, with country code.",

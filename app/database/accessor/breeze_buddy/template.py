@@ -32,6 +32,7 @@ from app.database.queries.breeze_buddy.template import (
     get_templates_count_query,
     get_templates_list_query,
     replace_template_query,
+    update_template_flow_and_configurations_query,
 )
 from app.schemas.breeze_buddy.template import TemplateMetadata
 
@@ -440,6 +441,35 @@ async def replace_template(
                 logger.info(f"Template updated successfully: {decoded_result.id}")
             return decoded_result
 
+    except Exception as e:
+        logger.error(f"Error updating template: {e}", exc_info=True)
+        return None
+
+
+async def update_template_flow_and_configurations(
+    template_id: str, flow: dict, configurations: Optional[dict], now
+) -> Optional[TemplateModel]:
+    """Update only a template's flow and configurations, with a version row.
+
+    Returns the updated TemplateModel, or None if it failed.
+    """
+    try:
+        query, values = update_template_flow_and_configurations_query(
+            template_id,
+            json.dumps(flow),
+            json.dumps(configurations) if configurations is not None else None,
+            now,
+        )
+        async with db_connection() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(query, *values)
+                if row is None:
+                    logger.error(f"Failed to update template: {template_id}")
+                    return None
+                await insert_template_version_on_conn(
+                    conn, row, change_source="manual_edit"
+                )
+        return decode_template(row)
     except Exception as e:
         logger.error(f"Error updating template: {e}", exc_info=True)
         return None

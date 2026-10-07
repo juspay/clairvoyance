@@ -1043,6 +1043,19 @@ MCP_PUBLIC_ENDPOINT_ENABLED = (
     os.environ.get("MCP_PUBLIC_ENDPOINT_ENABLED", "false").lower() == "true"
 )
 
+# Our console's origins: they may preview a paused widget and skip the
+# store's allowed_origins, so a merchant can try an agent before going live.
+# Origin can be faked, so voice and try-on still need the widget active.
+# Local consoles (http://localhost:5173) are added via .env, never by default.
+WIDGET_CONSOLE_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get(
+        "WIDGET_CONSOLE_ORIGINS",
+        "https://breezebuddy.ai,https://buddy.breezelabs.app",
+    ).split(",")
+    if origin.strip()
+]
+
 # Template `custom` global functions execute author-supplied python_code. An
 # in-process interpreter sandbox is NOT a security boundary, so this feature is
 # OFF by default and must be explicitly enabled per-deployment (and only when

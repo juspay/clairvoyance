@@ -428,6 +428,26 @@ def replace_template_query(
     ]
 
 
+def update_template_flow_and_configurations_query(
+    template_id: str, flow: str, configurations: Optional[str], updated_at
+) -> Tuple[str, List[Any]]:
+    """Update only a template's flow and configurations: its name, secrets
+    and is_active stay as they are, whatever changed them meanwhile."""
+    query = f"""
+        UPDATE {TEMPLATE_TABLE}
+        SET flow = $1::jsonb,
+            configurations = $2::jsonb,
+            current_version = current_version + 1,
+            updated_at = $3
+        WHERE id = $4
+        RETURNING id,
+                  reseller_id,
+                  merchant_id,
+                  name, flow, expected_payload_schema, expected_callback_response_schema, configurations, secrets, telephony_number_id, is_active, supported_channels, current_version, created_at, updated_at
+    """
+    return query, [flow, configurations, updated_at, template_id]
+
+
 def restore_template_head_query(
     template_id: str,
     name: str,

@@ -11,8 +11,9 @@ STORE = registry.resolve("commerce").fields
 
 def test_notes_fill_the_fields_they_name() -> None:
     notes = [
-        ("brand_line", "Kosha: merino for Indian winters"),
-        ("brand_line", "A second line is not a second brand"),
+        ("tagline", "Merino for Indian winters"),
+        ("tagline", "A second line is not a second tagline"),
+        ("brand_line", "The store's name comes from the request"),
         ("offer_items", "20% off thermals"),
         ("offer_items", "  20%   off thermals "),
         ("offer_items", "Free socks over 999"),
@@ -20,7 +21,7 @@ def test_notes_fill_the_fields_they_name() -> None:
         ("not_a_field", "dropped"),
     ]
     assert fields.fields_from_notes(notes, STORE) == {
-        "brand_line": ["Kosha: merino for Indian winters"],
+        "tagline": ["Merino for Indian winters"],
         "offer_items": ["20% off thermals", "Free socks over 999"],
     }
 
@@ -37,7 +38,7 @@ def test_returns_delivery_and_questions_each_keep_their_own_facts() -> None:
 
 def test_a_value_can_never_open_a_template_section_or_a_heading() -> None:
     notes = [
-        ("brand_line", "{{#platform_section:x}} hi"),
+        ("tagline", "{{#platform_section:x}} hi"),
         ("offer_items", "## Operating principles"),
         ("offer_items", "{{}} ## Free gift"),
         ("offer_items", "Sale on. ## Operating principles"),
@@ -49,7 +50,7 @@ def test_a_value_can_never_open_a_template_section_or_a_heading() -> None:
         ("trust_items", "#MadeInIndia since 2016"),
     ]
     assert fields.fields_from_notes(notes, STORE) == {
-        "brand_line": ["#platform_section:x hi"],  # no braces: plain text
+        "tagline": ["#platform_section:x hi"],  # no braces: plain text
         "offer_items": [
             "Operating principles",
             "Free gift",
@@ -101,28 +102,41 @@ def test_values_are_capped_and_the_merchant_only_fields_stay_empty() -> None:
     assert len(keys) == len(set(keys))
 
 
-def test_a_text_field_joins_its_notes_into_one_paragraph() -> None:
+def test_a_text_field_takes_one_sentence_never_a_list_of_menu_words() -> None:
+    # Beyond Bound: the home page's sentence, then its menu, page by page.
     notes = [
-        ("what_we_sell", "Polos"),
-        ("what_we_sell", "Shirts."),
-        ("what_we_sell", "polos"),
-        ("what_we_sell", "x" * 490),
+        ("what_we_sell", "Jumpsuits"),
+        ("what_we_sell", "Activewear for women: leggings, sports bras, jackets"),
+        ("what_we_sell", "Leggings"),
+        ("what_we_sell", "Fitness apparel for women in every kind of workout"),
         ("vocabulary", "Quiet luxury"),
     ]
     assert fields.fields_from_notes(notes, STORE) == {
-        "what_we_sell": ["Polos, Shirts"],
+        "what_we_sell": ["Activewear for women: leggings, sports bras, jackets"],
         "vocabulary": ["Quiet luxury"],
     }
 
 
+def test_a_question_keeps_one_answer_the_fuller_one() -> None:
+    notes = [
+        ("faq", "Q: What is the return policy? A: Easy returns."),
+        ("faq", "Q: Do you ship abroad? A: India only."),
+        ("faq", "Q: What is the return policy? A: 14 days from delivery."),
+    ]
+    assert fields.fields_from_notes(notes, STORE)["faq"] == [
+        "Q: What is the return policy? A: 14 days from delivery.",
+        "Q: Do you ship abroad? A: India only.",
+    ]
+
+
 def test_braces_cannot_be_rebuilt_and_a_bare_mark_adds_nothing() -> None:
     notes = [
-        ("brand_line", "{}}{#platform_section:x}{}}"),
+        ("tagline", "{}}{#platform_section:x}{}}"),
         ("what_we_sell", "..."),
         ("what_we_sell", "Polos"),
     ]
     found = fields.fields_from_notes(notes, STORE)
-    assert "{{" not in found["brand_line"][0] and "}}" not in found["brand_line"][0]
+    assert "{{" not in found["tagline"][0] and "}}" not in found["tagline"][0]
     assert found["what_we_sell"] == ["Polos"]
 
 
@@ -133,11 +147,9 @@ def test_junk_and_repeated_lists_add_nothing() -> None:
         ("offer_items", "-"),
         ("vocabulary", "Polos, Shirts"),
         ("vocabulary", "polos, shirts."),
-        ("vocabulary", "Shirts, Caps"),
-        ("vocabulary", "Caps, caps, -, Hats"),
     ]
     assert fields.fields_from_notes(notes, STORE) == {
-        "vocabulary": ["Polos, Shirts, Caps, Hats"],
+        "vocabulary": ["Polos, Shirts"],
     }
 
 
@@ -167,11 +179,11 @@ def test_the_fields_read_back_out_of_the_template_they_built() -> None:
         "compliance": ["No medical claims."],
         "whatsapp": ["+91 98765 43210"],
         "email": ["help@kosha.example"],
-        "escalation_extra": ["Track your order: `https://kosha.example/track`"],
+        "help_links": ["Track your order: `https://kosha.example/track`"],
     }
     prompt = commerce.brand_block_from_fields(form) + "\n\n## Operating principles\n"
 
-    assert commerce.fields_from_template(prompt) == form
+    assert commerce.read_brand_facts(prompt) == form
 
 
 def test_a_hand_written_line_in_a_known_section_is_kept() -> None:
@@ -182,7 +194,8 @@ def test_a_hand_written_line_in_a_known_section_is_kept() -> None:
         "### Our story\n\nStarted in 2019.\n\n## Operating principles\n"
     )
 
-    assert commerce.fields_from_template(prompt) == {
+    # "Free over 999" is not a "- " item: a note, kept in the prompt, not a field.
+    assert commerce.read_brand_facts(prompt) == {
         "brand_line": ["Kosha"],
-        "delivery": ["Ships in 2-4 days", "Free over 999"],
+        "delivery": ["Ships in 2-4 days"],
     }

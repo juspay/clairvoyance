@@ -22,10 +22,9 @@ STORE_FIELDS = FieldProfile(
             fields=(
                 FieldSpec(
                     "brand_line",
-                    "Your store in one line",
-                    "Who you are and what stands behind you.",
+                    "Your store's name",
+                    "As shoppers know it.",
                     kind="line",
-                    from_research=True,
                 ),
                 FieldSpec(
                     "what_we_sell",
@@ -141,7 +140,7 @@ STORE_FIELDS = FieldProfile(
                     from_research=True,
                 ),
                 FieldSpec(
-                    "escalation_extra",
+                    "help_links",
                     "Other places to send shoppers",
                     "Returns portal, contact form, order tracking, with the "
                     "full https address.",
