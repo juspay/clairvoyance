@@ -279,6 +279,7 @@ async def test_chat_context_uses_existing_accessors(
             created_at=now,
             status=ChatSessionStatus.ENDED,
             metadata={},
+            outcome="RESOLVED",
         )
     )
     list_messages = AsyncMock(
@@ -302,6 +303,7 @@ async def test_chat_context_uses_existing_accessors(
     )
 
     assert context and context["transcript"][0]["content"] == "My order is late"
+    assert context["outcome"] == "RESOLVED"
     list_messages.assert_awaited_once_with("session-id")
 
 

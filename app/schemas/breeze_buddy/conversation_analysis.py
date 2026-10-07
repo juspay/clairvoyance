@@ -64,6 +64,8 @@ class UpdateTopicConfigurationRequest(BaseModel):
     region: Optional[str] = Field(None, max_length=100)
     system_prompt: Optional[str] = Field(None, max_length=50000)
     settings: Optional[Dict[str, Any]] = None
+    topic_details: Optional[Dict[str, Dict[str, str]]] = None
+    breakdowns: Optional[Dict[str, str]] = None
 
     @field_validator(
         "provider",
@@ -72,6 +74,8 @@ class UpdateTopicConfigurationRequest(BaseModel):
         "region",
         "system_prompt",
         "settings",
+        "topic_details",
+        "breakdowns",
         mode="before",
     )
     @classmethod
@@ -91,6 +95,8 @@ class TopicConfigurationResponse(BaseModel):
     region: Optional[str] = None
     system_prompt: str
     settings: Dict[str, Any]
+    topic_details: Dict[str, Dict[str, str]]
+    breakdowns: Dict[str, str]
 
 
 class ConversationTopicsResponse(BaseModel):

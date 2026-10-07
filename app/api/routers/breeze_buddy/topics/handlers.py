@@ -2,6 +2,9 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException, status
 
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.catalog import (
+    catalog_problems,
+)
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.extractor import (
     resolve_topic_evaluation_configuration,
 )
@@ -71,6 +74,14 @@ async def add_topics_handler(
     # Same dedupe as the worker's auto-discovery: a label already in the
     # catalog, in any case, is not added twice.
     labels = list({label.lower(): label for label in request.topics}.values())
+    current = await get_evaluation_config(str(template_id), EvaluationType.TOPIC.value)
+    existing = (current or {}).get("topics") or []
+    problems = catalog_problems(existing, labels)
+    if problems:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="; ".join(problems),
+        )
     config = await add_discovered_topics(str(template_id), labels)
     if not config:
         raise HTTPException(
