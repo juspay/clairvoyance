@@ -8,7 +8,7 @@ answers.
 
 Flow (matches docs/BACKLOG_DISPATCHER_REDESIGN.md §2 Plane 4):
 
-    BLPOP ready -> RPUSH processing -> DB CAS lock -> pre-checks
+    BZPOPMIN ready -> RPUSH processing -> DB CAS lock -> pre-checks
       -> calling-hours -> rate-limit -> pick number -> BLPOP channel
       -> provider.make_call -> UPDATE status=PROCESSING -> LREM processing
 
@@ -41,7 +41,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     release_channel_token,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
-    READY_LIST,
+    READY_ZSET,
     processing_list_for,
     reseller_paused_key,
     worker_heartbeat_key,
@@ -83,6 +83,7 @@ from app.ai.voice.agents.breeze_buddy.utils.playground import (
 from app.core.concurrency import spawn_background_task
 from app.core.config import dynamic as dyn_cfg
 from app.core.config.static import (
+    BB_DISPATCH_QPS_JITTER_MS,
     BB_WORKER_BLPOP_TIMEOUT_S,
     BB_WORKER_COUNT,
     BB_WORKER_HEARTBEAT_REFRESH_S,
@@ -210,7 +211,7 @@ CALL_LIMIT_UNAVAILABLE_DEFER_S = 30
 
 class Worker:
     """
-    Long-lived asyncio task that consumes from ``bb:ready:leads`` and
+    Long-lived asyncio task that consumes from ``bb:ready:leads:z`` and
     dispatches one lead at a time.
     """
 
@@ -310,7 +311,7 @@ class Worker:
             await asyncio.sleep(2.0)
             return
 
-        lead_id = await self._blpop_ready()
+        lead_id = await self._pop_ready()
         if lead_id is None:
             return  # timeout — loop back so we can check stop signal
 
@@ -321,17 +322,19 @@ class Worker:
         finally:
             await self._lrem_processing(lead_id)
 
-    async def _blpop_ready(self) -> Optional[str]:
+    async def _pop_ready(self) -> Optional[str]:
         try:
             redis = await get_redis_service()
             client: Any = cast(Any, await redis.get_client())
-            popped = await client.blpop(READY_LIST, timeout=BB_WORKER_BLPOP_TIMEOUT_S)
+            popped = await client.bzpopmin(
+                READY_ZSET, timeout=BB_WORKER_BLPOP_TIMEOUT_S
+            )
             if popped is None:
                 return None
-            _, lead_id = popped
+            _, lead_id, _score = popped
             return lead_id
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Worker {self._uuid}: BLPOP ready failed: {e}")
+            logger.error(f"Worker {self._uuid}: BZPOPMIN ready failed: {e}")
             await asyncio.sleep(1.0)
             return None
 
@@ -410,6 +413,21 @@ class Worker:
 
         lock_released = False
         try:
+            # A lead not yet due is a stale copy (reconciler re-add, or a
+            # defer after it was queued). Read the row the lock returned, not
+            # the earlier read: a defer can land in between. The promoter can
+            # fire a lead up to the schedule jitter early, so allow that.
+            next_at = locked.next_attempt_at
+            jitter = timedelta(milliseconds=BB_DISPATCH_QPS_JITTER_MS)
+            if next_at and next_at > datetime.now(timezone.utc) + jitter:
+                logger.info(
+                    f"Worker {self._uuid}: lead {lead_id} not due until "
+                    f"{next_at.isoformat()}, dropping stale turn"
+                )
+                await schedule_lead(lead_id, next_at, jitter_ms=0)
+                lock_released = await self._release(locked.id)
+                return
+
             config = await _get_lead_config(locked)
             if not config:
                 lock_released = await self._fail_and_release(locked.id, "NO_CONFIG")

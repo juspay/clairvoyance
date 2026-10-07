@@ -13,7 +13,7 @@ import pytest
 
 from app.ai.voice.agents.breeze_buddy.dispatch import worker as w
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
-    READY_LIST,
+    READY_ZSET,
     processing_list_for,
     reseller_paused_key,
     worker_heartbeat_key,
@@ -98,17 +98,17 @@ async def test_heartbeat_loop_writes_to_redis(fake_redis, monkeypatch):
     await asyncio.wait_for(task, timeout=1.0)
 
 
-async def test_blpop_ready_returns_none_on_empty(fake_redis):
+async def test_pop_ready_returns_none_on_empty(fake_redis):
     worker = w.Worker()
-    result = await worker._blpop_ready()
+    result = await worker._pop_ready()
     assert result is None
 
 
-async def test_blpop_ready_returns_lead_id_when_present(fake_redis):
-    fake_redis.client.lists[READY_LIST] = ["lead-7"]
+async def test_pop_ready_returns_lead_id_when_present(fake_redis):
+    fake_redis.client.zsets[READY_ZSET] = {"lead-7": 1.0}
 
     worker = w.Worker()
-    result = await worker._blpop_ready()
+    result = await worker._pop_ready()
 
     assert result == "lead-7"
 

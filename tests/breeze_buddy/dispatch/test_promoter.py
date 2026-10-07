@@ -11,9 +11,10 @@ import pytest
 from app.ai.voice.agents.breeze_buddy.dispatch import promoter as p
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     PROMOTER_PAUSED,
-    READY_LIST,
+    READY_ZSET,
     SCHEDULE_ZSET,
 )
+from tests.breeze_buddy.dispatch.conftest import ready_members
 
 
 def _seed_due_leads(fake_redis, ids):
@@ -54,8 +55,8 @@ async def test_promoter_moves_due_leads_when_leader(fake_redis):
 
     assert moved == 3
     assert fake_redis.client.zsets.get(SCHEDULE_ZSET, {}) == {}
-    # RPUSH keeps due order: head is the earliest-due lead.
-    assert fake_redis.client.lists.get(READY_LIST, []) == ["a", "b", "c"]
+    # The batch keeps due order: the head is the earliest-due lead.
+    assert ready_members(fake_redis) == ["a", "b", "c"]
 
     await prom._leader.stop()
 
@@ -70,7 +71,7 @@ async def test_promoter_skips_future_leads(fake_redis):
 
     assert moved == 0
     assert "x" in fake_redis.client.zsets[SCHEDULE_ZSET]
-    assert fake_redis.client.lists.get(READY_LIST, []) == []
+    assert ready_members(fake_redis) == []
 
     await prom._leader.stop()
 
@@ -109,7 +110,7 @@ async def test_promoter_promotion_is_atomic_when_zrem_loses(fake_redis):
     moved = await prom._tick_once()
 
     assert moved == 1
-    assert fake_redis.client.lists.get(READY_LIST, []) == ["b"]
+    assert ready_members(fake_redis) == ["b"]
 
     await prom._leader.stop()
 
@@ -124,13 +125,13 @@ async def test_promoter_keeps_due_order_first_in_first_out(fake_redis):
 
     moved = await prom._tick_once()
     assert moved == 3
-    assert fake_redis.client.lists[READY_LIST] == ["a", "b", "c"]
+    assert ready_members(fake_redis) == ["a", "b", "c"]
 
     # Next tick: a newly due lead goes behind the ones still waiting.
     fake_redis.client.zsets[SCHEDULE_ZSET] = {"d": 4_000}
     await prom._tick_once()
-    assert fake_redis.client.lists[READY_LIST] == ["a", "b", "c", "d"]
+    assert ready_members(fake_redis) == ["a", "b", "c", "d"]
 
     # Workers pop the head: the earliest-due lead goes first.
-    assert (await fake_redis.client.blpop(READY_LIST))[1] == "a"
+    assert (await fake_redis.client.bzpopmin(READY_ZSET))[1] == "a"
     await prom._leader.stop()

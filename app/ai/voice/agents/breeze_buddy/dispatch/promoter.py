@@ -1,10 +1,10 @@
 """
-Promoter — moves due leads from ``bb:schedule:leads`` to ``bb:ready:leads``.
+Promoter — moves due leads from ``bb:schedule:leads`` to ``bb:ready:leads:z``.
 
 One promoter task runs in every pod; only the leader acts (see ``leader.py``).
 Tick cadence: ``BB_PROMOTER_TICK_MS`` (default 200ms).
 
-Atomicity: the ``ZRANGEBYSCORE`` + ``ZREM`` + ``RPUSH`` move is wrapped in a
+Atomicity: the ``ZRANGEBYSCORE`` + ``ZREM`` + ``ZADD NX`` move is wrapped in a
 single Lua script so a mid-loop Redis hiccup can't strip a lead from the
 schedule without also adding it to the ready list. Without Lua, every
 promoter-pod restart could orphan whichever leads were mid-loop until the
@@ -20,7 +20,7 @@ from typing import Optional
 
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     PROMOTER_PAUSED,
-    READY_LIST,
+    READY_ZSET,
     SCHEDULE_ZSET,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
@@ -31,15 +31,24 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.services.redis import get_redis_service
 
-# Lua script: claim up to ARGV[2] members with score <= ARGV[1], RPUSH them
+# Lua script: claim up to ARGV[2] members with score <= ARGV[1], ZADD NX them
 # to KEYS[2], return count moved. Atomic per Redis-execution semantics.
+# NX: a lead already waiting in ready is not added twice and keeps its place.
+# The ready score is promote order, not due time: each batch is numbered on
+# from the current tail (or now_ms * 1000, if later), so a lead promoted later
+# never overtakes one already waiting (FIFO, as the RPUSH list was) and a
+# batch keeps its due order, whatever the promoting pod's clock says. Exact
+# as a double until well past year 2200.
 _PROMOTE_LUA = """
 local ids = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, tonumber(ARGV[2]))
 if #ids == 0 then return 0 end
+local base = tonumber(ARGV[1]) * 1000
+local tail = redis.call('ZRANGE', KEYS[2], -1, -1, 'WITHSCORES')
+if #tail == 2 and tonumber(tail[2]) > base then base = tonumber(tail[2]) end
 local moved = 0
 for i = 1, #ids do
   if redis.call('ZREM', KEYS[1], ids[i]) == 1 then
-    redis.call('RPUSH', KEYS[2], ids[i])
+    redis.call('ZADD', KEYS[2], 'NX', base + i, ids[i])
     moved = moved + 1
   end
 end
@@ -100,7 +109,7 @@ class Promoter:
             redis = await get_redis_service()
             moved = await redis.run_script(
                 _PROMOTE_LUA,
-                keys=[SCHEDULE_ZSET, READY_LIST],
+                keys=[SCHEDULE_ZSET, READY_ZSET],
                 args=[str(now_ms), str(BB_PROMOTER_BATCH)],
             )
             return int(moved) if moved else 0

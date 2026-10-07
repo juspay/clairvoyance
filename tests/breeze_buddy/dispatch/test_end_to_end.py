@@ -3,8 +3,8 @@ End-to-end dispatch round-trip tests.
 
 Exercises the full hot path that unit tests don't cover:
 
-    schedule_lead -> SCHEDULE_ZSET -> promoter (Lua) -> READY_LIST
-      -> worker BLPOP -> processing list -> DB CAS lock -> pre-checks
+    schedule_lead -> SCHEDULE_ZSET -> promoter (Lua) -> READY_ZSET
+      -> worker BZPOPMIN -> processing list -> DB CAS lock -> pre-checks
       -> rate limit -> number pick -> channel BLPOP -> make_call
       -> post-CAS UPDATE -> processing list LREM
 
@@ -34,7 +34,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     release_channel_token,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
-    READY_LIST,
+    READY_ZSET,
     SCHEDULE_ZSET,
     processing_list_for,
     worker_heartbeat_key,
@@ -42,13 +42,18 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
 from app.ai.voice.agents.breeze_buddy.dispatch.leader import LeaderElection
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
 from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
-from app.core.config.static import BB_CHANNEL_WAIT_BACKOFF_MAX_S
+from app.core.config.static import (
+    BB_CHANNEL_WAIT_BACKOFF_MAX_S,
+    BB_DISPATCH_QPS_JITTER_MS,
+)
 from app.schemas import CallProvider, LeadCallStatus
 from tests.breeze_buddy.dispatch.conftest import (
     AlwaysLeader,
     CallRecorder,
     make_lead,
     make_number,
+    push_ready,
+    ready_members,
 )
 
 # ---------------------------------------------------------------------------
@@ -75,7 +80,7 @@ async def test_full_round_trip_happy_path(harness, fake_redis):
     moved = await promoter._tick_once()
     assert moved == 1
     assert await fake_redis.client.zcard(SCHEDULE_ZSET) == 0
-    assert await fake_redis.client.llen(READY_LIST) == 1
+    assert await fake_redis.client.zcard(READY_ZSET) == 1
 
     # Drive one worker iteration.
     worker = w.Worker(worker_uuid="w-happy")
@@ -98,7 +103,7 @@ async def test_full_round_trip_happy_path(harness, fake_redis):
     assert await fake_redis.client.llen(processing_list_for("w-happy")) == 0
 
     # Ready list drained.
-    assert await fake_redis.client.llen(READY_LIST) == 0
+    assert await fake_redis.client.zcard(READY_ZSET) == 0
 
     # Lock was NOT released by the worker (waiting on call-end webhook).
     assert "lead-happy" not in harness.released_locks
@@ -144,7 +149,7 @@ async def test_atomic_record_rejection_releases_resources_and_defers(
     harness.rate_limit_record_defer_seconds = 3600  # = window_seconds default
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-race")
     await worker._iteration(session=None)
@@ -187,7 +192,7 @@ async def test_channel_exhaustion_does_not_record_rate_limit_attempt(
 
     # Initialise with zero tokens — pretend the number is fully saturated.
     await init_channel_semaphore(harness.number.id, 0)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-exhausted")
     await worker._iteration(session=None)
@@ -222,7 +227,7 @@ async def test_make_call_exception_releases_token_and_defers(harness, fake_redis
     w.get_voice_provider = harness.get_voice_provider
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-exc")
     await worker._iteration(session=None)
@@ -251,7 +256,7 @@ async def test_make_call_returns_no_sid_defers(harness, fake_redis):
     w.get_voice_provider = harness.get_voice_provider
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-nosid")
     await worker._iteration(session=None)
@@ -272,7 +277,7 @@ async def test_post_cas_lost_releases_all_resources(harness, fake_redis):
     harness.cas_succeeds = False
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-cas")
     await worker._iteration(session=None)
@@ -291,7 +296,7 @@ async def test_status_not_backlog_skips_dispatch(harness, fake_redis):
     lead = make_lead("lead-skip", status=LeadCallStatus.PROCESSING)
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-skip")
     await worker._iteration(session=None)
@@ -304,6 +309,44 @@ async def test_status_not_backlog_skips_dispatch(harness, fake_redis):
     assert lead.id not in harness.released_locks
 
 
+async def test_lead_waiting_in_ready_is_not_promoted_twice(
+    harness, fake_redis, monkeypatch
+):
+    """
+    The bug this guards: a lead waiting in ready is off the schedule and
+    unlocked, so the backlog reconciler took it for lost, re-ZADDed it, and
+    the promoter handed it out a second time. Now the reconciler skips it
+    and the ready ZSET holds it once.
+    """
+    lead = make_lead("lead-waiting")
+    harness.add_lead(lead)
+    await schedule_lead(lead.id, datetime.now(timezone.utc) - timedelta(seconds=1))
+    promoter = prom_mod.Promoter(leader=cast(LeaderElection, AlwaysLeader()))
+    assert await promoter._tick_once() == 1
+
+    async def _backlog(*_a, **_kw):
+        score_ms = int(cast(datetime, lead.next_attempt_at).timestamp() * 1000)
+        return [(lead.id, lead.reseller_id, score_ms)]
+
+    monkeypatch.setattr(recon_mod, "get_unscheduled_backlog_leads", _backlog)
+    await recon_mod.reconcile_backlog_to_zset()
+
+    assert await fake_redis.client.zscore(SCHEDULE_ZSET, lead.id) is None
+    await promoter._tick_once()
+    assert ready_members(fake_redis) == [lead.id]
+
+
+async def test_promoter_does_not_duplicate_a_lead_already_in_ready(fake_redis):
+    """Even if the lead reaches the schedule again (reaper, a race), ZADD NX
+    keeps one copy in ready, in its original place."""
+    await push_ready(fake_redis, "lead-first", "lead-dup")
+    await schedule_lead("lead-dup", datetime.now(timezone.utc) - timedelta(seconds=1))
+    promoter = prom_mod.Promoter(leader=cast(LeaderElection, AlwaysLeader()))
+
+    assert await promoter._tick_once() == 1
+    assert ready_members(fake_redis) == ["lead-first", "lead-dup"]
+
+
 async def test_lock_acquire_fails_drops_lead(harness, fake_redis):
     """
     Another worker holds the lock → acquire returns None → drop cleanly.
@@ -313,7 +356,7 @@ async def test_lock_acquire_fails_drops_lead(harness, fake_redis):
     harness.add_lead(lead)
     harness.locked_lead_ids.add(lead.id)  # simulate another worker holds it.
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-locked")
     await worker._iteration(session=None)
@@ -321,6 +364,98 @@ async def test_lock_acquire_fails_drops_lead(harness, fake_redis):
     assert harness.call_recorder.calls == []
     assert await channel_tokens_available(harness.number.id) == 1
     assert harness.deferred == []
+
+
+async def test_second_turn_after_a_defer_does_not_dial_early(harness, fake_redis):
+    """
+    The reconciler can re-add a lead a worker popped after its DB read, so
+    the lead gets a second turn. The first turn defers it; the second must
+    not dial before the deferred time, and puts the lead back on schedule.
+    """
+    lead = make_lead("lead-dup")
+    harness.add_lead(lead)
+    harness.rate_limit_ok = False
+    harness.rate_limit_defer_seconds = 300
+    await init_channel_semaphore(harness.number.id, 1)
+    await push_ready(fake_redis, lead.id)
+
+    worker = w.Worker(worker_uuid="w-dup")
+    await worker._iteration(session=None)  # first turn: defers 300s
+    harness.rate_limit_ok = True
+    await fake_redis.client.zrem(SCHEDULE_ZSET, lead.id)
+    await push_ready(fake_redis, lead.id)  # the reconciler's re-add
+    await worker._iteration(session=None)  # second turn: not due
+
+    assert harness.deferred == [(lead.id, 300)]
+    assert len(harness.rate_limit_peeks) == 1
+    assert harness.call_recorder.calls == []
+    assert lead.id not in harness.locked_lead_ids
+    due_ms = cast(datetime, lead.next_attempt_at).timestamp() * 1000
+    score = await fake_redis.client.zscore(SCHEDULE_ZSET, lead.id)
+    assert abs(score - due_ms) <= BB_DISPATCH_QPS_JITTER_MS + 1
+
+
+async def test_due_check_reads_the_locked_row(harness, fake_redis, monkeypatch):
+    """A defer that lands between the worker's read and its lock is caught:
+    the check reads the row the lock returns, not the earlier read."""
+    lead = make_lead("lead-race")
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await push_ready(fake_redis, lead.id)
+    lock = harness.acquire_lock_on_lead_by_id
+
+    async def _lock_after_a_defer(lead_id, expected_status):
+        lead.next_attempt_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        return await lock(lead_id, expected_status)
+
+    monkeypatch.setattr(w, "acquire_lock_on_lead_by_id", _lock_after_a_defer)
+    await w.Worker(worker_uuid="w-race")._iteration(session=None)
+
+    assert harness.call_recorder.calls == []
+    assert harness.rate_limit_peeks == []
+    assert lead.id not in harness.locked_lead_ids
+
+
+async def test_stale_turn_reschedules_before_it_unlocks(
+    harness, fake_redis, monkeypatch
+):
+    """The not-due branch puts the lead back on the schedule while the row is
+    still locked. Unlocking first opens a gap where a /dispatch-now (which
+    only refuses locked rows) sets the lead to now, and the worker's later
+    ZADD then overwrites it with the old time."""
+    lead = make_lead("lead-order")
+    lead.next_attempt_at = datetime.now(timezone.utc) + timedelta(minutes=60)
+    harness.add_lead(lead)
+    await push_ready(fake_redis, lead.id)
+    calls = []
+
+    async def _record(lead_id, next_attempt_at, jitter_ms=None):
+        calls.append((lead_id in harness.locked_lead_ids, jitter_ms))
+        return True
+
+    monkeypatch.setattr(w, "schedule_lead", _record)
+    await w.Worker(worker_uuid="w-order")._iteration(session=None)
+
+    assert calls == [(True, 0)]
+    assert lead.id not in harness.locked_lead_ids
+    assert harness.call_recorder.calls == []
+
+
+async def test_lead_promoted_early_by_jitter_still_dials(harness, fake_redis):
+    """The promoter can fire a due lead up to BB_DISPATCH_QPS_JITTER_MS
+    before its next_attempt_at. That lead is due and must dial."""
+    lead = make_lead("lead-jitter")
+    lead.next_attempt_at = datetime.now(timezone.utc) + timedelta(
+        milliseconds=BB_DISPATCH_QPS_JITTER_MS
+    )
+    harness.add_lead(lead)
+    await init_channel_semaphore(harness.number.id, 1)
+    await push_ready(fake_redis, lead.id)
+
+    await w.Worker(worker_uuid="w-jitter")._iteration(session=None)
+
+    assert len(harness.call_recorder.calls) == 1
+    assert lead.status == LeadCallStatus.PROCESSING
 
 
 async def test_rate_limit_blocks_before_channel_acquire(harness, fake_redis):
@@ -340,7 +475,7 @@ async def test_rate_limit_blocks_before_channel_acquire(harness, fake_redis):
     harness.rate_limit_defer_seconds = 30
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-rl")
     await worker._iteration(session=None)
@@ -364,7 +499,7 @@ async def test_blacklisted_phone_finalizes_lead(harness, fake_redis):
     harness.is_blacklisted = True
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-bl")
     await worker._iteration(session=None)
@@ -395,7 +530,7 @@ async def test_get_available_number_returns_none_marks_lead_finished(
     harness.get_available_returns_none = True
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-nonum")
     await worker._iteration(session=None)
@@ -431,7 +566,7 @@ async def test_channel_token_returns_on_release(harness, fake_redis):
     lead = make_lead("lead-return")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 2)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-return")
     await worker._iteration(session=None)
@@ -546,7 +681,7 @@ async def test_daily_lead_reaching_worker_is_dropped(harness, fake_redis):
     harness.add_lead(lead)
 
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-daily-drop")
     await worker._iteration(session=None)
@@ -661,7 +796,7 @@ async def test_refused_token_is_dropped_not_pushed_back(
     harness.acquire_number_succeeds = False
 
     await init_channel_semaphore(harness.number.id, 1)  # the phantom
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-refused")
     await worker._iteration(session=None)
@@ -699,7 +834,7 @@ async def test_pile_behind_full_number_costs_one_round_per_phantom(
     for i in range(n_leads):
         lead = make_lead(f"lead-{i}")
         harness.add_lead(lead)
-        await fake_redis.client.rpush(READY_LIST, lead.id)
+        await push_ready(fake_redis, lead.id)
     await init_channel_semaphore(harness.number.id, phantoms)
 
     worker = w.Worker(worker_uuid="w-pile-2000")
@@ -730,7 +865,7 @@ async def test_pile_switches_defer_from_jitter_to_long(
     for i in range(8):
         lead = make_lead(f"lead-{i}")
         harness.add_lead(lead)
-        await fake_redis.client.rpush(READY_LIST, lead.id)
+        await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-pile")
     for _ in range(8):
@@ -751,7 +886,7 @@ async def test_refused_path_also_uses_pile_defer(harness, fake_redis, monkeypatc
     lead = make_lead("lead-refused-pile")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-refused-pile")
     await worker._iteration(session=None)
@@ -768,7 +903,7 @@ async def test_dial_path_unchanged_when_capacity_exists(
     lead = make_lead("lead-ok")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 2)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-ok")
     await worker._iteration(session=None)
@@ -817,7 +952,7 @@ async def test_make_call_error_frees_db_line_before_token(
     lead = make_lead("lead-dial-error")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-dial-error")
     await worker._iteration(session=None)
@@ -836,7 +971,7 @@ async def test_no_sid_frees_db_line_before_token(harness, fake_redis, monkeypatc
     lead = make_lead("lead-no-sid")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-no-sid")
     await worker._iteration(session=None)
@@ -872,7 +1007,7 @@ async def test_full_number_still_drops_the_token(harness, fake_redis, monkeypatc
     lead = make_lead("lead-full")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-full")
     await worker._iteration(session=None)
@@ -897,7 +1032,7 @@ async def test_db_error_on_acquire_returns_the_token(harness, fake_redis, monkey
     lead = make_lead("lead-db-error")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-db-error")
     await worker._iteration(session=None)
@@ -929,7 +1064,7 @@ async def test_twilio_refusal_returns_the_token(harness, fake_redis, monkeypatch
     lead = make_lead("lead-twilio-refused")
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
 
     worker = w.Worker(worker_uuid="w-twilio-refused")
     await worker._iteration(session=None)

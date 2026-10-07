@@ -14,9 +14,8 @@ from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
     channel_tokens_available,
     init_channel_semaphore,
 )
-from app.ai.voice.agents.breeze_buddy.dispatch.keys import READY_LIST
 from app.schemas import CallProvider, LeadCallStatus
-from tests.breeze_buddy.dispatch.conftest import make_lead
+from tests.breeze_buddy.dispatch.conftest import make_lead, push_ready
 
 US = PlivoAccount(auth_id="MAUS0000000000000001", auth_token="us-token")
 
@@ -43,7 +42,7 @@ async def _dispatch_one(harness, fake_redis, monkeypatch, result: Any, lead_id):
     lead = make_lead(lead_id)
     harness.add_lead(lead)
     await init_channel_semaphore(harness.number.id, 1)
-    await fake_redis.client.rpush(READY_LIST, lead.id)
+    await push_ready(fake_redis, lead.id)
     await w.Worker(worker_uuid="w-acct")._iteration(session=None)
     return lead
 
