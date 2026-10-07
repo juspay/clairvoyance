@@ -5,14 +5,15 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AssistResearchNote(BaseModel):
     """One fact, and the page it was read on (a ``note`` event)."""
 
-    field: str
-    value: str
+    # Bounded: the create request sends notes back.
+    field: str = Field(..., max_length=64)
+    value: str = Field(..., max_length=2000)
     source_url: str
 
 

@@ -19,6 +19,9 @@ from app.api.routers.breeze_buddy.assist.onboarding.preview import (
 from app.api.routers.breeze_buddy.assist.onboarding.research import (
     router as assist_research_router,
 )
+from app.api.routers.breeze_buddy.assist.onboarding.template import (
+    router as assist_template_router,
+)
 from app.api.routers.breeze_buddy.assist.probe import (
     router as assist_probe_router,
 )
@@ -137,6 +140,8 @@ router.include_router(assist_blueprint_router, prefix="", tags=["assist-onboardi
 router.include_router(assist_probe_router, prefix="", tags=["assist-onboarding"])
 # A store's brand colours and logo, for the console to preview (read-only).
 router.include_router(assist_preview_router, prefix="", tags=["assist-onboarding"])
+# The merchant's assistant, built from the console's research, switched off.
+router.include_router(assist_template_router, prefix="", tags=["assist-onboarding"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])
