@@ -47,26 +47,36 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
     update_lead_call_recording_url,
 )
 from app.schemas import LeadCallStatus, LeadCallTracker
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    completed_call_outcome,
+    outcome_word,
+)
 
 
 async def daily_completion_function(
     call_id: str,
-    outcome: Optional[str] = None,
     call_end_time: Optional[datetime] = None,
     meta_data: Optional[dict] = None,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """Completion function for Daily mode - updates lead status to FINISHED.
 
     For Daily mode, the call_id is actually the lead_id since Daily doesn't have
-    a traditional call_sid like telephony providers.
+    a traditional call_sid like telephony providers. ``call_outcome`` carries
+    the facts the session recorded; ``outcome`` is the word they give. A web
+    session has no phone line: it is recorded as INITIATED / WEB_SESSION, and
+    its provider columns stay empty.
     """
     logger.info(f"Daily completion: updating lead {call_id} to FINISHED")
+    completed = completed_call_outcome(call_outcome, web_session=True)
     return await update_lead_call_completion_details(
         id=call_id,
         status=LeadCallStatus.FINISHED,
-        outcome=outcome,
+        outcome=outcome_word(completed),
         meta_data=meta_data,
         call_end_time=call_end_time,
+        call_outcome=completed,
     )
 
 

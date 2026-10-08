@@ -30,6 +30,7 @@ def make_lead(
     outcome: Optional[str] = None,
     meta_data: Optional[Dict[str, Any]] = None,
     is_locked: bool = True,
+    agent_outcome: Optional[str] = None,
 ) -> LeadCallTracker:
     """A dispatched outbound lead: PROCESSING and is_locked, per worker.py."""
     return LeadCallTracker(
@@ -45,6 +46,7 @@ def make_lead(
         metaData=meta_data,
         status=status,
         outcome=outcome,
+        agent_outcome=agent_outcome,
         is_locked=is_locked,
         call_id=CALL_SID,
         call_initiated_time=datetime(2026, 9, 21, 15, 4, 26, tzinfo=timezone.utc),
@@ -317,9 +319,10 @@ async def _run_reaper_capturing_close(
 async def test_reaper_preserves_mid_call_outcome_and_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The update REPLACES meta_data, so the cleanup must merge into it."""
+    """The update REPLACES meta_data, so the cleanup must merge into it. The
+    word the agent recorded mid-call (agent_outcome) is the outcome."""
     lead = make_lead(
-        outcome="GUIDANCE_STEP_STARTED",
+        agent_outcome="GUIDANCE_STEP_STARTED",
         meta_data={
             "outcome": {"committed_step": "app khol liya"},
             "call_ended_by": "customer",
@@ -332,6 +335,19 @@ async def test_reaper_preserves_mid_call_outcome_and_metadata(
     assert captured["meta_data"]["cleanup"] == "stuck_processing_timeout"
     assert captured["meta_data"]["outcome"] == {"committed_step": "app khol liya"}
     assert captured["meta_data"]["call_ended_by"] == "customer"
+
+
+@pytest.mark.asyncio
+async def test_reaper_keeps_the_word_of_a_row_from_before_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call still live across the deploy: its word reached only the
+    legacy column, never agent_outcome. The reaper keeps it."""
+    captured = await _run_reaper_capturing_close(
+        monkeypatch, make_lead(outcome="GUIDANCE_STEP_STARTED")
+    )
+
+    assert captured["outcome"] == "GUIDANCE_STEP_STARTED"
 
 
 @pytest.mark.asyncio

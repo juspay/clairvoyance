@@ -40,6 +40,7 @@ from app.schemas.breeze_buddy.core import (
     TelephonyNumber,
     TelephonyNumberStatus,
 )
+from app.schemas.breeze_buddy.outcomes import CallOutcome
 
 
 class FakeRedisClient:
@@ -311,6 +312,15 @@ class FakeRedisService:
         raise NotImplementedError(f"FakeRedisService.run_script: {script}")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_dial_memo(monkeypatch):
+    """Every test starts with an empty v2 dial memo: one test's template, config or
+    number must not answer for the next test's dial."""
+    from app.ai.voice.agents.breeze_buddy.dispatch.v2.memo import TTLMemo
+
+    monkeypatch.setattr(worker_mod, "_DIAL_MEMO", TTLMemo(ttl_s=10))
+
+
 @pytest.fixture
 def fake_redis(monkeypatch) -> FakeRedisService:
     """
@@ -456,6 +466,8 @@ class DispatchHarness:
         self.call_limits: Optional[tuple] = None
         self.call_limit_reads: List[str] = []
         self.completions: List[Dict[str, Any]] = []
+        # The call outcome facts each successful dial recorded.
+        self.dial_outcomes: List[Optional[CallOutcome]] = []
         # Toggle behaviours.
         # ``pre_check_result`` is a convenience bool: True -> PROCEED,
         # False -> ABORT. For DEFER, set ``pre_check_decision`` directly
@@ -483,6 +495,7 @@ class DispatchHarness:
         # generate_realtime_opening_line flag (see the greeting mock below).
         self.opening_line_calls: List[Any] = []
         self.cas_succeeds: bool = True
+        self.within_hours: bool = True
         self.get_available_returns_none: bool = False
         # Postgres ``channels + 1 WHERE channels < maximum_channels``. False
         # simulates the number being full in the DB while Redis still handed
@@ -547,12 +560,14 @@ class DispatchHarness:
         call_id: str,
         call_initiated_time: datetime,
         telephony_number_id: str,
+        call_outcome: Optional[CallOutcome] = None,
     ) -> Optional[LeadCallTracker]:
         if not self.cas_succeeds:
             return None
         lead = self.leads.get(id)
         if not lead:
             return None
+        self.dial_outcomes.append(call_outcome)
         lead.status = status
         lead.call_id = call_id
         lead.call_initiated_time = call_initiated_time
@@ -566,6 +581,7 @@ class DispatchHarness:
         outcome: str,
         meta_data: Dict[str, Any],
         call_end_time: datetime,
+        call_outcome: Optional[CallOutcome] = None,
     ) -> Optional[LeadCallTracker]:
         self.completions.append(
             {
@@ -573,6 +589,7 @@ class DispatchHarness:
                 "status": status,
                 "outcome": outcome,
                 "meta_data": meta_data,
+                "call_outcome": call_outcome,
             }
         )
         lead = self.leads.get(id)
@@ -596,7 +613,7 @@ class DispatchHarness:
         return self.config
 
     def _is_within_calling_hours(self, config: CallExecutionConfig) -> bool:
-        return True
+        return self.within_hours
 
     async def _run_pre_checks_for_lead(
         self, *args, **kwargs

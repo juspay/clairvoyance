@@ -19,6 +19,7 @@ from app.ai.voice.agents.breeze_buddy.utils.common import (
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import send_message
 from app.core.logger import logger
 from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.schemas.breeze_buddy.outcomes import CallOutcome, SessionEndReason
 from app.services.redis.client import get_redis_service
 
 # Daily output runs at PipelineParams default (24 kHz, 16-bit, mono); the
@@ -234,7 +235,6 @@ async def end_call_with_errors(
     completion_function: Callable,
     transport_type: str,
     call_sid: Optional[str] = None,
-    outcome: str = "UNKNOWN",
     call_ended_by: str = "system",
 ) -> Optional[LeadCallTracker]:
     """
@@ -248,8 +248,9 @@ async def end_call_with_errors(
         completion_function: Call completion handler (usually handle_call_completion)
         transport_type: Transport mode ("daily" or telephony provider name)
         call_sid: Telephony call SID (None for Daily mode)
-        outcome: Call outcome (default: "UNKNOWN" prevents retries)
         call_ended_by: Who/what ended call (default: "system")
+
+    The ending is PIPELINE_ERROR, which gives the outcome UNKNOWN (no retry).
 
     Returns:
         Updated LeadCallTracker if successful, None if failed
@@ -272,14 +273,16 @@ async def end_call_with_errors(
 
     try:
         logger.info(
-            f"Ending call with errors: call_id={call_id}, outcome={outcome}, "
+            f"Ending call with errors: call_id={call_id}, "
             f"ended_by={call_ended_by}, errors={len(errors)}"
         )
         updated_lead = await completion_function(
             call_id=call_id,
-            outcome=outcome,
             call_end_time=datetime.now(timezone.utc),
             meta_data=lead.metaData,
+            call_outcome=CallOutcome(
+                session_end_reason=SessionEndReason.PIPELINE_ERROR
+            ),
         )
         logger.info(f"Successfully ended call with errors: {call_id}")
         return updated_lead

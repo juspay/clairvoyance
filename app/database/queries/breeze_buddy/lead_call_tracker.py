@@ -7,10 +7,33 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
+from app.schemas.breeze_buddy.outcomes import (
+    CALL_OUTCOME_COLUMNS,
+    CallOutcome,
+    legacy_outcome,
+)
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
 TELEPHONY_NUMBER_TABLE = "telephony_numbers"
+
+
+def _call_outcome_set_clauses(
+    call_outcome: Optional[CallOutcome], values: List[Any]
+) -> List[str]:
+    """SET clauses for the call outcome columns ``call_outcome`` carries.
+
+    Appends each value to ``values`` and returns the matching clauses; column
+    names come from the CallOutcome model, never from input. No call outcome
+    means no clause.
+    """
+    clauses: List[str] = []
+    if call_outcome is None:
+        return clauses
+    for column, value in call_outcome.columns().items():
+        values.append(value)
+        clauses.append(f'"{column}" = ${len(values)}')
+    return clauses
 
 
 # Lead call tracker queries
@@ -36,6 +59,7 @@ def insert_lead_call_tracker_query(
     outcome: Optional[
         str
     ] = None,  # For blocked calls where outcome is known at insert time
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
@@ -49,7 +73,13 @@ def insert_lead_call_tracker_query(
         telephony_number_id: Telephony number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND)
         outcome: Call outcome (optional, used for blocked calls e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
+        call_outcome: Call outcome columns the row starts with (a refused
+            inbound call's NOT_INITIATED, an accepted one's INITIATED). None
+            inserts exactly today's columns.
     """
+    outcome_columns = call_outcome.columns() if call_outcome is not None else {}
+    outcome_names = "".join(f',\n            "{column}"' for column in outcome_columns)
+    placeholders = ", ".join(f"${i}" for i in range(1, 22 + len(outcome_columns)))
     text = f"""
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
         (
@@ -73,9 +103,9 @@ def insert_lead_call_tracker_query(
             "call_direction",
             "outcome",
             "created_at",
-            "updated_at"
+            "updated_at"{outcome_names}
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *;
+        VALUES ({placeholders}) RETURNING *;
     """
 
     values = [
@@ -100,6 +130,7 @@ def insert_lead_call_tracker_query(
         outcome,
         datetime.now(),
         datetime.now(),
+        *outcome_columns.values(),
     ]
 
     return text, values
@@ -197,27 +228,32 @@ def update_lead_call_details_query(
     call_id: str,
     call_initiated_time: datetime,
     telephony_number_id: str,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call details.
     Only updates if lead is still in BACKLOG status to prevent concurrent
     process_backlog_leads invocations from overwriting an active call's details.
     Returns zero rows if the lead was already moved to PROCESSING/FINISHED by another invocation.
+    ``call_outcome`` (the dial's INITIATED facts) rides the same statement;
+    None writes exactly today's columns.
     """
-    text = f"""
-        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET "status" = $1, "call_id" = $2, "updated_at" = NOW(), "call_initiated_time" = $3, "telephony_number_id" = $4
-        WHERE "id" = $5 AND "status" = $6
-        RETURNING *;
-    """
-    values = [
+    values: List[Any] = [
         status.value,
         call_id,
         call_initiated_time,
         telephony_number_id,
-        id,
-        LeadCallStatus.BACKLOG.value,
     ]
+    outcome_set = "".join(
+        f", {clause}" for clause in _call_outcome_set_clauses(call_outcome, values)
+    )
+    values.extend([id, LeadCallStatus.BACKLOG.value])
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "status" = $1, "call_id" = $2, "updated_at" = NOW(), "call_initiated_time" = $3, "telephony_number_id" = $4{outcome_set}
+        WHERE "id" = ${len(values) - 1} AND "status" = ${len(values)}
+        RETURNING *;
+    """
     return text, values
 
 
@@ -544,19 +580,27 @@ def update_lead_call_initiated_time_query(
 
 
 def update_lead_call_initiated_time_by_id_query(
-    lead_id: str, call_initiated_time: datetime
+    lead_id: str,
+    call_initiated_time: datetime,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call initiated time by lead id.
-    Used for Daily mode where there's no telephony call_id.
+    Used for Daily mode where there's no telephony call_id. ``call_outcome``
+    (the session's INITIATED facts) rides the same statement; None writes
+    exactly today's columns.
     """
+    values: List[Any] = [call_initiated_time]
+    outcome_set = "".join(
+        f", {clause}" for clause in _call_outcome_set_clauses(call_outcome, values)
+    )
+    values.append(lead_id)
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET "call_initiated_time" = $1, "updated_at" = NOW()
-        WHERE "id" = $2
+        SET "call_initiated_time" = $1, "updated_at" = NOW(){outcome_set}
+        WHERE "id" = ${len(values)}
         RETURNING *;
     """
-    values = [call_initiated_time, lead_id]
     return text, values
 
 
@@ -618,10 +662,13 @@ def update_lead_call_completion_details_query(
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
     expected_status: Optional[LeadCallStatus] = None,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call completion details.
-    Only updates fields that are not None.
+    Only updates fields that are not None — the call outcome columns in
+    ``call_outcome`` included, so a mid-call write never clears one an earlier
+    write recorded.
 
     ``expected_status`` turns the UPDATE into an atomic CLAIM: the row is only
     written when it still holds that status, so a returned row means THIS
@@ -653,6 +700,8 @@ def update_lead_call_completion_details_query(
     if call_end_time is not None:
         values.append(call_end_time)
         set_clauses.append(f'"call_end_time" = ${len(values)}')
+
+    set_clauses.extend(_call_outcome_set_clauses(call_outcome, values))
 
     # Always update updated_at
     set_clauses.append('"updated_at" = NOW()')
@@ -865,43 +914,51 @@ def update_langfuse_scores_query(
 
 
 def abort_lead_by_id_query(
-    lead_id: str, cancellation_reason: str
+    lead_id: str,
+    cancellation_reason: str,
+    call_outcome: CallOutcome,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to abort a lead by lead ID.
-    Sets status to FINISHED and outcome to ABORT.
+    Sets status to FINISHED, the call outcome columns (NOT_INITIATED / ABORT),
+    and ``outcome`` to the word they give.
 
     Args:
         lead_id: Lead UUID
         cancellation_reason: Optional reason for cancellation
+        call_outcome: Call outcome columns (NOT_INITIATED / ABORT).
     """
+    metadata = {
+        "aborted_at": datetime.now().isoformat(),
+        "outcome": {"abort_reason": cancellation_reason},
+    }
+
+    values: List[Any] = [
+        LeadCallStatus.FINISHED.value,
+        legacy_outcome(call_outcome),
+        json.dumps(metadata),
+        lead_id,
+        LeadCallStatus.BACKLOG.value,
+        LeadCallStatus.RETRY.value,
+    ]
+    outcome_sets = "".join(
+        f",\n            {clause}"
+        for clause in _call_outcome_set_clauses(call_outcome, values)
+    )
+
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET 
             "status" = $1, 
             "outcome" = $2, 
             "updated_at" = NOW(),
-            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb{outcome_sets}
         WHERE 
             "id" = $4
             AND "status" IN ($5, $6)
             AND ("outcome" IS NULL OR "outcome" = '')
         RETURNING *;
     """
-
-    metadata = {
-        "aborted_at": datetime.now().isoformat(),
-        "outcome": {"abort_reason": cancellation_reason},
-    }
-
-    values = [
-        LeadCallStatus.FINISHED.value,
-        "ABORT",  # Outcome string literal
-        json.dumps(metadata),
-        lead_id,
-        LeadCallStatus.BACKLOG.value,
-        LeadCallStatus.RETRY.value,
-    ]
     return text, values
 
 
@@ -1042,9 +1099,12 @@ def reset_widget_voice_lead_query(
         before the stream pivot is upgraded on reuse instead of silently
         running the old agent-mode pipeline
       - call_id, call_initiated_time, call_end_time, outcome, cost,
-        recording_url are CLEARED so they don't leak from the prior
-        attempt's call into this one
+        recording_url and the call outcome columns are CLEARED so they don't
+        leak from the prior attempt's call into this one
     """
+    outcome_clears = "".join(
+        f'\n            "{column}" = NULL,' for column in CALL_OUTCOME_COLUMNS
+    )
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET
@@ -1058,7 +1118,7 @@ def reset_widget_voice_lead_query(
             "call_end_time"        = NULL,
             "outcome"              = NULL,
             "cost"                 = NULL,
-            "recording_url"        = NULL,
+            "recording_url"        = NULL,{outcome_clears}
             "updated_at"           = NOW()
         WHERE "id" = $1
         RETURNING *;

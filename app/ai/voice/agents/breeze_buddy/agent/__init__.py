@@ -147,8 +147,20 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 from app.database.accessor.breeze_buddy.template import get_template_by_id
 from app.schemas import CallProvider
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallTracker
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    SessionEndReason,
+    initiated_call_outcome,
+    record_session_end_reason,
+)
 
-DEFAULT_OUTCOME = "BUSY"
+# How an unexpected disconnect ended the session (the reasons come from this
+# module's own event handlers). Each gives BUSY when the agent set no word,
+# so an unexpected reason is a hangup too.
+_DISCONNECT_END_REASONS = {
+    "idle_timeout": SessionEndReason.IDLE_TIMEOUT,
+    "client_disconnected": SessionEndReason.CUSTOMER_HANGUP,
+}
 TTS_SPEAK_MAX_CHARS = 2000
 # Cap on a carousel/product-click `ui-action` message injected as a user turn
 # (mirrors TTS_SPEAK_MAX_CHARS). See docs/widget/VOICE_AS_CHAT.md (A2).
@@ -340,7 +352,8 @@ class Agent:
         # This prevents end_conversation from skipping finalization
 
         if self.lead:
-            self.lead.outcome = "BUSY"
+            # The ending gives BUSY, over any word the agent set.
+            record_session_end_reason(self.lead, SessionEndReason.USER_IDLE_TIMEOUT)
             if self.lead.metaData is None:
                 self.lead.metaData = {}
             self.lead.metaData["call_ended_by"] = "system"
@@ -409,7 +422,10 @@ class Agent:
 
         call_initiated_time = datetime.now(timezone.utc)
         self.lead = await update_lead_call_initiated_time_by_id(
-            lead_id, call_initiated_time
+            lead_id,
+            call_initiated_time,
+            # A widget / Daily voice session: set up, with no phone line.
+            call_outcome=initiated_call_outcome(web_session=True),
         )
         if not self.lead:
             raise ValueError(f"Lead not found for lead_id: {lead_id}")
@@ -1303,11 +1319,15 @@ class Agent:
                         lead = await get_lead_by_call_id(self.call_sid)
                         # If lead is None (not found), or it doesn't have an outcome,
                         # or the outcome is not a BLOCKED_ outcome, then it's an early hangup.
+                        # Before the agent starts the only word a row can hold is a
+                        # terminal one (an inbound block), which is still written.
                         if not lead or not lead.outcome:
                             await self.completion_function(
                                 call_id=self.call_sid,
-                                outcome="EARLY_HANGUP",
                                 call_end_time=datetime.now(timezone.utc),
+                                call_outcome=CallOutcome(
+                                    session_end_reason=SessionEndReason.EARLY_HANGUP
+                                ),
                             )
                     return
 
@@ -1648,8 +1668,11 @@ class Agent:
         logger.info(f"{reason}. Updating call status.")
 
         if self.lead:
-            if self.lead.outcome is None:
-                self.lead.outcome = DEFAULT_OUTCOME
+            # With no word from the agent, the ending gives BUSY.
+            record_session_end_reason(
+                self.lead,
+                _DISCONNECT_END_REASONS.get(reason, SessionEndReason.CUSTOMER_HANGUP),
+            )
 
             if self.lead.metaData is None:
                 self.lead.metaData = {}

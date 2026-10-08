@@ -134,6 +134,7 @@ from app.schemas.breeze_buddy.chat import (
     WidgetVoiceConnectResponse,
     WidgetVoiceEndResponse,
 )
+from app.schemas.breeze_buddy.outcomes import CallOutcome, SessionEndReason
 from app.schemas.breeze_buddy.try_on import WidgetTryOnResponse
 from app.services.breeze_buddy.try_on import (
     TryOnGenerationError,
@@ -1237,7 +1238,11 @@ async def voice_end_handler(
         try:
             await daily_completion_function(
                 call_id=call_id,
-                outcome="ended_by_widget",
+                # The visitor closed voice from the widget: the session's
+                # end, not an agent outcome (no word: ended_by_widget).
+                call_outcome=CallOutcome(
+                    session_end_reason=SessionEndReason.WIDGET_ENDED
+                ),
             )
         except Exception as exc:
             logger.warning(

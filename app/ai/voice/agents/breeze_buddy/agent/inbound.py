@@ -18,6 +18,7 @@ from app.database.accessor.breeze_buddy.template import (
 )
 from app.schemas import CallDirection, CallProvider, LeadCallStatus
 from app.schemas.breeze_buddy.core import LeadCallTracker
+from app.schemas.breeze_buddy.outcomes import initiated_call_outcome
 
 
 async def handle_inbound_call(
@@ -100,6 +101,8 @@ async def handle_inbound_call(
         call_id=call_sid,
         telephony_number_id=telephony_number.id,
         call_direction=CallDirection.INBOUND,
+        # The inbound call was accepted: set up, as a phone call.
+        call_outcome=initiated_call_outcome(),
     )
 
     if not lead:
@@ -176,6 +179,8 @@ async def create_lead_from_template_id(
         call_id=call_sid,
         telephony_number_id=template.telephony_number_id,
         call_direction=CallDirection.INBOUND,
+        # The inbound call was accepted: set up, as a phone call.
+        call_outcome=initiated_call_outcome(),
     )
 
     if not lead:

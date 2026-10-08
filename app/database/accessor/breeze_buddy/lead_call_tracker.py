@@ -50,6 +50,11 @@ from app.schemas import (
     LeadCallStatus,
     LeadCallTracker,
 )
+from app.schemas.breeze_buddy.outcomes import (
+    CallOutcome,
+    PlatformReason,
+    not_initiated_call_outcome,
+)
 
 
 def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
@@ -132,6 +137,7 @@ async def create_lead_call_tracker(
     outcome: Optional[
         str
     ] = None,  # For blocked calls where outcome is known at insert time
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
@@ -144,6 +150,8 @@ async def create_lead_call_tracker(
         telephony_number_id: Telephony number ID (optional, used for inbound calls)
         call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
         outcome: Call outcome (optional, e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
+        call_outcome: Call outcome columns the row starts with (a refused
+            inbound call's NOT_INITIATED, an accepted one's INITIATED).
 
     Raises:
         ValueError: when template_id is missing for a non-placeholder
@@ -173,6 +181,7 @@ async def create_lead_call_tracker(
             telephony_number_id=telephony_number_id,
             call_direction=call_direction,
             outcome=outcome,
+            call_outcome=call_outcome,
         )
 
         result = await run_parameterized_query(query_text, values)
@@ -302,17 +311,24 @@ async def update_lead_call_details(
     call_id: str,
     call_initiated_time: datetime,
     telephony_number_id: str,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call details.
     Returns None (zero rows) if the lead was already moved out of BACKLOG
     by a concurrent invocation — this is an expected concurrency outcome.
+    ``call_outcome`` (the dial's INITIATED facts) rides the same statement.
     """
     logger.info(f"Updating lead {id} with status {status} and call ID {call_id}")
 
     try:
         query_text, values = update_lead_call_details_query(
-            id, status, call_id, call_initiated_time, telephony_number_id
+            id,
+            status,
+            call_id,
+            call_initiated_time,
+            telephony_number_id,
+            call_outcome=call_outcome,
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
@@ -476,17 +492,22 @@ async def update_lead_call_initiated_time(
 
 
 async def update_lead_call_initiated_time_by_id(
-    lead_id: str, call_initiated_time: datetime
+    lead_id: str,
+    call_initiated_time: datetime,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call initiated time by lead id (Daily mode).
-    Used when there's no telephony call_id.
+    Used when there's no telephony call_id. ``call_outcome`` (the session's
+    INITIATED facts) rides the same statement.
     """
     logger.info(f"Updating lead {lead_id} with call initiated time")
 
     try:
         query_text, values = update_lead_call_initiated_time_by_id_query(
-            lead_id, call_initiated_time
+            lead_id,
+            call_initiated_time,
+            call_outcome=call_outcome,
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
@@ -597,10 +618,16 @@ async def update_lead_call_completion_details(
     meta_data: Optional[Dict[str, Any]] = None,
     call_end_time: Optional[datetime] = None,
     expected_status: Optional[LeadCallStatus] = None,
+    call_outcome: Optional[CallOutcome] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call completion details.
     Only updates fields that are not None.
+
+    ``call_outcome`` carries the call outcome columns, in the same statement.
+    ``outcome`` is written only by the writes that finish a lead, and is the
+    word ``legacy_outcome`` gives for the facts the row then holds
+    (``outcome_word``); a mid-call write passes facts only.
 
     With ``expected_status`` the write becomes an atomic claim — None then
     means "another caller got there first", not "the update failed". Callers
@@ -611,7 +638,13 @@ async def update_lead_call_completion_details(
 
     try:
         query_text, values = update_lead_call_completion_details_query(
-            id, status, outcome, meta_data, call_end_time, expected_status
+            id,
+            status,
+            outcome,
+            meta_data,
+            call_end_time,
+            expected_status,
+            call_outcome=call_outcome,
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
@@ -831,10 +864,15 @@ async def handle_lead_abort(
 ) -> Optional[LeadCallTracker]:
     """
     Abort a lead by lead ID.
-    Sets status to FINISHED and outcome to ABORT.
+    Sets status to FINISHED with the facts NOT_INITIATED / ABORT, and
+    ``outcome`` to the word they give (ABORT).
     """
     try:
-        query_text, values = abort_lead_by_id_query(lead_id, cancellation_reason)
+        query_text, values = abort_lead_by_id_query(
+            lead_id,
+            cancellation_reason,
+            call_outcome=not_initiated_call_outcome(PlatformReason.ABORT),
+        )
         result = await run_parameterized_query(query_text, values)
 
         if result and get_row_count(result) > 0:
@@ -952,7 +990,10 @@ async def reset_widget_voice_lead(
         f"(seed: {sorted(meta_data_seed.keys())}, mode: {execution_mode.value})"
     )
     query_text, values = reset_widget_voice_lead_query(
-        lead_id, payload, meta_data_seed, execution_mode.value
+        lead_id,
+        payload,
+        meta_data_seed,
+        execution_mode.value,
     )
     try:
         result = await run_parameterized_query(query_text, values)
