@@ -1101,6 +1101,8 @@ CRM_WALKER_LEASE_SECONDS = int(os.environ.get("CRM_WALKER_LEASE_SECONDS", 300))
 
 # Consecutive failed claims before a run parks for a human.
 CRM_WALKER_MAX_ATTEMPTS = int(os.environ.get("CRM_WALKER_MAX_ATTEMPTS", 3))
+# Shared Redis store for llm_call answers (tfx:*), off until switched on.
+LLM_CALL_L2_ENABLED = os.environ.get("LLM_CALL_L2_ENABLED", "false").lower() == "true"
 # Exited runs age out (canon T20 exited_at: the retention sweep is most
 # of what keeps the hot table small). Batched; leftovers go next tick.
 CRM_RUN_RETENTION_DAYS = int(os.environ.get("CRM_RUN_RETENTION_DAYS", 90))
