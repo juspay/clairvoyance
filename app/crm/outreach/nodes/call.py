@@ -178,6 +178,7 @@ async def execute(
             status=LeadCallStatus.FINISHED if capped else LeadCallStatus.BACKLOG,
             outcome=ABORTED_OUTCOME if capped else None,
             call_end_time=datetime.now(timezone.utc) if capped else None,
+            duplicate_expected=True,
         )
     except UniqueViolation:
         # Same meaning as None, so it falls to the same lookup. The accessor

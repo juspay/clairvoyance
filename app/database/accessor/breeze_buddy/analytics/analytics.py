@@ -55,70 +55,34 @@ async def get_summary_analytics_from_db(
         f"[Analytics DB] Getting summary analytics with filters: {filters}, group_by: {group_by}"
     )
 
-    try:
-        query_text, values = get_analytics_summary_query(filters, group_by)
-        result = await run_reader_query(query_text, values)
+    query_text, values = get_analytics_summary_query(filters, group_by)
+    result = await run_reader_query(query_text, values)
 
-        logger.debug(
-            f"[Analytics DB] Summary query returned {len(result) if result else 0} rows"
-        )
+    logger.debug(
+        f"[Analytics DB] Summary query returned {len(result) if result else 0} rows"
+    )
 
-        if not result or len(result) == 0:
-            logger.warning("[Analytics DB] Summary query returned no results")
-            if group_by:
-                return []
-            return {
-                "total_calls": 0,
-                "outbound_calls": 0,
-                "inbound_calls": 0,
-                "completed_calls": 0,
-                "failed_calls": 0,
-                "success_rate": 0.0,
-                "average_duration": None,
-                "total_templates": 0,
-                "total_shops": 0,
-                "outcome_breakdown": {},
-            }
-
+    if not result or len(result) == 0:
+        logger.warning("[Analytics DB] Summary query returned no results")
         if group_by:
-            # Return list of grouped results
-            grouped_results = []
-            for row in result:
-                total_calls = row["total_calls"] or 0
-                completed_calls = row["completed_calls"] or 0
-                failed_calls = row["failed_calls"] or 0
-                success_rate = (
-                    (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
-                )
+            return []
+        return {
+            "total_calls": 0,
+            "outbound_calls": 0,
+            "inbound_calls": 0,
+            "completed_calls": 0,
+            "failed_calls": 0,
+            "success_rate": 0.0,
+            "average_duration": None,
+            "total_templates": 0,
+            "total_shops": 0,
+            "outcome_breakdown": {},
+        }
 
-                grouped_results.append(
-                    {
-                        group_by: row[group_by],
-                        "shop_name": row.get("shop_name"),
-                        "total_calls": total_calls,
-                        "outbound_calls": row["outbound_calls"] or 0,
-                        "inbound_calls": row["inbound_calls"] or 0,
-                        "completed_calls": completed_calls,
-                        "failed_calls": failed_calls,
-                        "success_rate": round(success_rate, 2),
-                        "average_duration": (
-                            round(float(row["average_duration"]), 2)
-                            if row["average_duration"]
-                            else None
-                        ),
-                        "total_templates": row["total_templates"] or 0,
-                        "total_shops": row["total_shops"] or 0,
-                        "outcome_breakdown": row["outcome_breakdown"] or {},
-                    }
-                )
-
-            logger.info(
-                f"[Analytics DB] Grouped summary returned {len(grouped_results)} groups"
-            )
-            return grouped_results
-        else:
-            # Return single aggregate result
-            row = result[0]
+    if group_by:
+        # Return list of grouped results
+        grouped_results = []
+        for row in result:
             total_calls = row["total_calls"] or 0
             completed_calls = row["completed_calls"] or 0
             failed_calls = row["failed_calls"] or 0
@@ -126,30 +90,59 @@ async def get_summary_analytics_from_db(
                 (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
             )
 
-            logger.info(
-                f"[Analytics DB] Summary result: {total_calls} total calls, {completed_calls} completed ({success_rate:.2f}% success)"
+            grouped_results.append(
+                {
+                    group_by: row[group_by],
+                    "shop_name": row.get("shop_name"),
+                    "total_calls": total_calls,
+                    "outbound_calls": row["outbound_calls"] or 0,
+                    "inbound_calls": row["inbound_calls"] or 0,
+                    "completed_calls": completed_calls,
+                    "failed_calls": failed_calls,
+                    "success_rate": round(success_rate, 2),
+                    "average_duration": (
+                        round(float(row["average_duration"]), 2)
+                        if row["average_duration"]
+                        else None
+                    ),
+                    "total_templates": row["total_templates"] or 0,
+                    "total_shops": row["total_shops"] or 0,
+                    "outcome_breakdown": row["outcome_breakdown"] or {},
+                }
             )
 
-            return {
-                "total_calls": total_calls,
-                "outbound_calls": row["outbound_calls"] or 0,
-                "inbound_calls": row["inbound_calls"] or 0,
-                "completed_calls": completed_calls,
-                "failed_calls": failed_calls,
-                "success_rate": round(success_rate, 2),
-                "average_duration": (
-                    round(float(row["average_duration"]), 2)
-                    if row["average_duration"]
-                    else None
-                ),
-                "total_templates": row["total_templates"] or 0,
-                "total_shops": row["total_shops"] or 0,
-                "outcome_breakdown": row["outcome_breakdown"] or {},
-            }
+        logger.info(
+            f"[Analytics DB] Grouped summary returned {len(grouped_results)} groups"
+        )
+        return grouped_results
+    else:
+        # Return single aggregate result
+        row = result[0]
+        total_calls = row["total_calls"] or 0
+        completed_calls = row["completed_calls"] or 0
+        failed_calls = row["failed_calls"] or 0
+        success_rate = (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
 
-    except Exception as e:
-        logger.error(f"Error getting summary analytics: {e}", exc_info=True)
-        raise
+        logger.info(
+            f"[Analytics DB] Summary result: {total_calls} total calls, {completed_calls} completed ({success_rate:.2f}% success)"
+        )
+
+        return {
+            "total_calls": total_calls,
+            "outbound_calls": row["outbound_calls"] or 0,
+            "inbound_calls": row["inbound_calls"] or 0,
+            "completed_calls": completed_calls,
+            "failed_calls": failed_calls,
+            "success_rate": round(success_rate, 2),
+            "average_duration": (
+                round(float(row["average_duration"]), 2)
+                if row["average_duration"]
+                else None
+            ),
+            "total_templates": row["total_templates"] or 0,
+            "total_shops": row["total_shops"] or 0,
+            "outcome_breakdown": row["outcome_breakdown"] or {},
+        }
 
 
 async def get_call_details_from_db(
@@ -253,17 +246,12 @@ async def get_trends_analytics_from_db(
         f"[Analytics DB] Getting trends analytics with filters: {filters}, granularity: {time_granularity}"
     )
 
-    try:
-        query_text, values = get_analytics_trends_query(filters, time_granularity)
-        result = await run_reader_query(query_text, values)
-        logger.info(
-            f"[Analytics DB] Trends returned {len(result) if result else 0} time buckets"
-        )
-        return [dict(row) for row in result] if result else []
-
-    except Exception as e:
-        logger.error(f"Error getting trends analytics: {e}", exc_info=True)
-        raise
+    query_text, values = get_analytics_trends_query(filters, time_granularity)
+    result = await run_reader_query(query_text, values)
+    logger.info(
+        f"[Analytics DB] Trends returned {len(result) if result else 0} time buckets"
+    )
+    return [dict(row) for row in result] if result else []
 
 
 async def get_lead_based_analytics_from_db(
