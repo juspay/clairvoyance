@@ -47,6 +47,21 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
         call_direction=CallDirection(row.get("call_direction", "OUTBOUND")),
         customer_id=str(row["customer_id"]) if row.get("customer_id") else None,
         enrollment_id=(str(row["enrollment_id"]) if row.get("enrollment_id") else None),
+        # Call outcome columns (migration 083): read with .get so a RETURNING * from a
+        # database that has not run 083 yet still decodes.
+        platform_status=row.get("platform_status"),
+        platform_reason=row.get("platform_reason"),
+        provider_status=row.get("provider_status"),
+        provider_reason=row.get("provider_reason"),
+        provider_hangup_cause=row.get("provider_hangup_cause"),
+        session_end_reason=row.get("session_end_reason"),
+        agent_outcome=row.get("agent_outcome"),
+        agent_outcome_source=row.get("agent_outcome_source"),
+        eval_outcome=row.get("eval_outcome"),
+        eval_status=row.get("eval_status"),
+        eval_result_id=(
+            str(row["eval_result_id"]) if row.get("eval_result_id") else None
+        ),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

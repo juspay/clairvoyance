@@ -24,6 +24,7 @@ from app.database.accessor.breeze_buddy.chat_session import (
     flip_chat_session_to_chat,
 )
 from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
+from app.schemas.breeze_buddy.outcomes import ended_session_call_outcome
 
 callback_map = {
     "service_callback": service_callback,
@@ -275,6 +276,18 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         is_daily_mode = getattr(context.bot, "transport_type", None) == "daily"
         updated_lead = None
 
+        # Call outcome columns beside the legacy outcome: the agent's own
+        # outcome and how the session ended. Best-effort: a failure here
+        # must not cost the legacy completion write below.
+        call_outcome = None
+        try:
+            call_outcome = ended_session_call_outcome(context.lead)
+        except Exception as outcome_error:
+            logger.warning(
+                f"Could not build call outcome for call {context.call_sid}: "
+                f"{outcome_error}"
+            )
+
         if is_daily_mode and context.lead:
             # Daily mode: update by lead.id
             logger.info(
@@ -285,6 +298,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 outcome=context.lead.outcome,
                 call_end_time=datetime.now(),
                 meta_data=context.lead.metaData,
+                call_outcome=call_outcome,
             )
             if updated_lead:
                 context.lead = updated_lead
@@ -299,6 +313,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 outcome=context.lead.outcome,
                 call_end_time=datetime.now(),
                 meta_data=context.lead.metaData,
+                call_outcome=call_outcome,
             )
             if updated_lead:
                 context.lead = updated_lead

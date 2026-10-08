@@ -44,6 +44,11 @@ from app.ai.voice.agents.breeze_buddy.dispatch.queue import schedule_lead
 from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
 from app.core.config.static import BB_CHANNEL_WAIT_BACKOFF_MAX_S
 from app.schemas import CallProvider, LeadCallStatus
+from app.schemas.breeze_buddy.outcomes import (
+    PlatformReason,
+    initiated_call_outcome,
+    not_initiated_call_outcome,
+)
 from tests.breeze_buddy.dispatch.conftest import (
     AlwaysLeader,
     CallRecorder,
@@ -90,6 +95,8 @@ async def test_full_round_trip_happy_path(harness, fake_redis):
     assert lead.status == LeadCallStatus.PROCESSING
     assert lead.call_id == "CA-test-sid"
     assert lead.telephony_number_id == harness.number.id
+    # Call outcome columns: the provider placed it, so the platform set it up.
+    assert harness.dial_outcomes == [initiated_call_outcome()]
 
     # Channel token was consumed (2 → 1) and not yet returned (waiting on webhook).
     assert await channel_tokens_available(harness.number.id) == 1
@@ -373,6 +380,10 @@ async def test_blacklisted_phone_finalizes_lead(harness, fake_redis):
     assert lead.status == LeadCallStatus.FINISHED
     assert lead.outcome == "BLACKLISTED"
     assert await channel_tokens_available(harness.number.id) == 1
+    # Call outcome columns: never dialed, and why.
+    assert harness.completions[-1]["call_outcome"] == not_initiated_call_outcome(
+        PlatformReason.BLACKLISTED
+    )
 
 
 async def test_get_available_number_returns_none_marks_lead_finished(
@@ -408,6 +419,9 @@ async def test_get_available_number_returns_none_marks_lead_finished(
     assert len(harness.completions) == 1
     assert harness.completions[0]["outcome"] == "NUMBER_UNAVAILABLE"
     assert harness.completions[0]["status"] == LeadCallStatus.FINISHED
+    assert harness.completions[0]["call_outcome"] == not_initiated_call_outcome(
+        PlatformReason.NUMBER_UNAVAILABLE
+    )
     assert lead.status == LeadCallStatus.FINISHED
     assert lead.outcome == "NUMBER_UNAVAILABLE"
     # Throttled alert fired once with the right scope.

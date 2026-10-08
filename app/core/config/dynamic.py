@@ -3,7 +3,7 @@ import time
 from typing import Optional, Tuple
 
 from app.core.logger import logger
-from app.services.live_config.store import get_config
+from app.services.live_config.store import get_config, get_config_strict
 
 # -----------------------
 # Dynamic runtime configs
@@ -83,6 +83,18 @@ async def BB_DISPATCH_ENABLED() -> bool:
     overriding ``BB_DISPATCH_ENABLED`` in the Redis feature-flag blob.
     """
     return await get_config("BB_DISPATCH_ENABLED", True, bool)
+
+
+async def CALL_OUTCOME_WRITES_ENABLED() -> bool:
+    """Write the call outcome columns beside the legacy outcome (default: off).
+
+    Migration 083 adds the columns; the code may deploy before it runs, so
+    writes stay off until an operator flips this after the migration. Off
+    means every write is exactly today's: no call outcome column is named in any
+    statement. Also the rollback switch for the whole call outcome write path. See
+    app/schemas/breeze_buddy/outcomes.py.
+    """
+    return await get_config("CALL_OUTCOME_WRITES_ENABLED", False, bool)
 
 
 #: The engine's own join budget, extractors/engine.py VARIABLE_MAX_CHARS.
@@ -206,6 +218,33 @@ async def BB_RECONCILE_BACKLOG_LIMIT() -> int:
     Crank up to drain a Redis-loss event faster; lower if the DB is under
     pressure and the scan is expensive."""
     return await get_config("BB_RECONCILE_BACKLOG_LIMIT", 1000, int)
+
+
+async def BB_DISPATCH_V2_ENABLED(strict: bool = False) -> bool:
+    """Master switch for the v2 event dialler. Off = today's dialler only.
+    ``strict``: a failed Redis read raises instead of reading as "off" (the switch)."""
+    read = get_config_strict if strict else get_config
+    return await read("BB_DISPATCH_V2_ENABLED", False, bool)
+
+
+async def BB_DISPATCH_V2_NUMBERS(strict: bool = False) -> list[str]:
+    """Comma-separated telephony_number ids served by v2. Others stay on today's path.
+    ``strict``: a failed Redis read raises instead of reading as "none" (the switch)."""
+    read = get_config_strict if strict else get_config
+    raw = await read("BB_DISPATCH_V2_NUMBERS", "", str)
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+async def BB_V2_TIER_HIGH_MERCHANT_IDS() -> list[str]:
+    """Comma-separated merchant IDs for high-tier v2 prioritization."""
+    raw = await get_config("BB_V2_TIER_HIGH_MERCHANT_IDS", "", str)
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+async def BB_V2_TIER_MEDIUM_MERCHANT_IDS() -> list[str]:
+    """Comma-separated merchant IDs for medium-tier v2 prioritization."""
+    raw = await get_config("BB_V2_TIER_MEDIUM_MERCHANT_IDS", "", str)
+    return [x.strip() for x in raw.split(",") if x.strip()]
 
 
 async def BB_ANALYSIS_CONSUMER_COUNT() -> int:

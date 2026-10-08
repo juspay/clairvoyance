@@ -98,6 +98,7 @@ from app.schemas import (
     LeadCallStatus,
     TelephonyNumber,
 )
+from app.schemas.breeze_buddy.outcomes import initiated_call_outcome
 from app.services.redis.client import get_redis_service
 
 _GATED_INBOUND_PROVIDERS = {"plivo": CallProvider.PLIVO, "vobiz": CallProvider.VOBIZ}
@@ -543,6 +544,8 @@ async def _create_inbound_lead_in_answer_handler(
                 else None
             ),
             call_direction=CallDirection.INBOUND,
+            # The inbound call was accepted: set up, as a phone call.
+            call_outcome=initiated_call_outcome(),
         )
         if created_lead is None:
             # The accessor logs and returns None rather than raising.
