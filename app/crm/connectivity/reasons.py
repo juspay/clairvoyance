@@ -60,6 +60,23 @@ REASON_RECLAIMED_STALE_CLAIM = "reclaimed_stale_claim"
 REASON_PROVIDER_REJECTED = "provider_rejected"
 REASON_SUPPRESSED = "suppressed"
 REASON_GATE_UNAVAILABLE = "gate_unavailable"
+# The gate's probe ran out of time. Nothing was sent, but no answer is not
+# "no": a retryable failure that spends the attempt, never a terminal block
+# (a slow suppression read once blocked templates for good). Still fail
+# closed — the message waits, it is never sent unchecked.
+REASON_GATE_TIMEOUT = "gate_timeout"
+
+# --- session sends (session.py) — free-form replies inside the window ---
+# The channel's adapter has no free-form face: terminal, nothing was posted.
+REASON_NO_SESSION_SENDS = "channel_cannot_send_free_form"
+# The reply does not fit the channel (too many buttons, a title past the
+# provider's limit): refused before the wire rather than by the provider.
+REASON_BAD_BODY = "message_body_invalid"
+# A session send's process died between writing the row and recording the
+# outcome. It is never retried — the words live in the caller's memory and
+# the message.queued letter, not on the row — so the sweep closes it with
+# the honest answer: we do not know whether it went out.
+REASON_SESSION_ABANDONED = "session_send_abandoned"
 
 
 # --- what a provider's error code MEANS, for the reader ----------------------

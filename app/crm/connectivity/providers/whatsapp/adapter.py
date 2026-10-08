@@ -24,6 +24,7 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.core.transport.http_client import create_http_client
+from app.crm.connectivity.channels import conversation_profile
 from app.crm.connectivity.providers.base import ChannelAdapter, require_secret
 from app.crm.connectivity.providers.meta.graph import segment
 from app.crm.connectivity.providers.whatsapp import CHANNEL, TOKEN_KEY
@@ -31,16 +32,25 @@ from app.crm.connectivity.providers.whatsapp.classify import classify_failure, e
 from app.crm.connectivity.providers.whatsapp.payload import (
     build_parameters,
     build_send_body,
+    build_session_body,
     flow_button_indexes,
+    session_body_problem,
     to_meta_recipient,
 )
 from app.crm.connectivity.reasons import (
     REASON_BAD_ADDRESS,
+    REASON_BAD_BODY,
     REASON_BAD_VARIABLES,
     REASON_NO_CREDENTIAL,
+    REASON_NO_SESSION_SENDS,
     REASON_NO_TEMPLATE,
 )
-from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendRoute
+from app.crm.connectivity.schemas.message import (
+    QueuedMessage,
+    SendOutcome,
+    SendRoute,
+    SessionBody,
+)
 from app.crm.shared.redact import mask_address, mask_digit_runs
 
 # The Cloud API's own default, used only when the route carries no registry
@@ -143,8 +153,57 @@ class MetaWhatsAppAdapter(ChannelAdapter):
             return SendOutcome(status="blocked", reason=REASON_BAD_VARIABLES)
 
         payload = self.build_payload(message, recipient, route, parameters)
-        url = self.endpoint(route.binding.address)
+        return await self._post(route, token, payload, message)
 
+    async def deliver_session(
+        self, message: QueuedMessage, route: SendRoute, body: SessionBody
+    ) -> SendOutcome:
+        """A free-form reply inside the customer-service window.
+
+        Same posture as ``deliver``: every refusal before the network is
+        'blocked' and terminal. The WINDOW is not checked here — whether the
+        customer wrote in the last 24 hours is the conversations module's
+        predicate, and Meta's 131047 is the backstop classify.py already
+        reads as terminal.
+        """
+        token = require_secret(route.bundle, TOKEN_KEY, self.channel)
+        if token is None:
+            return SendOutcome(status="blocked", reason=REASON_NO_CREDENTIAL)
+
+        profile = conversation_profile(self.channel)
+        if profile is None:
+            return SendOutcome(status="blocked", reason=REASON_NO_SESSION_SENDS)
+
+        recipient = to_meta_recipient(message.sent_to_address)
+        if recipient is None:
+            logger.error(
+                f"whatsapp: message {message.id} address "
+                f"{mask_address(message.sent_to_address, self.channel)} "
+                f"is not a usable number"
+            )
+            return SendOutcome(status="blocked", reason=REASON_BAD_ADDRESS)
+
+        problem = session_body_problem(body, profile)
+        if problem is not None:
+            # The problem names the part and its length, never the words.
+            logger.error(f"whatsapp: message {message.id} does not fit — {problem}")
+            return SendOutcome(status="blocked", reason=REASON_BAD_BODY)
+
+        return await self._post(
+            route, token, build_session_body(recipient, body), message
+        )
+
+    async def _post(
+        self,
+        route: SendRoute,
+        token: str,
+        payload: Dict[str, Any],
+        message: QueuedMessage,
+    ) -> SendOutcome:
+        """POST one body to this binding's /messages and classify the answer
+        — the one network call both faces share, so a template and a reply
+        cannot come to read the same Meta answer two ways."""
+        url = self.endpoint(route.binding.address)
         try:
             async with create_http_client(
                 timeout=CRM_MESSAGE_SEND_TIMEOUT_SECONDS

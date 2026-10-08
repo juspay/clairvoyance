@@ -1,6 +1,7 @@
 """SQL builders for crm_channel_binding (T12, the pipe)."""
 
-from typing import Any, List, Tuple
+import json
+from typing import Any, Dict, List, Tuple
 
 from app.crm.connectivity.status import (
     BINDING_ACTIVE,
@@ -185,3 +186,158 @@ def inbound_binding_query(channel: str, address: str) -> Tuple[str, List[Any]]:
            AND status <> $3
     """
     return query, [channel, address, BINDING_RETIRED]
+
+
+def merchant_bindings_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """Every pipe the merchant still holds — not the retired ones, which
+    have surrendered their address. Default first, then oldest first."""
+    query = f"""
+        SELECT {BINDING_COLUMNS}
+          FROM {BINDING_TABLE}
+         WHERE merchant_id = $1
+           AND status <> $2
+         ORDER BY is_primary DESC, created_at
+    """
+    return query, [merchant_id, BINDING_RETIRED]
+
+
+def update_conversation_settings_query(
+    merchant_id: str, binding_id: str, changes: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """Merge ``changes`` into capabilities["conversation"] — one statement,
+    so two saves racing each keep the fields they sent.
+
+    A key sent as null is REMOVED (jsonb_strip_nulls over the merged
+    object), which is how a field goes back to its default. Every other
+    capability the provider declared is left exactly as it was. Scoped to
+    the merchant in the WHERE, never a retired pipe, and only the binding
+    that holds Buddy's settings — the move puts them there first.
+
+    The stored value is merged only when it IS an object: `||` on a stored
+    array or scalar would append rather than merge (or fail), so anything
+    else is treated as no settings and replaced by the patch.
+    """
+    query = f"""
+        UPDATE {BINDING_TABLE}
+           SET capabilities = jsonb_set(
+                   capabilities,
+                   '{{conversation}}',
+                   jsonb_strip_nulls(
+                       CASE WHEN jsonb_typeof(capabilities -> 'conversation') = 'object'
+                            THEN capabilities -> 'conversation'
+                            ELSE '{{}}'::jsonb
+                       END
+                       || $3::jsonb
+                   )
+               )
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND status <> $4
+           AND capabilities ? 'conversation'
+        RETURNING {BINDING_COLUMNS}
+    """
+    return query, [merchant_id, binding_id, json.dumps(changes), BINDING_RETIRED]
+
+
+# ---------------------------------------------------------------------------
+# Bindings: the template binding (is_primary) and Buddy's binding (the one row
+# holding capabilities["conversation"], migration 083). The writes below run
+# inside settings.py's bindings atom, after lock_channel_bindings_query.
+# ---------------------------------------------------------------------------
+
+
+def lock_channel_bindings_query(
+    merchant_id: str, binding_id: str
+) -> Tuple[str, List[Any]]:
+    """Every binding of the merchant on ``binding_id``'s channel, that one
+    included, locked in id order. Two changes at once queue behind each
+    other instead of each seeing the old holder and tripping a unique index.
+    Retired rows too: the move clears the config wherever it sits."""
+    query = f"""
+        SELECT {BINDING_COLUMNS}
+          FROM {BINDING_TABLE}
+         WHERE merchant_id = $1
+           AND channel = (
+                   SELECT channel FROM {BINDING_TABLE}
+                    WHERE merchant_id = $1 AND id = $2::uuid
+               )
+         ORDER BY id
+           FOR UPDATE
+    """
+    return query, [merchant_id, binding_id]
+
+
+def clear_primary_query(merchant_id: str, channel: str) -> Tuple[str, List[Any]]:
+    """Lower the current primary — before raising the new one, because
+    crm_channel_binding_primary_uq is checked per statement."""
+    query = f"""
+        UPDATE {BINDING_TABLE}
+           SET is_primary = false
+         WHERE merchant_id = $1
+           AND channel = $2
+           AND is_primary
+    """
+    return query, [merchant_id, channel]
+
+
+def set_primary_query(merchant_id: str, binding_id: str) -> Tuple[str, List[Any]]:
+    """Make one active binding the one templates go out from."""
+    query = f"""
+        UPDATE {BINDING_TABLE}
+           SET is_primary = true
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND status = $3
+        RETURNING {BINDING_COLUMNS}
+    """
+    return query, [merchant_id, binding_id, BINDING_ACTIVE]
+
+
+def take_conversation_query(merchant_id: str, channel: str) -> Tuple[str, List[Any]]:
+    """Lift Buddy's settings off whichever binding holds them, returning
+    that binding and the settings — the first half of a move. Before the
+    second, because crm_channel_binding_buddy_uq is checked per statement."""
+    query = f"""
+        UPDATE {BINDING_TABLE} b
+           SET capabilities = b.capabilities - 'conversation'
+          FROM (
+                   SELECT id, capabilities -> 'conversation' AS conversation
+                     FROM {BINDING_TABLE}
+                    WHERE merchant_id = $1
+                      AND channel = $2
+                      AND capabilities ? 'conversation'
+               ) old
+         WHERE b.id = old.id
+        RETURNING old.id, old.conversation
+    """
+    return query, [merchant_id, channel]
+
+
+def put_conversation_query(
+    merchant_id: str, binding_id: str, conversation: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """Set Buddy's settings on one active binding — the second half of a
+    move (or the first time Buddy is given a binding)."""
+    query = f"""
+        UPDATE {BINDING_TABLE}
+           SET capabilities = jsonb_set(capabilities, '{{conversation}}', $3::jsonb)
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND status = $4
+        RETURNING {BINDING_COLUMNS}
+    """
+    return query, [merchant_id, binding_id, json.dumps(conversation), BINDING_ACTIVE]
+
+
+def buddy_binding_query(merchant_id: str, channel: str) -> Tuple[str, List[Any]]:
+    """The active binding Buddy answers on, if the merchant has picked one.
+    The predicate is 083's, so the unique index answers it."""
+    query = f"""
+        SELECT {BINDING_COLUMNS}
+          FROM {BINDING_TABLE}
+         WHERE merchant_id = $1
+           AND channel = $2
+           AND capabilities ? 'conversation'
+           AND status = $3
+    """
+    return query, [merchant_id, channel, BINDING_ACTIVE]
