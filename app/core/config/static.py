@@ -472,6 +472,7 @@ def _flag(env_var: str, default_main_server: bool, default_agent_pool: bool) -> 
 
 
 ENABLE_DISPATCHER = _flag("ENABLE_DISPATCHER", True, False)
+ENABLE_EVALUATIONS_WORKER = _flag("ENABLE_EVALUATIONS_WORKER", False, False)
 
 # Promoter
 BB_PROMOTER_TICK_MS = int(os.environ.get("BB_PROMOTER_TICK_MS", 200))
