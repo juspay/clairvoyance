@@ -29,6 +29,7 @@ Widget → clairvoyance → LLM
 | Tool server URL | `https://{shop_url}/api/ucp/mcp` | `https://api.breezebuddy.ai/mcp/woocommerce/<host>`, answered in process |
 | Cart | Stored in Shopify | Stored in the cart id, e.g. `1128598:2,1315323:1` |
 | Checkout button | `ui_intents.urls.checkout_page` plus the `cart` cookie | The cart's `continue_url`: `https://<host>/checkout-link/?products=<cart id>` |
+| Order tracking (`flavor.ucp.features.order_tracking`) | Looked up through nautilus | Read from the store's REST API with the merchant's key (section 6) |
 
 The engine, widget and voice are the same for both platforms.
 
@@ -169,6 +170,64 @@ Open the store (or any page with the embed, served from an origin in
 | Add by chat, e.g. "add the blue one" | The assistant adds it and shows the cart |
 | Review and checkout | Opens `https://<host>/checkout-link/?products=…`; the store checkout shows the same items and total |
 
+## 6. Order tracking
+
+This step is optional. The assistant can answer "Where is my order?" for a
+WooCommerce store. It reads one order from the store's REST API, checks the
+phone or email on it, and shows the order card with tracking.
+
+### 6.1 Get a REST API key from the merchant
+
+The merchant creates it in **WooCommerce → Settings → Advanced → REST API →
+Add key**, with **Read** permission. They send the consumer key, which starts
+with `ck_`, and the consumer secret, which starts with `cs_`.
+
+### 6.2 Store the key
+
+Create one provider-account row for the merchant with
+`POST /agent/voice/breeze-buddy/credentials`:
+
+```json
+{
+  "reseller_id": "<template reseller_id>",
+  "merchant_id": "<template merchant_id>",
+  "name": "woocommerce-<host>",
+  "credential_type": "custom",
+  "provider": "woocommerce",
+  "value": {
+    "consumer_key": "ck_...",
+    "consumer_secret": "cs_...",
+    "endpoint": "https://<host>"
+  }
+}
+```
+
+| Rule | Why |
+|---|---|
+| `merchant_id` is the template's own | The lookup only reads this merchant's row. A reseller-wide row is not used. |
+| `endpoint` host is the `<host>` in the template's tool server URL (section 2.3), or `secrets.shop_url` for a template with no tool server | The lookup refuses a key for another store |
+| Exactly one such row | Two rows make the lookup refuse, rather than guess |
+| `name` names the store, e.g. `woocommerce-www.shopyvision.com` | Credential names must be unique within their scope; the lookup finds the row by `provider`, not by name |
+
+The key is stored encrypted and never reaches the model, a prompt or the
+session.
+
+### 6.3 Turn it on
+
+Set `configurations.flavor.ucp.features.order_tracking: true`. The template
+needs nothing else: the order tools come from the flag, and the store is the
+`<host>` in the tool server URL (section 2.3), the store the catalog tools read.
+A template with no tool server (order tracking without catalog tools) needs
+`secrets.shop_url` set to the store host instead.
+
+### 6.4 Test
+
+| Test | Expected |
+|---|---|
+| "Where is my order?", then a real order number and its phone or email | The order card with status, items and tracking |
+| The same order with a wrong phone | "I couldn't match that order…" |
+| An order number that does not exist | The same message. The assistant never says whether an order exists. |
+
 ## Public endpoint (off by default)
 
 The same URL can be served over HTTP to other clients, with one JSON-RPC
@@ -195,6 +254,14 @@ curl -s https://api.breezebuddy.ai/mcp/woocommerce/<host> \
 
 ## Limits
 
+- Order tracking finds an order by its ID, which is the order number on a
+  default WooCommerce store. A store whose order numbers differ from its IDs
+  (an order-numbering plugin) is not supported: WooCommerce's order search
+  scans every order and is too slow for a chat.
+- Order tracking: the tracking number and link come from the Shipment
+  Tracking or Advanced Shipment Tracking plugin. A store without either shows
+  the order with no tracking. The "View order" link opens the store's account
+  page, so a guest shopper must log in to use it.
 - Store search matches title words only; natural sentences can return nothing.
 - The endpoint reads `https://<host>/wp-json/wc/store/v1`. A store installed
   under a subdirectory is not supported yet.
@@ -219,3 +286,6 @@ curl -s https://api.breezebuddy.ai/mcp/woocommerce/<host> \
 | Prices 100 times too small | A `scale_by_exponent` rule was changed | Keep the blueprint's rules |
 | Checkout opens an empty cart | `checkout_page` is still set | Delete `ui_intents.urls.checkout_page` |
 | Cart card does not render after a chat add | A `cart_token` bind is left in `tool_ui_instructions` | Delete it |
+| "Where is my order?" always says the tracking system is unreachable, and the log says `store answered 401` | The REST key is wrong or has no Read permission, or the web server drops the `Authorization` header before WordPress sees it | Check the key in WooCommerce. If the key is right, ask the merchant's host to pass the `Authorization` header to PHP. |
+| The log says `0 woocommerce accounts` or `account is not for <host>` | No credential row for this merchant, or its `endpoint` names another host | Create one row as in 6.2, with the host from the tool server URL or `secrets.shop_url` |
+| The log says `no store for this template` | The template has no enabled `/mcp/woocommerce/<host>` tool server and no `secrets.shop_url`, or has two tool servers for different stores | Write the URL exactly as in section 2.3, or set `secrets.shop_url` |

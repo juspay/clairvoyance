@@ -40,6 +40,7 @@ before.
 | `elevenlabs` | `api_key` — the host is the deployment's per-service one (`ELEVENLABS_TTS_URL` for a voice, `ELEVENLABS_STT_URL` for Scribe) | |
 | `google` (Cloud STT, Chirp TTS, Gemini TTS) | `credentials_json` | |
 | `plivo` (telephony) | `auth_id` (20 characters, `MA…` or `SA…`), `auth_token` | |
+| `woocommerce` (commerce) | `consumer_key` and `consumer_secret`: a store REST API key with read access. `endpoint`: the store's `https://` URL. The order lookup refuses a row whose host is not the template's store: the `<host>` in its `/mcp/woocommerce/<host>` tool server URL, else its `secrets.shop_url`. One row per merchant. | |
 
 `credential_type` is `custom`. Scope is as for every credential: global (no
 reseller, admin-only), reseller-wide, or one merchant. Vocabulary lives in

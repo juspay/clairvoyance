@@ -1,11 +1,7 @@
-"""WooCommerce Store API reads, under a store's Store API base URL
-(``https://<host>/wp-json/wc/store/v1``).
-
-The Store API is public for catalog reads (no keys), so this module only
-ever sends GETs. The host comes from the request path of the MCP endpoint,
-so every request passes the SSRF egress check first
-(``app/core/security/ssrf.py``), redirects are not followed, and the body
-read is capped.
+"""GETs to a merchant's WooCommerce store: the public Store API for the
+catalog and cart, the REST API with the merchant's key for order tracking.
+Every request passes the SSRF check (``app/core/security/ssrf.py``), follows
+no redirects and caps the body.
 """
 
 from __future__ import annotations
@@ -31,14 +27,18 @@ class StoreError(Exception):
 
 
 async def get(
-    base: str, path: str, params: Optional[Dict[str, Any]] = None
+    base: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    auth: Optional[Tuple[str, str]] = None,
 ) -> httpx.Response:
-    """GET a Store API path. Raises ``SSRFError`` for a non-public host and
-    ``ResponseTooLarge`` for an oversized body."""
+    """GET ``path`` under ``base``, with Basic ``auth`` when given. Raises
+    ``SSRFError`` for a non-public host and ``ResponseTooLarge`` for an
+    oversized body."""
     url = f"{base.rstrip('/')}{path}"
     await validate_egress_url(url)
     async with create_http_client(timeout=_TIMEOUT_S) as client:
-        async with client.stream("GET", url, params=params) as resp:
+        async with client.stream("GET", url, params=params, auth=auth) as resp:
             body = bytearray()
             async for chunk in resp.aiter_bytes():
                 body += chunk
