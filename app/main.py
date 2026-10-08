@@ -61,6 +61,7 @@ from app.core.config.static import (
     CRM_ROLE,
     ENABLE_DISPATCHER,
     ENABLE_DRAGONTTS_KILL_SWITCH,
+    ENABLE_EVALUATIONS_WORKER,
     ENABLE_SIGTERM_HANDLER,
     HOST,
     MCP_PUBLIC_ENDPOINT_ENABLED,
@@ -312,7 +313,7 @@ async def lifespan(_app: FastAPI):
     else:
         logger.info("Event-driven dispatcher disabled (ENABLE_DISPATCHER=false)")
 
-    if POD_ROLE == "main_server":
+    if ENABLE_EVALUATIONS_WORKER:
         try:
             await start_analysis_worker()
         except Exception as e:
