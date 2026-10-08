@@ -12,17 +12,33 @@ producer as the owner of the validating dictionary.
 
 from typing import Any, Dict, Optional
 
-from app.crm.connectivity.channels import gate_handle_kind_for
+from app.crm.connectivity.channels import conversation_profile, gate_handle_kind_for
 from app.crm.connectivity.db.accessors import message as message_accessor
+from app.crm.connectivity.letters import file_queued_letter
 from app.crm.connectivity.schemas.message import SendBehind
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
-# T16 col 7. What caused the send; every funnel groups on this.
-SOURCE_KINDS = ("broadcast", "workflow", "agent", "transactional")
+# T16 col 7. What caused the send; every funnel groups on this. 'human' is
+# a teammate replying from the inbox (ADR 0014's CHECK extension, which
+# lives here now that the CHECK is gone).
+SOURCE_KINDS = ("broadcast", "workflow", "agent", "transactional", "human")
+
+#: The producers of free-form replies inside the customer-service window —
+#: Buddy (agent) and a teammate (human). Only they may make a session send.
+SESSION_SOURCE_KINDS = ("agent", "human")
 
 # Purpose roots the gate's caps are set per (design/gate-mechanics.md §3);
-# the full dotted list is permission's (canon T14 CK), not ours.
-PURPOSE_ROOTS = ("marketing", "utility", "transactional", "authentication")
+# the full dotted list is permission's (canon T14 CK), not ours. They follow
+# the providers' template pricing categories (decision D8; Meta's four on
+# WhatsApp): a template is marketing, utility or authentication; 'service'
+# is a free-form reply inside the window. 'transactional' predates the
+# mapping and reads as utility.
+PURPOSE_ROOTS = ("marketing", "utility", "transactional", "authentication", "service")
+
+#: The one root reserved for free-form replies. A template is never
+#: 'service' — the provider bills and polices it under its approved
+#: category — and a free-form reply is never anything else.
+SERVICE_ROOT = "service"
 
 
 def normalize_address(channel: str, address: str) -> Optional[str]:
@@ -44,13 +60,24 @@ def normalize_address(channel: str, address: str) -> Optional[str]:
     return None
 
 
+def purpose_root(purpose_key: str) -> str:
+    """PURE: the root of a dotted purpose key ('' for an empty one)."""
+    return purpose_key.split(".", 1)[0] if purpose_key else ""
+
+
 def validate_proposal(source_kind: str, purpose_key: str) -> None:
-    """PURE: refuse a proposal the vocabulary does not know."""
+    """PURE: refuse a template proposal the vocabulary does not know — or
+    one claiming the 'service' root, which only a free-form reply may."""
     if source_kind not in SOURCE_KINDS:
         raise ValueError(f"unknown source_kind: {source_kind!r}")
-    root = purpose_key.split(".", 1)[0] if purpose_key else ""
+    root = purpose_root(purpose_key)
     if root not in PURPOSE_ROOTS:
         raise ValueError(f"purpose_key must start with one of {PURPOSE_ROOTS}")
+    if root == SERVICE_ROOT:
+        raise ValueError(
+            "a template send cannot carry a 'service' purpose — that root is "
+            "for free-form replies inside the customer-service window"
+        )
 
 
 async def queue_message(
@@ -65,16 +92,24 @@ async def queue_message(
     template_id: Optional[str],
     variables: Dict[str, Any],
     dedupe_key: str,
+    binding_id: Optional[str] = None,
 ) -> Optional[str]:
     """Propose one send. Returns the new row's id, or None when
     dedupe_key already names a row for this merchant — the producer's
     retry was absorbed (T16 col 23), and it should carry on as if it
-    had queued. Raises ValueError on a proposal the vocabulary refuses."""
+    had queued. Raises ValueError on a proposal the vocabulary refuses.
+    ``binding_id`` sends from a named binding (a teammate's template from the
+    Inbox goes out on the binding the customer wrote to); None is the
+    primary, as every workflow send.
+
+    A new row files ``message.queued`` (letters.py) so the conversation
+    timeline shows the template the customer is about to get. The letter is
+    fire-and-forget: queueing never fails because the spine did."""
     validate_proposal(source_kind, purpose_key)
     sent_to = normalize_address(channel, address)
     if sent_to is None:
         raise ValueError(f"unusable {channel} address")
-    return await message_accessor.insert_message(
+    message_id = await message_accessor.insert_message(
         merchant_id,
         customer_id,
         channel,
@@ -85,7 +120,29 @@ async def queue_message(
         template_id,
         variables,
         dedupe_key,
+        binding_id,
     )
+    # The letter is the inbox timeline's only record of what we sent (D1), so
+    # every template on a channel WITH conversations files one — broadcasts
+    # included, one spine row per send, which is the accepted cost of the
+    # timeline. The event worker's pass over it is cheap: outreach returns at
+    # once (our own echo), and connectivity's consumers ignore the topic. A
+    # channel without conversations files none (there is no such channel
+    # today; SMS or email will be the first).
+    if message_id is not None and conversation_profile(channel) is not None:
+        await file_queued_letter(
+            merchant_id=merchant_id,
+            customer_id=customer_id,
+            message_id=message_id,
+            channel=channel,
+            sent_to_address=sent_to,
+            source_kind=source_kind,
+            source_id=source_id,
+            purpose_key=purpose_key,
+            template_id=template_id,
+            variables=variables,
+        )
+    return message_id
 
 
 async def send_behind(
