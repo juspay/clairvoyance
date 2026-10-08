@@ -178,7 +178,10 @@ async def create_lead_call_tracker(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead call tracker created successfully: {decoded_result}")
+            logger.info(
+                f"Lead call tracker created successfully: id={id} "
+                f"reseller_id={reseller_id} template={template}"
+            )
             if decoded_result is not None:
                 _fire_hooks(_created_hooks, decoded_result, "created-lead")
             return decoded_result
@@ -317,7 +320,9 @@ async def update_lead_call_details(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead updated successfully: {decoded_result}")
+            logger.info(
+                f"Lead updated successfully: id={id} status={status} call_id={call_id}"
+            )
             return decoded_result
 
         logger.warning(f"Lead {id} not updated — status may have changed concurrently")
@@ -339,7 +344,7 @@ async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead found: {decoded_result}")
+            logger.info(f"Lead found for call ID {call_id}")
             return decoded_result
 
         logger.warning("Lead not found")
@@ -361,7 +366,7 @@ async def get_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead found: {decoded_result}")
+            logger.info(f"Lead found for ID {lead_id}")
             return decoded_result
 
         logger.error("Lead not found")
@@ -464,7 +469,7 @@ async def update_lead_call_initiated_time(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead updated successfully: {decoded_result}")
+            logger.info(f"Lead updated successfully for call ID {call_id}")
             return decoded_result
 
         logger.error("Failed to update lead")
@@ -491,7 +496,7 @@ async def update_lead_call_initiated_time_by_id(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead updated successfully: {decoded_result}")
+            logger.info(f"Lead updated successfully for ID {lead_id}")
             return decoded_result
 
         logger.error("Failed to update lead")
@@ -579,7 +584,7 @@ async def update_lead_call_recording_url(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead updated successfully: {decoded_result}")
+            logger.info(f"Lead recording url updated for call ID {call_id}")
             return decoded_result
 
         logger.error("Failed to update lead")
@@ -617,7 +622,8 @@ async def update_lead_call_completion_details(
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
             logger.info(
-                f"Lead call completion details updated successfully: {decoded_result}"
+                f"Lead call completion details updated successfully: id={id} "
+                f"status={status} outcome={outcome}"
             )
             # Mirror the ending ONLY on the transition to FINISHED —
             # mid-call outcome writes (template hooks) pass status=None.
@@ -668,7 +674,10 @@ async def update_lead_template(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead template updated successfully: {decoded_result}")
+            logger.info(
+                f"Lead template updated successfully: lead_id={lead_id} "
+                f"template={template} template_id={template_id}"
+            )
             return decoded_result
 
         logger.error(f"Failed to update lead template for lead_id: {lead_id}")
