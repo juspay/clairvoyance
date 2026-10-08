@@ -626,6 +626,43 @@ async def test_an_agent_to_agent_transfer_keeps_the_vobiz_serializer(call_setup)
     assert type(agent.transport._params.serializer) is VobizFrameSerializer
 
 
+def _persisted(persisted: bool) -> Any:
+    """update_lead_template: the row after the write, or None when it failed."""
+
+    async def update_lead_template(lead_id: str, template: str, template_id: str):
+        if not persisted:
+            return None
+        return make_lead().model_copy(
+            update={"template": template, "template_id": template_id}
+        )
+
+    return update_lead_template
+
+
+@pytest.mark.parametrize("persisted", [True, False])
+async def test_an_agent_to_agent_transfer_moves_the_lead_to_the_new_template(
+    call_setup, monkeypatch, persisted
+):
+    """After a transfer bot.lead names the template the row names: the new
+    one once written, the old one if the write failed. Only those two fields
+    move; the in-memory metaData is newer than the row's."""
+    agent = await call_setup(CallProvider.VOBIZ)
+    assert agent.lead is not None
+    agent.lead.template_id = "tpl-1"
+    monkeypatch.setattr(transfer_mod, "update_lead_template", _persisted(persisted))
+    target = SimpleNamespace(id="tpl-2", name="billing", configurations=None)
+
+    await transfer_mod.apply_transfer(
+        agent, PendingAgentTransfer(template=cast(Any, target), template_vars={})
+    )
+
+    expected = ("billing", "tpl-2") if persisted else ("welcome", "tpl-1")
+    assert (agent.lead.template, agent.lead.template_id) == expected
+    assert agent.lead.metaData is not None
+    (record,) = agent.lead.metaData["agent_transfers"]
+    assert (record["from_template_id"], record["to_template_id"]) == ("tpl-1", "tpl-2")
+
+
 # ── the greeting sent before the pipeline starts ─────────────────────────
 
 

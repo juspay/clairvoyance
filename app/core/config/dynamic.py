@@ -619,6 +619,17 @@ async def BB_SARVAM_STT_HIGH_VAD_SENSITIVITY() -> bool:
     return await get_config("BB_SARVAM_STT_HIGH_VAD_SENSITIVITY", False, bool)
 
 
+async def BB_SARVAM_STT_FINALIZE_ON_SEGMENT() -> bool:
+    """Returns BB_SARVAM_STT_FINALIZE_ON_SEGMENT from Redis.
+
+    Kill switch: with Sarvam's VAD signals on, mark each segment's text
+    finalized so the turn skips pipecat's STT safety timer. Off restores that
+    wait after every Sarvam turn: SARVAM_TTFS_P99 (1.17 s) minus the VAD
+    stop_secs, ~0.87 s on telephony (0.3 s) and ~0.22 s on Daily (0.95 s).
+    """
+    return await get_config("BB_SARVAM_STT_FINALIZE_ON_SEGMENT", True, bool)
+
+
 async def BB_TTS_SERVICE() -> str:
     """Returns BREEZE_BUDDY_TTS_SERVICE from Redis (default provider name)"""
     return await get_config("BREEZE_BUDDY_TTS_SERVICE", "elevenlabs", str)
@@ -1006,6 +1017,23 @@ async def DRAGONTTS_HEALTH_TIMEOUT_S() -> float:
     except (TypeError, ValueError):
         logger.warning(f"Invalid DRAGONTTS_HEALTH_TIMEOUT_S value {value!r}; using 3.0")
         return 3.0
+
+
+async def DRAGONTTS_TURN_END_PAD_MS() -> int:
+    """Silence (ms) queued after the last sentence of each bot turn on the
+    DragonTTS live stream (default 160; 0 disables; clamped to 0..500).
+
+    pipecat's telephony output drops the end of every turn — the streaming
+    16k->8k resampler's held-back samples and the <40 ms chunk remainder —
+    and clean v3 clips end ~60 ms after the last word, so the last syllable
+    was cut on some calls. The pad is dropped instead. Once per turn, never
+    between sentences. Defensive parse."""
+    value = await get_config("DRAGONTTS_TURN_END_PAD_MS", 160, int)
+    try:
+        return max(0, min(500, int(value)))
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid DRAGONTTS_TURN_END_PAD_MS value {value!r}; using 160")
+        return 160
 
 
 # --- Plivo number purchasing ---

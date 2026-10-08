@@ -76,6 +76,17 @@ class TranscriptionRequest(BaseModel):
                 raise ValueError("JSON too deeply nested") from None
         return value
 
+    @model_validator(mode="after")
+    def _refuse_a_sarvam_window(self) -> "TranscriptionRequest":
+        """A one-shot clip has no streaming VAD: a Sarvam silence window
+        would be accepted and silently do nothing."""
+        if self.sarvam is not None and self.sarvam.negative_frames_count is not None:
+            raise ValueError(
+                "sarvam.negative_frames_count / negative_frames_window apply to "
+                "streaming STT only, not /stt/transcribe"
+            )
+        return self
+
 
 class TranscriptionStreamRequest(BaseModel):
     """First (JSON text) message on ``WS /agent/voice/breeze-buddy/stt/stream``.

@@ -30,9 +30,6 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.worker impo
     start_analysis_worker,
     stop_analysis_worker,
 )
-from app.ai.voice.agents.breeze_buddy.services.evals.providers import (
-    close_eval_provider_pools,
-)
 from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
     monitor_dragontts_health,
 )
@@ -40,7 +37,7 @@ from app.ai.voice.agents.breeze_buddy.tts.dragontts.monitor import (
 # Database imports
 from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
 from app.ai.voice.tts.catalog import get_enabled_voices as load_tts_voice_catalog
-from app.api.routers import breeze_buddy, devcycle, feature_flags, systems
+from app.api.routers import breeze_buddy, devcycle, feature_flags, mcp, systems
 from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
 
 # Import background task scheduler
@@ -64,8 +61,10 @@ from app.core.config.static import (
     CRM_ROLE,
     ENABLE_DISPATCHER,
     ENABLE_DRAGONTTS_KILL_SWITCH,
+    ENABLE_EVALUATIONS_WORKER,
     ENABLE_SIGTERM_HANDLER,
     HOST,
+    MCP_PUBLIC_ENDPOINT_ENABLED,
     POD_ROLE,
     PORT,
 )
@@ -80,6 +79,7 @@ from app.services.knowledge_base import (
     process_pending_documents as process_pending_kb_documents,
 )
 from app.services.langfuse.tasks.task import initialize_langfuse_tasks
+from app.services.model_provider import close_all as close_model_provider_pools
 from app.services.redis import (
     close_redis_connections,
     get_redis_service,
@@ -305,10 +305,6 @@ async def lifespan(_app: FastAPI):
             logger.info("Event-driven dispatcher started")
         except Exception as e:
             logger.error(f"Failed to start event-driven dispatcher: {e}", exc_info=True)
-        try:
-            await start_analysis_worker()
-        except Exception as e:
-            logger.error(f"Failed to start conversation analysis worker: {e}")
     elif CRM_ROLE != "api":
         logger.info(
             f"CRM_ROLE={CRM_ROLE}: event-driven dispatcher not started "
@@ -316,6 +312,12 @@ async def lifespan(_app: FastAPI):
         )
     else:
         logger.info("Event-driven dispatcher disabled (ENABLE_DISPATCHER=false)")
+
+    if ENABLE_EVALUATIONS_WORKER:
+        try:
+            await start_analysis_worker()
+        except Exception as e:
+            logger.error(f"Failed to start conversation analysis worker: {e}")
 
     # CRM worker roles (design/worker-runtime.md): one image, N pods. A
     # non-"api" CRM_ROLE runs its drain loop as an asyncio task in this
@@ -351,10 +353,11 @@ async def lifespan(_app: FastAPI):
             await stop_promoter()
         except Exception as e:
             logger.error(f"Error stopping dispatcher: {e}", exc_info=True)
-        try:
-            await stop_analysis_worker()
-        except Exception as e:
-            logger.error(f"Error stopping conversation analysis worker: {e}")
+
+    try:
+        await stop_analysis_worker()
+    except Exception as e:
+        logger.error(f"Error stopping conversation analysis worker: {e}")
 
     # Stop background task scheduler if running
     if _background_scheduler:
@@ -383,8 +386,8 @@ async def lifespan(_app: FastAPI):
     # Close shared httpx pools used by chat LLM clients (Azure today).
     # Drains keep-alive connections cleanly so we don't leak fds on SIGTERM.
     await close_llm_http_pools()
-    # Same for the evals providers' pooled vendor clients.
-    await close_eval_provider_pools()
+    # Same for the model providers' pooled vendor clients.
+    await close_model_provider_pools()
     # Close database pool
     await close_db_pool()
     # Close Redis connections
@@ -442,6 +445,11 @@ app.include_router(crm_api.router, prefix="")
 
 # System health endpoints
 app.include_router(systems.router, prefix="", tags=["Systems"])
+
+# Public MCP route (routers/mcp.py). Off by default: our engine answers these
+# URLs in process, and the route has no caller auth yet.
+if MCP_PUBLIC_ENDPOINT_ENABLED:
+    app.include_router(mcp.router, prefix="", tags=["MCP"])
 
 # TTS voice-catalog previews are served straight from the GCS bucket's public
 # URL, so this app exposes no /tts-previews route.

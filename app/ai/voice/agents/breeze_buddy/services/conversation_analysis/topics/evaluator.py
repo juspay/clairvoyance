@@ -15,6 +15,7 @@ from app.database.accessor.breeze_buddy.evaluation_result import (
     save_evaluation_results,
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
+from app.services.model_provider import ProviderError
 
 from .extractor import (
     TopicFirstTokenTimeout,
@@ -55,13 +56,20 @@ def classify_failure(exc: Exception) -> str:
         ),
     ):
         return MODEL_UNAVAILABLE
+    if isinstance(exc, ProviderError) and exc.retryable:
+        return MODEL_UNAVAILABLE
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     if isinstance(status, str) and status.isdigit():
         status = int(status)
     if isinstance(status, int) and (status == 429 or status >= 500):
         return MODEL_UNAVAILABLE
     if isinstance(
-        exc, (TopicModelResponseError, json.JSONDecodeError, ValidationError)
+        exc,
+        (
+            TopicModelResponseError,
+            json.JSONDecodeError,
+            ValidationError,
+        ),
     ):
         return MODEL_BAD_RESPONSE
     return EVALUATION_ERROR
@@ -120,6 +128,8 @@ async def analyze_topics(
             failure = classify_failure(exc)
             if isinstance(exc, TimeoutError):
                 detail = str(exc) or f"timeout after {_ANALYSIS_TIMEOUT_SECONDS}s"
+            elif isinstance(exc, TopicModelResponseError):
+                detail = str(exc)
             else:
                 detail = f"{type(exc).__name__}: {exc}"
             logger.bind(attempt=attempt, failure_class=failure, model=model).warning(

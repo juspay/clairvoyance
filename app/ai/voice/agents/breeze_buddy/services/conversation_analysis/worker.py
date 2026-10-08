@@ -27,6 +27,8 @@ from app.schemas.breeze_buddy.conversation_analysis import (
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
 
+# The agent's own evals: not live yet (see queue.py).
+# from .custom.agent_evals import run_agent_evals
 from .queue import (
     LOG_COMPONENT,
     dequeue_conversation_evaluation,
@@ -84,6 +86,12 @@ async def get_analysis_context(
             "template_id": template_id,
             "started_at": lead.call_initiated_time or lead.created_at,
             "transcript": transcript,
+            # The agent's own evals (not live yet, see queue.py) also need
+            # what an eval judge sees beside the transcript; topics ignore it:
+            # "channel": job.channel.value,
+            # "payload": lead.payload or {},
+            # "meta_data": metadata,
+            # "recorded_outcome": lead.outcome,
         }
     else:
         session = await get_chat_session_by_id(job.source_id)
@@ -188,6 +196,13 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
     if context is None:
         return
     update_log_context(merchant_id=context.get("merchant_id"))
+
+    # The agent's own evals, not live yet (see queue.py): a job of their own,
+    # so a topics retry never re-runs them and their retry never re-runs
+    # topics.
+    # if job.kind == "evals":
+    #     await run_agent_evals(job, context, evaluations)
+    #     return
 
     _in_flight += 1
     try:

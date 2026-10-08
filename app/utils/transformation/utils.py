@@ -41,6 +41,26 @@ def string_trim(value: str) -> str:
     return value.strip()
 
 
+def first_item(value: Any, count: Any = 1, separator: str = ", ") -> Any:
+    """The first ``count`` entries of a joined list, re-joined: "MUFTI, MUFTI,
+    JOCKEY, KILLER" -> "MUFTI" (count 1) or "MUFTI, MUFTI, JOCKEY" (count 3).
+    A real list is cut the same way. Anything else is returned as it came,
+    so a value that is not a list never goes missing."""
+    try:
+        keep = max(1, int(count))
+    except (TypeError, ValueError):
+        keep = 1
+    if isinstance(value, list):
+        if not value:
+            return value
+        return value[0] if keep == 1 else value[:keep]
+    if not isinstance(value, str):
+        return value
+    items = [item.strip() for item in value.split(separator)]
+    head = separator.join(item for item in items[:keep] if item)
+    return head or value
+
+
 def trim_words(value: str, words: list[str]) -> str:
     """
     Removes specified words (case-insensitive) from a string,

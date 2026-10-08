@@ -18,37 +18,11 @@ import pytest
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from app.ai.voice.agents.breeze_buddy.services.evals import (
-    engines,
-    providers,
-)
-from app.ai.voice.agents.breeze_buddy.services.evals.definition import (
-    validate_evals_configuration,
-)
-from app.ai.voice.agents.breeze_buddy.services.evals.engines import (
-    ENGINES,
-)
-from app.ai.voice.agents.breeze_buddy.services.evals.engines.common import (
-    ChoiceResult,
-    NoulResult,
-    ScoreResult,
-)
-from app.ai.voice.agents.breeze_buddy.services.evals.engines.structured_judge_engine import (
-    StructuredJudgeConfiguration,
-    StructuredJudgeEngine,
-    build_state,
-    decide,
-)
-from app.ai.voice.agents.breeze_buddy.services.evals.providers import (
-    PROVIDERS,
-    ProviderRequest,
-    ProviderResponse,
-    TypeSafeError,
-    typesafe,
-)
 from app.api.routers.breeze_buddy.evaluations import handlers
 from app.database.queries.breeze_buddy.evaluation_config import (
+    OUTCOME_CORRECTNESS,
     get_evaluation_config_query,
+    get_outcome_correctness_query,
     save_evaluation_configuration_query,
     set_evaluation_enabled_query,
     update_evaluation_configuration_query,
@@ -58,6 +32,37 @@ from app.schemas.breeze_buddy.evals import (
     EvaluationEnableRequest,
     EvaluationType,
     SaveEvaluationConfigurationRequest,
+)
+from app.services.evals import engines
+from app.services.evals.definition import (
+    validate_evals_configuration,
+)
+from app.services.evals.engines import (
+    ENGINES,
+)
+from app.services.evals.engines.common import (
+    ChoiceResult,
+    NoulResult,
+    ScoreResult,
+)
+from app.services.evals.engines.prompt_judge_engine import (
+    answer_schema as prompt_answer_schema,
+    decide as prompt_decide,
+    parse_questions as prompt_parse_questions,
+)
+from app.services.evals.engines.structured_judge_engine import (
+    StructuredJudgeConfiguration,
+    StructuredJudgeEngine,
+    build_state,
+    decide,
+)
+from app.services.model_provider import (
+    OPENROUTER,
+    PROVIDERS,
+    GenerateRequest,
+    GenerateResponse,
+    GenerationSettings,
+    ProviderConfig,
 )
 
 TEMPLATE_ID = "00000000-0000-0000-0000-000000000001"
@@ -251,7 +256,7 @@ def test_validator_rejects_unknown_engine_and_keys():
     with pytest.raises(ValueError, match="unknown engine"):
         validate_evals_configuration(config)
 
-    # provider must be one the engine supports (structured runs only on typesafe)
+    # provider must be one the engine supports (structured: typesafe)
     config = copy.deepcopy(EXAMPLE_CONFIGURATION)
     config["provider"] = "azure"
     with pytest.raises(ValueError, match="does not support provider"):
@@ -259,6 +264,21 @@ def test_validator_rejects_unknown_engine_and_keys():
 
     config = copy.deepcopy(EXAMPLE_CONFIGURATION)
     config["surprise"] = True
+    with pytest.raises(ValueError, match="unknown configuration keys"):
+        validate_evals_configuration(config)
+
+
+def test_instruction_and_settings_are_the_prompt_engines_keys():
+    # instruction/settings brief the prompt engine's chat model: accepted as
+    # written on a prompt row — even blank or misshapen, the engine reads
+    # them leniently at run time — and unknown on a structured row
+    config = copy.deepcopy(PROMPT_CONFIGURATION)
+    config.update(instruction="   ", settings=["temperature", 0])
+    decoded = validate_evals_configuration(config).model_dump()
+    assert decoded["engine"] == "prompt"
+
+    config = copy.deepcopy(EXAMPLE_CONFIGURATION)
+    config["settings"] = {"temperature": 0}
     with pytest.raises(ValueError, match="unknown configuration keys"):
         validate_evals_configuration(config)
 
@@ -293,7 +313,7 @@ def test_question_rules_belong_to_the_engine(monkeypatch):
     class FakeEngine:
         name = "fake"
         channels = frozenset()
-        providers = {"acme": object()}
+        providers = {"acme": SimpleNamespace(configuration_keys=frozenset())}
         configuration_keys = frozenset({"questions"})
 
         def validate_configuration(self, configuration):
@@ -520,6 +540,63 @@ def test_decide_survives_a_malformed_vendor_answer():
     )
     assert results["stt_accuracy"].value == 9.2
 
+    # a list or dict choice cannot be looked up among the options (unhashable):
+    # it costs that one answer, the rest of the verdict stands
+    for bad in (["BUSY"], {"BUSY": 1}):
+        answers = copy.deepcopy(RECORDED_ANSWERS)
+        answers["verified_outcome"]["choice"] = bad
+        results = {r.key: r for r in decide(answers, EXAMPLE_CONFIGURATION).result}
+        assert results["verified_outcome"] == ChoiceResult(
+            key="verified_outcome", label="Verified outcome", value=None, confidence=0.9
+        )
+        assert results["stt_accuracy"].value == 9.2
+
+
+def test_decide_drops_answers_off_the_questions_scale():
+    # a chat model is only ASKED to stay on the rubric; jev always does. An
+    # off-scale answer is not an answer: that one result is None, the
+    # verdict stands (the stored min/max would otherwise lie)
+    answers = {
+        "llm_accuracy": {"score": 10, "confidence": 0.5},  # 1-based on a 0..9 rubric
+        "latency": {"score": -1, "confidence": 0.5},
+        "loop_detection": {"score": 1, "confidence": 1.5},  # confidence off 0..1
+        "verified_outcome": {"choice": "N/A", "confidence": 0.9},  # not an option
+        "asked_for_human": {"noul": 1.2},
+        "user_emotion": {"score": 9, "confidence": 1.0},  # the top level, in range
+    }
+    by_key = {
+        r["key"]: r
+        for r in decide(answers, EXAMPLE_CONFIGURATION).model_dump()["result"]
+    }
+    assert by_key["llm_accuracy"]["value"] is None
+    assert by_key["latency"]["value"] is None
+    assert by_key["loop_detection"]["value"] == 1
+    assert by_key["loop_detection"]["confidence"] is None
+    assert by_key["verified_outcome"]["value"] is None
+    assert by_key["asked_for_human"]["value"] is None
+    assert by_key["user_emotion"]["value"] == 10
+    assert by_key["user_emotion"]["confidence"] == 1.0
+    assert len(by_key) == len(EXAMPLE_CONFIGURATION["questions"])
+
+
+def test_transform_refuses_a_reply_without_answers():
+    # a valid JSON object in the wrong shape would decide({}) into a verdict
+    # of Nones and be stored as "completed"; the contract requires `answers`,
+    # so its absence means the reply was not read — raise, store nothing
+    engine = StructuredJudgeEngine()
+    for body in (
+        {"llm_accuracy": {"score": 8, "confidence": 0.5}},  # no wrapper
+        {"answers": {}},
+        {"answers": "none"},
+        [1, 2],
+        None,  # a reply that was not JSON at all
+    ):
+        with pytest.raises(ValueError, match="no 'answers' object"):
+            engine.transform(
+                GenerateResponse(content=json.dumps(body), model="m", structured=body),
+                EXAMPLE_CONFIGURATION,
+            )
+
 
 def test_decide_is_pure():
     answers_before = copy.deepcopy(RECORDED_ANSWERS)
@@ -539,9 +616,13 @@ class FakeProvider:
         self.body = body
         self.calls = []
 
-    async def call(self, request):
+    async def generate(self, request):
         self.calls.append(request)
-        return ProviderResponse(text=json.dumps(self.body), model=self.body["model"])
+        return GenerateResponse(
+            content=json.dumps(self.body),
+            model=self.body["model"],
+            structured=self.body,
+        )
 
     async def close(self):
         return None
@@ -551,154 +632,469 @@ async def test_structured_evaluate_routes_to_the_configured_provider(monkeypatch
     provider = FakeProvider({"answers": RECORDED_ANSWERS, "model": "jev-1.13.0-b"})
     monkeypatch.setattr(StructuredJudgeEngine, "providers", {"typesafe": provider})
 
-    context = _voice_context()
-    verdict = await StructuredJudgeEngine().evaluate(context, EXAMPLE_CONFIGURATION)
+    verdict = await StructuredJudgeEngine().evaluate(
+        _voice_context(), EXAMPLE_CONFIGURATION
+    )
 
-    # one call, to the provider named in the config: the projected state and
-    # the typed questions as the JSON body, no prompt, no call options
+    # one call, to the provider named in the config: a payload judge gets the
+    # projected state and the typed questions as the payload, nothing else
     assert len(provider.calls) == 1
     request = provider.calls[0]
-    assert json.loads(request.content) == {
+    assert request.input == {
         "state": build_state(_voice_context()),
         "questions": _typesafe_questions(EXAMPLE_CONFIGURATION),
     }
     assert request.model == "jev-1.13.0"
-    assert request.instruction is None
-    assert request.settings == {}
+    assert request.system_prompt is None and request.schema is None
     # verdict is decide() over the body, with the model that actually served
     assert verdict.result == decide(RECORDED_ANSWERS, EXAMPLE_CONFIGURATION).result
     assert verdict.model == "jev-1.13.0-b"
 
 
-def _request(state=None, questions=None, model="m") -> ProviderRequest:
-    """What an engine hands TypeSafe: the JSON body, no instruction."""
-    return ProviderRequest(
-        model=model,
-        instruction=None,
-        content=json.dumps({"state": state or {}, "questions": questions or {}}),
-        settings={},
-    )
-
-
-def _typesafe_with(handler, monkeypatch):
-    """A TypeSafeProvider whose shared pool is an httpx MockTransport."""
-    monkeypatch.setattr(typesafe, "TYPESAFE_API_KEY", "k")
-    monkeypatch.setattr(typesafe.TypeSafeProvider, "_BACKOFF_BASE_SECONDS", 0.0)
-    monkeypatch.setattr(
-        typesafe.TypeSafeProvider,
-        "_client",
-        httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-    )
-    return typesafe.TypeSafeProvider()
-
-
-async def test_typesafe_judge_posts_state_questions_model(monkeypatch):
-    seen = {}
-
-    def handler(request):
-        seen["auth"] = request.headers["authorization"]
-        seen["json"] = json.loads(request.content)
-        return httpx.Response(200, json={"answers": {"q": {}}, "model": "m-served"})
-
-    response = await _typesafe_with(handler, monkeypatch).call(
-        _request({"s": 1}, {"q": {}}, "m")
-    )
-    assert json.loads(response.text) == {"answers": {"q": {}}, "model": "m-served"}
-    assert response.model == "m-served"
-    assert seen["auth"] == "Bearer k"
-    assert seen["json"] == {"state": {"s": 1}, "model": "m", "questions": {"q": {}}}
-
-
-async def test_typesafe_judge_retries_only_what_a_retry_can_fix(monkeypatch):
-    codes = iter([503, 504, 200])
-    seen = []
-
-    def flaky(request):
-        code = next(codes)
-        seen.append(code)
-        return httpx.Response(code, json={"answers": {}})
-
-    response = await _typesafe_with(flaky, monkeypatch).call(_request())
-    assert json.loads(response.text) == {"answers": {}}
-    assert seen == [503, 504, 200]  # every 5xx is retried, 504 included
-
-    seen.clear()
-
-    def rejected(request):
-        seen.append(400)
-        return httpx.Response(400, text="bad rubric")
-
-    with pytest.raises(TypeSafeError, match="HTTP 400"):
-        await _typesafe_with(rejected, monkeypatch).call(_request())
-    assert seen == [400]  # a 4xx is final: one attempt, no retry
-
-
-async def test_typesafe_close_drains_the_shared_pool(monkeypatch):
-    provider = _typesafe_with(lambda request: httpx.Response(200), monkeypatch)
-    pool = type(provider)._client
-    assert pool is not None and not pool.is_closed
-    await provider.close()
-    assert pool.is_closed and type(provider)._client is None
-    await provider.close()  # idempotent: nothing open, nothing raised
-
-
-async def test_close_eval_provider_pools_closes_every_provider_once(
-    monkeypatch,
-):
-    first, second = SimpleNamespace(close=AsyncMock()), SimpleNamespace(
-        close=AsyncMock()
-    )
-    monkeypatch.setattr(providers, "PROVIDERS", {"a": first, "b": second})
-    await providers.close_eval_provider_pools()
-    first.close.assert_awaited_once()
-    second.close.assert_awaited_once()
-
-
 def test_engines_use_the_registered_provider_instances():
-    # the closer drains PROVIDERS; an engine holding a private instance of a
-    # per-instance-pool provider would escape it
+    # close_all drains PROVIDERS; an engine holding a private instance of a
+    # provider would escape it
     for engine in ENGINES.values():
         for name, provider in engine.providers.items():
             assert PROVIDERS[name] is provider
 
 
-async def test_typesafe_judge_without_key_is_loud(monkeypatch):
-    monkeypatch.setattr(typesafe, "TYPESAFE_API_KEY", "")
-    with pytest.raises(typesafe.TypeSafeError, match="TYPESAFE_API_KEY"):
-        await typesafe.TypeSafeProvider().call(_request())
-
-
-async def test_typesafe_rejects_content_that_is_not_a_json_object(monkeypatch):
-    provider = _typesafe_with(lambda request: httpx.Response(200), monkeypatch)
-    bad = ProviderRequest(model="m", instruction=None, content="not json", settings={})
-    with pytest.raises(typesafe.TypeSafeError, match="not JSON"):
-        await provider.call(bad)
-
-
-# --- the pipeline steps are the engine's: build_request and transform --------
+# --- the pipeline steps are the engine's: build_request and transform ------
 
 
 def test_structured_build_request_and_transform_are_the_pipeline():
     engine = StructuredJudgeEngine()
     state = build_state(_voice_context())
     request = engine.build_request(state, EXAMPLE_CONFIGURATION)
-    assert request.instruction is None and request.settings == {}
-    assert json.loads(request.content) == {
+    # the payload a judge API reads natively: no prompt, no schema
+    assert request.model == "jev-1.13.0"
+    assert request.input == {
         "state": state,
         "questions": _typesafe_questions(EXAMPLE_CONFIGURATION),
     }
-    # transform = what gets stored; it is decide() over the vendor's answers
-    response = ProviderResponse(
-        text=json.dumps({"answers": RECORDED_ANSWERS, "model": "jev-1.13.0-b"}),
-        model="jev-1.13.0-b",
+    assert request.system_prompt is None and request.schema is None
+    # transform = what gets stored; it is decide() over the model's answers
+    body = {"answers": RECORDED_ANSWERS, "model": "jev-1.13.0-b"}
+    response = GenerateResponse(
+        content=json.dumps(body), model="jev-1.13.0-b", structured=body
     )
     verdict = engine.transform(response, EXAMPLE_CONFIGURATION)
     assert verdict.result == decide(RECORDED_ANSWERS, EXAMPLE_CONFIGURATION).result
     assert verdict.model == "jev-1.13.0-b"
-    with pytest.raises(json.JSONDecodeError):  # an unreadable reply is never stored
-        engine.transform(
-            ProviderResponse(text="nope", model="m"), EXAMPLE_CONFIGURATION
+
+
+def test_structured_engine_is_served_by_typesafe_only():
+    # criteria questions are read natively by jev; a chat model takes the
+    # prompt engine instead
+    config = copy.deepcopy(EXAMPLE_CONFIGURATION)
+    config.update(provider="openrouter", model="openai/gpt-4o-mini")
+    with pytest.raises(ValueError, match="does not support provider 'openrouter'"):
+        validate_evals_configuration(config)
+
+
+def _chat_reply(content, finish_reason="stop", model="openai/gpt-4o-mini-2024"):
+    """One OpenAI-shaped chat completion as OpenRouter returns it."""
+    return {
+        "id": "gen-1",
+        "model": model,
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _openrouter_with(handler, monkeypatch):
+    """The registered OpenRouter provider on an httpx MockTransport."""
+    monkeypatch.setattr(
+        OPENROUTER,
+        "_config",
+        ProviderConfig(api_key="k", base_url="https://or.test", timeout_seconds=5),
+    )
+    monkeypatch.setattr(OPENROUTER, "_BACKOFF_BASE_SECONDS", 0.0)
+    monkeypatch.setattr(
+        OPENROUTER, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    return OPENROUTER
+
+
+def _sent_document(request: GenerateRequest) -> Dict[str, Any]:
+    """The document a chat request carries as its user message."""
+    assert isinstance(request.input, list) and len(request.input) == 1
+    return json.loads(request.input[0].content)
+
+
+# --- the prompt engine: the same questions, no criteria -----------------------
+
+PROMPT_CONFIGURATION: Dict[str, Any] = {
+    "engine": "prompt",
+    "provider": "openrouter",
+    "model": "openai/gpt-4o-mini",
+    "questions": [
+        {
+            "key": "llm_accuracy",
+            "type": "score",
+            "label": "Llm accuracy",
+            "instructions": (
+                "Rate factual accuracy from 1 (fabricated facts or action lies) "
+                "to 10 (every fact correct). Style deviations are not errors."
+            ),
+        },
+        {
+            "key": "verified_outcome",
+            "type": "choice",
+            "label": "Verified outcome",
+            "instructions": (
+                "The outcome this call should have had: CONFIRM, CANCEL, BUSY or OTHER."
+            ),
+        },
+        {
+            "key": "asked_for_human",
+            "type": "noul",
+            "label": "Asked for human",
+            "instructions": "Did the customer ask to speak to a human agent?",
+        },
+    ],
+}
+
+
+def test_prompt_configuration_validates_without_criteria():
+    # the decoded row, minus the optional scale a score may leave unset
+    decoded = validate_evals_configuration(PROMPT_CONFIGURATION).model_dump(
+        exclude_none=True
+    )
+    assert decoded == PROMPT_CONFIGURATION
+
+    # criteria is refused: the scoring conditions belong in instructions
+    config = copy.deepcopy(PROMPT_CONFIGURATION)
+    config["questions"][0]["criteria"] = ["1 - bad", "2 - good"]
+    with pytest.raises(ValueError, match="no criteria"):
+        validate_evals_configuration(config)
+
+    # so is any other key a question does not have
+    config = copy.deepcopy(PROMPT_CONFIGURATION)
+    config["questions"][0]["levels"] = 10
+    with pytest.raises(ValueError, match="unknown question key 'levels'"):
+        validate_evals_configuration(config)
+
+    # chat models only: jev needs criteria arrays
+    config = copy.deepcopy(PROMPT_CONFIGURATION)
+    config["provider"] = "typesafe"
+    config["model"] = "jev-1.13.0"
+    with pytest.raises(ValueError, match="does not support provider 'typesafe'"):
+        validate_evals_configuration(config)
+
+    # the structured engine still demands criteria on its own rows
+    config = copy.deepcopy(PROMPT_CONFIGURATION)
+    config.update(engine="structured", provider="typesafe", model="jev-1.13.0")
+    with pytest.raises(
+        ValueError, match="question 'llm_accuracy': criteria is required"
+    ):
+        validate_evals_configuration(config)
+
+
+def test_prompt_answer_schema_bounds_nothing():
+    schema = json.loads(
+        json.dumps(
+            prompt_answer_schema(
+                prompt_parse_questions(PROMPT_CONFIGURATION["questions"])
+            )
         )
+    )
+    answers = schema["properties"]["answers"]
+    assert answers["required"] == [
+        "llm_accuracy",
+        "verified_outcome",
+        "asked_for_human",
+    ]
+    score = answers["properties"]["llm_accuracy"]["properties"]["score"]
+    assert score["type"] == "number"
+    assert "minimum" not in score and "maximum" not in score  # the scale is prose
+    choice = answers["properties"]["verified_outcome"]["properties"]["choice"]
+    assert "enum" not in choice  # the options are prose too
+    assert answers["properties"]["llm_accuracy"]["required"] == ["score"]
+    assert answers["properties"]["verified_outcome"]["required"] == ["choice"]
+    assert answers["properties"]["asked_for_human"]["required"] == ["noul"]
+
+
+def test_prompt_decide_stores_the_score_as_given_with_no_scale():
+    answers = {
+        "llm_accuracy": {"score": 7},
+        "verified_outcome": {"choice": "BUSY"},
+        "asked_for_human": {"noul": 0.2},
+    }
+    verdict = prompt_decide(answers, PROMPT_CONFIGURATION)
+    assert verdict.result == [
+        ScoreResult(
+            key="llm_accuracy", label="Llm accuracy", value=7, min=None, max=None
+        ),
+        ChoiceResult(key="verified_outcome", label="Verified outcome", value="BUSY"),
+        NoulResult(key="asked_for_human", label="Asked for human", value=0.2),
+    ]
+    # a confidence the model volunteers anyway is not read: none was asked for
+    volunteered = {"llm_accuracy": {"score": 7, "confidence": 0.6}}
+    first = prompt_decide(volunteered, PROMPT_CONFIGURATION).result[0]
+    assert isinstance(first, ScoreResult) and first.confidence is None
+    # the stored JSON says the scale explicitly: null, not missing
+    stored = verdict.model_dump()["result"][0]
+    assert stored["min"] is None and stored["max"] is None and "min" in stored
+
+    # a malformed or missing answer costs that one result, never the verdict
+    verdict = prompt_decide(
+        {"llm_accuracy": {"score": "seven"}, "verified_outcome": {"choice": 3}},
+        PROMPT_CONFIGURATION,
+    )
+    assert [result.value for result in verdict.result] == [None, None, None]
+
+
+def test_prompt_decide_bounds_only_what_it_knows_and_refuses_no_answers():
+    # the score scale is prose, so a score is stored as given; a noul is a
+    # probability and 0..1 is the one scale this engine knows
+    answers = {
+        "llm_accuracy": {"score": 11},
+        "verified_outcome": {"choice": "whatever"},
+        "asked_for_human": {"noul": 1.2},
+    }
+    by_key = {
+        r["key"]: r
+        for r in prompt_decide(answers, PROMPT_CONFIGURATION).model_dump()["result"]
+    }
+    assert by_key["llm_accuracy"]["value"] == 11
+    assert by_key["verified_outcome"]["value"] == "whatever"
+    assert by_key["asked_for_human"]["value"] is None
+
+    # NaN / Infinity parse as JSON here but JSONB refuses them: with no
+    # declared scale to check against, _number itself must drop them
+    body = json.loads(
+        '{"llm_accuracy": {"score": NaN}, "asked_for_human": {"noul": Infinity}}'
+    )
+    stored = prompt_decide(body, PROMPT_CONFIGURATION).model_dump()["result"]
+    assert stored[0]["value"] is None and stored[2]["value"] is None
+    assert json.dumps(stored, allow_nan=False)  # what the result writer needs
+
+    engine = ENGINES["prompt"]
+    with pytest.raises(ValueError, match="no 'answers' object"):
+        body = {"llm_accuracy": {"score": 8}}
+        engine.transform(
+            GenerateResponse(content=json.dumps(body), model="m", structured=body),
+            PROMPT_CONFIGURATION,
+        )
+
+
+def test_prompt_score_may_declare_its_scale():
+    # min/max are optional on a prompt score question; given together they
+    # reach the contract, bound the answer and are stored; absent = null
+    config = copy.deepcopy(PROMPT_CONFIGURATION)
+    config["questions"][0].update(min=1, max=10)
+    decoded = validate_evals_configuration(config).model_dump()
+    assert decoded["questions"][0]["min"] == 1 and decoded["questions"][0]["max"] == 10
+
+    schema = prompt_answer_schema(prompt_parse_questions(config["questions"]))
+    score = json.loads(json.dumps(schema))["properties"]["answers"]["properties"][
+        "llm_accuracy"
+    ]["properties"]["score"]
+    assert (score["minimum"], score["maximum"]) == (1, 10)
+
+    stored = prompt_decide({"llm_accuracy": {"score": 7}}, config).model_dump()[
+        "result"
+    ]
+    assert (stored[0]["value"], stored[0]["min"], stored[0]["max"]) == (7, 1, 10)
+    stored = prompt_decide({"llm_accuracy": {"score": 11}}, config).model_dump()[
+        "result"
+    ]
+    assert (
+        stored[0]["value"] is None and stored[0]["max"] == 10
+    )  # off the declared scale
+
+    # the model sees the scale in the document too
+    document = _sent_document(ENGINES["prompt"].build_request({}, config))
+    sent = document["questions"]["llm_accuracy"]
+    assert (sent["min"], sent["max"]) == (1, 10)
+    assert "min" not in document["questions"]["verified_outcome"]
+
+    # one without the other, or an empty range, is refused
+    for bad in ({"min": 1}, {"max": 10}, {"min": 5, "max": 5}, {"min": 10, "max": 1}):
+        config = copy.deepcopy(PROMPT_CONFIGURATION)
+        config["questions"][0].update(bad)
+        with pytest.raises(ValueError, match="min"):
+            validate_evals_configuration(config)
+
+
+_PREAMBLE_START = "You are an impartial evaluation judge."
+
+
+async def test_prompt_on_openrouter_end_to_end(monkeypatch):
+    answers = {
+        "llm_accuracy": {"score": 8},
+        "verified_outcome": {"choice": "CONFIRM"},
+        "asked_for_human": {"noul": 0.05},
+    }
+    seen = {}
+
+    def handler(request):
+        seen["json"] = json.loads(request.content)
+        return httpx.Response(200, json=_chat_reply(json.dumps({"answers": answers})))
+
+    _openrouter_with(handler, monkeypatch)
+    verdict = await ENGINES["prompt"].evaluate(_voice_context(), PROMPT_CONFIGURATION)
+
+    # the document: type + instructions per question, no criteria anywhere
+    system, user = seen["json"]["messages"]
+    assert json.loads(user["content"])["questions"] == {
+        q["key"]: {"type": q["type"], "instructions": q["instructions"]}
+        for q in PROMPT_CONFIGURATION["questions"]
+    }
+    # the reply shape travels as structured output, never as prompt text
+    assert system["content"].startswith(_PREAMBLE_START)
+    assert '"answers"' not in system["content"]
+    assert seen["json"]["response_format"]["type"] == "json_schema"
+    schema = seen["json"]["response_format"]["json_schema"]["schema"]
+    assert schema["required"] == ["answers"]
+    # the same stored shape as every other engine
+    assert (verdict.engine, verdict.provider) == ("prompt", "openrouter")
+    assert verdict.model == "openai/gpt-4o-mini-2024"
+    assert verdict.result[0] == ScoreResult(
+        key="llm_accuracy", label="Llm accuracy", value=8, min=None, max=None
+    )
+
+
+def test_prompt_reads_its_options_leniently():
+    # absent, blank/empty or the wrong shape = not provided; never an error
+    schema = prompt_answer_schema(
+        prompt_parse_questions(PROMPT_CONFIGURATION["questions"])
+    )
+    for options in (
+        {},
+        {"instruction": "   ", "settings": {}},
+        {"instruction": ["x"], "settings": ["temperature", 0]},
+    ):
+        config = {**PROMPT_CONFIGURATION, **options}
+        request = ENGINES["prompt"].build_request({}, config)
+        assert request.system_prompt is not None
+        assert request.system_prompt.startswith(_PREAMBLE_START)
+        assert request.schema == schema
+        # the default: a judge must be repeatable
+        assert request.settings == GenerationSettings(temperature=0)
+        assert request.extra is None
+
+
+def test_prompt_briefs_its_chat_model():
+    config = {
+        **PROMPT_CONFIGURATION,
+        "instruction": " Be strict. ",
+        "settings": {
+            "temperature": 0.5,
+            "max_tokens": 9,
+            "provider": {"order": ["openai"]},
+            "seed": 7,
+        },
+    }
+    state = build_state(_voice_context())
+    request = ENGINES["prompt"].build_request(state, config)
+
+    assert request.model == "openai/gpt-4o-mini"
+    # the document is the one user message
+    assert _sent_document(request) == {
+        "state": json.loads(json.dumps(state)),
+        "questions": {
+            q["key"]: {"type": q["type"], "instructions": q["instructions"]}
+            for q in PROMPT_CONFIGURATION["questions"]
+        },
+    }
+    # the row's instruction is the whole system prompt; the reply contract
+    # goes as the structured-output schema only
+    schema = prompt_answer_schema(prompt_parse_questions(config["questions"]))
+    assert request.schema == schema
+    assert request.system_prompt == "Be strict."
+    # the common knobs are typed; the rest passes through to the vendor
+    assert request.settings == GenerationSettings(temperature=0.5, max_tokens=9)
+    assert request.extra == {"provider": {"order": ["openai"]}, "seed": 7}
+
+
+def test_an_answer_that_is_not_an_object_costs_that_one_result():
+    # seen live: a small model replied "llm_accuracy": 8 instead of
+    # {"score": 8} — that one result is None, the rest of the verdict stands
+    verdict = prompt_decide(
+        {"llm_accuracy": 8, "verified_outcome": {"choice": "BUSY"}},
+        PROMPT_CONFIGURATION,
+    )
+    assert [result.value for result in verdict.result] == [None, "BUSY", None]
+    verdict = decide({"llm_accuracy": 3, "latency": [1]}, EXAMPLE_CONFIGURATION)
+    by_key = {result.key: result.value for result in verdict.result}
+    assert by_key["llm_accuracy"] is None and by_key["latency"] is None
+
+
+def test_structured_output_is_a_prompt_row_switch():
+    # true / false / absent are valid; anything else is a 400
+    for value in (True, False):
+        config = {**PROMPT_CONFIGURATION, "structured_output": value}
+        assert (
+            validate_evals_configuration(config).model_dump()["structured_output"]
+            is value
+        )
+    config = {**PROMPT_CONFIGURATION, "structured_output": "yes"}
+    with pytest.raises(ValueError, match="structured_output must be true or false"):
+        validate_evals_configuration(config)
+    # the structured engine's model reads criteria natively: not its key
+    config = {**EXAMPLE_CONFIGURATION, "structured_output": False}
+    with pytest.raises(ValueError, match="unknown configuration keys"):
+        validate_evals_configuration(config)
+
+
+def test_structured_output_decides_how_the_contract_travels():
+    schema = prompt_answer_schema(
+        prompt_parse_questions(PROMPT_CONFIGURATION["questions"])
+    )
+    contract = json.dumps(schema)
+    # absent or true: as the structured-output schema, never prompt text
+    for options in ({}, {"structured_output": True}):
+        request = ENGINES["prompt"].build_request(
+            {}, {**PROMPT_CONFIGURATION, **options}
+        )
+        assert request.schema == schema
+        assert request.system_prompt is not None
+        assert contract not in request.system_prompt
+    # false: no schema sent; the contract is spelled out in the system prompt
+    request = ENGINES["prompt"].build_request(
+        {}, {**PROMPT_CONFIGURATION, "structured_output": False, "instruction": "Hi."}
+    )
+    assert request.schema is None
+    assert request.system_prompt is not None
+    assert request.system_prompt.startswith("Hi.\n\n")
+    assert request.system_prompt.endswith(contract)
+
+
+async def test_prompt_without_structured_output_reads_the_reply_text(monkeypatch):
+    config = {**PROMPT_CONFIGURATION, "structured_output": False}
+    answers = {
+        "llm_accuracy": {"score": 6},
+        "verified_outcome": {"choice": "BUSY"},
+        "asked_for_human": {"noul": 0.3},
+    }
+    seen = {}
+
+    def handler(request):
+        seen["json"] = json.loads(request.content)
+        reply = "Sure:\n```json\n" + json.dumps({"answers": answers}) + "\n```"
+        return httpx.Response(200, json=_chat_reply(reply))
+
+    _openrouter_with(handler, monkeypatch)
+    verdict = await ENGINES["prompt"].evaluate(_voice_context(), config)
+
+    # one plain chat call: no structured output, no routing constraint
+    assert "response_format" not in seen["json"] and "provider" not in seen["json"]
+    assert [result.value for result in verdict.result] == [6, "BUSY", 0.3]
+
+    # a reply with no readable JSON is not stored
+    def prose(request):
+        return httpx.Response(200, json=_chat_reply("The agent did fine."))
+
+    _openrouter_with(prose, monkeypatch)
+    with pytest.raises(ValueError, match="no 'answers' object"):
+        await ENGINES["prompt"].evaluate(_voice_context(), config)
 
 
 # --- the SQL builders ------------------------------------------------------
@@ -740,12 +1136,36 @@ def test_save_configuration_creates_disabled_or_replaces():
     # the one creation point — a missing row is born DISABLED: configuring
     # is not consenting to run; enable is a separate explicit flip
     assert "INSERT INTO evaluation_config" in query
-    assert "VALUES ($1::uuid, $2::evaluation_type, false, $3::jsonb)" in query
+    # the per-type endpoint's row is the one named after its type
+    assert (
+        "VALUES ($1::uuid, $2::evaluation_type, lower($2::text), false, $3::jsonb)"
+        in query
+    )
+    assert "ON CONFLICT (template_id, name)" in query
     # an existing row: configuration replaced wholesale, enabled untouched
     assert "DO UPDATE SET configuration = EXCLUDED.configuration" in query
     assert "EXCLUDED.enabled" not in query
     assert values[:2] == [TEMPLATE_ID, "CONVERSATION_EVALS"]
     assert json.loads(values[2]) == EXAMPLE_CONFIGURATION
+
+
+def test_the_preset_outcome_eval_is_a_default_an_agent_row_overrides():
+    query, values = get_outcome_correctness_query(TEMPLATE_ID)
+    # the preset row (no template) holds the engine, model and threshold ...
+    assert "builtin.template_id IS NULL" in query
+    # ... and the agent's own row of that name, when there is one, decides
+    # whether it runs, either way; without one the preset row's flag does
+    assert "LEFT JOIN evaluation_config own" in query
+    assert "COALESCE(own.enabled, builtin.enabled)" in query
+    assert values == [TEMPLATE_ID, OUTCOME_CORRECTNESS]
+
+
+def test_the_preset_outcome_eval_is_seeded_off():
+    migration = Path(
+        "app/database/migrations/083_evaluation_config_names.sql"
+    ).read_text()
+    seed = migration[migration.index("INSERT INTO evaluation_config") :]
+    assert "'outcome_correctness',\n    false," in seed
 
 
 # --- the API handlers ------------------------------------------------------

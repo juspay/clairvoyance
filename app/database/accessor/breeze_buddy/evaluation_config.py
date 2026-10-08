@@ -1,4 +1,4 @@
-"""Database access for topic evaluation configuration."""
+"""Database access for per-template evaluation configuration."""
 
 from typing import Any, Dict, List, Optional
 
@@ -7,6 +7,7 @@ from app.database.queries.breeze_buddy.evaluation_config import (
     add_discovered_topics_query,
     get_enabled_evaluations_query,
     get_evaluation_config_query,
+    get_outcome_correctness_query,
     has_enabled_evaluations_query,
     initialize_evaluation_config_query,
     remove_topics_query,
@@ -34,6 +35,14 @@ async def get_enabled_evaluations(template_id: str) -> List[Dict[str, Any]]:
     query, values = get_enabled_evaluations_query(template_id)
     rows = await run_parameterized_query(query, values)
     return [dict(row) for row in rows or []]
+
+
+async def get_outcome_correctness(template_id: str) -> Optional[Dict[str, Any]]:
+    """The preset outcome_correctness row, or None when the eval is off for
+    this agent (off by default; see the query)."""
+    query, values = get_outcome_correctness_query(template_id)
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None
 
 
 async def has_enabled_evaluations(template_id: str) -> bool:

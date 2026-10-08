@@ -28,6 +28,11 @@ UVICORN_LOG_LEVEL = os.environ.get("UVICORN_LOG_LEVEL", "info")
 # Gemini Proxy Configuration
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+# Firecrawl Configuration
+# Firecrawl reads a store's site for onboarding research (and its brand
+# colours). Unset = research is unavailable; never called unauthenticated.
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
+
 # Pipecat Agent Configuration
 DAILY_API_KEY = os.environ.get("DAILY_API_KEY", "")
 DAILY_API_URL = os.environ.get("DAILY_API_URL", "https://api.daily.co/v1")
@@ -467,6 +472,7 @@ def _flag(env_var: str, default_main_server: bool, default_agent_pool: bool) -> 
 
 
 ENABLE_DISPATCHER = _flag("ENABLE_DISPATCHER", True, False)
+ENABLE_EVALUATIONS_WORKER = _flag("ENABLE_EVALUATIONS_WORKER", False, False)
 
 # Promoter
 BB_PROMOTER_TICK_MS = int(os.environ.get("BB_PROMOTER_TICK_MS", 200))
@@ -959,14 +965,24 @@ LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_BASEURL = os.environ.get("LANGFUSE_BASEURL", "https://us.cloud.langfuse.com")
 
-# TypeSafe Jev (evals provider, evals/providers/typesafe.py).
-# Empty key = every evaluation on it fails with a logged error
+# TypeSafe Jev (model provider, app/services/model_provider/typesafe.py).
+# Empty key = every call on it fails with a logged error
 # (a deployment mistake should be loud); nothing else is affected.
 TYPESAFE_API_KEY = os.environ.get("TYPESAFE_API_KEY", "")
 TYPESAFE_API_URL = os.environ.get(
     "TYPESAFE_API_URL", "https://api.typesafe.ai/v1/systemone"
 )
 TYPESAFE_TIMEOUT_SECONDS = _positive_float("TYPESAFE_TIMEOUT_SECONDS", 30.0)
+
+# OpenRouter (model provider, app/services/model_provider/openrouter.py): one
+# key and one chat-completions URL front every model it routes; ``model`` is
+# the OpenRouter model id. Empty key = every call on it fails with a logged
+# error; nothing else is affected.
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_API_URL = os.environ.get(
+    "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
+)
+OPENROUTER_TIMEOUT_SECONDS = _positive_float("OPENROUTER_TIMEOUT_SECONDS", 60.0)
 
 BREEZE_BUDDY_SONIOX_MODEL = os.environ.get("BREEZE_BUDDY_SONIOX_MODEL", "stt-rt-v4")
 BREEZE_BUDDY_SONIOX_LANGUAGE_HINTS = os.environ.get(
@@ -1154,6 +1170,13 @@ CORS_ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+
+# Public MCP endpoint, POST /mcp/{platform}/{store} (app/api/routers/mcp.py).
+# Off by default: our own engine answers these URLs in process, and the route
+# has no caller auth yet. Turn it on only after auth is added to the route.
+MCP_PUBLIC_ENDPOINT_ENABLED = (
+    os.environ.get("MCP_PUBLIC_ENDPOINT_ENABLED", "false").lower() == "true"
+)
 
 # Template `custom` global functions execute author-supplied python_code. An
 # in-process interpreter sandbox is NOT a security boundary, so this feature is

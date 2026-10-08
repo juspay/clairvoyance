@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import time
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -52,6 +53,13 @@ from app.schemas.breeze_buddy.conversation_analysis import (
     ConversationEvaluationJob,
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
+from app.services.model_provider import (
+    GenerateResponse,
+    GenerationSettings,
+    Message,
+    ProviderError,
+    Usage,
+)
 
 TEMPLATE_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -138,6 +146,76 @@ async def test_agent_prompt_is_sent_only_when_enabled(
         )
         prompt = llm.run_inference.await_args.kwargs["system_instruction"]
         assert prompt.count("calling from SBI") == expected_count
+
+
+async def test_openrouter_topics_go_through_the_model_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answer = (
+        '{"customer_needs": [], "topics": [{"type": "delivery_delay", '
+        '"label": "Delivery Delay", "phrase": "order is late", "evidence_turns": [0]}]}'
+    )
+    generate = AsyncMock(
+        return_value=GenerateResponse(
+            content=answer,
+            model="openai/gpt-4o-mini",
+            finish_reason="stop",
+            usage=Usage(input_tokens=120, output_tokens=40),
+        )
+    )
+    monkeypatch.setattr(extractor.OPENROUTER, "generate", generate)
+    configuration = {
+        "provider": "openrouter",
+        "model": "openai/gpt-4o-mini",
+        "system_prompt": "Classify topics. Known {accepted_topics}",
+        "settings": {"temperature": 0.2, "max_output_tokens": 2000},
+    }
+
+    topics = await extractor.extract_topics(
+        [{"role": "user", "content": "My order is late"}],
+        ["Delivery Delay"],
+        configuration,
+    )
+
+    assert [topic["label"] for topic in topics] == ["delivery delay"]
+    assert generate.await_args is not None
+    (request,) = generate.await_args.args
+    assert request.model == "openai/gpt-4o-mini"
+    assert request.input == [Message(role="user", content="[0] user: My order is late")]
+    assert request.system_prompt.startswith("Classify topics.")
+    assert '"type": "delivery_delay"' in request.system_prompt
+    assert request.settings == GenerationSettings(temperature=0.2, max_tokens=2000)
+    assert request.schema is None
+
+    for reply, finish_reason, reason in (
+        (
+            answer[:-3],
+            "length",
+            "openai/gpt-4o-mini hit the 2000-token output limit mid-answer. "
+            "Fix: raise settings.max_output_tokens (now 2000).",
+        ),
+        (
+            "",
+            "length",
+            "openai/gpt-4o-mini spent all 2000 output tokens thinking and wrote "
+            "no answer. Fix: raise settings.max_output_tokens (now 2000).",
+        ),
+        ("", "stop", "Expecting value"),
+    ):
+        generate.return_value = GenerateResponse(
+            content=reply, model="openai/gpt-4o-mini", finish_reason=finish_reason
+        )
+        with pytest.raises(ValueError, match=re.escape(reason)) as bad:
+            await extractor.extract_topics(
+                [{"role": "user", "content": "My order is late"}],
+                ["Delivery Delay"],
+                configuration,
+            )
+        assert evaluator.classify_failure(bad.value) == evaluator.MODEL_BAD_RESPONSE
+    with pytest.raises(ValueError, match="stream needs the openai provider"):
+        extractor.resolve_topic_evaluation_configuration(
+            {**configuration, "settings": {"stream": True}}
+        )
 
 
 def test_a_setting_of_the_wrong_type_is_refused() -> None:
@@ -495,7 +573,9 @@ def test_evaluation_config_initializes_from_explicit_template_flag() -> None:
     assert "enable_topic_evaluation" in query
     assert "defaults.template_id IS NULL" in query
     assert "defaults.evaluation_type = 'TOPIC'" in query
-    assert "ON CONFLICT (template_id, evaluation_type) DO NOTHING" in query
+    # TOPIC rows are always named 'topic': one per agent (migration 083)
+    assert "defaults.name" in query
+    assert "ON CONFLICT (template_id, name) DO NOTHING" in query
     assert values == ["template-id"]
 
 
@@ -765,6 +845,10 @@ def test_model_failures_are_classified() -> None:
     streamed_400 = openai.APIError("bad request", request, body={"code": "400"})
     assert classify(streamed_503) == evaluator.MODEL_UNAVAILABLE
     assert classify(streamed_400) == evaluator.EVALUATION_ERROR
+    exhausted = ProviderError("openrouter", "HTTP 503", status=503, retryable=True)
+    assert classify(exhausted) == evaluator.MODEL_UNAVAILABLE
+    refused = ProviderError("openrouter", "HTTP 401: no key", status=401)
+    assert classify(refused) == evaluator.EVALUATION_ERROR
     assert (
         classify(extractor.TopicModelResponseError("no content"))
         == evaluator.MODEL_BAD_RESPONSE
@@ -828,8 +912,7 @@ async def test_bad_model_response_saves_a_failed_row(
     assert failure_call is not None
     assert failure_call.args[:3] == (EVALUATION["id"], "TOPIC", "call-id")
     assert failure_call.args[-1] == (
-        "MODEL_BAD_RESPONSE after 2 attempt(s): "
-        "TopicModelResponseError: Topic evaluator returned no content"
+        "MODEL_BAD_RESPONSE after 2 attempt(s): Topic evaluator returned no content"
     )
 
 

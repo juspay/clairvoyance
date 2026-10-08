@@ -116,10 +116,19 @@ def foreign_payload_keys(adapter: PlatformAdapter) -> Tuple[str, ...]:
     return tuple(dict.fromkeys(k for k in keys if k not in adapter.payload_keys()))
 
 
+def folders_to_skip() -> FrozenSet[str]:
+    """Every platform's item and listing folders: research never reads them
+    as a page about the store."""
+    return frozenset(
+        name for adapter in PLATFORMS for name in adapter.folders_to_skip()
+    )
+
+
 __all__ = [
     "CLASSIFY_THRESHOLD",
     "PLATFORMS",
     "classify",
+    "folders_to_skip",
     "for_host_app",
     "for_request",
     "foreign_mcp_server_names",

@@ -56,6 +56,7 @@ from app.ai.voice.agents.breeze_buddy.agent.utils import (
     send_initial_greeting,
     send_initial_greeting_daily,
 )
+from app.ai.voice.agents.breeze_buddy.chat.flavors import set_active_connectors
 from app.ai.voice.agents.breeze_buddy.chat.voice_bridge import WidgetVoiceBridge
 from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import (
     end_conversation,
@@ -1389,6 +1390,9 @@ class Agent:
         run()'s loop then either finalizes (real end) or applies the transfer and
         re-invokes this method for the next generation.
         """
+        # Scope connector hooks to this template's connectors, as chat does.
+        # Set before the pipeline starts, so its tasks inherit the value.
+        set_active_connectors(self.template)
         # Stream mode skips LLM creation and runs build_pipeline with
         # mode="stream" (no LLM processor, no assistant aggregator, transcript
         # collector inserted, no user idle). All other wiring is identical.

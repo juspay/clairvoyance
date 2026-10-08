@@ -37,6 +37,9 @@ hooks installed before the first lead moves.
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.preset.outcome_eval import (
+    checked_outcome,
+)
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.crm.identity.contracts import resolve as crm_resolve
@@ -320,6 +323,8 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
             return
 
         async def _tap() -> None:
+            # the agent's outcome, or the post-call eval's correction of it
+            outcome = await checked_outcome(lead)
             await mirror_to_crm(
                 "call.completed",
                 merchant_id=lead.merchant_id,
@@ -331,7 +336,7 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
                 # is on the row by the time any call finishes.
                 customer_id=lead.customer_id,
                 call_id=lead.call_id,
-                outcome=lead.outcome,
+                outcome=outcome,
                 # The run that placed the call (phase 18): a listening square
                 # after a call node matches on it, so one call's outcome never
                 # wakes the customer's other run.

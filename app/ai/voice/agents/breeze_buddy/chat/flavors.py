@@ -41,6 +41,7 @@ config, and templates change under a live process.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Sequence, Tuple
 
@@ -165,6 +166,32 @@ def resolve_flavor_scope(template: Any, groups: Optional[Sequence[str]]) -> Flav
     return FlavorScope(groups=tuple(groups), roles=roles, tools=tools)
 
 
+# Platform connectors the current template names under
+# ``flavor.<protocol>.connectors``. Read by connector hooks that run where no
+# template is in scope (Pydantic validators). Empty = none named, so every
+# registered connector self-selects (also the value outside any turn).
+_ACTIVE_CONNECTORS: ContextVar[Tuple[str, ...]] = ContextVar(
+    "active_connectors", default=()
+)
+
+
+def set_active_connectors(template: Any) -> None:
+    """Scope connector hooks to the connectors ``template`` names under
+    ``flavor.<protocol>.connectors``, for the current context (one chat turn
+    or one voice call).
+    No connector named keeps every hook (the behaviour before scoping).
+    Never raises: an unreadable block names no connector."""
+    config = getattr(template, "configurations", None)
+    flavor = getattr(config, "flavor", None)
+    blocks = flavor.values() if isinstance(flavor, dict) else ()
+    names = [n for b in blocks for n in (getattr(b, "connectors", None) or [])]
+    _ACTIVE_CONNECTORS.set(tuple(dict.fromkeys(names)))
+
+
+def active_connectors() -> Tuple[str, ...]:
+    return _ACTIVE_CONNECTORS.get()
+
+
 def scoped_keys(tool_name: str, scope: FlavorScope) -> Iterator[Tuple[str, str]]:
     """The ``(group, key)`` candidates for ``tool_name``, in priority order.
 
@@ -186,10 +213,12 @@ def scoped_keys(tool_name: str, scope: FlavorScope) -> Iterator[Tuple[str, str]]
 __all__ = [
     "EMPTY_SCOPE",
     "ROLE_PREFIX",
+    "active_connectors",
     "FlavorScope",
     "RoleMapFn",
     "role_key",
     "register_flavor_roles",
     "resolve_flavor_scope",
     "scoped_keys",
+    "set_active_connectors",
 ]

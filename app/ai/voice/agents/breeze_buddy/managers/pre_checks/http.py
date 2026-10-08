@@ -16,6 +16,7 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline imp
 from app.ai.voice.agents.breeze_buddy.mcp import (
     _build_server_params,
     _create_direct_http_tool_handler,
+    in_process,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import HttpAuthConfig, HttpAuthType
 from app.core.logger import logger
@@ -118,6 +119,8 @@ async def _fetch_mcp_response(
         response_schema=server.tool_response_schemas.get(tool) or None,
         response_transforms=server.tool_response_transforms.get(tool) or None,
         default_args=server.default_args,
+        # Our own MCP endpoint is answered in process, as in the conversation.
+        transport=in_process.transport(server.url),
     )
 
     logger.info(

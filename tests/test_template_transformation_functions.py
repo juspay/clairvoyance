@@ -144,3 +144,26 @@ def test_scale_by_exponent_output_chains_to_speech() -> None:
     assert numeric_amount == 1585.9
     assert type(numeric_amount) is float
     assert spoken_amount == "one thousand five hundred and eighty six rupees"
+
+
+# --- first_item: one entry out of a joined list ------------------------------
+
+
+def test_first_item_takes_the_first_of_a_joined_list() -> None:
+    from app.utils.transformation import TEMPLATE_FUNCTION_REGISTRY
+    from app.utils.transformation.utils import first_item
+
+    assert first_item("MUFTI, MUFTI, JOCKEY, KILLER") == "MUFTI"
+    assert first_item("MUFTI, MUFTI, JOCKEY, KILLER", count=3) == "MUFTI, MUFTI, JOCKEY"
+    assert first_item("MUFTI, JOCKEY", count=5) == "MUFTI, JOCKEY"
+    assert first_item("MUFTI, JOCKEY", count="2") == "MUFTI, JOCKEY"  # params are JSON
+    assert first_item(["a", "b", "c"], count=2) == ["a", "b"]
+    assert (
+        first_item("MensClothingBottomwearBranded") == "MensClothingBottomwearBranded"
+    )
+    assert first_item(["a", "b"]) == "a"
+    assert first_item("a|b", separator="|") == "a"
+    # Never empties a value that had one, never touches a non-list.
+    assert first_item(", b") == ", b"
+    assert first_item(42) == 42
+    assert TEMPLATE_FUNCTION_REGISTRY["first_item"] is first_item

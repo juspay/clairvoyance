@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp import hooks
+from app.ai.voice.agents.breeze_buddy.chat import flavors
 
 
 @pytest.fixture
@@ -25,6 +26,10 @@ def empty_chains(monkeypatch):
     monkeypatch.setattr(hooks, "_MEDIA_RESOLVERS", [])
     monkeypatch.setattr(hooks, "_VARIANT_NORMALIZERS", [])
     monkeypatch.setattr(hooks, "_DESCRIPTION_REPAIRS", [])
+    # No connector named — whatever an earlier test's agent left in scope.
+    token = flavors._ACTIVE_CONNECTORS.set(())
+    yield
+    flavors._ACTIVE_CONNECTORS.reset(token)
 
 
 class TestEmptyChainIsPureUcp:
@@ -42,13 +47,13 @@ class TestEmptyChainIsPureUcp:
 
 class TestFirstOpinionWins:
     def test_none_falls_through_to_the_next_connector(self, empty_chains):
-        hooks.register_variant_normalizer(lambda _v: None)
-        hooks.register_variant_normalizer(lambda _v: [{"id": "second"}])
+        hooks.register_variant_normalizer("someplatform", lambda _v: None)
+        hooks.register_variant_normalizer("someplatform", lambda _v: [{"id": "second"}])
         assert hooks.normalize_variants([{"id": "orig"}]) == [{"id": "second"}]
 
     def test_repairs_compose_in_order(self, empty_chains):
-        hooks.register_description_repair(lambda t: t + " one")
-        hooks.register_description_repair(lambda t: t + " two")
+        hooks.register_description_repair("someplatform", lambda t: t + " one")
+        hooks.register_description_repair("someplatform", lambda t: t + " two")
         assert hooks.repair_description("start") == "start one two"
 
 
@@ -66,7 +71,7 @@ class TestConnectorIsNeverLoadBearing:
         def _boom(_v):
             raise RuntimeError("connector is broken")
 
-        hooks.register_variant_normalizer(_boom)
+        hooks.register_variant_normalizer("someplatform", _boom)
         variants = [{"id": "v1"}]
         assert hooks.normalize_variants(variants) == variants
 
@@ -74,7 +79,7 @@ class TestConnectorIsNeverLoadBearing:
         def _boom(_t):
             raise RuntimeError("connector is broken")
 
-        hooks.register_description_repair(_boom)
+        hooks.register_description_repair("someplatform", _boom)
         assert hooks.repair_description("text") == "text"
 
 
@@ -112,7 +117,9 @@ class TestBothProjectionsHonourTheNormalizer:
             ProductP,
         )
 
-        hooks.register_variant_normalizer(lambda vs: [vs[0]] if vs else None)
+        hooks.register_variant_normalizer(
+            "someplatform", lambda vs: [vs[0]] if vs else None
+        )
         raw = {
             "id": "p1",
             "title": "Tee",
@@ -157,6 +164,49 @@ def test_registration_is_idempotent(empty_chains):
     def _fn(_v):
         return None
 
-    hooks.register_variant_normalizer(_fn)
-    hooks.register_variant_normalizer(_fn)
-    assert hooks._VARIANT_NORMALIZERS.count(_fn) == 1
+    hooks.register_variant_normalizer("someplatform", _fn)
+    hooks.register_variant_normalizer("someplatform", _fn)
+    assert [fn for _, fn in hooks._VARIANT_NORMALIZERS].count(_fn) == 1
+
+
+class TestSessionConnectorScope:
+    """The variant and description chains run in validators with no template
+    in scope, so they read the turn's connectors from ``chat.flavors``.
+    Empty (none named, or outside a turn) keeps every connector."""
+
+    @pytest.fixture
+    def scoped(self):
+        tokens = []
+
+        def _set(*names):
+            tokens.append(flavors._ACTIVE_CONNECTORS.set(names))
+
+        yield _set
+        for token in reversed(tokens):
+            flavors._ACTIVE_CONNECTORS.reset(token)
+
+    def test_named_connector_runs_and_others_are_skipped(self, empty_chains, scoped):
+        hooks.register_variant_normalizer("someplatform", lambda _v: [{"id": "x"}])
+        hooks.register_description_repair("someplatform", lambda t: t + " fixed")
+
+        scoped("otherplatform")
+        assert hooks.normalize_variants([{"id": "orig"}]) == [{"id": "orig"}]
+        assert hooks.repair_description("text") == "text"
+
+        scoped("someplatform")
+        assert hooks.normalize_variants([{"id": "orig"}]) == [{"id": "x"}]
+        assert hooks.repair_description("text") == "text fixed"
+
+    @pytest.mark.parametrize(
+        "flavor", [{"ucp": {"connectors": ["x"]}}, {"ucp": None}, ["ucp"], None]
+    )
+    def test_unreadable_flavor_block_names_no_connector(self, flavor):
+        from types import SimpleNamespace
+
+        template = SimpleNamespace(configurations=SimpleNamespace(flavor=flavor))
+        token = flavors._ACTIVE_CONNECTORS.set(("stale",))
+        try:
+            flavors.set_active_connectors(template)  # must not raise
+            assert flavors.active_connectors() == ()
+        finally:
+            flavors._ACTIVE_CONNECTORS.reset(token)

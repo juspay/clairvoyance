@@ -13,6 +13,15 @@ from app.api.routers.breeze_buddy.assist.blueprint import (
 from app.api.routers.breeze_buddy.assist.onboarding import (
     router as assist_onboarding_router,
 )
+from app.api.routers.breeze_buddy.assist.onboarding.preview import (
+    router as assist_preview_router,
+)
+from app.api.routers.breeze_buddy.assist.onboarding.research import (
+    router as assist_research_router,
+)
+from app.api.routers.breeze_buddy.assist.onboarding.template import (
+    router as assist_template_router,
+)
 from app.api.routers.breeze_buddy.assist.probe import (
     router as assist_probe_router,
 )
@@ -123,10 +132,16 @@ router.include_router(website_scraping_router, prefix="", tags=["website-scrapin
 
 # Idempotent merchant onboarding for the Buddy Assist widget.
 router.include_router(assist_onboarding_router, prefix="", tags=["assist-onboarding"])
+# Read a store's site and stream what it says, for the console's onboarding.
+router.include_router(assist_research_router, prefix="", tags=["assist-onboarding"])
 # The reseller blueprint the merchant templates are built from (read-only).
 router.include_router(assist_blueprint_router, prefix="", tags=["assist-onboarding"])
 # Recognise a site before anything is built for it.
 router.include_router(assist_probe_router, prefix="", tags=["assist-onboarding"])
+# A store's brand colours and logo, for the console to preview (read-only).
+router.include_router(assist_preview_router, prefix="", tags=["assist-onboarding"])
+# The merchant's assistant, built from the console's research, switched off.
+router.include_router(assist_template_router, prefix="", tags=["assist-onboarding"])
 
 # Playground (configuration exploration)
 router.include_router(playground_router, prefix="", tags=["playground"])

@@ -17,6 +17,12 @@ from app.core.config import static
 from app.core.logger import logger
 from app.schemas.breeze_buddy.conversation_analysis import TopicExtractionResult
 from app.services.live_config.store import get_config
+from app.services.model_provider import (
+    OPENROUTER,
+    GenerateRequest,
+    GenerationSettings,
+    Message,
+)
 
 _FIRST_TOKEN_TIMEOUT_SECONDS = 30
 
@@ -48,7 +54,7 @@ def resolve_topic_evaluation_configuration(
         raw = {}
 
     provider = str(raw.get("provider") or LLMProvider.OPENAI.value).strip()
-    if provider not in [p.value for p in LLMProvider]:
+    if provider not in [p.value for p in LLMProvider] + [OPENROUTER.name]:
         raise ValueError(f"Unsupported topic evaluator provider: {provider}")
     sdk = str(raw.get("sdk") or "").strip() or None
     if sdk and sdk not in [s.value for s in LLMSdk]:
@@ -148,6 +154,40 @@ async def _request_llm(
     transcript: str,
     runtime: Mapping[str, Any],
 ) -> Dict[str, Any]:
+    instruction = prompt + "\n\n" + _PROMPT_ONLY_RESPONSE_INSTRUCTION
+    if runtime["provider"] == OPENROUTER.name:
+        started_at = time.monotonic()
+        response = await OPENROUTER.generate(
+            GenerateRequest(
+                model=runtime["model"],
+                input=[Message(role="user", content=transcript)],
+                system_prompt=instruction,
+                settings=GenerationSettings(
+                    temperature=runtime["settings"]["temperature"],
+                    max_tokens=runtime["settings"]["max_output_tokens"],
+                ),
+            )
+        )
+        usage = response.usage
+        logger.info(
+            f"Topic model answered by {runtime['provider']} ({response.model}) in "
+            f"{time.monotonic() - started_at:.1f}s: "
+            f"{usage.input_tokens if usage else '?'} input tokens, "
+            f"{usage.output_tokens if usage else '?'} output tokens"
+        )
+        if response.finish_reason == "length":
+            limit = runtime["settings"]["max_output_tokens"]
+            if response.content.strip():
+                what = f"{response.model} hit the {limit}-token output limit mid-answer"
+            else:
+                what = (
+                    f"{response.model} spent all {limit} output tokens thinking "
+                    "and wrote no answer"
+                )
+            raise TopicModelResponseError(
+                f"{what}. Fix: raise settings.max_output_tokens (now {limit})."
+            )
+        return _decode_json_object(response.content)
     endpoint = None
     api_key_name = None
     on_grid = False
@@ -188,7 +228,6 @@ async def _request_llm(
             max_retries=0, http_client=get_openai_httpx_client()
         )
     context = LLMContext([{"role": "user", "content": transcript}])
-    instruction = prompt + "\n\n" + _PROMPT_ONLY_RESPONSE_INSTRUCTION
     if runtime["settings"]["stream"]:
         llm = cast(OpenAILLMService, llm)
         params = llm.build_chat_completion_params(
@@ -225,8 +264,8 @@ async def _request_llm(
         content = "".join(parts)
         details = usage.completion_tokens_details if usage else None
         logger.info(
-            f"Topic model answered in {time.monotonic() - started_at:.1f}s: "
-            f"first token {first_token_s:.1f}s, "
+            f"Topic model answered by {runtime['provider']} in "
+            f"{time.monotonic() - started_at:.1f}s: first token {first_token_s:.1f}s, "
             f"{usage.prompt_tokens if usage else '?'} input tokens, "
             f"{usage.completion_tokens if usage else '?'} output tokens "
             f"({details.reasoning_tokens if details else '?'} thinking)"
