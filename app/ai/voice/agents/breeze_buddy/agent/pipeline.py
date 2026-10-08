@@ -658,3 +658,31 @@ async def create_pipeline_task(
         task_params["enable_tracing"] = True
 
     return PipelineTask(pipeline, **task_params)
+
+
+async def cancel_orphaned_transition_tasks(context_aggregator: Any) -> None:
+    """Cancel node-switch follow-ups the ended pipeline can never finish.
+
+    An outcome function that ends the call is still an edge function (a
+    node function would set run_llm=True and the LLM would speak once more
+    before the EndFrame drains — see agent_transfer's inert node), so
+    pipecat-flows schedules its node switch as a follow-up task on the
+    assistant aggregator (``<fn>:<tool_call_id>:on_context_updated``) AFTER
+    our handler queued EndFrame. Nothing cancels it: it waits on a pipeline
+    that is gone and the GC later logs "Task was destroyed but it is
+    pending!" once per such call. Once the pipeline ended no switch can run,
+    so every pending one is cancelled. Best effort — called from
+    on_pipeline_finished and again after the runner returns; teardown must
+    never fail on it.
+    """
+    if context_aggregator is None:
+        return
+    try:
+        assistant = context_aggregator.assistant()
+        # pipecat-private set; getattr so an upgrade that renames it degrades
+        # to the old noise rather than a crash on teardown.
+        for task in list(getattr(assistant, "_context_updated_tasks", ())):
+            if not task.done():
+                await assistant.cancel_task(task)
+    except Exception as e:
+        logger.debug(f"Orphaned transition cleanup skipped: {e}")

@@ -132,6 +132,7 @@ async def create_lead_call_tracker(
     outcome: Optional[
         str
     ] = None,  # For blocked calls where outcome is known at insert time
+    duplicate_expected: bool = False,  # Caller re-derives ids and adopts the row
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
@@ -189,6 +190,13 @@ async def create_lead_call_tracker(
         logger.error("Failed to create lead call tracker")
         return None
 
+    except asyncpg.UniqueViolationError as e:
+        # Same None contract as any other failure. Only a caller that derives
+        # its ids and adopts the existing row (the outreach walker on a lease
+        # retry) may call this expected; everywhere else it is a real fault.
+        log = logger.warning if duplicate_expected else logger.error
+        log(f"Lead call tracker insert hit a duplicate key, not inserted: {e}")
+        return None
     except Exception as e:
         logger.error(f"Error creating lead call tracker: {e}")
         return None

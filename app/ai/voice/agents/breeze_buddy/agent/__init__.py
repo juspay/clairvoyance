@@ -39,6 +39,7 @@ from app.ai.voice.agents.breeze_buddy.agent.inbound import (
 )
 from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
     build_pipeline,
+    cancel_orphaned_transition_tasks,
     create_pipeline_task,
     create_services,
     generate_conversation_id,
@@ -845,6 +846,13 @@ class Agent:
             logger.error("Transport or task not initialized")
             return
 
+        @self.task.event_handler("on_pipeline_finished")
+        async def on_pipeline_finished(task, frame):
+            """EndFrame reached the sink: cancel the node switch an outcome
+            function that ended the call left pending, BEFORE the task's own
+            teardown lists it as dangling and the GC reports it."""
+            await cancel_orphaned_transition_tasks(self._context_aggregator)
+
         @self.task.event_handler("on_pipeline_error")
         async def on_pipeline_error(task, error):
             """Capture TTS/STT/LLM pipeline failures."""
@@ -1635,6 +1643,10 @@ class Agent:
             if self._observer_manager:
                 await self._observer_manager.stop()
                 self._observer_manager = None
+            # Second net for the orphaned node switch (see on_pipeline_finished):
+            # a follow-up created after EndFrame reached the sink is still
+            # pending here.
+            await cancel_orphaned_transition_tasks(self._context_aggregator)
 
     # ══════════════════════════════════════════════════════════════════════
     # Cleanup

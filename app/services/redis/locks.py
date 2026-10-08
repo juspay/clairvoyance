@@ -132,22 +132,31 @@ class RedisLock:
             or another caller acquired after a stale TTL). Either way
             the caller's handle is cleared.
         """
-        if self._token is None:
+        # Snapshot the token: a concurrent (shielded) release racing its
+        # cancel-path sibling may null self._token while we await the script,
+        # and logging self._token[:8] then raised TypeError from a release that
+        # had succeeded. Both still run the compare-and-DEL on purpose: if ours
+        # fails on a Redis blip the sibling frees the lock instead of it
+        # staying held until TTL.
+        token = self._token
+        if token is None:
             return False
 
         redis = await self._get_redis()
-        result = await redis.run_script(
-            _RELEASE_LUA, keys=[self.key], args=[self._token]
-        )
+        result = await redis.run_script(_RELEASE_LUA, keys=[self.key], args=[token])
         released = bool(result)
-        if not released:
-            logger.warning(
-                f"RedisLock key='{self.key}' token={self._token[:8]}... "
-                "was already lost before release (TTL elapsed or stolen)"
+        if released:
+            logger.debug(f"Released RedisLock key='{self.key}' token={token[:8]}...")
+        elif self._token is None:
+            # A sibling release won the race while we awaited: not an anomaly.
+            logger.debug(
+                f"RedisLock key='{self.key}' token={token[:8]}... "
+                "already released by a concurrent release"
             )
         else:
-            logger.debug(
-                f"Released RedisLock key='{self.key}' token={self._token[:8]}..."
+            logger.warning(
+                f"RedisLock key='{self.key}' token={token[:8]}... "
+                "was already lost before release (TTL elapsed or stolen)"
             )
 
         self._token = None

@@ -237,19 +237,28 @@ class HttpRequestExecutor:
                                 return None
                             return (status, response_text)
 
-                        # Non-success status code
-                        logger.warning(
-                            f"HTTP {config.method.value} returned non-success status {status}: {response_text[:500]}"
-                        )
-
-                        # Don't retry on 4xx client errors (except 429 rate limit)
+                        # Don't retry on 4xx client errors (except 429 rate limit).
+                        # One line per response: status, the template's URL (not
+                        # the resolved one — query params carry lead data) and
+                        # the body. 404/410 = the endpoint is gone, warn; every
+                        # other 4xx means OUR request (auth, body) is wrong —
+                        # keep paging.
                         if 400 <= status < 500 and status != 429:
-                            logger.error(
-                                f"HTTP {config.method.value} client error {status}, not retrying"
+                            log = (
+                                logger.warning if status in (404, 410) else logger.error
+                            )
+                            log(
+                                f"HTTP {config.method.value} client error {status} "
+                                f"from {config.url}, not retrying: {response_text[:500]}"
                             )
                             if fire_and_forget:
                                 return None
                             return (status, response_text)
+
+                        # Retried (3xx / 5xx / 429): note the attempt and loop.
+                        logger.warning(
+                            f"HTTP {config.method.value} returned non-success status {status}: {response_text[:500]}"
+                        )
 
                 except asyncio.TimeoutError:
                     logger.warning(
@@ -284,7 +293,7 @@ class HttpRequestExecutor:
 
             # All retries exhausted
             logger.error(
-                f"HTTP {config.method.value} to {url} failed after {config.max_retries} attempts"
+                f"HTTP {config.method.value} to {config.url} failed after {config.max_retries} attempts"
             )
             if fire_and_forget:
                 return None
