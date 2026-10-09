@@ -327,6 +327,11 @@ class LeadCallTracker(BaseModel):
     recording_url: Optional[str] = None
     status: LeadCallStatus = LeadCallStatus.BACKLOG
     outcome: Optional[str] = None
+    # The agent's own outcome word (migration 084): set with every outcome
+    # write but the end-of-call outcome check's (outcome_correctness), so it
+    # differs from ``outcome`` only where the check replaced it. None on a
+    # lead without an outcome, or one a build from before the column wrote.
+    agent_outcome: Optional[str] = None
     call_id: Optional[str] = None
     call_initiated_time: Optional[datetime] = None
     call_end_time: Optional[datetime] = None

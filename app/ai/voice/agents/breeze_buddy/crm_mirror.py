@@ -40,6 +40,10 @@ from typing import Any, Dict, Optional
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.preset.outcome_eval import (
     checked_outcome,
 )
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
+    enqueue_conversation_evaluation,
+    queued_at_call_end,
+)
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.crm.identity.contracts import resolve as crm_resolve
@@ -49,6 +53,7 @@ from app.database.accessor.breeze_buddy import (
     template as template_accessor,
 )
 from app.schemas import CallDirection, LeadCallStatus, LeadCallTracker
+from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
 
 SOURCE_LEAD_API = "lead-api"
 SOURCE_TELEPHONY = "telephony"
@@ -315,16 +320,26 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
     failures, IVR, daily, demo, aborts) funnel through the two accessors
     that fire this hook, so no ending can be forgotten. Dedupe on
     topic:call_id keeps an accidental double-FINISH to one event.
+
+    It also queues the call's post-call evaluation job (its topics and
+    custom evals) once the end-of-call outcome check is done, for every
+    talked-through call, CRM traffic or not; a Daily call's job is queued by
+    end_conversation instead (``queued_at_call_end``).
     """
     try:
-        if is_non_customer_lead(lead.execution_mode, lead.metaData):
-            return
-        if not lead.merchant_id:
+        to_crm = bool(lead.merchant_id) and not is_non_customer_lead(
+            lead.execution_mode, lead.metaData
+        )
+        # Only a call that was talked through has anything to evaluate.
+        to_evaluate = bool(
+            lead.template_id
+            and (lead.metaData or {}).get("transcription")
+            and not queued_at_call_end(lead.execution_mode)
+        )
+        if not to_crm and not to_evaluate:
             return
 
-        async def _tap() -> None:
-            # the agent's outcome, or the post-call eval's correction of it
-            outcome = await checked_outcome(lead)
+        async def _mirror_completed(outcome: Optional[str]) -> None:
             await mirror_to_crm(
                 "call.completed",
                 merchant_id=lead.merchant_id,
@@ -347,6 +362,24 @@ def _finished_lead_tap(lead: LeadCallTracker) -> None:
                 customer_name=(lead.payload or {}).get("customer_name"),
                 declared=await call_facts(lead),
             )
+
+        async def _tap() -> None:
+            try:
+                if to_crm:
+                    # the agent's outcome, or the outcome check's correction
+                    # of it (the check runs on CRM traffic only)
+                    await _mirror_completed(await checked_outcome(lead))
+            finally:
+                # once the outcome is final, so the custom evals' judge
+                # always sees the corrected word; once per call, as a lead
+                # can be FINISHED more than once
+                if to_evaluate:
+                    await enqueue_conversation_evaluation(
+                        str(lead.id),
+                        ConversationChannel.VOICE,
+                        str(lead.template_id),
+                        once_per=f"{lead.id}:{lead.call_id}",
+                    )
 
         spawn_background_task(
             _tap(), name=f"crm-call-completed-{lead.call_id or lead.id}"

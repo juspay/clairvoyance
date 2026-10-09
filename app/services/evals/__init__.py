@@ -13,8 +13,9 @@ it. Finished conversations are the first caller.
     outcome_correctness/  which of the agent's own outcome words the call
                           should have ended with (run at the end of a call by
                           Buddy's conversation_analysis/preset/outcome_eval.py)
-  custom/               the custom evals an agent's merchant makes (not live
-                        yet): batch.py runs several in one judge request
+  custom/               the custom evals an agent's merchant makes, run after
+                        the call in its job, after its topics: batch.py runs
+                        several in one judge request
   shared/               what preset and custom evals share
     utils/                extract_agent_outcomes: an agent's outcome words,
                           read from its template

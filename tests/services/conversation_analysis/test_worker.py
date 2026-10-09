@@ -45,7 +45,7 @@ from app.database.queries.breeze_buddy.evaluation_result import (
     save_evaluation_failure_query,
     save_evaluation_results_query,
 )
-from app.schemas import LeadCallStatus, UserInfo, UserRole
+from app.schemas import ExecutionMode, LeadCallStatus, UserInfo, UserRole
 from app.schemas.breeze_buddy.analytics import AnalyticsOptions
 from app.schemas.breeze_buddy.chat import ChatSessionStatus
 from app.schemas.breeze_buddy.conversation_analysis import (
@@ -483,9 +483,16 @@ async def test_completion_enqueues_source_identity(
     end_conversation_module = import_module(
         "app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation"
     )
-    voice_result = SimpleNamespace(id="lead-id", template_id=TEMPLATE_ID)
+    # a telephony call's job is queued by crm_mirror's finished tap once the
+    # outcome check is done; a Daily call's here, as its process exits
+    telephony_result = SimpleNamespace(
+        id="lead-id", template_id=TEMPLATE_ID, execution_mode=ExecutionMode.TELEPHONY
+    )
+    daily_result = SimpleNamespace(
+        id="lead-id", template_id=TEMPLATE_ID, execution_mode=ExecutionMode.DAILY
+    )
     voice_enqueue = AsyncMock()
-    completion = AsyncMock(return_value=voice_result)
+    completion = AsyncMock(side_effect=[telephony_result, daily_result])
     monkeypatch.setattr(
         end_conversation_module,
         "enqueue_conversation_evaluation",
@@ -524,13 +531,11 @@ async def test_completion_enqueues_source_identity(
         await end_conversation_module.end_conversation(TemplateContext(bot), {})
 
     assert completion.await_count == 2
-    assert voice_enqueue.await_count == 2
-    for queued in voice_enqueue.await_args_list:
-        assert queued.args == (
-            "lead-id",
-            ConversationChannel.VOICE,
-            TEMPLATE_ID,
-        )
+    voice_enqueue.assert_awaited_once_with(
+        "lead-id",
+        ConversationChannel.VOICE,
+        TEMPLATE_ID,
+    )
 
     chat_result = SimpleNamespace(id="session-id", template_id=TEMPLATE_ID)
     monkeypatch.setattr(

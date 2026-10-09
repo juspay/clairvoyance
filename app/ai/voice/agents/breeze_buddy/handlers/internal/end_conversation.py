@@ -12,6 +12,7 @@ from app.ai.voice.agents.breeze_buddy.observability.tracing_setup import (
 )
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
     enqueue_conversation_evaluation,
+    queued_at_call_end,
 )
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
@@ -306,7 +307,16 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
         else:
             logger.warning("No call_sid or lead found, skipping database update")
 
-        if updated_lead and updated_lead.template_id:
+        # The call's post-call evaluation job (topics, custom evals). Queued
+        # here only for a Daily call, whose bot process exits with the call
+        # and which no outcome check runs on; every other call's is queued by
+        # crm_mirror's finished tap once the end-of-call outcome check is
+        # done, so the custom evals' judge sees the final outcome.
+        if (
+            updated_lead
+            and updated_lead.template_id
+            and queued_at_call_end(updated_lead.execution_mode)
+        ):
             await enqueue_conversation_evaluation(
                 str(updated_lead.id),
                 ConversationChannel.VOICE,

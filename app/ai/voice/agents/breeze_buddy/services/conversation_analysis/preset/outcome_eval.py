@@ -7,26 +7,30 @@ agent's own outcome words the call should have ended with
 (``app/services/evals/preset/outcome_correctness/``). A confident answer that
 differs from the agent's word becomes the lead's outcome and the event's.
 The eval gets at most ``_MAX_WAIT_SECONDS``; past it the agent's word goes
-out.
+out. A check that ran past it, or failed, leaves a FAILED result row (saved
+in the background) so outcome analytics can count it.
 """
 
 import asyncio
 import time
 from typing import Any, Dict, Optional
 
+from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.evaluation_config import (
     get_outcome_correctness,
 )
-from app.database.accessor.breeze_buddy.lead_call_tracker import (
-    update_lead_call_completion_details,
+from app.database.accessor.breeze_buddy.evaluation_result import (
+    save_evaluation_failure,
 )
+from app.database.accessor.breeze_buddy.lead_call_tracker import set_eval_outcome
 from app.database.accessor.breeze_buddy.template import get_template_by_id
-from app.schemas import ExecutionMode, LeadCallStatus, LeadCallTracker
+from app.schemas import ExecutionMode, LeadCallTracker
 from app.schemas.breeze_buddy.conversation_analysis import (
     ConversationChannel,
     ConversationEvaluationJob,
 )
+from app.schemas.breeze_buddy.evals import EvaluationType
 from app.services.evals.engines.common import ChoiceResult
 from app.services.evals.evaluator import analyze_evals
 from app.services.evals.preset.outcome_correctness import (
@@ -44,6 +48,10 @@ from app.utils.common import parse_json
 from ..worker import get_analysis_context
 
 _MAX_WAIT_SECONDS = 2
+
+#: The FAILED row's error for a check that ran past ``_MAX_WAIT_SECONDS``;
+#: analytics tell timeouts from other failures by this prefix.
+TIMED_OUT = "TIMEOUT"
 
 #: Every outcome-check log line carries this, so one filter finds them all.
 LOG_COMPONENT = "buddy.outcome_eval"
@@ -76,6 +84,28 @@ def _log_mismatch(
     )
 
 
+def _save_failure(builtin: Dict[str, Any], context: Dict[str, Any], error: str) -> None:
+    """This call's FAILED outcome_correctness row, in the background:
+    call.completed never waits on it. One per call (the insert dedupes).
+    Never raises: the outcome check must not."""
+    try:
+        spawn_background_task(
+            save_evaluation_failure(
+                str(builtin["id"]),
+                EvaluationType.CONVERSATION_EVALS.value,
+                str(context["source_id"]),
+                str(context["reseller_id"]),
+                context.get("merchant_id"),
+                str(context["template_id"]),
+                context["started_at"],
+                error,
+            ),
+            name=f"outcome-eval-failure-{context.get('source_id')}",
+        )
+    except Exception as exc:
+        logger.error(f"Outcome check failure row not saved: {exc!r}")
+
+
 async def checked_outcome(lead: LeadCallTracker) -> Optional[str]:
     """The outcome a finished lead's call.completed carries: the built-in
     eval's correction when it is confident, differs from the agent's word
@@ -89,6 +119,9 @@ async def checked_outcome(lead: LeadCallTracker) -> Optional[str]:
     ):
         return lead.outcome
     deadline = time.monotonic() + _MAX_WAIT_SECONDS
+    # set once the eval is about to run: what a FAILED row needs
+    builtin: Optional[Dict[str, Any]] = None
+    context: Optional[Dict[str, Any]] = None
     try:
         builtin = await get_outcome_correctness(str(lead.template_id))
         if builtin is None:
@@ -134,6 +167,10 @@ async def checked_outcome(lead: LeadCallTracker) -> Optional[str]:
             analyze_evals(judged, evaluation, ConversationChannel.VOICE),
             timeout=max(0.0, deadline - time.monotonic()),
         )
+        if verdict is None:
+            # analyze_evals logged why; nothing was stored
+            _save_failure(builtin, context, "EVAL_FAILED")
+            return lead.outcome
         answer = outcome_answer(verdict)
         differs = bool(
             answer
@@ -154,11 +191,8 @@ async def checked_outcome(lead: LeadCallTracker) -> Optional[str]:
                     ),
                 )
             return lead.outcome
-        updated = await update_lead_call_completion_details(
-            id=lead.id,
-            outcome=corrected,
-            expected_status=LeadCallStatus.FINISHED,
-        )
+        # the outcome alone: agent_outcome keeps the agent's word it replaced
+        updated = await set_eval_outcome(lead.id, corrected, lead.outcome)
         if answer:
             _log_mismatch(
                 lead, answer, settings, "replaced" if updated else "kept: not saved"
@@ -175,6 +209,10 @@ async def checked_outcome(lead: LeadCallTracker) -> Optional[str]:
             f"Outcome check {lead.id} ran past {_MAX_WAIT_SECONDS}s: "
             f"call.completed keeps {lead.outcome!r}"
         )
+        if builtin is not None and context is not None:
+            _save_failure(
+                builtin, context, f"{TIMED_OUT}: ran past {_MAX_WAIT_SECONDS}s"
+            )
     except Exception as exc:
         logger.error(f"Outcome check {lead.id} failed: {exc!r}")
     return lead.outcome

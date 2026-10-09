@@ -22,10 +22,10 @@ class ConversationEvaluationJob(BaseModel):
     deliveries: int = 0
     # Epoch seconds, so the worker can log how long a job sat in the queue.
     enqueued_at: float = Field(default_factory=time.time)
-    # The agent's own evals, not live yet (see conversation_analysis/queue.py):
-    # "topics" is the template's topic evaluation, as ever; "evals" the
-    # agent's own evals (its CONVERSATION_EVALS rows), voice only at first.
-    # kind: Literal["topics", "evals"] = "topics"
+    # One job per finished conversation runs everything the template has on:
+    # its topics, then (voice only at first) its custom evals. Set once the
+    # topics are done, so a retry for the custom evals never runs them again.
+    topics_done: bool = False
 
 
 class ConversationTopic(BaseModel):

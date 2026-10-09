@@ -7,7 +7,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -110,8 +110,10 @@ def _check(
     template: Any = "default",
     context: Any = "default",
 ) -> SimpleNamespace:
-    async def update(**kwargs: Any) -> LeadCallTracker:
-        return lead.model_copy(update={"outcome": kwargs["outcome"]})
+    async def update(
+        id: str, outcome: str, agent_outcome: Optional[str]
+    ) -> LeadCallTracker:
+        return lead.model_copy(update={"outcome": outcome})
 
     mocks = SimpleNamespace(
         builtin=AsyncMock(return_value=BUILTIN if builtin == "default" else builtin),
@@ -122,6 +124,10 @@ def _check(
             return_value=(
                 {
                     "source_id": "lead-1",
+                    "reseller_id": "breeze",
+                    "merchant_id": "shop",
+                    "template_id": TEMPLATE_ID,
+                    "started_at": datetime(2026, 10, 7, 10, tzinfo=timezone.utc),
                     "transcript": [{"role": "user", "content": "yes"}],
                 }
                 if context == "default"
@@ -133,14 +139,14 @@ def _check(
             return_value=verdict,
         ),
         update=AsyncMock(side_effect=update),
+        failure=AsyncMock(),
     )
     monkeypatch.setattr(outcome_eval, "get_outcome_correctness", mocks.builtin)
     monkeypatch.setattr(outcome_eval, "get_template_by_id", mocks.template)
     monkeypatch.setattr(outcome_eval, "get_analysis_context", mocks.context)
     monkeypatch.setattr(outcome_eval, "analyze_evals", mocks.evals)
-    monkeypatch.setattr(
-        outcome_eval, "update_lead_call_completion_details", mocks.update
-    )
+    monkeypatch.setattr(outcome_eval, "set_eval_outcome", mocks.update)
+    monkeypatch.setattr(outcome_eval, "save_evaluation_failure", mocks.failure)
     return mocks
 
 
@@ -167,9 +173,8 @@ async def test_the_builtin_eval_is_asked_about_the_agents_own_words(monkeypatch)
     (question,) = configuration["questions"]
     assert list(question["criteria"]) == ["CONFIRM", "CANCEL", NO_DECISION]
     assert question["criteria"]["CONFIRM"] == "customer confirms"
-    mocks.update.assert_awaited_once_with(
-        id="lead-1", outcome="CONFIRM", expected_status=LeadCallStatus.FINISHED
-    )
+    # the eval's word, with the agent's word it replaced
+    mocks.update.assert_awaited_once_with("lead-1", "CONFIRM", "BUSY")
 
 
 @pytest.mark.parametrize(
@@ -275,6 +280,54 @@ async def test_an_eval_past_two_seconds_keeps_the_agents_word(monkeypatch):
 
     assert time.monotonic() - started < 1
     mocks.update.assert_not_awaited()
+    # counted as a timeout in outcome analytics: a FAILED row, saved in the
+    # background
+    await asyncio.sleep(0)
+    mocks.failure.assert_awaited_once()
+    args = mocks.failure.await_args.args
+    assert args[:3] == ("builtin-id", "CONVERSATION_EVALS", "lead-1")
+    assert args[-1].startswith(outcome_eval.TIMED_OUT)
+
+
+async def test_an_eval_that_failed_leaves_a_failed_row(monkeypatch):
+    lead = make_lead()
+    mocks = _check(monkeypatch, lead, None)  # analyze_evals logged and stored nothing
+
+    assert await outcome_eval.checked_outcome(lead) == "CANCEL"
+
+    await asyncio.sleep(0)
+    mocks.failure.assert_awaited_once()
+    assert mocks.failure.await_args.args[-1] == "EVAL_FAILED"
+
+
+async def test_an_answered_check_leaves_no_failed_row(monkeypatch):
+    lead = make_lead()
+    mocks = _check(monkeypatch, lead, _verdict("CANCEL", 0.99))
+
+    assert await outcome_eval.checked_outcome(lead) == "CANCEL"
+
+    await asyncio.sleep(0)
+    mocks.failure.assert_not_awaited()
+
+
+async def test_a_failed_row_that_cannot_be_built_never_breaks_the_check(
+    monkeypatch,
+):
+    lead = make_lead()
+    # a context without the ids a FAILED row needs
+    mocks = _check(
+        monkeypatch,
+        lead,
+        None,
+        context={
+            "source_id": "lead-1",
+            "transcript": [{"role": "user", "content": "y"}],
+        },
+    )
+
+    assert await outcome_eval.checked_outcome(lead) == "CANCEL"
+    await asyncio.sleep(0)
+    mocks.failure.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -381,3 +434,92 @@ async def test_call_completed_carries_the_checked_outcome(monkeypatch):
     assert mirror.await_args is not None
     assert mirror.await_args.args[0] == "call.completed"
     assert mirror.await_args.kwargs["outcome"] == "CONFIRM"
+
+
+# ---------------------------------------------------------------------------
+# the write: the outcome and its record in one statement
+# ---------------------------------------------------------------------------
+
+
+def test_the_eval_outcome_is_written_with_the_agents_word():
+    from app.database.queries.breeze_buddy.lead_call_tracker import (
+        set_eval_outcome_query,
+    )
+
+    query, values = set_eval_outcome_query("lead-1", "CONFIRM", "BUSY")
+
+    assert values == ["lead-1", "CONFIRM", "BUSY", "FINISHED"]
+    assert '"outcome" = $2' in query
+    # the agent's word stays in its own column (migration 084): every other
+    # outcome write already set it; a lead a build from before the column
+    # wrote gets the word the check read
+    assert '"agent_outcome" = COALESCE("agent_outcome", $3)' in query
+    assert "meta_data" not in query
+    # compare-and-set: only a FINISHED lead whose outcome is still the word
+    # the check read, so an outcome written since is never overwritten
+    assert '"status" = $4' in query
+    assert '"outcome" IS NOT DISTINCT FROM $3' in query
+
+
+def test_every_other_outcome_write_sets_the_agents_word():
+    from app.database.queries.breeze_buddy.lead_call_tracker import (
+        abort_lead_by_id_query,
+        insert_lead_call_tracker_query,
+        reset_widget_voice_lead_query,
+        update_lead_call_completion_details_query,
+    )
+
+    # the call's completion, the agent's outcome hook among its callers:
+    # one value, both columns
+    query, values = update_lead_call_completion_details_query(
+        "lead-1", status=LeadCallStatus.FINISHED, outcome="BUSY"
+    )
+    assert values[1] == "BUSY"
+    assert '"outcome" = $2' in query and '"agent_outcome" = $2' in query
+    # no outcome, neither column
+    query, _ = update_lead_call_completion_details_query(
+        "lead-1", status=LeadCallStatus.FINISHED
+    )
+    assert "outcome" not in query
+
+    query, values = abort_lead_by_id_query("lead-1", "cancelled")
+    assert values[1] == "ABORT"
+    assert '"outcome" = $2' in query and '"agent_outcome" = $2' in query
+
+    # a blocked call's outcome, known at insert
+    query, values = insert_lead_call_tracker_query(
+        "lead-1", "r", "t", "m", None, None, None, outcome="BLOCKED_REJECT"
+    )
+    columns = query[query.index("(") + 1 : query.index(")")].split(",")
+    placeholders = query[query.index("VALUES (") + 8 :].split(")")[0].split(",")
+    position = dict(
+        zip([c.strip().strip('"') for c in columns], [p.strip() for p in placeholders])
+    )
+    assert position["outcome"] == position["agent_outcome"] == "$19"
+    assert values[18] == "BLOCKED_REJECT"
+
+    # a widget lead reused for the next voice attachment clears both
+    query, _ = reset_widget_voice_lead_query("lead-1", {}, {}, "DAILY_STREAM")
+    assert '"outcome"              = NULL' in query
+    assert '"agent_outcome"        = NULL' in query
+
+
+@pytest.mark.parametrize("stored", [None, "BUSY"])
+def test_the_lead_carries_the_agents_replaced_word(stored):
+    from app.database.decoder.breeze_buddy.lead_call_tracker import (
+        decode_lead_call_tracker,
+    )
+
+    row = {
+        **make_lead().model_dump(exclude={"metaData", "agent_outcome"}),
+        "meta_data": {},
+        "status": "FINISHED",
+        "execution_mode": "TELEPHONY",
+        "call_direction": "OUTBOUND",
+    }
+    if stored is not None:
+        row["agent_outcome"] = stored
+
+    # a row from before migration 084 has no such column: None
+    lead = decode_lead_call_tracker(cast(Any, row))
+    assert lead is not None and lead.agent_outcome == stored

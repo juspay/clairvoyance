@@ -72,10 +72,11 @@ def insert_lead_call_tracker_query(
             "telephony_number_id",
             "call_direction",
             "outcome",
+            "agent_outcome",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19, $20, $21) RETURNING *;
     """
 
     values = [
@@ -611,6 +612,31 @@ def update_lead_customer_id_query(
     return text, values
 
 
+def set_eval_outcome_query(
+    id: str,
+    outcome: str,
+    agent_outcome: Optional[str],
+) -> Tuple[str, List[Any]]:
+    """The end-of-call outcome check's outcome on a FINISHED lead: the one
+    outcome write that leaves ``agent_outcome`` (migration 084) alone, as
+    every other write sets both (and migration 084 backfilled older
+    leads). COALESCE fills it in, in the same statement, on a lead a build
+    from before the column wrote. Compare-and-set: written only while the lead is FINISHED and
+    its outcome is still ``agent_outcome``, the word the check read, so an
+    outcome written since is never overwritten."""
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "outcome" = $2,
+            "agent_outcome" = COALESCE("agent_outcome", $3),
+            "updated_at" = NOW()
+        WHERE "id" = $1
+          AND "status" = $4
+          AND "outcome" IS NOT DISTINCT FROM $3
+        RETURNING *;
+    """
+    return text, [id, outcome, agent_outcome, LeadCallStatus.FINISHED.value]
+
+
 def update_lead_call_completion_details_query(
     id: str,
     status: Optional[LeadCallStatus] = None,
@@ -645,6 +671,9 @@ def update_lead_call_completion_details_query(
     if outcome is not None:
         values.append(outcome)
         set_clauses.append(f'"outcome" = ${len(values)}')
+        # the agent's word, which only the end-of-call outcome check
+        # (set_eval_outcome_query) leaves behind when it replaces the outcome
+        set_clauses.append(f'"agent_outcome" = ${len(values)}')
 
     if meta_data is not None:
         values.append(json.dumps(meta_data))
@@ -878,8 +907,9 @@ def abort_lead_by_id_query(
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
         SET 
-            "status" = $1, 
-            "outcome" = $2, 
+            "status" = $1,
+            "outcome" = $2,
+            "agent_outcome" = $2,
             "updated_at" = NOW(),
             "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb
         WHERE 
@@ -1041,9 +1071,9 @@ def reset_widget_voice_lead_query(
       - execution_mode RE-ASSERTED (e.g. DAILY_STREAM) so a lead created
         before the stream pivot is upgraded on reuse instead of silently
         running the old agent-mode pipeline
-      - call_id, call_initiated_time, call_end_time, outcome, cost,
-        recording_url are CLEARED so they don't leak from the prior
-        attempt's call into this one
+      - call_id, call_initiated_time, call_end_time, outcome,
+        agent_outcome, cost, recording_url are CLEARED so they don't leak
+        from the prior attempt's call into this one
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
@@ -1057,6 +1087,7 @@ def reset_widget_voice_lead_query(
             "call_initiated_time"  = NULL,
             "call_end_time"        = NULL,
             "outcome"              = NULL,
+            "agent_outcome"        = NULL,
             "cost"                 = NULL,
             "recording_url"        = NULL,
             "updated_at"           = NOW()
