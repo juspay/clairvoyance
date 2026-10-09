@@ -1,8 +1,10 @@
 """Analytics schemas for Breeze Buddy."""
 
+import re
 from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -31,6 +33,8 @@ class AnalyticsType(str, Enum):
     CHATS_BY_HOUR = "chats-by-hour"
     TOPIC_DASHBOARD = "topic-dashboard"
     TOPIC_CONVERSATIONS = "topic-conversations"
+    TOPIC_TREE = "topic-tree"
+    TOPIC_BREAKDOWNS = "topic-breakdowns"
 
     @classmethod
     def _missing_(cls, value: object) -> Optional["AnalyticsType"]:
@@ -138,6 +142,50 @@ class AnalyticsFilters(BaseModel):
         max_length=200,
         description="Exact underlying stable keys when opening the virtual Other topic group",
     )
+    template_ids: Optional[List[str]] = Field(
+        None,
+        max_length=50,
+        description="Topic analytics over several agents: a topic id counts once per call across them",
+    )
+    dims: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description=(
+            "Topic breakdown filters: payload key -> values, e.g. "
+            "{'lender_name': ['DMI']}. At most 2 keys; a call matches a key "
+            "when it holds any of the values."
+        ),
+    )
+
+    @field_validator("template_ids")
+    @classmethod
+    def _template_ids_must_be_uuids(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        for template_id in v or []:
+            try:
+                UUID(template_id)
+            except ValueError:
+                raise ValueError("template_ids must be template UUIDs")
+        return v
+
+    @field_validator("dims")
+    @classmethod
+    def _dims_are_breakdown_filters(
+        cls, v: Optional[Dict[str, List[str]]]
+    ) -> Optional[Dict[str, List[str]]]:
+        if v is None:
+            return v
+        if len(v) > 2:
+            raise ValueError("dims allows at most 2 keys")
+        dims = {}
+        for key, values in v.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key):
+                raise ValueError(f"dims key is not a payload key: {key!r}")
+            cleaned = sorted(
+                {re.sub(r"\s+", "_", value.strip()).upper() for value in values} - {""}
+            )
+            if not cleaned or len(cleaned) > 50:
+                raise ValueError(f"dims {key!r} needs 1 to 50 values")
+            dims[key] = cleaned
+        return dims
 
 
 class AnalyticsOptions(BaseModel):
