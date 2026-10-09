@@ -3,7 +3,8 @@
 A template's tool server names ``/mcp/<platform>/<store host>``.
 ``transport`` answers that URL here, with no network call. The public route
 (``app/api/routers/mcp.py``) uses ``tool_call`` and is off unless
-``MCP_PUBLIC_ENDPOINT_ENABLED``.
+``MCP_PUBLIC_ENDPOINT_ENABLED``. ``store_host`` reads the store host from such
+a URL (WooCommerce order tracking).
 """
 
 from __future__ import annotations
@@ -37,6 +38,16 @@ def tool_call(platform: str, store: str) -> Optional[ToolCall]:
     from app.ai.voice.agents.breeze_buddy.assist.platforms.woocommerce import tools
 
     return functools.partial(tools.call_tool, tools.store_api_url(store))
+
+
+def store_host(url: str, platform: str) -> Optional[str]:
+    """The store host in a tool-server URL that names our endpoint for
+    ``platform`` (``/mcp/<platform>/<store host>``), or None."""
+    match = _PATH_RE.fullmatch(urlparse(url).path)
+    if match is None or match["platform"] != platform:
+        return None
+    store = match["store"].lower()
+    return store if _HOST_RE.fullmatch(store) else None
 
 
 class _InProcessTransport(httpx.AsyncBaseTransport):

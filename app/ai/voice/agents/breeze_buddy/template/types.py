@@ -1962,8 +1962,8 @@ class UiCatalogConfig(BaseModel):
 
 
 class FlavorProtocolConfig(BaseModel):
-    """One protocol dialect of a flavor: which platform connectors serve it
-    and which optional features are on.
+    """One protocol dialect of a flavor: which platform connectors serve it,
+    which optional features are on, and which credential each connector uses.
 
     Mirrors the flavor package layout — ``assist/<flavor>/<protocol>/`` is
     the protocol layer, ``assist/<flavor>/connectors/<name>/`` are the
@@ -1972,7 +1972,7 @@ class FlavorProtocolConfig(BaseModel):
         "flavor": {"ucp": {"connectors": ["shopify"],
                            "features": {"upsell": true}}}
 
-    The engine treats both fields opaquely: it never knows which protocols,
+    The engine treats these fields opaquely: it never knows which protocols,
     connectors, or features exist. A flavor resolves its own block by name
     and falls back to its defaults for anything unset.
     """
@@ -2002,6 +2002,16 @@ class FlavorProtocolConfig(BaseModel):
             "call + catalog search per add, run after the cart is already "
             "on the wire); 'try_on' offers virtual try-on on eligible "
             "products (each generated image costs the merchant credits)."
+        ),
+    )
+    credentials: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Connector name → the id of the credentials-table row that holds "
+            "the merchant's own key for that platform. The row is a plain "
+            "credential (no provider) of the template's own merchant; the key never "
+            "appears in the template. Commerce/ucp: 'woocommerce' is the "
+            "store's REST API key that order tracking reads orders with."
         ),
     )
 
