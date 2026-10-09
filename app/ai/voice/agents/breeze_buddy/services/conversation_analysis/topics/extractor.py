@@ -108,6 +108,11 @@ def resolve_topic_evaluation_configuration(
         raise ValueError("evaluation_config.settings.stream must be true or false")
     if stream and provider != LLMProvider.OPENAI.value:
         raise ValueError("evaluation_config.settings.stream needs the openai provider")
+    auto_add_topics = settings.get("auto_add_topics", True)
+    if not isinstance(auto_add_topics, bool):
+        raise ValueError(
+            "evaluation_config.settings.auto_add_topics must be true or false"
+        )
 
     return {
         "provider": provider,
@@ -121,6 +126,7 @@ def resolve_topic_evaluation_configuration(
             "max_topics": max_topics,
             "include_agent_prompt": include_agent_prompt,
             "stream": stream,
+            "auto_add_topics": auto_add_topics,
         },
     }
 

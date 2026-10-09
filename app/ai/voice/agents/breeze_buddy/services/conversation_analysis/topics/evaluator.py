@@ -16,6 +16,7 @@ from app.database.accessor.breeze_buddy.evaluation_result import (
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
 from app.services.model_provider import ProviderError
+from app.utils.common import parse_json
 
 from .extractor import (
     TopicFirstTokenTimeout,
@@ -177,18 +178,20 @@ async def analyze_topics(
         context["started_at"],
         topics,
     )
-    labels = list(
-        {
-            str(topic.get("label") or "")
-            .strip()
-            .lower(): str(topic.get("label") or "")
-            .strip()
-            for topic in topics
-            if str(topic.get("label") or "").strip()
-        }.values()
-    )
-    if labels:
-        await add_discovered_topics(str(context["template_id"]), labels)
+    settings = (parse_json(evaluation, "configuration") or {}).get("settings") or {}
+    if settings.get("auto_add_topics", True):
+        labels = list(
+            {
+                str(topic.get("label") or "")
+                .strip()
+                .lower(): str(topic.get("label") or "")
+                .strip()
+                for topic in topics
+                if str(topic.get("label") or "").strip()
+            }.values()
+        )
+        if labels:
+            await add_discovered_topics(str(context["template_id"]), labels)
     logger.bind(
         outcome="saved",
         attempts=attempt,
