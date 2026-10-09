@@ -39,6 +39,14 @@ def test_a_value_must_have_its_vendors_shape() -> None:
     assert shape_problems("deepgram", {"api_key": " "}) == [
         "api_key: Value error, api_key is empty"
     ]
+    # Plivo and WooCommerce share one empty-field check, naming the field
+    assert shape_problems("plivo", {"auth_id": "MA" + "0" * 18, "auth_token": " "}) == [
+        "auth_token: Value error, auth_token is empty"
+    ]
+    assert shape_problems(
+        "woocommerce",
+        {"consumer_key": "", "consumer_secret": "s", "endpoint": "https://x.com"},
+    ) == ["consumer_key: Value error, consumer_key is empty"]
     assert shape_problems("nope", {"api_key": "k"})[0].startswith("unknown provider")
     # a value is exactly its vendor's fields: a host under another name is refused
     assert shape_problems("openai", {"api_key": "k", "base_url": "https://gw"}) == [
