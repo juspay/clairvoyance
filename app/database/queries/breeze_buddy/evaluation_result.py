@@ -73,3 +73,21 @@ def save_evaluation_failure_query(
         started_at,
         error_message,
     ]
+
+
+def get_completed_eval_names_query(
+    source_id: str,
+    names: List[str],
+) -> Tuple[str, List[Any]]:
+    """Which of ``names`` (custom evals) already have a stored result for
+    this conversation: a retried job runs only the rest."""
+    query = """
+        SELECT result
+        FROM evaluation_result
+        WHERE source_id = $1
+          AND evaluation_type = 'CONVERSATION_EVALS'
+          AND result IS NOT NULL
+          AND result = ANY($2::text[])
+          AND status = 'COMPLETED'
+    """
+    return query, [source_id, names]

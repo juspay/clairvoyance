@@ -30,6 +30,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
     insert_lead_call_tracker_query,
     release_lock_on_lead_by_id_query,
     reset_widget_voice_lead_query,
+    set_eval_outcome_query,
     update_langfuse_scores_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
@@ -644,6 +645,33 @@ async def update_lead_call_completion_details(
 
     except Exception as e:
         logger.error(f"Error updating lead call completion details: {e}")
+        return None
+
+
+async def set_eval_outcome(
+    id: str,
+    outcome: str,
+    agent_outcome: Optional[str],
+) -> Optional[LeadCallTracker]:
+    """Write the end-of-call outcome check's outcome on a FINISHED lead,
+    leaving the agent's word in ``agent_outcome`` (filled in here on a lead
+    a build from before the column wrote). Its one
+    caller is conversation_analysis/preset/outcome_eval.py; the custom evals
+    run after the call never write an outcome. Fires no hook (the lead was
+    already FINISHED). None when the lead is no longer FINISHED or the write
+    failed."""
+    logger.info(f"Setting eval outcome {outcome!r} on lead {id}")
+
+    try:
+        query_text, values = set_eval_outcome_query(id, outcome, agent_outcome)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return decode_lead_call_tracker(result[0])
+        logger.info(f"Lead {id} was not FINISHED; eval outcome not written")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error setting eval outcome on lead {id}: {e}")
         return None
 
 

@@ -1,8 +1,9 @@
-"""Post-conversation evaluation worker."""
+"""Post-conversation evaluation worker: one job per finished conversation
+runs its topics, then its custom evals (custom/agent_evals.py)."""
 
 import asyncio
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config.dynamic import BB_ANALYSIS_CONSUMER_COUNT
 from app.core.logger import logger
@@ -27,10 +28,10 @@ from app.schemas.breeze_buddy.conversation_analysis import (
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
 
-# The agent's own evals: not live yet (see queue.py).
-# from .custom.agent_evals import run_agent_evals
+from .custom.agent_evals import run_agent_evals, save_eval_failures
 from .queue import (
-    LOG_COMPONENT,
+    EVALS_LOG_COMPONENT,
+    TOPICS_LOG_COMPONENT,
     dequeue_conversation_evaluation,
     requeue_conversation_evaluation,
 )
@@ -86,12 +87,12 @@ async def get_analysis_context(
             "template_id": template_id,
             "started_at": lead.call_initiated_time or lead.created_at,
             "transcript": transcript,
-            # The agent's own evals (not live yet, see queue.py) also need
-            # what an eval judge sees beside the transcript; topics ignore it:
-            # "channel": job.channel.value,
-            # "payload": lead.payload or {},
-            # "meta_data": metadata,
-            # "recorded_outcome": lead.outcome,
+            # what a custom eval's judge sees beside the transcript
+            # (build_state); topics read none of it
+            "channel": job.channel.value,
+            "payload": lead.payload or {},
+            "meta_data": metadata,
+            "recorded_outcome": lead.outcome,
         }
     else:
         session = await get_chat_session_by_id(job.source_id)
@@ -173,17 +174,15 @@ async def _consume_queue(recovery_lock: asyncio.Lock) -> None:
             raise
         except Exception as exc:
             where = f" for {job.source_id} (template {job.template_id})" if job else ""
-            logger.bind(component=LOG_COMPONENT).error(
+            logger.bind(component=TOPICS_LOG_COMPONENT).error(
                 f"Conversation analysis queue consumer failed{where}: {exc}"
             )
             await asyncio.sleep(1)
 
 
 async def _evaluate(job: ConversationEvaluationJob) -> None:
-    global _consecutive_failures, _paused_until, _in_flight
-
     set_log_context(
-        component=LOG_COMPONENT,
+        component=TOPICS_LOG_COMPONENT,
         source_id=job.source_id,
         template_id=str(job.template_id),
         channel=job.channel.value,
@@ -197,12 +196,75 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
         return
     update_log_context(merchant_id=context.get("merchant_id"))
 
-    # The agent's own evals, not live yet (see queue.py): a job of their own,
-    # so a topics retry never re-runs them and their retry never re-runs
-    # topics.
-    # if job.kind == "evals":
-    #     await run_agent_evals(job, context, evaluations)
-    #     return
+    # The conversation's topics, then its custom evals: each part is retried
+    # with the job while it fails, and never run again once done.
+    topics_on = any(
+        evaluation.get("evaluation_type") == EvaluationType.TOPIC.value
+        for evaluation in evaluations
+    )
+    unavailable = (
+        await _run_topics(job, context, evaluations)
+        if topics_on and not job.topics_done
+        else None
+    )
+    failed_evals = await run_agent_evals(job, context, evaluations)
+    if unavailable is None and not failed_evals:
+        return
+
+    job.deliveries += 1
+    job.topics_done = unavailable is None
+    if job.deliveries >= _MAX_DELIVERIES:
+        if unavailable is not None:
+            evaluation, exc = unavailable
+            await save_topic_failure(
+                context,
+                evaluation,
+                f"MODEL_UNAVAILABLE after {job.deliveries} deliveries: {exc}",
+            )
+            logger.bind(outcome="gave_up", deliveries=job.deliveries).error(
+                f"Topic evaluation {job.source_id} gave up after "
+                f"{job.deliveries} deliveries: FAILED row saved"
+            )
+        if failed_evals:
+            await save_eval_failures(job, context, failed_evals)
+        return
+
+    # back at the head of the queue: the next job tried (once the topics'
+    # model pause, if any, is over)
+    await requeue_conversation_evaluation(job)
+    if unavailable is not None:
+        _, exc = unavailable
+        now = time.monotonic()
+        logger.bind(
+            outcome="requeued",
+            deliveries=job.deliveries,
+            paused_for_s=round(_paused_until - now),
+            consecutive_failures=_consecutive_failures,
+        ).error(
+            f"Topic evaluation {job.source_id} MODEL_UNAVAILABLE ({exc}): "
+            f"job re-queued (delivery {job.deliveries}), all consumers paused for "
+            f"{_paused_until - now:.0f}s "
+            f"(failure #{_consecutive_failures} in a row)"
+        )
+    if failed_evals:
+        logger.bind(
+            component=EVALS_LOG_COMPONENT,
+            outcome="requeued",
+            deliveries=job.deliveries,
+        ).warning(
+            f"Agent evals for {job.source_id} re-queued " f"(delivery {job.deliveries})"
+        )
+
+
+async def _run_topics(
+    job: ConversationEvaluationJob,
+    context: Dict[str, Any],
+    evaluations: List[Dict[str, Any]],
+) -> Optional[Tuple[Dict[str, Any], ModelUnavailableError]]:
+    """The conversation's topic evaluation. On an unreachable model, pauses
+    every consumer and returns the evaluation and its error, for the job to
+    be retried; None once done (or with no topics on)."""
+    global _consecutive_failures, _paused_until, _in_flight
 
     _in_flight += 1
     try:
@@ -238,36 +300,13 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
                     _paused_until = now + min(
                         max(backoff, exc.retry_after or 0), _MAX_PAUSE_SECONDS
                     )
-                job.deliveries += 1
-                if job.deliveries >= _MAX_DELIVERIES:
-                    await save_topic_failure(
-                        context,
-                        evaluation,
-                        f"MODEL_UNAVAILABLE after {job.deliveries} deliveries: {exc}",
-                    )
-                    logger.bind(outcome="gave_up", deliveries=job.deliveries).error(
-                        f"Topic evaluation {job.source_id} gave up after "
-                        f"{job.deliveries} deliveries: FAILED row saved"
-                    )
-                    return
-                await requeue_conversation_evaluation(job)
-                logger.bind(
-                    outcome="requeued",
-                    deliveries=job.deliveries,
-                    paused_for_s=round(_paused_until - now),
-                    consecutive_failures=_consecutive_failures,
-                ).error(
-                    f"Topic evaluation {job.source_id} MODEL_UNAVAILABLE ({exc}): "
-                    f"job re-queued (delivery {job.deliveries}), all consumers paused for "
-                    f"{_paused_until - now:.0f}s "
-                    f"(failure #{_consecutive_failures} in a row)"
-                )
-                return
+                return evaluation, exc
 
         if model_answered and _consecutive_failures:
             logger.info("Topic evaluation resumed after the model recovered")
             _consecutive_failures = 0
             _paused_until = 0.0
+        return None
     finally:
         _in_flight -= 1
 
