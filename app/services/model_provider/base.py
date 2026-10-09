@@ -7,12 +7,25 @@ the shapes in ``models``.
 
 from typing import Protocol
 
-from app.services.model_provider.models import GenerateRequest, GenerateResponse
+from app.services.model_provider.models import (
+    GenerateRequest,
+    GenerateResponse,
+    ProviderConfig,
+)
 
 
 class ModelProvider(Protocol):
     # the provider's id, e.g. "openrouter"
     name: str
+
+    @property
+    def config(self) -> ProviderConfig:
+        """How it reaches its vendor: URL, key, timeout, retries."""
+        ...
+
+    def with_config(self, config: ProviderConfig) -> "ModelProvider":
+        """A new provider of this kind that reaches its vendor by ``config``."""
+        ...
 
     async def generate(self, request: GenerateRequest) -> GenerateResponse:
         """One completion. Raises ``ProviderError`` on failure — never a
