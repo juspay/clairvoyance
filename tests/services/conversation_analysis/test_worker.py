@@ -223,6 +223,7 @@ def test_a_setting_of_the_wrong_type_is_refused() -> None:
     for key, value in (
         ("include_agent_prompt", "true"),
         ("stream", "yes"),
+        ("auto_add_topics", "no"),
         ("temperature", "abc"),
         ("max_output_tokens", "abc"),
     ):
@@ -378,6 +379,54 @@ async def test_queue_job_is_evaluated(
         context["started_at"],
         [{"type": "delivery_delay"}],
     )
+
+
+@pytest.mark.parametrize(
+    ("settings", "appended"),
+    [
+        ({}, True),
+        ({"auto_add_topics": True}, True),
+        ({"auto_add_topics": False}, False),
+    ],
+)
+async def test_auto_add_topics_decides_whether_new_labels_join_the_catalog(
+    monkeypatch: pytest.MonkeyPatch, settings: dict, appended: bool
+) -> None:
+    """Default on keeps today's discovery; off keeps a curated catalog closed
+    and the model's own label lives on the call's row only."""
+    catalog_write = AsyncMock()
+    save = AsyncMock()
+    monkeypatch.setattr(evaluator, "add_discovered_topics", catalog_write)
+    monkeypatch.setattr(evaluator, "save_evaluation_results", save)
+    monkeypatch.setattr(
+        evaluator,
+        "extract_topics",
+        AsyncMock(
+            return_value=[
+                {
+                    "type": "brand_new",
+                    "label": "Brand New",
+                    "phrase": "x",
+                    "evidence_turns": [0],
+                }
+            ]
+        ),
+    )
+    evaluation = {
+        **EVALUATION,
+        "configuration": {**EVALUATION["configuration"], "settings": settings},
+    }
+
+    assert await evaluator.analyze_topics(_context(), evaluation) is True
+
+    assert save.await_args is not None
+    assert save.await_args.args[-1][0]["label"] == "Brand New"
+    if appended:
+        catalog_write.assert_awaited_once_with(
+            TEMPLATE_ID, ["Brand New"], flat_only=True
+        )
+    else:
+        catalog_write.assert_not_awaited()
 
 
 async def test_enqueue_failure_does_not_break_completion(

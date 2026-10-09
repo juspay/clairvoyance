@@ -165,7 +165,12 @@ def save_evaluation_configuration_query(
 def add_discovered_topics_query(
     template_id: str,
     labels: List[str],
+    flat_only: bool = False,
 ) -> Tuple[str, List[Any]]:
+    """``flat_only`` is the worker's auto-add: it appends only while the
+    stored list is empty or holds a dot-free entry. A list whose every entry
+    has a dot turned two-level after the job read it, and one flat label
+    would flip it back to the open-label path."""
     query = f"""
         UPDATE evaluation_config config
         SET topics = config.topics || ARRAY(
@@ -179,9 +184,18 @@ def add_discovered_topics_query(
         )
         WHERE config.template_id = $1::uuid
           AND config.evaluation_type = 'TOPIC'
+          AND (
+              NOT $3::boolean
+              OR cardinality(config.topics) = 0
+              OR EXISTS (
+                  SELECT 1
+                  FROM unnest(config.topics) AS existing(label)
+                  WHERE position('.' IN existing.label) = 0
+              )
+          )
         RETURNING {_CONFIG_COLUMNS}
     """
-    return query, [template_id, labels]
+    return query, [template_id, labels, flat_only]
 
 
 def remove_topics_query(
