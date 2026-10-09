@@ -38,8 +38,12 @@ from app.database.accessor.breeze_buddy.analytics.analytics import (
     get_trends_analytics_from_db,
 )
 from app.database.accessor.breeze_buddy.analytics.evaluation_result import (
+    get_topic_breakdown_labels,
     get_topic_conversations,
     get_topic_dashboard,
+    get_topic_dim_rows,
+    get_topic_examples,
+    get_topic_tree,
 )
 from app.database.accessor.breeze_buddy.chat_analytics import (
     get_chat_summary_from_db,
@@ -163,8 +167,10 @@ def _validate_topic_filters(
 
     required = ["date_from", "date_to"]
     if drilldown:
-        required += ["template_id", "topic_type"]
+        required.append("topic_type")
     missing = [key for key in required if not filters.get(key)]
+    if drilldown and not filters.get("template_id") and not filters.get("template_ids"):
+        missing.append("template_id")
     if missing:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, f"Missing {', '.join(missing)}"
@@ -406,6 +412,122 @@ async def get_topic_dashboard_analytics(
             for row in rows
             if row["result_type"] == "topic"
         ],
+    }
+
+
+def _daily_series(
+    daily: Dict[Any, int], filters: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    days = (filters["date_to"] - filters["date_from"]).days + 1
+    return [
+        {"date": day, "calls": daily.get(day, 0)}
+        for day in (filters["date_from"] + timedelta(days=n) for n in range(days))
+    ]
+
+
+async def get_topic_tree_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Topics with their sub-topics for the filtered calls: calls and share
+    of all calls in the range, calls in the equal-length window before it
+    (the change), calls per day, and one example call per sub-topic."""
+    _validate_topic_filters(filters)
+    tree = await get_topic_tree(filters)
+    examples = await get_topic_examples(filters)
+    totals = tree["totals"]
+    total = totals["calls"]
+
+    topics: Dict[str, Dict[str, Any]] = {}
+    for row in tree["rows"]:
+        topic = topics.setdefault(
+            row["topic"],
+            {
+                "topic": row["topic"],
+                "label": row["topic_label"],
+                "calls": 0,
+                "previous_calls": 0,
+                "daily": {},
+                "subtopics": [],
+            },
+        )
+        topic["calls"] += row["calls"]
+        topic["previous_calls"] += row["previous_calls"]
+        for day, calls in row["daily"].items():
+            topic["daily"][day] = topic["daily"].get(day, 0) + calls
+        topic["subtopics"].append(
+            {
+                "topic_type": row["topic_type"],
+                "label": row["label"],
+                "calls": row["calls"],
+                "previous_calls": row["previous_calls"],
+                "share": round(row["calls"] * 100 / total, 2) if total else 0.0,
+                "daily": _daily_series(row["daily"], filters),
+                "example": examples.get(row["topic_type"]),
+            }
+        )
+
+    results = []
+    for topic in topics.values():
+        topic["subtopics"].sort(key=lambda sub: (-sub["calls"], sub["topic_type"]))
+        topic["share"] = round(topic["calls"] * 100 / total, 2) if total else 0.0
+        topic["daily"] = _daily_series(topic["daily"], filters)
+        results.append(topic)
+    results.sort(
+        key=lambda topic: (
+            topic["topic"] == "no_topic",
+            -topic["calls"],
+            topic["topic"],
+        )
+    )
+
+    period = filters["date_to"] - filters["date_from"] + timedelta(days=1)
+    return {
+        "type": "topic-tree",
+        "filters_applied": filters,
+        "previous_window": {
+            "date_from": filters["date_from"] - period,
+            "date_to": filters["date_from"] - timedelta(days=1),
+        },
+        "totals": totals,
+        "topics": results,
+    }
+
+
+async def get_topic_breakdowns_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """The breakdown keys (agent config, plus the call outcome every row
+    carries) and their values with calls, for the Segment menu. dims are not
+    applied, so the menu lists every value in scope, not only the chosen
+    ones."""
+    _validate_topic_filters(filters)
+    scope = {key: value for key, value in filters.items() if key != "dims"}
+    labels = await get_topic_breakdown_labels(scope)
+    rows = await get_topic_dim_rows(scope)
+
+    value_calls: Dict[str, Dict[str, int]] = {key: {} for key in labels}
+    for row in rows:
+        values = value_calls.setdefault(row["key"], {})
+        values[row["value"]] = values.get(row["value"], 0) + row["calls"]
+    results = [
+        {
+            "key": key,
+            "label": labels.get(key, "Outcome" if key == "outcome" else key),
+            "calls": sum(values.values()),
+            "values": [
+                {"value": value, "calls": calls}
+                for value, calls in sorted(
+                    values.items(), key=lambda item: (-item[1], item[0])
+                )[:100]
+            ],
+        }
+        for key, values in value_calls.items()
+    ]
+    results.sort(key=lambda breakdown: (-breakdown["calls"], breakdown["key"]))
+    return {
+        "type": "topic-breakdowns",
+        "filters_applied": filters,
+        "breakdowns": results,
     }
 
 
