@@ -1,17 +1,32 @@
 """Topic analytics access for evaluation_result."""
 
+import hashlib
 import json
+import math
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 
 from app.core.logger import logger
 from app.database.queries import run_reader_query
 from app.database.queries.breeze_buddy.analytics.evaluation_result import (
+    MORE_THAN_ONE,
+    get_topic_configs_query,
     get_topic_conversations_query,
     get_topic_dashboard_rows_query,
+    get_topic_dim_counts_query,
+    get_topic_examples_query,
+    get_topic_flat_calls_query,
+    get_topic_screens_query,
+    get_topic_tree_query,
     get_topics_for_source_query,
 )
+from app.services.redis.client import get_redis_service
+
+MOST_AFFECTED_MIN_SEGMENT_CALLS = 150
+MOST_AFFECTED_MIN_CELL_CALLS = 30
+MOST_AFFECTED_MIN_Z = 3.0
+DIM_ROWS_CACHE_TTL_S = 300
 
 
 def _decode_topics(value: Any) -> List[Dict[str, Any]]:
@@ -202,6 +217,214 @@ async def get_topic_dashboard(
         + _trend_rows(topic_rows, counts, filters["date_from"], top_topics)
         + all_topics
     )
+
+
+def most_affected(
+    dim_rows: List[Dict[str, Any]], skip_keys: Set[str]
+) -> Dict[str, Dict[str, Any]]:
+    """PURE: for each topic id, the breakdown value where it is most over
+    represented against the other calls that carry that key (two-proportion
+    z-test, strongest z wins). Only values that clear the call minimums and
+    z count; no_topic ids get none; a key the user already filters on has no
+    rest to compare with."""
+    cells: Dict[tuple[str, str, str], int] = {}
+    segments: Dict[tuple[str, str], int] = {}
+    key_topics: Dict[tuple[str, str], int] = {}
+    key_calls: Dict[str, int] = {}
+    for row in dim_rows:
+        key, value, topic_type, calls = (
+            row["key"],
+            row["value"],
+            row["topic_type"],
+            row["calls"],
+        )
+        cells[(key, value, topic_type)] = calls
+        segments[(key, value)] = segments.get((key, value), 0) + calls
+        key_topics[(key, topic_type)] = key_topics.get((key, topic_type), 0) + calls
+        key_calls[key] = key_calls.get(key, 0) + calls
+
+    best: Dict[str, Dict[str, Any]] = {}
+    for (key, value, topic_type), cell in cells.items():
+        if key in skip_keys or topic_type.startswith("no_topic."):
+            continue
+        if value == MORE_THAN_ONE:
+            continue
+        segment = segments[(key, value)]
+        rest = key_calls[key] - segment
+        if segment < MOST_AFFECTED_MIN_SEGMENT_CALLS:
+            continue
+        if cell < MOST_AFFECTED_MIN_CELL_CALLS or rest <= 0:
+            continue
+        share = cell / segment
+        rest_share = (key_topics[(key, topic_type)] - cell) / rest
+        pooled = key_topics[(key, topic_type)] / key_calls[key]
+        spread = math.sqrt(pooled * (1 - pooled) * (1 / segment + 1 / rest))
+        if spread == 0:
+            continue
+        z = (share - rest_share) / spread
+        if z < MOST_AFFECTED_MIN_Z:
+            continue
+        if topic_type in best and best[topic_type]["z"] >= z:
+            continue
+        best[topic_type] = {
+            "key": key,
+            "value": value,
+            "segment_calls": segment,
+            "calls": cell,
+            "share": round(share * 100, 2),
+            "rest_share": round(rest_share * 100, 2),
+            "lift": round(share / rest_share, 1) if rest_share else None,
+            "z": round(z, 2),
+        }
+    return best
+
+
+async def get_topic_tree(filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Per topic id: calls in the range, calls in the equal-length window
+    before it, and calls per day of the range; plus the distinct calls of
+    both windows. A two-level call holds one row, so its ids add up; flat
+    ids (no dot) need a DISTINCT, run only when present."""
+    query, values = get_topic_tree_query(filters)
+    start = filters["date_from"]
+    by_type: Dict[str, Dict[str, Any]] = {}
+    for row in await run_reader_query(query, values) or []:
+        entry = by_type.setdefault(
+            row["topic_type"],
+            {
+                "topic_type": row["topic_type"],
+                "topic": row["topic"],
+                "topic_label": row["topic_label"],
+                "label": row["label"],
+                "calls": 0,
+                "previous_calls": 0,
+                "daily": {},
+            },
+        )
+        if row["day"] >= start:
+            entry["calls"] += row["calls"]
+            entry["daily"][row["day"]] = row["calls"]
+        else:
+            entry["previous_calls"] += row["calls"]
+    rows = list(by_type.values())
+    totals = {"calls": 0, "previous_calls": 0}
+    for row in rows:
+        if "." in row["topic_type"]:
+            totals["calls"] += row["calls"]
+            totals["previous_calls"] += row["previous_calls"]
+    if any("." not in row["topic_type"] for row in rows):
+        query, values = get_topic_flat_calls_query(filters)
+        flat = await run_reader_query(query, values)
+        totals["calls"] += flat[0]["calls"]
+        totals["previous_calls"] += flat[0]["previous_calls"]
+    return {"rows": rows, "totals": totals}
+
+
+async def get_topic_dim_counts(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    query, values = get_topic_dim_counts_query(filters)
+    rows = await run_reader_query(query, values)
+    return [dict(row) for row in rows or []]
+
+
+async def get_topic_configs(filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Breakdown labels, topic and sub-topic descriptions, and the funnel
+    (topic ids in purchase order) of the agents in scope. With several
+    agents, the first agent's label or description wins and funnels join in
+    order."""
+    query, values = get_topic_configs_query(filters)
+    labels: Dict[str, str] = {}
+    descriptions: Dict[str, str] = {}
+    funnel: List[str] = []
+    for row in await run_reader_query(query, values) or []:
+        parts = {}
+        for name in ("breakdowns", "topic_details", "funnel"):
+            value = row[name]
+            parts[name] = json.loads(value) if isinstance(value, str) else value
+        for key, label in (parts["breakdowns"] or {}).items():
+            labels.setdefault(key, str(label))
+        for topic_type, detail in (parts["topic_details"] or {}).items():
+            if isinstance(detail, dict) and detail.get("description"):
+                descriptions.setdefault(topic_type, str(detail["description"]))
+        for step in parts["funnel"] or []:
+            if step not in funnel:
+                funnel.append(str(step))
+    return {"labels": labels, "descriptions": descriptions, "funnel": funnel}
+
+
+async def get_topic_screens(
+    filters: Dict[str, Any],
+) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+    """Per topic id, the five most read screen texts and, for an ".other"
+    id, the five most named reasons, each with calls."""
+    query, values = get_topic_screens_query(filters)
+    found: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+    for row in await run_reader_query(query, values) or []:
+        kinds = found.setdefault(row["topic_type"], {"screen": [], "proposed": []})
+        kinds[row["kind"]].append({"text": row["text"], "calls": row["calls"]})
+    for kinds in found.values():
+        for texts in kinds.values():
+            texts.sort(key=lambda item: (-item["calls"], item["text"]))
+            del texts[5:]
+    return found
+
+
+async def get_topic_examples(filters: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    query, values = get_topic_examples_query(filters)
+    rows = await run_reader_query(query, values)
+    examples = {}
+    for row in rows or []:
+        dims = row["dims"]
+        if isinstance(dims, str):
+            dims = json.loads(dims)
+        examples[row["topic_type"]] = {
+            "source_id": row["source_id"],
+            "template_id": str(row["template_id"]) if row["template_id"] else None,
+            "started_at": row["started_at"],
+            "phrase": row["phrase"],
+            "phrase_en": row["phrase_en"],
+            "screen_text": row["screen_text"],
+            "summary": row["summary"],
+            "dims": dims if isinstance(dims, dict) else {},
+        }
+    return examples
+
+
+async def get_topic_dim_rows(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """get_topic_dim_counts() cached per filter set for 5 minutes (the
+    filters carry the caller's tenant scope). Redis errors read as a miss."""
+    digest = hashlib.sha256(
+        json.dumps(filters, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    cache_key = f"topic_dim_rows:{digest}"
+    redis = await get_redis_service()
+    cached = await redis.get(cache_key)
+    if cached:
+        return json.loads(cached)
+    rows = await get_topic_dim_counts(filters)
+    await redis.setex(cache_key, json.dumps(rows), ttl_seconds=DIM_ROWS_CACHE_TTL_S)
+    return rows
+
+
+def dim_split(
+    dim_rows: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+    """PURE: per topic id, each breakdown key's values with calls, largest
+    first (MORE_THAN_ONE is one of the values)."""
+    split: Dict[str, Dict[str, Dict[str, int]]] = {}
+    for row in dim_rows:
+        values = split.setdefault(row["topic_type"], {}).setdefault(row["key"], {})
+        values[row["value"]] = values.get(row["value"], 0) + row["calls"]
+    return {
+        topic_type: {
+            key: [
+                {"value": value, "calls": calls}
+                for value, calls in sorted(
+                    values.items(), key=lambda kv: (-kv[1], kv[0])
+                )
+            ]
+            for key, values in keys.items()
+        }
+        for topic_type, keys in split.items()
+    }
 
 
 async def get_topic_conversations(

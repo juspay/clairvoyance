@@ -40,8 +40,10 @@ from .handlers import (
     get_outcome_counts,
     get_performance_analytics,
     get_telephony_numbers_analytics,
+    get_topic_breakdowns_analytics,
     get_topic_conversations_analytics,
     get_topic_dashboard_analytics,
+    get_topic_tree_analytics,
 )
 from .rbac import (
     apply_hierarchical_filters,
@@ -71,6 +73,8 @@ _ANALYTICS_HANDLERS: Dict[AnalyticsType, Callable[..., Awaitable]] = {
     AnalyticsType.CHATS_BY_HOUR: get_chats_by_hour_analytics,
     AnalyticsType.TOPIC_DASHBOARD: get_topic_dashboard_analytics,
     AnalyticsType.TOPIC_CONVERSATIONS: get_topic_conversations_analytics,
+    AnalyticsType.TOPIC_TREE: get_topic_tree_analytics,
+    AnalyticsType.TOPIC_BREAKDOWNS: get_topic_breakdowns_analytics,
 }
 
 
