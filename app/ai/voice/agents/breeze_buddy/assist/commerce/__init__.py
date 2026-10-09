@@ -43,4 +43,9 @@ from app.ai.voice.agents.breeze_buddy.assist.platforms import (  # noqa: F401
     shopify,
 )
 
-__all__ = ["schemas", "intents", "shopify"]
+# WooCommerce order-tracking builtins — register their handlers on import.
+from app.ai.voice.agents.breeze_buddy.assist.platforms.woocommerce.wismo import (  # noqa: F401
+    order_tools,
+)
+
+__all__ = ["schemas", "intents", "shopify", "order_tools"]

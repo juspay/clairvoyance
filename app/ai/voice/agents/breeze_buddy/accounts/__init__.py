@@ -50,6 +50,7 @@ from app.ai.voice.agents.breeze_buddy.accounts.types import (
     KeyOnlyAccount,
     PlivoAccount,
     VertexAccount,
+    WooCommerceAccount,
     account_from_value,
     shape_problems,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "KeyOnlyAccount",
     "PlivoAccount",
     "VertexAccount",
+    "WooCommerceAccount",
     "account_blocks",
     "account_from_value",
     "accounts_for_template",

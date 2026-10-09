@@ -684,6 +684,12 @@ NAUTILUS_WEBHOOK_URL = os.environ.get(
     "https://nautilus.breezelabs.app/apps/breeze-buddy/webhooks/clairvoyance",
 )
 
+# WooCommerce order tracking: the courier-page reader, where ``{url}`` is the
+# tracking link. Override per environment.
+WISMO_PAGE_READER_URL = os.environ.get(
+    "WISMO_PAGE_READER_URL", "https://r.jina.ai/{url}"
+)
+
 # SKEW: how far AHEAD of a provider letter's own timestamp our stored clock
 # may sit and still let the letter apply. Two of OUR transitions stamp
 # status_updated_at with now() (recording a submission, recording an
