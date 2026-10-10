@@ -560,3 +560,29 @@ async def test_the_condition_square_routes_on_the_computed_answer(
 
     assert spent == {"reply_was-it-capped": "capped"}
     assert left == {"reply_was-it-capped": "else"}
+
+
+async def test_the_walker_lead_is_due_the_moment_it_is_born(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The walker's lead is already late: next_attempt_at sits a second in
+    the past, whatever the template's initial_offset says. A lead born at
+    now()+offset waited out the offset while channels sat idle with BACKLOG
+    rows queued — dispatch must find it on its very next pass.
+    """
+    inserted: List[str] = []
+    minted: List[Dict[str, Any]] = []
+    _install(monkeypatch, inserted, minted=minted)
+
+    async def slow_config(_id: str) -> Any:
+        return type("C", (), {"initial_offset": 300})()
+
+    monkeypatch.setattr(
+        call_node, "get_call_execution_config_by_template_id", slow_config
+    )
+
+    before = datetime.now(timezone.utc)
+    await execute(_run(), _NODE, _DEFINITION)
+
+    assert len(minted) == 1
+    assert minted[0]["next_attempt_at"] < before

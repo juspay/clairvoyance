@@ -133,9 +133,11 @@ async def execute(
     visit = _visits_so_far(run.context, node.id) + 1
     lead_id = str(uuid5(NAMESPACE_URL, f"crm-workflow-lead:{run.id}:{node.id}:{visit}"))
 
-    next_attempt_at = datetime.now(timezone.utc) + timedelta(
-        seconds=config.initial_offset
-    )
+    # Due a second ago, not now()+initial_offset: the walker already decided
+    # WHEN to call (its wait squares are the delay), so an offset here only
+    # left BACKLOG rows invisible to dispatch while channels sat idle. The
+    # second in the past absorbs app/DB clock skew against `<= now()`.
+    next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     # The template-variable bridge: every small fact the entry processor
     # carried (item, cart_value, ...) reaches the agent via the lead
     # payload — {placeholder}s in the template resolve from these keys.
