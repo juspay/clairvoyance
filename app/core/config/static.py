@@ -600,7 +600,7 @@ CRM_SCHEMA_CACHE_SECONDS = _positive_float("CRM_SCHEMA_CACHE_SECONDS", 60.0)
 
 # CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; pacing rides
 # CRM_WORKER_INTERVAL, but the batch is its own dial below). send() reaches
-# real providers behind a thin permission slice: dispatch._gate probes
+# real providers behind a thin permission slice: dispatch.gate probes
 # platform suppression before every send and fails CLOSED. The full
 # may_contact() — consent, purpose, quiet hours — replaces the gate's body
 # at B5; the seam is already load-bearing.
@@ -632,7 +632,7 @@ CRM_DISPATCH_MAX_ATTEMPTS = _positive_int("CRM_DISPATCH_MAX_ATTEMPTS", 3)
 CRM_DISPATCH_RETRY_BASE_SECONDS = _positive_int("CRM_DISPATCH_RETRY_BASE_SECONDS", 30)
 
 # The ceiling on ONE provider call, applied by send() so that no adapter can
-# forget it — and separately on the gate probe before it (dispatch._gate),
+# forget it — and separately on the gate probe before it (dispatch.gate),
 # which reads the same pool. Must stay well under CRM_DISPATCH_STALE_MINUTES:
 # a send that outlives its claim gets the row reassigned to a second worker
 # while the first is still sending, and the customer receives the message
@@ -732,6 +732,14 @@ META_WHATSAPP_GRAPH_VERSION = os.environ.get("META_WHATSAPP_GRAPH_VERSION", "v23
 # receipts to us.
 META_APP_ID = os.environ.get("META_APP_ID", "")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
+
+# The Embedded Signup configuration (Meta app dashboard -> Facebook Login for
+# Business -> Configurations). Public, like META_APP_ID: the browser needs
+# both to open Meta's signup popup, and the console reads them from
+# GET /connectors/whatsapp/signup so one env serves every frontend build.
+# Empty = signup is not offered (the console says so instead of opening a
+# popup that cannot work).
+META_ES_CONFIG_ID = os.environ.get("META_ES_CONFIG_ID", "")
 
 # Echoed back once, when the callback URL is registered in the Meta app.
 META_WEBHOOK_VERIFY_TOKEN = os.environ.get("META_WEBHOOK_VERIFY_TOKEN", "")
@@ -1122,6 +1130,12 @@ CRM_RUN_SWEEP_BATCH_SIZE = int(os.environ.get("CRM_RUN_SWEEP_BATCH_SIZE", 500))
 CRM_RUN_SWEEP_INTERVAL_SECONDS = _positive_float(
     "CRM_RUN_SWEEP_INTERVAL_SECONDS", 3600.0
 )
+
+# The conversations module (the inbox). How often each walker pod runs the
+# inbox sweeps (closing messages, lapsed handoffs, Buddy moving bindings,
+# retention), and how long resolved threads are kept (inbox D22: 90 days).
+CRM_INBOX_SWEEP_SECONDS = _positive_float("CRM_INBOX_SWEEP_SECONDS", 30.0)
+CRM_INBOX_RETENTION_DAYS = _positive_int("CRM_INBOX_RETENTION_DAYS", 90)
 
 UAP_ENVIRONMENT = os.environ.get("UAP_ENVIRONMENT", "production").strip().lower()
 _UAP_HOSTS = {

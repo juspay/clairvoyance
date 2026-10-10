@@ -30,12 +30,15 @@ cannot map the same family to a different code than its neighbour.
 """
 
 from typing import Any, Callable, Coroutine, Dict, List, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
+from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.core.security.authorization import require_role
 from app.crm.auth import merchant_scope
 from app.crm.connectivity import contracts
 from app.crm.connectivity.onboarding import (
@@ -44,7 +47,10 @@ from app.crm.connectivity.onboarding import (
     UnknownConnectorError,
 )
 from app.crm.connectivity.schemas.connector import (
+    ChannelSettingsRead,
+    ConversationSettingsPatch,
     InstallationRead,
+    SignupConfig,
     SubscriptionResult,
 )
 from app.crm.connectivity.schemas.template import (
@@ -54,11 +60,13 @@ from app.crm.connectivity.schemas.template import (
     SubmitTemplateRequest,
     TemplateRead,
 )
+from app.crm.connectivity.settings import SettingsError
 from app.crm.connectivity.templates.lifecycle import (
     TemplateError,
     TemplateInUseError,
     TemplateNotFoundError,
 )
+from app.schemas import UserInfo, UserRole
 
 
 def translate(error: Exception) -> Optional[HTTPException]:
@@ -82,7 +90,7 @@ def translate(error: Exception) -> Optional[HTTPException]:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=error.errors(include_input=False),
         )
-    if isinstance(error, (OnboardingError, TemplateError)):
+    if isinstance(error, (OnboardingError, TemplateError, SettingsError)):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
     return None
 
@@ -109,10 +117,30 @@ router = APIRouter(route_class=TranslatingRoute)
 
 _NOT_FOUND = "Connection not found"
 
+_SETTINGS_ROLES = [UserRole.ADMIN, UserRole.RESELLER, UserRole.MERCHANT]
+
 
 # ---------------------------------------------------------------------------
 # Connections
 # ---------------------------------------------------------------------------
+
+
+@router.get("/{connector_key}/signup", response_model=SignupConfig)
+async def signup_config_route(
+    connector_key: str,
+    merchant_id: str = Depends(
+        merchant_scope("start a connector signup", "crm.connectivity.onboard")
+    ),
+) -> SignupConfig:
+    """What the console needs to open this connector's signup popup (for
+    WhatsApp: Meta's app id and Embedded Signup configuration id).
+
+    Public values, served from the backend env so every frontend build reads
+    the same ones; the secret half of the handshake stays in POST
+    /{connector_key}/onboard. Scoped like onboarding itself, so only someone
+    allowed to connect this merchant asks.
+    """
+    return contracts.signup_config(connector_key)
 
 
 @router.post("/{connector_key}/onboard", response_model=InstallationRead)
@@ -225,6 +253,7 @@ async def create_template_route(
         req.name,
         req.language,
         req.components,
+        req.category,
     )
 
 
@@ -273,7 +302,9 @@ async def edit_template_route(
         merchant_scope("edit a template", "crm.connectivity.templates")
     ),
 ) -> TemplateRead:
-    return await contracts.edit_template(merchant_id, template_id, req.components)
+    return await contracts.edit_template(
+        merchant_id, template_id, req.components, req.category
+    )
 
 
 @router.post("/templates/{template_id}/retire", response_model=TemplateRead)
@@ -285,3 +316,45 @@ async def retire_template_route(
     ),
 ) -> TemplateRead:
     return await contracts.retire_template(merchant_id, template_id)
+
+
+# ---------------------------------------------------------------------------
+# Bindings: the template binding, Buddy's binding and Buddy's settings
+# (inbox R1, D13–D15, D24–D28)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/bindings", response_model=List[ChannelSettingsRead])
+async def list_bindings_route(
+    merchant_id: str = Depends(
+        merchant_scope("list connections", "crm.connectivity.settings")
+    ),
+) -> List[ChannelSettingsRead]:
+    """Every binding this merchant holds: its account, whether templates go
+    out from it, and Buddy's settings on Buddy's binding. Any user of the
+    merchant may read them."""
+    return await contracts.list_channel_settings(merchant_id)
+
+
+@router.patch("/bindings/{binding_id}", response_model=ChannelSettingsRead)
+async def update_binding_settings_route(
+    # Typed, so a malformed id is a 422 here — never a uuid cast error from
+    # the database, and never a lookup it could not answer anyway.
+    binding_id: UUID,
+    req: ConversationSettingsPatch,
+    merchant_id: str = Depends(
+        merchant_scope("change a connection's settings", "crm.connectivity.settings")
+    ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> ChannelSettingsRead:
+    """Change one binding: make templates go out from it (same account
+    only), make Buddy answer on it (Buddy's settings move here whole), or
+    change Buddy's settings — human handoff, the agent, the closing and
+    non-text words, the timings. Only the fields sent
+    change. Merchant admins only (D14): the merchant check first, then the
+    platform's own role gate."""
+    require_role(current_user, _SETTINGS_ROLES)
+    updated = await contracts.update_channel_settings(merchant_id, str(binding_id), req)
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
+    return updated

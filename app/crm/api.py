@@ -17,6 +17,7 @@ from app.crm.connectivity import (
     api as connectivity_api,
     contracts as connectivity_contracts,
 )
+from app.crm.conversations import api as conversations_api
 from app.crm.identity import api as identity_api
 from app.crm.outreach import api as outreach_api
 from app.crm.record import api as record_api, ingress as record_ingress
@@ -40,6 +41,9 @@ router.include_router(record_api.catalog_router, tags=["Catalog"])
 router.include_router(outreach_api.router, prefix="/workflows", tags=["Workflows"])
 router.include_router(
     outreach_api.customer_router, prefix="/customers", tags=["Workflows"]
+)
+router.include_router(
+    conversations_api.router, prefix="/conversations", tags=["Conversations"]
 )
 router.include_router(
     connectivity_api.router, prefix="/connectors", tags=["Connectors"]

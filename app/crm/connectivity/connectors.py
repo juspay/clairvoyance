@@ -18,7 +18,7 @@ anywhere else — onboarding.py and templates.py never name a provider.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Type
+from typing import Callable, Dict, Optional, Type
 
 from pydantic import BaseModel
 
@@ -39,8 +39,10 @@ from app.crm.connectivity.providers.shopify.onboard import (
 from app.crm.connectivity.providers.whatsapp.onboard import (
     OnboardWhatsappRequest,
     WhatsappOnboarder,
+    signup_config as whatsapp_signup_config,
 )
 from app.crm.connectivity.providers.whatsapp.templates import WhatsappTemplates
+from app.crm.connectivity.schemas.connector import SignupConfig
 
 #: Re-exported so onboarding.py can name the error every onboarder raises,
 #: and actions.py the one every action face raises. Neither can import
@@ -113,6 +115,13 @@ class ConnectorSpec:
     #: actions" without a branch, and why adding the fourth verb to an
     #: existing connector is one line here.
     actions: Dict[str, ConnectorAction] = field(default_factory=dict)
+    #: The public settings a browser needs to run this connector's signup
+    #: popup, or None for a connector connected some other way (Shopify
+    #: installs from its App Store). A callable because the values are the
+    #: provider face's own config (the registry never reads a provider's
+    #: settings); they are static config, fixed when the process starts, so
+    #: changing META_APP_ID / META_ES_CONFIG_ID takes a restart.
+    signup: Optional[Callable[[], SignupConfig]] = None
 
 
 # Instantiated once: the faces are stateless request builders, exactly like
@@ -125,6 +134,7 @@ CONNECTORS: Dict[str, ConnectorSpec] = {
         onboarder=WhatsappOnboarder(),
         templates=WhatsappTemplates(),
         request_model=OnboardWhatsappRequest,
+        signup=whatsapp_signup_config,
     ),
     # A door with no pipe, and the first connector that ACTS. channel=None
     # keeps it out of the send-side pins and out of the binding write; the

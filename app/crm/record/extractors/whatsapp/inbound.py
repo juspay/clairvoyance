@@ -59,6 +59,27 @@ def sender_name(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def business_address(payload: Dict[str, Any]) -> Optional[Any]:
+    """Which of the merchant's bindings she wrote to: the receiving number's
+    phone_number_id (metadata), the same id a binding's address holds."""
+    metadata = payload.get("metadata")
+    return metadata.get("phone_number_id") if isinstance(metadata, dict) else None
+
+
+def sender_address(payload: Dict[str, Any]) -> Optional[Any]:
+    """Who wrote, as the channel addresses them (any channel's extractor
+    declares it, for the inbox): on WhatsApp her wa_id, a phone number."""
+    return sender_phone(payload)
+
+
+def media_caption(payload: Dict[str, Any]) -> Optional[Any]:
+    """The caption she typed under an image, video or document; None for
+    everything else. A timeline keeps it in place of the media itself."""
+    item = _item(payload, "messages")
+    media = item.get(str(item.get("type") or ""))
+    return media.get("caption") if isinstance(media, dict) else None
+
+
 def message_type(payload: Dict[str, Any]) -> Optional[Any]:
     """Meta's message.type — text, image, button, and the rest."""
     return _item(payload, "messages").get("type")
@@ -134,6 +155,9 @@ def fields() -> List[CatalogField]:
             derived=True,
         ),
         _f("message_text", "text", "Message text", variable=True, derived=True),
+        _f("media_caption", "text", "Media caption", derived=True),
+        _f("sender_address", "text", "Sender address", derived=True),
+        _f("business_address", "text", "Our number (phone number id)", derived=True),
         # The answer, whichever widget carried it — what a listening wait
         # square branches on (key: "reply"). The label carries the one
         # word an author cannot guess: a completed form answers

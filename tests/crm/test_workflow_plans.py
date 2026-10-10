@@ -41,6 +41,48 @@ def test_valid_definition_passes() -> None:
     assert validate_definition(_definition()) == []
 
 
+def test_a_plan_cannot_start_from_its_own_sends() -> None:
+    """message.queued is our own record of a send: a plan whose door is it,
+    and which sends a template, would enrol her again from its own send."""
+    problems = validate_definition(
+        _definition(entry={"topic": "message.queued", "reenter": True})
+    )
+    assert any("our own record of a send" in p for p in problems)
+
+
+def test_a_goal_or_a_wait_cannot_name_our_own_sends_either() -> None:
+    """entry.py drops message.queued before goals and waits are judged, so a
+    plan naming it there would publish and silently never fire."""
+    problems = validate_definition(
+        _definition(
+            goal={"topics": ["message.queued"]},
+            nodes=[
+                {
+                    "id": "wait-30m",
+                    "type": "wait",
+                    "minutes": 30,
+                    "topics": ["message.queued"],
+                    "key": "message_id",
+                },
+                {"id": "rescue-call", "type": "call", "template_id": "tpl-1"},
+            ],
+            edges=[["wait-30m", "rescue-call", "timeout"]],
+        )
+    )
+    assert any(p.startswith("goal tier 0: 'message.queued'") for p in problems)
+    assert any(p.startswith("node wait-30m: 'message.queued'") for p in problems)
+
+
+def test_outreach_and_connectivity_spell_the_echo_topic_once() -> None:
+    """entry.py's guard and the publish refusal read connectivity's own word,
+    so a rename there cannot silently let a plan re-enrol from its sends."""
+    from app.crm.connectivity.topics import TOPIC_QUEUED
+    from app.crm.outreach import entry
+
+    assert entry.TOPIC_QUEUED is TOPIC_QUEUED
+    assert plans.OWN_SEND_TOPICS == frozenset({TOPIC_QUEUED})
+
+
 def test_duplicate_node_ids_fail() -> None:
     problems = validate_definition(
         _definition(

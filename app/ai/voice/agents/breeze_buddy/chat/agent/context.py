@@ -26,6 +26,7 @@ from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     render_client_context,
 )
+from app.ai.voice.agents.breeze_buddy.chat.inbox.format import markup_hint
 from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
     build_kb_system_message,
     build_retrieval_query,
@@ -41,6 +42,20 @@ from app.core.logger import logger
 
 if TYPE_CHECKING:
     from app.ai.voice.agents.breeze_buddy.chat.agent.core import ChatAgent
+
+
+#: How a reply reads on a text-only (messaging) channel, D32. The channel's
+#: own markup line follows it (inbox/format.py).
+TEXT_ONLY_STYLE = (
+    "You are replying in a messaging app chat. Write plain text a person "
+    "reads on a phone: short paragraphs, no tables, no headings, no UI."
+)
+
+
+def text_only_style(channel: Optional[str]) -> str:
+    """PURE: the text-only style, with the markup channel reads."""
+    hint = markup_hint(channel)
+    return f"{TEXT_ONLY_STYLE} {hint}" if hint else TEXT_ONLY_STYLE
 
 
 class ContextSeedMixin:
@@ -170,6 +185,12 @@ class ContextSeedMixin:
             *role_messages,
             *task_messages,
         ]
+        if self._text_only:
+            # Stable across turns (prompt-cache friendly), right after the
+            # template's own instructions.
+            messages.append(
+                {"role": "system", "content": text_only_style(self.channel)}
+            )
         if kb_message is not None and kb_message.placement == "prefix":
             messages.append(kb_message.message)
         messages.extend(history)
