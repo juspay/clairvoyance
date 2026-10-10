@@ -23,6 +23,7 @@ goal-cancel is the fast path; this is the belt-and-suspenders.
 """
 
 import random
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,9 +38,11 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
+from app.crm.outreach.entry import heard_report
 from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
+    FINISHED_REPORT_KEY,
     OUTCOME_KEY,
     dispatch_id,
     reply_key,
@@ -49,6 +52,7 @@ from app.crm.outreach.nodes.spec import ELSE, NodeParked
 from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.crm.outreach.steps import (
+    ARRIVED_BY_DOOR,
     ARRIVED_BY_WALK,
     StepRecord,
     as_rows,
@@ -57,7 +61,7 @@ from app.crm.outreach.steps import (
     step,
 )
 from app.crm.outreach.window import alarm, opens_at
-from app.crm.record.contracts import customer_has_event
+from app.crm.record.contracts import call_report, customer_has_event
 
 LOG_COMPONENT = "crm.outreach.walker"
 
@@ -68,6 +72,27 @@ _MAX_STEPS_PER_VISIT = 10
 # Transient-failure retry: exponential from the lease, capped, ±20% jitter
 # (canon T20: "backoff with jitter written into wake_at").
 _RETRY_CAP_SECONDS = 3600
+
+
+@dataclass
+class _Visit:
+    """What one visit did that its failure paths must undo: True once the
+    token was written onto a square that reaches out (_advance). A failure
+    after that hands the token back to the square the visit was claimed on."""
+
+    stepped: bool = False
+
+
+def _handback(run: EnrollmentRun, visit: _Visit) -> Tuple[Any, ...]:
+    """PURE: the extra arguments park_run / record_run_error take when the
+    visit stepped onto a dispatching square — the claimed square, its own
+    arrival stamp and the claimed context — else none, and the row stands.
+    The context goes back too: the walk already spent the claimed square's
+    reply (a retry would read it as a timeout) and counted the calls it
+    made (a retry would mint a fresh lead and dial again)."""
+    if not visit.stepped:
+        return ()
+    return (run.current_node, run.node_arrived_at, dict(run.context))
 
 
 def retry_delay_seconds(attempts: int, base: int) -> int:
@@ -111,7 +136,11 @@ async def walk_run(run: EnrollmentRun) -> None:
     already re-arms the run, and the next claim re-reads it WITH the
     reply and takes the right branch. Action nodes are idempotent
     (dedupe run:node, uuid5 lead), so a re-executed visit is exactly as
-    safe as the lease retry this file already relied on.
+    safe as the lease retry this file already relied on — except after an
+    insert: a square that reaches out is written onto BEFORE it executes
+    (_advance), and a FAILURE after that write hands the token back to the
+    square the visit was claimed on (_handback), so a retry or a park is
+    judged from where the plan put the run — its window's hold included.
 
     Stamped before the lease check, so even the earliest failure line
     carries the run's ids; the nodes this visit executes inherit them."""
@@ -123,6 +152,7 @@ async def walk_run(run: EnrollmentRun) -> None:
         node=run.current_node,
     )
     lease = run.wake_at
+    visit = _Visit()
     if lease is None:
         # A claimed run always carries its lease (the claim wrote it, and
         # waiting rows have wake_at NOT NULL). Anything else is a caller
@@ -174,9 +204,11 @@ async def walk_run(run: EnrollmentRun) -> None:
             # not enter under (versions are never deleted, ADR 0023 §5, so
             # this is drift, not life).
             raise NodeParked(f"definition v{run.workflow_version} missing")
-        await _advance(run, definition, lease)
+        await _advance(run, definition, lease, visit)
     except NodeParked as e:
-        if await enrollment_accessor.park_run(str(run.id), str(e), lease):
+        if await enrollment_accessor.park_run(
+            str(run.id), str(e), lease, *_handback(run, visit)
+        ):
             # A defect needs the document fixed; resuming alone re-parks it.
             # park_kind, NOT reason_class: that name carries dispatch's
             # fixed vocabulary, and one column holding two groups by neither.
@@ -188,7 +220,7 @@ async def walk_run(run: EnrollmentRun) -> None:
     except Exception as e:
         if run.attempts >= CRM_WALKER_MAX_ATTEMPTS:
             if await enrollment_accessor.park_run(
-                str(run.id), f"attempts exhausted: {e}", lease
+                str(run.id), f"attempts exhausted: {e}", lease, *_handback(run, visit)
             ):
                 # The other kind: transient, never settled. Same dead end,
                 # different fix — hence a field, not a message prefix.
@@ -200,7 +232,7 @@ async def walk_run(run: EnrollmentRun) -> None:
         else:
             retry_in = retry_delay_seconds(run.attempts, CRM_WALKER_LEASE_SECONDS)
             if await enrollment_accessor.record_run_error(
-                str(run.id), str(e), retry_in, lease
+                str(run.id), str(e), retry_in, lease, *_handback(run, visit)
             ):
                 # permanent=False keeps this out of the failure counts:
                 # the ladder is not spent, so nothing is owed yet.
@@ -231,7 +263,10 @@ def _deferred(run: EnrollmentRun, write: str) -> None:
 
 
 async def _advance(
-    run: EnrollmentRun, definition: WorkflowDefinition, lease: datetime
+    run: EnrollmentRun,
+    definition: WorkflowDefinition,
+    lease: datetime,
+    visit: Optional[_Visit] = None,
 ) -> None:
     """One visit: exits judged first, then the token moves as far as it
     can without waiting.
@@ -298,6 +333,17 @@ async def _advance(
     cut_short_by = context.pop(CUT_SHORT_BY_KEY, None)
     cut_short_by = str(cut_short_by) if cut_short_by else None
     arrived_by = first_arrival(run, cut_short_by)
+    start = nodes.get(current_id)
+    if (
+        start is not None
+        and NODE_TYPES[start.type].reaches_out
+        and arrived_by != ARRIVED_BY_DOOR
+    ):
+        # Only a walk puts a token on a dispatching square outside a door:
+        # the step-onto write below. The letter or timer that woke THIS
+        # visit did not bring it here (canon T26 arrived_by) — a letter
+        # still rides on the row, in cut_short_by.
+        arrived_by = ARRIVED_BY_WALK
     arrived_at = run.node_arrived_at
     walked: List[StepRecord] = []
     first = True
@@ -358,9 +404,38 @@ async def _advance(
                     _deferred(run, f"hold on {node.id}")
                 return
 
+        if NODE_TYPES[node.type].reaches_out and not first:
+            # Written onto the square before it executes, wake_at left as
+            # the lease. A reset landing BEFORE this write wins with nothing
+            # inserted. One landing AFTER it is keyed on the square the run
+            # now stands on — the call — so it cannot pull the run back to
+            # the wait; a letter the call does not listen for only refreshes
+            # the facts and sets wake_at = now(), this visit's final write
+            # misses, and the re-visit starts on this square, re-derives the
+            # same uuid5 lead and adopts it. If the call already ended, its
+            # report is heard from the record instead of awaited
+            # (_hear_finished_report; 03-enrollment-cas.md, amendment 2). The
+            # counter is kept: this write is not the visit's success.
+            if not await enrollment_accessor.advance_run(
+                str(run.id),
+                node.id,
+                lease,
+                dict(context),  # before this square's patch
+                lease,
+                node_arrived_at=arrived_at,
+                steps=as_rows(walked),
+                keep_attempts=True,
+            ):
+                _deferred(run, f"step onto {node.id}")
+                return
+            if visit is not None:
+                visit.stepped = True
+            walked = []
+
         execute = NODE_TYPES[node.type].execute
         dispatched: Optional[str] = None
         said: Optional[str] = None
+        finished_report: Optional[str] = None
         if execute is not None:  # a wait's action IS the alarm
             # The square sees the context AS WALKED, not the one the run was
             # claimed with. This visit runs consecutive immediate squares
@@ -380,6 +455,7 @@ async def _advance(
             # at the plan's ceiling). The word is for the trail row below —
             # popped here so it is never written into the run's context.
             said = patch.pop(OUTCOME_KEY, None)
+            finished_report = patch.pop(FINISHED_REPORT_KEY, None)
             context.update(patch)
             dispatched = dispatch_id(patch, node.id)
 
@@ -428,7 +504,19 @@ async def _advance(
         next_node = nodes.get(next_id)
         if next_node is None:
             raise NodeParked(f"edge points at unknown node {next_id}")
-        if is_wait(next_node):
+        heard = (
+            await _hear_finished_report(run, node, next_node, finished_report, context)
+            if finished_report and is_wait(next_node)
+            else None
+        )
+        if heard is not None:
+            # The adopted call already ended and its report is recorded: the
+            # after-call wait is answered now, as the consumer would have
+            # answered it, and walked through in this visit — never armed
+            # for a report that will not come again.
+            answer, facts = heard
+            context = _pre_answered(context, next_id, answer, facts)
+        elif is_wait(next_node):
             # Arrival scheduling: the wait's alarm starts now — its minutes,
             # the window's next opening, or the end of the run's life
             # (window.alarm). A wait already due moves on in this same visit.
@@ -481,6 +569,40 @@ async def _advance(
     raise NodeParked(
         f"{_MAX_STEPS_PER_VISIT} immediate nodes in one visit — runaway document"
     )
+
+
+async def _hear_finished_report(
+    run: EnrollmentRun,
+    call: WorkflowNode,
+    wait: WorkflowNode,
+    natural_id: str,
+    context: Dict[str, Any],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(answer, facts) of an adopted, already FINISHED lead's
+    report — only for THIS call's after-call wait (match.run is the call's
+    lead), and only once the report is recorded. None keeps today's path:
+    the wait is armed and the report, still to come, wakes it."""
+    if wait.match is None or wait.match.run != f"lead_{call.id}":
+        return None
+    report = await call_report(run.merchant_id, natural_id)
+    if report is None:
+        return None
+    event, variables = report
+    return await heard_report(
+        run.model_copy(update={"context": context}), wait, event, variables
+    )
+
+
+def _pre_answered(
+    context: Dict[str, Any], wait_id: str, answer: str, facts: Dict[str, Any]
+) -> Dict[str, Any]:
+    """PURE: the context resume_run_by_id would have written — the answer
+    under reply_<wait>, the letter's facts under facts.<wait> (replacing
+    that square's, and a non-object `facts` replaced, never merged)."""
+    by_square = context.get("facts")
+    by_square = dict(by_square) if isinstance(by_square, dict) else {}
+    by_square[wait_id] = facts
+    return {**context, reply_key(wait_id): answer, "facts": by_square}
 
 
 def goal_since(run: EnrollmentRun) -> datetime:

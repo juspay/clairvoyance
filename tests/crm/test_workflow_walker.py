@@ -503,14 +503,20 @@ def _quiet_actions(monkeypatch: pytest.MonkeyPatch, fired: List[str]) -> None:
         nodes.NODE_TYPES,
         "call",
         nodes.NODE_TYPES["call"].__class__(
-            validate=nodes.NODE_TYPES["call"].validate, execute=call, is_wait=False
+            validate=nodes.NODE_TYPES["call"].validate,
+            execute=call,
+            is_wait=False,
+            reaches_out=True,
         ),
     )
     monkeypatch.setitem(
         nodes.NODE_TYPES,
         "send",
         nodes.NODE_TYPES["send"].__class__(
-            validate=nodes.NODE_TYPES["send"].validate, execute=send, is_wait=False
+            validate=nodes.NODE_TYPES["send"].validate,
+            execute=send,
+            is_wait=False,
+            reaches_out=True,
         ),
     )
 
@@ -524,8 +530,9 @@ def test_a_condition_branches_and_the_visit_continues_to_the_next_wait(
     monkeypatch: pytest.MonkeyPatch, no_goal: None, cart_value: Any, expect: str
 ) -> None:
     """decide is not a wait: the walker evaluates it, takes the labelled
-    edge, runs the action square and only THEN writes — one advance, onto
-    wait-1d, with the condition's reply cleared like a listening square's."""
+    edge, writes the token ONTO the action square (it reaches out, 1 Oct
+    2026), runs it, and then writes the move onto wait-1d — with the
+    condition's reply cleared like a listening square's."""
     fired: List[str] = []
     _quiet_actions(monkeypatch, fired)
     writes = _Writes(matched=True, definition=_CONDITION_BOARD)
@@ -537,7 +544,11 @@ def test_a_condition_branches_and_the_visit_continues_to_the_next_wait(
         run.context["cart_value"] = cart_value
     _advance(writes, run)
     assert fired == [expect]
-    ((verb, args),) = writes.calls
+    onto, (verb, args) = writes.calls
+    assert (
+        onto[0] == "advance"
+        and onto[1][1] == {"call": "rescue-call", "send": "wa-nudge"}[expect]
+    )
     assert verb == "advance" and args[1] == "wait-1d"
     assert "reply_decide" not in args[3]
 
@@ -611,7 +622,9 @@ def test_inside_the_hours_the_timer_moves_on_and_the_next_wait_honours_them(
     _install(monkeypatch, writes)
     _advance(writes, _on_quiet())
     assert fired == ["call"]
-    ((verb, args),) = writes.calls
+    # Two writes: onto call-1 before the dial (it reaches out), then the move.
+    onto, (verb, args) = writes.calls
+    assert onto[1][1] == "call-1"
     assert (verb, args[1], args[2]) == ("advance", "gap", _NEXT_OPENING)
 
 
@@ -737,3 +750,604 @@ def test_arriving_on_a_listening_wait_with_a_window_listens_even_when_the_hours_
     ((verb, args),) = writes.calls
     life_ends = run.entered_at + timedelta(days=7, minutes=1)  # 17:00 IST, open
     assert (verb, args[1], args[2]) == ("advance", "listen", life_ends)
+
+
+# --- a square that reaches out is written onto BEFORE it executes (1 Oct 2026)
+#
+# P1's rule — a CAS miss defers, a re-done visit is idempotent — held for
+# every square that touched nothing outside the run. A call square inserts
+# a lead the dialler rings whatever the run row says: a reset landing
+# between the insert and the visit's write left the run on the square it
+# started from, the call reported to nobody, and the re-done visit fifteen
+# minutes later adopted a finished lead. So the token is written onto the
+# square first: a reset landing before that write wins with nothing
+# inserted; one landing after finds the run past the square it may touch.
+
+
+def _on_decide(cart_value: int = 6000) -> EnrollmentRun:
+    run = _run()
+    run.current_node = "decide"
+    run.node_arrived_at = NOW - timedelta(minutes=1)
+    run.context = {"phone": "+919876543210", "cart_value": cart_value}
+    return run
+
+
+def test_the_token_is_written_onto_a_call_square_before_the_lead_is_inserted(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=True, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    run = _on_decide()
+    _advance(writes, run)
+    assert fired == ["call"]
+    onto, move = writes.calls
+    run_id, square, alarm, context, lease = onto[1]
+    # Onto the call square under the claim's lease, wake_at left AS the lease
+    # — the squares walked so far close with it, the call's arrival stamped.
+    assert (run_id, square, alarm, lease) == (str(run.id), "rescue-call", LEASE, LEASE)
+    assert "reply_decide" not in context and "lead_rescue-call" not in context
+    assert [row["node"] for row in writes.flushes[0]["steps"]] == ["decide"]
+    assert writes.flushes[0]["node_arrived_at"] == NOW
+    run_id, square, _, context, lease = move[1]
+    assert (square, lease) == ("wait-1d", LEASE)
+    assert context["lead_rescue-call"] == "lead-1"
+    assert [row["node"] for row in writes.flushes[1]["steps"]] == ["rescue-call"]
+    assert writes.flushes[1]["steps"][0]["dispatch_id"] == "lead-1"
+
+
+def test_a_reset_landing_before_the_entry_write_wins_and_nothing_is_inserted(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The repeat slid the alarm while the walker was still on decide. The
+    entry write misses, the visit ends, the call square never ran — the
+    reset is honoured exactly as a lost lease always was, and the next
+    claim re-walks from quiet with the event's facts."""
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=False, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_decide())
+    assert fired == []
+    assert [(verb, args[1]) for verb, args in writes.calls] == [
+        ("advance", "rescue-call")
+    ]
+
+
+def test_a_visit_that_starts_on_the_call_square_writes_once(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The row already says the square (a redo after a park, a door that
+    starts on a call): nothing to write before executing."""
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=True, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    run = _on_decide()
+    run.current_node = "rescue-call"
+    _advance(writes, run)
+    assert fired == ["call"]
+    assert [(verb, args[1], args[4]) for verb, args in writes.calls] == [
+        ("advance", "wait-1d", LEASE)
+    ]
+
+
+def test_a_failed_insert_after_the_entry_write_parks_under_the_same_lease(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The entry write left wake_at as the lease, so the park that follows a
+    failed insert still matches."""
+    import app.crm.outreach.nodes as nodes
+
+    async def broken(run: Any, node: Any, definition: Any) -> Dict[str, Any]:
+        raise NodeParked("template t-1 not found")
+
+    monkeypatch.setitem(
+        nodes.NODE_TYPES,
+        "call",
+        nodes.NODE_TYPES["call"].__class__(
+            validate=nodes.NODE_TYPES["call"].validate,
+            execute=broken,
+            is_wait=False,
+            reaches_out=True,
+        ),
+    )
+    writes = _Writes(matched=True, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    run = _on_decide()
+    asyncio.run(walker.walk_run(run))
+    onto, park = writes.calls
+    assert onto[0] == "advance" and onto[1][1] == "rescue-call"
+    assert park[0] == "park" and park[1][2] == LEASE
+    # Handed back (review finding 1, option a): parked on the square the
+    # visit was claimed on, with its own arrival — never on the call, where
+    # any letter would un-park it with no reply and the next claim would
+    # dial at any hour.
+    assert park[1][3:] == ("decide", run.node_arrived_at, run.context)
+
+
+def _failing_call(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    import app.crm.outreach.nodes as nodes
+
+    async def broken(run: Any, node: Any, definition: Any) -> Dict[str, Any]:
+        raise error
+
+    monkeypatch.setitem(
+        nodes.NODE_TYPES,
+        "call",
+        nodes.NODE_TYPES["call"].__class__(
+            validate=nodes.NODE_TYPES["call"].validate,
+            execute=broken,
+            is_wait=False,
+            reaches_out=True,
+        ),
+    )
+
+
+def test_a_transient_failure_after_the_entry_write_retries_from_the_claimed_square(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """S4 (review): the insert fails at 20:58, the retry claim comes at
+    21:05. Retrying from the call would insert the lead outside the plan's
+    hours; retrying from the claimed square lets its window hold."""
+    _failing_call(monkeypatch, RuntimeError("dialler 503"))
+    writes = _Writes(matched=True, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    run = _on_decide()
+    asyncio.run(walker.walk_run(run))
+    onto, retry = writes.calls
+    assert onto[1][1] == "rescue-call"
+    assert retry[0] == "retry" and retry[1][3] == LEASE
+    assert retry[1][4:] == ("decide", run.node_arrived_at, run.context)
+
+
+def test_a_failure_before_any_entry_write_hands_nothing_back(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """A visit that starts ON the call square never stepped: the row already
+    names the square, so park and retry keep their old shape."""
+    _failing_call(monkeypatch, NodeParked("template t-1 not found"))
+    writes = _Writes(matched=True, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    run = _on_decide()
+    run.current_node = "rescue-call"
+    asyncio.run(walker.walk_run(run))
+    ((verb, args),) = writes.calls
+    assert verb == "park" and len(args) == 3
+
+
+def test_the_entry_write_keeps_the_attempt_counter(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """Zeroing it on the step-onto write gave a failing call four tries."""
+    fired: List[str] = []
+    _quiet_actions(monkeypatch, fired)
+    writes = _Writes(matched=True, definition=_CONDITION_BOARD)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_decide())
+    onto, move = writes.flushes
+    assert onto["keep_attempts"] is True
+    assert move.get("keep_attempts", False) is False
+
+
+class _Scripted(_Writes):
+    """Every advance answers from a script, in order — the CAS sequence."""
+
+    def __init__(self, answers: List[bool], definition: Dict[str, Any]) -> None:
+        super().__init__(matched=True, definition=definition)
+        self.answers = list(answers)
+
+    async def advance_run(self, *args: Any, **kwargs: Any) -> bool:
+        self.calls.append(("advance", args))
+        self.flushes.append(kwargs)
+        return self.answers.pop(0)
+
+
+def _uuid5_call(monkeypatch: pytest.MonkeyPatch, leads: List[str]) -> None:
+    """The call square's idempotency, exactly as nodes/call.py derives it:
+    uuid5 of run, square and visit number, the visit counter read off the
+    context the square is handed."""
+    from uuid import NAMESPACE_URL, uuid5
+
+    import app.crm.outreach.nodes as nodes
+    from app.crm.outreach.nodes import call as call_node
+
+    async def call(run: Any, node: Any, definition: Any) -> Dict[str, Any]:
+        visit = call_node._visits_so_far(run.context, node.id) + 1
+        lead = str(
+            uuid5(NAMESPACE_URL, f"crm-workflow-lead:{run.id}:{node.id}:{visit}")
+        )
+        leads.append(lead)
+        return {f"lead_{node.id}": lead, call_node._visits_key(node.id): visit}
+
+    monkeypatch.setitem(
+        nodes.NODE_TYPES,
+        "call",
+        nodes.NODE_TYPES["call"].__class__(
+            validate=nodes.NODE_TYPES["call"].validate,
+            execute=call,
+            is_wait=False,
+            reaches_out=True,
+        ),
+    )
+
+
+def test_the_25_sep_chain_the_re_visit_from_the_call_adopts_the_same_lead(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """S1, the incident: the entry write lands, a letter moves wake_at during
+    the insert, the final write misses. The re-visit starts ON the call
+    square — the letter could not pull it back — re-derives the same uuid5
+    from the context the entry write stored, and adopts the lead: one dial,
+    and the after-call wait is armed. Its row says how the token got there."""
+    leads: List[str] = []
+    _uuid5_call(monkeypatch, leads)
+    first = _Scripted([True, False], _CONDITION_BOARD)
+    _install(monkeypatch, first)
+    run = _on_decide()
+    _advance(first, run)
+    (_, onto), (_, missed) = first.calls
+    assert (onto[1], missed[1]) == ("rescue-call", "wait-1d")
+    stored = onto[3]  # what the entry write left on the row
+    assert not any(k.startswith("lead_") for k in stored)
+
+    again = _Scripted([True], _CONDITION_BOARD)
+    _install(monkeypatch, again)
+    revisit = run.model_copy(
+        update={
+            "current_node": "rescue-call",
+            "context": stored,
+            "node_arrived_at": first.flushes[0]["node_arrived_at"],
+        }
+    )
+    _advance(again, revisit)
+    assert len(leads) == 2 and leads[0] == leads[1]
+    ((_, move),) = again.calls
+    assert move[1] == "wait-1d" and move[3]["lead_rescue-call"] == leads[0]
+    (row,) = again.flushes[0]["steps"]
+    assert (row["node"], row["arrived_by"]) == ("rescue-call", "walk")
+
+
+# --- the hand-back restores the claimed context ------------------------------
+
+_REPLY_TO_CALL = {
+    "entry": {"topic": "checkout.initiated"},
+    "nodes": [
+        {
+            "id": "gap-30m",
+            "type": "wait",
+            "topics": ["button.reply"],
+            "key": "button_id",
+            "minutes": 30,
+        },
+        {"id": "call-2", "type": "call", "template_id": "tpl-1"},
+        {"id": "sms", "type": "send", "channel": "whatsapp", "template": "t"},
+        {"id": "wait-1d", "type": "wait", "minutes": 1440},
+    ],
+    "edges": [
+        ["gap-30m", "call-2", "CALLBACK"],
+        ["gap-30m", "sms", "timeout"],
+        ["call-2", "wait-1d"],
+        ["sms", "wait-1d"],
+    ],
+    "goal": {"topics": ["order.placed"]},
+    "purpose_key": "utility",
+}
+
+
+def test_a_failed_call_hands_back_the_reply_that_chose_it(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """Bug 1: the walk spends gap-30m's reply before stepping onto call-2.
+    Handed back without it, the retry would read the wait as timed out and
+    send the SMS the customer never asked for."""
+    _failing_call(monkeypatch, RuntimeError("dialler 503"))
+    writes = _Writes(matched=True, definition=_REPLY_TO_CALL)
+    _install(monkeypatch, writes)
+    run = _run()
+    run.current_node = "gap-30m"
+    run.node_arrived_at = NOW - timedelta(minutes=5)
+    run.context = {"phone": "+919876543210", "reply_gap-30m": "CALLBACK"}
+    asyncio.run(walker.walk_run(run))
+    (_, onto), (verb, retry) = writes.calls
+    assert onto[1] == "call-2" and "reply_gap-30m" not in onto[3]
+    assert verb == "retry"
+    assert retry[4:6] == ("gap-30m", run.node_arrived_at)
+    assert retry[6]["reply_gap-30m"] == "CALLBACK"
+
+
+_CALL_THEN_SEND = {
+    "entry": {"topic": "checkout.initiated"},
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {"id": "call-1", "type": "call", "template_id": "tpl-1"},
+        {"id": "sms", "type": "send", "channel": "whatsapp", "template": "t"},
+        {"id": "wait-1d", "type": "wait", "minutes": 1440},
+    ],
+    "edges": [["wait-30m", "call-1"], ["call-1", "sms"], ["sms", "wait-1d"]],
+    "goal": {"topics": ["order.placed"]},
+    "purpose_key": "utility",
+}
+
+
+def test_a_send_failing_after_a_call_in_the_same_visit_never_dials_twice(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """Bug 2: call-1 counts its visit before the walk steps onto the send.
+    Handed back with that count, the retry would mint a fresh lead for
+    call-1 and dial again; with the claimed context it re-derives the same
+    lead and adopts it."""
+    import app.crm.outreach.nodes as nodes
+
+    leads: List[str] = []
+    _uuid5_call(monkeypatch, leads)
+
+    async def broken(run: Any, node: Any, definition: Any) -> Dict[str, Any]:
+        raise RuntimeError("whatsapp 503")
+
+    monkeypatch.setitem(
+        nodes.NODE_TYPES,
+        "send",
+        nodes.NODE_TYPES["send"].__class__(
+            validate=nodes.NODE_TYPES["send"].validate,
+            execute=broken,
+            is_wait=False,
+            reaches_out=True,
+        ),
+    )
+    writes = _Writes(matched=True, definition=_CALL_THEN_SEND)
+    _install(monkeypatch, writes)
+    run = _run()
+    run.node_arrived_at = NOW - timedelta(minutes=30)
+    asyncio.run(walker.walk_run(run))
+    (_, onto_call), (_, onto_send), (verb, retry) = writes.calls
+    assert (onto_call[1], onto_send[1], verb) == ("call-1", "sms", "retry")
+    assert onto_send[3]["lead_call-1"] == leads[0]  # the walk counted it
+    handed = retry[6]
+    assert retry[4] == "wait-30m" and "lead_call-1" not in handed
+
+    # The retry walks from the claimed square with the claimed context.
+    again = _Writes(matched=True, definition=_CALL_THEN_SEND)
+    _install(monkeypatch, again)
+    with pytest.raises(RuntimeError):  # the send is still down
+        _advance(again, run.model_copy(update={"context": handed}))
+    assert len(leads) == 2 and leads[0] == leads[1]
+
+
+# --- the adopted lead whose call already ended (amendment 2: closed) ---------
+#
+# The re-visit after a lost lease adopts the lead it already inserted. When
+# that call has ENDED, its call.completed was recorded while the run stood
+# on the call square — which hears nothing, and reports skip the deaf
+# refresh — so arming the after-call wait would wait 1440 min for a report
+# that already came. The walker hears the recorded report instead.
+
+_AFTER_CALL_BOARD = {
+    "entry": {"topic": "checkout.initiated"},
+    "nodes": [
+        {"id": "quiet-15m", "type": "wait", "minutes": 15},
+        {"id": "call-1-v", "type": "call", "template_id": "tpl-1"},
+        {
+            "id": "after-call-1-v",
+            "type": "wait",
+            "topics": ["call.completed"],
+            "key": "outcome",
+            "match": {"run": "lead_call-1-v", "payload": "lead_id"},
+            "minutes": 1440,
+        },
+        {"id": "gap-30m-v", "type": "wait", "minutes": 30},
+        {"id": "listen", "type": "wait", "minutes": 60},
+    ],
+    "edges": [
+        ["quiet-15m", "call-1-v"],
+        ["call-1-v", "after-call-1-v"],
+        ["after-call-1-v", "listen", "NOT_INTERESTED"],
+        ["after-call-1-v", "gap-30m-v", "else"],
+        ["after-call-1-v", "gap-30m-v", "timeout"],
+    ],
+    "goal": {"topics": ["order.placed"]},
+    "purpose_key": "utility",
+}
+
+
+def _adopting_call(
+    monkeypatch: pytest.MonkeyPatch, leads: List[str], finished: bool
+) -> None:
+    """The call square on a lease retry: re-derives the same lead and adopts
+    it, saying so when the lead already FINISHED (nodes/call.py)."""
+    import app.crm.outreach.nodes as nodes
+    from app.crm.outreach.nodes.context import FINISHED_REPORT_KEY
+
+    async def call(run: Any, node: Any, definition: Any) -> Dict[str, Any]:
+        leads.append("lead-X")
+        patch: Dict[str, Any] = {f"lead_{node.id}": "lead-X"}
+        if finished:
+            patch[FINISHED_REPORT_KEY] = "call-sid-1"
+        return patch
+
+    monkeypatch.setitem(
+        nodes.NODE_TYPES,
+        "call",
+        nodes.NODE_TYPES["call"].__class__(
+            validate=nodes.NODE_TYPES["call"].validate,
+            execute=call,
+            is_wait=False,
+            reaches_out=True,
+        ),
+    )
+
+
+def _recorded_report(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: Optional[str],
+    asked: List[Tuple[str, str]],
+    recorded: bool = True,
+) -> None:
+    """record's call_report: the stored call.completed for the lead, as the
+    consumer would be handed it — or None while it is not yet recorded."""
+    from app.crm.record.schemas import RawEvent
+
+    payload: Dict[str, Any] = {"lead_id": "lead-X", "call_id": "call-sid-1"}
+    if outcome is not None:
+        payload["outcome"] = outcome
+
+    async def call_report(merchant_id: str, natural_id: str) -> Any:
+        asked.append((merchant_id, natural_id))
+        if not recorded:
+            return None
+        event = RawEvent(
+            id="ev-report",
+            merchant_id=merchant_id,
+            source="telephony",
+            topic="call.completed",
+            schema_version="1",
+            external_id=f"call.completed:{natural_id}",
+            payload=payload,
+            received_at=NOW,
+            occurred_at=NOW,
+        )
+        return event, {}
+
+    monkeypatch.setattr(walker, "call_report", call_report)
+
+
+def _on_call(square: str = "call-1-v") -> EnrollmentRun:
+    """The re-visit after the lost lease: the step-onto write left the run on
+    the call square (S1), its context from before the call's patch."""
+    run = _run()
+    run.current_node = square
+    run.node_arrived_at = NOW - timedelta(minutes=40)
+    return run
+
+
+def test_s1b_an_adopted_finished_lead_is_heard_and_the_run_moves_on(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The reviewer's S1b: X ended NO_ANSWER before the re-visit. The run
+    must end on gap-30m-v — not on after-call-1-v for 1440 min — with the
+    same lead, no new one, and the report's facts under its square."""
+    leads: List[str] = []
+    asked: List[Tuple[str, str]] = []
+    _adopting_call(monkeypatch, leads, finished=True)
+    _recorded_report(monkeypatch, "NO_ANSWER", asked)
+    writes = _Writes(matched=True, definition=_AFTER_CALL_BOARD)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_call())
+    assert leads == ["lead-X"]  # adopted once, nothing minted
+    assert asked == [("m1", "call-sid-1")]
+    ((verb, (_, square, wake, context, _)),) = writes.calls
+    assert (verb, square) == ("advance", "gap-30m-v")
+    assert wake == NOW + timedelta(minutes=30)
+    assert "reply_after-call-1-v" not in context  # spent on the way through
+    assert context["facts"]["after-call-1-v"]["outcome"] == "NO_ANSWER"
+    rows = writes.flushes[0]["steps"]
+    assert [r["node"] for r in rows] == ["call-1-v", "after-call-1-v"]
+    wait_row = rows[1]
+    assert (wait_row["outcome"], wait_row["next_node"]) == ("NO_ANSWER", "gap-30m-v")
+    assert wait_row["arrived_by"] == "walk"
+
+
+def test_a_finished_not_interested_takes_its_own_arrow(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    leads: List[str] = []
+    _adopting_call(monkeypatch, leads, finished=True)
+    _recorded_report(monkeypatch, "NOT_INTERESTED", [])
+    writes = _Writes(matched=True, definition=_AFTER_CALL_BOARD)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_call())
+    ((_, (_, square, _, _, _)),) = writes.calls
+    assert square == "listen"
+
+
+def test_a_lead_not_yet_finished_arms_the_wait_as_today(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """BACKLOG / PROCESSING at adopt: the report is still to come and the
+    armed wait hears it — no lookup at all."""
+    leads: List[str] = []
+    asked: List[Tuple[str, str]] = []
+    _adopting_call(monkeypatch, leads, finished=False)
+    _recorded_report(monkeypatch, "NO_ANSWER", asked)
+    writes = _Writes(matched=True, definition=_AFTER_CALL_BOARD)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_call())
+    assert asked == []
+    ((_, (_, square, wake, context, _)),) = writes.calls
+    assert (square, wake) == ("after-call-1-v", NOW + timedelta(minutes=1440))
+    assert "reply_after-call-1-v" not in context
+
+
+def test_a_finished_lead_whose_report_is_not_recorded_yet_arms_the_wait(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """The mirror records call.completed after the outcome check (≤2 s): a
+    lead FINISHED a moment ago has no report yet — it will come, and the
+    armed wait hears it."""
+    _adopting_call(monkeypatch, [], finished=True)
+    _recorded_report(monkeypatch, "NO_ANSWER", [], recorded=False)
+    writes = _Writes(matched=True, definition=_AFTER_CALL_BOARD)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_call())
+    ((_, (_, square, _, _, _)),) = writes.calls
+    assert square == "after-call-1-v"
+
+
+def test_a_finished_report_without_an_outcome_arms_the_wait(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """No key, no answer (B1): exactly what the consumer would do with it."""
+    _adopting_call(monkeypatch, [], finished=True)
+    _recorded_report(monkeypatch, None, [])
+    writes = _Writes(matched=True, definition=_AFTER_CALL_BOARD)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_call())
+    ((_, (_, square, wake, _, _)),) = writes.calls
+    assert (square, wake) == ("after-call-1-v", NOW + timedelta(minutes=1440))
+
+
+def test_the_release_chain_re_visit_from_quiet_adopts_and_is_pre_answered(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """Today's stall without this PR's step-onto: the final write missed,
+    the run stayed on quiet-15m, and its next timer re-walks to the call,
+    which adopts the FINISHED lead. Same rule, same result."""
+    _adopting_call(monkeypatch, [], finished=True)
+    _recorded_report(monkeypatch, "BUSY", [])
+    writes = _Writes(matched=True, definition=_AFTER_CALL_BOARD)
+    _install(monkeypatch, writes)
+    run = _run()
+    run.current_node = "quiet-15m"
+    run.node_arrived_at = NOW - timedelta(minutes=15)
+    _advance(writes, run)
+    (_, (_, onto, _, _, _)), (_, (_, square, _, context, _)) = writes.calls
+    assert (onto, square) == ("call-1-v", "gap-30m-v")
+    assert context["facts"]["after-call-1-v"]["outcome"] == "BUSY"
+
+
+def test_a_report_for_another_square_is_never_borrowed(
+    monkeypatch: pytest.MonkeyPatch, no_goal: None
+) -> None:
+    """Only THIS call's after-call wait (match.run = lead_<call>) is
+    pre-answered; a wait matched on anything else is armed as today."""
+    board = {
+        **_AFTER_CALL_BOARD,
+        "nodes": [
+            (
+                {**n, "match": {"run": "id", "payload": "enrollment_id"}}
+                if n["id"] == "after-call-1-v"
+                else n
+            )
+            for n in _AFTER_CALL_BOARD["nodes"]
+        ],
+    }
+    asked: List[Tuple[str, str]] = []
+    _adopting_call(monkeypatch, [], finished=True)
+    _recorded_report(monkeypatch, "NO_ANSWER", asked)
+    writes = _Writes(matched=True, definition=board)
+    _install(monkeypatch, writes)
+    _advance(writes, _on_call())
+    assert asked == []
+    ((_, (_, square, _, _, _)),) = writes.calls
+    assert square == "after-call-1-v"

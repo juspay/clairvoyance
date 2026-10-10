@@ -47,3 +47,7 @@ class NodeSpec:
     # listens — and so branches — is a property of the NODE (its topics),
     # answered by nodes.listens / nodes.branches (ruled 17 Sep 2026).
     branches: bool = False
+    # Executing the word touches something outside the run row (a lead, a
+    # manifest row, a connector). The walker writes the token onto such a
+    # square before executing it — a lost lease cannot undo an insert.
+    reaches_out: bool = False

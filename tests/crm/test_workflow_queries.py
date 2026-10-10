@@ -2,7 +2,7 @@
 predicates present, the claim's lease semantics, idempotent stamps."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.crm.outreach.db.queries.enrollment import (
@@ -215,8 +215,8 @@ def test_walker_writes_are_conditional_on_the_leased_wake_at() -> None:
         assert "RETURNING id" in sql, sql
     assert advance_run_query("r-1", "w", NOW, {}, leased)[1][5] is leased
     assert exit_run_query("r-1", "completed", None, None, leased)[1][4] is leased
-    assert park_run_query("r-1", "boom", leased)[1][-1] is leased
-    assert record_run_error_query("r-1", "boom", 600, leased)[1][-1] is leased
+    assert park_run_query("r-1", "boom", leased)[1][2] is leased
+    assert record_run_error_query("r-1", "boom", 600, leased)[1][3] is leased
 
 
 def test_event_side_writes_stay_unconditional() -> None:
@@ -261,7 +261,7 @@ def test_claim_skips_paused_plans_and_counts_the_claim() -> None:
 def test_transient_error_writes_the_retry_into_wake_at() -> None:
     sql, values = record_run_error_query("r-1", "boom", 600, NOW)
     assert "wake_at = now() + make_interval(secs => $3)" in sql
-    assert values == ["r-1", "boom", 600, NOW]
+    assert values == ["r-1", "boom", 600, NOW, None, None, None]
 
 
 def test_goal_recheck_survives_a_null_occurred_at() -> None:
@@ -300,3 +300,40 @@ def test_an_event_moves_a_parked_run_too() -> None:
     assert "status IN ('waiting', 'parked')" in where_clause
     assert "status = 'waiting'" in set_clause
     assert "CASE WHEN status = 'parked' THEN 0 ELSE attempts END" in set_clause
+
+
+# --- a failed dispatch hands the token back (review finding 1, option a) ---
+
+
+def test_a_failed_dispatch_hands_the_token_back_to_the_claimed_square() -> None:
+    """After the walker stepped onto a call, a park or a retry must leave the
+    run where the plan put it — its calling window's hold and its letters'
+    arrows are judged from there. Without a hand-back both keep the row's
+    square, exactly as before."""
+    arrived = NOW - timedelta(minutes=15)
+    ctx = {"reply_quiet-15m": "CALLBACK"}
+    for sql, params, node_at, stamp_at in (
+        (*park_run_query("r-1", "boom", NOW, "quiet-15m", arrived, ctx), 3, 4),
+        (
+            *record_run_error_query("r-1", "boom", 600, NOW, "quiet-15m", arrived, ctx),
+            4,
+            5,
+        ),
+    ):
+        n, a, c = f"${node_at + 1}", f"${stamp_at + 1}", f"${stamp_at + 2}"
+        assert f"current_node = COALESCE({n}::text, current_node)" in sql, sql
+        assert f"node_arrived_at = COALESCE({a}::timestamptz, node_arrived_at)" in sql
+        assert f"context = COALESCE({c}::jsonb, context)" in sql
+        assert (params[node_at], params[stamp_at]) == ("quiet-15m", arrived)
+        assert json.loads(params[stamp_at + 1]) == ctx
+    assert park_run_query("r-1", "boom", NOW)[1][3:] == [None, None, None]
+
+
+def test_the_step_onto_write_keeps_the_attempt_counter() -> None:
+    """The write onto a dispatching square is not the visit's success:
+    zeroing the counter there gave a failing call a fourth try."""
+    sql, params = advance_run_query("r-1", "call-1", NOW, {}, NOW, keep_attempts=True)
+    assert "attempts = CASE WHEN $8::boolean THEN attempts ELSE 0 END" in sql
+    assert "last_error = CASE WHEN $8::boolean THEN last_error ELSE NULL END" in sql
+    assert params[7] is True
+    assert advance_run_query("r-1", "w", NOW, {}, NOW)[1][7] is False

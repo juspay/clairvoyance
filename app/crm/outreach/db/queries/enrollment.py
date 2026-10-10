@@ -237,10 +237,15 @@ def advance_run_query(
     leased_wake_at: datetime,
     node_arrived_at: Optional[datetime] = None,
     steps: Optional[List[Dict[str, Any]]] = None,
+    keep_attempts: bool = False,
 ) -> Tuple[str, List[Any]]:
     """A successful step: move the token, set its next alarm, reset the
     failure counter (only CONSECUTIVE failures park a run), and flush the
     squares this visit finished (canon T26).
+
+    ``keep_attempts`` is the step ONTO a square that reaches out (walker):
+    the visit has not succeeded yet, so the counter and the last error stay
+    — zeroing them there would give a failing call a fourth try.
 
     The lease is the generation: a write under a stale lease is a no-op.
     A reply or a repeat that landed mid-visit moved wake_at, so this
@@ -258,7 +263,8 @@ def advance_run_query(
             UPDATE {ENROLLMENT_TABLE}
             SET current_node = $2, wake_at = $3, context = $4::jsonb,
                 node_arrived_at = COALESCE($5::timestamptz, node_arrived_at),
-                attempts = 0, last_error = NULL
+                attempts = CASE WHEN $8::boolean THEN attempts ELSE 0 END,
+                last_error = CASE WHEN $8::boolean THEN last_error ELSE NULL END
             WHERE id = $1 AND status = 'waiting' AND wake_at = $6
             RETURNING id, merchant_id, workflow_id, workflow_version
         ), wrote AS ({flush_arm("moved", "$7")})
@@ -273,6 +279,7 @@ def advance_run_query(
         node_arrived_at,
         leased_wake_at,
         json.dumps(steps or []),
+        keep_attempts,
     ]
 
 
@@ -321,36 +328,80 @@ def exit_run_query(
 
 
 def park_run_query(
-    run_id: str, last_error: str, leased_wake_at: datetime
+    run_id: str,
+    last_error: str,
+    leased_wake_at: datetime,
+    handback_node: Optional[str] = None,
+    handback_arrived_at: Optional[datetime] = None,
+    handback_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Any]]:
     """Errors park, never exit (canon) — held visible for the merchant,
     resumable by a human. The lease is the generation: a park under a
     stale lease is a no-op (P1) — the run that moved on will be judged
-    again on its next claim."""
+    again on its next claim.
+
+    ``handback_node`` is the square the visit was CLAIMED on, passed only
+    when the visit had already stepped onto a square that reaches out
+    (walker). The token goes back there with its own arrival stamp, so a
+    failed dispatch never leaves the run standing on the call: a calling
+    window's hold and a letter's arrow are judged from the square the plan
+    put it on (modules/05 §calling window). ``handback_context`` is the
+    context the visit was claimed with: the walk already spent that
+    square's reply and counted its calls, and a retry must see neither."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
-        SET status = 'parked', wake_at = NULL, last_error = $2
+        SET status = 'parked', wake_at = NULL, last_error = $2,
+            current_node = COALESCE($4::text, current_node),
+            node_arrived_at = COALESCE($5::timestamptz, node_arrived_at),
+            context = COALESCE($6::jsonb, context)
         WHERE id = $1 AND status = 'waiting' AND wake_at = $3
         RETURNING id
     """
-    return query, [run_id, last_error, leased_wake_at]
+    return query, [
+        run_id,
+        last_error,
+        leased_wake_at,
+        handback_node,
+        handback_arrived_at,
+        None if handback_context is None else json.dumps(handback_context),
+    ]
 
 
 def record_run_error_query(
-    run_id: str, last_error: str, retry_in_seconds: int, leased_wake_at: datetime
+    run_id: str,
+    last_error: str,
+    retry_in_seconds: int,
+    leased_wake_at: datetime,
+    handback_node: Optional[str] = None,
+    handback_arrived_at: Optional[datetime] = None,
+    handback_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Any]]:
     """A transient failure: the retry timer is written into wake_at (canon
     T20: backoff with jitter), and the reason is kept for the screen. The
     lease is the generation: under a stale lease this is a no-op (P1) —
-    the reply that moved the run already set its own, earlier alarm."""
+    the reply that moved the run already set its own, earlier alarm.
+
+    ``handback_node``: as park_run_query — the retry starts from the square
+    the visit was claimed on, not from the call it failed on."""
     query = f"""
         UPDATE {ENROLLMENT_TABLE}
         SET last_error = $2,
-            wake_at = now() + make_interval(secs => $3)
+            wake_at = now() + make_interval(secs => $3),
+            current_node = COALESCE($5::text, current_node),
+            node_arrived_at = COALESCE($6::timestamptz, node_arrived_at),
+            context = COALESCE($7::jsonb, context)
         WHERE id = $1 AND status = 'waiting' AND wake_at = $4
         RETURNING id
     """
-    return query, [run_id, last_error, retry_in_seconds, leased_wake_at]
+    return query, [
+        run_id,
+        last_error,
+        retry_in_seconds,
+        leased_wake_at,
+        handback_node,
+        handback_arrived_at,
+        None if handback_context is None else json.dumps(handback_context),
+    ]
 
 
 def open_runs_for_customer_query(
@@ -548,25 +599,32 @@ def patch_open_run_query(
     merchant_id: str,
     workflow_id: str,
     enrollment_key: str,
-    entry_node: str,
+    squares: List[str],
     event_id: str,
     patch: Dict[str, Any],
     accumulate: bool,
     max_field: Optional[str],
     max_value: Optional[float],
     debounce_minutes: float,
-    anywhere: bool = False,
+    waits: Optional[List[str]] = None,
 ) -> Tuple[str, List[Any]]:
     """Repeat entries (modules/05 §Repeat entries): ONE idempotent UPDATE
     in the reply's shape (resume_run_by_id_query). Touches only a run still
-    standing on the door's start square (status waiting, current_node =
-    the start) — a run past it is never patched — unless the door says
-    restart_on_repeat (phase 16, G8: ``anywhere``): then a repeat of the
-    door's topic re-arms whichever square the run stands on, "KYC retried,
-    the timer restarts". Found by enrollment_key so a keyed plan's order
-    edit patches ITS order's run. The event marks itself used in
-    context.repeat_event_ids, so a redelivered repeat matches zero rows and
-    the alarm cannot slide twice for one letter.
+    standing on one of ``squares`` (status waiting): the door's start
+    square alone — a run past it is never patched — or, with
+    restart_on_repeat (phase 16, G8), the plan's wait squares (the caller's
+    list, repeat.rearm_squares; never a square that reaches out). Found by
+    enrollment_key so a keyed plan's order edit patches ITS order's run.
+    The event marks itself used in context.repeat_event_ids, so a
+    redelivered repeat matches zero rows and the alarm cannot slide twice
+    for one letter.
+
+    ``waits`` are the plan's wait squares. A square in ``squares`` that is
+    NOT a wait (a door may start a run on a call) is re-armed only while
+    the run has never left it — ``node_arrived_at = entered_at``, canon col
+    19's "door" test. Once the token has walked onto it from elsewhere the
+    walker is mid-dispatch there, and a slid alarm would only make the
+    visit's last write miss.
 
     The facts win unconditionally (refresh_latest), only when the new value
     beats the stored one (refresh_max — compared here, in the statement, a
@@ -611,7 +669,8 @@ def patch_open_run_query(
                            ELSE wake_at END,
             last_error = NULL
         WHERE merchant_id = $1 AND workflow_id = $2::uuid AND enrollment_key = $3
-          AND status = 'waiting' AND ($11::boolean OR current_node = $4)
+          AND status = 'waiting' AND current_node = ANY($4::text[])
+          AND (current_node = ANY($11::text[]) OR node_arrived_at = entered_at)
           AND NOT (COALESCE(context->'repeat_event_ids', '[]'::jsonb) ? $5::text)
           AND context->>'source_event_id' IS DISTINCT FROM $5::text
         RETURNING id
@@ -620,14 +679,14 @@ def patch_open_run_query(
         merchant_id,
         workflow_id,
         enrollment_key,
-        entry_node,
+        list(squares),
         event_id,
         json.dumps(patch),
         accumulate,
         max_field,
         max_value,
         debounce_minutes,
-        anywhere,
+        list(waits or []),
     ]
 
 
