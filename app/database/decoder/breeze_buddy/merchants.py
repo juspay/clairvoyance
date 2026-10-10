@@ -7,6 +7,8 @@ from typing import Any, List, Optional
 
 from app.schemas.breeze_buddy.merchants import (
     CALL_LIMIT_MAX_RULES,
+    AnalyticsConfigResponse,
+    AnalyticsFieldConfig,
     CallLimit,
     CallLimitsResponse,
     MerchantResponse,
@@ -61,4 +63,27 @@ def decode_call_limits_row(row) -> CallLimitsResponse:
     return CallLimitsResponse(
         merchant_id=row["merchant_id"],
         call_limits=decode_call_limits(row["call_limits"]),
+    )
+
+
+def decode_analytics_field_config(raw: Any) -> Optional[AnalyticsFieldConfig]:
+    """The stored ``merchants.analytics_field_config``, or None for none.
+
+    STRICT: a value the schema refuses raises; read as empty, every mapped
+    column would silently go NULL. jsonb arrives as text (no codec).
+    """
+    if raw is None:
+        return None
+    value = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+    config = AnalyticsFieldConfig.model_validate(value)
+    return None if config.is_empty() else config
+
+
+def decode_analytics_config_row(row) -> AnalyticsConfigResponse:
+    """Build AnalyticsConfigResponse from a merchant row's config columns."""
+    return AnalyticsConfigResponse(
+        merchant_id=row["merchant_id"],
+        analytics_field_config=decode_analytics_field_config(
+            row["analytics_field_config"]
+        ),
     )
