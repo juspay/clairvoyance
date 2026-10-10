@@ -70,6 +70,14 @@ async def _is_v2_template(template_id: Optional[str]) -> Optional[bool]:
     return await template_is_v2_accounted(template_id)
 
 
+# A lead this young was ZADDed by its producer moments ago (push handler,
+# retry, created-lead hook). Re-adding it races that write: once the promoter
+# has moved it to ready it is absent from the ZSET again, so the reconciler
+# would queue a second copy. Only a lead the producer FAILED to schedule is
+# still unscheduled past this window — that is the drop this job heals.
+NEW_LEAD_GRACE_SECONDS = 30
+
+
 async def reconcile_backlog_to_zset() -> None:
     """
     Find BACKLOG rows that should be on ``bb:schedule:leads`` but aren't,
@@ -81,7 +89,11 @@ async def reconcile_backlog_to_zset() -> None:
     """
     try:
         limit = await dyn_cfg.BB_RECONCILE_BACKLOG_LIMIT()
-        leads = await get_unscheduled_backlog_leads(lookahead_seconds=120, limit=limit)
+        leads = await get_unscheduled_backlog_leads(
+            lookahead_seconds=120,
+            limit=limit,
+            min_age_seconds=NEW_LEAD_GRACE_SECONDS,
+        )
     except Exception as e:  # noqa: BLE001
         logger.error(f"reconcile_backlog_to_zset: DB read failed: {e}")
         return

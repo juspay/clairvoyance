@@ -33,7 +33,7 @@ from app.schemas import LeadCallTracker, TelephonyNumber
 
 
 async def get_unscheduled_backlog_leads(
-    lookahead_seconds: int = 120, limit: int = 1000
+    lookahead_seconds: int = 120, limit: int = 1000, min_age_seconds: int = 0
 ) -> List[Tuple[str, str, int, Optional[str]]]:
     """
     Return ``(id, reseller_id, score_ms, template_id)`` tuples for BACKLOG leads due
@@ -42,7 +42,9 @@ async def get_unscheduled_backlog_leads(
     """
     try:
         query, values = get_unscheduled_backlog_leads_query(
-            lookahead_seconds=lookahead_seconds, limit=limit
+            lookahead_seconds=lookahead_seconds,
+            limit=limit,
+            min_age_seconds=min_age_seconds,
         )
         rows = await run_parameterized_query(query, values)
         if not rows:

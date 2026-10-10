@@ -21,9 +21,11 @@ from app.ai.voice.agents.breeze_buddy.dispatch.v2 import (
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.latch import epoch_lost, v2_seen
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.routes import V2_ACCOUNTED_MODES
 from app.ai.voice.agents.breeze_buddy.dispatch.v2.scripts import Enqueue
+from app.core.concurrency import spawn_background_task
 from app.core.config.static import BB_DISPATCH_QPS_JITTER_MS, BB_V2_MATCH_CAP
 from app.core.logger import logger
-from app.schemas import ExecutionMode
+from app.database.accessor.breeze_buddy import lead_call_tracker as lct_accessor
+from app.schemas import ExecutionMode, LeadCallStatus, LeadCallTracker
 from app.services.redis import get_redis_service
 
 # Execution modes the event-driven dispatcher places outbound calls for.
@@ -343,3 +345,40 @@ async def get_schedule_size() -> int:
     except Exception as e:  # noqa: BLE001
         logger.error(f"get_schedule_size failed: {e}")
         return 0
+
+
+def _should_schedule_created_lead(lead: LeadCallTracker) -> bool:
+    """Which freshly inserted leads this hook puts on the schedule.
+
+    The CRM walker (app/crm/outreach/nodes/call.py) inserts leads but may not
+    import app.ai, so it cannot call ``schedule_lead`` itself — without this
+    its leads wait for ``reconcile_backlog_to_zset`` (60s+, oldest-first page)
+    while channels sit idle. Other producers (push handler, retries) already
+    ZADD at their own call site.
+    """
+    # TODO(human): decide which created leads to schedule.
+    return False
+
+
+def _schedule_created_lead(lead: LeadCallTracker) -> None:
+    """Created-lead hook: ZADD a dispatchable lead the moment it is inserted.
+
+    Sync and non-blocking like every accessor hook — the ZADD runs as a
+    background task, and a failure is only logged: the DB row is
+    authoritative and the backlog reconciler still heals a drop.
+    """
+    try:
+        if not _should_schedule_created_lead(lead) or lead.next_attempt_at is None:
+            return
+        spawn_background_task(
+            schedule_lead(lead.id, lead.next_attempt_at, template_id=lead.template_id),
+            name=f"bb-schedule-created-{lead.id}",
+        )
+    except Exception:  # fail-open: a hook never breaks the insert
+        logger.opt(exception=True).error(
+            f"schedule_lead: created-lead hook failed for {lead.id}"
+        )
+
+
+# Idempotent: the registry ignores re-registration.
+lct_accessor.register_created_hook(_schedule_created_lead)

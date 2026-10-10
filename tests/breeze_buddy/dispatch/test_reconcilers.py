@@ -424,3 +424,36 @@ async def test_health_monitor_alerts_dispatch_halted_when_overdue(
 
     await rc.monitor_dispatch_health()
     assert halted == [500]
+
+
+async def test_reconcile_backlog_leaves_brand_new_leads_to_their_producer(
+    fake_redis, monkeypatch
+):
+    """A lead inserted seconds ago was just ZADDed by its producer (push
+    handler, retry, created-lead hook). Re-adding it races that write and,
+    once the promoter has moved it to ready, makes a second queue copy — so
+    the reconciler only heals leads older than the grace window."""
+    seen: dict = {}
+
+    async def _fake_get(*a, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(rc, "get_unscheduled_backlog_leads", _fake_get)
+
+    await rc.reconcile_backlog_to_zset()
+
+    assert seen.get("min_age_seconds") == rc.NEW_LEAD_GRACE_SECONDS > 0
+
+
+def test_unscheduled_backlog_query_skips_leads_younger_than_the_grace():
+    from app.database.queries.breeze_buddy.dispatch import (
+        get_unscheduled_backlog_leads_query,
+    )
+
+    text, values = get_unscheduled_backlog_leads_query(
+        lookahead_seconds=120, limit=1000, min_age_seconds=30
+    )
+
+    assert "\"created_at\" <= NOW() - ($3 || ' seconds')::interval" in text
+    assert values == ["120", 1000, "30"]
