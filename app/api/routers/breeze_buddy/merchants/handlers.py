@@ -18,6 +18,8 @@ from app.core.security.scope import resolve_merchant_ids
 from app.database.accessor.breeze_buddy import merchants as merchant_accessors
 from app.schemas import UserInfo, UserRole
 from app.schemas.breeze_buddy.merchants import (
+    AnalyticsConfigResponse,
+    AnalyticsConfigUpdate,
     CallLimitsResponse,
     CallLimitsUpdate,
     MerchantCreate,
@@ -406,4 +408,80 @@ async def set_merchant_call_limits_handler(
         raise
     except Exception as e:
         logger.error(f"Error updating call limits for merchant {merchant_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def _check_analytics_config_write_access(
+    current_user: UserInfo, merchant_id: str, reseller_id: Optional[str]
+):
+    """Admin; the owning reseller; or role ``merchant`` with this merchant in
+    scope. Role ``user`` is read-only."""
+    if current_user.role == UserRole.ADMIN:
+        return
+    if current_user.role == UserRole.RESELLER:
+        if reseller_id == current_user.id:
+            return
+        raise HTTPException(
+            status_code=403, detail="You can only modify merchant entities you own"
+        )
+    if current_user.role == UserRole.MERCHANT:
+        allowed = await resolve_merchant_ids(current_user)
+        if allowed is None or merchant_id in allowed:
+            return
+        raise HTTPException(
+            status_code=403, detail="You don't have access to this merchant entity"
+        )
+    raise HTTPException(
+        status_code=403,
+        detail="Only admins, the owning reseller and the merchant can edit this config",
+    )
+
+
+async def get_merchant_analytics_config_handler(
+    merchant_id: str, current_user: UserInfo
+) -> AnalyticsConfigResponse:
+    """A merchant's analytics configs; view scope of GET /merchant/{merchant_id}."""
+    try:
+        # Check view access BEFORE DB fetch to avoid leaking resource existence
+        await _check_merchant_view_access(current_user, merchant_id)
+        config = await merchant_accessors.get_merchant_analytics_config(merchant_id)
+        if config is None:
+            raise HTTPException(status_code=404, detail="Merchant entity not found")
+        return config
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching analytics config for merchant {merchant_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def set_merchant_analytics_config_handler(
+    merchant_id: str, body: AnalyticsConfigUpdate, current_user: UserInfo
+) -> AnalyticsConfigResponse:
+    """Replace each config in the body whole; one write per config key."""
+    try:
+        merchant = await merchant_accessors.get_merchant_by_merchant_identifier(
+            merchant_id
+        )
+        if not merchant:
+            raise HTTPException(status_code=404, detail="Merchant entity not found")
+        await _check_analytics_config_write_access(
+            current_user, merchant_id, merchant.reseller_id
+        )
+
+        updated = await merchant_accessors.set_merchant_analytics_field_config(
+            merchant_id, body.analytics_field_config
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Merchant entity not found")
+        config = updated.analytics_field_config
+        logger.info(
+            f"User {current_user.username} set analytics field config for "
+            f"merchant {merchant_id}: {config.rule_count() if config else 0} rules"
+        )
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating analytics config for merchant {merchant_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

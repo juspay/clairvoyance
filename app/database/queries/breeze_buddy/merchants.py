@@ -365,3 +365,28 @@ def get_merchants_with_call_limits_query() -> Tuple[str, List[Any]]:
         WHERE call_limits IS NOT NULL
     """
     return query, []
+
+
+def get_merchant_analytics_config_query(
+    merchant_id: str,
+) -> Tuple[str, List[Any]]:
+    """Generate query to read a merchant's analytics config columns."""
+    query = f"""
+        SELECT merchant_id, analytics_field_config
+        FROM {MERCHANTS_TABLE}
+        WHERE merchant_id = $1
+    """
+    return query, [merchant_id]
+
+
+def set_merchant_analytics_field_config_query(
+    merchant_id: str, config_json: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """Generate query to replace a merchant's analytics field config; None clears."""
+    query = f"""
+        UPDATE {MERCHANTS_TABLE}
+        SET analytics_field_config = $1::jsonb, updated_at = $2
+        WHERE merchant_id = $3
+        RETURNING merchant_id, analytics_field_config
+    """
+    return query, [config_json, datetime.now(timezone.utc), merchant_id]
