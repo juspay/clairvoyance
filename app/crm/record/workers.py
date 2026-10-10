@@ -194,6 +194,20 @@ async def _discover_topic(
     return key
 
 
+async def variables_for(event: RawEvent) -> Optional[Dict[str, Any]]:
+    """The template variables this letter's consumers are handed — the same
+    spec and decode _run_processor uses. None when the decode fails: the
+    letter would have been quarantined, so no consumer ever heard it."""
+    spec = EMPTY_SPEC
+    if event.source not in EXTRACTORS:
+        spec = await catalog.decode_spec(event.merchant_id, event.source, event.topic)
+    try:
+        return _extract(event, spec).variables
+    except Exception as e:
+        logger.warning(f"event {event.id}: decode failed on re-read: {e}")
+        return None
+
+
 def _extract(event: RawEvent, spec: DecodeSpec) -> Extracted:
     """The decode step (pure). One engine, two spec sources: the letter is
     read by its spec — a code CatalogEntry or the vendor's registration —

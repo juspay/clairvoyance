@@ -35,6 +35,7 @@ _BOOKKEEPING_KEYS = (
     "current_node",  # run_facts: computed from the square, never a producer's
     "current_stage",
     "_outcome",  # OUTCOME_KEY: a square's word for the trail, popped by the walker
+    "_finished_report",  # FINISHED_REPORT_KEY: an adopted lead's report, popped
     "calls_today",  # ceiling.CALLS_TODAY_KEY (pinned by test); the call ledger
 )
 # The letter that woke a run in place, left for the flush that follows
@@ -56,6 +57,11 @@ LATEST_LETTER_KEY = "latest_letter"
 # leak could not reach a template either. A branching square never uses it:
 # its answer already rides reply_<node>.
 OUTCOME_KEY = "_outcome"
+# A call square that ADOPTED a lead already FINISHED (a lease retry after the
+# call ended) returns the lead's natural id under this key: its report was
+# already born, so the walker hears it now instead of arming the after-call
+# wait for it. Popped like OUTCOME_KEY, never persisted.
+FINISHED_REPORT_KEY = "_finished_report"
 
 
 # The bookkeeping keys whose value is the ID OF WHAT THIS SQUARE HANDED

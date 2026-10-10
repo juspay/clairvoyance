@@ -21,6 +21,7 @@ from app.crm.outreach.ceiling import (
 from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.nodes.blocks import blocks_for
 from app.crm.outreach.nodes.context import (
+    FINISHED_REPORT_KEY,
     OUTCOME_KEY,
     lead_request_id,
     playbook_key,
@@ -184,6 +185,7 @@ async def execute(
         # swallows this today; kept for the day it narrows.
         lead = None
 
+    adopted_finished = False
     if lead is None:
         # None means every failure, a duplicate key included, so the row's
         # existence tells them apart: ours means this visit already ran under
@@ -191,9 +193,11 @@ async def execute(
         lead = await get_lead_by_id(lead_id)
         if lead is None:
             raise RuntimeError(f"call node {node.id}: lead insert returned None")
+        adopted_finished = lead.status == LeadCallStatus.FINISHED
         logger.bind(lead_id=lead_id).info(
             f"walker: run {run.id} lead {lead_id} already exists "
-            f"(lease retry of visit {visit}) — continuing"
+            f"(lease retry of visit {visit}, "
+            f"{'finished' if adopted_finished else 'not finished'}) — continuing"
         )
 
     await update_lead_enrollment_id(lead_id, str(run.id))
@@ -224,4 +228,9 @@ async def execute(
         written[CALLS_TODAY_KEY] = {"day": day, "n": calls_today(run.context, day) + 1}
     if chosen:
         written[playbook_key(node.id)] = chosen
+    if adopted_finished:
+        # The call already ended, so its report was already born — and the
+        # run stood on this square, which hears nothing. The walker hears it
+        # now (the natural id is what the report is keyed by, crm_mirror).
+        written[FINISHED_REPORT_KEY] = lead.call_id or lead_id
     return written

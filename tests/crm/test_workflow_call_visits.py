@@ -10,7 +10,7 @@ refused by the PK it was relying on.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
@@ -24,7 +24,12 @@ from app.crm.outreach.ceiling import (
 )
 from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.nodes.call import ABORTED_OUTCOME, MAX_CALLS_OUTCOME, execute
-from app.crm.outreach.nodes.context import OUTCOME_KEY, is_bookkeeping, run_facts
+from app.crm.outreach.nodes.context import (
+    FINISHED_REPORT_KEY,
+    OUTCOME_KEY,
+    is_bookkeeping,
+    run_facts,
+)
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     WorkflowDefinition,
@@ -67,15 +72,20 @@ def _install(
     *,
     existing: Optional[set] = None,
     minted: Optional[List[Dict[str, Any]]] = None,
+    states: Optional[Dict[str, Tuple[str, Optional[str]]]] = None,
 ) -> None:
     """The accessor as it really behaves: a duplicate primary key is caught
     broadly and returned as None, never as a UniqueViolation the caller can
     see. `existing` is the set of ids already in the table; `minted` gets
-    every insert's keyword arguments, so a test can read the row as born."""
+    every insert's keyword arguments, so a test can read the row as born.
+    `states` gives an existing row its (status, call_id); BACKLOG otherwise."""
     rows = existing if existing is not None else set()
 
     async def fake_get_lead(lead_id: str) -> Any:
-        return type("L", (), {"id": lead_id})() if lead_id in rows else None
+        if lead_id not in rows:
+            return None
+        status, call_id = (states or {}).get(lead_id, ("BACKLOG", None))
+        return type("L", (), {"id": lead_id, "status": status, "call_id": call_id})()
 
     async def fake_create(**kw: Any) -> Any:
         if kw["id"] in rows:
@@ -150,6 +160,44 @@ async def test_the_same_visit_run_twice_is_one_lead(
 
     assert retry["lead_nudge-call"] == first["lead_nudge-call"]
     assert len(inserted) == 1, "the retry must not place a second call"
+
+
+async def test_adopting_a_finished_lead_names_its_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retry adopts a lead whose call already ENDED: the square says so,
+    by the id the report is keyed under (crm_mirror: the call's sid, else
+    the lead's id), and the walker hears that report instead of waiting."""
+    run = _run()
+    lead_id = _expected(str(run.id), _NODE.id, 1)
+    for call_id, natural in (("sid-9", "sid-9"), (None, lead_id)):
+        inserted: List[str] = []
+        _install(
+            monkeypatch,
+            inserted,
+            existing={lead_id},
+            states={lead_id: (LeadCallStatus.FINISHED, call_id)},
+        )
+        patch = await execute(run, _NODE, _DEFINITION)
+        assert inserted == [] and patch[FINISHED_REPORT_KEY] == natural
+
+
+async def test_adopting_a_lead_still_in_flight_names_no_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _run()
+    lead_id = _expected(str(run.id), _NODE.id, 1)
+    for status in (LeadCallStatus.BACKLOG, LeadCallStatus.PROCESSING):
+        _install(monkeypatch, [], existing={lead_id}, states={lead_id: (status, None)})
+        patch = await execute(run, _NODE, _DEFINITION)
+        assert FINISHED_REPORT_KEY not in patch
+
+
+async def test_a_fresh_insert_names_no_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(monkeypatch, [])
+    patch = await execute(_run(), _NODE, _DEFINITION)
+    assert FINISHED_REPORT_KEY not in patch
+    assert is_bookkeeping(FINISHED_REPORT_KEY)
 
 
 async def test_a_unique_violation_that_escapes_the_accessor_is_absorbed(

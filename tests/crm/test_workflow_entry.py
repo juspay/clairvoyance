@@ -20,6 +20,7 @@ import pytest
 
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
+from app.crm.outreach.db.queries.enrollment import resume_run_by_id_query
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.nodes.wait import TIMEOUT
@@ -613,10 +614,13 @@ def test_a_repeat_is_judged_by_the_open_runs_own_version(
     monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
     # v5's entry topic, but the order is A's -> the open run on v3
     _consume(_event("orders/confirmed", {"order_id": "A"}))
-    ((_, _, key, door, _, _),) = repeats
+    ((_, _, key, door, _, _, timers),) = repeats
     assert key == "A"
     assert door.on_repeat == "refresh_latest"
     assert door.start == "wait-30m"
+    # The production path (entry._repeat_door): the waits come off the SAME
+    # pinned document as the door — v3's, never the live v5's hold-30m.
+    assert timers == ["wait-30m", "ask"]
 
 
 def test_a_run_whose_version_is_missing_is_skipped_not_fatal(
@@ -945,7 +949,7 @@ def test_a_letter_the_square_listens_for_moves_the_run_and_is_not_its_repeat(
     # topic, so this IS a repeat of the profile door
     _consume(_event("loan.profile_created", {"application_id": "L-1"}, "ev-2"))
     assert len(spine.resumes) == 1
-    ((_, _, key, door, event_id, _),) = repeats
+    ((_, _, key, door, event_id, _, _),) = repeats
     assert (key, door.topic, event_id) == ("L-1", "loan.profile_created", "ev-2")
 
 
@@ -1263,3 +1267,74 @@ def test_a_scalar_door_field_is_read_from_the_payload_as_before(
     where = [{"field": "payload.order.sub_category", "op": "is", "value": "Mobile"}]
     assert _doors_opened(monkeypatch, {"order": {}}, where) == 0
     assert _doors_opened(monkeypatch, {"order": {"sub_category": "Mobile"}}, where) == 1
+
+
+# --- the walker hears an adopted lead's recorded report (amendment 2) -------
+
+_LEAD_MATCHED_PLAN: Dict[str, Any] = {
+    **_CALL_PLAN,
+    "nodes": [
+        _CALL_PLAN["nodes"][0],
+        {
+            **_CALL_PLAN["nodes"][1],
+            "match": {"payload": "lead_id", "run": "lead_rescue-call"},
+        },
+        *_CALL_PLAN["nodes"][2:],
+    ],
+}
+
+
+def test_the_walker_hears_a_report_exactly_as_the_consumer_would(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """heard_report is _wake_on_reply's answer and facts, asked by the walker
+    for a report the consumer could not deliver: the same reply word and the
+    same facts under the square — or nothing where the consumer would say
+    nothing (another lead, no outcome)."""
+    flow = _flow(_LEAD_MATCHED_PLAN, version=1)
+    definition = WorkflowDefinition.model_validate(_LEAD_MATCHED_PLAN)
+    wait = next(n for n in definition.nodes if n.id == "after-call")
+    report = _event(
+        "call.completed",
+        {"lead_id": "L-A", "outcome": "NO_ANSWER", "call_id": "sid"},
+        source="telephony",
+    )
+    run = _run(flow, 1, "after-call", {"order_id": "A", "lead_rescue-call": "L-A"})
+    spine = _Spine([flow], [run], {(flow.id, 1): _LEAD_MATCHED_PLAN})
+    _install(monkeypatch, spine)
+    _consume(report)
+    ((_, square, patch),) = spine.resumes
+    ((_, _, consumer_facts),) = spine.facts
+
+    heard = asyncio.run(entry.heard_report(run, wait, report, {}))
+    assert heard == (patch[f"reply_{square}"], consumer_facts)
+
+    other = run.model_copy(update={"context": {"lead_rescue-call": "L-B"}})
+    assert asyncio.run(entry.heard_report(other, wait, report, {})) is None
+    mute = _event("call.completed", {"lead_id": "L-A"}, source="telephony")
+    assert asyncio.run(entry.heard_report(run, wait, mute, {})) is None
+
+
+def test_a_late_report_after_the_pre_answer_changes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The walker already walked the run through after-call on the recorded
+    report; when the consumer reaches that same report, the run stands on
+    the next square. The only resume it asks names after-call, which the
+    statement's current_node guard refuses, and a report never takes the
+    deaf refresh — so the run is untouched."""
+    flow = _flow(_LEAD_MATCHED_PLAN, version=1)
+    run = _run(flow, 1, "wa-fallback", {"order_id": "A", "lead_rescue-call": "L-A"})
+    spine = _Spine([flow], [run], {(flow.id, 1): _LEAD_MATCHED_PLAN})
+    _install(monkeypatch, spine)
+    _consume(
+        _event(
+            "call.completed",
+            {"lead_id": "L-A", "outcome": "NO_ANSWER"},
+            source="telephony",
+        )
+    )
+    assert [square for _, square, _ in spine.resumes] == ["after-call"]
+    assert spine.refreshes == []
+    sql, _ = resume_run_by_id_query("m1", str(run.id), "after-call", {}, {})
+    assert "AND current_node = $3" in sql
