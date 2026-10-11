@@ -280,3 +280,20 @@ def test_a_missing_fact_parks_before_any_model_call(
     with pytest.raises(NodeParked):
         _render("tenure_line", {"offers": None})
     assert seen == []
+
+
+def test_the_runs_merchant_scopes_the_memo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """blocks_for keys llm_call to the run's merchant."""
+    import app.utils.transformation.utils as transformation
+
+    scopes: List[str] = []
+
+    async def fake(value: Any, prompt: str) -> Any:
+        scopes.append(transformation._memo_merchant.get())
+        return "vivo S2"
+
+    monkeypatch.setitem(TEMPLATE_FUNCTION_REGISTRY, "llm_call", fake)
+    assert _render("hook", {"product_name": RAW}) == {
+        "hook": "aapka vivo S2 cart me hai"
+    }
+    assert scopes == ["m1"]

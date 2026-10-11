@@ -97,6 +97,19 @@ SPOKEN text only: `when` rows and the lead payload keep the fact itself.
   dynamic config, temperature 0, 200 max tokens, reasoning effort `none`, 10 s timeout. The
   model sees the prompt and that ONE fact's value — never the rest of the
   run, so do not point it at a phone number or other personal data.
+- The ANSWER IS REMEMBERED, which is what makes that warning concrete. One
+  rewrite is kept in the pod and, once `LLM_CALL_L2_ENABLED` is on, in a
+  store shared by every pod for `LLM_CALL_L2_TTL_SECONDS` (a week), keyed on
+  the merchant and a one-way digest of the model, the prompt and the value.
+  Merchants never share an answer, and one merchant's can be purged alone
+  (`tfx:*:<merchant_id>:*`). So point `llm_call` at CATALOGUE facts — a
+  product, a brand, a category, a tenure — and never at a customer fact: a
+  name sent through it is held for a week, where a catalogue value is reused
+  by every run that mentions it (measured: ~5x within one morning, and 79% of
+  a day's values were already answered on an earlier day).
+- Editing a prompt is therefore not free: the prompt is part of the key, so a
+  reworded instruction — even one extra space — is a new key and the next
+  wave re-asks the model for every value of that fact.
 - It runs in the same pipeline as every built-in, in the order written;
   `_fill` awaits whatever a function returns that is awaitable. It rewrites
   the spoken words only — `when` rows still judge the fact itself. Publish
