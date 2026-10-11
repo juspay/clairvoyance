@@ -1,0 +1,36 @@
+-- 084: lead_call_tracker — vacuum at ~2% dead rows instead of ~20%.
+--
+-- Why (prod, measured 2 Oct 2026, audit DB-03): autovacuum runs at the
+-- server default autovacuum_vacuum_scale_factor = 0.2, so a table is
+-- vacuumed only once dead rows exceed 50 + 0.2 x reltuples. On
+-- lead_call_tracker (~3.1 M rows) that is roughly 580 k dead rows. The table
+-- takes ~31.4 M updates with 0 HOT updates, yet saw only 69 autovacuums,
+-- and its updated_at index has bloated to 3,767 MB (about 17x its natural
+-- size), growing 293 MB in the last two days. pg_class.reloptions was
+-- empty: nothing overrides the default today.
+--
+-- What: one per-table storage parameter. At 0.02, vacuum triggers at
+-- roughly 58 k dead rows, so dead index entries are reclaimed ten times
+-- sooner and the index stops growing as fast. This does NOT shrink the
+-- index that is already bloated; it only stops new bloat piling up.
+--
+-- Storage parameter only: no data change, no schema change, no table
+-- rewrite. It changes when autovacuum chooses to run, nothing else.
+--
+-- Lock: SHARE UPDATE EXCLUSIVE (PostgreSQL 14 docs, ALTER TABLE: "SHARE
+-- UPDATE EXCLUSIVE lock will be taken for fillfactor, toast and autovacuum
+-- storage parameters"). It does not conflict with ACCESS SHARE (SELECT) or
+-- ROW EXCLUSIVE (INSERT/UPDATE/DELETE), so reads and writes keep running.
+-- It does conflict with a running VACUUM/ANALYZE on this table: if one is
+-- in progress the ALTER waits for it (a regular autovacuum is cancelled
+-- automatically after deadlock_timeout; an anti-wraparound one is not), so
+-- the wait is capped at 10 s below. Reads and writes are not blocked even
+-- while it waits.
+--
+-- Rollback (same lock, same instant effect):
+--   ALTER TABLE lead_call_tracker RESET (autovacuum_vacuum_scale_factor);
+
+-- The runner wraps each file in its own transaction, so SET LOCAL ends with it.
+-- If a vacuum holds the table this errors after 10 s and can simply be re-run.
+SET LOCAL lock_timeout = '10s';
+ALTER TABLE lead_call_tracker SET (autovacuum_vacuum_scale_factor = 0.02);
