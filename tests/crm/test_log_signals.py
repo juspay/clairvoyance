@@ -348,6 +348,7 @@ def test_a_refused_enrolment_names_the_reason(
         enrol_mod.enrol(
             merchant_id="m1",
             workflow=_plan(status="paused"),
+            definition=WorkflowDefinition.model_validate(_DEFINITION),
             customer_id="c-1",
             context={},
         )
@@ -450,6 +451,7 @@ def _enrol(
     coro = enrol_mod.enrol(
         merchant_id="m1",
         workflow=cast(Any, workflow),
+        definition=WorkflowDefinition.model_validate(_DEFINITION),
         customer_id=str(uuid4()),
         context=context,
     )
