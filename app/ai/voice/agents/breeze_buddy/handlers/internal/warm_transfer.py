@@ -30,6 +30,7 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation import 
 )
 from app.ai.voice.agents.breeze_buddy.handlers.internal.stt import mute_stt, unmute_stt
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
+from app.ai.voice.agents.breeze_buddy.utils.call_duration import during_handoff
 from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
     subscribe_and_wait,
@@ -37,13 +38,17 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     close_websocket_safely,
 )
-from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
+from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import (
+    set_transfer_flag,
+    transfer_time_limit,
+)
 from app.core.config.static import APP_BASE_URL
 from app.core.logger import logger
 from app.database.accessor import get_telephony_number_by_id
 from app.schemas import CallProvider
 
 
+@during_handoff  # max-call-duration cap waits out a transfer in progress
 async def connect_to_live_agent(
     context: TemplateContext,
     args: Dict[str, Any],
@@ -206,6 +211,7 @@ async def _transfer_via_mpc(
             merchant_id=context.lead.merchant_id,
             transfer_number=agent_phone_number,
             customer_phone_number=customer_phone_number,
+            max_call_end_at=context.bot.max_call_end_at,
         )
         logger.info(f"Transfer flag set in Redis for call {context.call_sid}")
 
@@ -241,6 +247,9 @@ async def _transfer_via_mpc(
             agent_phone_number=agent_phone_number,
             customer_call_sid=context.call_sid,
             telephony_number=telephony_number,
+            # MPC max_duration floor is 300s (Plivo), so a transfer in the
+            # last 5 minutes can run up to 5 minutes past the cap.
+            max_duration=transfer_time_limit(context.bot.max_call_end_at, floor=300),
         )
 
         if not conference_result.get("success"):
@@ -399,6 +408,7 @@ async def _transfer_legacy(
             merchant_id=context.lead.merchant_id,
             transfer_number=agent_phone_number,
             customer_phone_number=customer_phone_number,
+            max_call_end_at=context.bot.max_call_end_at,
         )
         logger.info(f"Transfer flag set in Redis for call {context.call_sid}")
 
