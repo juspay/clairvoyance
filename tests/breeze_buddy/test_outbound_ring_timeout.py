@@ -32,7 +32,9 @@ CUSTOMER = "+919000000001"
 NUMBER = "+918000000001"
 
 
-def plivo_dial(monkeypatch: pytest.MonkeyPatch, ring: int) -> Dict[str, Any]:
+def plivo_dial(
+    monkeypatch: pytest.MonkeyPatch, ring: int, dial_ref: Any = None
+) -> Dict[str, Any]:
     """Dial through the real Plivo SDK; return the JSON body it would send."""
     monkeypatch.setattr(plivo_mod, "OUTBOUND_RING_TIMEOUT_SECONDS", ring)
     monkeypatch.setattr(static, "PLIVO_AUTH_ID", "MATEST00000000000001")
@@ -53,7 +55,7 @@ def plivo_dial(monkeypatch: pytest.MonkeyPatch, ring: int) -> Dict[str, Any]:
         return response
 
     monkeypatch.setattr(provider.client.session, "send", send)
-    assert provider.make_call(CUSTOMER, NUMBER) == {
+    assert provider.make_call(CUSTOMER, NUMBER, dial_ref=dial_ref) == {
         "status": "call_initiated",
         "sid": "u-1",
     }
@@ -119,3 +121,18 @@ def test_on_vobiz_rings_for_the_configured_seconds(monkeypatch):
     assert payload["ring_timeout"] == "20"
     assert "hangup_on_ring" not in payload
     assert payload["to"] == CUSTOMER and payload["from"] == NUMBER
+
+
+def test_the_ring_timeout_and_the_dial_ref_both_reach_plivo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1280 puts the dial reference on the hang-up URL (the only link to the lead
+    when Plivo's reply is lost); this setting adds ring_timeout. One request,
+    both."""
+    from urllib.parse import parse_qs, urlparse
+
+    ref = {"lead_id": "lead-1", "dial_at": "2026-10-02T04:32:04.123456Z"}
+    body = plivo_dial(monkeypatch, 40, dial_ref=ref)
+    assert body["ring_timeout"] == 40
+    hangup = parse_qs(urlparse(body["hangup_url"]).query)
+    assert hangup == {"lead_id": ["lead-1"], "dial_at": [ref["dial_at"]]}
