@@ -124,6 +124,29 @@ class InstallationRead(BaseModel):
     updated_at: datetime
 
 
+class SignupConfig(BaseModel):
+    """What a browser needs to open one connector's signup popup —
+    GET /connectors/{key}/signup.
+
+    Everything here is PUBLIC by design (an app id, a signup configuration
+    id, an API version): the browser hands them to the provider's own
+    popup, where they are visible anyway. The secret half of the handshake
+    — the app secret that trades the popup's code for a token — never
+    leaves the backend. Served from here rather than baked into each
+    frontend build so one env change reaches every console.
+
+    ``configured`` is False when the deployment lacks either id; the
+    console then says signup is not set up instead of opening a popup that
+    cannot work.
+    """
+
+    connector_key: str
+    configured: bool
+    app_id: Optional[str] = None
+    config_id: Optional[str] = None
+    graph_version: str
+
+
 class SubscriptionResult(BaseModel):
     """What was resubscribed. The provider's account id is echoed so an
     operator running the recovery across several accounts can see which one
