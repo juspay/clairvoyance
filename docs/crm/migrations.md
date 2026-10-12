@@ -28,7 +28,10 @@ CI-enforced by `scripts/check_migrations.py` and the immutability guard in
    one commit: the registry entry, this doc's list above, and the red
    test in `tests/crm/test_check_migrations.py` pinning the new name.
 3. **048+ is the CPaaS era.** One table owner per migration — the task
-   that owns a table ships its migration (vertical slices).
+   that owns a table ships its migration (vertical slices). One recorded
+   exception: 086 carries the inbox schema (conversations and buddy
+   changes) so the feature's later changes are code only; its sections
+   are split by owner instead.
 4. Migrations run as `POSTGRES_USER` via
    `uv run python scripts/migrate.py up`; check state with
    `uv run python scripts/migrate.py status`.
@@ -77,7 +80,8 @@ Rules the template encodes:
   CHECK; `crm_workflow_step` (073, canon T26) is outreach's as well — the
   append-only trail behind the token, inserted by the statement that moves
   the run and never updated, read by no one on the hot path, cascade-deleted
-  with its run).
+  with its run; conversations → `crm_conversation`,
+  `crm_conversation_message`, `crm_handoff` (086, ADR 0014)).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)

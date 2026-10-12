@@ -936,6 +936,25 @@ def test_whether_a_channel_registers_templates_is_the_registrys_answer() -> None
     assert registers_templates_for("carrier_pigeon") is True
 
 
+def test_the_channels_with_conversations_are_the_ones_with_limits() -> None:
+    """Generic code iterates these instead of naming a channel: a channel
+    joins the inbox, the closing sweep and Buddy by declaring its conversation
+    limits."""
+    from app.crm.connectivity.channels.registry import (
+        CHANNELS,
+        get_channels_with_conversations,
+        get_conversation_limits,
+    )
+
+    channels = get_channels_with_conversations()
+    assert channels and set(channels) == {
+        name
+        for name, entry in CHANNELS.items()
+        if entry.conversation_limits is not None
+    }
+    assert all(get_conversation_limits(name) is not None for name in channels)
+
+
 async def test_a_channel_that_does_not_register_templates_skips_the_registry(
     monkeypatch, counting_adapter
 ) -> None:

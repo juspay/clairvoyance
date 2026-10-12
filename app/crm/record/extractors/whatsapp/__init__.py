@@ -24,6 +24,7 @@ shape, modules/00 §1, ruled 7 Sep 2026):
   template.py  template.* — Meta's verdicts about a registered template.
   account.py   account.update — a notice about the WABA itself.
   flow.py      a completed Flow: the form, her answers, our token.
+  queued.py    message.queued — OUR letter about a message we are sending.
   bindings.py  binding.buddy_bot_moved — OUR letter: Buddy answers on another binding.
   shared.py    the source words, the narrowed-item read, _f/_entry.
 
@@ -43,6 +44,7 @@ from app.crm.record.extractors.whatsapp import (
     bindings,
     flow,
     inbound,
+    queued,
     status,
     template,
 )
@@ -69,6 +71,12 @@ DERIVERS: Dict[str, Deriver] = {
 ENTRIES: List[CatalogEntry] = [
     _entry("message.inbound", "Message received", inbound.fields()),
     _entry("message.status", "Message status", status.fields(), about="merchant"),
+    _entry(
+        "message.queued",
+        "Message we sent",
+        queued.queued_message_fields(),
+        about="merchant",
+    ),
     _entry(
         "binding.buddy_bot_moved",
         "Buddy moved to another binding",

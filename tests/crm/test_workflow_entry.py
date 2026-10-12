@@ -232,6 +232,20 @@ def _consume(event: RawEvent) -> None:
     asyncio.run(consume_attributed_event(event, "c-1", {}))
 
 
+def test_our_own_send_record_never_reaches_a_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """message.queued is connectivity's echo of a send we made. It is not
+    something she did: no run is read, woken, ended or started by it."""
+
+    async def never(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("message.queued reached the workflow engine")
+
+    monkeypatch.setattr(entry.enrollment_accessor, "open_runs_for_customer", never)
+    monkeypatch.setattr(entry.workflow_accessor, "live_workflows", never)
+    _consume(_event("message.queued", {"message_id": "m-1"}, source="whatsapp"))
+
+
 # --- phase 01, B1: no resume without an answer ---
 
 
