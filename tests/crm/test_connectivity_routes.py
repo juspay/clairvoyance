@@ -102,6 +102,43 @@ def test_the_door_reads_the_merchant_from_a_post_body(monkeypatch) -> None:
     assert response.status_code == 400 and seen["merchant"] == "shop"
 
 
+def test_the_template_routes_pass_the_picked_category_on(monkeypatch) -> None:
+    """The editor's category reaches the lifecycle from the create route and
+    the edit route alike."""
+    seen = {}
+
+    async def fake_create(merchant_id, *args):
+        seen["create"] = args[-1]
+        raise TemplateError("stop here")
+
+    async def fake_edit(merchant_id, template_id, components, category):
+        seen["edit"] = category
+        raise TemplateError("stop here")
+
+    monkeypatch.setattr(
+        connectivity_api.contracts, "create_template_draft", fake_create
+    )
+    monkeypatch.setattr(connectivity_api.contracts, "edit_template", fake_edit)
+    client = _client(monkeypatch)
+    client.post(
+        "/connectors/templates",
+        json={
+            "merchant_id": "shop",
+            "channel": "whatsapp",
+            "provider_account_ref": "waba-1",
+            "name": "n",
+            "language": "en",
+            "components": [],
+            "category": "MARKETING",
+        },
+    )
+    client.patch(
+        "/connectors/templates/t-1",
+        json={"merchant_id": "shop", "components": [], "category": "UTILITY"},
+    )
+    assert seen == {"create": "MARKETING", "edit": "UTILITY"}
+
+
 def test_a_foreign_merchant_is_refused_before_the_handler_runs(monkeypatch) -> None:
     async def never(*args):
         raise AssertionError("the handler must not run for a foreign merchant")

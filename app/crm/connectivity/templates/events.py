@@ -173,12 +173,11 @@ async def _resume_crashed_submit(
     repair nobody needed. Only when a crashed claim actually exists is it
     worth working out which account the letter arrived through.
 
-    What the resume CANNOT recover is ``submitted_category``: the category
-    we ASKED for lived only in the request whose process died. The row comes
-    back with the provider's own category once their next category letter
-    lands, and the 061-choice-4 comparison is simply unavailable for a
-    template whose submission crashed — an honest gap, not one to fill with
-    a guess.
+    ``submitted_category`` needs no recovering: the claim wrote the category
+    we ASKED for before the provider was called (claim_for_submit_query), and
+    the resume leaves it alone. The provider's own category arrives with
+    their next category letter, so the 061-choice-4 comparison holds for a
+    template whose submission crashed too.
     """
     provider_template_id = state.provider_template_id
     if event.topic != TOPIC_TEMPLATE_STATUS or not state.status:

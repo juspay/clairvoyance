@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 
 from app.crm.connectivity.schemas.tenancy import TenantScoped
 
+#: What a draft's picked category may look like — a provider's category word
+#: (Meta: MARKETING · UTILITY · AUTHENTICATION), never free text: the draft
+#: stores it and submit sends it back to the provider verbatim.
+CATEGORY_PATTERN = r"^[A-Z_]{1,32}$"
+
 
 class TemplateDraft(BaseModel):
     """What a provider needs to register a template. The local row's id and
@@ -88,11 +93,20 @@ class CreateTemplateDraftRequest(TenantScoped):
     components: List[Dict[str, Any]] = Field(
         ..., description="The registered structure, verbatim"
     )
+    category: Optional[str] = Field(
+        None,
+        pattern=CATEGORY_PATTERN,
+        description="The category the merchant picked (kept on the draft; "
+        "submit sends its own)",
+    )
 
 
 class SubmitTemplateRequest(TenantScoped):
+    # The same shape as a draft's: the claim writes it onto the row, and a
+    # refused submit leaves it there for the reopened draft to show.
     category: str = Field(
         ...,
+        pattern=CATEGORY_PATTERN,
         description=(
             "The provider's own category vocabulary, stored as theirs "
             "(Meta: MARKETING · UTILITY · AUTHENTICATION)"
@@ -103,6 +117,11 @@ class SubmitTemplateRequest(TenantScoped):
 class EditTemplateRequest(TenantScoped):
     components: List[Dict[str, Any]] = Field(
         ..., description="Replacement components, verbatim"
+    )
+    category: Optional[str] = Field(
+        None,
+        pattern=CATEGORY_PATTERN,
+        description="Drafts only: the category the merchant picked",
     )
 
 

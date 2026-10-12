@@ -733,6 +733,14 @@ META_WHATSAPP_GRAPH_VERSION = os.environ.get("META_WHATSAPP_GRAPH_VERSION", "v23
 META_APP_ID = os.environ.get("META_APP_ID", "")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
 
+# The Embedded Signup configuration (Meta app dashboard -> Facebook Login for
+# Business -> Configurations). Public, like META_APP_ID: the browser needs
+# both to open Meta's signup popup, and the console reads them from
+# GET /connectors/whatsapp/signup so one env serves every frontend build.
+# Empty = signup is not offered (the console says so instead of opening a
+# popup that cannot work).
+META_ES_CONFIG_ID = os.environ.get("META_ES_CONFIG_ID", "")
+
 # Echoed back once, when the callback URL is registered in the Meta app.
 META_WEBHOOK_VERIFY_TOKEN = os.environ.get("META_WEBHOOK_VERIFY_TOKEN", "")
 

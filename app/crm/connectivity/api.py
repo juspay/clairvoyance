@@ -45,6 +45,7 @@ from app.crm.connectivity.onboarding import (
 )
 from app.crm.connectivity.schemas.connector import (
     InstallationRead,
+    SignupConfig,
     SubscriptionResult,
 )
 from app.crm.connectivity.schemas.template import (
@@ -113,6 +114,24 @@ _NOT_FOUND = "Connection not found"
 # ---------------------------------------------------------------------------
 # Connections
 # ---------------------------------------------------------------------------
+
+
+@router.get("/{connector_key}/signup", response_model=SignupConfig)
+async def signup_config_route(
+    connector_key: str,
+    merchant_id: str = Depends(
+        merchant_scope("start a connector signup", "crm.connectivity.onboard")
+    ),
+) -> SignupConfig:
+    """What the console needs to open this connector's signup popup (for
+    WhatsApp: Meta's app id and Embedded Signup configuration id).
+
+    Public values, served from the backend env so every frontend build reads
+    the same ones; the secret half of the handshake stays in POST
+    /{connector_key}/onboard. Scoped like onboarding itself, so only someone
+    allowed to connect this merchant asks.
+    """
+    return contracts.signup_config(connector_key)
 
 
 @router.post("/{connector_key}/onboard", response_model=InstallationRead)
@@ -225,6 +244,7 @@ async def create_template_route(
         req.name,
         req.language,
         req.components,
+        req.category,
     )
 
 
@@ -273,7 +293,9 @@ async def edit_template_route(
         merchant_scope("edit a template", "crm.connectivity.templates")
     ),
 ) -> TemplateRead:
-    return await contracts.edit_template(merchant_id, template_id, req.components)
+    return await contracts.edit_template(
+        merchant_id, template_id, req.components, req.category
+    )
 
 
 @router.post("/templates/{template_id}/retire", response_model=TemplateRead)

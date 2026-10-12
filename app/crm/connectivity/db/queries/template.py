@@ -167,12 +167,16 @@ def insert_template_draft_query(
     name: str,
     language: str,
     components_json: str,
+    category: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
+    """A new local draft. ``category`` is the one the merchant picked in the
+    editor, kept in submitted_category (OURS — see 061 note 4) so a reopened
+    draft still says it; submit writes the category it actually sends."""
     query = f"""
         INSERT INTO {TEMPLATE_TABLE}
             (merchant_id, channel, provider_account_ref, name, language,
-             components)
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+             components, submitted_category)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
         RETURNING {TEMPLATE_COLUMNS}
     """
     return query, [
@@ -182,11 +186,15 @@ def insert_template_draft_query(
         name,
         language,
         components_json,
+        category,
     ]
 
 
 def update_draft_components_query(
-    merchant_id: str, template_id: str, components_json: str
+    merchant_id: str,
+    template_id: str,
+    components_json: str,
+    category: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Only ever touches a row that is still 'draft'.
 
@@ -194,21 +202,27 @@ def update_draft_components_query(
     sent for review: the components on file are the ones the provider is
     looking at, and replacing them locally would make the registry lie about
     what is under review. The status filter is the guard; a caller seeing no
-    row raises.
+    row raises. ``category`` (the editor's pick) replaces the draft's when
+    sent, and is left alone when not.
     """
     query = f"""
         UPDATE {TEMPLATE_TABLE}
-           SET components = $3::jsonb
+           SET components = $3::jsonb,
+               submitted_category = COALESCE($5, submitted_category)
          WHERE merchant_id = $1
            AND id = $2::uuid
            AND status = $4
         RETURNING {TEMPLATE_COLUMNS}
     """
-    return query, [merchant_id, template_id, components_json, TEMPLATE_DRAFT]
+    return query, [merchant_id, template_id, components_json, TEMPLATE_DRAFT, category]
 
 
-def claim_for_submit_query(merchant_id: str, template_id: str) -> Tuple[str, List[Any]]:
-    """draft -> submitting, exclusively.
+def claim_for_submit_query(
+    merchant_id: str, template_id: str, category: str
+) -> Tuple[str, List[Any]]:
+    """draft -> submitting, exclusively — and the category being sent lands
+    with the claim, so a submit that dies after the provider accepted (the
+    webhook's resume path below) still records what we asked for.
 
     The claim is the whole defence against submitting one template twice.
     Two requests that both read 'draft' would both POST to the provider; the
@@ -225,13 +239,20 @@ def claim_for_submit_query(merchant_id: str, template_id: str) -> Tuple[str, Lis
     query = f"""
         UPDATE {TEMPLATE_TABLE}
            SET status = $3,
+               submitted_category = $5,
                status_updated_at = now()
          WHERE merchant_id = $1
            AND id = $2::uuid
            AND status = $4
         RETURNING {TEMPLATE_COLUMNS}
     """
-    return query, [merchant_id, template_id, TEMPLATE_SUBMITTING, TEMPLATE_DRAFT]
+    return query, [
+        merchant_id,
+        template_id,
+        TEMPLATE_SUBMITTING,
+        TEMPLATE_DRAFT,
+        category,
+    ]
 
 
 def release_submit_claim_query(

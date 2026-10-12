@@ -109,6 +109,7 @@ async def insert_template_draft(
     name: str,
     language: str,
     components: List[Dict[str, Any]],
+    category: Optional[str] = None,
 ) -> TemplateRead:
     query, values = insert_template_draft_query(
         merchant_id,
@@ -117,6 +118,7 @@ async def insert_template_draft(
         name,
         language,
         json.dumps(components),
+        category,
     )
     row = await conn.fetchrow(query, *values)
     if row is None:
@@ -128,21 +130,25 @@ async def insert_template_draft(
 
 
 async def update_draft_components(
-    conn: DbTxn, merchant_id: str, template_id: str, components: List[Dict[str, Any]]
+    conn: DbTxn,
+    merchant_id: str,
+    template_id: str,
+    components: List[Dict[str, Any]],
+    category: Optional[str] = None,
 ) -> Optional[TemplateRead]:
     """None = the row is no longer a draft (raced, or already submitted)."""
     query, values = update_draft_components_query(
-        merchant_id, template_id, json.dumps(components)
+        merchant_id, template_id, json.dumps(components), category
     )
     row = await conn.fetchrow(query, *values)
     return decode_template(row) if row is not None else None
 
 
 async def claim_for_submit(
-    conn: DbTxn, merchant_id: str, template_id: str
+    conn: DbTxn, merchant_id: str, template_id: str, category: str
 ) -> Optional[TemplateRead]:
     """None = somebody else holds the claim, or the row is not a draft."""
-    query, values = claim_for_submit_query(merchant_id, template_id)
+    query, values = claim_for_submit_query(merchant_id, template_id, category)
     row = await conn.fetchrow(query, *values)
     return decode_template(row) if row is not None else None
 
