@@ -6,6 +6,8 @@ Importers name the file they mean:
 
     gate.py         may this message reach this person now? Asked before
                     every send; fails closed
+    letters.py      message.queued — our own letter on the event spine
+                    about a message we are sending
     receipts.py     what became of it — the spine consumer that moves a
                     sent message along sent → delivered → read (or failed)
     outbound/       we start it — an approved template, queued and sent by
