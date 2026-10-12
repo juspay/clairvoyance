@@ -18,7 +18,7 @@ from app.core.logger import logger
 from app.crm.connectivity.providers.base import TemplateProviderError
 from app.crm.connectivity.providers.meta.graph import GraphError, call, segment
 from app.crm.connectivity.providers.whatsapp import TOKEN_KEY
-from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.connector import CredentialBundle
 from app.crm.connectivity.schemas.template import ProviderTemplateState, TemplateDraft
 from app.crm.connectivity.vocabulary.status import TEMPLATE_PENDING
 from app.crm.connectivity.vocabulary.topics import (

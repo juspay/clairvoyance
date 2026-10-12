@@ -25,12 +25,12 @@ from app.crm.connectivity.providers.whatsapp.payload import (
     flow_button_indexes,
     to_meta_recipient,
 )
-from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
-from app.crm.connectivity.schemas.message import (
+from app.crm.connectivity.schemas.connector import (
+    ChannelBinding,
+    ConnectorInstallation,
     CredentialBundle,
-    QueuedMessage,
-    SendRoute,
 )
+from app.crm.connectivity.schemas.message.shared import QueuedMessage, SendRoute
 from app.crm.connectivity.schemas.template import ApprovedTemplate
 from tests.crm.doubles import stub_http
 

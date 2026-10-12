@@ -10,7 +10,7 @@ throttle half of them without importing the send door.
 from typing import Optional
 
 from app.crm.connectivity.providers.meta.graph import GRAPH_THROTTLE_CODES
-from app.crm.connectivity.schemas.message import SendOutcome
+from app.crm.connectivity.schemas.message.shared import SendOutcome
 from app.crm.connectivity.vocabulary.reasons import REASON_UNREADABLE
 
 # Retryable — the provider is busy or pacing us, not refusing on the merits.

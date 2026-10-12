@@ -4,7 +4,8 @@ Exports nothing (module rules §1: an ``__init__`` is not a re-export hub).
 Importers name the file they mean:
 
     registry.py     what each channel can do — the handle the gate probes,
-                    whether it registers templates
+                    whether it registers templates, its conversation limits
+    utils.py        the lookups generic code asks of that registry
     settings.py     which number templates go out from, which number Buddy
                     answers on, and Buddy's settings
 
