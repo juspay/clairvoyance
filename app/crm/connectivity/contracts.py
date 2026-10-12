@@ -65,7 +65,11 @@ What is here, and why each thing is on the surface:
   state, and there is deliberately no timer beside it: the periodic sync
   was removed before it ever ran.
 
-- ``conversation_profile`` — the channel's limits, so a caller shapes a
+- ``send_session`` and ``TextBody`` — a free-form reply inside the
+  customer-service window, sent NOW (the conversations module and Buddy's
+  turns are its callers). Same manifest, same gate, same send
+  door as a template; the words ride the message.queued letter (D1).
+  ``conversation_profile`` is the channel's limits, so a caller shapes a
   reply to fit instead of having it refused; ``conversation_channels`` is
   every channel that carries a conversation at all, so a caller iterates
   them instead of naming one.
@@ -106,6 +110,8 @@ from app.crm.connectivity.queue import queue_message, send_behind
 from app.crm.connectivity.reasons import reason_label
 from app.crm.connectivity.receipts import consume_status_event
 from app.crm.connectivity.schemas.connector import ConversationSettings
+from app.crm.connectivity.schemas.message import TextBody
+from app.crm.connectivity.session import send_session
 from app.crm.connectivity.settings import (
     buddy_binding,
     conversation_settings,
@@ -168,6 +174,8 @@ __all__ = [
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
     # free-form replies inside the customer-service window
+    "send_session",
+    "TextBody",
     "conversation_profile",
     "conversation_channels",
     # the receipts consumer (worker_main registers)

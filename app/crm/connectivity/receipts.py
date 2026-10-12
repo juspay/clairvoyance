@@ -27,7 +27,7 @@ no delay, and quarantines it after a handful of tries. So a young receipt
 that matches no row is PARKED (crm_message_receipt_pending, migration 084)
 and the letter completes normally:
 
-  * the side that stamps the id — the dispatcher — applies
+  * the side that stamps the id — the dispatcher, a session send — applies
     whatever is parked for it straight after (``apply_parked``). The drain
     is one atom: a parked row leaves only with its receipt applied, in
     ladder order, so a failure part-way loses nothing;
