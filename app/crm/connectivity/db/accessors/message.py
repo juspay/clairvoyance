@@ -20,7 +20,7 @@ from app.crm.connectivity.db.queries.message import (
     requeue_stale_claims_query,
     send_behind_provider_id_query,
 )
-from app.crm.connectivity.schemas.message import QueuedMessage, SendBehind
+from app.crm.connectivity.schemas.message.shared import QueuedMessage, SendBehind
 from app.crm.connectivity.vocabulary.status import MESSAGE_QUEUED
 from app.crm.shared.db import crm_connection
 

@@ -36,7 +36,7 @@ from typing import Any, Dict, Optional
 from app.core.logger import logger
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.ingress import status_letter_keys
-from app.crm.connectivity.schemas.message import ProviderReceipt
+from app.crm.connectivity.schemas.message.shared import ProviderReceipt
 from app.crm.connectivity.vocabulary.reasons import REASON_PROVIDER_REJECTED
 from app.crm.connectivity.vocabulary.status import (
     MESSAGE_DELIVERED,

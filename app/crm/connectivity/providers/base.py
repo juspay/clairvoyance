@@ -31,10 +31,10 @@ from pydantic import BaseModel
 from app.core.logger import logger
 from app.crm.connectivity.schemas.connector import (
     ConnectorInstallation,
+    CredentialBundle,
     OnboardResult,
 )
-from app.crm.connectivity.schemas.message import (
-    CredentialBundle,
+from app.crm.connectivity.schemas.message.shared import (
     QueuedMessage,
     SendOutcome,
     SendRoute,

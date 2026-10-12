@@ -26,8 +26,7 @@ from typing import Any, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.crm.connectivity.schemas.connector import OnboardResult
-from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.connector import CredentialBundle, OnboardResult
 
 
 class OnboardShopifyRequest(BaseModel):

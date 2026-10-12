@@ -18,8 +18,8 @@ from typing import Optional
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
-from app.crm.connectivity.channels.registry import gate_handle_kind_for
-from app.crm.connectivity.schemas.message import QueuedMessage, SendToken
+from app.crm.connectivity.channels.utils import get_gate_handle_kind
+from app.crm.connectivity.schemas.message.shared import QueuedMessage, SendToken
 from app.crm.connectivity.vocabulary.reasons import (
     REASON_GATE_UNAVAILABLE,
     REASON_SUPPRESSED,
@@ -40,7 +40,7 @@ async def gate(message: QueuedMessage) -> Optional[str]:
     # consent from the consent table, purpose authorisation, quiet hours.
     # Suppression stays as check #1; may_contact() joins it here, and its
     # decision_id flows into mint_send_token below.
-    kind = gate_handle_kind_for(message.channel)
+    kind = get_gate_handle_kind(message.channel)
     if kind is None:
         # A channel the gate cannot check must not slip through unchecked.
         return REASON_GATE_UNAVAILABLE

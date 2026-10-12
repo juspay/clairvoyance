@@ -12,17 +12,32 @@ producer as the owner of the validating dictionary.
 
 from typing import Any, Dict, Optional
 
-from app.crm.connectivity.channels.registry import gate_handle_kind_for
+from app.crm.connectivity.channels.utils import get_gate_handle_kind
 from app.crm.connectivity.db.accessors import message as message_accessor
-from app.crm.connectivity.schemas.message import SendBehind
+from app.crm.connectivity.schemas.message.shared import SendBehind
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
-# T16 col 7. What caused the send; every funnel groups on this.
-SOURCE_KINDS = ("broadcast", "workflow", "agent", "transactional")
+# T16 col 7. What caused the send; every funnel groups on this. 'human' is
+# a teammate replying from the inbox (ADR 0014's CHECK extension, which
+# lives here now that the CHECK is gone).
+SOURCE_KINDS = ("broadcast", "workflow", "agent", "transactional", "human")
+
+#: The producers of free-form replies inside the customer-service window —
+#: Buddy (agent) and a teammate (human). Only they may make a session send.
+REPLY_SOURCE_KINDS = ("agent", "human")
 
 # Purpose roots the gate's caps are set per (design/gate-mechanics.md §3);
-# the full dotted list is permission's (canon T14 CK), not ours.
-PURPOSE_ROOTS = ("marketing", "utility", "transactional", "authentication")
+# the full dotted list is permission's (canon T14 CK), not ours. They follow
+# the providers' template pricing categories (decision D8; Meta's four on
+# WhatsApp): a template is marketing, utility or authentication; 'service'
+# is a free-form reply inside the window. 'transactional' predates the
+# mapping and reads as utility.
+PURPOSE_ROOTS = ("marketing", "utility", "transactional", "authentication", "service")
+
+#: The one root reserved for free-form replies. A template is never
+#: 'service' — the provider bills and polices it under its approved
+#: category — and a free-form reply is never anything else.
+SERVICE_PURPOSE_ROOT = "service"
 
 
 def normalize_address(channel: str, address: str) -> Optional[str]:
@@ -36,7 +51,7 @@ def normalize_address(channel: str, address: str) -> Optional[str]:
     it at dispatch anyway, and a manifest row that can never send is not
     worth writing.
     """
-    kind = gate_handle_kind_for(channel)
+    kind = get_gate_handle_kind(channel)
     if kind == "phone":
         return normalize_phone(address)
     if kind == "email":
@@ -44,13 +59,24 @@ def normalize_address(channel: str, address: str) -> Optional[str]:
     return None
 
 
+def purpose_root(purpose_key: str) -> str:
+    """PURE: the root of a dotted purpose key ('' for an empty one)."""
+    return purpose_key.split(".", 1)[0] if purpose_key else ""
+
+
 def validate_proposal(source_kind: str, purpose_key: str) -> None:
-    """PURE: refuse a proposal the vocabulary does not know."""
+    """PURE: refuse a template proposal the vocabulary does not know — or
+    one claiming the 'service' root, which only a free-form reply may."""
     if source_kind not in SOURCE_KINDS:
         raise ValueError(f"unknown source_kind: {source_kind!r}")
-    root = purpose_key.split(".", 1)[0] if purpose_key else ""
+    root = purpose_root(purpose_key)
     if root not in PURPOSE_ROOTS:
         raise ValueError(f"purpose_key must start with one of {PURPOSE_ROOTS}")
+    if root == SERVICE_PURPOSE_ROOT:
+        raise ValueError(
+            "a template send cannot carry a 'service' purpose — that root is "
+            "for free-form replies inside the customer-service window"
+        )
 
 
 async def queue_message(

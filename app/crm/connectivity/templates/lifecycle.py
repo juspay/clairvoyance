@@ -45,8 +45,10 @@ from app.crm.connectivity.db import DbTxn, atomically
 from app.crm.connectivity.db.accessors import (
     template as template_accessor,
 )
-from app.crm.connectivity.schemas.connector import ConnectorInstallation
-from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.connector import (
+    ConnectorInstallation,
+    CredentialBundle,
+)
 from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
 from app.crm.connectivity.templates import retire_guard
 from app.crm.connectivity.vocabulary.status import (
