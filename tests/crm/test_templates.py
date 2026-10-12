@@ -768,7 +768,7 @@ def test_the_send_read_carries_the_row_and_decides_nothing() -> None:
     ride WHOLE onto the shape, totalized exactly as decode_template does
     (a malformed column filters, never raises — this decoder runs per
     message). Which of those buttons is a Flow button is Meta's vocabulary
-    and lives in Meta's face (providers/whatsapp/payload.py), so nothing
+    and lives in Meta's face (providers/whatsapp/payload/template.py), so nothing
     here walks them — a decoder makes no business decisions."""
     from app.crm.connectivity.db.decoders.template import decode_approved_template
 
