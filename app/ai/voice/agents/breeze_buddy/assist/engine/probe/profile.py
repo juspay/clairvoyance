@@ -41,6 +41,8 @@ _CHALLENGE_MARKERS = (
     "px-captcha",
     "/_incapsula_resource",
     "are you a human",
+    # A platform's rate-limit page, which a render may report as status 200.
+    "<title>too many requests</title>",
 )
 _CHALLENGE_HEADERS = ("cf-mitigated", "x-datadome", "x-incapsula-rid")
 # Header values are evidence, not payload: enough to match a fingerprint,
@@ -162,14 +164,23 @@ def is_challenge(status: int, headers: Mapping[str, str], body: str) -> bool:
 
 
 def summarize(profile: SiteProfile) -> Dict[str, Any]:
-    """The operator-facing half of a probe report."""
+    """The operator-facing half of a probe report.
+
+    A challenge page's title is the interstitial's ("Too many requests"), not
+    the store's, so a blocked probe names nothing and the caller falls back to
+    the address.
+    """
+    own = not profile.challenge
     return {
         "final_url": profile.final_url,
         "status": profile.status,
-        "title": profile.title or profile.meta.get("og:title"),
-        "description": profile.meta.get("description")
-        or profile.meta.get("og:description"),
-        "name": profile.meta.get("og:site_name") or profile.title,
+        "title": (profile.title or profile.meta.get("og:title")) if own else None,
+        "description": (
+            (profile.meta.get("description") or profile.meta.get("og:description"))
+            if own
+            else None
+        ),
+        "name": (profile.meta.get("og:site_name") or profile.title) if own else None,
         "challenge": profile.challenge,
         "truncated": profile.truncated,
         "size_bytes": profile.size_bytes,
