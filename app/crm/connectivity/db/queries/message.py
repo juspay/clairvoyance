@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.crm.connectivity.reasons import (
     REASON_ATTEMPTS_EXHAUSTED,
     REASON_RECLAIMED_STALE_CLAIM,
+    REASON_SESSION_ABANDONED,
 )
 from app.crm.connectivity.status import (
     MESSAGE_ACCEPTED,
@@ -237,6 +238,97 @@ def send_behind_provider_id_query(
            AND provider_message_id = $2
     """
     return query, [merchant_id, provider_message_id]
+
+
+# ---------------------------------------------------------------------------
+# Session sends — a free-form reply's row is written IN FLIGHT and closed by
+# the same call; the dispatcher never claims it.
+# ---------------------------------------------------------------------------
+
+
+def insert_session_message_query(
+    merchant_id: str,
+    customer_id: str,
+    channel: str,
+    sent_to_address: str,
+    source_kind: str,
+    source_id: Optional[str],
+    purpose_key: str,
+    dedupe_key: str,
+) -> Tuple[str, List[Any]]:
+    """One free-form reply, written already in flight ('sending', attempt 1).
+
+    ``claimed_at`` stays NULL, and that is the marker, not an accident: the
+    dispatcher's claim always stamps claimed_at, so its stale sweep
+    (``claimed_at < now() - …``) can never pick this row up and re-send a
+    reply whose words it does not have. An abandoned session row is closed
+    by its own sweep below instead.
+
+    No template, no variables (canon T16 col 11: free-text sends carry
+    none — the words ride the message.queued letter). The dedupe unique
+    absorbs a caller's retry of the same reply: conflict = no row returned.
+    """
+    query = f"""
+        INSERT INTO {MESSAGE_TABLE}
+            (merchant_id, customer_id, channel, sent_to_address, source_kind,
+             source_id, purpose_key, template_id, variables, dedupe_key,
+             status, attempt)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, '{{}}'::jsonb, $8, $9, 1)
+        ON CONFLICT (merchant_id, dedupe_key) DO NOTHING
+        RETURNING id
+    """
+    return query, [
+        merchant_id,
+        customer_id,
+        channel,
+        sent_to_address,
+        source_kind,
+        source_id,
+        purpose_key,
+        dedupe_key,
+        MESSAGE_SENDING,
+    ]
+
+
+def message_state_by_dedupe_query(
+    merchant_id: str, dedupe_key: str
+) -> Tuple[str, List[Any]]:
+    """The row a dedupe key already names — one point read on the
+    (merchant_id, dedupe_key) unique."""
+    query = f"""
+        SELECT id, status, reason, provider_message_id
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND dedupe_key = $2
+    """
+    return query, [merchant_id, dedupe_key]
+
+
+def abandon_stale_session_sends_query(stale_minutes: int) -> Tuple[str, List[Any]]:
+    """Close session rows whose sender died between the insert and the
+    outcome — 'sending' with no claim (the session marker) past the stale
+    window.
+
+    Dead, never requeued: the words are not on the row, so there is nothing
+    to send again, and the honest answer is "we do not know whether it went
+    out". The candidate set is small by construction — only rows still
+    'sending' — so it runs beside the dispatcher's own stale sweep each pass.
+    """
+    query = f"""
+        UPDATE {MESSAGE_TABLE}
+           SET status = $2,
+               reason = $3
+         WHERE status = $4
+           AND claimed_at IS NULL
+           AND created_at < now() - make_interval(mins => $1::int)
+        RETURNING id
+    """
+    return query, [
+        stale_minutes,
+        MESSAGE_DEAD,
+        REASON_SESSION_ABANDONED,
+        MESSAGE_SENDING,
+    ]
 
 
 # ---------------------------------------------------------------------------

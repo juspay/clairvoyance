@@ -23,12 +23,13 @@ are harmless.
 manifest when the dispatcher records the send's outcome, and a fast webhook
 can be filed and consumed before that write lands: it matches no row, and
 this consumer lets it go. It is not lost — the letter stays on the spine,
-and the dispatcher, straight after the stamp, reads the message's status
-letters back and applies them (``apply_filed_receipts``). The two sides
-cannot both miss: the stamp commits before the read-back, so a letter filed
-before it is found there, and one filed after it is consumed after the
-stamp and matches. A receipt that matches no row at all names a message this
-system did not send (the provider's own app on the same binding).
+and the side that stamps the id (the dispatcher, a session send) reads the
+message's status letters back straight after the stamp and applies them
+(``apply_filed_receipts``). The two sides cannot both miss: the stamp
+commits before the read-back, so a letter filed before it is found there,
+and one filed after it is consumed after the stamp and matches. A receipt
+that matches no row at all names a message this system did not send (the
+provider's own app on the same binding).
 """
 
 from typing import Any, Dict, Optional

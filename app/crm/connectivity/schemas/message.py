@@ -77,7 +77,7 @@ class SendOutcome(BaseModel):
 class SendToken(BaseModel):
     """The gate's grant for ONE message. Presented to send(), consumed there.
 
-    dispatch.py mints one only after _gate() allows the message — today the
+    dispatch.py mints one only after gate() allows the message — today the
     suppression slice (fail closed), until the full may_contact() (consent,
     purpose, quiet hours — the permission module's B5) replaces the gate's
     body. send() refuses a token that does not name this exact message, so
@@ -241,6 +241,38 @@ def body_text(body: SessionBodyType) -> Optional[str]:
     if isinstance(body, ImageBody):
         return body.caption
     return body.text
+
+
+class SessionSendResult(BaseModel):
+    """What one session send came to.
+
+    ``status`` is the manifest row's word: accepted (the provider took it),
+    failed (the provider refused — ``retryable`` says whether the same words
+    could plausibly go through later), or blocked (WE refused: the gate, no
+    route, a body that does not fit the channel). A session send is never
+    queued and never retried by the dispatcher — its words are not on the
+    row — so a retry is the caller's, under a NEW dedupe key.
+
+    ``duplicate`` means the dedupe key already named a row: nothing was sent
+    this time, and the fields describe that earlier row as it stands.
+    """
+
+    message_id: str
+    status: str
+    reason: Optional[str] = None
+    provider_message_id: Optional[str] = None
+    retryable: bool = False
+    duplicate: bool = False
+
+
+class MessageState(BaseModel):
+    """One manifest row's current word — what a repeated session send (same
+    dedupe key) reports instead of sending again."""
+
+    id: str
+    status: str
+    reason: Optional[str] = None
+    provider_message_id: Optional[str] = None
 
 
 class ProviderReceipt(BaseModel):
