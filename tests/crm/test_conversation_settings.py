@@ -24,14 +24,22 @@ from app.crm.connectivity.db.queries.binding import (
     take_conversation_query,
     update_conversation_settings_query,
 )
+from app.crm.connectivity.letters import queued_letter_payload
 from app.crm.connectivity.schemas.connector import (
     DEFAULT_CLOSING_MESSAGE,
     ChannelBinding,
     ConversationSettings,
     ConversationSettingsPatch,
 )
+from app.crm.connectivity.schemas.message import (
+    ButtonsBody,
+    ImageBody,
+    ListBody,
+    TextBody,
+)
 from app.crm.connectivity.status import BINDING_ACTIVE, BINDING_RETIRED
 from app.crm.record import catalog
+from app.crm.record.extractors.whatsapp.queued import QUEUED_KINDS
 
 
 def _binding(
@@ -544,3 +552,32 @@ def test_the_moved_letter_keys_are_spelled_the_same_on_both_sides() -> None:
     }
     source = Path(__file__).parents[2] / "app/crm/connectivity/letters.py"
     assert all(f'"{key}"' in source.read_text() for key in declared)
+
+
+def test_the_catalog_declares_the_keys_the_letter_writes() -> None:
+    """letters.py writes the payload; record's WhatsApp spec declares it
+    (rule 12 forbids the import). A key renamed on one side only would read
+    as absent in every timeline."""
+    written = set(
+        queued_letter_payload(
+            message_id="m",
+            channel="whatsapp",
+            sent_to_address="+91",
+            source_kind="agent",
+            source_id=None,
+            purpose_key="service.x",
+            template_id=None,
+            variables={},
+            body=TextBody(text="hi"),
+        )
+    )
+    declared = {
+        field.path.removeprefix("payload.")
+        for field in catalog.CATALOG[("whatsapp", "message.queued")].fields
+    }
+    assert declared <= written
+    body_kinds = [
+        model.model_fields["kind"].default
+        for model in (TextBody, ButtonsBody, ListBody, ImageBody)
+    ]
+    assert QUEUED_KINDS == ["template"] + body_kinds
