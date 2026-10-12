@@ -26,7 +26,6 @@ from app.crm.connectivity.messaging.outbound.dispatch import (
     _jittered,
     backoff_seconds,
     plan_for_outcome,
-    sample_ids,
 )
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
@@ -38,6 +37,7 @@ from app.crm.connectivity.vocabulary.reasons import (
     REASON_CLASS_POLICY,
     REASON_CLASS_PROVIDER,
     REASON_GATE_REFUSED,
+    REASON_GATE_TIMEOUT,
     REASON_NO_CREDENTIAL,
     REASON_RECLAIMED_STALE_CLAIM,
     REASON_SUPPRESSED,
@@ -294,12 +294,13 @@ async def test_a_channel_the_gate_cannot_check_fails_closed(monkeypatch) -> None
 
 
 async def test_a_hung_gate_probe_is_bounded_and_fails_closed(monkeypatch) -> None:
-    """A hung gate probe is bounded and fails closed.
+    """A hung gate probe is bounded and fails closed — but retryably.
 
     The probe reads the same pool send() guards with its deadline; unbounded,
     a hung probe stalls the serial batch past the claim lease and reproduces
-    the double send the lease inequality pins against. Bounded, it is OUR
-    refusal — blocked/gate_unavailable — and nothing reaches the provider.
+    the double send the lease inequality pins against. Bounded, nothing
+    reaches the provider, and the row goes back on the ladder as
+    gate_timeout: a slow read is no answer, never a terminal block.
     """
     written = {}
 
@@ -323,9 +324,44 @@ async def test_a_hung_gate_probe_is_bounded_and_fails_closed(monkeypatch) -> Non
     monkeypatch.setattr(gate, "CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
-    assert written["status"] == MESSAGE_BLOCKED
-    assert written["reason"] == REASON_GATE_UNAVAILABLE
+    assert written["status"] == MESSAGE_QUEUED
+    assert written["reason"] == REASON_GATE_TIMEOUT
     assert written["mark_sent"] is False
+
+
+async def test_a_gate_that_keeps_timing_out_ends_dead_not_blocked(
+    monkeypatch,
+) -> None:
+    """The timeout spends the attempt like any retryable failure: at the
+    limit the row is dead (attempts exhausted), never blocked for good."""
+    written = {}
+
+    async def hanging_probe(handles):
+        """Test double: the suppression probe never answers."""
+        await asyncio.sleep(3600)
+
+    async def record_outcome(
+        message_id, status, reason, pmid, mark_sent, attempt, retry, binding_id=None
+    ):
+        """Test double: records what the dispatcher tried to write."""
+        written.update(status=status, reason=reason)
+        return True
+
+    monkeypatch.setattr(gate, "is_suppressed", hanging_probe)
+    monkeypatch.setattr(gate, "CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
+    await dispatch._dispatch_one(_message(attempt=3), 3)
+    assert written == {"status": MESSAGE_DEAD, "reason": REASON_ATTEMPTS_EXHAUSTED}
+
+
+def test_only_a_gate_timeout_is_a_retryable_refusal() -> None:
+    """refusal_outcome is the one place a gate word becomes a row: the
+    timeout is a retryable failure, every other refusal is our block."""
+    timed_out = gate.refusal_outcome(REASON_GATE_TIMEOUT)
+    assert (timed_out.status, timed_out.retryable) == (MESSAGE_FAILED, True)
+    for refusal in (REASON_SUPPRESSED, REASON_GATE_UNAVAILABLE):
+        blocked = gate.refusal_outcome(refusal)
+        assert (blocked.status, blocked.reason) == (MESSAGE_BLOCKED, refusal)
 
 
 def test_every_adapter_channel_is_registered_in_channels() -> None:
@@ -417,24 +453,6 @@ def test_claim_is_race_safe_across_pods() -> None:
     assert "WHERE status = $3" in query
     assert "LIMIT $1" in query
     assert values == [25, MESSAGE_SENDING, MESSAGE_QUEUED]
-
-
-# --- log lines stay bounded --------------------------------------------------
-
-
-def test_sample_ids_lists_everything_when_it_fits() -> None:
-    """Sample ids lists everything when it fits."""
-    assert sample_ids(["a", "b"], limit=10) == "a, b"
-    assert sample_ids([], limit=10) == ""
-
-
-def test_sample_ids_truncates_and_says_how_many_it_hid() -> None:
-    """Sample ids truncates and says how many it hid."""
-    # Batch size is operator-tunable and the stale sweep is unbounded, so an
-    # uncapped join could emit a multi-megabyte log record.
-    out = sample_ids([f"id-{n}" for n in range(1000)], limit=3)
-    assert out == "id-0, id-1, id-2 … +997 more"
-    assert len(out) < 200
 
 
 # --- the worker role --------------------------------------------------------
@@ -1052,6 +1070,7 @@ def test_only_what_a_merchant_can_act_on_is_theirs() -> None:
         REASON_TRANSPORT,
         REASON_ATTEMPTS_EXHAUSTED,
         REASON_GATE_UNAVAILABLE,
+        REASON_GATE_TIMEOUT,
         REASON_UNREADABLE,
         "429",  # rate limited — we should be backing off
         "130429",  # throughput_limit_reached

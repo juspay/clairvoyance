@@ -9,7 +9,8 @@ shared drain-loop scaffold (app/crm/shared/worker.py) as the "dispatcher"
 role in app/crm/worker_main.py. This file owns only what a row means.
 
 The gate (messaging/gate.py) is asked before every send, and a refusal
-writes a 'blocked' row.
+writes a 'blocked' row (a probe that ran out of time writes a retryable
+failure instead).
 """
 
 import random
@@ -25,7 +26,11 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.crm.connectivity.db.accessors import message as message_accessor
-from app.crm.connectivity.messaging.gate import gate, mint_send_token
+from app.crm.connectivity.messaging.conversations.abandoned import (
+    close_abandoned_sessions,
+)
+from app.crm.connectivity.messaging.gate import gate, mint_send_token, refusal_outcome
+from app.crm.connectivity.messaging.logs import sample_ids
 from app.crm.connectivity.messaging.receipts import apply_filed_receipts
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
 from app.crm.connectivity.send import send
@@ -46,11 +51,6 @@ from app.crm.connectivity.vocabulary.status import (
 
 LOG_COMPONENT = "crm.connectivity.dispatch"
 
-# Batch size is operator-configurable and the stale sweep is unbounded, so
-# never interpolate a whole id list into a log line — one bad tick would
-# emit a multi-megabyte record.
-LOG_ID_SAMPLE = 100
-
 # Ceiling on the exponential backoff. Not a config knob: at the default three
 # attempts it is never reached, and it exists only so that raising
 # CRM_DISPATCH_MAX_ATTEMPTS cannot silently park a message for hours.
@@ -64,14 +64,6 @@ RETRY_MAX_SECONDS = 300
 # All REASON_* words live in reasons.py — one file, one name per failure
 # mode. Channel metadata (which handle kind the gate probes) lives in
 # channels.py — one registry, pinned ADAPTERS ⊆ CHANNELS by the test suite.
-
-
-def sample_ids(ids: Sequence[str], limit: int = LOG_ID_SAMPLE) -> str:
-    """Render ids for a log line, bounded. The full set is always recoverable
-    from the rows themselves; an unbounded log line is not worth it."""
-    if len(ids) <= limit:
-        return ", ".join(ids)
-    return f"{', '.join(ids[:limit])} … +{len(ids) - limit} more"
 
 
 def backoff_seconds(attempt: int, base: int, cap: int) -> int:
@@ -190,10 +182,26 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
     # pass's claim and sweep lines.
     set_log_context(component=LOG_COMPONENT)
 
-    # Reclaim first, so rows abandoned by a dead worker rejoin this batch
-    # instead of waiting a tick. The sweep KILLS rather than requeues a row
-    # out of attempts — every lap through it was a claim that really sent, so
-    # an unbounded sweep would be an unbounded sender.
+    # Each housekeeping sweep is fenced on its own: one that fails (a lock
+    # timeout, a bad row) must not stop the others or the claim — a
+    # dispatcher that cannot sweep can still send. Reclaim runs first, so
+    # rows abandoned by a dead worker rejoin this batch instead of waiting a
+    # tick.
+    for sweep in (_requeue_stale_claims, close_abandoned_sessions):
+        try:
+            await sweep()
+        except Exception as e:
+            logger.opt(exception=e).error(f"crm dispatch {sweep.__name__} failed")
+
+    messages = await message_accessor.claim_queued_messages(batch)
+    _log_queue_lag(messages, batch)
+    return messages
+
+
+async def _requeue_stale_claims() -> None:
+    """Return a dead worker's claims to the queue. KILLS rather than requeues
+    a row out of attempts — every lap through here was a claim that really
+    sent, so an unbounded sweep would be an unbounded sender."""
     reclaimed, exhausted = await message_accessor.requeue_stale_claims(
         CRM_DISPATCH_STALE_MINUTES, CRM_DISPATCH_MAX_ATTEMPTS
     )
@@ -211,10 +219,6 @@ async def claim_sends(batch: int) -> List[QueuedMessage]:
             f"crm dispatch killed {len(exhausted)} stale claim(s) out of "
             f"attempts: {sample_ids(exhausted)}"
         )
-
-    messages = await message_accessor.claim_queued_messages(batch)
-    _log_queue_lag(messages, batch)
-    return messages
 
 
 def _log_queue_lag(messages: Sequence[QueuedMessage], limit: int) -> None:
@@ -267,13 +271,14 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
     )
     refusal = await gate(message)
     if refusal is not None:
-        # Blocked before the adapter is ever touched — the row records OUR
-        # refusal with its reason, and nothing reaches the provider.
+        # Stopped before the adapter is ever touched — the row records OUR
+        # refusal with its reason (or, for a probe that timed out, a
+        # retryable failure), and nothing reaches the provider.
         # gate_unavailable is louder: it means misconfig (a channel the gate
         # cannot probe), not policy — the one refusal an operator must notice.
         log = logger.error if refusal == REASON_GATE_UNAVAILABLE else logger.warning
-        log(f"message {message.id} blocked by gate — {refusal}")
-        outcome = SendOutcome(status=MESSAGE_BLOCKED, reason=refusal)
+        log(f"message {message.id} stopped by gate — {refusal}")
+        outcome = refusal_outcome(refusal)
     else:
         try:
             outcome = await send(mint_send_token(message), message)

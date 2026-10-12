@@ -65,7 +65,11 @@ What is here, and why each thing is on the surface:
   state, and there is deliberately no timer beside it: the periodic sync
   was removed before it ever ran.
 
-- ``conversation_profile`` — the channel's limits, so a caller shapes a
+- ``send_session`` and ``TextBody`` — a free-form reply inside the
+  customer-service window, sent NOW (the conversations module and Buddy's
+  turns are its callers). Same manifest, same gate, same send
+  door as a template; the words ride the message.queued letter (D1).
+  ``conversation_profile`` is the channel's limits, so a caller shapes a
   reply to fit instead of having it refused; ``conversation_channels`` is
   every channel that carries a conversation at all, so a caller iterates
   them instead of naming one.
@@ -103,10 +107,12 @@ from app.crm.connectivity.actions.perform import (
 )
 from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.messaging.conversations.session import send_session
 from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
 from app.crm.connectivity.messaging.receipts import consume_status_event
 from app.crm.connectivity.schemas.conversation import ConversationSettings
+from app.crm.connectivity.schemas.message import TextBody
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -170,6 +176,8 @@ __all__ = [
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
     # free-form replies inside the customer-service window
+    "send_session",
+    "TextBody",
     "conversation_profile",
     "conversation_channels",
     # the receipts consumer (worker_main registers)

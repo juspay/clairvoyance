@@ -8,7 +8,8 @@ messaging/ rather than outbound/ because it guards every message, not one
 kind of send.
 
 The gate exists as a thin slice: gate() probes platform suppression (fail
-closed) before every send, and a refusal writes a 'blocked' row. The full
+closed) before every send, and a refusal writes a 'blocked' row (a probe
+that ran out of time writes a retryable failure instead). The full
 may_contact() — consent, purpose, quiet hours — replaces gate's body with
 B5; the call sites never change.
 """
@@ -18,18 +19,21 @@ from typing import Optional
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
-from app.crm.connectivity.schemas.message import QueuedMessage, SendToken
+from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
 from app.crm.connectivity.vocabulary.channels import gate_handle_kind_for
 from app.crm.connectivity.vocabulary.reasons import (
+    REASON_GATE_TIMEOUT,
     REASON_GATE_UNAVAILABLE,
     REASON_SUPPRESSED,
 )
+from app.crm.connectivity.vocabulary.status import MESSAGE_BLOCKED, MESSAGE_FAILED
 from app.crm.platform.contracts import is_suppressed
 
 
 async def gate(message: QueuedMessage) -> Optional[str]:
-    """Returns a refusal reason, or None to allow. may_contact() (B5)
-    replaces this body; the call sites never change.
+    """Returns a refusal reason, or None to allow — for both send paths (a
+    free-form reply in session.py passes the SAME check a template does).
+    may_contact() (B5) replaces this body; the call sites never change.
 
     The thin slice that exists today is the one check a person who said
     STOP is protected by: platform's suppression probe, which itself fails
@@ -40,6 +44,8 @@ async def gate(message: QueuedMessage) -> Optional[str]:
     # consent from the consent table, purpose authorisation, quiet hours.
     # Suppression stays as check #1; may_contact() joins it here, and its
     # decision_id flows into mint_send_token below.
+    # One value for the probe's deadline and its log line.
+    timeout = CRM_MESSAGE_SEND_TIMEOUT_SECONDS
     kind = gate_handle_kind_for(message.channel)
     if kind is None:
         # A channel the gate cannot check must not slip through unchecked.
@@ -52,23 +58,30 @@ async def gate(message: QueuedMessage) -> Optional[str]:
         # deadline plus send()'s.
         if await asyncio.wait_for(
             is_suppressed({kind: message.sent_to_address}),
-            timeout=CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
+            timeout=timeout,
         ):
             return REASON_SUPPRESSED
     except asyncio.TimeoutError:
-        # Fail closed, not retry-later-by-word: nothing was sent, so this is
-        # OUR refusal, same as a probe that raised.
-        logger.error(
-            f"gate probe timed out after {CRM_MESSAGE_SEND_TIMEOUT_SECONDS}s "
-            f"for {message.id}"
-        )
-        return REASON_GATE_UNAVAILABLE
+        # Fail closed — nothing is sent — but as no-answer-yet, not "no": a
+        # slow read is not a verdict, and refusal_outcome() turns this word
+        # into a retryable failure rather than a terminal block.
+        logger.error(f"gate probe timed out after {timeout}s for {message.id}")
+        return REASON_GATE_TIMEOUT
     except Exception as e:
         # is_suppressed is total by contract; this catches an escape from
         # OUR plumbing around it. Unknown gate input → NO (ADR 0018).
         logger.opt(exception=e).error(f"gate probe raised for {message.id}")
         return REASON_GATE_UNAVAILABLE
     return None
+
+
+def refusal_outcome(refusal: str) -> SendOutcome:
+    """PURE: what a gate refusal records, on either send path. A probe that
+    ran out of time is no answer — a retryable failure that sent nothing;
+    every other refusal is OUR terminal 'blocked'."""
+    if refusal == REASON_GATE_TIMEOUT:
+        return SendOutcome(status=MESSAGE_FAILED, reason=refusal, retryable=True)
+    return SendOutcome(status=MESSAGE_BLOCKED, reason=refusal)
 
 
 def mint_send_token(message: QueuedMessage) -> SendToken:

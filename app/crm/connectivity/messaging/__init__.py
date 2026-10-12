@@ -8,8 +8,12 @@ Importers name the file they mean:
                     every send; fails closed
     letters.py      message.queued — our own letter on the event spine
                     about a message we are sending
+    logs.py         log helpers — sample_ids(), a bounded list of message
+                    ids for a log line
     receipts.py     what became of it — the spine consumer that moves a
                     sent message along sent → delivered → read (or failed)
+    conversations/  the customer started it — a free-form reply inside the
+                    customer-service window, sent now, one reply per send
     outbound/       we start it — an approved template, queued and sent by
                     the dispatcher, one message per send
 
