@@ -15,6 +15,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.probe import profile_from_page
+from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
+    WebsiteScrapingConfigurationError,
+)
 from app.ai.voice.agents.breeze_buddy.assist.engine.web.fetch import (
     EgressNotGuardedError,
     FetchFailedError,
@@ -158,3 +161,78 @@ def test_over_the_cap_nothing_is_fetched(monkeypatch, probe_site) -> None:
     assert response.status_code == 429
     assert response.headers["retry-after"] == "42"
     probe_site.assert_not_awaited()
+
+
+# What Shopify sends a data-centre address: a short page, status 429.
+_TURNED_AWAY = (
+    "<html><head><title>Too many requests</title></head>"
+    "<body><h1>Too many requests</h1></body></html>"
+)
+
+
+def _blocked_profile():
+    return profile_from_page(
+        url="https://hustleculture.co.in/",
+        final_url="https://hustleculture.co.in/",
+        status=429,
+        headers={},
+        cookie_names=[],
+        body=_TURNED_AWAY,
+    )
+
+
+def test_a_blocked_probe_is_read_again_through_firecrawl(
+    monkeypatch, probe_site
+) -> None:
+    probe_site.return_value = _blocked_profile()
+    read_html = AsyncMock(
+        return_value=(
+            "https://hustleculture.co.in/",
+            200,
+            (FIXTURES / "shopify_home.html").read_text(),
+        )
+    )
+    monkeypatch.setattr(probe.firecrawl, "read_html", read_html)
+    body = _post(ADMIN).json()
+    read_html.assert_awaited_once()
+    assert body["platform"] == "shopify"
+    assert body["identity"]["permanent_host"] == "9b1086-18.myshopify.com"
+    assert body["site"]["challenge"] is False
+    assert body["site"]["name"] != "Too many requests"
+
+
+def test_a_render_of_the_rate_limit_page_is_still_blocked(
+    monkeypatch, probe_site
+) -> None:
+    # Firecrawl may report the platform's rate-limit page as status 200.
+    probe_site.return_value = _blocked_profile()
+    monkeypatch.setattr(
+        probe.firecrawl,
+        "read_html",
+        AsyncMock(return_value=("https://hustleculture.co.in/", 200, _TURNED_AWAY)),
+    )
+    body = _post(ADMIN).json()
+    assert body["site"]["challenge"] is True
+    assert body["site"]["name"] is None
+
+
+def test_a_probe_that_stays_blocked_names_no_store(monkeypatch, probe_site) -> None:
+    probe_site.return_value = _blocked_profile()
+    monkeypatch.setattr(
+        probe.firecrawl,
+        "read_html",
+        AsyncMock(side_effect=WebsiteScrapingConfigurationError("no key")),
+    )
+    body = _post(ADMIN).json()
+    assert body["site"]["challenge"] is True
+    # The interstitial's title is not the store's name: the console shows
+    # the address instead.
+    assert body["site"]["name"] is None
+    assert body["site"]["title"] is None
+
+
+def test_an_open_store_is_not_rendered_again(monkeypatch, probe_site) -> None:
+    read_html = AsyncMock()
+    monkeypatch.setattr(probe.firecrawl, "read_html", read_html)
+    assert _post(ADMIN).json()["platform"] == "shopify"
+    read_html.assert_not_awaited()

@@ -20,7 +20,12 @@ COMMERCE_V2 = SkeletonSpec(
             re.compile(r'`link=\{"label": "[^"]+", "url": "https://[^"]+"\}`\.'),
             "<LINK>",
         ),
-        (re.compile(r'\("I\'ve added an? [^"]+ button below"\)'), "<LINKPHRASE>"),
+        # "button below" was the old phrase: the button is drawn above the
+        # words, so the phrase now names no side. Both are the same slot.
+        (
+            re.compile(r'\("I\'ve added an? [^"]+ button(?: below)?"\)'),
+            "<LINKPHRASE>",
+        ),
         (
             re.compile(r"- \*\*Named product or line\*\* \([^)]*\)"),
             "- **Named product or line** <NAMED>",

@@ -486,3 +486,110 @@ async def test_a_punctuation_only_value_is_no_fact(monkeypatch) -> None:
     _firecrawl(monkeypatch, links=[], pages={HOME: {"brand_line": ["...", "-"]}})
     _, notes = await _read()
     assert notes == []
+
+
+async def test_the_same_fact_from_two_pages_is_kept_once(monkeypatch) -> None:
+    _firecrawl(
+        monkeypatch,
+        links=[f"{HOME}/pages/help"],
+        pages={
+            HOME: {
+                "delivery": ["Orders ship in 30 days."],
+                "what_we_sell": ["Men's shoes", "Women's shoes"],
+            },
+            f"{HOME}/pages/help": {
+                "delivery": [
+                    "Order ships in 30 days",
+                    "ORDERS SHIP IN 30 DAYS!",
+                    "Shipping may take up to 30 days.",
+                ],
+                # the same words in another order say something else
+                "returns": [
+                    "Exchanges within 7 days, refunds within 15 days.",
+                    "Refunds within 7 days, exchanges within 15 days.",
+                ],
+            },
+        },
+    )
+    _, notes = await _read()
+    assert notes == [
+        ("what_we_sell", "Men's shoes"),
+        ("what_we_sell", "Women's shoes"),
+        ("delivery", "Orders ship in 30 days."),
+        ("returns", "Exchanges within 7 days, refunds within 15 days."),
+        ("returns", "Refunds within 7 days, exchanges within 15 days."),
+        ("delivery", "Shipping may take up to 30 days."),
+    ]
+
+
+async def test_a_one_sentence_field_keeps_its_first_answer(monkeypatch) -> None:
+    _firecrawl(
+        monkeypatch,
+        links=[f"{HOME}/pages/about"],
+        pages={
+            HOME: {"vocabulary": ["Casual and friendly."]},
+            f"{HOME}/pages/about": {"vocabulary": ["Warm, upbeat and eco-minded."]},
+        },
+    )
+    _, notes = await _read()
+    assert notes == [("vocabulary", "Casual and friendly.")]
+
+
+async def test_facts_keep_page_order_whichever_page_finishes_first(
+    monkeypatch,
+) -> None:
+    about, faq = f"{HOME}/pages/about-us", f"{HOME}/pages/faq"
+
+    async def read_page(url: str, **_: Any) -> Tuple[str, Dict[str, Any], List[str]]:
+        if url == about:
+            await asyncio.sleep(0.05)
+        # brand voice keeps one line: the first page's, not the fastest's
+        voice = {HOME: [], about: ["Casual and friendly"], faq: ["Warm and upbeat"]}
+        return url, {"vocabulary": voice[url]}, []
+
+    _firecrawl(monkeypatch, links=[about, faq], pages={})
+    monkeypatch.setattr(firecrawl, "read_page", read_page)
+    _, notes = await _read()
+    assert notes == [("vocabulary", "Casual and friendly")]
+
+
+async def test_a_page_shows_without_waiting_for_the_pages_after_it(
+    monkeypatch,
+) -> None:
+    about, faq = f"{HOME}/pages/about-us", f"{HOME}/pages/faq"
+    about_shown = asyncio.Event()
+
+    async def read_page(url: str, **_: Any) -> Tuple[str, Dict[str, Any], List[str]]:
+        if url == faq:
+            # The FAQ page is read only once the about page is on screen.
+            await about_shown.wait()
+        found = {HOME: {}, about: {"tagline": ["Made by hand"]}, faq: {"faq": ["Q"]}}
+        return url, found[url], []
+
+    async def on_event(kind: str, data: Dict[str, Any]) -> None:
+        if kind == "note" and data["source_url"] == about:
+            about_shown.set()
+
+    _firecrawl(monkeypatch, links=[about, faq], pages={})
+    monkeypatch.setattr(firecrawl, "read_page", read_page)
+    result = await asyncio.wait_for(service.read_facts(HOME, on_event=on_event), 5)
+    assert result.status == "completed"
+
+
+def test_a_white_button_is_no_brand_colour() -> None:
+    # Allbirds: a white button on a photo, a dark primary underneath.
+    look = firecrawl.parse_branding(
+        {
+            "colors": {"primary": "#212A2F", "background": "#FFFFFF"},
+            "components": {"buttonPrimary": {"background": "#FFFFFF"}},
+        }
+    )
+    assert look.primary_color == "#212a2f"
+    # Nothing but white: no colour, and the console keeps its default.
+    look = firecrawl.parse_branding(
+        {
+            "colors": {"primary": "#fff", "accent": "#FAFAFA"},
+            "components": {"buttonPrimary": {"background": "#ffffff"}},
+        }
+    )
+    assert look.primary_color is None

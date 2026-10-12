@@ -5,6 +5,9 @@ the header and primary button name a brand colour far more reliably than
 counting hex values in a stylesheet. A render takes 15-40 s, so callers give it
 a time budget.
 
+``read_html`` renders one page and returns its HTML: the probe's second look
+when a store turns this server away (1 credit a page).
+
 ``map`` lists a site's addresses (1 credit a call). ``scrape`` with a ``json``
 format renders one page and fills a JSON schema from it (5 credits a page).
 Firecrawl does the fetching, so no request to the store leaves this server.
@@ -35,6 +38,9 @@ _SCRAPE_ENDPOINT = "https://api.firecrawl.dev/v2/scrape"
 # Longest a brand render may take.
 _TIMEOUT_SECONDS = 60.0
 _HEX_COLOR = re.compile(r"#(?:[0-9a-f]{3}|[0-9a-f]{6})")
+# A colour this light is a white button on a photo, not a brand colour: a
+# white send button on a light panel cannot be seen.
+_MAX_BRAND_LIGHTNESS = 0.9
 
 
 class Branding(NamedTuple):
@@ -69,24 +75,56 @@ async def brand_look(url: str) -> Branding:
         ) from exc
 
 
+async def read_html(url: str, *, timeout_seconds: float) -> Tuple[str, int, str]:
+    """Render ``url`` and return (where it landed, its HTTP status, its HTML).
+
+    Raises ``WebsiteScrapingConfigurationError`` without a working key and
+    ``WebsiteScrapingUpstreamError`` when the provider returns no page.
+    """
+    payload = {
+        "url": normalize_probe_url(url),
+        "formats": ["rawHtml"],
+        "timeout": int(timeout_seconds * 1000),
+    }
+    parsed = await _call_firecrawl(_SCRAPE_ENDPOINT, payload, timeout_seconds)
+    try:
+        data = parsed["data"]
+        html, metadata = data["rawHtml"], data.get("metadata")
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise WebsiteScrapingUpstreamError("provider returned no page") from exc
+    if not isinstance(html, str) or not html:
+        raise WebsiteScrapingUpstreamError("provider returned no page")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    final, status = metadata.get("url"), metadata.get("statusCode")
+    return (
+        final if isinstance(final, str) and final.startswith("https://") else url,
+        status if isinstance(status, int) else 200,
+        html,
+    )
+
+
 def parse_branding(branding: Dict[str, Any]) -> Branding:
     """Provider payload → ``Branding``. Pure, so a captured payload replays.
 
     The primary colour is the store's own main button, chosen by the store and
     readable as it stands; with none, a dark site's background (a black store
-    like sensesindia.in); else the render's own primary.
+    like sensesindia.in); else the render's own primary, then its accent. A
+    near-white colour is skipped for the next one.
     """
     raw_colors = branding.get("colors") or {}
     button = (branding.get("components") or {}).get("buttonPrimary") or {}
     dark = branding.get("colorScheme") == "dark"
     # A favicon is not a logo; it is kept apart as the site's square icon.
     images = branding.get("images") or {}
+    candidates = (
+        button.get("background"),
+        raw_colors.get("background") if dark else None,
+        raw_colors.get("primary"),
+        raw_colors.get("accent"),
+    )
     return Branding(
-        primary_color=(
-            _color_code(button.get("background"))
-            or (_color_code(raw_colors.get("background")) if dark else None)
-            or _color_code(raw_colors.get("primary"))
-        ),
+        primary_color=_first_brand_color(candidates),
         logo_url=_https_url(images.get("logo")) or _https_url(branding.get("logo")),
         icon_url=_https_url(images.get("favicon")),
     )
@@ -98,6 +136,23 @@ def _color_code(value: Any) -> Optional[str]:
         return None
     text = value.strip().lower()
     return text if _HEX_COLOR.fullmatch(text) else None
+
+
+def _first_brand_color(candidates: Tuple[Any, ...]) -> Optional[str]:
+    """The first candidate that is a colour and not near-white."""
+    for code in map(_color_code, candidates):
+        if code and _lightness(code) <= _MAX_BRAND_LIGHTNESS:
+            return code
+    return None
+
+
+def _lightness(code: str) -> float:
+    """HSL lightness of ``#rgb`` / ``#rrggbb``, 0 (black) to 1 (white)."""
+    digits = code[1:]
+    if len(digits) == 3:
+        digits = "".join(ch * 2 for ch in digits)
+    channels = [int(digits[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    return (max(channels) + min(channels)) / 2
 
 
 def _https_url(value: Any) -> Optional[str]:
@@ -218,4 +273,11 @@ async def _call_firecrawl(
     return parsed
 
 
-__all__ = ["Branding", "brand_look", "list_pages", "parse_branding", "read_page"]
+__all__ = [
+    "Branding",
+    "brand_look",
+    "list_pages",
+    "parse_branding",
+    "read_html",
+    "read_page",
+]

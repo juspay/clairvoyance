@@ -3,6 +3,7 @@ turned into notes."""
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -14,7 +15,11 @@ from app.schemas.breeze_buddy.assist.onboarding.research import AssistResearchNo
 
 # Longest fact value kept, and facts kept per field.
 _MAX_VALUE_CHARS = 500
-_MAX_NOTES_PER_FIELD = 12
+_MAX_NOTES_PER_FIELD = 8
+# Fields that ask for one sentence: every page answers them again in its own
+# words ("Casual and friendly", "Friendly and inviting"), so keep the first.
+_FIELD_CAPS: Dict[str, int] = {"vocabulary": 1, "tagline": 3}
+_WORD = re.compile(r"[a-z0-9]+")
 
 # The pages worth reading, by words their address contains.
 _PAGE_KINDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
@@ -134,7 +139,7 @@ def to_notes(
     filled: Dict[str, Any],
     source: str,
     kept: Dict[str, int],
-    seen: set[Tuple[str, str]],
+    seen: set[Tuple[str, Tuple[str, ...]]],
 ) -> List[AssistResearchNote]:
     notes: List[AssistResearchNote] = []
     for name in FIELDS:
@@ -143,19 +148,32 @@ def to_notes(
             values = [values]
         if not isinstance(values, list):
             continue
+        cap = _FIELD_CAPS.get(name, _MAX_NOTES_PER_FIELD)
         for value in values:
             if not isinstance(value, str):
                 continue
             text = " ".join(value.split())[:_MAX_VALUE_CHARS]
-            # Pages repeat a fact with other punctuation ("policy" / "policy.").
-            key = (name, "".join(ch for ch in text.lower() if ch.isalnum()))
+            # Pages repeat a fact with other punctuation or case ("Ships in
+            # 30 days." / "ships in 30 days"); the word order is kept, as it
+            # carries the meaning ("refunds within 7 days, exchanges within
+            # 15" is not "exchanges within 7 days, refunds within 15").
+            key = (name, _dedupe_key(text))
             # No letter or digit ("...", "-") is no fact.
-            if not key[1] or key in seen or kept.get(name, 0) >= _MAX_NOTES_PER_FIELD:
+            if not key[1] or key in seen or kept.get(name, 0) >= cap:
                 continue
             seen.add(key)
             kept[name] = kept.get(name, 0) + 1
             notes.append(AssistResearchNote(field=name, value=text, source_url=source))
     return notes
+
+
+def _dedupe_key(text: str) -> Tuple[str, ...]:
+    """A fact's words in order, lower-cased, with a plural "s" dropped
+    ("days" is "day")."""
+    return tuple(
+        word[:-1] if len(word) > 3 and word.endswith("s") else word
+        for word in _WORD.findall(text.lower().replace("'s", ""))
+    )
 
 
 __all__ = ["contacts_in_links", "pick_pages", "same_site", "to_notes"]

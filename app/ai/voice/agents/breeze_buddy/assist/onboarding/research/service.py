@@ -53,7 +53,7 @@ async def read_facts(url: str, *, on_event: OnEvent) -> AssistResearchCompletion
     result = AssistResearchCompletion()
     pages_read = 0
     kept: Dict[str, int] = {}
-    seen: set[Tuple[str, str]] = set()
+    seen: set[Tuple[str, Tuple[str, ...]]] = set()
 
     async def keep(notes: List[AssistResearchNote]) -> None:
         for note in notes:
@@ -111,18 +111,23 @@ async def read_facts(url: str, *, on_event: OnEvent) -> AssistResearchCompletion
 
     tasks = [asyncio.create_task(read(page)) for page in pages]
     try:
-        for next_read in asyncio.as_completed(
-            tasks, timeout=max(deadline - time.monotonic(), 0)
-        ):
+        # Facts are kept in page order, not the order reads finish: the first
+        # wording of a repeated fact wins, so the same site gives the same
+        # notes. Each page still shows as soon as the pages before it are in.
+        for task in tasks:
             try:
-                source, filled = await next_read
+                source, filled = await asyncio.wait_for(
+                    task, timeout=max(deadline - time.monotonic(), 0)
+                )
+            except TimeoutError:
+                # Out of time: a page already read still counts.
+                result.status = "timed_out"
+                continue
             except WebsiteScrapingUpstreamError as exc:
                 logger.info(f"assist research: a page could not be read: {exc}")
                 continue
             pages_read += 1
             await keep(utils.to_notes(filled, source, kept, seen))
-    except TimeoutError:
-        result.status = "timed_out"
     finally:
         for task in tasks:
             task.cancel()
