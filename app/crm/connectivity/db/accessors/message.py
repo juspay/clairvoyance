@@ -17,6 +17,7 @@ from app.crm.connectivity.db.queries.message import (
     apply_receipt_query,
     claim_queued_messages_query,
     insert_message_query,
+    message_by_dedupe_query,
     requeue_stale_claims_query,
     send_behind_provider_id_query,
 )
@@ -53,6 +54,16 @@ async def insert_message(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return str(row["id"]) if row else None
+
+
+async def message_by_dedupe(
+    merchant_id: str, dedupe_key: str
+) -> Optional[QueuedMessage]:
+    """The row a dedupe key already names, or None."""
+    query, values = message_by_dedupe_query(merchant_id, dedupe_key)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_queued_message(row) if row is not None else None
 
 
 async def claim_queued_messages(batch_size: int) -> List[QueuedMessage]:
