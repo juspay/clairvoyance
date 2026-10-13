@@ -1091,15 +1091,17 @@ class MembersAdded(BaseModel):
 
 
 class SegmentMember(BaseModel):
-    """One member of a static list (canon T21): who, since when, from where."""
+    """One member of a segment: who — and, for a static list's row (canon
+    T21), since when and from where. A dynamic segment's member has neither:
+    the rule holds for them now, nobody added them."""
 
     customer_id: UUID
-    added_at: datetime
+    added_at: Optional[datetime] = None
     source: Optional[str] = None
 
 
 class SegmentMembersPage(BaseModel):
-    """One page of a static list's members, in customer_id order.
+    """One page of a segment's members, in customer_id order.
     ``next_after`` is the cursor for the next page (pass it as ``after``);
     None means this was the last page."""
 

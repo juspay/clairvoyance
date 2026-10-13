@@ -6,6 +6,12 @@ parameter of an _in_txn body; accessors self-scope everything else.
 asyncpg exists only in shared/db and db/.
 """
 
-from app.crm.shared.db import DbTxn, UniqueViolation, atomically, savepoint
+from app.crm.shared.db import (
+    DbTxn,
+    ReadUnavailable,
+    UniqueViolation,
+    atomically,
+    savepoint,
+)
 
-__all__ = ["DbTxn", "UniqueViolation", "atomically", "savepoint"]
+__all__ = ["DbTxn", "ReadUnavailable", "UniqueViolation", "atomically", "savepoint"]
