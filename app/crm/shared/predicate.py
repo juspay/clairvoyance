@@ -67,7 +67,12 @@ INCLUDES_OP = "includes"
 LIST_OPS = (INCLUDES_OP,)  # any of the field's values equals the plan's one value
 CONTAINS_OP = "contains"
 PARTIAL_OPS = (CONTAINS_OP,)  # the value (any element) holds one of these pieces
-_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
+# ASCII digits and ASCII whitespace only — the SQL half of a segment
+# (record/db/queries_segments.py) reads numeric text with the same rule; a
+# Unicode digit ("٣") or a no-break space would otherwise count here and not
+# there.
+_NUMBER = re.compile(r"^-?[0-9]+(\.[0-9]+)?$")
+_SPACE = " \t\n\r\f\v"
 
 
 class Condition(BaseModel):
@@ -107,8 +112,8 @@ def as_number(value: Any) -> Optional[float]:
         return None
     if isinstance(value, (int, float)):
         return float(value)
-    if isinstance(value, str) and _NUMBER.match(value.strip()):
-        return float(value.strip())
+    if isinstance(value, str) and _NUMBER.match(value.strip(_SPACE)):
+        return float(value.strip(_SPACE))
     return None
 
 
