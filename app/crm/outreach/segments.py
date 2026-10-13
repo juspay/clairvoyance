@@ -1,12 +1,13 @@
 """Segments (canon T15 + T21, canon/05-audiences.md) — a static list's row
-(phase 1) and its members (phase 2).
+(phase 1), its members (phase 2), a dynamic segment's rule (phase 3) and its
+answer (phase 4).
 
 A segment is a stored question; membership is computed at read time and
 never stored. A static list is the one exception — an imported set IS its
 members, stored as narrow rows (crm_segment_member). A dynamic segment's
-rule is checked and saved here (phase 3, segment_rules.py); it is compiled
-and counted in phase 4 — until then the member reads refuse a dynamic
-segment rather than guess.
+rule is checked and saved here (segment_rules.py); who it holds for is
+asked of record, which owns the events (record.contracts.customers_matching
+/ count_matching — outreach never reads crm_event_raw itself).
 
 What this file keeps:
 - **A segment is never a permission list** (modules/05-outreach.md:233).
@@ -19,10 +20,11 @@ What this file keeps:
   two racing creates; this file only names the refusal.
 - **Counts carry their stamp, and a list's count is exact** (T15 cols 7-8):
   recounted from the rows and stamped by the same transaction that changed
-  them.
+  them. A dynamic segment's count is a cache, stamped with the moment it
+  was asked; nothing decides on it.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from app.crm.identity.contracts import resolve
@@ -34,6 +36,7 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.schemas import (
     MembersAdded,
     Segment,
+    SegmentMember,
     SegmentMembersPage,
     SegmentPage,
     SkippedMember,
@@ -42,6 +45,11 @@ from app.crm.outreach.segment_rules import (
     SegmentRuleInvalid,
     gather_rule_catalogs,
     validate_rule,
+)
+from app.crm.record.contracts import (
+    SegmentRuleUnanswerable,
+    count_matching,
+    customers_matching,
 )
 
 #: One add takes at most this many people. Each person is one resolve() —
@@ -73,9 +81,8 @@ class SegmentNotFound(Exception):
 
 
 class SegmentIsDynamic(Exception):
-    """Members belong to static lists only (T21). A dynamic segment's members
-    are computed from its definition (phase 4), never added or listed as
-    rows."""
+    """Members are added to static lists only (T21). A dynamic segment's
+    members are computed from its definition, never added as rows."""
 
 
 class MemberPlan(NamedTuple):
@@ -159,12 +166,18 @@ async def list_segments(merchant_id: str, limit: int, offset: int) -> SegmentPag
     )
 
 
-async def _static_list(merchant_id: str, segment_id: str) -> Segment:
-    """GATHER: this merchant's segment, which must be a static list. Raises
-    SegmentNotFound / SegmentIsDynamic."""
+async def _segment(merchant_id: str, segment_id: str) -> Segment:
+    """GATHER: this merchant's segment. Raises SegmentNotFound."""
     segment = await segment_accessor.get_segment(merchant_id, segment_id)
     if segment is None:
         raise SegmentNotFound(segment_id)
+    return segment
+
+
+async def _static_list(merchant_id: str, segment_id: str) -> Segment:
+    """GATHER: this merchant's segment, which must be a static list. Raises
+    SegmentNotFound / SegmentIsDynamic."""
+    segment = await _segment(merchant_id, segment_id)
     if segment.kind != "static":
         raise SegmentIsDynamic(segment_id)
     return segment
@@ -258,13 +271,47 @@ async def _add_members_in_txn(
 async def segment_members(
     merchant_id: str, segment_id: str, after: Optional[str], limit: int
 ) -> SegmentMembersPage:
-    """evaluate(id), one chunk at a time (canon/05-audiences.md wiring): a
-    static list's members are its rows, read in customer_id order. Pass the
-    page's ``next_after`` as ``after`` for the next page; None means the
-    last page was reached. Raises SegmentNotFound / SegmentIsDynamic."""
-    await _static_list(merchant_id, segment_id)
-    items = await segment_member_accessor.member_page(
-        merchant_id, segment_id, after, limit
-    )
+    """evaluate(id), one chunk at a time (canon/05-audiences.md wiring), in
+    customer_id order: a static list's members are its rows; a dynamic
+    segment's are whoever its rule holds for right now, answered by record.
+    Pass the page's ``next_after`` as ``after`` for the next page; None means
+    the last page was reached. Raises SegmentNotFound, or SegmentRuleInvalid
+    when record cannot answer the stored rule."""
+    segment = await _segment(merchant_id, segment_id)
+    if segment.kind == "static":
+        items = await segment_member_accessor.member_page(
+            merchant_id, segment_id, after, limit
+        )
+    else:
+        try:
+            ids = await customers_matching(
+                merchant_id, segment.definition, after, limit
+            )
+        except SegmentRuleUnanswerable as e:
+            raise SegmentRuleInvalid(e.problems) from e
+        items = [SegmentMember(customer_id=customer_id) for customer_id in ids]
     next_after = items[-1].customer_id if len(items) == limit else None
     return SegmentMembersPage(items=items, next_after=next_after)
+
+
+async def count_segment(merchant_id: str, segment_id: str) -> Segment:
+    """count(id) -> the segment with its count and stamp (canon/05-audiences.md
+    wiring). A static list's count is already exact (stamped by every add),
+    so it is returned as it stands. A dynamic segment is counted now by
+    record and the cache stamped with the moment it was asked. Raises
+    SegmentNotFound, or SegmentRuleInvalid when record cannot answer the
+    stored rule."""
+    segment = await _segment(merchant_id, segment_id)
+    if segment.kind == "static":
+        return segment
+    asked_at = datetime.now(timezone.utc)
+    try:
+        n = await count_matching(merchant_id, segment.definition)
+    except SegmentRuleUnanswerable as e:
+        raise SegmentRuleInvalid(e.problems) from e
+    stamped = await segment_accessor.stamp_dynamic_count(
+        merchant_id, segment_id, n, asked_at
+    )
+    # None: a count asked later already stands (the stamp only moves
+    # forward) — return that one; or the segment is gone.
+    return stamped or await _segment(merchant_id, segment_id)

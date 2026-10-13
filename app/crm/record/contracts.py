@@ -27,6 +27,12 @@ from app.crm.record.extractors.engine import field_value, list_values, variable_
 from app.crm.record.ingest import record_event
 from app.crm.record.ingress import IngressSpec, register_ingress
 from app.crm.record.schemas import CatalogField, EventIn, RawEvent, TopicCount
+from app.crm.record.segments import (
+    MAX_MATCHING_PAGE,
+    SegmentRuleUnanswerable,
+    count_matching,
+    customers_matching,
+)
 from app.crm.record.timeline import get_customer_journey
 
 __all__ = [
@@ -58,4 +64,10 @@ __all__ = [
     # producer's: outreach lets them answer a square but never take a run's
     # latest letter.
     "CALL_REPORT_SOURCES",
+    # A dynamic segment's answer (segments P4): outreach owns the segment
+    # and asks; record runs the ONE query over its own events.
+    "customers_matching",
+    "count_matching",
+    "MAX_MATCHING_PAGE",
+    "SegmentRuleUnanswerable",
 ]
