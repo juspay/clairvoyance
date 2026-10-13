@@ -1032,3 +1032,34 @@ class CustomerRun(EnrollmentRun):
     each row says which plan it belongs to (rollout phase 09)."""
 
     workflow_name: str
+
+
+# --- segments (canon T15, canon/05-audiences.md) ---
+
+
+class Segment(BaseModel):
+    """A segment: a static list (``definition`` None — its members are
+    stored rows) or a dynamic segment (``definition`` set — the stored
+    question, computed at read time). ``kind`` is derived from
+    ``definition`` on read, never stored (law 10). ``member_count`` is
+    display-only and always travels with ``computed_at``, so a count says
+    how old it is (T15 cols 7-8); nothing ever decides on it."""
+
+    id: UUID
+    merchant_id: str
+    name: str
+    kind: Literal["static", "dynamic"]
+    definition: Optional[Dict[str, Any]] = None
+    member_count: Optional[int] = None
+    computed_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SegmentPage(BaseModel):
+    """One page of a merchant's segments and how many there are in all —
+    the total in the body, typed (the RunPage ruling)."""
+
+    items: List[Segment]
+    total: int
