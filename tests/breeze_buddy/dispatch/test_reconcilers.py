@@ -347,6 +347,88 @@ async def test_reconcile_channels_null_channels_behaves_as_before(
 
 
 # ---------------------------------------------------------------------------
+# reconcile_channel_tokens — every list read in one round trip
+# ---------------------------------------------------------------------------
+
+
+async def test_reconcile_channels_burst_during_loop_mints_no_phantom(
+    fake_redis, monkeypatch
+):
+    """Pops on num-B mid-loop must not trigger a top-up."""
+    fake_redis.client.lists[channel_key("num-A")] = ["a1"]
+    fake_redis.client.lists[channel_key("num-B")] = [f"b{i}" for i in range(5)]
+    _wire(
+        monkeypatch,
+        [
+            _FakeNumber(id="num-A", maximum_channels=5),
+            _FakeNumber(id="num-B", maximum_channels=5),
+        ],
+        {},
+    )
+
+    real_topup = rc.topup_channel_tokens
+
+    async def _topup_then_burst_on_b(number_id, count):
+        added = await real_topup(number_id, count)
+        if number_id == "num-A":
+            for _ in range(3):
+                await fake_redis.client.lpop(channel_key("num-B"))
+        return added
+
+    monkeypatch.setattr(rc, "topup_channel_tokens", _topup_then_burst_on_b)
+
+    await rc.reconcile_channel_tokens()
+
+    assert len(fake_redis.client.lists[channel_key("num-A")]) == 5
+    assert len(fake_redis.client.lists[channel_key("num-B")]) == 2
+
+
+async def test_reconcile_channels_skips_tick_when_redis_read_fails(
+    fake_redis, monkeypatch
+):
+    fake_redis.client.lists[channel_key("num-A")] = ["t1"]
+    _wire(monkeypatch, [_FakeNumber(id="num-A", maximum_channels=5)], {})
+
+    def _pipeline_fails(transaction: bool = True):
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(fake_redis.client, "pipeline", _pipeline_fails)
+
+    await rc.reconcile_channel_tokens()
+
+    assert fake_redis.client.lists[channel_key("num-A")] == ["t1"]
+
+
+async def test_reconcile_channels_skips_only_the_number_whose_read_fails(
+    fake_redis, monkeypatch
+):
+    fake_redis.client.lists[channel_key("num-A")] = ["a1"]
+    fake_redis.client.lists[channel_key("num-B")] = ["b1"]
+    _wire(
+        monkeypatch,
+        [
+            _FakeNumber(id="num-A", maximum_channels=5),
+            _FakeNumber(id="num-B", maximum_channels=5),
+        ],
+        {},
+    )
+
+    real_llen = fake_redis.client.llen
+
+    async def _llen_fails_for_a(key):
+        if key == channel_key("num-A"):
+            raise ConnectionError("WRONGTYPE")
+        return await real_llen(key)
+
+    monkeypatch.setattr(fake_redis.client, "llen", _llen_fails_for_a)
+
+    await rc.reconcile_channel_tokens()
+
+    assert fake_redis.client.lists[channel_key("num-A")] == ["a1"]
+    assert len(fake_redis.client.lists[channel_key("num-B")]) == 5
+
+
+# ---------------------------------------------------------------------------
 # clean_stale_bb_locks — passes through to accessor
 # ---------------------------------------------------------------------------
 

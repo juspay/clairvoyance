@@ -20,8 +20,6 @@ from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
     raise_schedule_depth_high,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.channel_semaphore import (
-    channel_exists,
-    channel_tokens_available,
     init_channel_semaphore,
     topup_channel_tokens,
     trim_channel_tokens,
@@ -31,6 +29,7 @@ from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
     PROMOTER_LEADER,
     READY_ZSET,
     SCHEDULE_ZSET,
+    channel_key,
     worker_heartbeat_key,
 )
 from app.ai.voice.agents.breeze_buddy.dispatch.queue import (
@@ -254,12 +253,25 @@ async def reconcile_channel_tokens() -> None:
         logger.error(f"reconcile_channel_tokens: DB count failed: {e}")
         return
 
+    # One batch read right after the DB counts, so burst pops don't read as drift.
+    try:
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        async with client.pipeline(transaction=False) as pipe:
+            for n in numbers:
+                pipe.exists(channel_key(n.id))
+                pipe.llen(channel_key(n.id))
+            lists = await pipe.execute(raise_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"reconcile_channel_tokens: Redis read failed: {e}")
+        return
+
     fixed_init = 0
     fixed_topup = 0
     fixed_trim = 0
     drift_alert_threshold = await dyn_cfg.BB_CHANNEL_DRIFT_ALERT_THRESHOLD()
 
-    for n in numbers:
+    for i, n in enumerate(numbers):
         # Preserve maximum_channels=0 (explicit zero capacity); only fall back
         # to 1 when the column is NULL.
         max_ch = n.maximum_channels if n.maximum_channels is not None else 1
@@ -267,9 +279,8 @@ async def reconcile_channel_tokens() -> None:
         channels_n = n.channels if n.channels is not None else 0
         expected_free = max(0, max_ch - max(in_flight_n, channels_n))
 
-        try:
-            exists = await channel_exists(n.id)
-        except Exception:  # noqa: BLE001
+        exists, actual = lists[2 * i], lists[2 * i + 1]
+        if isinstance(exists, Exception) or isinstance(actual, Exception):
             continue
 
         if not exists:
@@ -277,10 +288,7 @@ async def reconcile_channel_tokens() -> None:
                 fixed_init += 1
             continue
 
-        try:
-            actual = await channel_tokens_available(n.id)
-        except Exception:  # noqa: BLE001
-            continue
+        actual = int(actual)
 
         drift = abs(actual - expected_free)
         if actual < expected_free:
