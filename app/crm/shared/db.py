@@ -31,6 +31,18 @@ from app.database.queries import run_reader_query
 # ever importing asyncpg — the driver is confined to db/ and this file.
 DbTxn = asyncpg.Connection
 UniqueViolation = asyncpg.UniqueViolationError
+# A read that could not be answered in time — the statement timed out or was
+# cancelled (a long read on a busy replica is cancelled when it conflicts
+# with replay: SQLSTATE 40001), or the connection was lost. Not a wrong
+# query: asking again later can succeed.
+ReadUnavailable = (
+    asyncpg.QueryCanceledError,
+    asyncpg.SerializationError,
+    asyncpg.PostgresConnectionError,
+    asyncpg.exceptions.InterfaceError,
+    TimeoutError,
+    OSError,
+)
 
 
 @asynccontextmanager
@@ -53,8 +65,8 @@ async def crm_replica_read(
     query: str, values: Sequence[Any]
 ) -> List[Mapping[str, Any]]:
     """THE one way a crm read reaches the READ REPLICA — for the console's
-    reports only (Performance, Versions, Runs, a customer's journey),
-    never for a worker or a write. The replica runs behind the primary
+    reports only (Performance, Versions, Runs, a customer's journey, a
+    segment's answer), never for a worker or a write. The replica runs behind the primary
     (seconds at peak): a chart a few seconds old is fine, a walker or a
     claim acting on a stale row acts twice.
 

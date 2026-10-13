@@ -4,6 +4,7 @@ parameterized; merchant_id is $1 on every read and write (tenancy law).
 """
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.outreach.db.queries.tables import SEGMENT_MEMBER_TABLE, SEGMENT_TABLE
@@ -112,3 +113,22 @@ def stamp_member_count_query(
         RETURNING member_count, computed_at
     """
     return query, [merchant_id, segment_id]
+
+
+def stamp_dynamic_count_query(
+    merchant_id: str, segment_id: str, member_count: int, computed_at: datetime
+) -> Tuple[str, List[Any]]:
+    """A dynamic segment's cached count and the moment it was asked (T15
+    cols 7-8: display-only — nothing decides on it). Monotonic: a slower
+    count asked earlier never overwrites one asked later, so the stamp only
+    moves forward. No row returned = not this merchant's dynamic segment, or
+    a newer count already stands."""
+    query = f"""
+        UPDATE {SEGMENT_TABLE}
+        SET member_count = $3, computed_at = $4
+        WHERE merchant_id = $1 AND id = $2
+          AND definition IS NOT NULL
+          AND (computed_at IS NULL OR computed_at < $4)
+        RETURNING {_SEGMENT_COLUMNS}
+    """
+    return query, [merchant_id, segment_id, member_count, computed_at]

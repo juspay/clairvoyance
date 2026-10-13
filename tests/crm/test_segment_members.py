@@ -368,13 +368,12 @@ async def test_a_full_page_carries_the_cursor_and_a_short_one_ends(world) -> Non
     assert len(short.items) == 3 and short.next_after is None
 
 
-async def test_members_of_a_missing_or_dynamic_segment_are_refused(world) -> None:
+async def test_members_of_a_missing_segment_are_refused(world) -> None:
+    # A dynamic segment's members are answered by record (phase 4,
+    # tests/crm/test_segment_compiler.py), no longer refused.
     world(None)
     with pytest.raises(segments.SegmentNotFound):
         await segments.segment_members("m1", "seg-x", None, 10)
-    world(_segment("dynamic"))
-    with pytest.raises(segments.SegmentIsDynamic):
-        await segments.segment_members("m1", "seg-1", None, 10)
 
 
 # --- the routes ---
