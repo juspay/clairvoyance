@@ -153,6 +153,8 @@ TTS_SPEAK_MAX_CHARS = 2000
 # Cap on a carousel/product-click `ui-action` message injected as a user turn
 # (mirrors TTS_SPEAK_MAX_CHARS). See docs/widget/VOICE_AS_CHAT.md (A2).
 UI_ACTION_MAX_CHARS = 2000
+# The provider's "start" event lands in ms; past this the caller is gone.
+TELEPHONY_START_TIMEOUT_S = 10
 
 
 class Agent:
@@ -500,8 +502,17 @@ class Agent:
         await self.ws.accept()
         call_initiated_time = datetime.now(timezone.utc)
 
-        # Parse WebSocket messages to get transport type and call data
-        transport_type, call_data = await parse_telephony_websocket(self.ws)
+        # Parse WebSocket messages to get transport type and call data. No
+        # "start" means the caller hung up as the call connected: Plivo closes
+        # the socket (ValueError), Vobiz leaves it open and silent (timeout).
+        try:
+            transport_type, call_data = await asyncio.wait_for(
+                parse_telephony_websocket(self.ws), timeout=TELEPHONY_START_TIMEOUT_S
+            )
+        except (TimeoutError, ValueError) as e:
+            logger.warning(f"No telephony start event, caller likely hung up: {e!r}")
+            await close_websocket_safely(self.ws, code=1000, reason="No start event")
+            return False
 
         self.call_sid = call_data.get("call_id")
         self.stream_sid = call_data.get("stream_id")

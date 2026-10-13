@@ -172,7 +172,8 @@ async def builtin_function_dispatcher(
         # before executing the handler. This guarantees the message is heard even
         # if the handler terminates the pipeline (e.g., connect_to_live_agent
         # pushes EndFrame which kills TTS mid-sentence).
-        if function_config.pre_tts_message:
+        # Once the call ended nothing can speak it: the wait would only time out.
+        if function_config.pre_tts_message and not context.conversation_ended:
             await _speak_and_wait(context, function_config.pre_tts_message)
 
         if handler_name in _CONFIG_AWARE_HANDLERS:

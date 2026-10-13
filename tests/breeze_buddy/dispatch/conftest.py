@@ -227,13 +227,23 @@ class FakeRedisClient:
                 self.ops.append(("rpush", (key, *vals)))
                 return self
 
-            async def execute(self) -> List[Any]:
-                results = []
+            def exists(self, key: str):
+                self.ops.append(("exists", (key,)))
+                return self
+
+            def llen(self, key: str):
+                self.ops.append(("llen", (key,)))
+                return self
+
+            async def execute(self, raise_on_error: bool = True) -> List[Any]:
+                results: List[Any] = []
                 for op, args in self.ops:
-                    if op == "delete":
-                        results.append(await outer.delete(args[0]))
-                    elif op == "rpush":
-                        results.append(await outer.rpush(args[0], *args[1:]))
+                    try:
+                        results.append(await getattr(outer, op)(*args))
+                    except Exception as e:  # noqa: BLE001
+                        if raise_on_error:
+                            raise
+                        results.append(e)
                 return results
 
         return _Pipe()
