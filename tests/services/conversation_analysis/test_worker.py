@@ -772,6 +772,54 @@ async def test_topic_dashboard_limit_picks_named_topics(
     }
 
 
+async def test_topic_dashboard_limit_is_across_agents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other_template = "00000000-0000-0000-0000-000000000002"
+    calls = [
+        (TEMPLATE_ID, "shared", 1),
+        (TEMPLATE_ID, "first_only", 3),
+        (TEMPLATE_ID, "first_minor", 2),
+        (other_template, "shared", 5),
+        (other_template, "second_only", 1),
+    ]
+    rows = [
+        {
+            "source_id": f"{template_id}-{topic_type}-{index}",
+            "template_id": template_id,
+            "template_name": "Agent",
+            "started_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "raw_topic_type": topic_type,
+            "raw_label": topic_type,
+        }
+        for template_id, topic_type, count in calls
+        for index in range(count)
+    ]
+    monkeypatch.setattr(
+        evaluation_result,
+        "run_reader_query",
+        AsyncMock(return_value=rows),
+    )
+
+    dashboard = await evaluation_result.get_topic_dashboard(
+        {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}, top_topics=2
+    )
+
+    named = [
+        row
+        for row in dashboard
+        if row["result_type"] == "summary" and not row["is_other"]
+    ]
+    assert {row["topic_type"] for row in named} == {"shared", "first_only"}
+    shared_on_first = next(
+        row
+        for row in named
+        if row["template_id"] == TEMPLATE_ID and row["topic_type"] == "shared"
+    )
+    assert shared_on_first["conversation_count"] == 1
+    assert shared_on_first["rank"] == 1
+
+
 def test_topic_filter_normalizes_template_alias() -> None:
     filters: dict[str, Any] = {
         "date_from": date(2026, 8, 1),
