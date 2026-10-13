@@ -189,6 +189,17 @@ async def create_lead_call_tracker(
         logger.error("Failed to create lead call tracker")
         return None
 
+    except asyncpg.UniqueViolationError:
+        # Expected, not a fault: the CRM walker mints a deterministic uuid5
+        # lead id per visit, so a lease retry re-inserts the same id. Callers
+        # already treat None as "maybe it exists" and adopt the row
+        # (crm/outreach/nodes/call.py), so this is a WARNING, never an ERROR.
+        logger.warning(
+            f"Lead call tracker {id} already exists (duplicate insert) — "
+            "returning None"
+        )
+        return None
+
     except Exception as e:
         logger.error(f"Error creating lead call tracker: {e}")
         return None
