@@ -79,8 +79,10 @@ Rules the template encodes:
   the run and never updated, read by no one on the hot path, cascade-deleted
   with its run; `crm_segment` (086, canon T15) is outreach's too — one row
   per segment, a static list when `definition` is NULL, the kind derived on
-  read and never stored; its members (T21) ship with the writer that fills
-  them).
+  read and never stored; `crm_segment_member` (087, canon T21) holds a static
+  list's members — a pure child row with no merchant_id, so its 087 trigger
+  checks what a tenant-pinned FK would: the customer belongs to the segment's
+  merchant, and the segment is static).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)
