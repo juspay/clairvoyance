@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import merchant_scope
-from app.crm.outreach import analytics, plans, runs, versions
+from app.crm.outreach import analytics, plans, runs, segments, versions
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
@@ -33,6 +33,8 @@ from app.crm.outreach.schemas import (
     RunCall,
     RunPage,
     RunStep,
+    Segment,
+    SegmentPage,
     VersionMigration,
     Workflow,
     WorkflowCallSummary,
@@ -48,11 +50,20 @@ router = APIRouter()
 # The customer-facing door (/customers/{id}/runs) mounts under a different
 # prefix than the plans' router — the record module's two-router precedent.
 customer_router = APIRouter()
+# The audiences door (/segments, canon T15) — outreach owns segments beside
+# the plans they will one day feed through a broadcast; same precedent.
+segment_router = APIRouter()
 
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     definition: Dict[str, Any]
+
+
+class SegmentCreate(BaseModel):
+    # Phase 1 creates static lists only: a name and nothing else. A
+    # dynamic segment's definition joins this body with its compiler.
+    name: str = Field(min_length=1, max_length=200)
 
 
 class WorkflowStatusChange(BaseModel):
@@ -470,3 +481,50 @@ async def customer_runs_route(
     ),
 ) -> List[CustomerRun]:
     return await runs.customer_runs(merchant_id, customer_id, limit)
+
+
+@segment_router.post("", response_model=Segment, status_code=status.HTTP_201_CREATED)
+async def create_segment_route(
+    body: SegmentCreate,
+    merchant_id: str = Depends(
+        merchant_scope("create a segment", "crm.segments.create")
+    ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> Segment:
+    """A new, empty static list. 409 when the merchant already has a segment
+    by this name; 422 when the name is blank once trimmed."""
+    try:
+        return await segments.create_static_list(
+            merchant_id, body.name, current_user.email
+        )
+    except segments.SegmentNameTaken as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"a segment named {e} already exists",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+
+@segment_router.get("", response_model=SegmentPage)
+async def list_segments_route(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    merchant_id: str = Depends(merchant_scope("list segments", "crm.segments.list")),
+) -> SegmentPage:
+    return await segments.list_segments(merchant_id, limit, offset)
+
+
+@segment_router.get("/{segment_id}", response_model=Segment)
+async def get_segment_route(
+    segment_id: UUID,
+    merchant_id: str = Depends(merchant_scope("read a segment", "crm.segments.get")),
+) -> Segment:
+    segment = await segments.get_segment(merchant_id, str(segment_id))
+    if segment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found"
+        )
+    return segment
