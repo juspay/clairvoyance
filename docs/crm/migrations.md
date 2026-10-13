@@ -77,7 +77,10 @@ Rules the template encodes:
   CHECK; `crm_workflow_step` (073, canon T26) is outreach's as well — the
   append-only trail behind the token, inserted by the statement that moves
   the run and never updated, read by no one on the hot path, cascade-deleted
-  with its run).
+  with its run; `crm_segment` (085, canon T15) is outreach's too — one row
+  per segment, a static list when `definition` is NULL, the kind derived on
+  read and never stored; its members (T21) ship with the writer that fills
+  them).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)
