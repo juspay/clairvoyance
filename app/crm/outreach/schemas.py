@@ -1063,3 +1063,45 @@ class SegmentPage(BaseModel):
 
     items: List[Segment]
     total: int
+
+
+class SkippedMember(BaseModel):
+    """One person who did not become a member, and why. ``line`` is the
+    person's 1-based position in what was sent — the CSV line, once a file
+    is the input (canon/05-audiences.md:45-47: skipped lines get a report)."""
+
+    line: int
+    reason: str
+
+
+class MembersAdded(BaseModel):
+    """What one add did to a static list. ``received`` = ``added`` +
+    ``already_member`` + ``duplicates_in_upload`` + ``len(skipped)`` — every
+    person sent is accounted for exactly once. ``member_count`` and
+    ``computed_at`` are the list's exact count after this add, stamped by
+    the same transaction that changed the rows."""
+
+    received: int
+    added: int
+    already_member: int
+    duplicates_in_upload: int
+    skipped: List[SkippedMember]
+    member_count: int
+    computed_at: datetime
+
+
+class SegmentMember(BaseModel):
+    """One member of a static list (canon T21): who, since when, from where."""
+
+    customer_id: UUID
+    added_at: datetime
+    source: Optional[str] = None
+
+
+class SegmentMembersPage(BaseModel):
+    """One page of a static list's members, in customer_id order.
+    ``next_after`` is the cursor for the next page (pass it as ``after``);
+    None means this was the last page."""
+
+    items: List[SegmentMember]
+    next_after: Optional[UUID] = None
