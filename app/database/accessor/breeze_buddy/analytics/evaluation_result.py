@@ -47,19 +47,24 @@ def _topic_counts(
         count["first_seen_at"] = min(count["first_seen_at"], started_at)
         count["label"] = min(count["label"], label)
 
-    by_template: Dict[str, List[tuple[str, Dict[str, Any]]]] = {}
-    for (template_id, topic_type), count in counts.items():
-        by_template.setdefault(template_id, []).append((topic_type, count))
-    for topics in by_template.values():
-        topics.sort(
-            key=lambda item: (
-                -len(item[1]["sources"]),
-                item[1]["first_seen_at"],
-                item[0],
-            )
+    by_topic: Dict[str, Dict[str, Any]] = {}
+    for (_, topic_type), count in counts.items():
+        total = by_topic.setdefault(
+            topic_type, {"calls": 0, "first_seen_at": count["first_seen_at"]}
         )
-        for rank, (_, count) in enumerate(topics, 1):
-            count["rank"] = rank
+        total["calls"] += len(count["sources"])
+        total["first_seen_at"] = min(total["first_seen_at"], count["first_seen_at"])
+    ranked = sorted(
+        by_topic,
+        key=lambda topic_type: (
+            -by_topic[topic_type]["calls"],
+            by_topic[topic_type]["first_seen_at"],
+            topic_type,
+        ),
+    )
+    rank_of = {topic_type: rank for rank, topic_type in enumerate(ranked, 1)}
+    for (_, topic_type), count in counts.items():
+        count["rank"] = rank_of[topic_type]
     return counts
 
 
