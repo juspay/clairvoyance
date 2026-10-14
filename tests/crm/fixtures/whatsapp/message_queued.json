@@ -1,0 +1,13 @@
+{
+  "message_id": "7d3f2b1e-5a4c-4e8f-9b21-0c6d8e4f1a23",
+  "channel": "whatsapp",
+  "sent_to_address": "+919876543210",
+  "source_kind": "workflow",
+  "source_id": "5c1e9a44-2b7d-4f0e-8a31-9d6c2e7b1f08",
+  "purpose_key": "utility.order.cod_confirm",
+  "kind": "template",
+  "template_id": "cod_confirm_v2",
+  "variables": {"1": "Priya", "2": "ORD-4812"},
+  "text": null,
+  "body": null
+}

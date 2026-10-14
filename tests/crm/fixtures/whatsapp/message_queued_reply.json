@@ -1,0 +1,23 @@
+{
+  "message_id": "b8a1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "channel": "whatsapp",
+  "sent_to_address": "+919876543210",
+  "source_kind": "agent",
+  "source_id": "3f9e8d7c-6b5a-4c3d-9e2f-1a0b9c8d7e6f",
+  "purpose_key": "service.conversation",
+  "kind": "buttons",
+  "template_id": null,
+  "variables": {},
+  "text": "Which size would you like?",
+  "body": {
+    "reply_to": null,
+    "kind": "buttons",
+    "text": "Which size would you like?",
+    "buttons": [
+      {"id": "size_8", "title": "Size 8"},
+      {"id": "size_9", "title": "Size 9"}
+    ],
+    "header": null,
+    "footer": null
+  }
+}
