@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 from typing import Any, Dict
@@ -18,6 +19,7 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
     summarize_transcription,
 )
+from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 from app.core.logger.context import clear_log_context
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -28,6 +30,42 @@ from app.schemas.breeze_buddy.conversation_analysis import ConversationChannel
 callback_map = {
     "service_callback": service_callback,
 }
+
+
+async def _persist_completion(context: TemplateContext, call_id):
+    """Run ``context.completion_function`` so a cancel of ``end_conversation``
+    cannot abort it.
+
+    The completion is the lead's terminal DB write (status FINISHED, outcome,
+    telephony-channel decrement, pod release). When a transfer moves the call
+    leg off our websocket the pipeline tears down and cancels the in-flight
+    function-call task — i.e. this handler — mid-await. ``CancelledError`` is a
+    ``BaseException``: it skips ``except Exception`` and would leave the lead
+    PROCESSING until the stuck-call sweeper closes it as UNKNOWN (seen in prod,
+    2026-10-14). So the write runs as its own task (strong reference held by
+    ``spawn_background_task``) and we await it through ``asyncio.shield``:
+    cancelling the handler detaches us from the task without stopping it. The
+    cancel is re-raised so the caller's teardown semantics are unchanged.
+    """
+    task = spawn_background_task(
+        context.completion_function(
+            call_id=call_id,
+            outcome=context.lead.outcome,
+            call_end_time=datetime.now(),
+            meta_data=context.lead.metaData,
+        ),
+        name=f"call-completion:{call_id}",
+    )
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if not task.done():
+            logger.warning(
+                f"end_conversation cancelled while finalizing call "
+                f"{context.call_sid} (lead {getattr(context.lead, 'id', None)}); "
+                "call completion continues in the background"
+            )
+        raise
 
 
 async def end_conversation(context: TemplateContext, args, transition_to=None):
@@ -280,12 +318,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.info(
                 f"Updating database with call completion details for lead {context.lead.id}"
             )
-            updated_lead = await context.completion_function(
-                call_id=context.lead.id,
-                outcome=context.lead.outcome,
-                call_end_time=datetime.now(),
-                meta_data=context.lead.metaData,
-            )
+            updated_lead = await _persist_completion(context, call_id=context.lead.id)
             if updated_lead:
                 context.lead = updated_lead
             logger.info(f"Successfully updated database for lead {context.lead.id}")
@@ -294,12 +327,7 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
             logger.info(
                 f"Updating database with call completion details for call {context.call_sid}"
             )
-            updated_lead = await context.completion_function(
-                call_id=context.call_sid,
-                outcome=context.lead.outcome,
-                call_end_time=datetime.now(),
-                meta_data=context.lead.metaData,
-            )
+            updated_lead = await _persist_completion(context, call_id=context.call_sid)
             if updated_lead:
                 context.lead = updated_lead
             logger.info(f"Successfully updated database for call {context.call_sid}")
