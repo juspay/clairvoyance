@@ -14,7 +14,7 @@ the routers to keep it that way. Create and publish also take the plain RBAC
 dependency for the caller's email: a byline, not a door.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -24,8 +24,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import merchant_scope
-from app.crm.outreach import analytics, plans, runs, segments, versions
+from app.crm.outreach import (
+    analytics,
+    broadcasts,
+    campaigns,
+    plans,
+    runs,
+    segments,
+    versions,
+)
 from app.crm.outreach.schemas import (
+    Broadcast,
+    BroadcastPage,
+    Campaign,
     CustomerRun,
     EnrollmentRun,
     MembersAdded,
@@ -55,11 +66,34 @@ customer_router = APIRouter()
 # The audiences door (/segments, canon T15) — outreach owns segments beside
 # the plans they will one day feed through a broadcast; same precedent.
 segment_router = APIRouter()
+# The launch button (/broadcasts, canon T17) and the badge registry it wears
+# (/campaigns, canon T22) — outreach's, beside the plans they launch.
+broadcast_router = APIRouter()
+campaign_router = APIRouter()
 
 
 class WorkflowCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     definition: Dict[str, Any]
+
+
+class CampaignCreate(BaseModel):
+    # A slug, chosen once and stable forever (diwali-2026); lowercased on
+    # the way in.
+    key: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=200)
+    # For the report's header only — a campaign never blocks a send.
+    starts_at: Optional[date] = None
+    ends_at: Optional[date] = None
+
+
+class BroadcastCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    # The audience to freeze at launch, and the workflow to admit it into.
+    segment_id: UUID
+    workflow_id: UUID
+    # The badge — a campaign key this merchant has. Optional.
+    campaign_key: Optional[str] = Field(None, min_length=1, max_length=64)
 
 
 class SegmentCreate(BaseModel):
@@ -642,3 +676,110 @@ async def count_segment_route(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
         )
+
+
+@campaign_router.post("", response_model=Campaign, status_code=status.HTTP_201_CREATED)
+async def create_campaign_route(
+    body: CampaignCreate,
+    merchant_id: str = Depends(
+        merchant_scope("create a campaign", "crm.campaigns.create")
+    ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> Campaign:
+    """A new badge. 409 when the merchant already has this key · 422 a
+    malformed key, a blank name, or a window that ends before it starts."""
+    try:
+        return await campaigns.create_campaign(
+            merchant_id,
+            body.key,
+            body.name,
+            body.starts_at,
+            body.ends_at,
+            current_user.email,
+        )
+    except campaigns.CampaignKeyTaken as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"a campaign with key {e} already exists",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+
+@campaign_router.get("", response_model=List[Campaign])
+async def list_campaigns_route(
+    merchant_id: str = Depends(merchant_scope("list campaigns", "crm.campaigns.list")),
+) -> List[Campaign]:
+    return await campaigns.list_campaigns(merchant_id)
+
+
+@broadcast_router.post(
+    "", response_model=Broadcast, status_code=status.HTTP_201_CREATED
+)
+async def create_broadcast_route(
+    body: BroadcastCreate,
+    merchant_id: str = Depends(
+        merchant_scope("create a broadcast", "crm.broadcasts.create")
+    ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> Broadcast:
+    """A new DRAFT broadcast — nothing is frozen or sent until it is
+    launched. 422 a blank name or a malformed campaign key, or with every
+    problem: a segment, workflow or campaign this merchant does not have, or
+    an archived workflow."""
+    try:
+        return await broadcasts.create_broadcast(
+            merchant_id,
+            body.name,
+            str(body.segment_id),
+            str(body.workflow_id),
+            body.campaign_key,
+            current_user.email,
+        )
+    except broadcasts.BroadcastInvalid as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+
+@broadcast_router.get("", response_model=BroadcastPage)
+async def list_broadcasts_route(
+    campaign_key: Optional[str] = Query(
+        None, min_length=1, max_length=64, description="Only this season's"
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    merchant_id: str = Depends(
+        merchant_scope("list broadcasts", "crm.broadcasts.list")
+    ),
+) -> BroadcastPage:
+    """One page, newest first, with the total. 422 a malformed campaign key."""
+    try:
+        return await broadcasts.list_broadcasts(
+            merchant_id, campaign_key, limit, offset
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+
+@broadcast_router.get("/{broadcast_id}", response_model=Broadcast)
+async def get_broadcast_route(
+    broadcast_id: UUID,
+    merchant_id: str = Depends(
+        merchant_scope("read a broadcast", "crm.broadcasts.get")
+    ),
+) -> Broadcast:
+    broadcast = await broadcasts.get_broadcast(merchant_id, str(broadcast_id))
+    if broadcast is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found"
+        )
+    return broadcast

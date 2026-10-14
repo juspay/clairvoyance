@@ -1,0 +1,16 @@
+{
+  "campaign": {
+    "merchant_id": "flipkart",
+    "key": "diwali-2026",
+    "name": "Diwali 2026",
+    "starts_at": "2026-10-15",
+    "ends_at": "2026-11-05"
+  },
+  "broadcast": {
+    "merchant_id": "flipkart",
+    "name": "Final nudge — offered, not granted",
+    "segment_id": "3906251d-e12e-4585-9bbf-365b87e3b1f0",
+    "workflow_id": "9a1c0b7e-52f4-4c8e-9d3a-0f6e2b1d7c45",
+    "campaign_key": "diwali-2026"
+  }
+}
