@@ -19,6 +19,8 @@ Covers the two placement styles the reference handles:
 
 from __future__ import annotations
 
+import asyncio
+import time
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
@@ -254,3 +256,85 @@ async def test_thinking_override_applies_for_level_dialect_models():
         pass
     thinking = captured["config"].thinking_config
     assert str(getattr(thinking, "thinking_level", "")).lower().endswith("minimal")
+
+
+# ---------------------------------------------------------------------------
+# prompt cache: creation never blocks a turn
+# ---------------------------------------------------------------------------
+
+
+def _cache_client(names: List[str], fail: bool = False):
+    calls: List[str] = []
+
+    async def create(model: str, config: Any):
+        calls.append(model)
+        await asyncio.sleep(0)
+        if fail:
+            raise RuntimeError("below the cache minimum")
+        return SimpleNamespace(name=names[len(calls) - 1], usage_metadata=None)
+
+    client = SimpleNamespace(
+        aio=SimpleNamespace(caches=SimpleNamespace(create=create)),
+        _api_client=SimpleNamespace(project="p", location="global"),
+    )
+    return client, calls
+
+
+def _fresh_cache_state(monkeypatch):
+    from app.ai.voice.agents.breeze_buddy.chat.llm.gemini import prompt_cache
+
+    monkeypatch.setattr(prompt_cache, "_registry", {})
+    monkeypatch.setattr(prompt_cache, "_failed_at", {})
+    monkeypatch.setattr(prompt_cache, "_inflight", {})
+    return prompt_cache
+
+
+async def _settle(prompt_cache) -> None:
+    while prompt_cache._inflight:
+        await asyncio.gather(*prompt_cache._inflight.values())
+
+
+async def test_cache_miss_returns_none_and_creates_once_in_background(monkeypatch):
+    pc = _fresh_cache_state(monkeypatch)
+    client, calls = _cache_client(["caches/one"])
+    kw = dict(model="m", system_instruction="sys", tools=None)
+
+    first, second = await asyncio.gather(
+        pc.resolve_prompt_cache(client, **kw), pc.resolve_prompt_cache(client, **kw)
+    )
+    assert (first, second) == (None, None)
+    await _settle(pc)
+    assert calls == ["m"]
+    assert await pc.resolve_prompt_cache(client, **kw) == "caches/one"
+
+
+async def test_cache_near_expiry_is_served_while_it_is_recreated(monkeypatch):
+    pc = _fresh_cache_state(monkeypatch)
+    client, calls = _cache_client(["caches/new"])
+    kw = dict(model="m", system_instruction="sys", tools=None)
+    key = pc._cache_key("m", "sys", None, pc._client_scope(client))
+    pc._registry[key] = ("caches/old", time.time() + 120)
+
+    assert await pc.resolve_prompt_cache(client, **kw) == "caches/old"
+    await _settle(pc)
+    assert calls == ["m"]
+    assert await pc.resolve_prompt_cache(client, **kw) == "caches/new"
+
+
+async def test_failed_create_cools_down_but_a_live_cache_is_still_served(
+    monkeypatch,
+):
+    pc = _fresh_cache_state(monkeypatch)
+    client, calls = _cache_client([], fail=True)
+    kw = dict(model="m", system_instruction="sys", tools=None)
+
+    assert await pc.resolve_prompt_cache(client, **kw) is None
+    await _settle(pc)
+    assert await pc.resolve_prompt_cache(client, **kw) is None
+    await _settle(pc)
+    assert calls == ["m"]  # no second create during the cooldown
+
+    key = pc._cache_key("m", "sys", None, pc._client_scope(client))
+    pc._registry[key] = ("caches/live", time.time() + 200)
+    assert await pc.resolve_prompt_cache(client, **kw) == "caches/live"
+    assert not pc._inflight  # cooling: no refresh attempt
