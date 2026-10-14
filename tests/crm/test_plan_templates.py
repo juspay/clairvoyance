@@ -452,7 +452,7 @@ def test_the_mobile_door_asks_the_list_its_one_question_and_nothing_else() -> No
     problems = validate_definition(doc, catalogs=_catalogs())
     assert any(
         "payload.products.sub_category" in p
-        and "allowed: includes, exists, not_exists" in p
+        and "allowed: includes, contains, exists, not_exists" in p
         for p in problems
     ), problems
 

@@ -92,7 +92,7 @@ def test_value_shape_is_checked_at_the_shape(op, value) -> None:
 
 def test_unknown_op_is_refused() -> None:
     with pytest.raises(ValueError):
-        Condition(field="payload.x", op="contains", value="x")  # type: ignore[arg-type]
+        Condition(field="payload.x", op="regex", value="x")  # type: ignore[arg-type]
 
 
 def test_not_exists_ands_with_the_rest() -> None:
@@ -183,3 +183,59 @@ def test_includes_is_the_dual_of_in(one: str, many: list) -> None:
     assert evaluate(Condition(field="f", op="in", value=many), one) is evaluate(
         Condition(field="f", op="includes", value=one), many
     )
+
+
+# --- contains: the one partial match (a model inside a product name) --------
+
+_OFFER_MODELS = ["Samsung Galaxy A36 5G", "Google Pixel 10a", "Samsung Galaxy S25 5G"]
+
+
+@pytest.mark.parametrize(
+    "actual, expected",
+    [
+        # the names Flipkart sends: variant included, and cut at 50 chars
+        ("Samsung Galaxy A36 5G (Dark Blue, 128 GB)", True),
+        ("Google Pixel 10a (Obsidian", True),
+        ("Samsung Galaxy S25 5G Snapdragon (Silver Shadow, 1", True),
+        # case-insensitive: a vendor's casing is not the model
+        ("SAMSUNG galaxy a36 5g (Awesome Lime, 256 GB)", True),
+        # a look-alike is a different model, not a longer one
+        ("Samsung Galaxy S25 Ultra 5G (Titanium Black, 256 G", False),
+        # anywhere: an accessory naming the model holds it too — which is why
+        # the offer filter pairs this with category in ONE item_where
+        ("Zapcase Back Cover for Samsung Galaxy A36 5G", True),
+        # list: any element, as `includes`; a scalar is a list of one
+        (["vivo V20 (Sunset Melody, 128 GB)", "Google Pixel 10a (Fog, 256 GB)"], True),
+        (
+            ["vivo V20 (Sunset Melody, 128 GB)", "vivo T5x 5G (Flame Red, 128 GB)"],
+            False,
+        ),
+        ([], False),
+        (None, False),
+        # only text holds anything
+        (10, False),
+        (True, False),
+        ([7, None], False),
+    ],
+)
+def test_contains_asks_whether_the_value_holds_any_piece(actual, expected) -> None:
+    condition = Condition(
+        field="payload.products.product_name", op="contains", value=_OFFER_MODELS
+    )
+    assert evaluate(condition, actual) is expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Samsung",  # one piece is still a list: the shape of `in`
+        [],
+        [""],  # an empty piece is in every value
+        ["  "],
+        ["Samsung", 5],
+        None,
+    ],
+)
+def test_contains_takes_a_non_empty_list_of_text(value) -> None:
+    with pytest.raises(ValueError):
+        Condition(field="payload.x", op="contains", value=value)

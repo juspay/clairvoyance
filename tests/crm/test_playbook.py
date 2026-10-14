@@ -132,6 +132,36 @@ def test_the_first_row_that_holds_wins_and_the_last_is_the_default() -> None:
     assert plain["hook_line"] == "aapne checkout shuru kiya tha"
 
 
+def test_a_row_picks_the_offer_line_when_the_offer_filter_kept_a_phone() -> None:
+    """The offer is decided per PRODUCT at decode: a list field whose
+    item_where says product_name `contains` a listed model AND category is
+    Mobile exists only when the cart held such a phone. The row just asks
+    `exists` — so a back cover naming the model, or the phone sitting second
+    in the cart, cannot change which line the agent speaks."""
+    doc = _doc()
+    doc["playbook"]["lines"][
+        "hook_offer"
+    ] = "is phone par 1000 rupees ka extra discount"
+    doc["playbook"]["blocks"]["hook_line"].insert(
+        0,
+        {
+            "when": [{"field": "context.offer_phones", "op": "exists"}],
+            "say": "hook_offer",
+        },
+    )
+    d = _definition(doc)
+    assert playbook.laws(d) == []
+
+    def said(facts: Dict[str, Any]) -> str:
+        out, _ = _resolve(d, ["hook_line"], facts, {}, None)
+        return out["hook_line"]
+
+    offer = "is phone par 1000 rupees ka extra discount"
+    kept = "Samsung Galaxy A36 5G (Dark Blue, 128 GB)"
+    assert said({"offer_phones": kept, "product_name": "vivo V20, " + kept}) == offer
+    assert said({"product_name": "Back Cover for Samsung Galaxy A36 5G"}) != offer
+
+
 def test_a_list_say_renders_one_step_per_line_in_order() -> None:
     """The ORDER section of the prompt, generated: a call agent reads them as
     steps and the name rides along, so it can say which step is done."""
