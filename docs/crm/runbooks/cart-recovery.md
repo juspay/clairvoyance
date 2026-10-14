@@ -215,10 +215,21 @@ with edges `["decide", "rescue-call", "big"]` and `["decide", "wa-nudge", "else"
   the edge. OR is two rules. None holding takes the mandatory `else` edge —
   a predicate never parks a run.
 - **The ops are the door's own where-grammar** (`is`, `is_not`, `in`, `=`,
-  `>`, `>=`, `<`, `<=`, `exists`, `not_exists`): `is` compares text exactly,
-  `=` and the ordering ops read numbers (Shopify posts money as `"1850.00"`).
-  `exists` and `not_exists` take no value: `not_exists` holds only when the
-  fact is absent (a letter that cleared it reads absent too).
+  `>`, `>=`, `<`, `<=`, `exists`, `not_exists`, `contains`): `is` compares
+  text exactly, `=` and the ordering ops read numbers (Shopify posts money as
+  `"1850.00"`). `exists` and `not_exists` take no value: `not_exists` holds
+  only when the fact is absent (a letter that cleared it reads absent too).
+- **`contains` is the one partial match**: a list of text pieces, case-
+  insensitive, holds when the text holds any of them anywhere (on a list
+  field, any element). It is for names that carry a variant or arrive cut
+  short — `"Samsung Galaxy A36 5G"` matches `SAMSUNG Galaxy A36 5G (Dark Blue,
+  128 GB)`. Anywhere also reaches accessories ("Back Cover for Samsung Galaxy
+  A36 5G"), so put it in a list field's `item_where` beside `{"field":
+  "category", "op": "in", "value": ["Mobile"]}`: the element filter judges
+  each product alone, so the variable exists only when a real phone in the
+  cart matched, in any position, and a playbook row asks it `exists`. On
+  `context.*` a list fact is the cart's joined text, with no per-product
+  category beside it — keep `contains` in `item_where` for product rules.
 - **Fields** say where the value comes from: `context.<key>` (the run's
   facts, plus `current_node` / `current_stage`), `facts.<node>.<key>` (one
   stage's letter), `customer.display_name` / `primary_locale` / `timezone`

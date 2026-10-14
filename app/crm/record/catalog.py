@@ -49,6 +49,7 @@ from app.crm.shared.predicate import (
     EQUALS_OP,
     INCLUDES_OP,
     ORDER_OPS,
+    PARTIAL_OPS,
     PRESENCE_OPS,
     TEXT_OPS,
 )
@@ -58,8 +59,8 @@ from app.crm.shared.predicate import (
 # what the engine runs — parity is structural, not a convention. phone is
 # identity — never filterable.
 OPS_BY_TYPE: Dict[str, List[str]] = {
-    "text": [*TEXT_OPS, *PRESENCE_OPS],
-    "choice": [*TEXT_OPS, *PRESENCE_OPS],
+    "text": [*TEXT_OPS, *PARTIAL_OPS, *PRESENCE_OPS],
+    "choice": [*TEXT_OPS, *PARTIAL_OPS, *PRESENCE_OPS],
     "number": [*ORDER_OPS, EQUALS_OP, *PRESENCE_OPS],
     "boolean": ["is", "is_not", *PRESENCE_OPS],
     "datetime": [*ORDER_OPS, *PRESENCE_OPS],
@@ -69,9 +70,11 @@ OPS_BY_TYPE: Dict[str, List[str]] = {
     # ruling): `includes` = any element equals the value, `exists` = the
     # array is non-empty, `not_exists` = empty or absent. Never is/in/
     # ordering — those compare a field's ONE value, and a list has many.
+    # `contains` is the same existential, partially: any element holds one
+    # of the plan's pieces (a model inside a product name with its variant).
     # item_where keeps its one job, narrowing what the renderer joins into
     # the template variable; it never decides a door.
-    "list": [INCLUDES_OP, *PRESENCE_OPS],
+    "list": [INCLUDES_OP, *PARTIAL_OPS, *PRESENCE_OPS],
 }
 KEYABLE_TYPES = ("text", "number")
 MAX_REGISTERED_FIELDS = 200
@@ -81,7 +84,10 @@ SEEN_WINDOW_DAYS = 7
 # An element filter names a path INSIDE the element, never payload.* — the
 # element is the root; an empty array reads as absent (`exists` no,
 # `not_exists` yes).
-_ITEM_WHERE_OPS = ("is", "is_not", "in", *PRESENCE_OPS)
+# A partial match narrows an element too: "keep the products whose name
+# contains a listed model AND whose category is Mobile", judged per element,
+# so a cart's other products and a back cover naming the model are dropped.
+_ITEM_WHERE_OPS = ("is", "is_not", "in", *PARTIAL_OPS, *PRESENCE_OPS)
 _ELEMENT_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _PAYLOAD_PATH = re.compile(
     r"^payload\.[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$"

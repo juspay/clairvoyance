@@ -22,6 +22,16 @@ ruling): does ANY of the field's values equal the value written in the plan
 against the raw array; a scalar counts as a list of one, so a vendor that
 collapses a one-item array to a bare value is judged the same way. Absent
 holds nothing, as everywhere.
+
+`contains` is the one partial match: does the value hold ANY of the pieces
+written in the plan, anywhere, case-insensitively. A vendor's product name
+carries its variant and may be cut short ("Google Pixel 10a (Obsidian"), so an
+exact `in` can never keep up with a model's colours and storages; a piece
+names the model once ("Samsung Galaxy A36 5G"). Anywhere also reaches
+accessories ("Back Cover for Samsung Galaxy A36 5G"), so it pairs with a
+category in the same `item_where`, which judges each element alone. On a
+list, ANY element counts — `includes`'s existential, a scalar a list of one.
+Only text is compared: a number or a boolean holds no text.
 """
 
 import re
@@ -31,7 +41,18 @@ from typing import Any, Callable, Iterable, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 Op = Literal[
-    "is", "is_not", "in", ">", ">=", "<", "<=", "=", "exists", "not_exists", "includes"
+    "is",
+    "is_not",
+    "in",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "=",
+    "exists",
+    "not_exists",
+    "includes",
+    "contains",
 ]
 # The op FAMILIES, by what they compare. The catalog's OPS_BY_TYPE (record/
 # catalog.py) is built from these, so a type's allowed ops and the evaluator
@@ -44,6 +65,8 @@ NOT_EXISTS_OP = "not_exists"
 PRESENCE_OPS = (EXISTS_OP, NOT_EXISTS_OP)  # no value: the field is there or not
 INCLUDES_OP = "includes"
 LIST_OPS = (INCLUDES_OP,)  # any of the field's values equals the plan's one value
+CONTAINS_OP = "contains"
+PARTIAL_OPS = (CONTAINS_OP,)  # the value (any element) holds one of these pieces
 _NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
 
 
@@ -62,6 +85,13 @@ class Condition(BaseModel):
                 raise ValueError("'in' needs a non-empty list value")
             if any(isinstance(v, (list, dict)) or v is None for v in self.value):
                 raise ValueError("'in' values must be scalars")
+        elif self.op in PARTIAL_OPS:
+            if not isinstance(self.value, list) or not self.value:
+                raise ValueError(f"{self.op!r} needs a non-empty list of text")
+            if any(not isinstance(v, str) or not v.strip() for v in self.value):
+                # An empty piece is in every value: a typo would contact
+                # everyone the rest of the rule lets through.
+                raise ValueError(f"{self.op!r} values must be non-empty text")
         elif self.op in PRESENCE_OPS:
             if self.value is not None:
                 raise ValueError(f"{self.op!r} takes no value")
@@ -146,6 +176,11 @@ def evaluate(condition: Condition, actual: Any) -> bool:
         # The scalar-is-a-list-of-one rule lives here, once.
         values = actual if isinstance(actual, list) else [actual]
         return any(_same(v, condition.value) for v in values)
+    if op in PARTIAL_OPS:
+        pieces = [p.casefold() for p in condition.value]
+        values = actual if isinstance(actual, list) else [actual]
+        texts = [v.casefold() for v in values if isinstance(v, str)]
+        return any(piece in t for t in texts for piece in pieces)
     if op == "=":
         a, b = as_number(actual), as_number(condition.value)
         return a is not None and b is not None and a == b

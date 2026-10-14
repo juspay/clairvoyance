@@ -23,7 +23,7 @@ from app.crm.record.contracts import (
     catalog_fields,
     variable_name,
 )
-from app.crm.shared.predicate import PRESENCE_OPS, Condition, as_number
+from app.crm.shared.predicate import PARTIAL_OPS, PRESENCE_OPS, Condition, as_number
 
 # The catalog handed to validate_definition: topic -> (path -> field, both
 # layers), with None for a topic no layer knows — every door's topic and
@@ -202,7 +202,9 @@ def condition_against_catalog(
     if field.deprecated:
         logger.warning(f"where: {condition.field!r} is deprecated in the catalog")
     values = condition.value if condition.op == "in" else [condition.value]
-    if condition.op in PRESENCE_OPS:
+    if condition.op in PRESENCE_OPS or condition.op in PARTIAL_OPS:
+        # A partial piece is text the author writes, never one of a choice's
+        # values: "Samsung Galaxy" is not a value, it is part of many.
         return []
     if field.type == "choice" and field.values:
         bad = [v for v in values if str(v) not in field.values]
