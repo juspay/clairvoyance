@@ -82,7 +82,14 @@ Rules the template encodes:
   read and never stored; `crm_segment_member` (087, canon T21) holds a static
   list's members — a pure child row with no merchant_id, so its 087 trigger
   checks what a tenant-pinned FK would: the customer belongs to the segment's
-  merchant, and the segment is static).
+  merchant, and the segment is static; `crm_campaign` (088, canon T22) is the
+  badge registry, keyed `(merchant_id, key)`; `crm_broadcast` (089, canon T17)
+  is the launch button — its segment, workflow and badge are tenant-pinned
+  composite FKs, and its `status` is the canon's closed enum in a CHECK. 090
+  adds the FK `crm_workflow_enrollment.source_broadcast_id` waited for since
+  058, `NOT VALID`: every existing run's value is NULL, so there is nothing
+  to validate, and a validating scan of that hot table would hold the
+  walker's writes — a NOT VALID FK is still enforced on every new write).
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)
