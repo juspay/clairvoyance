@@ -313,7 +313,7 @@ def record_downstream(monkeypatch: pytest.MonkeyPatch) -> List[tuple]:
     async def no_lead(call_sid: str) -> None:
         return None
 
-    async def retry(call_sid: str) -> None:
+    async def retry(call_sid: str, **_kwargs: Any) -> None:
         events.append(("retry", call_sid))
 
     monkeypatch.setattr(cb_mod, "safe_release_pod", release_pod)
