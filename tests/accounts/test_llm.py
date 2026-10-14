@@ -3,7 +3,7 @@ realtime and observer factories build on the account the resolver hands
 them — the row's key and the row's host."""
 
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
@@ -161,3 +161,83 @@ def test_the_realtime_factory_builds_on_the_rows_key_and_host(
         == "azure-rt"
     )
     assert seen == {"api_key": "rt-acct", "base_url": "wss://acct.openai.azure.com/rt"}
+
+
+def test_the_gemini_factory_passes_pooled_through(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.ai.voice.agents.breeze_buddy.llm as llm_factory
+
+    seen: List[bool] = []
+
+    def fake_build(config: Any, *, pooled: bool = False) -> str:
+        seen.append(pooled)
+        return "gemini"
+
+    monkeypatch.setattr(llm_factory, "build_vertex_llm", fake_build)
+    store.rows[ROW2] = cred(
+        id=ROW2,
+        provider="google_vertex",
+        value={"credentials_json": "{}", "project_id": "p"},
+    )
+    block = LLMConfiguration(
+        provider="google_vertex",
+        model="gemini-3.6-flash",
+        region="global",
+        temperature=0.7,
+        max_tokens=1024,
+        credential_id=ROW2,
+    )
+    for pooled in (True, False):
+        asyncio.run(
+            llm_factory.get_llm_service(
+                block, pooled=pooled, accounts=Accounts("r-1", "m-1")
+            )
+        )
+    assert seen == [True, False]
+
+
+def test_a_pooled_gemini_service_shares_one_client_and_never_refreshes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.oauth2 import service_account
+    from pipecat.services.google.vertex import llm as pipecat_vertex
+
+    from app.ai.voice.llm import _pools
+    from app.ai.voice.llm.vertex import VertexConfig, build_vertex_llm
+
+    refreshes: List[int] = []
+
+    class FakeCreds:
+        def refresh(self, _request: Any) -> None:
+            refreshes.append(1)
+
+    class FakeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+    monkeypatch.setattr(
+        service_account.Credentials,
+        "from_service_account_info",
+        classmethod(lambda cls, info, scopes=None: FakeCreds()),
+    )
+    monkeypatch.setattr(pipecat_vertex, "Client", FakeClient)
+    monkeypatch.setattr(_pools.genai, "Client", FakeClient)
+    monkeypatch.setattr(_pools, "_GENAI_VERTEX_POOLS", {})
+    config = VertexConfig(
+        credentials_json='{"type": "service_account"}',
+        project_id="p",
+        location="global",
+        model="gemini-3.6-flash",
+        temperature=0.7,
+        max_tokens=1024,
+    )
+
+    first = build_vertex_llm(config, pooled=True)
+    second = build_vertex_llm(config, pooled=True)
+    assert first._client is second._client and refreshes == []
+    assert first._settings.model == "gemini-3.6-flash"
+
+    # voice keeps the stock service: one refresh and one client per build
+    stock = build_vertex_llm(config)
+    assert stock._client is not first._client and refreshes == [1]
