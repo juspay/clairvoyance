@@ -35,7 +35,7 @@ from app.crm.conversations.db.accessors import (
     thread as thread_accessor,
 )
 from app.crm.conversations.errors import ConversationError, NotAllowed, ThreadConflict
-from app.crm.conversations.project import _preview
+from app.crm.conversations.project import build_preview
 from app.crm.conversations.realtime import wake
 from app.crm.conversations.schemas import Thread, TimelineRow
 from app.crm.conversations.status import (
@@ -94,7 +94,7 @@ async def _record(
         message_id,
         provider_message_id,
         body,
-        _preview(preview),
+        build_preview(preview),
         datetime.now(timezone.utc),
     )
 

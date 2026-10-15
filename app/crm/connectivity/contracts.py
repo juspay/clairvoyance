@@ -89,6 +89,8 @@ What is here, and why each thing is on the surface:
   bindings: the one templates go out from, and the one Buddy answers on with
   Buddy's settings (R1, D13–D15, D24–D28); read total and fail-closed (no
   agent, handoff off).
+  ``CLOSING_LEAD_MINUTES_RANGE`` / ``CLAIM_SLA_MINUTES_RANGE`` bound the
+  two timings, so a sweep narrows by the same bounds the settings allow.
 
 ``send()`` stays OFF this surface so that nothing outside the module can
 reach a provider without passing the checks in front of it. So does the
@@ -134,7 +136,11 @@ from app.crm.connectivity.messaging.shared.receipts import (
     message_ticks,
     receipt_target,
 )
-from app.crm.connectivity.schemas.conversation import ConversationSettings
+from app.crm.connectivity.schemas.conversation import (
+    CLAIM_SLA_MINUTES_RANGE,
+    CLOSING_LEAD_MINUTES_RANGE,
+    ConversationSettings,
+)
 from app.crm.connectivity.schemas.message.whatsapp import TextBody
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
@@ -221,4 +227,6 @@ __all__ = [
     "list_channel_settings",
     "update_channel_settings",
     "ConversationSettings",
+    "CLOSING_LEAD_MINUTES_RANGE",
+    "CLAIM_SLA_MINUTES_RANGE",
 ]

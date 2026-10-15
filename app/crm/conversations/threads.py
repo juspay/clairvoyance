@@ -91,7 +91,7 @@ def window_of(thread: Thread, now: datetime) -> Window:
     )
 
 
-def _handoff_of(thread: Thread) -> Optional[HandoffRead]:
+def get_open_handoff(thread: Thread) -> Optional[HandoffRead]:
     """The open handoff, read from the thread's own columns (None = none)."""
     if thread.handoff_requested_at is None:
         return None
@@ -117,7 +117,7 @@ def _read(thread: Thread, sla: int, now: datetime) -> ThreadRead:
         preview=thread.preview,
         last_message_at=thread.last_message_at,
         window=window_of(thread, now),
-        handoff=_handoff_of(thread),
+        handoff=get_open_handoff(thread),
     )
 
 

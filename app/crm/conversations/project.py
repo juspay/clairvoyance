@@ -78,7 +78,9 @@ def _reader(event: RawEvent):
     return value
 
 
-def _preview(text: Optional[str]) -> Optional[str]:
+def build_preview(text: Optional[str]) -> Optional[str]:
+    """The Inbox list's one line for a message: whitespace collapsed, cut to
+    PREVIEW_MAX with an ellipsis. None for no words."""
     if not text:
         return None
     text = " ".join(text.split())
@@ -140,7 +142,7 @@ async def _project_inbound(event: RawEvent, customer_id: str) -> None:
         event.id,
         event.external_id,
         body,
-        _preview(text or caption) or f"[{kind}]",
+        build_preview(text or caption) or f"[{kind}]",
         event.occurred_at or event.received_at,
         settings.default_agent_id,
         settings.claim_sla_minutes,
@@ -278,6 +280,10 @@ async def _add_template_to_thread_in_txn(
     if row is None:
         return  # already on the timeline
     await thread_accessor.touch_outbound(
-        merchant_id, thread_id, occurred_at, _preview(f"Template · {template_id}"), txn
+        merchant_id,
+        thread_id,
+        occurred_at,
+        build_preview(f"Template · {template_id}"),
+        txn,
     )
     await wake(merchant_id, thread_id, WAKE_MESSAGE, txn)

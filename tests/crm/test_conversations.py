@@ -1,25 +1,25 @@
 """Conversations (inbox PR 2): the pure rules — the window, who holds a
-thread, what a customer's message does — the projector's "Buddy's binding
-only", the move consumer, who may act, and the SQL's tenancy and
-vocabulary discipline."""
+thread, what a customer's message does, what the closing sweep does — the
+projector's "Buddy's binding only", the move consumer, who may act, and the
+SQL's tenancy and vocabulary discipline."""
 
 import ast
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, cast
+from typing import Any, AsyncGenerator, Dict, List, Optional, cast
 
 import pytest
 
-from app.crm.conversations import moves, project, status as words
+from app.crm.conversations import moves, project, status as words, sweeps
 from app.crm.conversations.access import actor_of
 from app.crm.conversations.db.accessors import notify as notify_accessor
 from app.crm.conversations.db.queries import message as message_q, thread as thread_q
 from app.crm.conversations.route import plan_inbound
 from app.crm.conversations.schemas import Thread
 from app.crm.conversations.state import held_by, lapsed
-from app.crm.conversations.window import closes_at, is_open
+from app.crm.conversations.window import closes_at, is_closing_message_due, is_open
 from app.crm.record.schemas import RawEvent
 from app.schemas import UserInfo, UserRole
 
@@ -62,6 +62,15 @@ def test_the_window_is_her_last_message_plus_the_channel_hours() -> None:
     assert is_open(last, 24, NOW)
     assert not is_open(NOW - timedelta(hours=24), 24, NOW)
     assert not is_open(None, 24, NOW) and closes_at(None, 24) is None
+
+
+def test_the_closing_message_is_due_inside_the_lead_only() -> None:
+    last = NOW - timedelta(hours=23, minutes=50)  # shuts in 10 min
+    assert is_closing_message_due(last, 24, 15, NOW)
+    assert not is_closing_message_due(last, 24, 5, NOW)
+    assert not is_closing_message_due(
+        NOW - timedelta(hours=25), 24, 15, NOW
+    )  # already shut
 
 
 # --- who holds a thread: derived ------------------------------------------
@@ -130,6 +139,52 @@ def test_whoever_holds_it_keeps_it() -> None:
         _thread(bot_template_id=AGENT, **OPEN_HANDOFF), AGENT, 10, NOW
     )
     assert waiting.bot_template_id == AGENT and not waiting.reopen
+
+
+# --- the closing sweep (R5, D9, R7) -----------------------------------------
+
+
+def _closing(thread: Thread, held: str, quiet: Optional[timedelta] = None) -> str:
+    last = NOW - quiet if quiet is not None else None
+    return sweeps.decide_closing_action(thread, BUDDY_BINDING, held, 15, 24, last, NOW)
+
+
+def test_a_thread_off_buddys_binding_resolves_quietly() -> None:
+    assert (
+        _closing(_thread(binding_id="another"), words.HELD_BY_BUDDY)
+        == sweeps.ACTION_MOVED
+    )
+    assert (
+        sweeps.decide_closing_action(
+            _thread(), None, words.HELD_BY_BUDDY, 15, 24, None, NOW
+        )
+        == sweeps.ACTION_MOVED
+    )
+
+
+def test_buddy_and_a_waiting_thread_say_goodbye_inside_the_lead() -> None:
+    due = _thread(last_inbound_at=NOW - timedelta(hours=23, minutes=50))
+    assert _closing(due, words.HELD_BY_BUDDY) == sweeps.ACTION_CLOSE
+    assert _closing(due, words.HELD_WAITING) == sweeps.ACTION_CLOSE
+    assert _closing(_thread(), words.HELD_BY_BUDDY) == sweeps.ACTION_WAIT
+
+
+def test_a_teammate_gets_the_goodbye_sent_only_after_an_hour_quiet() -> None:
+    due = _thread(last_inbound_at=NOW - timedelta(hours=23, minutes=50))
+    assert (
+        _closing(due, words.HELD_BY_TEAMMATE, timedelta(minutes=20))
+        == sweeps.ACTION_WAIT
+    )
+    assert (
+        _closing(due, words.HELD_BY_TEAMMATE, timedelta(hours=2)) == sweeps.ACTION_CLOSE
+    )
+
+
+def test_nobody_answering_gets_no_goodbye_and_a_shut_window_expires() -> None:
+    due = _thread(last_inbound_at=NOW - timedelta(hours=23, minutes=50))
+    assert _closing(due, words.HELD_BY_NOBODY) == sweeps.ACTION_WAIT
+    shut = _thread(last_inbound_at=NOW - timedelta(hours=25))
+    assert _closing(shut, words.HELD_BY_BUDDY) == sweeps.ACTION_EXPIRE
 
 
 # --- who may act (D19) ------------------------------------------------------
@@ -499,7 +554,11 @@ def test_resolving_a_thread_closes_its_open_handoff_onto_the_trail(build) -> Non
 
 QUERY_MODULES = (thread_q, message_q)
 #: The builders that deliberately cross tenants: the drains.
-CROSS_TENANT: Set[str] = set()
+CROSS_TENANT = {
+    "get_threads_near_window_close_query",
+    "delete_threads_past_retention_query",
+    "get_threads_waiting_longer_than_query",
+}
 
 
 def _builders():
@@ -575,11 +634,91 @@ def test_the_replay_guards_match_the_partial_unique_indexes() -> None:
             "m", "t", "outbound", "assist", None, None, None, None, NOW
         )[0]
     )
+    # A thread holds one open handoff: asking again opens nothing new.
+    assert "AND handoff_requested_at IS NULL" in (
+        thread_q.open_handoff_query("m", "t", None, None, "normal")[0]
+    )
 
 
 def test_take_over_is_a_compare_and_set() -> None:
     query, _ = thread_q.take_over_query("m", "t", "u", {})
     assert "AND assignee_user_id IS NULL" in query
+
+
+@pytest.mark.parametrize(
+    ("over", "answers"),
+    [
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW), True),
+        (dict(last_inbound_at=NOW), False),  # no agent
+        (dict(bot_template_id=AGENT, last_inbound_at=None), False),  # she never wrote
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW, resolved_at=NOW), False),
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW, assignee_user_id="u"), False),
+    ],
+)
+def test_a_thread_is_buddys_to_answer_only_while_nobody_else_holds_it(
+    over, answers
+) -> None:
+    from app.crm.conversations import bot
+
+    work = bot._build_bot_work(_thread(**over))
+    assert (work is not None) is answers
+    if work is not None:
+        assert work.agent_id == AGENT
+
+
+@pytest.mark.parametrize("unanswered", [True, False])
+async def test_buddy_owes_her_what_she_wrote_past_his_cursor(
+    monkeypatch, unanswered
+) -> None:
+    """Owed = an inbound row written after the cursor — read from the
+    timeline, never by comparing provider times: two messages in one second,
+    or one that lands late, are still owed."""
+    from app.crm.conversations import bot
+
+    cursor = NOW - timedelta(minutes=1)
+    asked: List[tuple] = []
+
+    async def get_messages_written_after(merchant_id, thread_id, kinds, after, limit):
+        asked.append((kinds, after, limit))
+        return [SimpleNamespace(id="r1")] if unanswered else []
+
+    monkeypatch.setattr(
+        bot.message_accessor, "get_messages_written_after", get_messages_written_after
+    )
+    thread = _thread(bot_template_id=AGENT, last_inbound_at=NOW, bot_cursor_at=cursor)
+    assert await bot.has_unanswered_messages(thread) is unanswered
+    assert asked == [([words.KIND_INBOUND], cursor, 1)]
+
+
+async def test_a_thread_buddy_does_not_answer_owes_nothing_without_a_read(
+    monkeypatch,
+) -> None:
+    from app.crm.conversations import bot
+
+    async def get_messages_written_after(*args: Any):
+        raise AssertionError("no read for a thread a teammate holds")
+
+    monkeypatch.setattr(
+        bot.message_accessor, "get_messages_written_after", get_messages_written_after
+    )
+    taken = _thread(bot_template_id=AGENT, last_inbound_at=NOW, assignee_user_id="u")
+    assert await bot.has_unanswered_messages(taken) is False
+
+
+def test_buddy_reads_her_messages_in_the_order_they_were_written() -> None:
+    """Inbound rows are stamped with clock_timestamp() under the thread's
+    row lock, and Buddy's reads and cursor follow that stamp — not the
+    provider's whole-second occurred_at."""
+    insert, _ = message_q.insert_inbound_query(
+        "m", "t", "inbound", "customer", None, None, None, NOW
+    )
+    assert "occurred_at, created_at)" in insert and "$8, clock_timestamp())" in insert
+    after, values = message_q.get_messages_written_after_query(
+        "m", "t", ["inbound"], NOW, 50
+    )
+    assert "created_at > $4" in after and "ORDER BY created_at, id" in after
+    assert "occurred_at >" not in after
+    assert values[3] == NOW
 
 
 def test_every_view_has_a_predicate() -> None:
@@ -804,6 +943,75 @@ async def test_a_note_and_its_wake_up_share_one_atom(monkeypatch) -> None:
     assert seen == [("insert", txn), ("wake", txn)]
 
 
+def test_the_lapse_closes_only_the_handoff_it_judged_while_still_unclaimed() -> None:
+    """The sweep judged a handoff from a page it read earlier: a teammate who
+    took it since, or a newer handoff on the thread, is never closed."""
+    query, values = thread_q.close_lapsed_handoff_query(
+        "shop", "t", NOW, words.TRAIL_ACTION_HANDOFF, words.OUTCOME_SLA_LAPSED, 10
+    )
+    assert "AND handoff_requested_at = $3::timestamptz" in query
+    assert (
+        "AND assignee_user_id IS NULL" in query and "AND resolved_at IS NULL" in query
+    )
+    assert "AND handoff_requested_at <= now() - make_interval(mins => $6::int)" in query
+    assert "handoff_requested_at = NULL" in query  # it closes onto the trail
+    assert values == ["shop", "t", NOW, "handoff", "sla_lapsed", 10]
+
+
+def test_retention_rechecks_the_age_on_the_row_it_deletes() -> None:
+    """A delete that waited on her reopening the thread re-checks only its
+    own WHERE: the age is there too, so the reopened thread survives."""
+    query, _ = thread_q.delete_threads_past_retention_query(90, 500)
+    outer = query[query.index("LIMIT $2") :]
+    assert "AND resolved_at < now() - make_interval(days => $1::int)" in outer
+
+
+# --- the sweeps resolve only the thread they read ----------------------------
+
+
+def test_a_sweep_resolve_is_guarded_by_what_it_read() -> None:
+    query, values = thread_q.resolve_query(
+        "shop", "t", words.TRAIL_ACTION_HANDOFF, words.OUTCOME_EXPIRED, None, NOW
+    )
+    assert "AND ($3::timestamptz IS NULL OR last_inbound_at = $3)" in query
+    assert values == ["shop", "t", NOW, "handoff", "expired", None]
+    # a teammate's resolve stays unconditional
+    teammate = thread_q.resolve_query(
+        "shop", "t", words.TRAIL_ACTION_HANDOFF, words.OUTCOME_RESOLVED, "u-1"
+    )
+    assert teammate[1][:3] == ["shop", "t", None]
+
+
+async def test_a_message_that_lands_mid_sweep_keeps_the_thread_open(
+    monkeypatch,
+) -> None:
+    """The window shut and the sweep read the thread; she writes before it
+    resolves — the guarded resolve misses and the thread stays open."""
+    calls: List[tuple] = []
+
+    async def get_current_buddy_binding(merchant_id, channel):
+        return SimpleNamespace(id=BUDDY_BINDING)
+
+    async def settings(merchant_id, channel, binding_id=None):
+        return SimpleNamespace(
+            claim_sla_minutes=10, closing_lead_minutes=15, closing_message="bye"
+        )
+
+    async def atomically(fn, *args):
+        calls.append((fn.__name__, args))
+        return None  # her message moved last_inbound_at: the guard missed
+
+    monkeypatch.setattr(sweeps, "get_current_buddy_binding", get_current_buddy_binding)
+    monkeypatch.setattr(sweeps, "conversation_settings", settings)
+    monkeypatch.setattr(sweeps, "atomically", atomically)
+    read = NOW - timedelta(hours=25)  # her window shut an hour ago
+    thread = _thread(bot_template_id=AGENT, last_inbound_at=read)
+    action = await sweeps._close_thread_window(thread, 24, {}, {}, NOW)
+    [(name, args)] = calls
+    assert name == "resolve_thread_in_txn" and args[-1] == read
+    assert action == sweeps.ACTION_WAIT  # not counted as expired
+
+
 # --- the live stream notices a lost connection --------------------------------
 
 
@@ -976,6 +1184,32 @@ async def test_the_projector_follows_the_registrys_conversation_channels(
     assert [name for name, _ in world.atoms] == ["_project_inbound_in_txn"]
 
 
+async def test_the_closing_sweep_walks_every_conversation_channel(
+    monkeypatch,
+) -> None:
+    asked: List[str] = []
+
+    async def candidates(channel, older_than, after, limit):
+        asked.append(channel)
+        return []
+
+    monkeypatch.setattr(
+        sweeps,
+        "get_supported_channels_for_conversations",
+        lambda: ("whatsapp", "instagram"),
+    )
+    monkeypatch.setattr(
+        sweeps,
+        "get_conversation_channel_limits",
+        lambda channel: SimpleNamespace(window_hours=24),
+    )
+    monkeypatch.setattr(
+        sweeps.thread_accessor, "get_threads_near_window_close", candidates
+    )
+    await sweeps.sweep_closing_windows(50)
+    assert asked == ["whatsapp", "instagram"]
+
+
 async def test_each_waiting_thread_reads_its_own_bindings_claim_sla(
     monkeypatch,
 ) -> None:
@@ -1096,6 +1330,54 @@ async def test_a_reply_is_recorded_in_one_atom_with_a_short_preview(
     assert seen == [("insert", txn), ("touch", txn), ("wake", txn)]
 
 
+# --- may Buddy speak: re-checked before every send ---------------------------
+
+#: can_bot_speak reads the wall clock: a handoff opened "now" is inside its SLA.
+_JUST_NOW = datetime.now(timezone.utc)
+
+
+_ASKING = "55555555-5555-4555-8555-555555555555"
+#: Her handoff, open "now" (inside its SLA), asked by the session _ASKING.
+_WAITING: Dict[str, Any] = dict(
+    bot_template_id=AGENT,
+    bot_session_id=_ASKING,
+    handoff_requested_at=_JUST_NOW,
+    handoff_priority=words.PRIORITY_NORMAL,
+)
+
+
+@pytest.mark.parametrize(
+    ("thread", "session_id", "may"),
+    [
+        (_thread(bot_template_id=AGENT), None, True),
+        # her handoff is open: Buddy is silent...
+        (_thread(**_WAITING), None, False),
+        # ...bar the turn that asked for it (its waiting message)
+        (_thread(**_WAITING), _ASKING, True),
+        # a teammate claimed it: even the asking session is silent
+        (_thread(**_WAITING, assignee_user_id="u-1"), _ASKING, False),
+        # Buddy moved to another number
+        (_thread(bot_template_id=AGENT, binding_id="other-number"), None, False),
+    ],
+)
+async def test_bot_may_speak(monkeypatch, thread, session_id, may) -> None:
+    from app.crm.conversations import bot
+
+    async def get_thread(merchant_id, thread_id):
+        return thread
+
+    async def settings(_thread):
+        return SimpleNamespace(claim_sla_minutes=10)
+
+    async def buddy(merchant_id, channel):
+        return SimpleNamespace(id=BUDDY_BINDING)
+
+    monkeypatch.setattr(bot.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(bot, "settings_for", settings)
+    monkeypatch.setattr(bot, "get_current_buddy_binding", buddy)
+    assert await bot.can_bot_speak("shop", thread.id, session_id) is may
+
+
 # --- receipts wake the thread showing the send --------------------------------
 
 
@@ -1160,6 +1442,130 @@ def test_the_send_lookup_reads_either_id() -> None:
     assert values == ["shop", "wamid.X", None]
 
 
+# --- only the session answering a thread may hand it off ----------------------
+
+_SESSION = "55555555-5555-4555-8555-555555555555"
+
+
+@pytest.mark.parametrize(
+    ("thread", "refused"),
+    [
+        (_thread(bot_template_id=AGENT, bot_session_id=_SESSION), None),
+        # a web session naming someone else's thread
+        (_thread(bot_template_id=AGENT, bot_session_id="other-session"), "NotAllowed"),
+        # a teammate took it while Buddy's turn was running
+        (_thread(assignee_user_id="u-1"), "ThreadConflict"),
+        (_thread(resolved_at=NOW), "ThreadConflict"),
+    ],
+)
+async def test_a_handoff_is_asked_only_by_the_threads_own_session(
+    monkeypatch, thread, refused
+) -> None:
+    from app.crm.conversations import handoffs
+
+    opened: List[str] = []
+
+    async def get_thread(merchant_id, thread_id, txn=None, for_update=False):
+        assert for_update, "checked under the row lock"
+        return thread
+
+    async def open_handoff(txn, merchant_id, thread_id, *rest):
+        opened.append(thread_id)
+        return thread.model_copy(
+            update={
+                "handoff_requested_at": NOW,
+                "handoff_priority": words.PRIORITY_NORMAL,
+                "handoff_reason": "customer_requested",
+            }
+        )
+
+    async def wake(*args):
+        return None
+
+    async def settings(_thread):
+        return SimpleNamespace(human_handoff=True)
+
+    monkeypatch.setattr(handoffs.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(handoffs.thread_accessor, "open_handoff", open_handoff)
+    monkeypatch.setattr(handoffs, "wake", wake)
+    monkeypatch.setattr(handoffs, "settings_for", settings)
+    txn: Any = object()  # the accessors are faked; nothing touches it
+    call = handoffs._request_handoff_in_txn(
+        txn, "shop", thread.id, _SESSION, "customer_requested", None, "normal"
+    )
+    if refused is None:
+        handoff = await call
+        assert handoff.opened_at == NOW and handoff.reason == "customer_requested"
+        assert opened == [thread.id]
+    else:
+        with pytest.raises(Exception) as caught:
+            await call
+        assert type(caught.value).__name__ == refused and opened == []
+
+    async def plain_get_thread(merchant_id, thread_id, txn=None, for_update=False):
+        return thread
+
+    monkeypatch.setattr(handoffs.thread_accessor, "get_thread", plain_get_thread)
+    assert await handoffs.can_request_handoff("shop", thread.id, _SESSION) is (
+        refused is None
+    )
+
+
+# --- a new session hears the latest of the conversation ------------------------
+
+
+def test_the_context_slice_is_the_latest_rows_before_the_burst() -> None:
+    since, before = NOW - timedelta(hours=24), NOW
+    query, values = message_q.get_latest_messages_between_query(
+        "shop", "t", ["inbound", "outbound"], since, before, 50
+    )
+    assert "ORDER BY occurred_at DESC, id DESC" in query
+    assert "occurred_at > $4" in query and "occurred_at < $5" in query
+    assert values == ["shop", "t", ["inbound", "outbound"], since, before, 50]
+
+
+async def test_the_context_slice_reads_oldest_first(monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+
+    from app.crm.conversations.db.accessors import message as message_accessor
+
+    def row(n: int) -> Dict[str, Any]:
+        return dict(
+            id=f"r{n}",
+            conversation_session_id="t",
+            kind="inbound",
+            author_kind="customer",
+            author_user_id=None,
+            event_raw_id=None,
+            message_id=None,
+            provider_message_id=None,
+            body={"type": "text", "text": str(n)},
+            occurred_at=NOW + timedelta(minutes=n),
+            created_at=NOW + timedelta(minutes=n),
+        )
+
+    class Conn:
+        async def fetch(self, query, *values):
+            return [row(3), row(2), row(1)]  # the database answers newest first
+
+    @asynccontextmanager
+    async def crm_connection():
+        yield Conn()
+
+    monkeypatch.setattr(message_accessor, "crm_connection", crm_connection)
+    rows = await message_accessor.get_latest_messages_between(
+        "shop", "t", ["inbound"], NOW, NOW, 3
+    )
+    assert [r.id for r in rows] == ["r1", "r2", "r3"]
+
+
+def test_a_widget_thread_is_never_this_answers_work() -> None:
+    from app.crm.conversations import bot
+
+    widget = _thread(channel="widget", bot_template_id=AGENT, last_inbound_at=NOW)
+    assert bot._build_bot_work(widget) is None
+
+
 # --- the plan's once-only guarantees ------------------------------------------
 
 
@@ -1186,6 +1592,73 @@ def test_hand_back_and_resolve_close_the_open_handoff_onto_the_trail() -> None:
         words.OUTCOME_RESOLVED,
         "u-1",
     ]
+
+
+async def test_the_closing_message_is_sent_once_per_window(monkeypatch) -> None:
+    """Its dedupe key names the window, so a second sweep or pod finds the
+    first send; her next message opens a new window and a new key."""
+    keys: List[str] = []
+    rows: List[str] = []
+
+    async def send_reply(**kwargs: Any):
+        duplicate = kwargs["dedupe_key"] in keys
+        keys.append(kwargs["dedupe_key"])
+        return SimpleNamespace(
+            duplicate=duplicate, message_id="m-1", provider_message_id="w-1"
+        )
+
+    async def insert_outbound(*args: Any):
+        rows.append("row")
+        return SimpleNamespace(id="r-1")
+
+    touched: List[Optional[str]] = []
+
+    async def touch_outbound(merchant_id, thread_id, at, preview, txn=None):
+        touched.append(preview)
+
+    async def wake(*args: Any):
+        return None
+
+    monkeypatch.setattr(sweeps, "send_reply", send_reply)
+    monkeypatch.setattr(sweeps.message_accessor, "insert_outbound", insert_outbound)
+    monkeypatch.setattr(sweeps.thread_accessor, "touch_outbound", touch_outbound)
+    monkeypatch.setattr(sweeps, "wake", wake)
+    thread = _thread(bot_template_id=AGENT, last_inbound_at=NOW)
+    await sweeps._send_closing_message(thread, "bye", words.HELD_BY_BUDDY, NOW)
+    await sweeps._send_closing_message(thread, "bye", words.HELD_BY_BUDDY, NOW)
+    later = _thread(bot_template_id=AGENT, last_inbound_at=NOW + timedelta(days=1))
+    await sweeps._send_closing_message(later, "bye", words.HELD_BY_BUDDY, NOW)
+    assert keys[0] == keys[1] != keys[2]
+    assert rows == ["row", "row"]  # the duplicate wrote no second timeline row
+    # Each closing message that landed moved the thread's list row.
+    assert touched == ["bye", "bye"]
+
+
+async def test_buddys_reply_preview_is_cut_like_every_other(monkeypatch) -> None:
+    """The Inbox list shows one short line: Buddy's long answer is cut to
+    PREVIEW_MAX with an ellipsis, as a customer's or a teammate's is."""
+    from app.crm.conversations import bot
+    from app.crm.conversations.project import PREVIEW_MAX
+
+    previews: List[Optional[str]] = []
+
+    async def insert_outbound(*args: Any):
+        return SimpleNamespace(id="r-1")
+
+    async def touch_outbound(merchant_id, thread_id, at, preview, txn=None):
+        previews.append(preview)
+
+    async def wake(*args: Any):
+        return None
+
+    monkeypatch.setattr(bot.message_accessor, "insert_outbound", insert_outbound)
+    monkeypatch.setattr(bot.thread_accessor, "touch_outbound", touch_outbound)
+    monkeypatch.setattr(bot, "wake", wake)
+    await bot.record_bot_reply(
+        "shop", "t", "m-1", "w-1", {"type": "text"}, "word " * 100
+    )
+    [preview] = previews
+    assert preview is not None and len(preview) == PREVIEW_MAX and preview.endswith("…")
 
 
 async def test_a_replayed_letter_changes_nothing(monkeypatch) -> None:

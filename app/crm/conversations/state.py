@@ -35,6 +35,19 @@ def lapsed(thread: Thread, claim_sla_minutes: int, now: datetime) -> bool:
     )
 
 
+def is_bot_answering(thread: Thread) -> bool:
+    """PURE: Buddy answers this thread — it is open, an agent is set, no
+    teammate holds it, and she has written. Whether she wrote since Buddy last
+    answered is a row read (bot.has_unanswered_messages); whether Buddy may SPEAK (an open
+    handoff, the binding) is asked again before every send."""
+    return not (
+        thread.bot_template_id is None
+        or thread.last_inbound_at is None
+        or thread.resolved_at is not None
+        or thread.assignee_user_id is not None
+    )
+
+
 def held_by(thread: Thread, claim_sla_minutes: int, now: datetime) -> str:
     """PURE: who holds the thread right now."""
     if thread.resolved_at is not None:

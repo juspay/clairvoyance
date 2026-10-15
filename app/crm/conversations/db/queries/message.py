@@ -31,7 +31,7 @@ def insert_inbound_query(
     """What the customer said. Keyed on its letter: a replayed letter writes
     nothing (no row comes back).
 
-    ``created_at`` is the row's place in Buddy's reading order (rows_after):
+    ``created_at`` is the row's place in Buddy's reading order (get_messages_written_after):
     clock_timestamp(), not now(), and taken while the projector holds the
     thread's row lock, so per thread it rises in the order the rows commit.
     ``occurred_at`` can't order her messages: it is the provider's time, in
@@ -111,6 +111,69 @@ def timeline_query(
          LIMIT $5
     """
     return query, [merchant_id, thread_id, before_at, before_id, limit]
+
+
+def get_messages_written_after_query(
+    merchant_id: str,
+    thread_id: str,
+    kinds: List[str],
+    after: Optional[datetime],
+    limit: int,
+) -> Tuple[str, List[Any]]:
+    """The thread's rows of these kinds written after ``after`` (Buddy's
+    cursor, in insert time — see insert_inbound_query), in the order they
+    were written: what Buddy has not answered yet."""
+    query = f"""
+        SELECT {TIMELINE_COLUMNS}
+          FROM {TIMELINE_TABLE}
+         WHERE merchant_id = $1
+           AND conversation_session_id = $2::uuid
+           AND kind = ANY($3::text[])
+           AND ($4::timestamptz IS NULL OR created_at > $4)
+         ORDER BY created_at, id
+         LIMIT $5
+    """
+    return query, [merchant_id, thread_id, kinds, after, limit]
+
+
+def get_latest_messages_between_query(
+    merchant_id: str,
+    thread_id: str,
+    kinds: List[str],
+    after: datetime,
+    before: datetime,
+    limit: int,
+) -> Tuple[str, List[Any]]:
+    """The thread's LAST ``limit`` rows of these kinds between two moments,
+    newest first — the latest of a conversation, however long it ran."""
+    query = f"""
+        SELECT {TIMELINE_COLUMNS}
+          FROM {TIMELINE_TABLE}
+         WHERE merchant_id = $1
+           AND conversation_session_id = $2::uuid
+           AND kind = ANY($3::text[])
+           AND occurred_at > $4
+           AND occurred_at < $5
+         ORDER BY occurred_at DESC, id DESC
+         LIMIT $6
+    """
+    return query, [merchant_id, thread_id, kinds, after, before, limit]
+
+
+def get_last_message_time_by_author_query(
+    merchant_id: str, thread_id: str, kind: str, author_kind: str
+) -> Tuple[str, List[Any]]:
+    """When this author last wrote on the thread — a teammate's last reply
+    decides whether the closing message goes out for them (D9)."""
+    query = f"""
+        SELECT max(occurred_at) AS at
+          FROM {TIMELINE_TABLE}
+         WHERE merchant_id = $1
+           AND conversation_session_id = $2::uuid
+           AND kind = $3
+           AND author_kind = $4
+    """
+    return query, [merchant_id, thread_id, kind, author_kind]
 
 
 def thread_for_send_query(
