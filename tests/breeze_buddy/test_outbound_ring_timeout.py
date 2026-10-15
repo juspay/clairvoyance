@@ -73,7 +73,7 @@ def vobiz_dial(monkeypatch: pytest.MonkeyPatch, ring: int) -> Dict[str, Any]:
             status_code=201, json=lambda: {"request_uuid": "u-1"}, text=""
         )
 
-    monkeypatch.setattr(vz.requests, "post", post)
+    monkeypatch.setattr(vz, "_session", lambda: SimpleNamespace(post=post))
     assert VobizProvider(None).make_call(CUSTOMER, NUMBER) == {
         "status": "call_initiated",
         "sid": "u-1",
