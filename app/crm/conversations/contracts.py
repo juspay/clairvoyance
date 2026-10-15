@@ -35,6 +35,9 @@ from app.crm.conversations.schemas import BotWork, Thread, TimelineRow
 from app.crm.conversations.status import (
     HANDOFF_PRIORITIES,
     KIND_INBOUND,
+    RESUME_CLAIM_TIMEOUT,
+    RESUME_HANDED_BACK,
+    RESUME_REASONS,
     SERVICE_PURPOSE,
     SOURCE_AGENT,
 )
@@ -65,6 +68,10 @@ __all__ = [
     "SERVICE_PURPOSE",
     "SOURCE_AGENT",
     "HANDOFF_PRIORITIES",
+    # why Buddy has a thread back (the answer route's ``reason``)
+    "RESUME_HANDED_BACK",
+    "RESUME_CLAIM_TIMEOUT",
+    "RESUME_REASONS",
     # shapes
     "BotWork",
     "Thread",

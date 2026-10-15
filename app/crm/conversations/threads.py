@@ -17,6 +17,7 @@ from app.crm.connectivity.contracts import (
     message_ticks,
 )
 from app.crm.conversations.access import Actor
+from app.crm.conversations.ask import ask_buddy
 from app.crm.conversations.db import DbTxn, atomically
 from app.crm.conversations.db.accessors import (
     message as message_accessor,
@@ -36,7 +37,7 @@ from app.crm.conversations.schemas import (
     TimelineRow,
     Window,
 )
-from app.crm.conversations.state import held_by
+from app.crm.conversations.state import held_by, is_bot_answering
 from app.crm.conversations.status import (
     AUTHOR_TEAMMATE,
     CHANNEL_WIDGET,
@@ -45,6 +46,7 @@ from app.crm.conversations.status import (
     OUTCOME_HANDED_BACK,
     OUTCOME_RESOLVED,
     PRIORITY_NORMAL,
+    RESUME_HANDED_BACK,
     TRAIL_ACTION_HANDOFF,
     VIEWS,
     WAKE_MESSAGE,
@@ -346,6 +348,13 @@ async def hand_back(
         raise ThreadConflict(
             "only the teammate handling this conversation can hand it back"
         )
+    if (
+        back.channel != CHANNEL_WIDGET
+        and is_bot_answering(back)
+        and window_of(back, datetime.now(timezone.utc)).open
+    ):
+        # Buddy is told it has the thread back, in a turn of its own (D38).
+        await ask_buddy(merchant_id, thread_id, RESUME_HANDED_BACK)
     return back
 
 

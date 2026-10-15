@@ -81,14 +81,21 @@ async def has_unanswered_messages(thread: Thread) -> bool:
     return bool(unanswered)
 
 
-async def get_bot_work(merchant_id: str, thread_id: str) -> Optional[BotWork]:
-    """The thread as Buddy's turn answers it (see _build_bot_work), read fresh — None
-    unless she wrote since Buddy last answered."""
+async def get_bot_work(
+    merchant_id: str, thread_id: str, unanswered_only: bool = True
+) -> Optional[BotWork]:
+    """The thread as Buddy's turn answers it (see _build_bot_work), read
+    fresh — None unless she wrote since Buddy last answered.
+    ``unanswered_only=False``: whenever it is Buddy's to answer (a turn that
+    tells Buddy why it has the thread back runs with or without her
+    messages)."""
     thread = await thread_accessor.get_thread(merchant_id, thread_id)
     if thread is None:
         return None
     work = _build_bot_work(thread)
-    return work if work is not None and await has_unanswered_messages(thread) else None
+    if work is None or not unanswered_only:
+        return work
+    return work if await has_unanswered_messages(thread) else None
 
 
 async def can_bot_speak(

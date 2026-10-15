@@ -11,20 +11,28 @@ from datetime import datetime
 from typing import Optional
 
 from app.core.logger import logger
+from app.crm.conversations.ask import ask_buddy
 from app.crm.conversations.db import DbTxn, atomically
 from app.crm.conversations.db.accessors import thread as thread_accessor
 from app.crm.conversations.errors import NotAllowed, ThreadConflict, ThreadNotFound
 from app.crm.conversations.realtime import wake
 from app.crm.conversations.schemas import HandoffRead, Thread
-from app.crm.conversations.state import lapsed
+from app.crm.conversations.state import is_bot_answering, lapsed
 from app.crm.conversations.status import (
+    CHANNEL_WIDGET,
     HANDOFF_PRIORITIES,
     OUTCOME_SLA_LAPSED,
     PRIORITY_NORMAL,
+    RESUME_CLAIM_TIMEOUT,
     TRAIL_ACTION_HANDOFF,
     WAKE_HANDOFF,
 )
-from app.crm.conversations.threads import get_open_handoff, settings_for, thread_or_404
+from app.crm.conversations.threads import (
+    get_open_handoff,
+    settings_for,
+    thread_or_404,
+    window_of,
+)
 
 
 async def request_handoff(
@@ -138,4 +146,12 @@ async def close_handoff_if_lapsed(thread: Thread, now: datetime) -> bool:
         f"handoff on thread {thread.id} lapsed after {sla} min unclaimed — "
         f"Buddy resumes"
     )
+    if (
+        closed.channel != CHANNEL_WIDGET
+        and is_bot_answering(closed)
+        and window_of(closed, now).open
+    ):
+        # Buddy is told nobody came, in a turn of its own, with whatever she
+        # wrote while she waited (D5, D38).
+        await ask_buddy(closed.merchant_id, closed.id, RESUME_CLAIM_TIMEOUT)
     return True
