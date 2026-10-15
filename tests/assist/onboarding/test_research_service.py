@@ -95,6 +95,30 @@ def test_one_page_per_kind_is_picked() -> None:
     ]
 
 
+def test_a_page_only_named_after_contact_lenses_is_no_contact_page() -> None:
+    # visiondirect.co.uk, 27 Oct 2026: its menu links "/contact-lenses", the
+    # map lists "/contact-us"; contactsdirect.com reads an article as "about".
+    links = [
+        f"{HOME}/things-to-know-about-wearing-contacts",
+        f"{HOME}/contact-lenses",
+        f"{HOME}/contactless-delivery",
+    ]
+    pages = utils.pick_pages(HOME, links, [f"{HOME}/contact-us"])
+    assert f"{HOME}/contact-lenses" not in pages
+    assert utils.contact_page(pages) == f"{HOME}/contact-us"
+    assert utils.contact_page(utils.pick_pages(HOME, links, [])) == ""
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/contact", "/contacts/", "/pages/contact-us", "/contactus", "/contact.php"],
+)
+def test_a_page_named_contact_is_the_contact_page(path) -> None:
+    assert utils.contact_page(utils.pick_pages(HOME, [f"{HOME}{path}"], [])) == (
+        f"{HOME}{path}"
+    )
+
+
 def test_app_and_blog_pages_are_never_picked() -> None:
     links = [f"{HOME}/apps/returns", f"{HOME}/blogs/news/our-story"]
     assert utils.pick_pages(HOME, [], links) == []
@@ -410,7 +434,14 @@ async def test_a_busy_provider_on_the_home_page_stops_the_run(monkeypatch) -> No
 
 @pytest.mark.parametrize(
     "data",
-    [{"json": None}, {"json": ["x"]}, {"json": "x"}, None],
+    [
+        {"json": None},
+        {"json": ["x"]},
+        {"json": "x"},
+        None,
+        # a missing page: no facts, and no page to link to
+        {"json": {}, "metadata": {"statusCode": 404}},
+    ],
 )
 async def test_a_page_firecrawl_could_not_fill_is_one_failed_page(
     monkeypatch, data
@@ -593,3 +624,22 @@ def test_a_white_button_is_no_brand_colour() -> None:
         }
     )
     assert look.primary_color is None
+
+
+async def test_the_contact_page_read_becomes_the_contact_link(monkeypatch) -> None:
+    _firecrawl(
+        monkeypatch,
+        links=[f"{HOME}/pages/contact-us"],
+        pages={HOME: {}, f"{HOME}/pages/contact-us": {}},
+    )
+    _, notes = await _read()
+    assert notes == [("help_links", f"Contact page: {HOME}/pages/contact-us")]
+
+    # A stale contact link that lands back on the home page is no contact page.
+    _firecrawl(
+        monkeypatch,
+        links=[f"{HOME}/pages/contact-us"],
+        pages={HOME: {}, f"{HOME}/pages/contact-us": (f"{HOME}/", {})},
+    )
+    _, notes = await _read()
+    assert notes == []
