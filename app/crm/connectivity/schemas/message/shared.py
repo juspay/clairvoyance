@@ -172,3 +172,15 @@ class MessageState(BaseModel):
     status: str
     reason: Optional[str] = None
     provider_message_id: Optional[str] = None
+
+
+class MessageTick(BaseModel):
+    """What became of one manifest row, as a timeline shows it: its status
+    word, the reason when it failed, and when each tick landed."""
+
+    id: str
+    status: str
+    reason: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    read_at: Optional[datetime] = None

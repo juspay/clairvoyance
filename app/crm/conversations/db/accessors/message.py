@@ -1,7 +1,7 @@
 """Mechanical access to crm_conversation_message."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.conversations.db.decoders.rows import decode_timeline
 from app.crm.conversations.db.queries import message as q
@@ -72,6 +72,18 @@ async def insert_outbound(
     return await _one(txn, query, values)
 
 
+async def timeline(
+    merchant_id: str,
+    thread_id: str,
+    before: Optional[Tuple[datetime, str]],
+    limit: int,
+) -> List[TimelineRow]:
+    query, values = q.timeline_query(merchant_id, thread_id, before, limit)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_timeline(row) for row in rows]
+
+
 async def thread_for_send(
     merchant_id: str, provider_message_id: str, message_id: Optional[str]
 ) -> Optional[str]:
@@ -81,3 +93,17 @@ async def thread_for_send(
     async with crm_connection() as conn:
         found = await conn.fetchval(query, *values)
     return str(found) if found is not None else None
+
+
+async def written_at(
+    txn: DbTxn, merchant_id: str, thread_id: str, row_id: str, kind: str
+) -> Optional[datetime]:
+    query, values = q.written_at_query(merchant_id, thread_id, row_id, kind)
+    return await txn.fetchval(query, *values)
+
+
+async def wrote_since(
+    txn: DbTxn, merchant_id: str, thread_id: str, kind: str, after: datetime
+) -> bool:
+    query, values = q.wrote_since_query(merchant_id, thread_id, kind, after)
+    return bool(await txn.fetchval(query, *values))

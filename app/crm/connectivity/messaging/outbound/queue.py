@@ -96,11 +96,15 @@ async def queue_message(
     template_id: Optional[str],
     variables: Dict[str, Any],
     dedupe_key: str,
+    binding_id: Optional[str] = None,
 ) -> Optional[str]:
     """Propose one send. Returns the new row's id, or None when
     dedupe_key already names a row for this merchant — the producer's
     retry was absorbed (T16 col 23), and it should carry on as if it
-    had queued. Raises ValueError on a proposal the vocabulary refuses."""
+    had queued. Raises ValueError on a proposal the vocabulary refuses.
+    ``binding_id`` sends from a named binding (a teammate's template from the
+    Inbox goes out on the binding the customer wrote to); None is the
+    primary, as every workflow send."""
     validate_proposal(source_kind, purpose_key)
     sent_to = normalize_address(channel, address)
     if sent_to is None:
@@ -116,6 +120,7 @@ async def queue_message(
         template_id,
         variables,
         dedupe_key,
+        binding_id,
     )
     # A new row on a channel with conversations: the template hook may put it
     # on her thread (template_hook.py). An absorbed retry calls nothing — a

@@ -81,7 +81,7 @@ What is here, and why each thing is on the surface:
   it): message.status letters move the manifest along sent -> delivered ->
   read, or to failed with the provider's code. ``receipt_target`` names the
   send a receipt letter is about (conversations wakes the thread showing
-  it).
+  it); ``message_ticks`` reads what they wrote, for a timeline.
 - ``TOPIC_BUDDY_BOT_MOVED`` — the letter this module files when Buddy moves
   to another binding; conversations resolves the old binding's threads.
 - ``get_current_buddy_binding`` / ``conversation_settings`` /
@@ -131,6 +131,7 @@ from app.crm.connectivity.messaging.outbound.queue import (
 from app.crm.connectivity.messaging.outbound.template_hook import register_template_hook
 from app.crm.connectivity.messaging.shared.receipts import (
     consume_status_event,
+    message_ticks,
     receipt_target,
 )
 from app.crm.connectivity.schemas.conversation import ConversationSettings
@@ -212,6 +213,8 @@ __all__ = [
     "TOPIC_STATUS",
     "TOPIC_BUDDY_BOT_MOVED",
     "receipt_target",
+    # what became of our sends, for a timeline's ticks
+    "message_ticks",
     # the merchant's bindings: the template binding, Buddy's binding, settings
     "get_current_buddy_binding",
     "conversation_settings",
