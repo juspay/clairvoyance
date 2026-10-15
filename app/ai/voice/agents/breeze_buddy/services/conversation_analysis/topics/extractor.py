@@ -24,6 +24,8 @@ from app.services.model_provider import (
     Message,
 )
 
+from .segments import validate_segments
+
 _FIRST_TOKEN_TIMEOUT_SECONDS = 30
 
 
@@ -122,6 +124,7 @@ def resolve_topic_evaluation_configuration(
             "include_agent_prompt": include_agent_prompt,
             "stream": stream,
         },
+        "segments": validate_segments(raw.get("segments")),
     }
 
 
@@ -293,9 +296,9 @@ def topic_labels_to_catalog(labels: Optional[List[str]]) -> List[Dict[str, str]]
     catalog: List[Dict[str, str]] = []
     seen = set()
     for raw_label in labels or []:
-        label = normalize_topic_label(str(raw_label))
+        label = re.sub(r"\s+", " ", str(raw_label).strip()).strip(" .,:;!?-_/")[:120]
         topic_type = normalize_topic_type(label)
-        identity = (topic_type, label)
+        identity = (topic_type, label.lower())
         if not topic_type or not label or identity in seen:
             continue
         seen.add(identity)
@@ -313,12 +316,17 @@ def normalize_topics(
     catalog_by_label: Dict[str, tuple[str, str]] = {}
     for existing in existing_topics or []:
         topic_type = normalize_topic_type(str(existing.get("type") or ""))
-        label = normalize_topic_label(str(existing.get("label") or ""))
+        display = str(existing.get("label") or "").strip()
+        label = normalize_topic_label(display)
         if not topic_type or not label:
             continue
-        catalog_by_type[topic_type] = label
-        catalog_by_label[label] = (topic_type, label)
+        catalog_by_type[topic_type] = display
+        catalog_by_label[label] = (topic_type, display)
 
+    two_level = bool(catalog_by_type) and all(
+        "." in display for display in catalog_by_type.values()
+    )
+    parents = set()
     normalized: List[Dict[str, Any]] = []
     seen = set()
     for topic in parsed.topics:
@@ -333,6 +341,11 @@ def normalize_topics(
 
         if not topic_type or not label or topic_type in seen:
             continue
+        parent, dot, _ = label.partition(".")
+        if two_level and dot:
+            if parent.strip().lower() in parents:
+                continue
+            parents.add(parent.strip().lower())
         seen.add(topic_type)
         normalized.append(
             {

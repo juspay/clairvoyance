@@ -13,6 +13,7 @@ import httpx
 import openai
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.ai.voice.agents.breeze_buddy.chat import cleanup as chat_cleanup
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis import (
@@ -22,16 +23,19 @@ from app.ai.voice.agents.breeze_buddy.services.conversation_analysis import (
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics import (
     evaluator,
     extractor,
+    segments,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
 from app.api.routers.breeze_buddy.analytics.handlers import (
     _validate_topic_filters,
     get_topic_dashboard_analytics,
 )
+from app.api.routers.breeze_buddy.topics import handlers as topic_handlers
 from app.core.config import static
 from app.database.accessor.breeze_buddy.analytics import evaluation_result
 from app.database.queries.breeze_buddy.analytics.evaluation_result import (
     get_topic_dashboard_rows_query,
+    get_topic_segment_counts_query,
 )
 from app.database.queries.breeze_buddy.evaluation_config import (
     add_discovered_topics_query,
@@ -46,7 +50,7 @@ from app.database.queries.breeze_buddy.evaluation_result import (
     save_evaluation_results_query,
 )
 from app.schemas import LeadCallStatus, UserInfo, UserRole
-from app.schemas.breeze_buddy.analytics import AnalyticsOptions
+from app.schemas.breeze_buddy.analytics import AnalyticsFilters, AnalyticsOptions
 from app.schemas.breeze_buddy.chat import ChatSessionStatus
 from app.schemas.breeze_buddy.conversation_analysis import (
     ConversationChannel,
@@ -177,7 +181,7 @@ async def test_openrouter_topics_go_through_the_model_provider(
         configuration,
     )
 
-    assert [topic["label"] for topic in topics] == ["delivery delay"]
+    assert [topic["label"] for topic in topics] == ["Delivery Delay"]
     assert generate.await_args is not None
     (request,) = generate.await_args.args
     assert request.model == "openai/gpt-4o-mini"
@@ -232,6 +236,100 @@ def test_a_setting_of_the_wrong_type_is_refused() -> None:
             )
 
 
+SEGMENTS = [
+    {
+        "key": "lender",
+        "field": "lender_name",
+        "split": ",",
+        "values": ["DMI", "TVS_CREDIT"],
+    },
+    {"key": "stage", "field": "event_name", "values": ["OFFERED", "KYC_COMPLETED"]},
+]
+
+
+def test_segments_come_from_the_payload() -> None:
+    config = segments.validate_segments(SEGMENTS)
+    assert segments.resolve_segments(
+        config, {"lender_name": "TVS_CREDIT, dmi", "event_name": "KYC_COMPLETED"}
+    ) == {"lender": ["TVS_CREDIT", "DMI"], "stage": ["KYC_COMPLETED"]}
+    assert segments.resolve_segments(
+        config, {"lender_name": ["TVS_CREDIT, DMI", None], "event_name": "OFFERED"}
+    ) == {"lender": ["TVS_CREDIT", "DMI"], "stage": ["OFFERED"]}
+    assert segments.resolve_segments(
+        config, {"lender_name": "SBI", "event_name": ""}
+    ) == {"lender": ["other"], "stage": ["not_known"]}
+    assert segments.resolve_segments(config, {}) == {
+        "lender": ["not_known"],
+        "stage": ["not_known"],
+    }
+
+
+def test_number_ranges_make_bands() -> None:
+    config = segments.validate_segments(
+        [{"key": "order_value", "field": "total_price", "ranges": [500, 2000]}]
+    )
+    assert config[0]["values"] == ["<500", "500-2000", "2000+"]
+    resolved = extractor.resolve_topic_evaluation_configuration(
+        {"model": "m", "segments": config}
+    )
+    assert extractor.resolve_topic_evaluation_configuration(resolved) == resolved
+    assert segments.validate_segments(
+        [{"key": "limit", "field": "credit_limit", "ranges": [100000, 1000000]}]
+    )[0]["values"] == ["<100000", "100000-1000000", "1000000+"]
+    for raw, band in (
+        (499, "<500"),
+        ("500", "500-2000"),
+        ("1,999.50", "500-2000"),
+        (2000, "2000+"),
+        ("free", "not_known"),
+        (None, "not_known"),
+    ):
+        assert segments.resolve_segments(config, {"total_price": raw}) == {
+            "order_value": [band]
+        }
+
+
+def test_a_bad_segment_config_is_refused() -> None:
+    for bad, message in (
+        ([SEGMENTS[0], SEGMENTS[0]], "unique"),
+        ([{**SEGMENTS[0], "values": []}], "values"),
+        ([{**SEGMENTS[0], "values": ["DMI", "Other"]}], "must not be"),
+        ([{**SEGMENTS[0], "spilt": ","}], "unknown keys"),
+        ([{**SEGMENTS[0], "field": ""}], "field"),
+        ([{"key": "value", "field": "total_price", "ranges": [2000, 500]}], "ranges"),
+        ([{**SEGMENTS[0], "ranges": [500]}], "ranges"),
+        (
+            [
+                {
+                    "key": "value",
+                    "field": "total_price",
+                    "ranges": [500],
+                    "values": ["a"],
+                }
+            ],
+            "values come from ranges",
+        ),
+    ):
+        with pytest.raises(ValueError, match=message):
+            extractor.resolve_topic_evaluation_configuration(
+                {"model": "m", "segments": bad}
+            )
+
+
+def test_the_catalog_lists_the_agent_segments() -> None:
+    config = {
+        "enabled": True,
+        "topics": ["KYC.Selfie fails"],
+        "configuration": json.dumps({"model": "m", "segments": SEGMENTS}),
+    }
+    catalog = topic_handlers._evaluation_catalog_response(TEMPLATE_ID, config)
+    assert [segment.model_dump() for segment in catalog.segments] == [
+        {"key": "lender", "values": ["DMI", "TVS_CREDIT"]},
+        {"key": "stage", "values": ["OFFERED", "KYC_COMPLETED"]},
+    ]
+    assert topic_handlers._evaluation_catalog_response(TEMPLATE_ID, None).segments == []
+
+
 async def test_non_list_transcript_is_ignored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -278,7 +376,7 @@ async def test_chat_context_uses_existing_accessors(
             template_id=TEMPLATE_ID,
             created_at=now,
             status=ChatSessionStatus.ENDED,
-            metadata={},
+            metadata={"plan": "gold"},
         )
     )
     list_messages = AsyncMock(
@@ -302,6 +400,7 @@ async def test_chat_context_uses_existing_accessors(
     )
 
     assert context and context["transcript"][0]["content"] == "My order is late"
+    assert context["payload"] == {"plan": "gold"}
     list_messages.assert_awaited_once_with("session-id")
 
 
@@ -471,6 +570,51 @@ async def test_analysis_retries_once_after_timeout(
         context["started_at"],
         [{"type": "payment_issue"}],
     )
+
+
+async def test_a_two_level_list_never_grows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    found = [{"type": "otp_not_coming", "label": "otp not coming"}]
+    monkeypatch.setattr(evaluator, "extract_topics", AsyncMock(return_value=found))
+    monkeypatch.setattr(evaluator, "save_evaluation_results", AsyncMock())
+    add = AsyncMock()
+    monkeypatch.setattr(evaluator, "add_discovered_topics", add)
+    evaluation = {
+        "id": "00000000-0000-0000-0000-000000000010",
+        "evaluation_type": "TOPIC",
+        "configuration": {},
+    }
+
+    two_level = ["KYC.Location error", "KYC.Other"]
+    await evaluator.analyze_topics(context, {**evaluation, "topics": two_level})
+    add.assert_not_awaited()
+
+    for flat in ([], ["Refund status"], ["KYC.Location error", "Refund status"]):
+        add.reset_mock()
+        await evaluator.analyze_topics(context, {**evaluation, "topics": flat})
+        add.assert_awaited_once_with(str(context["template_id"]), ["otp not coming"])
+
+
+def test_a_two_level_list_keeps_one_subtopic_per_topic() -> None:
+    labels = [
+        "KYC.Selfie fails",
+        "KYC.Camera does not open",
+        "Auto-pay.UPI not received",
+    ]
+    raw = {
+        "topics": [
+            {"type": f"t{index}", "label": label, "phrase": "p", "evidence_turns": [1]}
+            for index, label in enumerate(labels)
+        ]
+    }
+    two_level = extractor.topic_labels_to_catalog(labels)
+    kept = extractor.normalize_topics(raw, max_topics=2, existing_topics=two_level)
+    assert [topic["label"] for topic in kept] == [labels[0], labels[2]]
+
+    flat = extractor.topic_labels_to_catalog(["Refund"])
+    assert len(extractor.normalize_topics(raw, None, existing_topics=flat)) == 3
 
 
 async def test_completion_enqueues_source_identity(
@@ -724,6 +868,7 @@ async def test_topic_dashboard_aggregates_rows_after_fetch(
     summary = [row for row in dashboard if row["result_type"] == "summary"]
     assert len(summary) == 12
     assert not any(row["is_other"] for row in summary)
+    assert {row["conversation_total"] for row in summary} == {11}
 
 
 async def test_topic_dashboard_limit_picks_named_topics(
@@ -820,6 +965,59 @@ async def test_topic_dashboard_limit_is_across_agents(
     assert shared_on_first["rank"] == 1
 
 
+async def test_topic_dashboard_limit_keeps_a_topic_with_all_its_subtopics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = [
+        ("kyc_location_error", "KYC.Location error", 3),
+        ("kyc_selfie_fail", "KYC.Selfie fail", 1),
+        ("later_busy", "Later.Busy", 2),
+        ("refund", "Refund", 1),
+    ]
+    rows = [
+        {
+            "source_id": f"{topic_type}-{index}",
+            "template_id": TEMPLATE_ID,
+            "template_name": "Agent",
+            "started_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "raw_topic_type": topic_type,
+            "raw_label": label,
+        }
+        for topic_type, label, count in calls
+        for index in range(count)
+    ]
+    monkeypatch.setattr(
+        evaluation_result,
+        "run_reader_query",
+        AsyncMock(return_value=rows),
+    )
+
+    dashboard = await evaluation_result.get_topic_dashboard(
+        {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}, top_topics=1
+    )
+
+    named = [
+        row
+        for row in dashboard
+        if row["result_type"] == "summary" and not row["is_other"]
+    ]
+    assert {row["topic_type"] for row in named} == {
+        "kyc_location_error",
+        "kyc_selfie_fail",
+    }
+    ranks = {
+        row["topic_type"]: row["rank"]
+        for row in dashboard
+        if row["result_type"] == "topic"
+    }
+    assert ranks == {
+        "kyc_location_error": 1,
+        "kyc_selfie_fail": 1,
+        "later_busy": 2,
+        "refund": 3,
+    }
+
+
 def test_topic_filter_normalizes_template_alias() -> None:
     filters: dict[str, Any] = {
         "date_from": date(2026, 8, 1),
@@ -833,6 +1031,39 @@ def test_topic_filter_normalizes_template_alias() -> None:
     filters["template_id"] = "00000000-0000-0000-0000-000000000002"
     with pytest.raises(HTTPException):
         _validate_topic_filters(filters, drilldown=True)
+
+
+def test_topic_filters_match_every_segment() -> None:
+    query, values = get_topic_dashboard_rows_query(
+        {
+            "date_from": date(2026, 10, 1),
+            "date_to": date(2026, 10, 2),
+            "segments": {"lender": ["DMI"], "stage": ["OFFERED", "KYC_COMPLETED"]},
+        }
+    )
+    assert "ca.metadata -> 'segments' -> $1::text ?| $2::text[]" in query
+    assert "ca.metadata -> 'segments' -> $3::text ?| $4::text[]" in query
+    assert values[:4] == ["lender", ["DMI"], "stage", ["OFFERED", "KYC_COMPLETED"]]
+    for bad in ({"lender": []}, {"lender": ["DMI"] * 101}):
+        with pytest.raises(ValidationError):
+            AnalyticsFilters(segments=bad)
+
+
+def test_segment_counts_leave_out_their_own_filter() -> None:
+    query, values = get_topic_segment_counts_query(
+        {
+            "date_from": date(2026, 10, 1),
+            "date_to": date(2026, 10, 2),
+            "template_id": TEMPLATE_ID,
+            "segments": {"lender": ["DMI"]},
+        }
+    )
+    assert "jsonb_each(ca.metadata -> 'segments')" in query
+    assert (
+        "(segment.key = $4::text OR ca.metadata -> 'segments' -> $4::text "
+        "?| $5::text[])"
+    ) in query
+    assert values[-2:] == ["lender", ["DMI"]]
 
 
 EVALUATION = {
@@ -962,6 +1193,34 @@ async def test_bad_model_response_saves_a_failed_row(
     assert failure_call.args[-1] == (
         "MODEL_BAD_RESPONSE after 2 attempt(s): Topic evaluator returned no content"
     )
+
+
+async def test_saved_topics_carry_the_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    topic = {"type": "kyc_location_blocked", "label": "KYC.Location blocked"}
+    save = AsyncMock()
+    monkeypatch.setattr(evaluator, "extract_topics", AsyncMock(return_value=[topic]))
+    monkeypatch.setattr(evaluator, "save_evaluation_results", save)
+    monkeypatch.setattr(evaluator, "add_discovered_topics", AsyncMock())
+    context = {
+        **_context(),
+        "payload": {"lender_name": "TVS_CREDIT, DMI", "event_name": "OFFERED"},
+    }
+    evaluation = {
+        **EVALUATION,
+        "configuration": {"model": "open-large-sa", "segments": SEGMENTS},
+    }
+
+    assert await evaluator.analyze_topics(context, evaluation) is True
+
+    assert save.await_args is not None
+    assert save.await_args.args[-1] == [
+        {
+            **topic,
+            "segments": {"lender": ["TVS_CREDIT", "DMI"], "stage": ["OFFERED"]},
+        }
+    ]
 
 
 async def test_our_own_timeout_fails_the_job_without_pausing(

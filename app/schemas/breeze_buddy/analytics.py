@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -137,6 +137,13 @@ class AnalyticsFilters(BaseModel):
         None,
         max_length=200,
         description="Exact underlying stable keys when opening the virtual Other topic group",
+    )
+    segments: Optional[
+        Dict[str, Annotated[List[str], Field(min_length=1, max_length=100)]]
+    ] = Field(
+        None,
+        max_length=5,
+        description="Topic analytics: segment key -> values; a conversation matches when it has one of the values of every key",
     )
 
 
