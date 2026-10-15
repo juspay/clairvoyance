@@ -28,7 +28,7 @@ dependencies = [
     "google-auth>=2.17.0",
     "cryptography>=44.0.1",
     "twilio",
-    "plivo",
+    "plivo==4.59.5",
     "PyJWT",
     "bcrypt>=4.0.0",
     "pydub",

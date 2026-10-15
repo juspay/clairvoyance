@@ -809,7 +809,7 @@ requires-dist = [
     { name = "opentelemetry-sdk" },
     { name = "pipecat-ai", extras = ["daily", "google", "assemblyai", "silero", "openai", "azure", "elevenlabs", "aic", "anthropic", "deepgram", "soniox", "mcp", "sarvam", "cartesia", "aws", "smallest"], specifier = "==1.1.0" },
     { name = "pipecat-ai-flows", specifier = "==1.0.0" },
-    { name = "plivo" },
+    { name = "plivo", specifier = "==4.59.5" },
     { name = "pydub" },
     { name = "pyjwt" },
     { name = "pypdf", specifier = ">=6.14.2" },
