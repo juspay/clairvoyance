@@ -2,7 +2,11 @@
 
 from typing import Any, Mapping
 
-from app.crm.connectivity.schemas.message import QueuedMessage, SendBehind
+from app.crm.connectivity.schemas.message import (
+    MessageState,
+    QueuedMessage,
+    SendBehind,
+)
 from app.crm.shared.decode import jsonb_object, uuid_or_none
 
 
@@ -36,4 +40,14 @@ def decode_send_behind(row: Mapping[str, Any]) -> SendBehind:
         source_kind=row["source_kind"],
         source_id=str(row["source_id"]) if row["source_id"] is not None else None,
         dedupe_key=row["dedupe_key"],
+    )
+
+
+def decode_message_state(row: Mapping[str, Any]) -> MessageState:
+    """One crm_message row -> its current word (the dedupe read)."""
+    return MessageState(
+        id=str(row["id"]),
+        status=row["status"],
+        reason=row["reason"],
+        provider_message_id=row["provider_message_id"],
     )
