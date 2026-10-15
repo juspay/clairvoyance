@@ -19,6 +19,10 @@ from app.crm.connectivity.contracts import (
     dispatch_send,
     register_retire_guard,
 )
+from app.crm.conversations.contracts import (
+    consume_buddy_moved,
+    consume_conversation_event,
+)
 from app.crm.outreach.contracts import (
     claim_due_runs,
     consume_attributed_event,
@@ -45,6 +49,11 @@ register_consumer(consume_template_event)
 # consumer returns from; it moves the manifest along sent -> delivered ->
 # read, or to failed with the provider's code.
 register_consumer(consume_status_event)
+# The fourth and fifth: conversations' projector (a customer's message on
+# Buddy's binding becomes a thread; a template on a shared binding joins it)
+# and its "Buddy moved" consumer (the old binding's threads resolve).
+register_consumer(consume_conversation_event)
+register_consumer(consume_buddy_moved)
 # The same inversion for connectivity's template retire guard (phase 14):
 # connectivity may not import outreach, so this root hands outreach's
 # "who would still send this template" into connectivity's slot.

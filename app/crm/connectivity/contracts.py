@@ -75,7 +75,11 @@ What is here, and why each thing is on the surface:
   them instead of naming one.
 - ``consume_status_event`` — the receipts consumer (worker_main registers
   it): message.status letters move the manifest along sent -> delivered ->
-  read, or to failed with the provider's code.
+  read, or to failed with the provider's code. ``receipt_target`` names the
+  send a receipt letter is about (conversations wakes the thread showing
+  it).
+- ``TOPIC_BUDDY_MOVED`` — the letter this module files when Buddy moves to
+  another binding; conversations resolves the old binding's threads.
 - ``buddy_binding`` / ``conversation_settings`` / ``list_channel_settings``
   / ``update_channel_settings`` — the merchant's bindings: the one templates
   go out from, and the one Buddy answers on with Buddy's settings (R1,
@@ -106,9 +110,9 @@ from app.crm.connectivity.onboarding import (
     onboard,
     resubscribe,
 )
-from app.crm.connectivity.queue import queue_message, send_behind
+from app.crm.connectivity.queue import normalize_address, queue_message, send_behind
 from app.crm.connectivity.reasons import reason_label
-from app.crm.connectivity.receipts import consume_status_event
+from app.crm.connectivity.receipts import consume_status_event, receipt_target
 from app.crm.connectivity.schemas.connector import ConversationSettings
 from app.crm.connectivity.schemas.message import TextBody
 from app.crm.connectivity.session import send_session
@@ -131,7 +135,12 @@ from app.crm.connectivity.templates.reads import (
     template_status,
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
-from app.crm.connectivity.topics import TOPIC_QUEUED
+from app.crm.connectivity.topics import (
+    TOPIC_BUDDY_MOVED,
+    TOPIC_INBOUND,
+    TOPIC_QUEUED,
+    TOPIC_STATUS,
+)
 
 __all__ = [
     # the dispatcher role
@@ -178,10 +187,17 @@ __all__ = [
     "TextBody",
     "conversation_profile",
     "conversation_channels",
+    "normalize_address",
     # the receipts consumer (worker_main registers)
     "consume_status_event",
     # the topic of our own send's echo — outreach must never react to it
     "TOPIC_QUEUED",
+    # the conversations module's letters: a customer wrote, a send moved
+    # (a receipt), Buddy moved
+    "TOPIC_INBOUND",
+    "TOPIC_STATUS",
+    "TOPIC_BUDDY_MOVED",
+    "receipt_target",
     # the merchant's bindings: the template binding, Buddy's binding, settings
     "buddy_binding",
     "conversation_settings",

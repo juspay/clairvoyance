@@ -247,3 +247,19 @@ async def sweep_parked() -> int:
     ):
         await apply_parked(merchant_id, provider_message_id)
     return await receipt_accessor.expire_parked(int(PARK_GRACE.total_seconds()))
+
+
+async def receipt_target(event: RawEvent) -> Optional[Tuple[str, Optional[str]]]:
+    """Which of our sends a receipt letter is about: (the provider's id, our
+    row's id — None when no row of ours carries it yet). None for a letter
+    that is not a receipt we act on. A read: the receipt itself is applied
+    by consume_status_event."""
+    if event.topic != TOPIC_STATUS:
+        return None
+    receipt = read_receipt(event)
+    if receipt is None:
+        return None
+    message_id = await message_accessor.message_id_by_provider(
+        event.merchant_id, receipt.provider_message_id
+    )
+    return receipt.provider_message_id, message_id
