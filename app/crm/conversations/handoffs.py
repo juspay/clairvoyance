@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.core.logger import logger
+from app.crm.conversations.ask import ask_buddy
 from app.crm.conversations.db import DbTxn, atomically
 from app.crm.conversations.db.accessors import (
     handoff as handoff_accessor,
@@ -19,14 +20,16 @@ from app.crm.conversations.db.accessors import (
 from app.crm.conversations.errors import NotAllowed, ThreadConflict, ThreadNotFound
 from app.crm.conversations.realtime import wake
 from app.crm.conversations.schemas import Handoff, Thread
-from app.crm.conversations.state import lapsed
+from app.crm.conversations.state import bot_answers, lapsed
 from app.crm.conversations.status import (
+    CHANNEL_WIDGET,
     HANDOFF_PRIORITIES,
     OUTCOME_SLA_LAPSED,
     PRIORITY_NORMAL,
+    RESUME_CLAIM_TIMEOUT,
     WAKE_HANDOFF,
 )
-from app.crm.conversations.threads import settings_for, thread_or_404
+from app.crm.conversations.threads import settings_for, thread_or_404, window_of
 
 
 async def request_handoff(
@@ -133,4 +136,14 @@ async def lapse_if_due(handoff: Handoff, now: datetime) -> bool:
     logger.bind(
         merchant_id=handoff.merchant_id, thread_id=handoff.conversation_id
     ).info(f"handoff {handoff.id} lapsed after {sla} min unclaimed — Buddy resumes")
+    if (
+        thread.channel != CHANNEL_WIDGET
+        and bot_answers(thread)
+        and window_of(thread, now).open
+    ):
+        # Buddy is told nobody came, in a turn of its own, with whatever she
+        # wrote while she waited (D5, D38).
+        await ask_buddy(
+            handoff.merchant_id, handoff.conversation_id, RESUME_CLAIM_TIMEOUT
+        )
     return True
