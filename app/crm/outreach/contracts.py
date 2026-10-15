@@ -7,6 +7,8 @@ Logic-layer functions only, never accessors.
                               savepoint, before the row's stamp.
   claim_due_runs / walk_run — the walker's pair for the shared drain loop
                               (CRM_ROLE=walker).
+  claim_due_freezes / freeze_broadcast — the broadcaster's pair for the
+                              shared drain loop (CRM_ROLE=broadcaster).
   template_references       — who would still send a template: (open
                               runs by their pinned documents, live/paused
                               plans by their latest) — the guard
@@ -15,6 +17,7 @@ Logic-layer functions only, never accessors.
                               not import this file.
 """
 
+from app.crm.outreach.broadcasts import claim_due_freezes, freeze_broadcast
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.versions import template_references
 from app.crm.outreach.workers import claim_due_runs, walk_run
@@ -23,5 +26,7 @@ __all__ = [
     "consume_attributed_event",
     "claim_due_runs",
     "walk_run",
+    "claim_due_freezes",
+    "freeze_broadcast",
     "template_references",
 ]
