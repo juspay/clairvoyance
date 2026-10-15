@@ -29,6 +29,16 @@ _PAGE_KINDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("shipping", ("shipping", "delivery")),
     ("returns", ("return", "refund", "exchange")),
 )
+# A contact page's own name: "contact", "contacts", "contact-us", "contact.php",
+# "contact-information", "contact-us-form"; "contact-lenses" or
+# "contactless-delivery" only has the word in it.
+_CONTACT_NAME = re.compile(
+    r"contacts?(?:[-_]?(?:us|form|page|info|information|details))*"
+    r"(?:[-_]\d+)?(?:\.\w+)?"
+)
+# Characters a browser reads differently from ``urlsplit`` ("\" is "/" to a
+# browser) or that would carry text into the prompt.
+_UNSAFE_URL = re.compile(r"[\s\\\x00-\x1f\x7f]")
 # File endings that are never a page: documents, scripts, styles, images.
 _FILE_ENDINGS = (
     ".pdf",
@@ -84,13 +94,40 @@ def pick_pages(home: str, home_links: List[str], map_links: List[str]) -> List[s
         key=lambda link: (link not in own, len(urlsplit(link).path), link),
     )
     pages: List[str] = []
-    for _, words in _PAGE_KINDS:
+    for kind, words in _PAGE_KINDS:
         for link in candidates:
             path = urlsplit(link).path.lower()
-            if link not in pages and any(word in path for word in words):
+            found = (
+                is_contact_page(link)
+                if kind == "contact"
+                else any(word in path for word in words)
+            )
+            if link not in pages and found:
                 pages.append(link)
                 break
     return pages
+
+
+def contact_page(pages: List[str]) -> str:
+    """The contact page among ``pick_pages``' picks, or "" when none is."""
+    return next((page for page in pages if is_contact_page(page)), "")
+
+
+def is_safe_link(link: str) -> bool:
+    """An https address a browser reads as ``urlsplit`` does: no backslash,
+    whitespace or control character, and no ``user@`` before the host."""
+    return (
+        link.startswith("https://")
+        and not _UNSAFE_URL.search(link)
+        and "@" not in urlsplit(link).netloc
+    )
+
+
+def is_contact_page(link: str) -> bool:
+    """A page named as the contact page: "/pages/contact-us", not the
+    "/contact-lenses" range of an eyewear store (visiondirect.co.uk)."""
+    name = urlsplit(link).path.lower().rstrip("/").rsplit("/", 1)[-1]
+    return bool(_CONTACT_NAME.fullmatch(name))
 
 
 def _is_web_page(link: str) -> bool:
@@ -176,4 +213,10 @@ def _dedupe_key(text: str) -> Tuple[str, ...]:
     )
 
 
-__all__ = ["contacts_in_links", "pick_pages", "same_site", "to_notes"]
+__all__ = [
+    "contact_page",
+    "contacts_in_links",
+    "pick_pages",
+    "same_site",
+    "to_notes",
+]
