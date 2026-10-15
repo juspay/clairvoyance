@@ -49,22 +49,24 @@ def _topic_counts(
 
     by_topic: Dict[str, Dict[str, Any]] = {}
     for (_, topic_type), count in counts.items():
+        parent, dot, _ = count["label"].partition(".")
+        count["group"] = f"{parent.strip().lower()}." if dot else topic_type
         total = by_topic.setdefault(
-            topic_type, {"calls": 0, "first_seen_at": count["first_seen_at"]}
+            count["group"], {"calls": 0, "first_seen_at": count["first_seen_at"]}
         )
         total["calls"] += len(count["sources"])
         total["first_seen_at"] = min(total["first_seen_at"], count["first_seen_at"])
     ranked = sorted(
         by_topic,
-        key=lambda topic_type: (
-            -by_topic[topic_type]["calls"],
-            by_topic[topic_type]["first_seen_at"],
-            topic_type,
+        key=lambda group: (
+            -by_topic[group]["calls"],
+            by_topic[group]["first_seen_at"],
+            group,
         ),
     )
-    rank_of = {topic_type: rank for rank, topic_type in enumerate(ranked, 1)}
-    for (_, topic_type), count in counts.items():
-        count["rank"] = rank_of[topic_type]
+    rank_of = {group: rank for rank, group in enumerate(ranked, 1)}
+    for count in counts.values():
+        count["rank"] = rank_of[count["group"]]
     return counts
 
 

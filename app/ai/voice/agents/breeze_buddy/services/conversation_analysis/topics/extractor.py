@@ -293,9 +293,9 @@ def topic_labels_to_catalog(labels: Optional[List[str]]) -> List[Dict[str, str]]
     catalog: List[Dict[str, str]] = []
     seen = set()
     for raw_label in labels or []:
-        label = normalize_topic_label(str(raw_label))
+        label = re.sub(r"\s+", " ", str(raw_label).strip()).strip(" .,:;!?-_/")[:120]
         topic_type = normalize_topic_type(label)
-        identity = (topic_type, label)
+        identity = (topic_type, label.lower())
         if not topic_type or not label or identity in seen:
             continue
         seen.add(identity)
@@ -313,11 +313,12 @@ def normalize_topics(
     catalog_by_label: Dict[str, tuple[str, str]] = {}
     for existing in existing_topics or []:
         topic_type = normalize_topic_type(str(existing.get("type") or ""))
-        label = normalize_topic_label(str(existing.get("label") or ""))
+        display = str(existing.get("label") or "").strip()
+        label = normalize_topic_label(display)
         if not topic_type or not label:
             continue
-        catalog_by_type[topic_type] = label
-        catalog_by_label[label] = (topic_type, label)
+        catalog_by_type[topic_type] = display
+        catalog_by_label[label] = (topic_type, display)
 
     normalized: List[Dict[str, Any]] = []
     seen = set()

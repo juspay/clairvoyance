@@ -177,7 +177,7 @@ async def test_openrouter_topics_go_through_the_model_provider(
         configuration,
     )
 
-    assert [topic["label"] for topic in topics] == ["delivery delay"]
+    assert [topic["label"] for topic in topics] == ["Delivery Delay"]
     assert generate.await_args is not None
     (request,) = generate.await_args.args
     assert request.model == "openai/gpt-4o-mini"
@@ -471,6 +471,31 @@ async def test_analysis_retries_once_after_timeout(
         context["started_at"],
         [{"type": "payment_issue"}],
     )
+
+
+async def test_a_two_level_list_never_grows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    found = [{"type": "otp_not_coming", "label": "otp not coming"}]
+    monkeypatch.setattr(evaluator, "extract_topics", AsyncMock(return_value=found))
+    monkeypatch.setattr(evaluator, "save_evaluation_results", AsyncMock())
+    add = AsyncMock()
+    monkeypatch.setattr(evaluator, "add_discovered_topics", add)
+    evaluation = {
+        "id": "00000000-0000-0000-0000-000000000010",
+        "evaluation_type": "TOPIC",
+        "configuration": {},
+    }
+
+    two_level = ["KYC.Location error", "KYC.Other"]
+    await evaluator.analyze_topics(context, {**evaluation, "topics": two_level})
+    add.assert_not_awaited()
+
+    for flat in ([], ["Refund status"], ["KYC.Location error", "Refund status"]):
+        add.reset_mock()
+        await evaluator.analyze_topics(context, {**evaluation, "topics": flat})
+        add.assert_awaited_once_with(str(context["template_id"]), ["otp not coming"])
 
 
 async def test_completion_enqueues_source_identity(
@@ -818,6 +843,59 @@ async def test_topic_dashboard_limit_is_across_agents(
     )
     assert shared_on_first["conversation_count"] == 1
     assert shared_on_first["rank"] == 1
+
+
+async def test_topic_dashboard_limit_keeps_a_topic_with_all_its_subtopics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = [
+        ("kyc_location_error", "KYC.Location error", 3),
+        ("kyc_selfie_fail", "KYC.Selfie fail", 1),
+        ("later_busy", "Later.Busy", 2),
+        ("refund", "Refund", 1),
+    ]
+    rows = [
+        {
+            "source_id": f"{topic_type}-{index}",
+            "template_id": TEMPLATE_ID,
+            "template_name": "Agent",
+            "started_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "raw_topic_type": topic_type,
+            "raw_label": label,
+        }
+        for topic_type, label, count in calls
+        for index in range(count)
+    ]
+    monkeypatch.setattr(
+        evaluation_result,
+        "run_reader_query",
+        AsyncMock(return_value=rows),
+    )
+
+    dashboard = await evaluation_result.get_topic_dashboard(
+        {"date_from": date(2026, 8, 1), "date_to": date(2026, 8, 2)}, top_topics=1
+    )
+
+    named = [
+        row
+        for row in dashboard
+        if row["result_type"] == "summary" and not row["is_other"]
+    ]
+    assert {row["topic_type"] for row in named} == {
+        "kyc_location_error",
+        "kyc_selfie_fail",
+    }
+    ranks = {
+        row["topic_type"]: row["rank"]
+        for row in dashboard
+        if row["result_type"] == "topic"
+    }
+    assert ranks == {
+        "kyc_location_error": 1,
+        "kyc_selfie_fail": 1,
+        "later_busy": 2,
+        "refund": 3,
+    }
 
 
 def test_topic_filter_normalizes_template_alias() -> None:

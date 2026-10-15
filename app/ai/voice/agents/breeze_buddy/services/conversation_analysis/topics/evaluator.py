@@ -187,7 +187,9 @@ async def analyze_topics(
             if str(topic.get("label") or "").strip()
         }.values()
     )
-    if labels:
+    entries = evaluation.get("topics") or []
+    two_level = bool(entries) and all("." in str(entry) for entry in entries)
+    if labels and not two_level:
         await add_discovered_topics(str(context["template_id"]), labels)
     logger.bind(
         outcome="saved",
