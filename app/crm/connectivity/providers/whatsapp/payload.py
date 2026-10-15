@@ -5,6 +5,15 @@ nothing here reads the database, decides a retry, or talks to Meta.
 import re
 from typing import Any, Dict, List, Optional, Union
 
+from app.crm.connectivity.channels import ConversationProfile
+from app.crm.connectivity.schemas.message import (
+    ButtonsBody,
+    ImageBody,
+    ListBody,
+    SessionBodyType,
+    TextBody,
+)
+
 # The wire key the flow_token rides under. Meta echoes it back inside the
 # customer's submission, where record's extractor strips it by the SAME
 # spelling (record/extractors/whatsapp/flow.py) — spelled twice because
@@ -171,3 +180,134 @@ def build_send_body(
             "components": components,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Session sends — free-form replies inside the customer-service window
+# ---------------------------------------------------------------------------
+
+
+def _too_long(label: str, value: Optional[str], limit: int) -> Optional[str]:
+    if value is not None and len(value) > limit:
+        return f"{label} is {len(value)} characters, the limit is {limit}"
+    return None
+
+
+def session_body_problem(
+    body: SessionBodyType, profile: ConversationProfile
+) -> Optional[str]:
+    """PURE: why ``body`` cannot go out on this channel as it stands, or None.
+
+    The limits are the channel's (channels.py), checked HERE so a reply that
+    would be refused by the provider is refused by us first — with a
+    sentence naming the part that does not fit, where the provider would
+    return a bare code. Whoever composes replies reads the same profile
+    through contracts and shapes to fit; this is the backstop, not the plan.
+    """
+    if isinstance(body, TextBody):
+        return _too_long("text", body.text, profile.text_max)
+    if isinstance(body, ImageBody):
+        return _too_long("caption", body.caption, profile.caption_max)
+    problem = (
+        _too_long("body", body.text, profile.interactive_body_max)
+        or _too_long("header", body.header, profile.header_max)
+        or _too_long("footer", body.footer, profile.footer_max)
+    )
+    if problem:
+        return problem
+    if isinstance(body, ButtonsBody):
+        if len(body.buttons) > profile.max_reply_buttons:
+            return (
+                f"{len(body.buttons)} buttons, the limit is "
+                f"{profile.max_reply_buttons}"
+            )
+        for button in body.buttons:
+            problem = _too_long(
+                "button title", button.title, profile.reply_button_title_max
+            )
+            if problem:
+                return problem
+        return None
+    if len(body.rows) > profile.max_list_rows:
+        return f"{len(body.rows)} rows, the limit is {profile.max_list_rows}"
+    problem = _too_long("list button", body.button, profile.list_button_max) or (
+        _too_long("section title", body.section_title, profile.list_row_title_max)
+    )
+    if problem:
+        return problem
+    for row in body.rows:
+        problem = _too_long(
+            "row title", row.title, profile.list_row_title_max
+        ) or _too_long(
+            "row description", row.description, profile.list_row_description_max
+        )
+        if problem:
+            return problem
+    return None
+
+
+def _decorations(body: Union[ButtonsBody, ListBody]) -> Dict[str, Any]:
+    """The optional header and footer an interactive message may carry."""
+    extra: Dict[str, Any] = {}
+    if body.header:
+        extra["header"] = {"type": "text", "text": body.header}
+    if body.footer:
+        extra["footer"] = {"text": body.footer}
+    return extra
+
+
+def build_session_body(recipient: str, body: SessionBodyType) -> Dict[str, Any]:
+    """The Cloud API body for one free-form reply. Assembly only — ``body``
+    arrives already judged to fit (session_body_problem).
+
+    ``context.message_id`` quotes the message this reply answers; it changes
+    how the reply is shown, never who it goes to.
+    """
+    payload: Dict[str, Any] = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+    }
+    if body.reply_to:
+        payload["context"] = {"message_id": body.reply_to}
+    if isinstance(body, TextBody):
+        payload["type"] = "text"
+        payload["text"] = {"preview_url": body.preview_url, "body": body.text}
+        return payload
+    if isinstance(body, ImageBody):
+        image: Dict[str, Any] = {"link": body.url}
+        if body.caption:
+            image["caption"] = body.caption
+        payload["type"] = "image"
+        payload["image"] = image
+        return payload
+    if isinstance(body, ButtonsBody):
+        interactive: Dict[str, Any] = {
+            "type": "button",
+            "body": {"text": body.text},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": b.id, "title": b.title}}
+                    for b in body.buttons
+                ]
+            },
+        }
+    else:
+        section: Dict[str, Any] = {
+            "rows": [
+                {"id": row.id, "title": row.title}
+                | ({"description": row.description} if row.description else {})
+                for row in body.rows
+            ]
+        }
+        if body.section_title:
+            section["title"] = body.section_title
+        interactive = {
+            "type": "list",
+            "body": {"text": body.text},
+            "action": {"button": body.button, "sections": [section]},
+        }
+    interactive.update(_decorations(body))
+    payload["type"] = "interactive"
+    payload["interactive"] = interactive
+    return payload
