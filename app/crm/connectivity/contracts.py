@@ -37,6 +37,9 @@ What is here, and why each thing is on the surface:
 - ``template_status`` / ``get_registers_templates`` — what outreach's
   publish asks so a send node naming an unknown or unapproved template
   is refused at publish, not blocked at dispatch hours later (phase 08).
+- ``register_template_hook`` — the slot worker_main fills with
+  conversations' add_template_to_thread: a queued template on a channel with
+  conversations may join the customer's thread.
 - ``register_retire_guard`` — the slot worker_main fills with outreach's
   count of open runs naming a template, so retire can refuse to pull a
   template from under a run in flight without this module importing
@@ -76,7 +79,11 @@ What is here, and why each thing is on the surface:
   naming one.
 - ``consume_status_event`` — the receipts consumer (worker_main registers
   it): message.status letters move the manifest along sent -> delivered ->
-  read, or to failed with the provider's code.
+  read, or to failed with the provider's code. ``receipt_target`` names the
+  send a receipt letter is about (conversations wakes the thread showing
+  it).
+- ``TOPIC_BUDDY_BOT_MOVED`` — the letter this module files when Buddy moves
+  to another binding; conversations resolves the old binding's threads.
 - ``get_current_buddy_binding`` / ``conversation_settings`` /
   ``list_channel_settings`` / ``update_channel_settings`` — the merchant's
   bindings: the one templates go out from, and the one Buddy answers on with
@@ -116,8 +123,16 @@ from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.ingress import META_INGRESS
 from app.crm.connectivity.messaging.conversations.reply import send_reply
 from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
-from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
-from app.crm.connectivity.messaging.shared.receipts import consume_status_event
+from app.crm.connectivity.messaging.outbound.queue import (
+    normalize_address,
+    queue_message,
+    send_behind,
+)
+from app.crm.connectivity.messaging.outbound.template_hook import register_template_hook
+from app.crm.connectivity.messaging.shared.receipts import (
+    consume_status_event,
+    receipt_target,
+)
 from app.crm.connectivity.schemas.conversation import ConversationSettings
 from app.crm.connectivity.schemas.message.whatsapp import TextBody
 from app.crm.connectivity.templates.events import consume_template_event
@@ -134,6 +149,11 @@ from app.crm.connectivity.templates.reads import (
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
 from app.crm.connectivity.vocabulary.reasons import reason_label
+from app.crm.connectivity.vocabulary.topics import (
+    TOPIC_BUDDY_BOT_MOVED,
+    TOPIC_INBOUND,
+    TOPIC_STATUS,
+)
 
 __all__ = [
     # the dispatcher role
@@ -166,6 +186,8 @@ __all__ = [
     "get_registers_templates",
     # the retire guard slot (worker_main fills)
     "register_retire_guard",
+    # the slot worker_main fills with conversations' template-on-thread
+    "register_template_hook",
     # the template webhook consumer (worker_main registers)
     "consume_template_event",
     # webhook subscription recovery
@@ -181,8 +203,15 @@ __all__ = [
     "TextBody",
     "get_conversation_channel_limits",
     "get_supported_channels_for_conversations",
+    "normalize_address",
     # the receipts consumer (worker_main registers)
     "consume_status_event",
+    # the conversations module's letters: a customer wrote, a send moved
+    # (a receipt), Buddy moved
+    "TOPIC_INBOUND",
+    "TOPIC_STATUS",
+    "TOPIC_BUDDY_BOT_MOVED",
+    "receipt_target",
     # the merchant's bindings: the template binding, Buddy's binding, settings
     "get_current_buddy_binding",
     "conversation_settings",

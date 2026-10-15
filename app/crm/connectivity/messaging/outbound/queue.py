@@ -10,10 +10,15 @@ Two code dictionaries live here because canon T16 dropped their CHECKs
 producer as the owner of the validating dictionary.
 """
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from app.crm.connectivity.channels.utils import get_gate_handle_kind
+from app.crm.connectivity.channels.utils import (
+    get_conversation_channel_limits,
+    get_gate_handle_kind,
+)
 from app.crm.connectivity.db.accessors import message as message_accessor
+from app.crm.connectivity.messaging.outbound.template_hook import call_template_hook
 from app.crm.connectivity.schemas.message.shared import SendBehind
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
@@ -100,7 +105,7 @@ async def queue_message(
     sent_to = normalize_address(channel, address)
     if sent_to is None:
         raise ValueError(f"unusable {channel} address")
-    return await message_accessor.insert_message(
+    message_id = await message_accessor.insert_message(
         merchant_id,
         customer_id,
         channel,
@@ -112,6 +117,21 @@ async def queue_message(
         variables,
         dedupe_key,
     )
+    # A new row on a channel with conversations: the template hook may put it
+    # on her thread (template_hook.py). An absorbed retry calls nothing — a
+    # first try that died before the hook leaves its template off the thread,
+    # a display gap the manifest row itself does not share.
+    if message_id is not None and get_conversation_channel_limits(channel) is not None:
+        await call_template_hook(
+            merchant_id,
+            channel,
+            customer_id,
+            message_id,
+            template_id,
+            source_kind,
+            datetime.now(timezone.utc),
+        )
+    return message_id
 
 
 async def send_behind(

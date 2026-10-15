@@ -27,6 +27,17 @@ def graph_stub(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_template_hook(monkeypatch: pytest.MonkeyPatch):
+    """worker_main fills connectivity's template hook when it is imported; a
+    unit test that queues a template must never reach conversations'
+    database through it by accident. A test that watches the hook patches
+    over it (monkeypatch runs in order)."""
+    from app.crm.connectivity.messaging.outbound import template_hook
+
+    monkeypatch.setattr(template_hook, "_template_hook", None)
+
+
+@pytest.fixture(autouse=True)
 def _no_receipt_read_back(monkeypatch: pytest.MonkeyPatch):
     """Both send paths read a message's filed receipts back after recording
     its outcome — real database work a unit test of dispatch or a reply must
