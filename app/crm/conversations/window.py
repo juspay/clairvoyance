@@ -2,7 +2,8 @@
 
 A customer's message opens (or resets) the channel's window: the business
 may send free-form messages until last_inbound_at + the channel's hours.
-Our own sends never move it.
+Our own sends never move it. The closing message is due ``lead`` minutes
+before it shuts (R5).
 """
 
 from datetime import datetime, timedelta
@@ -24,3 +25,17 @@ def is_open(
     """PURE: may we send free-form right now?"""
     end = closes_at(last_inbound_at, window_hours)
     return end is not None and now < end
+
+
+def closing_due(
+    last_inbound_at: Optional[datetime],
+    window_hours: int,
+    lead_minutes: int,
+    now: datetime,
+) -> bool:
+    """PURE: is it time for the closing message — inside the lead, before
+    the window shuts?"""
+    end = closes_at(last_inbound_at, window_hours)
+    if end is None:
+        return False
+    return end - timedelta(minutes=lead_minutes) <= now < end

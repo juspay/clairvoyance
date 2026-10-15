@@ -2,6 +2,7 @@
 thread (crm_handoff_merchant_open_uq); closing is one conditional UPDATE, so
 a handoff closes once."""
 
+from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
 HANDOFF_TABLE = "crm_handoff"
@@ -10,6 +11,28 @@ HANDOFF_COLUMNS = """
     id, merchant_id, conversation_id, chat_session_id, reason, summary,
     priority, claimed_by, claimed_at, outcome, closed_by, closed_at, opened_at
 """
+
+
+def open_handoff_query(
+    merchant_id: str,
+    thread_id: str,
+    chat_session_id: str,
+    reason: Optional[str],
+    summary: Optional[str],
+    priority: str,
+) -> Tuple[str, List[Any]]:
+    """Open one — or nothing, when the thread already has one open (the
+    caller then reads that one: asking twice is the same ask)."""
+    query = f"""
+        INSERT INTO {HANDOFF_TABLE}
+            (merchant_id, conversation_id, chat_session_id, reason, summary,
+             priority)
+        VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6)
+        ON CONFLICT (merchant_id, conversation_id) WHERE closed_at IS NULL
+        DO NOTHING
+        RETURNING {HANDOFF_COLUMNS}
+    """
+    return query, [merchant_id, thread_id, chat_session_id, reason, summary, priority]
 
 
 def open_for_thread_query(merchant_id: str, thread_id: str) -> Tuple[str, List[Any]]:
@@ -71,6 +94,27 @@ def close_query(
     return query, [merchant_id, thread_id, outcome, closed_by]
 
 
+def lapse_query(
+    merchant_id: str, handoff_id: str, outcome: str, claim_sla_minutes: int
+) -> Tuple[str, List[Any]]:
+    """Close THIS handoff as lapsed, only if it still is: open, unclaimed and
+    past the claim SLA on the row as it stands. The sweep judged it from a
+    page it read earlier — a teammate who took it since, or a new handoff
+    on the thread, is never closed."""
+    query = f"""
+        UPDATE {HANDOFF_TABLE}
+           SET outcome = $3,
+               closed_at = now()
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND closed_at IS NULL
+           AND claimed_at IS NULL
+           AND opened_at <= now() - make_interval(mins => $4::int)
+        RETURNING {HANDOFF_COLUMNS}
+    """
+    return query, [merchant_id, handoff_id, outcome, claim_sla_minutes]
+
+
 def close_for_threads_query(
     merchant_id: str, thread_ids: List[str], outcome: str
 ) -> Tuple[str, List[Any]]:
@@ -84,3 +128,24 @@ def close_for_threads_query(
         RETURNING id
     """
     return query, [merchant_id, thread_ids, outcome]
+
+
+def unclaimed_older_than_query(
+    seconds: int, after: Optional[Tuple[datetime, str]], limit: int
+) -> Tuple[str, List[Any]]:
+    """Open handoffs nobody claimed for at least ``seconds``, oldest first
+    (crm_handoff_unclaimed_ix), keyset-paged so a merchant with a long SLA
+    never crowds out one whose handoff is due — the sweep reads each
+    merchant's own SLA after this narrows."""
+    after_at, after_id = after if after else (None, None)
+    query = f"""
+        SELECT {HANDOFF_COLUMNS}
+          FROM {HANDOFF_TABLE}
+         WHERE closed_at IS NULL
+           AND claimed_at IS NULL
+           AND opened_at < now() - make_interval(secs => $1::int)
+           AND ($2::timestamptz IS NULL OR (opened_at, id) > ($2, $3::uuid))
+         ORDER BY opened_at, id
+         LIMIT $4
+    """
+    return query, [seconds, after_at, after_id, limit]

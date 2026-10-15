@@ -62,6 +62,18 @@ def thread_query(
     return query, [merchant_id, thread_id]
 
 
+def threads_by_ids_query(
+    merchant_id: str, thread_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        SELECT {THREAD_COLUMNS}
+          FROM {THREAD_TABLE}
+         WHERE merchant_id = $1
+           AND id = ANY($2::uuid[])
+    """
+    return query, [merchant_id, thread_ids]
+
+
 def thread_for_contact_query(
     merchant_id: str, channel: str, contact_key: str
 ) -> Tuple[str, List[Any]]:
@@ -372,3 +384,89 @@ def view_counts_query(
            AND ($2::text IS NULL OR t.channel = $2)
     """
     return query, [merchant_id, channel, user_id]
+
+
+# ---------------------------------------------------------------------------
+# Buddy's turns: the per-thread writes
+# ---------------------------------------------------------------------------
+
+
+def set_bot_session_query(
+    merchant_id: str, thread_id: str, session_id: str
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        UPDATE {THREAD_TABLE}
+           SET bot_session_id = $3::uuid
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+           AND bot_template_id IS NOT NULL
+           AND resolved_at IS NULL
+        RETURNING {THREAD_COLUMNS}
+    """
+    return query, [merchant_id, thread_id, session_id]
+
+
+def mark_bot_cursor_query(
+    merchant_id: str, thread_id: str, answered_upto: datetime
+) -> Tuple[str, List[Any]]:
+    """The turn answered everything up to ``answered_upto``. Forward only."""
+    query = f"""
+        UPDATE {THREAD_TABLE}
+           SET bot_cursor_at = GREATEST(COALESCE(bot_cursor_at, $3), $3)
+         WHERE merchant_id = $1
+           AND id = $2::uuid
+        RETURNING {THREAD_COLUMNS}
+    """
+    return query, [merchant_id, thread_id, answered_upto]
+
+
+# ---------------------------------------------------------------------------
+# the sweeps (cross-tenant)
+# ---------------------------------------------------------------------------
+
+
+def closing_candidates_query(
+    channel: str,
+    older_than_seconds: int,
+    after: Optional[Tuple[datetime, str]],
+    limit: int,
+) -> Tuple[str, List[Any]]:
+    """Open threads on a channel whose window is within the longest lead of
+    shutting (or already shut), oldest first, keyset-paged so threads that
+    must wait never crowd out the ones due. The per-thread decision reads the
+    merchant's own lead; this only narrows (crm_conversation_window_ix)."""
+    after_at, after_id = after if after else (None, None)
+    query = f"""
+        SELECT {THREAD_COLUMNS}
+          FROM {THREAD_TABLE}
+         WHERE resolved_at IS NULL
+           AND last_inbound_at IS NOT NULL
+           AND last_inbound_at < now() - make_interval(secs => $2::int)
+           AND channel = $1
+           AND ($3::timestamptz IS NULL OR (last_inbound_at, id) > ($3, $4::uuid))
+         ORDER BY last_inbound_at, id
+         LIMIT $5
+    """
+    return query, [channel, older_than_seconds, after_at, after_id, limit]
+
+
+def delete_resolved_query(older_than_days: int, limit: int) -> Tuple[str, List[Any]]:
+    """Retention (D22): resolved threads older than the window go, their
+    timeline and handoffs with them (ON DELETE CASCADE). Batched. The age is
+    checked again on the row the delete reaches: a delete that waits on her
+    reopening the thread re-checks only its own WHERE, not the subquery."""
+    query = f"""
+        WITH gone AS (
+            DELETE FROM {THREAD_TABLE}
+             WHERE id IN (
+                       SELECT id FROM {THREAD_TABLE}
+                        WHERE resolved_at IS NOT NULL
+                          AND resolved_at < now() - make_interval(days => $1::int)
+                        LIMIT $2
+                   )
+               AND resolved_at < now() - make_interval(days => $1::int)
+            RETURNING 1
+        )
+        SELECT count(*) FROM gone
+    """
+    return query, [older_than_days, limit]

@@ -84,6 +84,8 @@ What is here, and why each thing is on the surface:
   / ``update_channel_settings`` — the merchant's bindings: the one templates
   go out from, and the one Buddy answers on with Buddy's settings (R1,
   D13–D15, D24–D28); read total and fail-closed (no agent, handoff off).
+  ``CLOSING_LEAD_MINUTES_RANGE`` / ``CLAIM_SLA_MINUTES_RANGE`` bound the
+  two timings, so a sweep narrows by the same bounds the settings allow.
 
 ``send()`` stays OFF this surface so that nothing outside the module can
 reach a provider without passing the checks in front of it. So does the
@@ -118,7 +120,11 @@ from app.crm.connectivity.receipts import (
     message_ticks,
     receipt_target,
 )
-from app.crm.connectivity.schemas.connector import ConversationSettings
+from app.crm.connectivity.schemas.connector import (
+    CLAIM_SLA_MINUTES_RANGE,
+    CLOSING_LEAD_MINUTES_RANGE,
+    ConversationSettings,
+)
 from app.crm.connectivity.schemas.message import TextBody
 from app.crm.connectivity.session import send_session
 from app.crm.connectivity.settings import (
@@ -212,4 +218,6 @@ __all__ = [
     "list_channel_settings",
     "update_channel_settings",
     "ConversationSettings",
+    "CLOSING_LEAD_MINUTES_RANGE",
+    "CLAIM_SLA_MINUTES_RANGE",
 ]

@@ -208,3 +208,22 @@ class ReplyRead(BaseModel):
     message: TimelineRow
     status: Optional[str] = None
     reason: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# what Buddy's turns work on (PR 3 consumes these through contracts)
+# ---------------------------------------------------------------------------
+
+
+class BotWork(BaseModel):
+    """A thread with customer messages Buddy has not answered yet, as one
+    turn answers it."""
+
+    thread_id: str
+    merchant_id: str
+    channel: str
+    customer_id: Optional[str] = None
+    address: Optional[str] = None
+    binding_id: Optional[str] = None
+    agent_id: str
+    session_id: Optional[str] = None

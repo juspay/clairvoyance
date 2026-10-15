@@ -20,8 +20,10 @@ from app.crm.connectivity.contracts import (
     register_retire_guard,
 )
 from app.crm.conversations.contracts import (
+    claim_inbox_tick,
     consume_buddy_moved,
     consume_conversation_event,
+    run_inbox_tick,
 )
 from app.crm.outreach.contracts import (
     claim_due_runs,
@@ -81,15 +83,34 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         stop_event=stop_event,
         name="dispatcher",
     ),
-    "walker": lambda stop_event: run_drain_loop(
-        claim_due_runs,
-        walk_run,
-        interval=CRM_WORKER_INTERVAL,
-        batch=CRM_WORKER_BATCH,
-        stop_event=stop_event,
-        name="walker",
-    ),
+    "walker": lambda stop_event: _walker(stop_event),
 }
+
+
+async def _walker(stop_event: asyncio.Event) -> None:
+    """The walker pod runs two loops: workflow runs, and the inbox sweeps
+    (closing messages, lapsed handoffs, retention) — so the inbox needs no
+    pod of its own. Each is the shared scaffold; one failing never stops
+    the other."""
+    await asyncio.gather(
+        run_drain_loop(
+            claim_due_runs,
+            walk_run,
+            interval=CRM_WORKER_INTERVAL,
+            batch=CRM_WORKER_BATCH,
+            stop_event=stop_event,
+            name="walker",
+        ),
+        run_drain_loop(
+            claim_inbox_tick,
+            run_inbox_tick,
+            interval=CRM_WORKER_INTERVAL,
+            batch=1,
+            stop_event=stop_event,
+            name="inbox-sweeper",
+        ),
+    )
+
 
 _task: Optional[asyncio.Task] = None
 _stop_event: Optional[asyncio.Event] = None

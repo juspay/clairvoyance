@@ -35,6 +35,19 @@ def lapsed(handoff: Handoff, claim_sla_minutes: int, now: datetime) -> bool:
     )
 
 
+def bot_answers(thread: Thread) -> bool:
+    """PURE: Buddy answers this thread — it is open, an agent is set, no
+    teammate holds it, and she has written. Whether she wrote since Buddy last
+    answered is a row read (bot.owes_reply); whether Buddy may SPEAK (an open
+    handoff, the binding) is asked again before every send."""
+    return not (
+        thread.bot_template_id is None
+        or thread.last_inbound_at is None
+        or thread.resolved_at is not None
+        or thread.assignee_user_id is not None
+    )
+
+
 def held_by(
     thread: Thread,
     handoff: Optional[Handoff],
