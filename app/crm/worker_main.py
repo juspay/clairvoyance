@@ -3,6 +3,7 @@ at the package root because it is the one leaf that may import every
 module's contracts side by side."""
 
 import asyncio
+import gc
 from typing import Any, Callable, Coroutine, Dict, Optional
 
 from app.core.config.static import (
@@ -100,6 +101,15 @@ async def start_worker_role(role: str) -> None:
             f"transaction. At a ceiling of one, #2 waits on the connection #1 "
             f"is holding and the worker hangs on the first row, silently."
         )
+    # Everything the process built at startup (imports, routers, config)
+    # lives as long as the pod, yet every full garbage collection walks all
+    # of it again — ~3 lakh objects, a ~65 ms pause each time, during which
+    # no loop of this role runs (measured locally on 15 Oct: a walker beside
+    # a 2-lakh broadcast freeze was held up to 129 ms; with this, 7.6 ms).
+    # Collect once, then freeze what is left: later collections walk only
+    # what the loops create.
+    gc.collect()
+    gc.freeze()
     _stop_event = asyncio.Event()
     _task = asyncio.create_task(ROLES[role](_stop_event), name=f"crm-{role}")
 
