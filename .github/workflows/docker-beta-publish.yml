@@ -33,10 +33,15 @@ jobs:
       - name: Extract short SHA
         run: echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
 
+      # N-CI-1: mask the token and hand it to the build step only, as a step
+      # output — never via $GITHUB_ENV, which every later step (and action)
+      # in the job would inherit.
       - name: Get GCP Access Token for Docker Build
+        id: gcp_token
         run: |
           ACCESS_TOKEN=$(gcloud auth print-access-token)
-          echo "GCP_ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+          echo "::add-mask::$ACCESS_TOKEN"
+          echo "token=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Build and Push Docker Image to Artifact Registry
         uses: docker/build-push-action@v5
@@ -48,6 +53,6 @@ jobs:
           build-args: |
             KRISP_BUCKET_PATH=gs://clairvoyance-models/krisp
           secrets: |
-            gcp_token=${{ env.GCP_ACCESS_TOKEN }}
+            gcp_token=${{ steps.gcp_token.outputs.token }}
           provenance: false
           sbom: false

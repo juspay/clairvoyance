@@ -17,6 +17,11 @@ from app.schemas.breeze_buddy.stt import TranscriptionStreamRequest
 _USER = UserInfo(id="user-1", username="tester", role=UserRole.ADMIN)
 
 
+async def _ws_user(_ws: WebSocket) -> UserInfo:
+    """Async stand-in for get_user_from_websocket (now a coroutine)."""
+    return _USER
+
+
 class FakeWebSocket:
     """Minimal stand-in implementing the surface the stream handler uses.
 
@@ -111,7 +116,7 @@ def stream_env(monkeypatch: pytest.MonkeyPatch) -> dict:
             setattr(stub, attr, value)
         return stub
 
-    monkeypatch.setattr(handlers, "get_user_from_websocket", lambda ws: _USER)
+    monkeypatch.setattr(handlers, "get_user_from_websocket", _ws_user)
     create_mock = AsyncMock(return_value=object())
     monkeypatch.setattr(handlers, "create_stt_from_config", create_mock)
     created["create_stt"] = create_mock
@@ -138,25 +143,30 @@ def test_stream_request_normalizes_and_bounds() -> None:
         )
 
 
-def test_websocket_auth_reads_header_then_query(
+async def test_websocket_auth_reads_header_then_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[str] = []
+
+    async def _verify(token: str) -> UserInfo:
+        seen.append(token)
+        return _USER
+
     monkeypatch.setattr(
         rbac_token.rbac_token_manager,
         "verify_rbac_token",
-        lambda token: seen.append(token) or _USER,
+        _verify,
     )
 
     ws = FakeWebSocket("", headers={"authorization": "Bearer header-token"})
-    assert rbac_token.get_user_from_websocket(as_ws(ws)) is _USER
+    assert await rbac_token.get_user_from_websocket(as_ws(ws)) is _USER
 
     ws = FakeWebSocket("", query={"token": "query-token"})
-    assert rbac_token.get_user_from_websocket(as_ws(ws)) is _USER
+    assert await rbac_token.get_user_from_websocket(as_ws(ws)) is _USER
     assert seen == ["header-token", "query-token"]
 
     with pytest.raises(HTTPException):
-        rbac_token.get_user_from_websocket(as_ws(FakeWebSocket("")))
+        await rbac_token.get_user_from_websocket(as_ws(FakeWebSocket("")))
 
 
 async def test_stream_rejects_unauthenticated() -> None:
@@ -171,7 +181,7 @@ async def test_stream_rejects_unauthenticated() -> None:
 async def test_stream_rejects_invalid_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(handlers, "get_user_from_websocket", lambda ws: _USER)
+    monkeypatch.setattr(handlers, "get_user_from_websocket", _ws_user)
 
     ws = FakeWebSocket(json.dumps({"provider": "not-a-provider"}))
     await handlers.handle_transcription_stream(as_ws(ws))
@@ -183,7 +193,7 @@ async def test_stream_rejects_invalid_config(
 async def test_stream_rejects_openai_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(handlers, "get_user_from_websocket", lambda ws: _USER)
+    monkeypatch.setattr(handlers, "get_user_from_websocket", _ws_user)
 
     ws = FakeWebSocket(json.dumps({"provider": "openai"}))
     await handlers.handle_transcription_stream(as_ws(ws))
@@ -196,7 +206,7 @@ async def test_stream_rejects_openai_provider(
 async def test_stream_rejects_sarvam_sample_rate_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(handlers, "get_user_from_websocket", lambda ws: _USER)
+    monkeypatch.setattr(handlers, "get_user_from_websocket", _ws_user)
 
     ws = FakeWebSocket(json.dumps({"provider": "sarvam", "sample_rate": 8000}))
     await handlers.handle_transcription_stream(as_ws(ws))

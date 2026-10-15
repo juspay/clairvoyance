@@ -16,8 +16,9 @@ Throttle TTLs reflect severity:
 Slack failures never break dispatch — every alert is best-effort and the
 underlying observation is also logged at the source.
 
-``emit_template_updated_alert`` is the one unthrottled notice here: an audit
-trail of template saves, where every event must reach the channel.
+``emit_template_updated_alert`` and ``emit_s2s_token_minted_alert`` are the
+unthrottled notices here: audit trails of template saves and S2S token mints,
+where every event must reach the channel.
 """
 
 from __future__ import annotations
@@ -510,6 +511,41 @@ async def emit_template_updated_alert(
         logger.warning(
             f"[TEMPLATE_UPDATED] Slack alert failed for {template_id}: {slack_exc}"
         )
+
+
+async def emit_s2s_token_minted_alert(
+    *,
+    minted_by: str,
+    ip: str,
+    token_role: str,
+    reseller_ids: List[str],
+    merchant_ids: List[str],
+    lifetime_days: int,
+    expires_at: str,
+    merchant_name: Optional[str] = None,
+) -> None:
+    """Best-effort Slack notice that a long-lived S2S token was minted.
+
+    Spawned, never awaited — same reasoning as ``emit_template_updated_alert``:
+    the token is already issued, and a slow Slack must not hold the response.
+    Unthrottled: every mint is a credential someone needs to see. The token
+    itself is never sent.
+    """
+    fields = [
+        {"name": "Minted by", "value": _slack_text(minted_by)},
+        {"name": "From IP", "value": _slack_text(ip or "-")},
+        {"name": "Token role", "value": _slack_text(token_role)},
+        {"name": "Resellers", "value": _slack_text(", ".join(reseller_ids) or "-")},
+        {"name": "Merchants", "value": _slack_text(", ".join(merchant_ids) or "-")},
+        {"name": "TTL", "value": f"{lifetime_days} days"},
+        {"name": "Expires at", "value": _slack_text(expires_at)},
+    ]
+    if merchant_name:
+        fields.append({"name": "Merchant name", "value": _slack_text(merchant_name)})
+    try:
+        await slack_alert.send(title="New S2S Token Minted", fields=fields)
+    except Exception as slack_exc:  # noqa: BLE001
+        logger.warning(f"[S2S_TOKEN_MINTED] Slack alert failed: {slack_exc}")
 
 
 # ---------------------------------------------------------------------------

@@ -14,13 +14,19 @@
 #   LITELLM_BASE_URL  : LiteLLM proxy base URL (reachable from GitHub runners).
 #   LITELLM_API_KEY   : LiteLLM proxy API key.
 #
-# Fork PRs (which can't read secrets) and runs with missing secrets are skipped
-# cleanly — the check passes so it never deadlocks merges.
+# Fork PRs and runs with missing secrets are skipped cleanly — the check passes
+# so it never deadlocks merges.
+#
+# N-CI-2: runs on pull_request_target, so THIS file and the checkout (CLAUDE.md,
+# yama.config.yaml) come from the base branch, never from the PR. A PR that edits
+# this workflow cannot make it print the secrets, and cannot rewrite the review
+# rules it is judged by. Yama reads the PR itself through the GitHub API. Never
+# check out or run the PR's head here — that would hand PR code the secrets.
 
 name: 'Yama PR Review'
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
     branches: [release]
 
@@ -53,8 +59,10 @@ jobs:
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           IS_SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
+          # pull_request_target DOES give fork PRs the secrets, so this gate is
+          # what keeps them (and the write-capable PAT) away from outside PRs.
           if [ "$IS_SAME_REPO" != "true" ]; then
-            echo "::notice::Fork PR — repository secrets are unavailable; skipping Yama review (check passes)."
+            echo "::notice::Fork PR — Yama review runs only for same-repo branches; skipping (check passes)."
             echo "run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -69,6 +77,8 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v4
         with:
+          # No `ref:` on purpose — pull_request_target checks out the base branch,
+          # never the PR head (see the header).
           fetch-depth: 0
           # Yama authenticates with its own PAT; don't leave the ephemeral Actions
           # token in .git/config.
