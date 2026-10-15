@@ -61,7 +61,10 @@ class LoginRequest(BaseModel):
     """Login request model"""
 
     username: str
-    password: str
+    # min_length=1: bcrypt's verifier rejects an empty plaintext with
+    # ValueError, which would surface as a 500 instead of the generic 401.
+    # Fail at the schema boundary (422) so it never reaches verify_password.
+    password: str = Field(..., min_length=1)
 
 
 class LoginResponse(BaseModel):
@@ -83,7 +86,8 @@ class S2STokenRequest(BaseModel):
     """S2S token generation request model"""
 
     username: str
-    password: str
+    # See LoginRequest.password — empty plaintext must 422, never reach bcrypt.
+    password: str = Field(..., min_length=1)
     token_lifetime_days: int = Field(
         default=365, ge=1, le=365000, description="Token lifetime in days (1-365000)"
     )

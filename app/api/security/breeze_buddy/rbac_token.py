@@ -3,6 +3,7 @@ Breeze Buddy specific RBAC token management.
 Handles JWT token creation and verification with Breeze Buddy's RBAC model.
 """
 
+import secrets
 from datetime import timedelta
 from typing import List, Optional
 
@@ -12,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.logger import logger
 from app.core.security.jwt import jwt_manager
+from app.core.security.token_revocation import is_token_revoked
 from app.schemas import UserInfo, UserRole
 
 # HTTP Bearer security scheme
@@ -66,6 +68,10 @@ class BreezeBuddyRBACTokenManager:
             "merchant_ids": merchant_ids,
             "permissions": permissions,
             "owner_id": owner_id,
+            # Makes every token unique. Revocation is keyed by a hash of the
+            # token, and two logins in the same second would otherwise mint
+            # byte-identical tokens, so logging one out would end both (PT-22).
+            "jti": secrets.token_urlsafe(16),
         }
 
         if src:
@@ -74,9 +80,13 @@ class BreezeBuddyRBACTokenManager:
         # Use the generic JWT manager to create the token
         return self.jwt_manager.create_access_token(payload, expires_delta)
 
-    def verify_rbac_token(self, token: str) -> UserInfo:
+    async def verify_rbac_token(self, token: str) -> UserInfo:
         """
         Verify and decode a JWT token with Breeze Buddy RBAC information.
+
+        Also enforces server-side revocation (denylist) and a per-request user
+        liveness recheck, so a logged-out/forged token can be killed and a
+        disabled/deleted account's tokens stop working (PT-22).
 
         Args:
             token: JWT token string
@@ -143,6 +153,44 @@ class BreezeBuddyRBACTokenManager:
                     detail="Could not validate credentials",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+
+            # Server-side revocation: a token that was logged out or explicitly
+            # revoked is rejected regardless of its (still-valid) signature.
+            if await is_token_revoked(token):
+                logger.warning(f"RBAC verifier: rejected revoked token for {user_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            # Liveness recheck: a disabled/deleted account's outstanding tokens
+            # (including long-lived S2S tokens, whose ``sub`` is the minting
+            # user) must stop working immediately.
+            #
+            # Exception: "merchant:<id>" subjects have no ``users`` row, so a
+            # users-table probe would always refuse them. Two token kinds carry
+            # one: launch tokens (POST /auth/launch-token: 60-minute TTL, merchant
+            # checked active at mint) and merchant S2S tokens (POST /merchant
+            # with issue_token: long-lived, and NOT rechecked here — deactivating
+            # the merchant does not cut them off; only the revocation denylist
+            # above does). Keep this prefix in
+            # lockstep with the ``sub`` minted in launch_token_handler and
+            # merchants/handlers.py.
+            # Imported lazily to avoid a module-load import cycle with the DB
+            # accessor layer.
+            if not str(user_id).startswith("merchant:"):
+                from app.database.accessor.breeze_buddy.users import is_user_active
+
+                if not await is_user_active(user_id):
+                    logger.warning(
+                        f"RBAC verifier: rejected token for inactive/deleted user {user_id}"
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Could not validate credentials",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
 
             # Extract Breeze Buddy RBAC data
             # Normalize legacy "shop" role to "user" for old JWTs still in circulation
@@ -269,10 +317,10 @@ async def get_current_user_with_rbac(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return rbac_token_manager.verify_rbac_token(credentials.credentials)
+    return await rbac_token_manager.verify_rbac_token(credentials.credentials)
 
 
-def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
+async def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
     """Authenticate a WebSocket connection with the standard RBAC bearer token.
 
     The FastAPI ``Depends(HTTPBearer())`` guards are HTTP-only, so WebSocket
@@ -295,7 +343,7 @@ def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing credentials",
         )
-    return rbac_token_manager.verify_rbac_token(token)
+    return await rbac_token_manager.verify_rbac_token(token)
 
 
 async def get_active_user(
