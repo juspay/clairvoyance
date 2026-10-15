@@ -5,6 +5,9 @@ from fastapi import HTTPException, status
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.extractor import (
     resolve_topic_evaluation_configuration,
 )
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.segments import (
+    validate_segments,
+)
 from app.api.routers.breeze_buddy.templates.rbac import validate_template_access
 from app.database.accessor.breeze_buddy.evaluation_config import (
     add_discovered_topics,
@@ -20,18 +23,25 @@ from app.schemas.breeze_buddy.conversation_analysis import (
     TopicCatalogResponse,
     TopicConfigurationResponse,
     TopicEvaluationSettingsRequest,
+    TopicSegment,
     UpdateTopicConfigurationRequest,
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
+from app.utils.common import parse_json
 
 
 def _evaluation_catalog_response(
     template_id: str, config: Optional[Dict[str, Any]]
 ) -> TopicCatalogResponse:
+    configuration = (parse_json(config, "configuration") or {}) if config else {}
     return TopicCatalogResponse(
         template_id=template_id,
         enabled=bool(config and config.get("enabled")),
         topics=list(config.get("topics") or []) if config else [],
+        segments=[
+            TopicSegment(key=segment["key"], values=segment["values"])
+            for segment in validate_segments(configuration.get("segments"))
+        ],
     )
 
 

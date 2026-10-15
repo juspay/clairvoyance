@@ -22,6 +22,7 @@ from .extractor import (
     TopicModelResponseError,
     extract_topics,
 )
+from .segments import resolve_segments, validate_segments
 
 _ANALYSIS_TIMEOUT_SECONDS = 240
 _ANALYSIS_MAX_ATTEMPTS = 2
@@ -167,6 +168,17 @@ async def analyze_topics(
             )
             return failure == MODEL_BAD_RESPONSE
 
+    configuration = evaluation.get("configuration") or {}
+    if isinstance(configuration, str):
+        configuration = json.loads(configuration)
+    segments = resolve_segments(
+        validate_segments(configuration.get("segments")),
+        context.get("payload") or {},
+    )
+    if segments:
+        for topic in topics:
+            topic["segments"] = segments
+
     await save_evaluation_results(
         str(evaluation["id"]),
         EvaluationType.TOPIC.value,
@@ -187,7 +199,9 @@ async def analyze_topics(
             if str(topic.get("label") or "").strip()
         }.values()
     )
-    if labels:
+    entries = evaluation.get("topics") or []
+    two_level = bool(entries) and all("." in str(entry) for entry in entries)
+    if labels and not two_level:
         await add_discovered_topics(str(context["template_id"]), labels)
     logger.bind(
         outcome="saved",
