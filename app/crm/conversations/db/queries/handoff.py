@@ -2,7 +2,7 @@
 thread (crm_handoff_merchant_open_uq); closing is one conditional UPDATE, so
 a handoff closes once."""
 
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 HANDOFF_TABLE = "crm_handoff"
 
@@ -21,6 +21,54 @@ def open_for_thread_query(merchant_id: str, thread_id: str) -> Tuple[str, List[A
            AND closed_at IS NULL
     """
     return query, [merchant_id, thread_id]
+
+
+def open_for_threads_query(
+    merchant_id: str, thread_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    """The open handoff of each listed thread — one read for a page."""
+    query = f"""
+        SELECT {HANDOFF_COLUMNS}
+          FROM {HANDOFF_TABLE}
+         WHERE merchant_id = $1
+           AND conversation_id = ANY($2::uuid[])
+           AND closed_at IS NULL
+    """
+    return query, [merchant_id, thread_ids]
+
+
+def claim_query(
+    merchant_id: str, thread_id: str, user_id: str
+) -> Tuple[str, List[Any]]:
+    """The teammate taking the thread claims its open handoff too."""
+    query = f"""
+        UPDATE {HANDOFF_TABLE}
+           SET claimed_by = $3,
+               claimed_at = now()
+         WHERE merchant_id = $1
+           AND conversation_id = $2::uuid
+           AND closed_at IS NULL
+           AND claimed_at IS NULL
+        RETURNING {HANDOFF_COLUMNS}
+    """
+    return query, [merchant_id, thread_id, user_id]
+
+
+def close_query(
+    merchant_id: str, thread_id: str, outcome: str, closed_by: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """Close the thread's open handoff, once."""
+    query = f"""
+        UPDATE {HANDOFF_TABLE}
+           SET outcome = $3,
+               closed_by = $4,
+               closed_at = now()
+         WHERE merchant_id = $1
+           AND conversation_id = $2::uuid
+           AND closed_at IS NULL
+        RETURNING {HANDOFF_COLUMNS}
+    """
+    return query, [merchant_id, thread_id, outcome, closed_by]
 
 
 def close_for_threads_query(

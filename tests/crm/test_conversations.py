@@ -1,6 +1,7 @@
-"""Conversations (inbox PR 2): the pure rules — who holds a thread, what a
-customer's message does — the projector's "Buddy's binding only", the move
-consumer, and the SQL's tenancy and vocabulary discipline."""
+"""Conversations (inbox PR 2): the pure rules — the window, who holds a
+thread, what a customer's message does — the projector's "Buddy's binding
+only", the move consumer, who may act, and the SQL's tenancy and
+vocabulary discipline."""
 
 import ast
 import asyncio
@@ -12,6 +13,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, cast
 import pytest
 
 from app.crm.conversations import moves, project, status as words
+from app.crm.conversations.access import actor_of
 from app.crm.conversations.db.accessors import notify as notify_accessor
 from app.crm.conversations.db.queries import (
     handoff as handoff_q,
@@ -21,7 +23,9 @@ from app.crm.conversations.db.queries import (
 from app.crm.conversations.route import plan_inbound
 from app.crm.conversations.schemas import Handoff, Thread
 from app.crm.conversations.state import held_by, lapsed
+from app.crm.conversations.window import closes_at, is_open
 from app.crm.record.schemas import RawEvent
+from app.schemas import UserInfo, UserRole
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 AGENT = "7c1e0f4a-2b3c-4d5e-8f90-a1b2c3d4e5f6"
@@ -56,6 +60,17 @@ def _handoff(**over: Any) -> Handoff:
     )
     fields.update(over)
     return Handoff(**fields)
+
+
+# --- the window: a predicate, never stored ----------------------------------
+
+
+def test_the_window_is_her_last_message_plus_the_channel_hours() -> None:
+    last = NOW - timedelta(hours=23)
+    assert closes_at(last, 24) == NOW + timedelta(hours=1)
+    assert is_open(last, 24, NOW)
+    assert not is_open(NOW - timedelta(hours=24), 24, NOW)
+    assert not is_open(None, 24, NOW) and closes_at(None, 24) is None
 
 
 # --- who holds a thread: derived ------------------------------------------
@@ -118,6 +133,24 @@ def test_whoever_holds_it_keeps_it() -> None:
     assert (plan.bot_template_id, plan.bot_session_id) == (AGENT, buddy.bot_session_id)
     waiting = plan_inbound(_thread(bot_template_id=AGENT), _handoff(), AGENT, 10, NOW)
     assert waiting.bot_template_id == AGENT and not waiting.reopen
+
+
+# --- who may act (D19) ------------------------------------------------------
+
+
+def _user(id_: str, role: UserRole) -> UserInfo:
+    return UserInfo(id=id_, username="u", role=role, merchant_ids=["shop"])
+
+
+def test_a_login_link_session_reads_but_never_acts() -> None:
+    launch = actor_of(_user("merchant:shop", UserRole.MERCHANT))
+    assert launch.read_only and not launch.manager
+
+
+def test_merchant_admins_manage_and_users_act() -> None:
+    assert actor_of(_user("u-1", UserRole.MERCHANT)).manager
+    user = actor_of(_user("u-2", UserRole.USER))
+    assert not user.manager and not user.read_only
 
 
 # --- the projector: Buddy's binding only (R1) -------------------------------
@@ -197,11 +230,12 @@ async def test_a_message_to_any_other_binding_does_nothing(monkeypatch) -> None:
     await project.consume_conversation_event(
         letter, "33333333-3333-4333-8333-333333333333"
     )
-    _World(None).install(monkeypatch)  # Buddy on no binding at all
+    nowhere = _World(None)  # Buddy on no binding at all
+    nowhere.install(monkeypatch)
     await project.consume_conversation_event(
         letter, "33333333-3333-4333-8333-333333333333"
     )
-    assert world.atoms == []
+    assert world.atoms == [] and nowhere.atoms == []
 
 
 async def test_letters_about_nobody_or_another_channel_are_ignored(monkeypatch) -> None:
@@ -531,6 +565,15 @@ def test_the_replay_guards_match_the_partial_unique_indexes() -> None:
     )
 
 
+def test_take_over_is_a_compare_and_set() -> None:
+    query, _ = thread_q.take_over_query("m", "t", "u", {})
+    assert "AND assignee_user_id IS NULL" in query
+
+
+def test_every_view_has_a_predicate() -> None:
+    assert set(thread_q.VIEW_PREDICATES) == set(words.VIEWS)
+
+
 # --- a reopened thread starts fresh ------------------------------------------
 
 
@@ -546,6 +589,188 @@ def test_a_reopened_thread_moves_buddys_cursor_to_just_before_her_message() -> N
         in query
     )
     assert values[4] is True and values[7] == written
+
+
+#: Buddy's cursor on a hand back: never back past what Buddy answered
+#: (GREATEST), never into the future, the clock when nothing was seen (LEAST).
+HAND_BACK_CURSOR = (
+    "bot_cursor_at = GREATEST( bot_cursor_at, "
+    "LEAST($6::timestamptz, clock_timestamp()) )"
+)
+
+
+def test_a_hand_back_moves_buddys_cursor_past_everything_she_wrote() -> None:
+    """Stamped under the same row lock as her messages: what she wrote
+    before the hand back was the teammate's, the next one is Buddy's.
+    LEAST ignores the missing ``seen_upto``, so the cursor is the clock."""
+    query, values = thread_q.hand_back_query("shop", "t", "u", AGENT, {})
+    assert HAND_BACK_CURSOR in " ".join(query.split())
+    assert values[5] is None
+
+
+def test_a_hand_back_leaves_buddy_what_the_teammate_never_saw() -> None:
+    """She wrote while the teammate clicked Hand back: the cursor stops at
+    when the newest of her messages the console showed was written, so the
+    one it did not show is Buddy's to answer instead of being taken as
+    handled — and a stale console never moves it back past what Buddy
+    already answered."""
+    seen = NOW - timedelta(seconds=5)
+    query, values = thread_q.hand_back_query("shop", "t", "u", AGENT, {}, seen)
+    assert HAND_BACK_CURSOR in " ".join(query.split())
+    assert values[5] == seen
+
+
+async def test_resolve_refuses_while_she_has_written_since_the_teammate_looked(
+    monkeypatch,
+) -> None:
+    """She wrote "wait, one more thing" as the teammate clicked Resolve: the
+    thread is locked first, then the server reads when the newest of her
+    messages the console showed was written, then looks past it — a message
+    already written is seen and the resolve refused; nothing is resolved."""
+    from app.crm.conversations import threads as threads_module
+    from app.crm.conversations.errors import ThreadConflict
+
+    calls: List[tuple] = []
+    wrote = {"since": True}
+    seen = NOW - timedelta(seconds=5)
+
+    async def get_thread(merchant_id, thread_id, txn=None, for_update=False):
+        calls.append(("lock", for_update))
+        return _thread()
+
+    async def written_at(txn, merchant_id, thread_id, row_id, kind):
+        calls.append(("seen", row_id, kind))
+        return seen if row_id == "m-shown" else None
+
+    async def wrote_since(txn, merchant_id, thread_id, kind, after):
+        calls.append(("look", kind, after))
+        return wrote["since"]
+
+    async def resolve(txn, merchant_id, thread_id, last_inbound_at=None):
+        calls.append(("resolve",))
+        return _thread(resolved_at=NOW)
+
+    async def close(*args: Any):
+        return None
+
+    async def wake(*args: Any):
+        return None
+
+    monkeypatch.setattr(threads_module.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(threads_module.message_accessor, "written_at", written_at)
+    monkeypatch.setattr(threads_module.message_accessor, "wrote_since", wrote_since)
+    monkeypatch.setattr(threads_module.thread_accessor, "resolve", resolve)
+    monkeypatch.setattr(threads_module.handoff_accessor, "close", close)
+    monkeypatch.setattr(threads_module, "wake", wake)
+    txn: Any = object()  # the fakes above never touch it
+
+    async def resolve_seen(seen_message_id: Optional[str]):
+        return await threads_module.resolve_thread_in_txn(
+            txn,
+            "shop",
+            "t",
+            words.OUTCOME_RESOLVED,
+            "u-1",
+            seen_message_id=seen_message_id,
+        )
+
+    looked = [
+        ("lock", True),
+        ("seen", "m-shown", words.KIND_INBOUND),
+        ("look", words.KIND_INBOUND, seen),
+    ]
+    with pytest.raises(ThreadConflict, match="written since you last looked"):
+        await resolve_seen("m-shown")
+    assert calls == looked
+
+    calls.clear()
+    wrote["since"] = False  # nothing new: resolved as asked
+    assert await resolve_seen("m-shown")
+    assert calls == [*looked, ("resolve",)]
+
+    calls.clear()  # not one of her messages on this thread: refresh first
+    with pytest.raises(ThreadConflict, match="refresh"):
+        await resolve_seen("m-teammates-own-reply")
+    assert ("resolve",) not in calls
+
+    calls.clear()  # nothing seen sent (a sweep, an older console): no look
+    await resolve_seen(None)
+    assert calls == [("resolve",)]
+    query, values = message_q.wrote_since_query("shop", "t", "inbound", seen)
+    assert "created_at > $4" in query and values[2:] == ["inbound", seen]
+    query, values = message_q.written_at_query("shop", "t", "m-shown", "inbound")
+    assert "id = $3::uuid" in query and "kind = $4" in query
+
+
+async def test_a_hand_back_reads_the_seen_message_on_the_server(monkeypatch) -> None:
+    """The console sends which of her messages it saw, never a clock: the
+    server reads when that row was written and stops Buddy's cursor there."""
+    from app.crm.conversations import threads as threads_module
+
+    seen = NOW - timedelta(seconds=5)
+    handed: Dict[str, Any] = {}
+
+    async def written_at(txn, merchant_id, thread_id, row_id, kind):
+        return seen if (row_id, kind) == ("m-shown", words.KIND_INBOUND) else None
+
+    async def hand_back(txn, merchant_id, thread_id, user_id, agent_id, trail, upto):
+        handed["upto"] = upto
+        return _thread()
+
+    async def nothing(*args: Any):
+        return None
+
+    monkeypatch.setattr(threads_module.message_accessor, "written_at", written_at)
+    monkeypatch.setattr(threads_module.thread_accessor, "hand_back", hand_back)
+    monkeypatch.setattr(threads_module.handoff_accessor, "close", nothing)
+    monkeypatch.setattr(threads_module, "wake", nothing)
+    txn: Any = object()
+    await threads_module._hand_back_in_txn(
+        txn, "shop", "t", "u-1", AGENT, {}, "m-shown"
+    )
+    assert handed["upto"] == seen
+    await threads_module._hand_back_in_txn(txn, "shop", "t", "u-1", AGENT, {}, None)
+    assert handed["upto"] is None  # the clock, as before
+
+
+async def test_a_note_and_its_wake_up_share_one_atom(monkeypatch) -> None:
+    """A wake-up that fails must undo the note too: the console keeps the
+    text on an error and the teammate saves it again."""
+    from app.crm.conversations import threads as threads_module
+    from app.crm.conversations.access import Actor
+
+    atoms: List[tuple] = []
+
+    async def thread_or_404(merchant_id, thread_id):
+        return _thread()
+
+    async def atomically(fn, *args):
+        atoms.append((fn.__name__, args))
+        return SimpleNamespace()
+
+    monkeypatch.setattr(threads_module, "thread_or_404", thread_or_404)
+    monkeypatch.setattr(threads_module, "atomically", atomically)
+    teammate = Actor(user_id="u-1", read_only=False, manager=False)
+    await threads_module.add_note("shop", "t", "call her back", teammate)
+    [(name, args)] = atoms
+    assert name == "_add_note_in_txn"
+
+    seen: List[tuple] = []
+    txn: Any = object()
+
+    async def insert_outbound(handle: Any, *rest: Any):
+        seen.append(("insert", handle))
+        return SimpleNamespace()
+
+    async def wake(*rest: Any):
+        seen.append(("wake", rest[-1]))
+
+    monkeypatch.setattr(
+        threads_module.message_accessor, "insert_outbound", insert_outbound
+    )
+    monkeypatch.setattr(threads_module, "wake", wake)
+    await threads_module._add_note_in_txn(txn, *args)
+    assert seen == [("insert", txn), ("wake", txn)]
 
 
 # --- the live stream notices a lost connection --------------------------------
@@ -718,6 +943,127 @@ async def test_the_projector_follows_the_registrys_conversation_channels(
     assert [name for name, _ in world.atoms] == ["_project_inbound_in_txn"]
 
 
+async def test_each_waiting_thread_reads_its_own_bindings_claim_sla(
+    monkeypatch,
+) -> None:
+    """The Inbox list and the open thread read the same settings: the ones
+    on the thread's own channel and binding — one read per binding."""
+    from app.crm.conversations import threads as threads_module
+
+    reads: List[Optional[str]] = []
+
+    async def settings_for(thread):
+        reads.append(thread.binding_id)
+        return SimpleNamespace(
+            claim_sla_minutes={"b-1": 10, "b-2": 30}[thread.binding_id]
+        )
+
+    monkeypatch.setattr(threads_module, "settings_for", settings_for)
+    waiting = [
+        _thread(id="t-a", binding_id="b-1"),
+        _thread(id="t-b", binding_id="b-2"),
+        _thread(id="t-c", binding_id="b-1"),
+    ]
+    quiet = _thread(id="t-d", binding_id="b-2")
+    handoffs = {t.id: _handoff() for t in waiting}
+    slas = await threads_module._claim_slas([*waiting, quiet], handoffs)
+    assert slas == {"t-a": 10, "t-b": 30, "t-c": 10}
+    assert reads == ["b-1", "b-2"]
+
+
+@pytest.mark.parametrize(
+    ("channel", "templates", "closed_hint"),
+    [
+        ("whatsapp", True, "send a template instead"),
+        ("instagram", False, "it opens again when they write"),
+        ("widget", False, None),
+    ],
+)
+async def test_a_template_reply_needs_a_channel_that_registers_them(
+    monkeypatch, channel, templates, closed_hint
+) -> None:
+    from app.crm.conversations import reply
+    from app.crm.conversations.access import Actor
+    from app.crm.conversations.errors import ThreadConflict
+
+    teammate = Actor(user_id="u-1", read_only=False, manager=False)
+
+    async def holder(merchant_id, thread_id, actor):
+        return _thread(channel=channel)
+
+    monkeypatch.setattr(reply, "_holder", holder)
+    monkeypatch.setattr(reply, "registers_templates_for", lambda c: c == "whatsapp")
+    monkeypatch.setattr(reply, "window_of", lambda t, now: SimpleNamespace(open=False))
+    if not templates:
+        with pytest.raises(ThreadConflict, match="has no templates"):
+            await reply.reply_template("shop", "t", "tpl-1", {}, teammate)
+    if closed_hint is not None:
+        with pytest.raises(ThreadConflict, match=closed_hint):
+            await reply.reply_text("shop", "t", "hi", teammate)
+
+
+async def test_a_reply_is_recorded_in_one_atom_with_a_short_preview(
+    monkeypatch,
+) -> None:
+    """Sent, then recorded: the timeline row, the list row and the wake-up
+    share one atom (a failure part-way never leaves the list stale or the
+    Inbox unwoken), and the preview is the list's one short line."""
+    from app.crm.conversations import reply
+    from app.crm.conversations.access import Actor
+
+    teammate = Actor(user_id="u-1", read_only=False, manager=False)
+    sent: Dict[str, Any] = {}
+    atoms: List[tuple] = []
+
+    async def holder(merchant_id, thread_id, actor):
+        return _thread(assignee_user_id="u-1")
+
+    async def send_session(**kwargs: Any):
+        sent.update(kwargs)
+        return SimpleNamespace(
+            message_id="m-1",
+            provider_message_id="wamid.9",
+            status="accepted",
+            reason=None,
+        )
+
+    async def atomically(fn, *args):
+        atoms.append((fn.__name__, args))
+        return SimpleNamespace()  # the timeline row
+
+    monkeypatch.setattr(reply, "_holder", holder)
+    monkeypatch.setattr(reply, "window_of", lambda t, now: SimpleNamespace(open=True))
+    monkeypatch.setattr(reply, "send_session", send_session)
+    monkeypatch.setattr(reply, "atomically", atomically)
+    await reply.reply_text("shop", "t", "line one\n" + "word " * 1000, teammate)
+    # users.id is free text (migration 019) and source_id a uuid: the teammate
+    # is named on the timeline row (author_user_id), never on the manifest.
+    assert sent["source_id"] is None
+    [(name, args)] = atoms
+    assert name == "_record_in_txn"
+    preview = args[6]
+    assert len(preview) <= project.PREVIEW_MAX and "\n" not in preview
+
+    seen: List[tuple] = []
+    txn: Any = object()
+
+    async def insert_outbound(handle: Any, *rest: Any):
+        seen.append(("insert", handle))
+        return SimpleNamespace()
+
+    async def touch_outbound(*rest: Any):
+        seen.append(("touch", rest[-1]))
+
+    async def wake(*rest: Any):
+        seen.append(("wake", rest[-1]))
+
+    monkeypatch.setattr(reply.message_accessor, "insert_outbound", insert_outbound)
+    monkeypatch.setattr(reply.thread_accessor, "touch_outbound", touch_outbound)
+    monkeypatch.setattr(reply, "wake", wake)
+    await reply._record_in_txn(txn, *args)
+    assert seen == [("insert", txn), ("touch", txn), ("wake", txn)]
+
+
 # --- receipts wake the thread showing the send --------------------------------
 
 
@@ -783,6 +1129,14 @@ def test_the_send_lookup_reads_either_id() -> None:
 
 
 # --- the plan's once-only guarantees ------------------------------------------
+
+
+def test_a_handoff_closes_once() -> None:
+    """Closing is one conditional UPDATE: a second close (resolve racing the
+    lapse sweep, say) finds nothing open and returns no row."""
+    query, values = handoff_q.close_query("m", "t", words.OUTCOME_RESOLVED, None)
+    assert "AND closed_at IS NULL" in query and "RETURNING" in query
+    assert values == ["m", "t", "resolved", None]
 
 
 async def test_a_replayed_letter_changes_nothing(monkeypatch) -> None:

@@ -93,6 +93,26 @@ def insert_outbound_query(
     ]
 
 
+def timeline_query(
+    merchant_id: str,
+    thread_id: str,
+    before: Optional[Tuple[datetime, str]],
+    limit: int,
+) -> Tuple[str, List[Any]]:
+    """One page of the thread, newest first, keyset-paged."""
+    before_at, before_id = before if before else (None, None)
+    query = f"""
+        SELECT {TIMELINE_COLUMNS}
+          FROM {TIMELINE_TABLE}
+         WHERE merchant_id = $1
+           AND conversation_id = $2::uuid
+           AND ($3::timestamptz IS NULL OR (occurred_at, id) < ($3, $4::uuid))
+         ORDER BY occurred_at DESC, id DESC
+         LIMIT $5
+    """
+    return query, [merchant_id, thread_id, before_at, before_id, limit]
+
+
 def thread_for_send_query(
     merchant_id: str, provider_message_id: str, message_id: Optional[str]
 ) -> Tuple[str, List[Any]]:
@@ -108,3 +128,38 @@ def thread_for_send_query(
          LIMIT 1
     """
     return query, [merchant_id, provider_message_id, message_id]
+
+
+def written_at_query(
+    merchant_id: str, thread_id: str, row_id: str, kind: str
+) -> Tuple[str, List[Any]]:
+    """When one of the thread's rows of this kind was written (created_at) —
+    no row when the id is not one."""
+    query = f"""
+        SELECT created_at
+          FROM {TIMELINE_TABLE}
+         WHERE merchant_id = $1
+           AND conversation_id = $2::uuid
+           AND id = $3::uuid
+           AND kind = $4
+    """
+    return query, [merchant_id, thread_id, row_id, kind]
+
+
+def wrote_since_query(
+    merchant_id: str, thread_id: str, kind: str, after: datetime
+) -> Tuple[str, List[Any]]:
+    """Whether the thread has a row of this kind written after ``after`` —
+    by created_at, the time it was written under the thread's row lock (see
+    insert_inbound_query), never the provider's occurred_at."""
+    query = f"""
+        SELECT EXISTS (
+            SELECT 1
+              FROM {TIMELINE_TABLE}
+             WHERE merchant_id = $1
+               AND conversation_id = $2::uuid
+               AND kind = $3
+               AND created_at > $4
+        )
+    """
+    return query, [merchant_id, thread_id, kind, after]

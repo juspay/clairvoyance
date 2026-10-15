@@ -1,10 +1,17 @@
-"""Conversations' shapes: the rows (a thread, its timeline, its handoffs).
-Leaf module — imports nothing internal."""
+"""Conversations' shapes: the rows (a thread, its timeline, its handoffs),
+what the Inbox reads, and the request bodies it sends. Leaf module — imports
+nothing internal."""
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
+
+#: Longest teammate reply or note the API takes; each channel's own
+#: ``text_max`` applies again at send.
+TEXT_MAX = 4096
+
 
 # ---------------------------------------------------------------------------
 # rows
@@ -72,3 +79,132 @@ class TimelineRow(BaseModel):
     occurred_at: datetime
     #: When the row was written — Buddy's reading order for her messages.
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# what the Inbox reads
+# ---------------------------------------------------------------------------
+
+
+class Window(BaseModel):
+    """The free-form reply window, computed at read — never stored."""
+
+    open: bool
+    closes_at: Optional[datetime] = None
+
+
+class ThreadRead(BaseModel):
+    """One thread as the Inbox lists it."""
+
+    id: str
+    channel: str
+    customer_id: Optional[str] = None
+    address: Optional[str] = None
+    binding_id: Optional[str] = None
+    #: teammate · waiting · buddy · unattended · resolved — derived.
+    held_by: str
+    assignee_user_id: Optional[str] = None
+    unread: bool
+    preview: Optional[str] = None
+    last_message_at: datetime
+    window: Window
+    handoff: Optional[Handoff] = None
+
+
+class ThreadDetail(ThreadRead):
+    """One thread with what the Inbox needs to act on it."""
+
+    resolved_at: Optional[datetime] = None
+    bot_session_id: Optional[str] = None
+    #: Whether a person may take this thread (Buddy's settings, D15). Off =
+    #: the Inbox is read-only for it.
+    human_handoff: bool
+    assignment_trail: List[Dict[str, Any]] = []
+
+
+class ThreadPage(BaseModel):
+    threads: List[ThreadRead]
+    #: Pass back as ``cursor`` for the next (older) page; None at the end.
+    next_cursor: Optional[str] = None
+    #: How many threads each view holds right now.
+    counts: Dict[str, int]
+
+
+class Ticks(BaseModel):
+    """What became of an outbound message — joined from the manifest at read,
+    never copied onto the timeline."""
+
+    status: str
+    reason: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    read_at: Optional[datetime] = None
+
+
+class TimelineItem(TimelineRow):
+    ticks: Optional[Ticks] = None
+
+
+class TimelinePage(BaseModel):
+    items: List[TimelineItem]
+    #: Pass back as ``before`` for older rows; None at the start.
+    next_before: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# request bodies
+# ---------------------------------------------------------------------------
+
+
+class TenantScoped(BaseModel):
+    """Base for request bodies: the merchant the caller must be allowed to
+    touch, checked by the route's dependency before the handler runs."""
+
+    merchant_id: str = Field(..., min_length=1, description="Tenant scope")
+
+
+class ThreadAction(TenantScoped):
+    """Take over, hand back, resolve, mark read: the tenant, nothing else."""
+
+
+class SeenAction(ThreadAction):
+    """Resolve or hand back, with what the console had on screen: the id of
+    the newest of HER messages it showed — newest by ``created_at``, not by
+    place on screen (a late letter shows above newer ones), and never the
+    teammate's own reply or note. Resolve is refused if she wrote after it;
+    a hand back leaves Buddy what she wrote after it. Omitted: neither —
+    the thread as it stands when the click lands."""
+
+    seen_message_id: Optional[UUID] = None
+
+
+class AssignRequest(TenantScoped):
+    user_id: str = Field(..., min_length=1, max_length=128)
+
+
+class NoteRequest(TenantScoped):
+    text: str = Field(..., min_length=1, max_length=TEXT_MAX)
+
+
+class ReplyRequest(TenantScoped):
+    """A teammate's reply: ``text`` inside the window, or an approved
+    ``template_id`` (+ ``variables``) outside it. Exactly one of the two."""
+
+    text: Optional[str] = Field(None, min_length=1, max_length=TEXT_MAX)
+    template_id: Optional[str] = Field(None, min_length=1, max_length=512)
+    variables: Dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "ReplyRequest":
+        if (self.text is None) == (self.template_id is None):
+            raise ValueError("send either text or a template_id")
+        return self
+
+
+class ReplyRead(BaseModel):
+    """A teammate's reply: its timeline row and what became of the send
+    (accepted · failed · blocked · queued; None on the widget)."""
+
+    message: TimelineRow
+    status: Optional[str] = None
+    reason: Optional[str] = None
