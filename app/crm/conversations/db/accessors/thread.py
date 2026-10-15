@@ -47,6 +47,13 @@ async def get_thread(
     return await _one(txn, query, values)
 
 
+async def threads_by_ids(merchant_id: str, thread_ids: List[str]) -> List[Thread]:
+    query, values = q.threads_by_ids_query(merchant_id, thread_ids)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_thread(row) for row in rows]
+
+
 async def thread_for_contact(
     merchant_id: str, channel: str, contact_key: str, txn: Optional[DbTxn] = None
 ) -> Optional[Thread]:
@@ -160,3 +167,37 @@ async def view_counts(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return {view: int(row[view] or 0) for view in q.COUNTED_VIEWS} if row else {}
+
+
+async def set_bot_session(
+    merchant_id: str, thread_id: str, session_id: str
+) -> Optional[Thread]:
+    query, values = q.set_bot_session_query(merchant_id, thread_id, session_id)
+    return await _one(None, query, values)
+
+
+async def mark_bot_cursor(
+    merchant_id: str, thread_id: str, answered_upto: datetime
+) -> Optional[Thread]:
+    query, values = q.mark_bot_cursor_query(merchant_id, thread_id, answered_upto)
+    return await _one(None, query, values)
+
+
+async def closing_candidates(
+    channel: str,
+    older_than_seconds: int,
+    after: Optional[Tuple[datetime, str]],
+    limit: int,
+) -> List[Thread]:
+    query, values = q.closing_candidates_query(
+        channel, older_than_seconds, after, limit
+    )
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_thread(row) for row in rows]
+
+
+async def delete_resolved(older_than_days: int, limit: int) -> int:
+    query, values = q.delete_resolved_query(older_than_days, limit)
+    async with crm_connection() as conn:
+        return int(await conn.fetchval(query, *values) or 0)

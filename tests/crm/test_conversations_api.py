@@ -1,6 +1,6 @@
 """The Inbox's routes: every one declares the tenancy door and translates
 through one route class; a read-only session acts on nothing; the wiring
-(consumers, the router) is in place."""
+(consumers, the sweep loop, the router) is in place."""
 
 from types import SimpleNamespace
 from typing import Any, List
@@ -134,6 +134,27 @@ def test_the_consumers_are_registered() -> None:
     assert contracts.consume_buddy_moved in registered
 
 
+async def test_the_walker_runs_the_inbox_sweeper(monkeypatch) -> None:
+    """The sweeps ride the walker pod (no pod of their own): its role runs
+    the inbox tick as one of its drain loops."""
+    import asyncio
+
+    import app.crm.worker_main as worker_main
+
+    loops: List[tuple] = []
+
+    async def drain(claim, run, **kwargs: Any) -> None:
+        loops.append((claim, run, kwargs.get("name")))
+
+    monkeypatch.setattr(worker_main, "run_drain_loop", drain)
+    await worker_main.ROLES["walker"](asyncio.Event())
+    assert (
+        contracts.claim_inbox_tick,
+        contracts.run_inbox_tick,
+        "inbox-sweeper",
+    ) in loops
+
+
 def test_a_second_claim_is_a_409(monkeypatch) -> None:
     """Two teammates take over at once: the compare-and-set lets one win,
     the other's request is refused, never applied."""
@@ -163,3 +184,11 @@ def test_the_inbox_is_mounted_at_conversations() -> None:
 
     paths = {getattr(r, "path", "") for r in router.routes}
     assert "/conversations" in paths and "/conversations/stream" in paths
+
+
+async def test_the_sweep_tick_runs_once_per_interval(monkeypatch) -> None:
+    from app.crm.conversations import workers
+
+    monkeypatch.setattr(workers, "_last_tick", 0.0)
+    assert await workers.claim_inbox_tick(1) == [workers.TICK]
+    assert await workers.claim_inbox_tick(1) == []

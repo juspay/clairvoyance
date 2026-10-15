@@ -84,6 +84,44 @@ async def timeline(
     return [decode_timeline(row) for row in rows]
 
 
+async def rows_before(
+    merchant_id: str,
+    thread_id: str,
+    kinds: List[str],
+    after: datetime,
+    before: datetime,
+    limit: int,
+) -> List[TimelineRow]:
+    """The last ``limit`` rows between the two moments, oldest first."""
+    query, values = q.rows_before_query(
+        merchant_id, thread_id, kinds, after, before, limit
+    )
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_timeline(row) for row in reversed(rows)]
+
+
+async def rows_after(
+    merchant_id: str,
+    thread_id: str,
+    kinds: List[str],
+    after: Optional[datetime],
+    limit: int,
+) -> List[TimelineRow]:
+    query, values = q.rows_after_query(merchant_id, thread_id, kinds, after, limit)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_timeline(row) for row in rows]
+
+
+async def last_by_author(
+    merchant_id: str, thread_id: str, kind: str, author_kind: str
+) -> Optional[datetime]:
+    query, values = q.last_by_author_query(merchant_id, thread_id, kind, author_kind)
+    async with crm_connection() as conn:
+        return await conn.fetchval(query, *values)
+
+
 async def thread_for_send(
     merchant_id: str, provider_message_id: str, message_id: Optional[str]
 ) -> Optional[str]:

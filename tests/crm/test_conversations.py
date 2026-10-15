@@ -1,18 +1,18 @@
 """Conversations (inbox PR 2): the pure rules — the window, who holds a
-thread, what a customer's message does — the projector's "Buddy's binding
-only", the move consumer, who may act, and the SQL's tenancy and
-vocabulary discipline."""
+thread, what a customer's message does, what the closing sweep does — the
+projector's "Buddy's binding only", the move consumer, who may act, and the
+SQL's tenancy and vocabulary discipline."""
 
 import ast
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set, cast
+from typing import Any, AsyncGenerator, Dict, List, Optional, cast
 
 import pytest
 
-from app.crm.conversations import moves, project, status as words
+from app.crm.conversations import moves, project, status as words, sweeps
 from app.crm.conversations.access import actor_of
 from app.crm.conversations.db.accessors import notify as notify_accessor
 from app.crm.conversations.db.queries import (
@@ -23,7 +23,7 @@ from app.crm.conversations.db.queries import (
 from app.crm.conversations.route import plan_inbound
 from app.crm.conversations.schemas import Handoff, Thread
 from app.crm.conversations.state import held_by, lapsed
-from app.crm.conversations.window import closes_at, is_open
+from app.crm.conversations.window import closes_at, closing_due, is_open
 from app.crm.record.schemas import RawEvent
 from app.schemas import UserInfo, UserRole
 
@@ -71,6 +71,13 @@ def test_the_window_is_her_last_message_plus_the_channel_hours() -> None:
     assert is_open(last, 24, NOW)
     assert not is_open(NOW - timedelta(hours=24), 24, NOW)
     assert not is_open(None, 24, NOW) and closes_at(None, 24) is None
+
+
+def test_the_closing_message_is_due_inside_the_lead_only() -> None:
+    last = NOW - timedelta(hours=23, minutes=50)  # shuts in 10 min
+    assert closing_due(last, 24, 15, NOW)
+    assert not closing_due(last, 24, 5, NOW)
+    assert not closing_due(NOW - timedelta(hours=25), 24, 15, NOW)  # already shut
 
 
 # --- who holds a thread: derived ------------------------------------------
@@ -133,6 +140,50 @@ def test_whoever_holds_it_keeps_it() -> None:
     assert (plan.bot_template_id, plan.bot_session_id) == (AGENT, buddy.bot_session_id)
     waiting = plan_inbound(_thread(bot_template_id=AGENT), _handoff(), AGENT, 10, NOW)
     assert waiting.bot_template_id == AGENT and not waiting.reopen
+
+
+# --- the closing sweep (R5, D9, R7) -----------------------------------------
+
+
+def _closing(thread: Thread, held: str, quiet: Optional[timedelta] = None) -> str:
+    last = NOW - quiet if quiet is not None else None
+    return sweeps.closing_action(thread, BUDDY_BINDING, held, 15, 24, last, NOW)
+
+
+def test_a_thread_off_buddys_binding_resolves_quietly() -> None:
+    assert (
+        _closing(_thread(binding_id="another"), words.HELD_BY_BUDDY)
+        == sweeps.ACTION_MOVED
+    )
+    assert (
+        sweeps.closing_action(_thread(), None, words.HELD_BY_BUDDY, 15, 24, None, NOW)
+        == sweeps.ACTION_MOVED
+    )
+
+
+def test_buddy_and_a_waiting_thread_say_goodbye_inside_the_lead() -> None:
+    due = _thread(last_inbound_at=NOW - timedelta(hours=23, minutes=50))
+    assert _closing(due, words.HELD_BY_BUDDY) == sweeps.ACTION_CLOSE
+    assert _closing(due, words.HELD_WAITING) == sweeps.ACTION_CLOSE
+    assert _closing(_thread(), words.HELD_BY_BUDDY) == sweeps.ACTION_WAIT
+
+
+def test_a_teammate_gets_the_goodbye_sent_only_after_an_hour_quiet() -> None:
+    due = _thread(last_inbound_at=NOW - timedelta(hours=23, minutes=50))
+    assert (
+        _closing(due, words.HELD_BY_TEAMMATE, timedelta(minutes=20))
+        == sweeps.ACTION_WAIT
+    )
+    assert (
+        _closing(due, words.HELD_BY_TEAMMATE, timedelta(hours=2)) == sweeps.ACTION_CLOSE
+    )
+
+
+def test_nobody_answering_gets_no_goodbye_and_a_shut_window_expires() -> None:
+    due = _thread(last_inbound_at=NOW - timedelta(hours=23, minutes=50))
+    assert _closing(due, words.HELD_BY_NOBODY) == sweeps.ACTION_WAIT
+    shut = _thread(last_inbound_at=NOW - timedelta(hours=25))
+    assert _closing(shut, words.HELD_BY_BUDDY) == sweeps.ACTION_EXPIRE
 
 
 # --- who may act (D19) ------------------------------------------------------
@@ -356,7 +407,11 @@ async def test_a_late_moved_letter_leaves_buddys_current_binding_alone(
 
 QUERY_MODULES = (thread_q, message_q, handoff_q)
 #: The builders that deliberately cross tenants: the drains.
-CROSS_TENANT: Set[str] = set()
+CROSS_TENANT = {
+    "closing_candidates_query",
+    "delete_resolved_query",
+    "unclaimed_older_than_query",
+}
 
 
 def _builders():
@@ -432,11 +487,84 @@ def test_the_replay_guards_match_the_partial_unique_indexes() -> None:
             "m", "t", "outbound", "assist", None, None, None, None, NOW
         )[0]
     )
+    assert "ON CONFLICT (merchant_id, conversation_id) WHERE closed_at IS NULL" in (
+        handoff_q.open_handoff_query("m", "t", "s", None, None, "normal")[0]
+    )
 
 
 def test_take_over_is_a_compare_and_set() -> None:
     query, _ = thread_q.take_over_query("m", "t", "u", {})
     assert "AND assignee_user_id IS NULL" in query
+
+
+@pytest.mark.parametrize(
+    ("over", "answers"),
+    [
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW), True),
+        (dict(last_inbound_at=NOW), False),  # no agent
+        (dict(bot_template_id=AGENT, last_inbound_at=None), False),  # she never wrote
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW, resolved_at=NOW), False),
+        (dict(bot_template_id=AGENT, last_inbound_at=NOW, assignee_user_id="u"), False),
+    ],
+)
+def test_a_thread_is_buddys_to_answer_only_while_nobody_else_holds_it(
+    over, answers
+) -> None:
+    from app.crm.conversations import bot
+
+    work = bot._work(_thread(**over))
+    assert (work is not None) is answers
+    if work is not None:
+        assert work.agent_id == AGENT
+
+
+@pytest.mark.parametrize("unanswered", [True, False])
+async def test_buddy_owes_her_what_she_wrote_past_his_cursor(
+    monkeypatch, unanswered
+) -> None:
+    """Owed = an inbound row written after the cursor — read from the
+    timeline, never by comparing provider times: two messages in one second,
+    or one that lands late, are still owed."""
+    from app.crm.conversations import bot
+
+    cursor = NOW - timedelta(minutes=1)
+    asked: List[tuple] = []
+
+    async def rows_after(merchant_id, thread_id, kinds, after, limit):
+        asked.append((kinds, after, limit))
+        return [SimpleNamespace(id="r1")] if unanswered else []
+
+    monkeypatch.setattr(bot.message_accessor, "rows_after", rows_after)
+    thread = _thread(bot_template_id=AGENT, last_inbound_at=NOW, bot_cursor_at=cursor)
+    assert await bot.owes_reply(thread) is unanswered
+    assert asked == [([words.KIND_INBOUND], cursor, 1)]
+
+
+async def test_a_thread_buddy_does_not_answer_owes_nothing_without_a_read(
+    monkeypatch,
+) -> None:
+    from app.crm.conversations import bot
+
+    async def rows_after(*args: Any):
+        raise AssertionError("no read for a thread a teammate holds")
+
+    monkeypatch.setattr(bot.message_accessor, "rows_after", rows_after)
+    taken = _thread(bot_template_id=AGENT, last_inbound_at=NOW, assignee_user_id="u")
+    assert await bot.owes_reply(taken) is False
+
+
+def test_buddy_reads_her_messages_in_the_order_they_were_written() -> None:
+    """Inbound rows are stamped with clock_timestamp() under the thread's
+    row lock, and Buddy's reads and cursor follow that stamp — not the
+    provider's whole-second occurred_at."""
+    insert, _ = message_q.insert_inbound_query(
+        "m", "t", "inbound", "customer", None, None, None, NOW
+    )
+    assert "occurred_at, created_at)" in insert and "$8, clock_timestamp())" in insert
+    after, values = message_q.rows_after_query("m", "t", ["inbound"], NOW, 50)
+    assert "created_at > $4" in after and "ORDER BY created_at, id" in after
+    assert "occurred_at >" not in after
+    assert values[3] == NOW
 
 
 def test_every_view_has_a_predicate() -> None:
@@ -465,6 +593,69 @@ def test_a_hand_back_moves_buddys_cursor_past_everything_she_wrote() -> None:
     before the hand back was the teammate's, the next one is Buddy's."""
     query, _ = thread_q.hand_back_query("shop", "t", "u", AGENT, {})
     assert "bot_cursor_at = clock_timestamp()" in query
+
+
+def test_the_lapse_closes_only_the_handoff_it_judged_while_still_unclaimed() -> None:
+    """The sweep judged a handoff from a page it read earlier: a teammate who
+    took it since, or a newer handoff on the thread, is never closed."""
+    query, values = handoff_q.lapse_query("shop", "h", words.OUTCOME_SLA_LAPSED, 10)
+    assert "AND id = $2::uuid" in query and "conversation_id =" not in query
+    assert "AND closed_at IS NULL" in query and "AND claimed_at IS NULL" in query
+    assert "AND opened_at <= now() - make_interval(mins => $4::int)" in query
+    assert values == ["shop", "h", "sla_lapsed", 10]
+
+
+def test_retention_rechecks_the_age_on_the_row_it_deletes() -> None:
+    """A delete that waited on her reopening the thread re-checks only its
+    own WHERE: the age is there too, so the reopened thread survives."""
+    query, _ = thread_q.delete_resolved_query(90, 500)
+    outer = query[query.index("LIMIT $2") :]
+    assert "AND resolved_at < now() - make_interval(days => $1::int)" in outer
+
+
+# --- the sweeps resolve only the thread they read ----------------------------
+
+
+def test_a_sweep_resolve_is_guarded_by_what_it_read() -> None:
+    query, values = thread_q.resolve_query("shop", "t", NOW)
+    assert "AND ($3::timestamptz IS NULL OR last_inbound_at = $3)" in query
+    assert values == ["shop", "t", NOW]
+    # a teammate's resolve stays unconditional
+    assert thread_q.resolve_query("shop", "t")[1] == ["shop", "t", None]
+
+
+async def test_a_message_that_lands_mid_sweep_keeps_the_thread_open(
+    monkeypatch,
+) -> None:
+    """The window shut and the sweep read the thread; she writes before it
+    resolves — the guarded resolve misses and the thread stays open."""
+    calls: List[tuple] = []
+
+    async def buddy_binding(merchant_id, channel):
+        return SimpleNamespace(id=BUDDY_BINDING)
+
+    async def settings(merchant_id, channel, binding_id=None):
+        return SimpleNamespace(
+            claim_sla_minutes=10, closing_lead_minutes=15, closing_message="bye"
+        )
+
+    async def open_for_thread(merchant_id, thread_id):
+        return None
+
+    async def atomically(fn, *args):
+        calls.append((fn.__name__, args))
+        return None  # her message moved last_inbound_at: the guard missed
+
+    monkeypatch.setattr(sweeps, "buddy_binding", buddy_binding)
+    monkeypatch.setattr(sweeps, "conversation_settings", settings)
+    monkeypatch.setattr(sweeps.handoff_accessor, "open_for_thread", open_for_thread)
+    monkeypatch.setattr(sweeps, "atomically", atomically)
+    read = NOW - timedelta(hours=25)  # her window shut an hour ago
+    thread = _thread(bot_template_id=AGENT, last_inbound_at=read)
+    action = await sweeps._close_one(thread, 24, {}, {}, NOW)
+    [(name, args)] = calls
+    assert name == "resolve_thread_in_txn" and args[-1] == read
+    assert action == sweeps.ACTION_WAIT  # not counted as expired
 
 
 # --- the live stream notices a lost connection --------------------------------
@@ -635,6 +826,26 @@ async def test_the_projector_follows_the_registrys_conversation_channels(
     assert [name for name, _ in world.atoms] == ["_project_inbound_in_txn"]
 
 
+async def test_the_closing_sweep_walks_every_conversation_channel(
+    monkeypatch,
+) -> None:
+    asked: List[str] = []
+
+    async def candidates(channel, older_than, after, limit):
+        asked.append(channel)
+        return []
+
+    monkeypatch.setattr(
+        sweeps, "conversation_channels", lambda: ("whatsapp", "instagram")
+    )
+    monkeypatch.setattr(
+        sweeps, "conversation_profile", lambda channel: SimpleNamespace(window_hours=24)
+    )
+    monkeypatch.setattr(sweeps.thread_accessor, "closing_candidates", candidates)
+    await sweeps.sweep_closing(50)
+    assert asked == ["whatsapp", "instagram"]
+
+
 async def test_each_waiting_thread_reads_its_own_bindings_claim_sla(
     monkeypatch,
 ) -> None:
@@ -692,6 +903,63 @@ async def test_a_template_reply_needs_a_channel_that_registers_them(
     if closed_hint is not None:
         with pytest.raises(ThreadConflict, match=closed_hint):
             await reply.reply_text("shop", "t", "hi", teammate)
+
+
+# --- may Buddy speak: re-checked before every send ---------------------------
+
+#: bot_may_speak reads the wall clock: a handoff opened "now" is inside its SLA.
+_JUST_NOW = datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("thread", "handoff", "session_id", "may"),
+    [
+        (_thread(bot_template_id=AGENT), None, None, True),
+        # her handoff is open: Buddy is silent...
+        (_thread(bot_template_id=AGENT), _handoff(opened_at=_JUST_NOW), None, False),
+        # ...bar the turn that asked for it (its waiting message)
+        (
+            _thread(bot_template_id=AGENT),
+            _handoff(opened_at=_JUST_NOW),
+            "55555555-5555-4555-8555-555555555555",
+            True,
+        ),
+        # a teammate claimed it: even the asking session is silent
+        (
+            _thread(bot_template_id=AGENT, assignee_user_id="u-1"),
+            _handoff(opened_at=_JUST_NOW, claimed_by="u-1", claimed_at=_JUST_NOW),
+            "55555555-5555-4555-8555-555555555555",
+            False,
+        ),
+        # Buddy moved to another number
+        (
+            _thread(bot_template_id=AGENT, binding_id="other-number"),
+            None,
+            None,
+            False,
+        ),
+    ],
+)
+async def test_bot_may_speak(monkeypatch, thread, handoff, session_id, may) -> None:
+    from app.crm.conversations import bot
+
+    async def get_thread(merchant_id, thread_id):
+        return thread
+
+    async def open_for_thread(merchant_id, thread_id):
+        return handoff
+
+    async def settings(_thread):
+        return SimpleNamespace(claim_sla_minutes=10)
+
+    async def buddy(merchant_id, channel):
+        return SimpleNamespace(id=BUDDY_BINDING)
+
+    monkeypatch.setattr(bot.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(bot.handoff_accessor, "open_for_thread", open_for_thread)
+    monkeypatch.setattr(bot, "settings_for", settings)
+    monkeypatch.setattr(bot, "buddy_binding", buddy)
+    assert await bot.bot_may_speak("shop", thread.id, session_id) is may
 
 
 # --- receipts wake the thread showing the send --------------------------------
@@ -758,6 +1026,120 @@ def test_the_send_lookup_reads_either_id() -> None:
     assert values == ["shop", "wamid.X", None]
 
 
+# --- only the session answering a thread may hand it off ----------------------
+
+_SESSION = "55555555-5555-4555-8555-555555555555"
+
+
+@pytest.mark.parametrize(
+    ("thread", "refused"),
+    [
+        (_thread(bot_template_id=AGENT, bot_session_id=_SESSION), None),
+        # a web session naming someone else's thread
+        (_thread(bot_template_id=AGENT, bot_session_id="other-session"), "NotAllowed"),
+        # a teammate took it while Buddy's turn was running
+        (_thread(assignee_user_id="u-1"), "ThreadConflict"),
+        (_thread(resolved_at=NOW), "ThreadConflict"),
+    ],
+)
+async def test_a_handoff_is_asked_only_by_the_threads_own_session(
+    monkeypatch, thread, refused
+) -> None:
+    from app.crm.conversations import handoffs
+
+    opened: List[str] = []
+
+    async def get_thread(merchant_id, thread_id, txn=None, for_update=False):
+        assert for_update, "checked under the row lock"
+        return thread
+
+    async def open_handoff(txn, merchant_id, thread_id, session_id, *rest):
+        opened.append(session_id)
+        return _handoff()
+
+    async def wake(*args):
+        return None
+
+    async def settings(_thread):
+        return SimpleNamespace(human_handoff=True)
+
+    monkeypatch.setattr(handoffs.thread_accessor, "get_thread", get_thread)
+    monkeypatch.setattr(handoffs.handoff_accessor, "open_handoff", open_handoff)
+    monkeypatch.setattr(handoffs, "wake", wake)
+    monkeypatch.setattr(handoffs, "settings_for", settings)
+    txn: Any = object()  # the accessors are faked; nothing touches it
+    call = handoffs._request_handoff_in_txn(
+        txn, "shop", thread.id, _SESSION, "customer_requested", None, "normal"
+    )
+    if refused is None:
+        assert (await call).id == _handoff().id and opened == [_SESSION]
+    else:
+        with pytest.raises(Exception) as caught:
+            await call
+        assert type(caught.value).__name__ == refused and opened == []
+
+    async def plain_get_thread(merchant_id, thread_id, txn=None, for_update=False):
+        return thread
+
+    monkeypatch.setattr(handoffs.thread_accessor, "get_thread", plain_get_thread)
+    assert await handoffs.handoff_available("shop", thread.id, _SESSION) is (
+        refused is None
+    )
+
+
+# --- a new session hears the latest of the conversation ------------------------
+
+
+def test_the_context_slice_is_the_latest_rows_before_the_burst() -> None:
+    since, before = NOW - timedelta(hours=24), NOW
+    query, values = message_q.rows_before_query(
+        "shop", "t", ["inbound", "outbound"], since, before, 50
+    )
+    assert "ORDER BY occurred_at DESC, id DESC" in query
+    assert "occurred_at > $4" in query and "occurred_at < $5" in query
+    assert values == ["shop", "t", ["inbound", "outbound"], since, before, 50]
+
+
+async def test_the_context_slice_reads_oldest_first(monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+
+    from app.crm.conversations.db.accessors import message as message_accessor
+
+    def row(n: int) -> Dict[str, Any]:
+        return dict(
+            id=f"r{n}",
+            conversation_id="t",
+            kind="inbound",
+            author_kind="customer",
+            author_user_id=None,
+            event_raw_id=None,
+            message_id=None,
+            provider_message_id=None,
+            body={"type": "text", "text": str(n)},
+            occurred_at=NOW + timedelta(minutes=n),
+            created_at=NOW + timedelta(minutes=n),
+        )
+
+    class Conn:
+        async def fetch(self, query, *values):
+            return [row(3), row(2), row(1)]  # the database answers newest first
+
+    @asynccontextmanager
+    async def crm_connection():
+        yield Conn()
+
+    monkeypatch.setattr(message_accessor, "crm_connection", crm_connection)
+    rows = await message_accessor.rows_before("shop", "t", ["inbound"], NOW, NOW, 3)
+    assert [r.id for r in rows] == ["r1", "r2", "r3"]
+
+
+def test_a_widget_thread_is_never_this_answers_work() -> None:
+    from app.crm.conversations import bot
+
+    widget = _thread(channel="widget", bot_template_id=AGENT, last_inbound_at=NOW)
+    assert bot._work(widget) is None
+
+
 # --- the plan's once-only guarantees ------------------------------------------
 
 
@@ -767,6 +1149,34 @@ def test_a_handoff_closes_once() -> None:
     query, values = handoff_q.close_query("m", "t", words.OUTCOME_RESOLVED, None)
     assert "AND closed_at IS NULL" in query and "RETURNING" in query
     assert values == ["m", "t", "resolved", None]
+
+
+async def test_the_closing_message_is_sent_once_per_window(monkeypatch) -> None:
+    """Its dedupe key names the window, so a second sweep or pod finds the
+    first send; her next message opens a new window and a new key."""
+    keys: List[str] = []
+    rows: List[str] = []
+
+    async def send_session(**kwargs: Any):
+        duplicate = kwargs["dedupe_key"] in keys
+        keys.append(kwargs["dedupe_key"])
+        return SimpleNamespace(
+            duplicate=duplicate, message_id="m-1", provider_message_id="w-1"
+        )
+
+    async def insert_outbound(*args: Any):
+        rows.append("row")
+        return SimpleNamespace(id="r-1")
+
+    monkeypatch.setattr(sweeps, "send_session", send_session)
+    monkeypatch.setattr(sweeps.message_accessor, "insert_outbound", insert_outbound)
+    thread = _thread(bot_template_id=AGENT, last_inbound_at=NOW)
+    await sweeps._send_closing(thread, "bye", words.HELD_BY_BUDDY, NOW)
+    await sweeps._send_closing(thread, "bye", words.HELD_BY_BUDDY, NOW)
+    later = _thread(bot_template_id=AGENT, last_inbound_at=NOW + timedelta(days=1))
+    await sweeps._send_closing(later, "bye", words.HELD_BY_BUDDY, NOW)
+    assert keys[0] == keys[1] != keys[2]
+    assert rows == ["row", "row"]  # the duplicate wrote no second timeline row
 
 
 async def test_a_replayed_letter_changes_nothing(monkeypatch) -> None:
