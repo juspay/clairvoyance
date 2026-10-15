@@ -7,7 +7,7 @@ JSON serialization for JSONB columns happens here.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.database.decoder.breeze_buddy.chat_session import (
@@ -30,6 +30,7 @@ from app.database.queries.breeze_buddy.chat_session import (
     list_chat_sessions_query,
     list_chat_turn_metrics_for_session_query,
     list_idle_chat_sessions_query,
+    list_open_sessions_on_channel_query,
     merge_client_context_query,
     record_chat_turn_metrics_query,
     set_chat_session_voice_lead_query,
@@ -57,6 +58,7 @@ async def create_chat_session(
     reseller_id: str,
     merchant_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    channel: str = "web",
 ) -> Optional[ChatSession]:
     """Insert a new ACTIVE chat session and return the full row."""
     query, values = create_chat_session_query(
@@ -64,6 +66,7 @@ async def create_chat_session(
         reseller_id=reseller_id,
         merchant_id=merchant_id,
         metadata_json=json.dumps(metadata or {}),
+        channel=channel,
     )
     try:
         result = await run_parameterized_query(query, values)
@@ -158,16 +161,38 @@ async def update_chat_session_outcome(
         raise
 
 
+async def list_open_sessions_on_channel(
+    channel: str,
+    statuses: List[ChatSessionStatus],
+    limit: int = 100,
+    after: Optional[Tuple[datetime, str]] = None,
+) -> List[ChatSession]:
+    """Open sessions on one channel (the idle sweeper's thread-bound half);
+    ``after`` is the last (last_activity_at, id) of the previous page."""
+    query, values = list_open_sessions_on_channel_query(
+        channel=channel,
+        statuses=[s.value for s in statuses],
+        limit=limit,
+        after_activity_at=after[0] if after else None,
+        after_id=after[1] if after else None,
+    )
+    rows = await run_parameterized_query(query, values)
+    return [s for s in (decode_chat_session(row) for row in rows or []) if s]
+
+
 async def list_idle_chat_sessions(
     cutoff: datetime,
     statuses: List[ChatSessionStatus],
     limit: int = 100,
+    channels: Optional[List[str]] = None,
 ) -> List[ChatSession]:
-    """Find sessions whose last_activity_at < cutoff and status ∈ statuses."""
+    """Find sessions whose last_activity_at < cutoff and status ∈ statuses,
+    on the given channels when named."""
     query, values = list_idle_chat_sessions_query(
         cutoff=cutoff,
         statuses=[s.value for s in statuses],
         limit=limit,
+        channels=channels,
     )
     try:
         rows = await run_parameterized_query(query, values)
