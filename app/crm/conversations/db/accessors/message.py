@@ -1,7 +1,7 @@
 """Mechanical access to crm_conversation_message."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.conversations.db.decoders.rows import decode_timeline
 from app.crm.conversations.db.queries import message as q
@@ -70,6 +70,18 @@ async def insert_outbound(
         occurred_at,
     )
     return await _one(txn, query, values)
+
+
+async def timeline(
+    merchant_id: str,
+    thread_id: str,
+    before: Optional[Tuple[datetime, str]],
+    limit: int,
+) -> List[TimelineRow]:
+    query, values = q.timeline_query(merchant_id, thread_id, before, limit)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_timeline(row) for row in rows]
 
 
 async def thread_for_send(

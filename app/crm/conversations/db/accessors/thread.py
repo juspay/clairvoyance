@@ -2,7 +2,7 @@
 ``txn``; the rest self-scope (crm_connection)."""
 
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.conversations.db.decoders.rows import decode_thread
 from app.crm.conversations.db.queries import thread as q
@@ -35,6 +35,16 @@ async def ensure_thread(
     if thread is None:
         raise RuntimeError("crm_conversation upsert returned no row")
     return thread
+
+
+async def get_thread(
+    merchant_id: str,
+    thread_id: str,
+    txn: Optional[DbTxn] = None,
+    for_update: bool = False,
+) -> Optional[Thread]:
+    query, values = q.thread_query(merchant_id, thread_id, for_update)
+    return await _one(txn, query, values)
 
 
 async def thread_for_contact(
@@ -79,7 +89,74 @@ async def touch_outbound(
     return await _one(txn, query, values)
 
 
+async def take_over(
+    txn: DbTxn, merchant_id: str, thread_id: str, user_id: str, trail: Dict[str, Any]
+) -> Optional[Thread]:
+    query, values = q.take_over_query(merchant_id, thread_id, user_id, trail)
+    return await _one(txn, query, values)
+
+
+async def assign(
+    txn: DbTxn, merchant_id: str, thread_id: str, user_id: str, trail: Dict[str, Any]
+) -> Optional[Thread]:
+    query, values = q.assign_query(merchant_id, thread_id, user_id, trail)
+    return await _one(txn, query, values)
+
+
+async def hand_back(
+    txn: DbTxn,
+    merchant_id: str,
+    thread_id: str,
+    user_id: str,
+    agent_id: Optional[str],
+    trail: Dict[str, Any],
+) -> Optional[Thread]:
+    query, values = q.hand_back_query(merchant_id, thread_id, user_id, agent_id, trail)
+    return await _one(txn, query, values)
+
+
+async def resolve(
+    txn: DbTxn,
+    merchant_id: str,
+    thread_id: str,
+    last_inbound_at: Optional[datetime] = None,
+) -> Optional[Thread]:
+    query, values = q.resolve_query(merchant_id, thread_id, last_inbound_at)
+    return await _one(txn, query, values)
+
+
 async def resolve_binding(txn: DbTxn, merchant_id: str, binding_id: str) -> List[str]:
     query, values = q.resolve_binding_query(merchant_id, binding_id)
     rows = await txn.fetch(query, *values)
     return [str(row["id"]) for row in rows]
+
+
+async def mark_read(merchant_id: str, thread_id: str) -> Optional[Thread]:
+    query, values = q.mark_read_query(merchant_id, thread_id)
+    return await _one(None, query, values)
+
+
+async def list_threads(
+    merchant_id: str,
+    view: str,
+    user_id: str,
+    channel: Optional[str],
+    search: Optional[str],
+    before: Optional[Tuple[datetime, str]],
+    limit: int,
+) -> List[Thread]:
+    query, values = q.list_threads_query(
+        merchant_id, view, user_id, channel, search, before, limit
+    )
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_thread(row) for row in rows]
+
+
+async def view_counts(
+    merchant_id: str, user_id: str, channel: Optional[str]
+) -> Dict[str, int]:
+    query, values = q.view_counts_query(merchant_id, user_id, channel)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return {view: int(row[view] or 0) for view in q.COUNTED_VIEWS} if row else {}
