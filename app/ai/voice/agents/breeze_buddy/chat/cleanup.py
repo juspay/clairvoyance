@@ -12,6 +12,7 @@ from datetime import timedelta
 from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     terminate_pending_approvals,
 )
+from app.ai.voice.agents.breeze_buddy.chat.inbox.sessions import end_released_sessions
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.queue import (
     enqueue_conversation_evaluation,
 )
@@ -59,7 +60,17 @@ async def end_idle_chat_sessions() -> None:
     mode "single mutual-exclusion primitive across pods" guarantee.
     A ``LockAcquireError`` here means a turn is in flight, so the session
     isn't actually idle and we skip it; the next tick will catch it.
+
+    Thread-bound (inbox) sessions are not idle-timed: they end once their
+    thread lets go of Buddy (inbox/sessions.py), checked here every tick.
     """
+    try:
+        released = await end_released_sessions()
+        if released:
+            logger.info(f"chat cleanup: ended {released} released inbox session(s)")
+    except Exception as exc:
+        logger.error(f"chat cleanup: ending released inbox sessions failed: {exc}")
+
     idle_after = await CHAT_SESSION_END_TIMEOUT_SECONDS()
     cutoff = utcnow() - timedelta(seconds=idle_after)
 
@@ -68,6 +79,10 @@ async def end_idle_chat_sessions() -> None:
             cutoff=cutoff,
             statuses=[ChatSessionStatus.ACTIVE, ChatSessionStatus.IDLE],
             limit=_SWEEP_BATCH_SIZE,
+            # Web sessions only: a thread-bound session lives as long as its
+            # thread holds Buddy, and ends above once it lets go (window
+            # closed, taken over, Buddy moved) — tab inactivity means nothing.
+            channels=["web"],
         )
     except Exception as exc:
         logger.error(f"chat cleanup: list_idle_chat_sessions failed: {exc}")
