@@ -484,13 +484,10 @@ async def test_completion_enqueues_source_identity(
         "app.ai.voice.agents.breeze_buddy.handlers.internal.end_conversation"
     )
     voice_result = SimpleNamespace(id="lead-id", template_id=TEMPLATE_ID)
-    voice_enqueue = AsyncMock()
     completion = AsyncMock(return_value=voice_result)
-    monkeypatch.setattr(
-        end_conversation_module,
-        "enqueue_conversation_evaluation",
-        voice_enqueue,
-    )
+    # a call's job is queued by crm_mirror's finished tap once the outcome
+    # check is done, not here
+    assert not hasattr(end_conversation_module, "enqueue_conversation_evaluation")
     monkeypatch.setattr(
         end_conversation_module,
         "update_span_with_evaluation_data",
@@ -524,13 +521,6 @@ async def test_completion_enqueues_source_identity(
         await end_conversation_module.end_conversation(TemplateContext(bot), {})
 
     assert completion.await_count == 2
-    assert voice_enqueue.await_count == 2
-    for queued in voice_enqueue.await_args_list:
-        assert queued.args == (
-            "lead-id",
-            ConversationChannel.VOICE,
-            TEMPLATE_ID,
-        )
 
     chat_result = SimpleNamespace(id="session-id", template_id=TEMPLATE_ID)
     monkeypatch.setattr(

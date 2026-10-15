@@ -27,10 +27,10 @@ from app.schemas.breeze_buddy.conversation_analysis import (
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
 
-# The agent's own evals: not live yet (see queue.py).
-# from .custom.agent_evals import run_agent_evals
+from .custom.agent_evals import run_agent_evals, save_eval_failures
 from .queue import (
-    LOG_COMPONENT,
+    EVALS_LOG_COMPONENT,
+    TOPICS_LOG_COMPONENT,
     dequeue_conversation_evaluation,
     requeue_conversation_evaluation,
 )
@@ -86,12 +86,12 @@ async def get_analysis_context(
             "template_id": template_id,
             "started_at": lead.call_initiated_time or lead.created_at,
             "transcript": transcript,
-            # The agent's own evals (not live yet, see queue.py) also need
-            # what an eval judge sees beside the transcript; topics ignore it:
-            # "channel": job.channel.value,
-            # "payload": lead.payload or {},
-            # "meta_data": metadata,
-            # "recorded_outcome": lead.outcome,
+            # what a custom eval's judge sees beside the transcript
+            # (build_state); topics read none of it
+            "channel": job.channel.value,
+            "payload": lead.payload or {},
+            "meta_data": metadata,
+            "recorded_outcome": lead.outcome,
         }
     else:
         session = await get_chat_session_by_id(job.source_id)
@@ -173,7 +173,7 @@ async def _consume_queue(recovery_lock: asyncio.Lock) -> None:
             raise
         except Exception as exc:
             where = f" for {job.source_id} (template {job.template_id})" if job else ""
-            logger.bind(component=LOG_COMPONENT).error(
+            logger.bind(component=TOPICS_LOG_COMPONENT).error(
                 f"Conversation analysis queue consumer failed{where}: {exc}"
             )
             await asyncio.sleep(1)
@@ -183,7 +183,7 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
     global _consecutive_failures, _paused_until, _in_flight
 
     set_log_context(
-        component=LOG_COMPONENT,
+        component=TOPICS_LOG_COMPONENT,
         source_id=job.source_id,
         template_id=str(job.template_id),
         channel=job.channel.value,
@@ -197,12 +197,10 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
         return
     update_log_context(merchant_id=context.get("merchant_id"))
 
-    # The agent's own evals, not live yet (see queue.py): a job of their own,
-    # so a topics retry never re-runs them and their retry never re-runs
-    # topics.
-    # if job.kind == "evals":
-    #     await run_agent_evals(job, context, evaluations)
-    #     return
+    # The custom evals the job has not marked passed (job.evals_done), then
+    # its topics unless marked done (job.topics_done): a retry runs only what
+    # failed.
+    failed_evals = await run_agent_evals(job, context, evaluations)
 
     _in_flight += 1
     try:
@@ -224,7 +222,7 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
                     f"{job.template_id}: {evaluation.get('evaluation_type')}"
                 )
                 continue
-            if evaluation_type is not EvaluationType.TOPIC:
+            if evaluation_type is not EvaluationType.TOPIC or job.topics_done:
                 continue
 
             try:
@@ -240,6 +238,8 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
                     )
                 job.deliveries += 1
                 if job.deliveries >= _MAX_DELIVERIES:
+                    if failed_evals:
+                        await save_eval_failures(job, context, failed_evals)
                     await save_topic_failure(
                         context,
                         evaluation,
@@ -263,6 +263,14 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
                     f"(failure #{_consecutive_failures} in a row)"
                 )
                 return
+            except Exception as exc:
+                # Topics are dropped as before; the failed custom evals still
+                # get their retry or FAILED rows below.
+                if not failed_evals:
+                    raise
+                logger.bind(outcome="failed").error(
+                    f"Topic evaluation {job.source_id} failed: {exc!r}"
+                )
 
         if model_answered and _consecutive_failures:
             logger.info("Topic evaluation resumed after the model recovered")
@@ -270,6 +278,18 @@ async def _evaluate(job: ConversationEvaluationJob) -> None:
             _paused_until = 0.0
     finally:
         _in_flight -= 1
+
+    if not failed_evals:
+        return
+    job.topics_done = True
+    job.deliveries += 1
+    if job.deliveries >= _MAX_DELIVERIES:
+        await save_eval_failures(job, context, failed_evals)
+        return
+    await requeue_conversation_evaluation(job)
+    logger.bind(
+        component=EVALS_LOG_COMPONENT, outcome="requeued", deliveries=job.deliveries
+    ).warning(f"Agent evals for {job.source_id} re-queued (delivery {job.deliveries})")
 
 
 async def start_analysis_worker() -> None:

@@ -2,8 +2,9 @@
 
 An agent can have many CONVERSATION_EVALS rows, each named, and one TOPIC row
 (always named 'topic'). The per-type endpoints address the row named after
-their type (``lower(evaluation_type)``); naming more evals comes with the
-merchant eval API.
+their type (``lower(evaluation_type)``). The agent's custom evals are its
+CONVERSATION_EVALS rows other than the preset outcome_correctness one, each
+addressed by its name.
 """
 
 import json
@@ -17,6 +18,10 @@ _CONFIG_COLUMNS = (
 #: The preset eval: a global row (the default for every agent) that an
 #: agent's own row of the same name overrides, enabled or disabled.
 OUTCOME_CORRECTNESS = "outcome_correctness"
+
+#: The CONVERSATION_EVALS rows that are not the agent's custom evals: the
+#: preset's.
+NOT_CUSTOM_EVALS = [OUTCOME_CORRECTNESS]
 
 
 def get_evaluation_config_query(
