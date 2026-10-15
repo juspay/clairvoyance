@@ -68,7 +68,10 @@ async def crm_replica_read(
     reports only (Performance, Versions, Runs, a customer's journey, a
     segment's answer), never for a worker or a write. The replica runs behind the primary
     (seconds at peak): a chart a few seconds old is fine, a walker or a
-    claim acting on a stale row acts twice.
+    claim acting on a stale row acts twice. One worker reads it, by design:
+    a broadcast's freeze reads a dynamic segment's ids here — it only
+    writes them with ON CONFLICT DO NOTHING, and an audience a few seconds
+    behind is still the one frozen just before dispatch.
 
     No replica configured → the writer, so local runs are unchanged. A
     replica failure RAISES: retrying a report on the primary would put

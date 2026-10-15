@@ -1140,12 +1140,23 @@ CRM_RUN_SWEEP_INTERVAL_SECONDS = _positive_float(
     "CRM_RUN_SWEEP_INTERVAL_SECONDS", 3600.0
 )
 
+# Broadcasts (canon T17): how many claims a freeze may spend before the
+# broadcast fails with its last error. The claim spends one (092, the T20
+# attempts precedent), so a freeze that keeps meeting a transient error (a
+# replica timeout) is retried once per lease and then given up — never
+# claimed again forever. Capped at 100, about a day of 15-minute leases:
+# past that nothing is transient.
+CRM_BROADCAST_FREEZE_MAX_ATTEMPTS = min(
+    _positive_int("CRM_BROADCAST_FREEZE_MAX_ATTEMPTS", 3), 100
+)
+
 # UAP routes (/uap/*). Off by default for security, and nobody uses them today.
 # Fix these before turning them on:
 # - Parallel payments can pass the rider's spending limit.
 # - A missing provider fare falls back to the amount the client sent.
 # - The routes have no caller auth.
 UAP_ROUTES_ENABLED = os.environ.get("UAP_ROUTES_ENABLED", "false").lower() == "true"
+
 UAP_ENVIRONMENT = os.environ.get("UAP_ENVIRONMENT", "production").strip().lower()
 _UAP_HOSTS = {
     "sandbox": "https://sandbox.juspay.in",
