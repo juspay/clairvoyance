@@ -18,8 +18,7 @@ from app.core.config.static import (
     PLIVO_RECORDING_TIME_LIMIT,
 )
 from app.core.logger import logger
-from app.core.security.ssrf import host_matches_allowlist
-from app.core.transport.http_client import get_proxy_config
+from app.core.network import fetch_bytes_from_allowed_host, host_matches_allowlist
 from app.database.accessor import get_lead_by_call_id
 
 # Keys go only to Plivo's recording hosts (media.plivo.com and its regions,
@@ -84,27 +83,25 @@ async def download_call_recording(
             account = await lead_plivo_account(lead)
             auth = aiohttp.BasicAuth(account.auth_id, account.auth_token)
 
-        # Get proxy configuration
-        proxy_url = get_proxy_config()
-
-        logger.info(f"Downloading Plivo recording from: {recording_url}")
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                recording_url, auth=auth, proxy=proxy_url
-            ) as response:
-                if response.status != 200:
-                    logger.error(
-                        f"Failed to download Plivo recording. Status: {response.status}"
-                    )
-                    return None
-
-                # Read the recording into memory
-                audio_data = await response.read()
-                audio_file = BytesIO(audio_data)
+        # No allow-list without credentials: the address check is what makes
+        # the fetch safe, and gating reachability on a hostname turns a
+        # recording served from anywhere unlisted into a silent failure.
+        audio_data = await fetch_bytes_from_allowed_host(
+            recording_url,
+            allowed_host_suffixes=list(_RECORDING_HOSTS) if auth else None,
+            auth=auth,
+            # Nothing secret to protect without keys, so a provider serving the
+            # file over plain http loses the recording rather than the argument.
+            # With keys it stays https-only.
+            allow_http=auth is None,
+        )
+        if audio_data is None:
+            return None
+        audio_file = BytesIO(audio_data)
 
         logger.info(
-            f"Successfully downloaded Plivo recording for call: {call_sid} ({len(audio_data)} bytes)"
+            f"Successfully downloaded Plivo recording for call: {call_sid} "
+            f"({len(audio_data)} bytes)"
         )
         return audio_file
 

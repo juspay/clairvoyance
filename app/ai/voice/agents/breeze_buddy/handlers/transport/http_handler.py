@@ -120,7 +120,7 @@ async def http_function_handler(
     5. Returns data to LLM
 
     Args:
-        context: TemplateContext with bot state access (includes aiohttp_session)
+        context: TemplateContext with bot state access
         args: LLM function arguments (e.g., {"order_id": "12345"})
         function_config: GlobalHttpFunction configuration from template
 
@@ -139,13 +139,6 @@ async def http_function_handler(
     config: GlobalHttpFunction = function_config
     function_name = config.name
     logger.info(f"[http_function_handler] Starting HTTP call for '{function_name}'")
-
-    if not context.aiohttp_session:
-        logger.error(f"[{function_name}] No aiohttp_session available in context")
-        return {
-            "status": "error",
-            "error": "HTTP session not available",
-        }, None
 
     try:
         # Pre-flight validation: Check all LLM-sourced fields are present in args
@@ -185,7 +178,7 @@ async def http_function_handler(
         )
 
         # Step 2: Create executor
-        executor = HttpRequestExecutor(session=context.aiohttp_session)
+        executor = HttpRequestExecutor()
 
         logger.info(
             f"[{function_name}] Executing HTTP {config.http_request.method.value} "

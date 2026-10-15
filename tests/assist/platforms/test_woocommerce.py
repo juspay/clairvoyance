@@ -13,7 +13,7 @@ import copy
 import json
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any, Dict, cast
+from typing import Any, Dict
 
 import httpx
 import pytest
@@ -42,7 +42,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     McpServerConfig,
 )
 from app.api.routers import mcp as mcp_route
-from app.core.security import ssrf
+from app.core.network import egress as ssrf
 
 HOST = "www.shopyvision.com"
 STORE_API = f"https://{HOST}/wp-json/wc/store/v1"
@@ -825,7 +825,7 @@ async def test_an_mcp_pre_check_answers_a_hosted_url_in_process(store, no_networ
         mcp_arguments={"catalog": {"ids": ["347693"]}},
     )
     # The MCP path never uses the executor's HTTP session.
-    executor = HttpRequestExecutor(session=cast(Any, None))
+    executor = HttpRequestExecutor()
     payload, reason = await _fetch_mcp_response(pre_check, {}, executor)
 
     assert reason is None and payload is not None

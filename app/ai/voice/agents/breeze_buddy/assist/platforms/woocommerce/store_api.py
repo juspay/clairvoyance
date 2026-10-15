@@ -4,7 +4,7 @@
 The Store API is public for catalog reads (no keys), so this module only
 ever sends GETs. The host comes from the request path of the MCP endpoint,
 so every request passes the SSRF egress check first
-(``app/core/security/ssrf.py``), redirects are not followed, and the body
+(``app/core/network``), redirects are not followed, and the body
 read is capped.
 """
 
@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
-from app.core.security.ssrf import validate_egress_url
+from app.core.network import validate_egress_url
 from app.core.transport.http_client import create_http_client
 
 _TIMEOUT_S = 15.0

@@ -7,9 +7,15 @@ from typing import Optional
 
 import aiohttp
 
-from app.core.config.static import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+from app.core.config.static import (
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+)
 from app.core.logger import logger
-from app.core.transport.http_client import get_proxy_config
+from app.core.network import fetch_bytes_from_allowed_host, host_matches_allowlist
+
+# Only ever send Twilio BasicAuth to Twilio's own hosts (recordings + media CDN).
+_TWILIO_HOST_SUFFIXES = ("twilio.com", "twiliocdn.com")
 
 
 async def download_call_recording(
@@ -27,29 +33,31 @@ async def download_call_recording(
     """
     try:
         # Twilio recordings require authentication
-        auth = aiohttp.BasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        auth = (
+            aiohttp.BasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            if host_matches_allowlist(recording_url, list(_TWILIO_HOST_SUFFIXES))
+            else None
+        )
 
-        # Get proxy configuration
-        proxy_url = get_proxy_config()
-
-        logger.info(f"Downloading Twilio recording from: {recording_url}")
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                recording_url, auth=auth, proxy=proxy_url
-            ) as response:
-                if response.status != 200:
-                    logger.error(
-                        f"Failed to download Twilio recording. Status: {response.status}"
-                    )
-                    return None
-
-                # Read the recording into memory
-                audio_data = await response.read()
-                audio_file = BytesIO(audio_data)
+        # No allow-list without credentials: the address check is what makes
+        # the fetch safe, and gating reachability on a hostname turns a
+        # recording served from anywhere unlisted into a silent failure.
+        audio_data = await fetch_bytes_from_allowed_host(
+            recording_url,
+            allowed_host_suffixes=list(_TWILIO_HOST_SUFFIXES) if auth else None,
+            auth=auth,
+            # Nothing secret to protect without keys, so a provider serving the
+            # file over plain http loses the recording rather than the argument.
+            # With keys it stays https-only.
+            allow_http=auth is None,
+        )
+        if audio_data is None:
+            return None
+        audio_file = BytesIO(audio_data)
 
         logger.info(
-            f"Successfully downloaded Twilio recording for call: {call_sid} ({len(audio_data)} bytes)"
+            f"Successfully downloaded Twilio recording for call: {call_sid} "
+            f"({len(audio_data)} bytes)"
         )
         return audio_file
 
