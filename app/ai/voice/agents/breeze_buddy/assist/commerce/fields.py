@@ -145,6 +145,7 @@ STORE_FIELDS = FieldProfile(
                     "Returns portal, contact form, order tracking, with the "
                     "full https address.",
                     kind="list",
+                    from_research=True,
                 ),
             ),
         ),
