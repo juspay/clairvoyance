@@ -209,6 +209,62 @@ def test_generic_build_drops_every_shopify_section() -> None:
     assert built.configurations.tool_arg_injection == []
 
 
+def test_woocommerce_build_keeps_only_its_store_server() -> None:
+    blueprint = _blueprint()
+    assert blueprint.configurations is not None and blueprint.configurations.mcp
+    servers = blueprint.configurations.mcp.servers
+    # The store server as WOOCOMMERCE_ASSIST.md builds it: no Shopify cart token.
+    woo = servers[0].model_dump()
+    woo["name"] = "woocommerce-store"
+    woo["url"] = "https://api.breezebuddy.ai/mcp/woocommerce/{{shop_domain}}"
+    for rules in woo["tool_response_transforms"].values():
+        rules[:] = [rule for rule in rules if rule["fn"] != "derive_field"]
+    for tool in ("create_cart", "get_cart", "update_cart"):
+        ui = woo["tool_ui_instructions"][tool]
+        ui["instructions"] = (
+            ui["instructions"]
+            .replace(f",{{prop:'cart_token',ref:'$tool:{tool}#/cart_token'}}", "")
+            .replace(", and cart-cookie sync itself", "")
+        )
+    blueprint.configurations.mcp.servers = [
+        *servers,
+        type(servers[0]).model_validate(woo),
+    ]
+    built = service.build_merchant_template(
+        default_template=blueprint,
+        body=_request(platform="woocommerce", is_shopify=None),
+        website_context="Sells eyewear.",
+        template_id="00000000-0000-0000-0000-000000000002",
+        existing_template=None,
+        adapter=registry.resolve("woocommerce"),
+        vertical=verticals.resolve("commerce"),
+    )
+
+    assert "### Cart-cookie sync (Shopify storefront)" not in (
+        built.flow["system_prompt"]
+    )
+    assert built.configurations is not None
+    config = built.configurations.model_dump(mode="json", exclude_none=True)
+    assert [s["name"] for s in config["mcp"]["servers"]] == ["woocommerce-store"]
+    assert config["mcp"]["servers"][0]["url"] == (
+        "https://api.breezebuddy.ai/mcp/woocommerce/hustleculture.co.in"
+    )
+    assert config["flavor"]["ucp"] == {
+        "connectors": ["woocommerce"],
+        "features": {"upsell": True},
+    }
+    assert "cart_token" not in str(config["mcp"])
+    assert "ui_intents" not in config and not config["state_reducers"]
+    assert list(built.expected_payload_schema or {}) == ["shop_url"]
+    assert built.secrets == {"shop_url": "hustleculture.co.in"}
+
+    # A blueprint without the store server is refused for these stores.
+    with pytest.raises(service.OnboardingFailure):
+        service._validate_default_template(
+            _blueprint(), registry.resolve("woocommerce"), verticals.resolve("commerce")
+        )
+
+
 @pytest.mark.parametrize(
     "prompt",
     [
