@@ -60,6 +60,7 @@ from app.crm.connectivity.schemas.message import (
     SendOutcome,
     SendRoute,
     SendToken,
+    SessionBody,
 )
 from app.crm.connectivity.templates import reads as template_reads
 from app.crm.shared.redact import mask_address
@@ -99,6 +100,7 @@ async def resolve_send_route(
     channel: str,
     binding_id: Optional[str] = None,
     template_name: Optional[str] = None,
+    session: bool = False,
 ) -> Union[SendRoute, str]:
     """Find the pipe, the account, the secrets and the approved template — or
     the reason there is none.
@@ -113,6 +115,11 @@ async def resolve_send_route(
     installation's provider account, so it comes after those two — but before
     the vault, because it is a plain read and the vault read is a KMS
     decrypt: the cheapest refusal should never pay for the dearest step.
+
+    ``session`` is a free-form reply inside the customer-service window:
+    it names no template, so the registry step is skipped — that is the one
+    difference. Every other check (the pipe, a healthy door, a credential)
+    applies to it exactly as to a template.
     """
     binding = await binding_accessor.get_binding(merchant_id, channel, binding_id)
     if binding is None:
@@ -138,7 +145,7 @@ async def resolve_send_route(
     # send names no registry row and must not be refused for lacking one.
     # The registry states the fact; the word for "no" is this door's.
     template = None
-    if registers_templates_for(channel):
+    if not session and registers_templates_for(channel):
         if not template_name:
             # The adapter refuses this too, but refusing here keeps the
             # reason on the near side of the wire for every such channel.
@@ -169,19 +176,26 @@ async def resolve_send_route(
 
 
 async def _resolve_and_deliver(
-    adapter: ChannelAdapter, message: QueuedMessage
+    adapter: ChannelAdapter,
+    message: QueuedMessage,
+    body: Optional[SessionBody] = None,
 ) -> SendOutcome:
     """The part of a send that must finish inside the claim lease.
 
     Split out so ONE wait_for in send() covers the route's DB reads as well
     as the provider call: a stalled pool outlives the lease exactly like a
     hung provider — same reassigned row, same double send.
+
+    ``body`` present means a free-form reply (a session send): the route
+    skips the template registry and the adapter's conversation face carries
+    it. Absent, this is the template send it has always been.
     """
     route = await resolve_send_route(
         message.merchant_id,
         message.channel,
         message.binding_id,
         message.template_id,
+        session=body is not None,
     )
     if not isinstance(route, SendRoute):
         # No route, and the resolver said why. Its reason is the honest one.
@@ -192,8 +206,12 @@ async def _resolve_and_deliver(
         f"connectivity: sending {message.id} via {message.channel} "
         f"to {mask_address(message.sent_to_address, message.channel)} "
         f"from binding {route.binding.id}"
+        + (f" (free-form {body.kind})" if body is not None else "")
     )
-    outcome = await adapter.deliver(message, route)
+    if body is not None:
+        outcome = await adapter.deliver_session(message, route, body)
+    else:
+        outcome = await adapter.deliver(message, route)
     if outcome.status != "accepted":
         return outcome
     return outcome.model_copy(update={"binding_id": str(route.binding.id)})
@@ -201,6 +219,25 @@ async def _resolve_and_deliver(
 
 async def send(send_token: SendToken, message: QueuedMessage) -> SendOutcome:
     """Hand ``message`` to its channel's adapter, if everything permits it."""
+    return await _send(send_token, message, None)
+
+
+async def deliver_session_send(
+    send_token: SendToken, message: QueuedMessage, body: SessionBody
+) -> SendOutcome:
+    """Hand a free-form reply to its channel's adapter, if everything
+    permits it — the same grant check, the same adapter lookup, the same
+    route checks and the same deadline as a template send. Only session.py
+    calls it; it is here because this file is the one path to a provider.
+    """
+    return await _send(send_token, message, body)
+
+
+async def _send(
+    send_token: SendToken, message: QueuedMessage, body: Optional[SessionBody]
+) -> SendOutcome:
+    """Both doors' shared body: the checks that must precede ANY message
+    reaching a person, then the adapter, inside one deadline."""
     if not token_grants(send_token, message):
         logger.error(
             f"connectivity: send token does not authorise message {message.id}"
@@ -219,7 +256,7 @@ async def send(send_token: SendToken, message: QueuedMessage) -> SendOutcome:
 
     try:
         return await asyncio.wait_for(
-            _resolve_and_deliver(adapter, message),
+            _resolve_and_deliver(adapter, message, body),
             timeout=CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:

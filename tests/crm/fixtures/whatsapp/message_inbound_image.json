@@ -1,0 +1,27 @@
+{
+  "messaging_product": "whatsapp",
+  "metadata": {
+    "display_phone_number": "918067451234",
+    "phone_number_id": "812345678901234"
+  },
+  "contacts": [
+    {
+      "profile": { "name": "Priya Sharma" },
+      "wa_id": "919876543210"
+    }
+  ],
+  "messages": [
+    {
+      "from": "919876543210",
+      "id": "wamid.HBgMOTE5ODc2NTQzMjEwFQIAEhggQUJDREVGMDEyMzQ1Njc4OQ",
+      "timestamp": "1788177901",
+      "type": "image",
+      "image": {
+        "caption": "this is the damaged box",
+        "mime_type": "image/jpeg",
+        "sha256": "8bbe1c7b3a1e4f3c9d2a6b5e4f7c1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f",
+        "id": "1234567890123456"
+      }
+    }
+  ]
+}
