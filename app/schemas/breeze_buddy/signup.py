@@ -16,7 +16,12 @@ Security notes:
 import re
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.core.security.password_policy import (
+    MIN_PASSWORD_LENGTH,
+    validate_password_strength,
+)
 
 
 class MerchantSignupRequest(BaseModel):
@@ -55,13 +60,19 @@ class MerchantSignupRequest(BaseModel):
     )
     password: str = Field(
         ...,
-        min_length=8,
-        description="Password (minimum 8 characters).",
+        min_length=MIN_PASSWORD_LENGTH,
+        description=f"Password (minimum {MIN_PASSWORD_LENGTH} characters, "
+        "including at least one symbol).",
     )
     email: Optional[str] = Field(
         None,
         description="Optional email address.",
     )
+
+    @model_validator(mode="after")
+    def _validate_password_policy(self) -> "MerchantSignupRequest":
+        validate_password_strength(self.password)
+        return self
 
     @field_validator("merchant_id")
     @classmethod
@@ -154,6 +165,11 @@ class ListAccountsRequest(BaseModel):
     email: Optional[str] = Field(
         None, description="Email address (for password flows)."
     )
+    password: Optional[str] = Field(
+        None,
+        description="Password — proves ownership of an account under `email`. "
+        "Not needed when the caller is already signed in as that email.",
+    )
 
 
 class AccountSummary(BaseModel):
@@ -184,7 +200,11 @@ class SelectAccountRequest(BaseModel):
     id_token: Optional[str] = Field(
         None, description="Google id_token (for SSO flows)."
     )
-    password: Optional[str] = Field(None, description="Password (for password flows).")
+    # min_length=1 so an explicitly-empty password 422s at the boundary rather
+    # than reaching bcrypt, which raises ValueError -> 500 instead of 401.
+    password: Optional[str] = Field(
+        None, min_length=1, description="Password (for password flows)."
+    )
 
 
 class SwitchAccountRequest(BaseModel):
