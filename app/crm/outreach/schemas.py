@@ -1141,7 +1141,8 @@ class Broadcast(BaseModel):
     ``workflow_id``, now or at ``scheduled_for``. The clocks tell its story —
     authored at created_at, frozen at resolved_at (late, just before
     dispatch), fired at dispatched_at, final at closed_at. It never sends:
-    the workflow does."""
+    the workflow does. ``attempts`` counts the freeze's claims and
+    ``last_error`` says why one broke — or why the broadcast failed (091)."""
 
     id: UUID
     merchant_id: str
@@ -1156,6 +1157,8 @@ class Broadcast(BaseModel):
     closed_at: Optional[datetime] = None
     created_by: Optional[str] = None
     created_at: datetime
+    attempts: int = 0
+    last_error: Optional[str] = None
 
 
 class BroadcastPage(BaseModel):
@@ -1163,3 +1166,7 @@ class BroadcastPage(BaseModel):
 
     items: List[Broadcast]
     total: int
+
+
+#: A recipient's own life (canon T18 col 8) — 090's CHECK words.
+RecipientStatus = Literal["queued", "claimed", "skipped", "enrolled", "cancelled"]

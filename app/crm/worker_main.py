@@ -19,8 +19,10 @@ from app.crm.connectivity.contracts import (
     register_retire_guard,
 )
 from app.crm.outreach.contracts import (
+    claim_due_freezes,
     claim_due_runs,
     consume_attributed_event,
+    freeze_broadcast,
     template_references,
     walk_run,
 )
@@ -73,6 +75,19 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         batch=CRM_WORKER_BATCH,
         stop_event=stop_event,
         name="walker",
+    ),
+    # Its own role (design/worker-runtime.md: one role per pod, no pod runs
+    # two loops). A freeze reads a whole segment; on its own pod it never
+    # holds up the runs the walker moves.
+    "broadcaster": lambda stop_event: run_drain_loop(
+        claim_due_freezes,
+        freeze_broadcast,
+        interval=CRM_WORKER_INTERVAL,
+        # One broadcast at a time per pod: a freeze is long, and another
+        # replica takes the next one.
+        batch=1,
+        stop_event=stop_event,
+        name="broadcaster",
     ),
 }
 
