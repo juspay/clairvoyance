@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
+from urllib.parse import urlsplit
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
     WebsiteScrapingUnavailableError,
@@ -109,12 +110,13 @@ async def read_facts(url: str, *, on_event: OnEvent) -> AssistResearchCompletion
             )
         return source, filled
 
+    contact_page = utils.contact_page(pages)
     tasks = [asyncio.create_task(read(page)) for page in pages]
     try:
         # Facts are kept in page order, not the order reads finish: the first
         # wording of a repeated fact wins, so the same site gives the same
         # notes. Each page still shows as soon as the pages before it are in.
-        for task in tasks:
+        for page, task in zip(pages, tasks):
             try:
                 source, filled = await asyncio.wait_for(
                     task, timeout=max(deadline - time.monotonic(), 0)
@@ -127,6 +129,18 @@ async def read_facts(url: str, *, on_event: OnEvent) -> AssistResearchCompletion
                 logger.info(f"assist research: a page could not be read: {exc}")
                 continue
             pages_read += 1
+            if page == contact_page and urlsplit(source).path.strip("/"):
+                # The contact page that was read, for the "Contact us" button;
+                # one that sent the reader back to the home page is none.
+                await keep(
+                    [
+                        AssistResearchNote(
+                            field="help_links",
+                            value=f"Contact page: {source}",
+                            source_url=source,
+                        )
+                    ]
+                )
             await keep(utils.to_notes(filled, source, kept, seen))
     finally:
         for task in tasks:

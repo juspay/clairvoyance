@@ -162,20 +162,16 @@ def test_shopify_build_lands_on_the_fleet_core() -> None:
         config["ui_intents"]["urls"]["checkout_page"]
         == "https://hustleculture.co.in/cart"
     )
-    assert (
-        "https://hustleculture.co.in/pages/contact"
-        in config["render_ui"]["trusted_link_urls"]
-    )
+    assert config["render_ui"]["trusted_link_urls"] == [
+        "https://hustleculture.co.in/cart"
+    ]
     servers = config["mcp"]["servers"]
     assert len(servers) == 1 and servers[0]["name"] in shopify_adapter.MCP_SERVER_NAMES
     assert (
         "https://hustleculture.co.in/cart"
         in servers[0]["tool_ui_instructions"]["get_cart"]["instructions"]
     )
-    assert (
-        'link={"label": "Contact us", "url": "https://hustleculture.co.in/pages/contact"}'
-        in prompt
-    )
+    assert "/pages/contact" not in prompt
 
     assert built.name == "hustle-culture-assist"
     assert built.supported_channels == ["chat"]
