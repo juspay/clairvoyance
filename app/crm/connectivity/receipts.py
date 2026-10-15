@@ -32,7 +32,7 @@ that matches no row at all names a message this system did not send (the
 provider's own app on the same binding).
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.db.accessors import message as message_accessor
@@ -184,3 +184,19 @@ async def apply_filed_receipts(
         logger.opt(exception=e).warning(
             f"receipts filed for {provider_message_id} not read back"
         )
+
+
+async def receipt_target(event: RawEvent) -> Optional[Tuple[str, Optional[str]]]:
+    """Which of our sends a receipt letter is about: (the provider's id, our
+    row's id — None when no row of ours carries it yet). None for a letter
+    that is not a receipt we act on. A read: the receipt itself is applied
+    by consume_status_event."""
+    if event.topic != TOPIC_STATUS:
+        return None
+    receipt = read_receipt(event)
+    if receipt is None:
+        return None
+    message_id = await message_accessor.message_id_by_provider(
+        event.merchant_id, receipt.provider_message_id
+    )
+    return receipt.provider_message_id, message_id
