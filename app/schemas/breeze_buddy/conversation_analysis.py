@@ -43,10 +43,16 @@ class TopicEvaluationSettingsRequest(BaseModel):
     enabled: bool
 
 
+class TopicSegment(BaseModel):
+    key: str
+    values: List[str]
+
+
 class TopicCatalogResponse(BaseModel):
     template_id: UUID
     enabled: bool
     topics: List[str] = Field(default_factory=list)
+    segments: List[TopicSegment] = Field(default_factory=list)
 
 
 class TopicCatalogChangeRequest(BaseModel):
@@ -64,6 +70,7 @@ class UpdateTopicConfigurationRequest(BaseModel):
     region: Optional[str] = Field(None, max_length=100)
     system_prompt: Optional[str] = Field(None, max_length=50000)
     settings: Optional[Dict[str, Any]] = None
+    segments: Optional[List[Dict[str, Any]]] = None
 
     @field_validator(
         "provider",
@@ -72,6 +79,7 @@ class UpdateTopicConfigurationRequest(BaseModel):
         "region",
         "system_prompt",
         "settings",
+        "segments",
         mode="before",
     )
     @classmethod
@@ -91,6 +99,7 @@ class TopicConfigurationResponse(BaseModel):
     region: Optional[str] = None
     system_prompt: str
     settings: Dict[str, Any]
+    segments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ConversationTopicsResponse(BaseModel):

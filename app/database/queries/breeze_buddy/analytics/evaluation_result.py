@@ -29,6 +29,12 @@ def _topic_filters(
     template_id = filters.get("template_id") or filters.get("template")
     if template_id:
         add(str(template_id), f"{alias}.template_id = ${{index}}::uuid")
+    for key, wanted in (filters.get("segments") or {}).items():
+        values.extend([key, list(wanted)])
+        clauses.append(
+            f"{alias}.metadata -> 'segments' -> ${len(values) - 1}::text "
+            f"?| ${len(values)}::text[]"
+        )
     if filters.get("date_from"):
         add(filters["date_from"], f"{alias}.started_at >= ${{index}}::date")
     if filters.get("date_to"):
@@ -80,6 +86,38 @@ def get_topic_dashboard_rows_query(
         WHERE {where}
           AND ca.result IS NOT NULL
         ORDER BY ca.started_at, ca.source_id, ca.result
+    """
+    return query, values
+
+
+def get_topic_segment_counts_query(
+    filters: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    scope_filters = {
+        key: value
+        for key, value in filters.items()
+        if key not in {"topic_type", "topic_types", "segments"}
+    }
+    clauses, values = _topic_filters(scope_filters)
+    for key, wanted in (filters.get("segments") or {}).items():
+        values.extend([key, list(wanted)])
+        clauses.append(
+            f"(segment.key = ${len(values) - 1}::text "
+            f"OR ca.metadata -> 'segments' -> ${len(values) - 1}::text "
+            f"?| ${len(values)}::text[])"
+        )
+    where = " AND ".join(clauses)
+    query = f"""
+        SELECT
+            segment.key AS segment_key,
+            item.value AS segment_value,
+            COUNT(DISTINCT ca.source_id) AS conversation_count
+        FROM evaluation_result ca
+        CROSS JOIN LATERAL jsonb_each(ca.metadata -> 'segments')
+            AS segment(key, items)
+        CROSS JOIN LATERAL jsonb_array_elements_text(segment.items) AS item(value)
+        WHERE {where}
+        GROUP BY segment.key, item.value
     """
     return query, values
 

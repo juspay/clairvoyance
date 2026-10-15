@@ -86,10 +86,10 @@ async def get_analysis_context(
             "template_id": template_id,
             "started_at": lead.call_initiated_time or lead.created_at,
             "transcript": transcript,
+            "payload": lead.payload or {},
             # The agent's own evals (not live yet, see queue.py) also need
             # what an eval judge sees beside the transcript; topics ignore it:
             # "channel": job.channel.value,
-            # "payload": lead.payload or {},
             # "meta_data": metadata,
             # "recorded_outcome": lead.outcome,
         }
@@ -111,6 +111,7 @@ async def get_analysis_context(
             "merchant_id": session.merchant_id,
             "template_id": template_id,
             "started_at": session.created_at,
+            "payload": session.metadata or {},
             "transcript": [
                 {
                     "idx": message.idx,
