@@ -5,7 +5,7 @@ one statement (module rules §1).
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
 
@@ -252,9 +252,14 @@ async def get_run(
 
 
 async def open_runs_for_customer(
-    merchant_id: str, customer_id: str
+    merchant_id: str,
+    customer_id: str,
+    keys: Sequence[Tuple[str, str]] = (),
+    run_ids: Sequence[str] = (),
 ) -> List[EnrollmentRun]:
-    query, values = open_runs_for_customer_query(merchant_id, customer_id)
+    query, values = open_runs_for_customer_query(
+        merchant_id, customer_id, keys, run_ids
+    )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_run(row) for row in rows]
