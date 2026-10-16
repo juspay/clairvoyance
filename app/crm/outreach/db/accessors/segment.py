@@ -1,8 +1,12 @@
 """Mechanical DB access for crm_segment (T15) — one table, one file (module
-rules §1 at scale). Every function self-scopes one statement; no decisions.
+rules §1 at scale). Two shapes, by signature: a ``conn`` parameter runs inside
+the caller's atom; no parameter self-scopes one statement. No decisions.
 """
 
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Tuple
+
+import asyncpg
 
 from app.crm.outreach.db.decoders.segment import decode_segment
 from app.crm.outreach.db.queries.segment import (
@@ -10,6 +14,8 @@ from app.crm.outreach.db.queries.segment import (
     get_segment_query,
     insert_static_list_query,
     list_segments_query,
+    lock_segment_query,
+    stamp_member_count_query,
 )
 from app.crm.outreach.schemas import Segment
 from app.crm.shared.db import crm_connection
@@ -46,3 +52,25 @@ async def count_segments(merchant_id: str) -> int:
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return int(row["total"]) if row else 0
+
+
+async def lock_segment(
+    conn: asyncpg.Connection, merchant_id: str, segment_id: str
+) -> Optional[bool]:
+    """Inside the add-members atom: lock this merchant's segment row and say
+    whether it is a static list. None = no such segment for this merchant."""
+    query, values = lock_segment_query(merchant_id, segment_id)
+    row = await conn.fetchrow(query, *values)
+    return bool(row["is_static"]) if row else None
+
+
+async def stamp_member_count(
+    conn: asyncpg.Connection, merchant_id: str, segment_id: str
+) -> Tuple[int, datetime]:
+    """Inside the add-members atom: recount the list from its rows and stamp
+    it now. The row was locked by lock_segment in the same atom, so it is
+    there."""
+    query, values = stamp_member_count_query(merchant_id, segment_id)
+    row = await conn.fetchrow(query, *values)
+    assert row is not None  # locked earlier in this same transaction
+    return int(row["member_count"]), row["computed_at"]

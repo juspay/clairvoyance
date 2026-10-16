@@ -5,7 +5,7 @@ parameterized; merchant_id is $1 on every read and write (tenancy law).
 
 from typing import Any, List, Optional, Tuple
 
-from app.crm.outreach.db.queries.tables import SEGMENT_TABLE
+from app.crm.outreach.db.queries.tables import SEGMENT_MEMBER_TABLE, SEGMENT_TABLE
 
 _SEGMENT_COLUMNS = """
     id, merchant_id, name, definition, member_count, computed_at,
@@ -62,3 +62,38 @@ def count_segments_query(merchant_id: str) -> Tuple[str, List[Any]]:
         WHERE merchant_id = $1
     """
     return query, [merchant_id]
+
+
+def lock_segment_query(merchant_id: str, segment_id: str) -> Tuple[str, List[Any]]:
+    """Inside the add-members atom: take the segment row FOR UPDATE before any
+    member is written, so two concurrent adds to one list run one after the
+    other — the second one's count then sees the first one's rows, and the
+    stamped count stays exact. Returns the row only when it is this
+    merchant's; the caller reads ``is_static`` to refuse a dynamic segment."""
+    query = f"""
+        SELECT definition IS NULL AS is_static
+        FROM {SEGMENT_TABLE}
+        WHERE merchant_id = $1 AND id = $2
+        FOR UPDATE
+    """
+    return query, [merchant_id, segment_id]
+
+
+def stamp_member_count_query(
+    merchant_id: str, segment_id: str
+) -> Tuple[str, List[Any]]:
+    """A static list's count, recounted from its rows and stamped now (T15
+    cols 7-8 — exact forever for a list). Recounted, never incremented: a
+    count derived from the rows cannot drift from them."""
+    query = f"""
+        UPDATE {SEGMENT_TABLE}
+        SET member_count = (
+                SELECT count(*)::int
+                FROM {SEGMENT_MEMBER_TABLE}
+                WHERE segment_id = $2
+            ),
+            computed_at = now()
+        WHERE merchant_id = $1 AND id = $2
+        RETURNING member_count, computed_at
+    """
+    return query, [merchant_id, segment_id]
