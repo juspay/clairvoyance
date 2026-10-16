@@ -26,6 +26,7 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.ai.voice.agents.breeze_buddy.template.types import ClientContextConfig
+from app.utils.common import json_size_bytes
 
 # Reserved key inside agent_session_state.data holding the pushed facts
 # namespace. Underscore-prefixed so it can't collide with a merchant's
@@ -161,11 +162,7 @@ def compute_context_patch(
         # ``max_bytes=0`` is honoured as a real cap — it rejects any non-empty
         # facts rather than silently disabling the guard. An empty projection
         # never trips it (clearing facts is always allowed).
-        if (
-            projected
-            and len(json.dumps(projected, default=str).encode("utf-8"))
-            > config.max_bytes
-        ):
+        if projected and json_size_bytes(projected) > config.max_bytes:
             raise ClientContextTooLarge(config.max_bytes)
 
     return state_patch, facts_patch, replace, accepted_state, accepted_facts
