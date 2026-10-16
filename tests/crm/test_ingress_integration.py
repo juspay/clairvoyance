@@ -78,6 +78,50 @@ def _envelope(*values: Dict[str, Any]) -> bytes:
     ).encode()
 
 
+# --- XyneSpaces: this file covers Meta's whole door, and Xyne's own door. --
+
+
+XYNE_SECRET = "integration-xyne-secret"
+XYNE_URL = "/ingest/webhooks/xyne"
+# Reserved account ids, one per merchant plus an orphan nothing owns. The
+# account IS the tenancy root (an account, not a per-address binding), so an
+# installation's external_account_id is what the ingress looks this up by.
+XYNE_OUR_ACCOUNT = "flow-itest-shop"
+XYNE_OTHER_ACCOUNT = "flow-itest-other"
+XYNE_ORPHAN_ACCOUNT = "flow-itest-nobody"
+XYNE_EVENT = "flow-ev-0001"
+
+
+def _xyne_signed(body: bytes) -> Dict[str, str]:
+    """Headers Xyne's relay would send with these exact bytes."""
+    mac = hmac.new(XYNE_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return {
+        "x-xyne-signature": f"sha256={mac}",
+        "Content-Type": "application/json",
+    }
+
+
+def _xyne_submission(account: str, event_id: str = XYNE_EVENT) -> bytes:
+    """The relay's flow_action submission, serialised once so the signature
+    matches the bytes FASTAPI actually receives."""
+    return json.dumps(
+        {
+            "flow_action": {
+                "type": "flow_action",
+                "id": event_id,
+                "account_id": account,
+                "performed_at": "1788177600",
+            },
+            "customer_mobile_number": "919876543210",
+            "customer_name": "Ada",
+            "values": {
+                "selected_dates": ["2026-10-15"],
+                "slots_2026-10-15": ["10:00"],
+            },
+        }
+    ).encode()
+
+
 def _status(number: str, wamid: str, status: str) -> Dict[str, Any]:
     """A Meta status entry for test payloads."""
     return {
@@ -164,7 +208,12 @@ async def _purge(conn: asyncpg.Connection) -> None:
         await conn.execute("DELETE FROM crm_customer WHERE merchant_id = $1", merchant)
     await conn.execute(
         "DELETE FROM credentials WHERE name = ANY($1::text[])",
-        [f"{MERCHANT}-wa", f"{OTHER_MERCHANT}-wa"],
+        [
+            f"{MERCHANT}-wa",
+            f"{OTHER_MERCHANT}-wa",
+            f"{MERCHANT}-xyne",
+            f"{OTHER_MERCHANT}-xyne",
+        ],
     )
 
 
@@ -201,6 +250,26 @@ async def _seed(conn: asyncpg.Connection) -> None:
             installation_id,
             number,
         )
+        # Xyne's own door: one installed flow account per merchant. It is a
+        # CONNECTOR-level owner (an account, no channel binding), exactly the
+        # account_id the ingress resolves on.
+        xyne_credential, xyne_installation = uuid.uuid4(), uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO credentials (id, name, credential_type, value)"
+            " VALUES ($1, $2, 'custom', $3)",
+            xyne_credential,
+            f"{merchant}-xyne",
+            json.dumps({"webhook_secret": "itest-xyne-secret"}),
+        )
+        await conn.execute(
+            "INSERT INTO crm_connector_installation (id, merchant_id, connector_key,"
+            " external_account_id, credential_id, status)"
+            " VALUES ($1, $2, 'xyne', $3, $4, 'healthy')",
+            xyne_installation,
+            merchant,
+            f"flow-{merchant}",
+            xyne_credential,
+        )
     customer_id = uuid.uuid4()
     await conn.execute(
         "INSERT INTO crm_customer (id, merchant_id) VALUES ($1, $2)",
@@ -227,9 +296,11 @@ async def client(monkeypatch, db) -> AsyncIterator[AsyncClient]:
     URL Meta is actually given."""
     from app.crm import api as crm_api
     from app.crm.connectivity.providers.meta import inbound as meta_module
+    from app.crm.connectivity.providers.xyne import inbound as xyne_module
 
     monkeypatch.setattr(meta_module, "META_APP_SECRET", SECRET)
     monkeypatch.setattr(meta_module, "META_WEBHOOK_VERIFY_TOKEN", TOKEN)
+    monkeypatch.setattr(xyne_module, "XYNE_WEBHOOK_SECRET", XYNE_SECRET)
 
     app = FastAPI()
     app.include_router(crm_api.router, prefix="")
@@ -478,3 +549,72 @@ async def test_a_template_letter_is_owned_through_the_waba(client, db) -> None:
     filed = await _letters(db)
     assert [row["topic"] for row in filed] == ["template.status"]
     assert filed[0]["external_id"] == f"waba-{MERCHANT}:tmpl-1:APPROVED:1788177600"
+
+
+# --- XyneSpaces: the response comes through the workflow, in real SQL ----
+
+
+async def test_xyne_a_flow_action_submission_files_under_the_installing_merchant(
+    client, db
+) -> None:
+    """A signed flow_action submission is owned through the installed flow
+    account and filed to the spine as a flow_action event."""
+    body = _xyne_submission(XYNE_OUR_ACCOUNT)
+    assert (
+        await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+    ).status_code == 200
+
+    filed = await _letters(db)
+    assert len(filed) == 1
+    assert filed[0]["source"] == "xyne"
+    assert filed[0]["topic"] == "flow_action"
+    assert filed[0]["external_id"] == f"{XYNE_OUR_ACCOUNT}:{XYNE_EVENT}"
+    # The whole relay submission rides verbatim, so the extractor reads its
+    # declared fields unchanged.
+    payload = json.loads(filed[0]["payload"])
+    assert payload["flow_action"]["account_id"] == XYNE_OUR_ACCOUNT
+    assert payload["values"]["slots_2026-10-15"] == ["10:00"]
+    # Canon T13 col 5: the stamped schema version is the app's webhook API
+    # version for xyne, never an inferred "1".
+    from app.core.config.static import XYNE_WEBHOOK_SCHEMA_VERSION
+
+    assert filed[0]["schema_version"] == XYNE_WEBHOOK_SCHEMA_VERSION
+
+
+async def test_xyne_an_orphan_flow_account_is_accepted_and_filed_nowhere(
+    client, db
+) -> None:
+    """A flow account nobody owns is accepted (200) but filed nowhere —
+    filing it under any merchant would be a cross-tenant leak."""
+    body = _xyne_submission(XYNE_ORPHAN_ACCOUNT)
+    response = await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+    assert response.status_code == 200
+    assert await _letters(db, MERCHANT) == []
+    assert await _letters(db, OTHER_MERCHANT) == []
+
+
+async def test_xyne_replaying_a_callback_files_nothing_new(client, db) -> None:
+    """THE test a mock cannot run: the spine's UNIQUE index dedupes a replayed
+    xyne callback — a retry must not file the same flow_action twice."""
+    body = _xyne_submission(XYNE_OUR_ACCOUNT)
+    for _ in range(3):
+        response = await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+        assert response.status_code == 200
+    assert len(await _letters(db)) == 1
+
+
+async def test_xyne_a_wrong_signature_is_refused(client, db) -> None:
+    """A callback that cannot sign is refused over the bytes fastapi delivers."""
+    body = _xyne_submission(XYNE_OUR_ACCOUNT)
+    headers = _xyne_signed(body)
+    headers["x-xyne-signature"] = "sha256=" + "f" * 64
+    response = await client.post(XYNE_URL, content=body, headers=headers)
+    assert response.status_code == 403
+    assert await _letters(db) == []
+
+
+async def test_xyne_the_url_we_give_xyne_is_really_mounted(client, db) -> None:
+    """The URL the relay is given is really mounted on app.crm.api's router."""
+    body = _xyne_submission(XYNE_OUR_ACCOUNT)
+    response = await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+    assert response.status_code == 200

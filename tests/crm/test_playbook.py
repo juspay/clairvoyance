@@ -480,7 +480,12 @@ def test_every_square_that_asks_gets_its_blocks(
     done: Dict[str, Any] = {}
 
     async def fake_do(
-        merchant_id: str, connector: str, action: str, args: Any, meta: Any
+        merchant_id: str,
+        connector: str,
+        action: str,
+        args: Any,
+        meta: Any,
+        installation_id: Any = None,
     ) -> Any:
         done["args"] = args
         return {"ok": True}

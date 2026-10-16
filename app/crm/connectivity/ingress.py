@@ -24,6 +24,7 @@ reader of every ``providers/<x>/inbound.py`` face.
 from typing import Awaitable, Callable, Dict, List, Mapping, Optional
 
 import app.crm.connectivity.providers.meta.inbound as meta
+import app.crm.connectivity.providers.xyne.inbound as xyne
 from app.core.logger import logger
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
@@ -121,4 +122,13 @@ META_INGRESS = IngressSpec(
     verify=meta.verify_signature,
     envelope=envelope_over(meta.letters),
     challenge=meta.handshake_challenge,
+)
+
+#: The XyneSpaces bay, registered by app/crm/api.py under the key "xyne".
+#: Their relay answers to one callback, and every letter resolves through the
+#: flow/installation account (connector 'xyne') — the account, not a member.
+XYNE_INGRESS = IngressSpec(
+    verify=xyne.verify_signature,
+    envelope=envelope_over(xyne.letters),
+    challenge=xyne.handshake_challenge,
 )

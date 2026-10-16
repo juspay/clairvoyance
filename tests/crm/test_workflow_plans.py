@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 import app.crm.outreach.plans as plans
+from app.crm.connectivity.schemas.connector import ConnectorInstallation
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.outreach.db import DbTxn
 from app.crm.outreach.plans import validate_definition
@@ -583,6 +584,118 @@ async def test_publish_holds_the_templates_it_sends_before_asking_the_registry(
     assert accessor.order == ["lock", "ask", "publish"]
 
 
+# --- rollout: an action node may pin WHICH door (door_name) ---
+
+_INSTALL_PLAN: Dict[str, Any] = {
+    "entry": {"topic": "checkouts/update", "reenter": True, "cooldown_hours": 0},
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {
+            "id": "hit-credit-line",
+            "type": "action",
+            "connector": "merchant_http",
+            "action": "request",
+            "door_name": "credit-line",
+            "args": {"path": "/credit-line/link", "body": {"customer_id": "FK1"}},
+        },
+    ],
+    "edges": [["wait-30m", "hit-credit-line"]],
+    "goal": {"topics": ["orders/create"]},
+    "purpose_key": "sales.credit_line.link",
+}
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_an_action_node_whose_pinned_door_resolves_to_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The publish-time half of door pinning: a plan that names a door must
+    name a door OF THIS MERCHANT under that connector that is still usable —
+    otherwise the first sign is a parked run hours later."""
+    accessor = _PublishAccessor(_INSTALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+
+    async def no_door(
+        merchant_id: str, connector_key: str, door_name: Optional[str] = None
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(plans, "get_installation_for_connector", no_door)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "action node hit-credit-line: door_name credit-line names no usable "
+        "door of this merchant on connector 'merchant_http'"
+    ]
+    assert accessor.published is False
+
+
+@pytest.mark.asyncio
+async def test_publish_proceeds_when_the_pinned_door_resolves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _PublishAccessor(_INSTALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+
+    async def one_door(
+        merchant_id: str, connector_key: str, door_name: Optional[str] = None
+    ) -> ConnectorInstallation:
+        return ConnectorInstallation(
+            id="00000000-0000-0000-0000-000000009001",
+            merchant_id="m1",
+            connector_key="merchant_http",
+            external_account_id="credit-line",
+            door_name="credit-line",
+            door_data={"base_url": "https://api.example.com/v1"},
+            display_label="Credit line API",
+            credential_id="cred-1",
+            status="healthy",
+        )
+
+    monkeypatch.setattr(plans, "get_installation_for_connector", one_door)
+    published = await _publish(accessor)
+    assert accessor.published is True and published.status == "live"
+
+
+def test_a_malformed_door_name_is_refused_at_the_schema_boundary() -> None:
+    """A door is addressed by its STABLE merchant-chosen name — never a URL,
+    never a placeholder, never a row id. A base_url or a '{placeholder}' is
+    not a doorway anyone could name, so the schema refuses it BEFORE publish
+    or check_draft can forward it to a lookup that silently matches nothing —
+    that would otherwise surface as a parked run later, or a plan that names
+    a door it can never resolve."""
+    malformed = _definition(
+        nodes=[
+            {
+                "id": "hit-credit-line",
+                "type": "action",
+                "connector": "merchant_http",
+                "action": "request",
+                "door_name": "https://api.example.com/v1",
+                "args": {"path": "/credit-line/link", "body": {"customer_id": "FK1"}},
+            }
+        ],
+        edges=[],
+    )
+    problems = validate_definition(malformed)
+    assert problems and "definition shape invalid" in problems[0]
+    assert "door_name" in problems[0]
+
+    # A real stable name on the same shape is not a shape complaint any more —
+    # it falls through to the graph laws (a plan with one node and no edges is
+    # refused later, never as a shape error here).
+    good = {
+        **malformed,
+        "nodes": [
+            {
+                **malformed["nodes"][0],
+                "door_name": "credit-line",
+            }
+        ],
+    }
+    assert not any("definition shape invalid" in p for p in validate_definition(good))
+
+
 # --- rollout phase 15: entry as a list of doors, and $topic on wait_event ---
 
 _LADDER: Dict[str, Any] = {
@@ -932,6 +1045,129 @@ def test_action_args_must_name_declared_facts_too() -> None:
     assert any(
         "before filtering, keying or templating" in p for p in problems
     ), problems
+
+
+def test_a_later_square_may_name_a_fact_an_action_declares() -> None:
+    """The action is the only verb whose output RESTARTS the run's facts:
+    the response values an action declares it will write (merchant_http's
+    `facts` map) are run-produced, never catalog-declared, so a LATER
+    square's `{payment_link}` is admitted by reading the connector's
+    `action_declares` — without it, `{payment_link}` published cleanly and
+    parked on the first run, exactly the failure the send-side check exists
+    to prevent."""
+    catalogs: plans.Catalogs = {"orders/create": _orders_create_catalog()}
+
+    # Two actions: the first's request declares `payment_link`, the second
+    # (a send) asks for it. The chain must publish.
+    def _doc(send_variables: Dict[str, str]) -> Dict[str, Any]:
+        return {
+            **_COD,
+            "purpose_key": "utility.order.receipt",
+            "nodes": [
+                {
+                    "id": "link",
+                    "type": "action",
+                    "connector": "merchant_http",
+                    "action": "request",
+                    "args": {
+                        "path": "/v2/payment-links",
+                        "method": "POST",
+                        "body": {"amount": "{id}"},
+                        "facts": {"payment_link": "data.link"},
+                    },
+                },
+                {
+                    "id": "receipt",
+                    "type": "send",
+                    "channel": "whatsapp",
+                    "template": "t",
+                    "variables": send_variables,
+                },
+            ],
+            "edges": [["link", "receipt"]],
+        }
+
+    # A send's blank right-hand side may name the action's declared fact.
+    assert validate_definition(_doc({"1": "payment_link"}), catalogs=catalogs) == []
+
+    # So may a LATER ACTION's args placeholder.
+    later_action = {
+        **_doc({}),
+        "nodes": [
+            _doc({})["nodes"][0],
+            {
+                "id": "mark",
+                "type": "action",
+                "connector": "shopify",
+                "action": "add_tag",
+                "args": {"order_id": "{payment_link}", "tags": ["paid"]},
+            },
+        ],
+        "edges": [["link", "mark"]],
+    }
+    assert validate_definition(later_action, catalogs=catalogs) == []
+
+    # A name nobody declares is still refused — the allow-list was not
+    # thrown open, only extended with the action's honest answers.
+    problems = validate_definition(_doc({"1": "payment_lik"}), catalogs=catalogs)
+    assert any(
+        "'payment_lik' is not a declared variable field" in p for p in problems
+    ), problems
+
+    # …and an action that declares NO facts (Shopify's tag) admits nothing.
+    problems = (
+        validate_definition(
+            {
+                **later_action,
+                "nodes": [
+                    {
+                        "id": "tag",
+                        "type": "action",
+                        "connector": "shopify",
+                        "action": "add_tag",
+                        "args": {"order_id": "{id}", "tags": ["x"]},
+                    },
+                    {
+                        "id": "send-after",
+                        "type": "send",
+                        "channel": "whatsapp",
+                        "template": "t",
+                        "variables": {"1": "tagged_fact"},
+                    },
+                ],
+                "edges": [["tag", "send-after"]],
+            },
+            catalogs=catalogs,
+        )
+        != []
+    )
+
+
+def test_an_action_may_not_declare_a_fact_named_like_walker_bookkeeping() -> None:
+    """A declared fact is merged at the run's TOP level (nodes/action.py), so
+    a name that shadows the walker's own bookkeeping would overwrite `phone`
+    or `source_event_id` on a live run. Refused at publish where an author
+    can still edit — the write path refuses the same name for versions that
+    predate this guard."""
+    catalogs: plans.Catalogs = {"orders/create": _orders_create_catalog()}
+    doc = {
+        **_COD,
+        "nodes": [
+            {
+                "id": "link",
+                "type": "action",
+                "connector": "merchant_http",
+                "action": "request",
+                "args": {
+                    "path": "/v2/payment-links",
+                    "facts": {"phone": "data.phone"},
+                },
+            }
+        ],
+        "edges": [],
+    }
+    problems = validate_definition(doc, catalogs=catalogs)
+    assert any("shadows the walker's own bookkeeping" in p for p in problems), problems
 
 
 def test_send_variables_may_name_a_stage_letters_fact_and_the_square() -> None:

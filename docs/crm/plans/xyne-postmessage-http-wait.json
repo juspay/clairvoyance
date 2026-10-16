@@ -1,0 +1,53 @@
+{
+  "on_publish": "pin",
+  "name": "Xyne postMessage -> async reply (demo)",
+  "entry": {
+    "topic": "flow_action",
+    "where": [
+      {
+        "field": "payload.actionId",
+        "op": "is",
+        "value": "submit-interview-availability"
+      }
+    ],
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "goals": [
+    {
+      "topics": [
+        "flow_action"
+      ],
+      "key": {
+        "event": "conversationId",
+        "run": "conversationId"
+      },
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 7
+  },
+  "nodes": [
+    {
+      "id": "http-post-message",
+      "type": "action",
+      "connector": "merchant_http",
+      "action": "request",
+      "args": {
+        "path": "/api/apps/chat/postMessage",
+        "method": "POST",
+        "body": {
+          "type": "message",
+          "text": "Demo: entry column waits for the async reply after this form was submitted.",
+          "context": {
+            "userId": "{userId}",
+            "conversationId": "{conversationId}"
+          }
+        }
+      }
+    }
+  ],
+  "edges": [],
+  "purpose_key": "xyne.postmessage.demo"
+}

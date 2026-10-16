@@ -751,6 +751,20 @@ META_ES_CONFIG_ID = os.environ.get("META_ES_CONFIG_ID", "")
 META_WEBHOOK_VERIFY_TOKEN = os.environ.get("META_WEBHOOK_VERIFY_TOKEN", "")
 
 
+# XyneSpaces relay webhooks (go.webhooks.cc). PLATFORM-level by necessity,
+# the same way META_APP_SECRET is: the payload naming the merchant cannot be
+# trusted until its signature is verified, and verifying it needs the
+# secret. Empty is a legal boot, but then every inbound webhook is REFUSED —
+# fail closed, or anyone can write flow_action events to us.
+XYNE_WEBHOOK_SECRET = os.environ.get("XYNE_WEBHOOK_SECRET", "")
+
+# Echoed back once, when the callback URL is registered in XyneSpaces.
+XYNE_WEBHOOK_VERIFY_TOKEN = os.environ.get("XYNE_WEBHOOK_VERIFY_TOKEN", "")
+
+# The relay's API version we parse against, stamped on every letter.
+XYNE_WEBHOOK_SCHEMA_VERSION = os.environ.get("XYNE_WEBHOOK_SCHEMA_VERSION", "v1")
+
+
 # Announcement Banner Configuration
 DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR = os.environ.get(
     "DEFAULT_ANNOUNCEMENT_BANNER_TEXT_COLOR", "white"

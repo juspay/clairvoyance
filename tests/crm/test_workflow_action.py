@@ -8,7 +8,7 @@ refusal from the destination) parks; a BAD MOMENT (timeout, 5xx, 429) leaves
 as itself so the walker's lease ladder re-sends it."""
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import pytest
@@ -130,6 +130,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, calls: List[Dict[str, Any]], **kw:
         action: str,
         args: Dict[str, Any],
         context: Dict[str, Any],
+        door_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         calls.append(
             {
@@ -138,11 +139,15 @@ def _install(monkeypatch: pytest.MonkeyPatch, calls: List[Dict[str, Any]], **kw:
                 "action": action,
                 "args": args,
                 "context": context,
+                "door_name": door_name,
             }
         )
         if "raises" in kw:
             raise kw["raises"]
-        return {"ok": True}
+        # Connectivity returns {ok, status, facts}; the facts are the
+        # response values the author declared readable (a merchant_http
+        # `facts` map), and the whole result is the marker too.
+        return {"ok": True, "facts": kw.get("facts", {})}
 
     monkeypatch.setattr(action_node, "perform_action", fake_perform)
 
@@ -160,11 +165,16 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
         _DEFINITION,
     )
 
-    # The action's OWN normalised facts, kept rather than discarded — under
-    # the square's `action_` bookkeeping key, so they stay out of run_facts
-    # and can never reach a template. This assertion is what stops
-    # "responses are normalised" from being a promise with no reader.
-    assert result == {"action_tag-vip": {"ok": True}}
+    # The marker keeps the whole normalised result for whoever triages the
+    # run — `action_<node>`, bookkeeping, so it never reaches a template. An
+    # empty `facts` map (Shopify's tag produces no response values a later
+    # square reads) merges nothing extra at the top level: this assertion is
+    # what stops "responses are normalised" from being a promise with no
+    # reader.
+    assert result == {
+        "action_tag-vip": {"ok": True, "facts": {}},
+        "action_visits_tag-vip": 1,
+    }
     assert calls == [
         {
             "merchant_id": "m1",
@@ -174,25 +184,104 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
             # EVERY value the connector needs is here: the args are the whole
             # contract, resolved from the plan's own placeholders.
             "args": {"order_id": "5408422249", "tags": ["CONFIRM", "vip"]},
-            # Bookkeeping ONLY — the two halves of the idempotency key. A
+            # Bookkeeping ONLY — the three parts of the idempotency key. A
             # provider reading data from here would be reading outreach's
             # context shape from inside connectivity.
-            "context": {"run_id": str(run.id), "node_id": "tag-vip"},
+            "context": {
+                "run_id": str(run.id),
+                "node_id": "tag-vip",
+                "node_visits": 1,
+            },
+            "door_name": None,
         }
     ]
+
+
+async def test_a_node_that_names_a_door_carries_its_name_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one piece of transport an action node may name: when a merchant
+    holds several base_urls on merchant_http, WHICH door is a plan's call, so
+    door_name must reach the connector untouched (connectivity validates it).
+    It is a STABLE name, never the row id or the base URL — a base-URL edit
+    on the same door therefore needs no republish."""
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+    run = _run({"id": "1"})
+
+    await execute_action(
+        run,
+        _node(
+            connector="merchant_http",
+            action="request",
+            door_name="payments",
+        ),
+        _DEFINITION,
+    )
+
+    assert calls[0]["connector"] == "merchant_http"
+    assert calls[0]["door_name"] == "payments"
 
 
 async def test_the_marker_is_bookkeeping_and_never_a_template_variable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The `action_<node>` marker — the whole normalised result envelope — is
+    bookkeeping, never a template variable: run_facts drops it. The declared
+    response FACTS it carries are a separate thing, merged at the run's top
+    level (next test); the marker itself must never leak into a message."""
     calls: List[Dict[str, Any]] = []
-    _install(monkeypatch, calls)
+    _install(monkeypatch, calls, facts={"payment_link": "https://pay"})
     run = _run({"id": "1", "cart_value": 900})
     patch = await execute_action(run, _node(), _DEFINITION)
 
     merged = {**run.context, **patch}
     assert "action_tag-vip" not in run_facts(merged)
     assert run_facts(merged)["cart_value"] == 900
+
+
+async def test_declared_facts_reach_a_later_square(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reason an action carries `facts` at all: the response values the
+    author declared readable become run facts under their own names, so a
+    later square's `{payment_link}` (a send variable, an args placeholder)
+    resolves — the marker stays under `action_<node>`, the values ride atop
+    the context for the rest of the run."""
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls, facts={"payment_link": "https://pay.example/l"})
+    run = _run({"id": "order-1"})
+    patch = await execute_action(run, _node(), _DEFINITION)
+
+    written = run_facts({**run.context, **patch})
+    assert written["payment_link"] == "https://pay.example/l"
+    # The marker is still there for whoever triages the run…
+    assert patch["action_tag-vip"] == {
+        "ok": True,
+        "facts": {"payment_link": "https://pay.example/l"},
+    }
+    # …but stays out of the facts a template or payload may touch.
+    assert "action_tag-vip" not in written
+
+
+async def test_a_fact_that_shadows_the_walkers_own_bookkeeping_is_never_written(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A version predating the publish guard (catalog_laws refuses the name)
+    must not be able to overwrite `phone` or `source_event_id`: the write
+    path refuses bookkeeping names even though the publish guard is the
+    place the author hears the collision."""
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls, facts={"phone": "+1-555"})
+    run = _run({"id": "1", "phone": "keep-me"})
+    patch = await execute_action(run, _node(), _DEFINITION)
+
+    # The fraudulent fact never reaches the write path, so the run's own
+    # `phone` (a bookkeeping key) is untouched when the patch is applied.
+    assert "phone" not in patch
+    assert {**run.context, **patch}["phone"] == "keep-me"
+    # (run_facts drops `phone` entirely by design — it is bookkeeping — so
+    # the assertion above, not a run_facts read, is the honest check.)
 
 
 async def test_a_missing_fact_for_a_placeholder_parks(
@@ -234,3 +323,40 @@ async def test_a_version_predating_the_validator_parks_rather_than_calling(
     with pytest.raises(NodeParked, match="no connector/action to perform"):
         await execute_action(_run({"id": "1"}), _node(action=None), _DEFINITION)
     assert calls == []
+
+
+async def test_the_visit_counter_drives_a_new_idempotency_key_on_revisit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The idempotency key's third part, maintained HERE (the square owns the
+    run's context) so every connector gets per-visit keys. A lease retry of the
+    SAME visit — the write that would advance the counter was the one lost — re-
+    derives the same number; a revisit, the counter having landed, advances."""
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+
+    # First visit: no counter in the run's context -> visit 1.
+    run = _run({"id": "1"})
+    patch = await execute_action(run, _node(), _DEFINITION)
+    assert patch["action_visits_tag-vip"] == 1
+    assert calls[0]["context"]["node_visits"] == 1
+    # The counter is bookkeeping: a template never sees it.
+    assert "action_visits_tag-vip" not in run_facts({**run.context, **patch})
+
+    # Lease retry: the counter's write did not land, so the run's context is
+    # unchanged -> visit 1 again, the SAME idempotency key the merchant already
+    # answered.
+    calls.clear()
+    run = _run({"id": "1"})
+    patch = await execute_action(run, _node(), _DEFINITION)
+    assert calls[0]["context"]["node_visits"] == 1
+    assert patch["action_visits_tag-vip"] == 1
+
+    # Revisit: the counter PERSISTED (the write landed), the run looped back ->
+    # visit 2, a NEW key, so a merchant honouring idempotency does not replay
+    # the first answer (e.g. an expired payment link) for a brand-new write.
+    calls.clear()
+    run = _run({"id": "1", action_node._visits_key("tag-vip"): 1})
+    patch = await execute_action(run, _node(), _DEFINITION)
+    assert calls[0]["context"]["node_visits"] == 2
+    assert patch["action_visits_tag-vip"] == 2
