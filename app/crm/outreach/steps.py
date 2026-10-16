@@ -160,6 +160,7 @@ def step(
     cut_short_by: Optional[str],
     first: bool,
     dispatch_id: Optional[str] = None,
+    answered_by: Optional[str] = None,
 ) -> List[StepRecord]:
     """PURE: one CLOSED square, as a zero-or-one element buffer.
 
@@ -175,7 +176,11 @@ def step(
     claim, so they record one. The known gap is a park: both resume paths
     zero the counter before any row exists, so a parked-then-resumed square
     flushes as one clean attempt (ruled 17 Sep 2026 — a park is visible
-    while it is happening, on the run row, not afterwards)."""
+    while it is happening, on the run row, not afterwards).
+
+    ``answered_by`` is the letter that answered a square walked onto in
+    this visit (a call report the walker heard from the record) — the one
+    way a chained square is cut short by a letter."""
     if arrived_at is None:
         return []
     if left_at < arrived_at:
@@ -204,7 +209,7 @@ def step(
             attempts=max(run.attempts, 1) if first else 1,
             last_error=run.last_error if first else None,
             dispatch_id=dispatch_id,
-            cut_short_by=cut_short_by if first else None,
+            cut_short_by=cut_short_by if first else answered_by,
         )
     ]
 
