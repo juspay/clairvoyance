@@ -3,7 +3,6 @@
 from datetime import datetime
 from typing import List, Optional
 
-from app.core.logger import logger
 from app.crm.connectivity.db.decoders.installation import (
     decode_installation,
     decode_installation_read,
