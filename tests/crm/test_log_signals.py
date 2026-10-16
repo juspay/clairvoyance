@@ -26,7 +26,11 @@ from app.core.logger.context import clear_log_context, get_log_context
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
-NOW = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+# The real clock, not a pinned date: the walker judges a run's age against
+# datetime.now() (walker.py, max_age_days), so a run that "entered five
+# minutes ago" on a fixed day ages out once that day is max_age_days old —
+# this file's 15 Sep pin failed every build from 15 Oct.
+NOW = datetime.now(timezone.utc)
 LEASE = NOW + timedelta(seconds=300)
 
 
