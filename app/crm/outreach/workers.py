@@ -6,7 +6,9 @@ T20) and the handler (walker.py).
 The retention sweep (canon T20 exited_at: "exited rows age out") is
 housekeeping on the same loop, not a second one: the claim callable runs
 one sweep pass every CRM_RUN_SWEEP_INTERVAL_SECONDS before it claims. The table's owner keeps its own
-table small, and the pod still runs exactly one loop.
+table small, and the walker stays one loop. (The role also runs the
+broadcaster beside it — a second loop, worker_main._walker_role — because a
+freeze is long and must never stall the runs.)
 
 The entry-rules CONSUMER is deliberately not here: a consumer is a function
 the event worker's pass calls (entry.py), never a loop of ours.

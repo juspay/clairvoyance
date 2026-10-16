@@ -283,15 +283,40 @@ async def segment_members(
             merchant_id, segment_id, after, limit
         )
     else:
-        try:
-            ids = await customers_matching(
-                merchant_id, segment.definition, after, limit
-            )
-        except SegmentRuleUnanswerable as e:
-            raise SegmentRuleInvalid(e.problems) from e
+        ids = await _matching(merchant_id, segment, after, limit)
         items = [SegmentMember(customer_id=customer_id) for customer_id in ids]
     next_after = items[-1].customer_id if len(items) == limit else None
     return SegmentMembersPage(items=items, next_after=next_after)
+
+
+async def segment_member_ids(
+    merchant_id: str, segment_id: str, after: Optional[str], limit: int
+) -> List[str]:
+    """evaluate(id) for a broadcast's freeze: the same chunk segment_members
+    reads, as customer ids and nothing else. A full chunk means there may be
+    more — pass its last id as ``after``; a short one is the last.
+
+    Ids, not members: a freeze builds no object per person. A lakh member
+    objects per freeze set off the garbage collector's full pauses, which
+    held the walker sharing the pod (measured 15 Oct: 8 pauses of ~65 ms per
+    2-lakh freeze). Raises SegmentNotFound, or SegmentRuleInvalid when
+    record cannot answer the stored rule."""
+    segment = await _segment(merchant_id, segment_id)
+    if segment.kind == "static":
+        return await segment_member_accessor.member_ids(
+            merchant_id, segment_id, after, limit
+        )
+    return await _matching(merchant_id, segment, after, limit)
+
+
+async def _matching(
+    merchant_id: str, segment: Segment, after: Optional[str], limit: int
+) -> List[str]:
+    """One page of who a dynamic segment's rule holds for, asked of record."""
+    try:
+        return await customers_matching(merchant_id, segment.definition, after, limit)
+    except SegmentRuleUnanswerable as e:
+        raise SegmentRuleInvalid(e.problems) from e
 
 
 async def count_segment(merchant_id: str, segment_id: str) -> Segment:

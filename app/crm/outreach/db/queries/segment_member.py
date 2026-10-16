@@ -47,3 +47,22 @@ def member_page_query(
         LIMIT $4
     """
     return query, [merchant_id, segment_id, after, limit]
+
+
+def member_ids_query(
+    merchant_id: str, segment_id: str, after: Optional[str], limit: int
+) -> Tuple[str, List[Any]]:
+    """member_page_query's page with the id only — what a broadcast's freeze
+    reads. Same parent, same keyset, same order; no added_at or source to
+    decode, because the freeze stores who and nothing else."""
+    query = f"""
+        SELECT m.customer_id
+        FROM {SEGMENT_MEMBER_TABLE} m
+        JOIN {SEGMENT_TABLE} s ON s.id = m.segment_id
+        WHERE s.merchant_id = $1
+          AND m.segment_id = $2
+          AND ($3::uuid IS NULL OR m.customer_id > $3::uuid)
+        ORDER BY m.customer_id
+        LIMIT $4
+    """
+    return query, [merchant_id, segment_id, after, limit]

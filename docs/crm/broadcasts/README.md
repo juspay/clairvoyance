@@ -36,6 +36,46 @@ workflow (ten broadcasts may launch the same one). Code:
   first, with the total; `GET /broadcasts/{id}?merchant_id=` — one (404 for
   an unknown or another merchant's id).
 
+## The launch (phase 2)
+
+`POST /broadcasts/{id}/schedule` `{merchant_id, scheduled_for?}` aims a draft
+(or re-aims a scheduled broadcast) at `scheduled_for`, or now when it is left
+out. The workflow must be **live**; the moment needs a timezone and may not be
+past. Nothing is frozen yet.
+
+At that moment the **broadcaster** — a second loop in the walker role, beside
+the walker — claims the broadcast (`scheduled` → `resolving`, `resolved_at` =
+now) and freezes the segment **once**, page by page, into queued recipient
+rows (`crm_broadcast_recipient`, T18); then `resolving` → `dispatching`. Phase
+3 admits the queue into the workflow.
+
+- **Late, on purpose.** Friday's send is aimed with Friday's segment: who
+  matches at `resolved_at`, not at authoring time.
+- **Crash-safe.** `resolved_at` is also the freeze's lease: a freeze whose
+  worker died is claimed again after 15 minutes, and the re-run adds no one
+  twice — the recipients' primary key `(broadcast_id, customer_id)` absorbs
+  everyone already queued.
+- **A segment that cannot be answered** (a stored rule record refuses) fails
+  the broadcast: `resolving` → `failed`.
+- **Light on the walker beside it.** The freeze reads customer ids only, and
+  each page's insert answers with one count. Building an object per person
+  set off the garbage collector's full pauses, which held the walker sharing
+  the pod (measured locally on 15 Oct: 8 pauses of ~65 ms per 2-lakh freeze).
+
+`POST /broadcasts/{id}/cancel?merchant_id=` stops the broadcast admitting
+anyone else — its still-queued recipients are cancelled with it, in one
+transaction; runs it already started resolve by their own rules (canon). A
+freeze running at that moment stops at its next page. 409 once the broadcast
+is sent, closed, cancelled or failed.
+
+| From | schedule | the freeze | cancel |
+|---|---|---|---|
+| `draft` | → `scheduled` | — | → `cancelled` |
+| `scheduled` | re-aimed | at its moment → `resolving` | → `cancelled` |
+| `resolving` | 409 | → `dispatching` (or `failed`) | → `cancelled`, queue cancelled |
+| `dispatching` | 409 | — | → `cancelled`, queue cancelled |
+| `sent` · `closed` · `cancelled` · `failed` | 409 | — | 409 |
+
 ## Example
 
 [`final-nudge.json`](final-nudge.json): the Diwali season's badge, and a

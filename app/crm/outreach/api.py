@@ -96,6 +96,11 @@ class BroadcastCreate(BaseModel):
     campaign_key: Optional[str] = Field(None, min_length=1, max_length=64)
 
 
+class BroadcastSchedule(BaseModel):
+    # When to freeze the audience and launch — with a timezone. Omitted: now.
+    scheduled_for: Optional[datetime] = None
+
+
 class SegmentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     # Omitted: a static list (members are added to it). Present: a dynamic
@@ -783,3 +788,57 @@ async def get_broadcast_route(
             status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found"
         )
     return broadcast
+
+
+@broadcast_router.post("/{broadcast_id}/schedule", response_model=Broadcast)
+async def schedule_broadcast_route(
+    broadcast_id: UUID,
+    body: BroadcastSchedule,
+    merchant_id: str = Depends(
+        merchant_scope("schedule a broadcast", "crm.broadcasts.schedule")
+    ),
+) -> Broadcast:
+    """Aim a draft at scheduled_for (or now), or re-aim a scheduled one. The
+    audience is frozen at that moment, not now. 404 unknown or another
+    merchant's · 409 already launched or finished · 422 with every problem:
+    the workflow is not live, the moment has no timezone or is past."""
+    try:
+        return await broadcasts.schedule_broadcast(
+            merchant_id, str(broadcast_id), body.scheduled_for
+        )
+    except broadcasts.BroadcastNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found"
+        )
+    except broadcasts.BroadcastStateConflict as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"the broadcast is {e.status} — only a draft or scheduled one can be aimed",
+        )
+    except broadcasts.BroadcastInvalid as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        )
+
+
+@broadcast_router.post("/{broadcast_id}/cancel", response_model=Broadcast)
+async def cancel_broadcast_route(
+    broadcast_id: UUID,
+    merchant_id: str = Depends(
+        merchant_scope("cancel a broadcast", "crm.broadcasts.cancel")
+    ),
+) -> Broadcast:
+    """Stop the broadcast admitting anyone else; runs it already started
+    resolve by their own rules. 404 · 409 already finished (sent, closed,
+    cancelled, failed)."""
+    try:
+        return await broadcasts.cancel_broadcast(merchant_id, str(broadcast_id))
+    except broadcasts.BroadcastNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found"
+        )
+    except broadcasts.BroadcastStateConflict as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"the broadcast is already {e.status}",
+        )

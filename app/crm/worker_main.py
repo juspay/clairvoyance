@@ -19,8 +19,10 @@ from app.crm.connectivity.contracts import (
     register_retire_guard,
 )
 from app.crm.outreach.contracts import (
+    claim_due_freezes,
     claim_due_runs,
     consume_attributed_event,
+    freeze_broadcast,
     template_references,
     walk_run,
 )
@@ -46,6 +48,36 @@ register_consumer(consume_template_event)
 # lives) is wired too.
 register_retire_guard(template_references)
 
+
+async def _walker_role(stop_event: asyncio.Event) -> None:
+    """The walker role runs two loops side by side: the walker (due runs)
+    and the broadcaster (due broadcasts to freeze). Two loops, not one: a
+    freeze reads a whole segment page by page and must never stall the runs
+    the walker moves — it waits on the database between pages, and the
+    walker runs in those waits. Same pod, no new role to deploy; each loop
+    claims with SKIP LOCKED, so replicas never collide."""
+    await asyncio.gather(
+        run_drain_loop(
+            claim_due_runs,
+            walk_run,
+            interval=CRM_WORKER_INTERVAL,
+            batch=CRM_WORKER_BATCH,
+            stop_event=stop_event,
+            name="walker",
+        ),
+        run_drain_loop(
+            claim_due_freezes,
+            freeze_broadcast,
+            interval=CRM_WORKER_INTERVAL,
+            # One broadcast at a time per pod: a freeze is long, and another
+            # replica takes the next one.
+            batch=1,
+            stop_event=stop_event,
+            name="broadcaster",
+        ),
+    )
+
+
 ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
     "event-worker": lambda stop_event: run_drain_loop(
         run_pass,
@@ -66,14 +98,7 @@ ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
         stop_event=stop_event,
         name="dispatcher",
     ),
-    "walker": lambda stop_event: run_drain_loop(
-        claim_due_runs,
-        walk_run,
-        interval=CRM_WORKER_INTERVAL,
-        batch=CRM_WORKER_BATCH,
-        stop_event=stop_event,
-        name="walker",
-    ),
+    "walker": _walker_role,
 }
 
 _task: Optional[asyncio.Task] = None

@@ -1163,3 +1163,7 @@ class BroadcastPage(BaseModel):
 
     items: List[Broadcast]
     total: int
+
+
+#: A recipient's own life (canon T18 col 8) — 090's CHECK words.
+RecipientStatus = Literal["queued", "claimed", "skipped", "enrolled", "cancelled"]
