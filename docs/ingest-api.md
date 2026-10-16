@@ -126,6 +126,7 @@ Every other **scalar** key (≤256 chars) rides into the template's
 | ------ | --------------------------------- | ---------------------------------------------------------------- |
 | 200    | `{"id": "<uuid>", "duplicate": false}` | Stored — `id` is this event's receipt                       |
 | 200    | `{"id": null, "duplicate": true}` | Already stored under `(merchant_id, source, external_id)` — success, not an error |
+| 200    | `{"id": null, "duplicate": false, "archived": true}` | Parked during a planned database outage — accepted, not yet checked. It is replayed through this same door afterwards and checked then like any push: a valid event is stored (deduped), an invalid or unauthorised one is refused at replay and reported back to you |
 | 401    | —                                 | No token, or invalid/expired/superseded                          |
 | 404    | —                                 | No per-merchant token provisioned for this merchant              |
 | 413    | —                                 | Event larger than 1 MB — split it; one event per fact          |

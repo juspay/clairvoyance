@@ -85,6 +85,33 @@ async def BB_DISPATCH_ENABLED() -> bool:
     return await get_config("BB_DISPATCH_ENABLED", True, bool)
 
 
+async def BB_INGEST_ARCHIVE_ENABLED() -> bool:
+    """Copy every POST /ingest/events and POST /leads to GCS (default: False).
+
+    Background copy only: the request then runs exactly as today, auth and
+    Postgres included. Turned on first around a planned Postgres outage, to
+    see objects land in INGEST_ARCHIVE_GCS_BUCKET/copied/ before
+    BB_INGEST_DB_WRITES_DISABLED is turned on. Read per request, so a
+    DevCycle / Redis flip needs no restart. See app/services/ingest_archive.py.
+    """
+    return await get_config("BB_INGEST_ARCHIVE_ENABLED", False, bool)
+
+
+async def BB_INGEST_DB_WRITES_DISABLED() -> bool:
+    """Answer POST /ingest/events and POST /leads from GCS alone (default:
+    False). Implies BB_INGEST_ARCHIVE_ENABLED.
+
+    Checked ahead of routing: the request is written to
+    INGEST_ARCHIVE_GCS_BUCKET/parked/ with the auth header the caller sent,
+    and answered with the door's normal success body. No auth check and no
+    Postgres. If the GCS write fails the request runs exactly as today.
+    Everything parked must be replayed through the same door afterwards,
+    with its stored auth header. Read per request, so a DevCycle / Redis
+    flip needs no restart. See app/services/ingest_archive.py.
+    """
+    return await get_config("BB_INGEST_DB_WRITES_DISABLED", False, bool)
+
+
 #: The engine's own join budget, extractors/engine.py VARIABLE_MAX_CHARS.
 #: DUPLICATED here, not imported: app/core imports nothing from app.crm, and
 #: inverting that for one integer would put the base layer under a module

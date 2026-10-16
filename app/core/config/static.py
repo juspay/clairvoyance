@@ -67,6 +67,14 @@ TTS_PREVIEW_GCS_BUCKET = os.environ.get("TTS_PREVIEW_GCS_BUCKET", "")
 # own public URL.
 TTS_PREVIEW_PUBLIC_BASE_URL = os.environ.get("TTS_PREVIEW_PUBLIC_BASE_URL", "")
 
+# Inbound request archive (app/services/ingest_archive.py): the bucket for
+# POST /ingest/events and POST /leads while BB_INGEST_ARCHIVE_ENABLED (copy)
+# or BB_INGEST_DB_WRITES_DISABLED (park) is on. Objects hold the caller's
+# auth header, so only replay operators may read it. Authenticates with
+# GCS_CREDENTIALS_JSON above. Unset = nothing is archived and every request
+# runs as today.
+INGEST_ARCHIVE_GCS_BUCKET = os.environ.get("INGEST_ARCHIVE_GCS_BUCKET", "")
+
 ENABLE_AIC_FILTER = os.environ.get("ENABLE_AIC_FILTER", "false").lower() == "true"
 AIC_LICENSE_KEY = os.environ.get("AIC_LICENSE_KEY", "")
 # Breeze Buddy AIC License Key

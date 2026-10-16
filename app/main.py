@@ -75,6 +75,7 @@ from app.core.middleware.widget_cors_bypass import CustomWidgetCorsBypassMiddlew
 from app.crm import api as crm_api
 from app.crm.worker_main import start_worker_role, stop_worker_role
 from app.database import close_db_pool, init_db_pool
+from app.services.ingest_archive import IngestArchiveMiddleware
 from app.services.knowledge_base import (
     process_pending_documents as process_pending_kb_documents,
 )
@@ -409,6 +410,12 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
+
+# Ingest archive (app/services/ingest_archive.py): two DevCycle flags copy,
+# or answer from GCS alone, POSTs on the two ingest doors, ahead of routing
+# and auth. Added BEFORE the CORS middleware so CORS stays outermost and its
+# headers are on a parked answer too.
+app.add_middleware(IngestArchiveMiddleware)
 
 # CORS — path-aware. The strict static allowlist (CORS_ALLOWED_ORIGINS)
 # still gates admin/RBAC/portal traffic, but the public widget surface
