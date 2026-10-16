@@ -182,11 +182,19 @@ async def advance_run(
     leased_wake_at: datetime,
     node_arrived_at: Optional[datetime] = None,
     steps: Optional[List[Dict[str, Any]]] = None,
+    keep_attempts: bool = False,
 ) -> bool:
     """True when the row still carried the lease (the write landed, and
     the buffered squares landed with it)."""
     query, values = advance_run_query(
-        run_id, current_node, wake_at, context, leased_wake_at, node_arrived_at, steps
+        run_id,
+        current_node,
+        wake_at,
+        context,
+        leased_wake_at,
+        node_arrived_at,
+        steps,
+        keep_attempts,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
@@ -317,29 +325,27 @@ async def patch_open_run(
     merchant_id: str,
     workflow_id: str,
     enrollment_key: str,
-    entry_node: str,
+    squares: List[str],
     event_id: str,
     patch: Dict[str, Any],
     accumulate: bool,
     max_field: Optional[str],
     max_value: Optional[float],
     debounce_minutes: float,
-    anywhere: bool = False,
 ) -> bool:
-    """True when an open run on the door's start square (or, with
-    ``anywhere``, on any square) took the repeat."""
+    """True when an open run standing on one of ``squares`` took the
+    repeat."""
     query, values = patch_open_run_query(
         merchant_id,
         workflow_id,
         enrollment_key,
-        entry_node,
+        squares,
         event_id,
         patch,
         accumulate,
         max_field,
         max_value,
         debounce_minutes,
-        anywhere,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)

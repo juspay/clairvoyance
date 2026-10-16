@@ -163,6 +163,20 @@ def customer_has_event_query(
     return query, params
 
 
+def event_by_key_query(
+    merchant_id: str, source: str, external_id: str
+) -> Tuple[str, List[Any]]:
+    """One letter by its dedupe key — the UNIQUE (merchant_id, source,
+    external_id) index, so a single-row read."""
+    query = f"""
+        SELECT id, merchant_id, source, topic, schema_version, external_id,
+               payload, received_at, occurred_at, customer_id, attempts
+        FROM {EVENT_RAW_TABLE}
+        WHERE merchant_id = $1 AND source = $2 AND external_id = $3
+    """
+    return query, [merchant_id, source, external_id]
+
+
 def event_topics_query(merchant_id: str, event_ids: List[str]) -> Tuple[str, List[Any]]:
     """The topic behind each of a few letter ids — what a run's trail
     names when it says which letter moved a square (T26 keeps the pointer,

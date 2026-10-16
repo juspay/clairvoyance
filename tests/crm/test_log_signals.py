@@ -136,6 +136,7 @@ class _Spec:
     def __init__(self, execute: Any = None, branches: bool = False) -> None:
         self.execute = execute
         self.branches = branches
+        self.reaches_out = False
 
 
 def test_a_multi_square_visit_names_the_square_it_broke_on(

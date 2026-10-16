@@ -37,10 +37,13 @@ from app.crm.outreach.db.accessors import (
     workflow as workflow_accessor,
 )
 from app.crm.outreach.definitions import definition_for
+from app.crm.outreach.entry import heard_report
 from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait
 from app.crm.outreach.nodes.context import (
     CUT_SHORT_BY_KEY,
+    FINISHED_REPORT_KEY,
     OUTCOME_KEY,
+    STEPPED_FROM_KEY,
     dispatch_id,
     reply_key,
     without_reply,
@@ -49,6 +52,7 @@ from app.crm.outreach.nodes.spec import ELSE, NodeParked
 from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 from app.crm.outreach.steps import (
+    ARRIVED_BY_DOOR,
     ARRIVED_BY_WALK,
     StepRecord,
     as_rows,
@@ -57,7 +61,7 @@ from app.crm.outreach.steps import (
     step,
 )
 from app.crm.outreach.window import alarm, opens_at
-from app.crm.record.contracts import customer_has_event
+from app.crm.record.contracts import call_report, customer_has_event
 
 LOG_COMPONENT = "crm.outreach.walker"
 
@@ -111,7 +115,10 @@ async def walk_run(run: EnrollmentRun) -> None:
     already re-arms the run, and the next claim re-reads it WITH the
     reply and takes the right branch. Action nodes are idempotent
     (dedupe run:node, uuid5 lead), so a re-executed visit is exactly as
-    safe as the lease retry this file already relied on.
+    safe as the lease retry this file already relied on — and a square
+    that reaches out is written onto BEFORE it executes (_advance), so a
+    failure after that write retries or parks ON that square: the move
+    onto it committed, and its trail rows with it.
 
     Stamped before the lease check, so even the earliest failure line
     carries the run's ids; the nodes this visit executes inherit them."""
@@ -298,6 +305,21 @@ async def _advance(
     cut_short_by = context.pop(CUT_SHORT_BY_KEY, None)
     cut_short_by = str(cut_short_by) if cut_short_by else None
     arrived_by = first_arrival(run, cut_short_by)
+    start = nodes.get(current_id)
+    if (
+        start is not None
+        and NODE_TYPES[start.type].reaches_out
+        and arrived_by != ARRIVED_BY_DOOR
+    ):
+        # Only a walk puts a token on a dispatching square outside a door:
+        # the step-onto write below. The letter or timer that woke THIS
+        # visit did not bring it here (canon T26 arrived_by) — a letter
+        # still rides on the row, in cut_short_by.
+        arrived_by = ARRIVED_BY_WALK
+    # The report that answered THIS square (a pre-answered after-call wait,
+    # below): its trail row names that letter, as the consumer's resume
+    # would have (canon T26 cut_short_by).
+    answered_by: Optional[str] = None
     arrived_at = run.node_arrived_at
     walked: List[StepRecord] = []
     first = True
@@ -315,13 +337,19 @@ async def _advance(
                 f"node {current_id} not in definition v{run.workflow_version}"
             )
 
-        if node.window is not None and context.get(reply_key(node.id)) is None:
+        window = node.window
+        if window is None and first and NODE_TYPES[node.type].reaches_out:
+            # A dispatch resumed after a step-onto: held by the window of
+            # the square the run was claimed on then.
+            source = nodes.get(str(context.get(STEPPED_FROM_KEY)))
+            window = source.window if source is not None else None
+        if window is not None and context.get(reply_key(node.id)) is None:
             # The timer fired, not a letter. Outside the window's hours the
             # run holds on this square, still listening, until it opens. A
             # letter is never held; publish refuses a letter arrow from here
             # that reaches a call without waiting (plans.py), so together
             # nothing is queued at night for the dialler to ring at 7 AM.
-            opening = opens_at(now, node.window)
+            opening = opens_at(now, window)
             if opening > now:
                 # TRAP 1 (canon T26): the hold calls advance_run with this
                 # square's OWN id. The token has NOT left it, so no row
@@ -357,10 +385,47 @@ async def _advance(
                 ):
                     _deferred(run, f"hold on {node.id}")
                 return
+        if first:
+            context.pop(STEPPED_FROM_KEY, None)  # its hold is judged
+
+        if NODE_TYPES[node.type].reaches_out and not first:
+            # Written onto the square before it executes, wake_at left as
+            # the lease. A reset landing BEFORE this write wins with nothing
+            # inserted. One landing AFTER it is keyed on the square the run
+            # now stands on — the call — so it cannot pull the run back to
+            # the wait; a letter the call does not listen for only refreshes
+            # the facts and sets wake_at = now(), this visit's final write
+            # misses, and the re-visit starts on this square, re-derives the
+            # same uuid5 lead and adopts it. If the call already ended, its
+            # report is heard from the record instead of awaited
+            # (_hear_finished_report; 03-enrollment-cas.md, amendment 2). The
+            # counter is kept: this write is not the visit's success. A
+            # failure after it retries or parks HERE — the move committed —
+            # and a retry is held by the claimed square's window.
+            claimed = nodes.get(run.current_node)
+            if not await enrollment_accessor.advance_run(
+                str(run.id),
+                node.id,
+                lease,
+                # Before this square's patch.
+                (
+                    {**context, STEPPED_FROM_KEY: claimed.id}
+                    if claimed is not None and claimed.window is not None
+                    else dict(context)
+                ),
+                lease,
+                node_arrived_at=arrived_at,
+                steps=as_rows(walked),
+                keep_attempts=True,
+            ):
+                _deferred(run, f"step onto {node.id}")
+                return
+            walked = []
 
         execute = NODE_TYPES[node.type].execute
         dispatched: Optional[str] = None
         said: Optional[str] = None
+        finished_report: Optional[str] = None
         if execute is not None:  # a wait's action IS the alarm
             # The square sees the context AS WALKED, not the one the run was
             # claimed with. This visit runs consecutive immediate squares
@@ -380,6 +445,7 @@ async def _advance(
             # at the plan's ceiling). The word is for the trail row below —
             # popped here so it is never written into the run's context.
             said = patch.pop(OUTCOME_KEY, None)
+            finished_report = patch.pop(FINISHED_REPORT_KEY, None)
             context.update(patch)
             dispatched = dispatch_id(patch, node.id)
 
@@ -411,6 +477,7 @@ async def _advance(
                 cut_short_by,
                 first,
                 dispatched,
+                answered_by,
             )
             if await enrollment_accessor.exit_run(
                 str(run.id),
@@ -428,7 +495,20 @@ async def _advance(
         next_node = nodes.get(next_id)
         if next_node is None:
             raise NodeParked(f"edge points at unknown node {next_id}")
-        if is_wait(next_node):
+        heard = (
+            await _hear_finished_report(run, node, next_node, finished_report, context)
+            if finished_report and is_wait(next_node)
+            else None
+        )
+        heard_letter: Optional[str] = None
+        if heard is not None:
+            # The adopted call already ended and its report is recorded: the
+            # after-call wait is answered now, as the consumer would have
+            # answered it, and walked through in this visit — never armed
+            # for a report that will not come again.
+            answer, facts, heard_letter = heard
+            context = _pre_answered(context, next_id, answer, facts)
+        elif is_wait(next_node):
             # Arrival scheduling: the wait's alarm starts now — its minutes,
             # the window's next opening, or the end of the run's life
             # (window.alarm). A wait already due moves on in this same visit.
@@ -445,6 +525,7 @@ async def _advance(
                     cut_short_by,
                     first,
                     dispatched,
+                    answered_by,
                 )
                 if not await enrollment_accessor.advance_run(
                     str(run.id),
@@ -471,16 +552,59 @@ async def _advance(
             cut_short_by,
             first,
             dispatched,
+            answered_by,
         )
         arrived_at = left_at  # the next square's arrival is this one's exit
         arrived_by = ARRIVED_BY_WALK
         cut_short_by = None  # the letter cut short ONE square, not the chain
+        answered_by = heard_letter  # the wait walked onto next, if heard
         first = False
         current_id = next_id  # an action, or a due wait: this same visit
 
     raise NodeParked(
         f"{_MAX_STEPS_PER_VISIT} immediate nodes in one visit — runaway document"
     )
+
+
+async def _hear_finished_report(
+    run: EnrollmentRun,
+    call: WorkflowNode,
+    wait: WorkflowNode,
+    natural_id: str,
+    context: Dict[str, Any],
+) -> Optional[Tuple[str, Dict[str, Any], str]]:
+    """(answer, facts, letter id) of an adopted, already FINISHED lead's
+    report — only for THIS call's after-call wait (match.run is the call's
+    lead), and only once the report is recorded. None keeps today's path:
+    the wait is armed and the report, still to come, wakes it."""
+    if not _hears_call(call, wait):
+        return None
+    report = await call_report(run.merchant_id, natural_id)
+    if report is None:
+        return None
+    event, variables = report
+    heard = await heard_report(
+        run.model_copy(update={"context": context}), wait, event, variables
+    )
+    return None if heard is None else (*heard, str(event.id))
+
+
+def _hears_call(call: WorkflowNode, wait: WorkflowNode) -> bool:
+    """PURE: is this wait the call's own after-call wait (match.run is the
+    call's lead)?"""
+    return wait.match is not None and wait.match.run == f"lead_{call.id}"
+
+
+def _pre_answered(
+    context: Dict[str, Any], wait_id: str, answer: str, facts: Dict[str, Any]
+) -> Dict[str, Any]:
+    """PURE: the context resume_run_by_id would have written — the answer
+    under reply_<wait>, the letter's facts under facts.<wait> (replacing
+    that square's, and a non-object `facts` replaced, never merged)."""
+    by_square = context.get("facts")
+    by_square = dict(by_square) if isinstance(by_square, dict) else {}
+    by_square[wait_id] = facts
+    return {**context, reply_key(wait_id): answer, "facts": by_square}
 
 
 def goal_since(run: EnrollmentRun) -> datetime:

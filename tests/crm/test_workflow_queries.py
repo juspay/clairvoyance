@@ -215,8 +215,8 @@ def test_walker_writes_are_conditional_on_the_leased_wake_at() -> None:
         assert "RETURNING id" in sql, sql
     assert advance_run_query("r-1", "w", NOW, {}, leased)[1][5] is leased
     assert exit_run_query("r-1", "completed", None, None, leased)[1][4] is leased
-    assert park_run_query("r-1", "boom", leased)[1][-1] is leased
-    assert record_run_error_query("r-1", "boom", 600, leased)[1][-1] is leased
+    assert park_run_query("r-1", "boom", leased)[1][2] is leased
+    assert record_run_error_query("r-1", "boom", 600, leased)[1][3] is leased
 
 
 def test_event_side_writes_stay_unconditional() -> None:
@@ -300,3 +300,13 @@ def test_an_event_moves_a_parked_run_too() -> None:
     assert "status IN ('waiting', 'parked')" in where_clause
     assert "status = 'waiting'" in set_clause
     assert "CASE WHEN status = 'parked' THEN 0 ELSE attempts END" in set_clause
+
+
+def test_the_step_onto_write_keeps_the_attempt_counter() -> None:
+    """The write onto a dispatching square is not the visit's success:
+    zeroing the counter there gave a failing call a fourth try."""
+    sql, params = advance_run_query("r-1", "call-1", NOW, {}, NOW, keep_attempts=True)
+    assert "attempts = CASE WHEN $8::boolean THEN attempts ELSE 0 END" in sql
+    assert "last_error = CASE WHEN $8::boolean THEN last_error ELSE NULL END" in sql
+    assert params[7] is True
+    assert advance_run_query("r-1", "w", NOW, {}, NOW)[1][7] is False

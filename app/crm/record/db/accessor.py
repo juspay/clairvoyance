@@ -19,6 +19,7 @@ from app.crm.record.db.decoder import (
 from app.crm.record.db.queries import (
     claim_pending_events_query,
     customer_has_event_query,
+    event_by_key_query,
     event_topics_query,
     get_customer_journey_query,
     get_schema_query,
@@ -139,6 +140,15 @@ async def register_schema(
     if row is None:
         raise RuntimeError("schema registration returned no row")
     return decode_event_schema(row)
+
+
+async def event_by_key(
+    merchant_id: str, source: str, external_id: str
+) -> Optional[RawEvent]:
+    query, values = event_by_key_query(merchant_id, source, external_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_raw_event(row) if row else None
 
 
 async def event_topics(merchant_id: str, event_ids: List[str]) -> Dict[str, str]:
