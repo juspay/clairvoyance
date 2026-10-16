@@ -40,6 +40,7 @@ from app.database.accessor.breeze_buddy.analytics.analytics import (
 from app.database.accessor.breeze_buddy.analytics.evaluation_result import (
     get_topic_conversations,
     get_topic_dashboard,
+    get_topic_segment_counts,
 )
 from app.database.accessor.breeze_buddy.chat_analytics import (
     get_chat_summary_from_db,
@@ -372,6 +373,9 @@ async def get_topic_dashboard_analytics(
     limit = options.get("limit", 50)
     top_topics = limit if limit <= 25 else 10
     rows = await get_topic_dashboard(filters, top_topics)
+    segment_counts = (
+        await get_topic_segment_counts(filters) if filters.get("template_id") else {}
+    )
 
     return {
         "type": "topic-dashboard",
@@ -406,6 +410,7 @@ async def get_topic_dashboard_analytics(
             for row in rows
             if row["result_type"] == "topic"
         ],
+        "segment_counts": segment_counts,
     }
 
 

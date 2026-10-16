@@ -138,6 +138,11 @@ class AnalyticsFilters(BaseModel):
         max_length=200,
         description="Exact underlying stable keys when opening the virtual Other topic group",
     )
+    segments: Optional[Dict[str, List[str]]] = Field(
+        None,
+        max_length=5,
+        description="Topic analytics: segment key -> values; a conversation matches when it has one of the values of every key",
+    )
 
 
 class AnalyticsOptions(BaseModel):
