@@ -44,6 +44,7 @@ from app.crm.connectivity.schemas.connector import (
     ConnectorInstallation,
     InstallationRead,
     OnboardResult,
+    SignupConfig,
 )
 from app.crm.connectivity.status import (
     BINDING_RETIRED,
@@ -170,6 +171,18 @@ async def _store_credential(
     if credential is None:
         raise OnboardingError("could not store the connector credential")
     return str(credential.id)
+
+
+def signup_config(connector_key: str) -> SignupConfig:
+    """The public settings a browser needs to start this connector's signup
+    popup. A connector with no browser signup (Shopify installs from its
+    App Store) is a 404 like an unknown one: there is no such signup."""
+    spec = connector_for(connector_key)
+    if spec is None or spec.signup is None:
+        raise UnknownConnectorError(
+            f"no browser signup for connector '{connector_key}'"
+        )
+    return spec.signup()
 
 
 async def onboard(

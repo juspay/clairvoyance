@@ -5,8 +5,11 @@ Central dispatcher for built-in global functions. Routes to the correct
 handler based on function_config.handler field.
 
 To add a new built-in global function:
-1. Create a handler in handlers/internal/ with signature: (context, args) -> Dict
-2. Import it here and add to BUILTIN_HANDLERS registry
+1. Create a handler with signature: (context, args) -> Dict (usually in
+   handlers/internal/)
+2. Import it here and add to BUILTIN_HANDLERS registry, or call
+   register_builtin_handler(key, handler) when its module is imported
+   (e.g. assist/platforms/woocommerce/wismo/handlers.py)
 3. Use it in templates with: {"type": "builtin", "handler": "<handler_key>", ...}
 """
 
@@ -50,7 +53,8 @@ from app.core.logger import logger
 
 # Registry of built-in handler name -> handler function.
 # Each handler has signature: (context: TemplateContext, args: Dict) -> Dict
-# To add a new built-in function, import it and add an entry here.
+# To add a new built-in function, import it and add an entry here, or call
+# register_builtin_handler from its module (see the module docstring).
 BUILTIN_HANDLERS: Dict[str, Callable] = {
     "connect_to_agent": connect_to_agent,
     "connect_to_live_agent": connect_to_live_agent,
@@ -60,6 +64,19 @@ BUILTIN_HANDLERS: Dict[str, Callable] = {
     "query_knowledge_base": query_knowledge_base,
     "update_outcome": update_outcome,
 }
+
+
+def register_builtin_handler(name: str, handler: Callable) -> None:
+    """Add a builtin handler at runtime, from a module that registers its
+    builtins on import (e.g. ``woocommerce/wismo/handlers.py``). Idempotent
+    for the same function; a different function under a taken name is
+    refused, since a template names handlers by this key."""
+    existing = BUILTIN_HANDLERS.get(name)
+    if existing is None:
+        BUILTIN_HANDLERS[name] = handler
+    elif existing is not handler:
+        raise ValueError(f"builtin handler {name!r} is already registered")
+
 
 # Handlers that receive their own function-entry config. The transfer
 # targets/limits live on the connect_to_agent function entry (not on
@@ -172,7 +189,8 @@ async def builtin_function_dispatcher(
         # before executing the handler. This guarantees the message is heard even
         # if the handler terminates the pipeline (e.g., connect_to_live_agent
         # pushes EndFrame which kills TTS mid-sentence).
-        if function_config.pre_tts_message:
+        # Once the call ended nothing can speak it: the wait would only time out.
+        if function_config.pre_tts_message and not context.conversation_ended:
             await _speak_and_wait(context, function_config.pre_tts_message)
 
         if handler_name in _CONFIG_AWARE_HANDLERS:

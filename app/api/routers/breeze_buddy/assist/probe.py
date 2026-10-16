@@ -15,7 +15,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.classify import classify_profile
-from app.ai.voice.agents.breeze_buddy.assist.engine.probe import probe_site, summarize
+from app.ai.voice.agents.breeze_buddy.assist.engine.models import SiteProfile
+from app.ai.voice.agents.breeze_buddy.assist.engine.probe import (
+    probe_site,
+    profile_from_page,
+    summarize,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
+    WebsiteScrapingServiceError,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.research.providers import (
+    firecrawl,
+)
 from app.ai.voice.agents.breeze_buddy.assist.engine.web.fetch import (
     EgressNotGuardedError,
     FetchFailedError,
@@ -48,6 +59,11 @@ _PROBE_ROLES = [UserRole.ADMIN, UserRole.RESELLER, UserRole.MERCHANT]
 _PROBE_LIMIT_PER_HOUR = 120
 _PROBE_WINDOW_SECONDS = 3600
 _PROBE_TIMEOUT_SECONDS = 12.0
+# A store that turns this server away (a hosted store platform answers a
+# data-centre address with "429 Too many requests") is read once more through
+# Firecrawl, which renders it from a browser. Slower, so it runs only when the
+# probe is blocked.
+_RENDER_TIMEOUT_SECONDS = 30.0
 
 
 @router.post("/assist/probe", response_model=ProbeResponse)
@@ -110,6 +126,9 @@ async def probe_website(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
 
+    if profile.challenge:
+        profile = await _detect_platform_via_firecrawl(body.url, profile)
+
     classification = classify_profile(profile)
     logger.info(
         "assist probe complete",
@@ -119,6 +138,26 @@ async def probe_website(
         status=profile.status,
     )
     return build_report(profile, classification, summarize(profile))
+
+
+async def _detect_platform_via_firecrawl(url: str, blocked: SiteProfile) -> SiteProfile:
+    """The store's own page through Firecrawl, else the blocked profile."""
+    try:
+        final_url, status_code, html = await firecrawl.read_html(
+            url, timeout_seconds=_RENDER_TIMEOUT_SECONDS
+        )
+    except WebsiteScrapingServiceError as exc:
+        logger.info(f"assist probe was blocked and the render failed: {exc}")
+        return blocked
+    rendered = profile_from_page(
+        url=blocked.url,
+        final_url=final_url,
+        status=status_code,
+        headers={},
+        cookie_names=[],
+        body=html,
+    )
+    return blocked if rendered.challenge else rendered
 
 
 __all__ = ["router"]

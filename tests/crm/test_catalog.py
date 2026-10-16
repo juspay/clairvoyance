@@ -514,7 +514,11 @@ def test_every_catalog_op_is_an_op_the_evaluator_speaks() -> None:
     spoken = set(get_args(predicate.Op))
     for field_type, ops in catalog.OPS_BY_TYPE.items():
         assert set(ops) <= spoken, (field_type, set(ops) - spoken)
-    assert catalog.OPS_BY_TYPE["text"] == [*predicate.TEXT_OPS, *predicate.PRESENCE_OPS]
+    assert catalog.OPS_BY_TYPE["text"] == [
+        *predicate.TEXT_OPS,
+        *predicate.PARTIAL_OPS,
+        *predicate.PRESENCE_OPS,
+    ]
     assert catalog.OPS_BY_TYPE["number"] == [
         *predicate.ORDER_OPS,
         predicate.EQUALS_OP,
@@ -715,12 +719,22 @@ def test_a_list_field_admits_one_existential_question_and_nothing_else() -> None
     """A door asks a list `includes` (any element equals the plan's value),
     `exists` or `not_exists` — against the raw array (event-catalog.md
     §The `list` ruling) — and never an op that compares a field's ONE value."""
-    assert catalog.OPS_BY_TYPE["list"] == ["includes", "exists", "not_exists"]
+    assert catalog.OPS_BY_TYPE["list"] == [
+        "includes",
+        "contains",
+        "exists",
+        "not_exists",
+    ]
     field = catalog.with_ops(
         CatalogField(path="payload.items", type="list", label="Items", variable=True)
     )
-    assert field.ops == ["includes", "exists", "not_exists"]
-    for op, value in (("includes", "x"), ("exists", None), ("not_exists", None)):
+    assert field.ops == ["includes", "contains", "exists", "not_exists"]
+    for op, value in (
+        ("includes", "x"),
+        ("contains", ["x"]),
+        ("exists", None),
+        ("not_exists", None),
+    ):
         assert (
             condition_against_catalog(
                 Condition(field="payload.items", op=op, value=value),
@@ -733,7 +747,8 @@ def test_a_list_field_admits_one_existential_question_and_nothing_else() -> None
             Condition(field="payload.items", op=op, value=value),
             {"payload.items": field},
         )
-        assert problems and "allowed: includes, exists, not_exists" in problems[0], (
+        allowed = "allowed: includes, contains, exists, not_exists"
+        assert problems and allowed in problems[0], (
             op,
             problems,
         )
@@ -762,6 +777,42 @@ def test_includes_is_refused_on_every_type_that_is_not_a_list() -> None:
     assert predicate.INCLUDES_OP not in catalog.OPS_BY_TYPE["phone"]
 
 
+def test_contains_is_offered_on_text_choice_and_list_and_nowhere_else() -> None:
+    """A partial match is a TEXT question: a number, a yes/no, a date or a
+    phone holds no text, so the validator refuses it there."""
+    op: Any = predicate.CONTAINS_OP
+    for field_type in ("text", "choice", "list"):
+        assert op in catalog.OPS_BY_TYPE[field_type], field_type
+    for field_type in ("number", "boolean", "datetime", "phone"):
+        assert op not in catalog.OPS_BY_TYPE[field_type]
+    number = catalog.with_ops(CatalogField(path="payload.n", type="number", label="N"))
+    problems = condition_against_catalog(
+        Condition(field="payload.n", op=op, value=["1"]),
+        {"payload.n": number},
+    )
+    assert problems and f"{op!r} is not an op" in problems[0]
+
+
+def test_a_partial_piece_on_a_choice_field_is_not_held_to_its_values() -> None:
+    """`in` on a choice must name its values; a piece names PART of many,
+    so "Samsung Galaxy" passes although no value is spelled that way."""
+    choice = catalog.with_ops(
+        CatalogField(
+            path="payload.model",
+            type="choice",
+            label="Model",
+            values=["Samsung Galaxy A36 5G (Dark Blue, 128 GB)"],
+        )
+    )
+    assert (
+        condition_against_catalog(
+            Condition(field="payload.model", op="contains", value=["Samsung Galaxy"]),
+            {"payload.model": choice},
+        )
+        == []
+    )
+
+
 def test_the_stored_row_keeps_item_format_only_where_it_means_something() -> None:
     """canon's field list is extended for the new type, not for every row."""
     plain = catalog.stored_field(CatalogField(path="payload.a", type="text", label="A"))
@@ -778,14 +829,92 @@ def test_the_stored_row_keeps_item_format_only_where_it_means_something() -> Non
     assert listed["item_format"] == "{n}"
 
 
+# --- a partial match per product: the offer list, judged element by element ----
+
+_CART = {
+    "products": [
+        {"product_name": "vivo V20 (Sunset Melody, 128 GB)", "category": "Mobile"},
+        {
+            "product_name": "Zapcase Back Cover for Samsung Galaxy A36 5G",
+            "category": "Accessories",
+        },
+        {
+            "product_name": "Samsung Galaxy A36 5G (Dark Blue, 128 GB)",
+            "category": "Mobile",
+        },
+    ]
+}
+
+
+def test_an_element_filter_keeps_a_listed_model_anywhere_in_the_cart() -> None:
+    """item_where judges EACH product alone, before anything is joined: the
+    A36 in third place is kept, the vivo is dropped, and the back cover that
+    holds "Samsung Galaxy A36" is dropped by its own category — so the
+    variable exists only when the cart holds a listed phone, in any position."""
+    where = [
+        Condition(field="product_name", op="contains", value=["Samsung Galaxy A36"]),
+        Condition(field="category", op="in", value=["Mobile"]),
+    ]
+    kept = engine.list_values(_CART, "payload.products.product_name", where)
+    assert kept == ["Samsung Galaxy A36 5G (Dark Blue, 128 GB)"]
+    assert (
+        engine.list_values(
+            {"products": _CART["products"][:2]}, "payload.products.product_name", where
+        )
+        == []
+    )
+
+
+def test_contains_reaches_mid_name_and_the_category_keeps_out_accessories() -> None:
+    """`contains` finds an attribute anywhere ("128 GB"); the back cover also
+    holds the model, which is why it rides with a category in one filter."""
+    where = [
+        Condition(field="product_name", op="contains", value=["128 GB"]),
+        Condition(field="category", op="in", value=["Mobile"]),
+    ]
+    assert engine.list_values(_CART, "payload.products.product_name", where) == [
+        "vivo V20 (Sunset Melody, 128 GB)",
+        "Samsung Galaxy A36 5G (Dark Blue, 128 GB)",
+    ]
+    only_name = [Condition(field="product_name", op="contains", value=["Galaxy A36"])]
+    found = engine.list_values(_CART, "payload.products.product_name", only_name)
+    assert found is not None and len(found) == 2
+
+
+def test_a_partial_element_filter_registers() -> None:
+    assert not catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [
+                        {"field": "product_name", "op": "contains", "value": ["Pixel"]}
+                    ],
+                }
+            ]
+        )
+    )
+
+
 # --- item_where / item_numbered: the registration law ---------------------------
 
 
-def test_an_element_filter_belongs_to_a_list_and_speaks_five_ops() -> None:
+def test_an_element_filter_belongs_to_a_list_and_speaks_its_ops() -> None:
     """A filter on a text field has no elements to judge; an ordering op on
     an element field has no declared type to fit — the element filter
-    speaks is · is_not · in · exists · not_exists and nothing else."""
-    assert catalog._ITEM_WHERE_OPS == ("is", "is_not", "in", "exists", "not_exists")
+    speaks is · is_not · in · contains · exists · not_exists and nothing
+    else."""
+    assert catalog._ITEM_WHERE_OPS == (
+        "is",
+        "is_not",
+        "in",
+        "contains",
+        "exists",
+        "not_exists",
+    )
     assert not catalog.validate_registration(
         _reg(
             [

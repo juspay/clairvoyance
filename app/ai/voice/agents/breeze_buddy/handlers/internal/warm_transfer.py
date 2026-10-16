@@ -66,6 +66,18 @@ async def connect_to_live_agent(
     """
     logger.info(f"Transfer called for {context.call_sid}")
 
+    # The caller hung up while the LLM's transfer call was in flight; the
+    # provider no longer has the call, so a transfer can only fail.
+    if context.conversation_ended:
+        logger.warning(
+            f"Transfer skipped for call {context.call_sid}: caller already hung up"
+        )
+        return {
+            "status": "failed",
+            "reason": "call_ended",
+            "message": "Call already ended before the transfer",
+        }
+
     # Fetch telephony number from database
     if not context.lead or not context.lead.telephony_number_id:
         logger.error(

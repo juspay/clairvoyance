@@ -12,7 +12,11 @@ FIELDS: Dict[str, str] = {
         "Names of items the store features or calls best sellers: an item's "
         "own name, never a category or menu link ('Leggings')."
     ),
-    "offer_items": "Offers, discounts or sales running now.",
+    "offer_items": (
+        "A sale, discount, promo code or free-shipping offer running now. "
+        "Never a running-total message ('Spend $20 more for free shipping') "
+        "or a shipping delay notice."
+    ),
     "trust_items": (
         "Why shoppers can trust the store: guarantees, certifications, "
         "awards, years in business, who founded it and why. Never shipping, "

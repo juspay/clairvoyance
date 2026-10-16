@@ -10,12 +10,19 @@ every language variant with it.
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.crm.connectivity import accounts as accounts_module
+from app.crm.connectivity.db.accessors import template as template_accessor_module
+from app.crm.connectivity.db.queries.template import (
+    claim_for_submit_query,
+    insert_template_draft_query,
+    update_draft_components_query,
+)
 from app.crm.connectivity.providers.whatsapp.templates import (
     WhatsappTemplateError,
     WhatsappTemplates,
@@ -23,7 +30,13 @@ from app.crm.connectivity.providers.whatsapp.templates import (
 )
 from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
 from app.crm.connectivity.schemas.message import CredentialBundle
-from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
+from app.crm.connectivity.schemas.template import (
+    CreateTemplateDraftRequest,
+    EditTemplateRequest,
+    SubmitTemplateRequest,
+    TemplateDraft,
+    TemplateRead,
+)
 from app.crm.connectivity.templates import (
     lifecycle as templates_module,
     reads as template_reads_module,
@@ -205,19 +218,34 @@ class _FakeTemplateAccessor:
         """Test double: no existing row unless one was seeded."""
         return self.template
 
-    async def insert_template_draft(self, txn, *args):
-        """Test double: record the insert."""
+    async def insert_template_draft(
+        self,
+        txn,
+        merchant_id,
+        channel,
+        provider_account_ref,
+        name,
+        language,
+        components,
+        category=None,
+    ):
+        """Test double: record the insert and the category it keeps."""
         self.calls.append("insert")
+        self.draft_category = category
         return _template()
 
-    async def update_draft_components(self, txn, merchant_id, template_id, components):
-        """Test double: record the draft edit."""
+    async def update_draft_components(
+        self, txn, merchant_id, template_id, components, category=None
+    ):
+        """Test double: record the draft edit and the category it keeps."""
         self.calls.append("update_draft")
+        self.draft_category = category
         return _template(components=components)
 
-    async def claim_for_submit(self, txn, merchant_id, template_id):
+    async def claim_for_submit(self, txn, merchant_id, template_id, category):
         """Test double: the exclusive claim, or nothing."""
         self.calls.append("claim")
+        self.claimed_category = category
         return _template(status="submitting") if self.claim else None
 
     async def release_submit_claim(self, merchant_id, template_id):
@@ -453,6 +481,8 @@ async def test_a_successful_submit_records_the_providers_verdict(
     assert updated.status == "pending"
     assert updated.provider_template_id == "T-1"
     assert accessor.calls == ["claim", "record_submission"]
+    # the category sent to the provider is the one the claim wrote
+    assert accessor.claimed_category == "UTILITY"
 
 
 async def test_retiring_still_happens_when_the_provider_is_down(
@@ -1029,3 +1059,109 @@ def test_the_publish_check_is_on_the_contract_surface() -> None:
     assert "template_status" in contracts.__all__
     assert "registers_templates_for" in contracts.__all__
     assert contracts.registers_templates_for is channels_module.registers_templates_for
+
+
+def test_a_draft_keeps_the_category_the_merchant_picked() -> None:
+    """The editor's category rides on the draft (submitted_category, OURS),
+    so a reopened draft still says Marketing and submit sends Marketing —
+    and an edit that sends no category leaves the draft's alone."""
+    query, values = insert_template_draft_query(
+        "shop", "whatsapp", "waba-1", "sale", "en", "[]", "MARKETING"
+    )
+    assert "submitted_category" in query and values[-1] == "MARKETING"
+    query, values = update_draft_components_query("shop", "t-1", "[]", None)
+    assert "submitted_category = COALESCE($5, submitted_category)" in query
+    assert values[-1] is None
+
+
+def test_the_submit_claim_records_the_category_being_sent() -> None:
+    """Written with the claim: a submit that dies after the provider accepted
+    still says what we asked for when the webhook resumes it."""
+    query, values = claim_for_submit_query("shop", "t-1", "UTILITY")
+    assert "submitted_category = $5" in query and values[4] == "UTILITY"
+
+
+async def test_create_and_edit_keep_the_picked_category_on_the_draft(
+    monkeypatch,
+) -> None:
+    """The editor's pick reaches the row through every layer the lifecycle
+    owns: a new draft, the re-create of an existing one, and an edit."""
+    accessor, _ = _patch(monkeypatch)
+    await create_draft("shop", "whatsapp", "waba-1", "sale", "en_US", [], "MARKETING")
+    assert "insert" in accessor.calls and accessor.draft_category == "MARKETING"
+
+    accessor, _ = _patch(monkeypatch, templates=_FakeTemplateAccessor(_template()))
+    await create_draft(
+        "shop", "whatsapp", "waba-1", "order_update", "en_US", [], "UTILITY"
+    )
+    assert "update_draft" in accessor.calls and accessor.draft_category == "UTILITY"
+    await edit("shop", "t-1", [], "MARKETING")
+    assert accessor.draft_category == "MARKETING"
+
+
+class _RecordingConn:
+    """A connection that records what each statement was given, and returns
+    no row."""
+
+    def __init__(self) -> None:
+        self.values: List[tuple] = []
+
+    async def fetchrow(self, query, *values):
+        self.values.append(values)
+        return None
+
+
+async def test_the_accessor_writes_the_category_it_is_given() -> None:
+    """The layer the lifecycle tests fake: the category handed to the
+    draft's insert and edit reaches the statement."""
+    conn: Any = _RecordingConn()
+    with pytest.raises(RuntimeError):  # the insert's own "no row" refusal
+        await template_accessor_module.insert_template_draft(
+            conn, "shop", "whatsapp", "waba-1", "sale", "en", [], "MARKETING"
+        )
+    await template_accessor_module.update_draft_components(
+        conn, "shop", "t-1", [], "UTILITY"
+    )
+    assert [values[-1] for values in conn.values] == ["MARKETING", "UTILITY"]
+
+
+async def test_a_submitted_templates_category_is_refused_not_dropped(
+    monkeypatch,
+) -> None:
+    """Its category is the provider's: an edit that sends one is refused (a
+    400), before anything is written or sent."""
+    accessor, _ = _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(
+            _template(status="approved", provider_template_id="T-1")
+        ),
+    )
+    with pytest.raises(TemplateError, match="only a draft's category"):
+        await edit("shop", "t-1", [{"type": "BODY", "text": "new"}], "MARKETING")
+    assert accessor.calls == []
+
+
+@pytest.mark.parametrize("category", ["marketing", "UTILITY; DROP", "A" * 33, ""])
+def test_a_category_must_look_like_a_provider_category(category) -> None:
+    """On a draft and on submit alike: the submit claim writes its category
+    onto the row too, and a refused submit leaves it there."""
+    with pytest.raises(ValidationError):
+        SubmitTemplateRequest(merchant_id="shop", category=category)
+    with pytest.raises(ValidationError):
+        EditTemplateRequest(merchant_id="shop", components=[], category=category)
+    with pytest.raises(ValidationError):
+        CreateTemplateDraftRequest(
+            merchant_id="shop",
+            channel="whatsapp",
+            provider_account_ref="waba-1",
+            name="sale",
+            language="en",
+            components=[],
+            category=category,
+        )
+    assert (
+        EditTemplateRequest(merchant_id="shop", components=[], category="MARKETING")
+    ).category == "MARKETING"
+    assert SubmitTemplateRequest(merchant_id="shop", category="UTILITY").category == (
+        "UTILITY"
+    )

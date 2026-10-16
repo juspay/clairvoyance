@@ -90,6 +90,7 @@ from app.crm.connectivity.onboarding import (
     list_installations,
     onboard,
     resubscribe,
+    signup_config,
 )
 from app.crm.connectivity.queue import queue_message, send_behind
 from app.crm.connectivity.reasons import reason_label
@@ -122,6 +123,7 @@ __all__ = [
     "validate_action_args",
     "ActionError",
     # connections
+    "signup_config",
     "onboard",
     "get_installation",
     "get_installation_for_connector",

@@ -48,6 +48,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport
+from starlette.websockets import WebSocketState
 
 from app.ai.voice.agents.breeze_buddy import agent as agent_mod
 from app.ai.voice.agents.breeze_buddy.agent import (
@@ -624,6 +625,55 @@ async def test_an_agent_to_agent_transfer_keeps_the_vobiz_serializer(call_setup)
     assert agent.transport is not first
     assert isinstance(agent.transport, FastAPIWebsocketTransport)
     assert type(agent.transport._params.serializer) is VobizFrameSerializer
+
+
+# ── no start event: the caller hung up as the call connected ─────────────
+
+
+class ClosedProviderSocket(FakeProviderSocket):
+    """Plivo after an instant hang-up: closed before any message."""
+
+    client_state = WebSocketState.DISCONNECTED
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.close_code: Optional[int] = None
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.close_code = code
+
+
+class SilentProviderSocket(ClosedProviderSocket):
+    """Vobiz after an instant hang-up: the socket stays open, nothing arrives."""
+
+    client_state = WebSocketState.CONNECTED
+
+    async def iter_text(self):
+        await asyncio.Event().wait()
+        yield ""
+
+
+@pytest.mark.parametrize(
+    "ws,close_code",
+    [(ClosedProviderSocket(), None), (SilentProviderSocket(), 1000)],
+    ids=["plivo-closes-the-socket", "vobiz-leaves-it-silent"],
+)
+async def test_no_start_event_ends_setup_with_a_warning(
+    monkeypatch, logs, ws, close_code
+):
+    monkeypatch.setattr(agent_mod, "TELEPHONY_START_TIMEOUT_S", 0.05)
+    agent = agent_mod.Agent(
+        transport_type=CallProvider.VOBIZ,
+        ws=cast(WebSocket, ws),
+        provider=CallProvider.VOBIZ,
+    )
+
+    assert await agent._setup_telephony_transport() is False
+
+    assert agent.call_sid is None
+    assert ws.close_code == close_code  # we close only a socket still open
+    assert any("No telephony start event" in m for m in messages(logs, "WARNING"))
+    assert messages(logs, "ERROR") == []
 
 
 def _persisted(persisted: bool) -> Any:
