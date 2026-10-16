@@ -26,7 +26,7 @@ from app.core.logger.context import clear_log_context, get_log_context
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
-NOW = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
 LEASE = NOW + timedelta(seconds=300)
 
 

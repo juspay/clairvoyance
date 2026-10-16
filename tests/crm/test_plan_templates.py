@@ -33,6 +33,12 @@ LINE_MOBILE = PLANS / "line-nudge-mobile.json"
 LINE_PLAYBOOK = PLANS / "line-nudge-playbook.json"
 LINE_CALL_WAIT = PLANS / "line-nudge-call-wait.json"
 LINE_OFFSET = PLANS / "line-nudge-offset.json"
+XYNE_HTTP_WAIT = PLANS / "xyne-postmessage-http-wait.json"
+# The runnable demo companion to the canonical http-wait board: entry on the
+# whatsapp `message.inbound` letter (a Meta value object) with an explicit
+# `door_name` on the merchant_http node. Distinct purpose_key, so it ships as
+# its own document and must validate on every CI run too.
+XYNE_POSTMESSAGE_RUN = PLANS / "xyne-postmessage-run.json"
 # The lending journey on a merchant's OWN events (line-nudge.json): eight
 # non-terminal topics the squares listen on, three terminals the goal ends on.
 LINE_OPEN = [
@@ -183,12 +189,57 @@ def test_the_expected_documents_exist() -> None:
         LINE_PLAYBOOK,
         LINE,
         LOAN,
+        XYNE_HTTP_WAIT,
+        XYNE_POSTMESSAGE_RUN,
     ]
 
 
 @pytest.mark.parametrize("path", _every_plan(), ids=lambda p: p.stem)
 def test_every_plan_template_validates(path: Path) -> None:
     assert validate_definition(_load(path), catalogs=_catalogs()) == [], path
+
+
+def test_the_xyne_goal_fires_only_on_the_async_reply() -> None:
+    """The demo's goal is keyed on TOP-LEVEL `conversationId`, which is how a
+    `MESSAGE_POSTED` reply — the async answer to our `postMessage` — is told
+    apart from the entry's own submission.
+
+    The relay files every attributable event on the same `flow_action` topic
+    (connectivity/providers/xyne/inbound.py), so the goal cannot branch on the
+    topic or on `eventType` (which the goal grammar never reads). It branches
+    on where `conversationId` sits instead: the reply carries it TOP-LEVEL
+    (the `_goal_patch`/`_end_on_goal` read is `event.payload.get(key.event)`,
+    a top-level leaf), while the submission nests it under `context` — so a
+    keyed goal with `event=conversationId, run=conversationId` matches the
+    reply (and only this run's thread) and SKIPS a fresh submission, whose
+    top-level `conversationId` is absent. A fresh submit therefore neither
+    re-POSTs nor ends the run; only the async reply does.
+    """
+    doc = _load(XYNE_HTTP_WAIT)
+    definition = WorkflowDefinition.model_validate(doc)
+    (tier,) = definition.goals
+    assert tier.key is not None  # the demo's one tier is keyed
+    assert (tier.key.event, tier.key.run) == ("conversationId", "conversationId")
+    # The run's context carries `conversationId` because the xyne entry
+    # declares payload.context.conversationId as a variable (engine.variable_name
+    # -> `conversationId`), merged into the run at enrol.
+    run_context = {"conversationId": "ead0b5ff-32f9-460c-92d6-f52847257465"}
+    # The async reply: eventType tops a flat body, conversationId TOP-LEVEL and
+    # matching this run's thread — the goal key matches -> goal_met.
+    reply = {
+        "eventType": "MESSAGE_POSTED",
+        "messageId": "m_new",
+        "conversationId": run_context["conversationId"],
+    }
+    assert reply.get(tier.key.event) == run_context[tier.key.run]
+    # A fresh submission: actionId present, conversationId NESTED under context
+    # (tests/crm/fixtures/xyne/flow_action.json) — the goal's top-level read
+    # sees nothing, so it is not this tier's answer and the run keeps waiting.
+    submit = {
+        "actionId": "submit-interview-availability",
+        "context": {"conversationId": run_context["conversationId"]},
+    }
+    assert submit.get(tier.key.event) in (None, "")  # the tier is skipped
 
 
 def test_the_catalog_laws_actually_run_over_the_boards() -> None:

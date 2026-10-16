@@ -296,6 +296,8 @@ async def _onboard_in_txn(
         merchant_id,
         connector_key,
         result.external_account_id,
+        result.door_name,
+        json.dumps(result.door_data),
         result.display_label,
         credential_id,
         status,
@@ -351,6 +353,26 @@ async def get_installation(
 ) -> Optional[InstallationRead]:
     return await installation_accessor.get_installation_read(
         merchant_id, installation_id
+    )
+
+
+async def get_installation_for_connector(
+    merchant_id: str, connector_key: str, door_name: Optional[str] = None
+) -> Optional[ConnectorInstallation]:
+    """The usable door this merchant acts through on one connector, or None.
+
+    ``door_name`` pins the door when a relation names one (a merchant can
+    hold several base_urls on merchant_http, each under its own STABLE name);
+    absent it, the connector's newest usable door is chosen. This is the
+    same door ``perform_action`` acts through, so a publish-time check and
+    the run that follows agree on what "usable" means.
+
+    None is the fail-closed answer: no connection, an unproven one, a
+    withdrawn one, or a named door that is not this merchant's under this
+    connector all read the same here.
+    """
+    return await installation_accessor.get_installation_for_connector(
+        merchant_id, connector_key, door_name=door_name
     )
 
 

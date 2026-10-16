@@ -263,6 +263,17 @@ class WorkflowNode(BaseModel):
     # day a relay becomes a direct provider call, this document is unchanged.
     connector: Optional[str] = None
     action: Optional[str] = None
+    # action only: WHICH of this merchant's doors on ``connector`` the action
+    # runs through, by the door's STABLE merchant-chosen NAME (crm_connector_
+    # installation.door_name — never the row id, never the base URL). Absent ->
+    # the connector's newest usable door. A name, not an id or a URL, is the
+    # deliberate shape: renaming a merchant's base URL re-onboards the same
+    # name onto the same row, so a plan pinned to it keeps resolving and a
+    # pinned run keeps calling the new address — no republish. A merchant can
+    # hold several base_urls on the SAME merchant_http connector, and this is
+    # how a plan says which one. Validated at publish: the name must be a
+    # usable door OF THIS MERCHANT under ``connector``.
+    door_name: Optional[str] = None
     # action: the action's OWN arguments, validated at publish against the
     # model the connector declares for it. Values may be "{placeholder}" and
     # are resolved from the run's facts at fire time.
@@ -311,6 +322,26 @@ class WorkflowNode(BaseModel):
         if isinstance(data, dict) and data.get("type") == RETIRED_WAIT_EVENT:
             data = {**data, "type": "wait"}
         return data
+
+    @field_validator("door_name", mode="before")
+    @classmethod
+    def _door_name_is_a_plain_stable_name(cls, value: Any) -> Any:
+        """The door's STABLE merchant-chosen name, full stop. A name is the
+        plan-addressable handle for a merchant_http door (``payments``), so a
+        malformed value — a stray quote, a comma, a URL, a ``{placeholder}`` —
+        is not a doorway anyone could name and is refused here, at the schema
+        boundary, instead of silently matching nothing at run time. Absent
+        (None) is the ordinary case: the connector's newest usable door."""
+        if value is None:
+            return None
+        name = str(value).strip()
+        if not name:
+            raise ValueError("door_name must not be empty")
+        if "{" in name or "}" in name:
+            raise ValueError("door_name may not contain placeholders")
+        if "/" in name or ":" in name or " " in name:
+            raise ValueError("door_name may not contain /, : or spaces")
+        return name
 
 
 # An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a

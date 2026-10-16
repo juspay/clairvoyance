@@ -18,16 +18,16 @@ INSTALLATION_TABLE = "crm_connector_installation"
 
 # The route's shape — what send.py needs to reach a provider.
 INSTALLATION_COLUMNS = """
-    id, merchant_id, connector_key, external_account_id, display_label,
-    credential_id, status, token_expires_at
+    id, merchant_id, connector_key, external_account_id, door_name,
+    door_data, display_label, credential_id, status, token_expires_at
 """
 
 # The console's shape. credential_id is deliberately ABSENT: a read model
 # that names where a secret lives is a map to it.
 INSTALLATION_READ_COLUMNS = """
-    id, merchant_id, connector_key, external_account_id, display_label,
-    status, token_expires_at, last_event_at, health_detail, installed_at,
-    created_at, updated_at
+    id, merchant_id, connector_key, external_account_id, door_name,
+    display_label, status, token_expires_at, last_event_at, health_detail,
+    installed_at, created_at, updated_at
 """
 
 
@@ -91,23 +91,53 @@ def installation_by_account_query(
 
 
 def installation_for_connector_query(
-    merchant_id: str, connector_key: str
+    merchant_id: str, connector_key: str, door_name: Optional[str] = None
 ) -> Tuple[str, List[Any]]:
     """The route shape, found by the CONNECTOR alone — the door an action
     acts through.
 
     Neither of the lookups above fits: an action node names a connector
-    ("shopify"), not our installation id and not the provider's account id,
+    ("shopify"), not an installation id and not the provider's account id,
     because a plan document must not have to know either. One merchant CAN
-    hold two accounts on one connector (two shops, two WABAs — that is what
-    the account unique index allows), so this takes the newest usable one and
-    is deliberately not the way a multi-shop merchant will address a specific
-    shop; that day the node names the account and this gains a parameter.
+    hold multiple doors on one connector (two base_urls on merchant_http —
+    that is what the door_name unique allows), so without more it takes the
+    newest usable one.
+
+    ``door_name`` (crm_connector_installation.door_name — the stable,
+    merchant-chosen name, NOT the primary key) pins the door when a plan
+    names one. That is how a merchant with two base_urls on the SAME
+    merchant_http connector says which door an action acts through — the one
+    case a plan document DOES name the account. Still merchant-scoped and
+    still connector-bound: the name is only meaningful inside ``merchant_id``
+    AND ``connector_key``, so a leaked name from another tenant, or a
+    merchant_http node pointing at a whatsapp door, selects nothing rather
+    than the wrong door. A name (not an id) is exactly what lets a base-URL
+    change stay an in-place UPDATE: renaming the URL edits door_data on the
+    same row, and the plan's name resolves to the same door forever.
 
     Usable only, bound as a parameter: fail closed on 'connecting',
     'degraded', 'revoked' and 'disabled' alike — an action performed through
-    an unproven or withdrawn door is a write we cannot stand behind.
+    an unproven or withdrawn door is a write we cannot stand behind. When the
+    name pins the door there is one row by construction (the name is unique),
+    so no ORDER BY.
     """
+    if door_name is not None:
+        query = f"""
+            SELECT {INSTALLATION_COLUMNS}
+              FROM {INSTALLATION_TABLE}
+             WHERE merchant_id = $1
+               AND connector_key = $2
+               AND door_name = $3
+               AND status = ANY($4::text[])
+             LIMIT 1
+        """
+        return query, [
+            merchant_id,
+            connector_key,
+            door_name,
+            sorted(INSTALLATION_USABLE),
+        ]
+
     query = f"""
         SELECT {INSTALLATION_COLUMNS}
           FROM {INSTALLATION_TABLE}
@@ -124,6 +154,8 @@ def upsert_installation_query(
     merchant_id: str,
     connector_key: str,
     external_account_id: str,
+    door_name: Optional[str],
+    door_data_json: str,
     display_label: Optional[str],
     credential_id: Optional[str],
     status: str,
@@ -144,29 +176,40 @@ def upsert_installation_query(
     · It never lowers is_primary or resurrects a retired pipe; that is the
       binding's business, and the binding's own upsert states its rules.
 
+    ``door_name`` rides EXCLUDED so a rename takes effect on the next
+    re-onboard, and ``door_data`` rides it because re-onboarding IS how a
+    merchant edits a base URL — the unique key (external_account_id, for
+    merchant_http the stable name) never moves, so the edit stays on this row.
+
     token_expires_at rides EXCLUDED because a re-onboard IS a rotation: the
     old token's expiry describes a credential that no longer exists.
     """
     query = f"""
         INSERT INTO {INSTALLATION_TABLE}
-            (merchant_id, connector_key, external_account_id, display_label,
-             credential_id, status, token_expires_at, health_detail)
-        VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8::jsonb)
+            (merchant_id, connector_key, external_account_id, door_name,
+             door_data, display_label, credential_id, status,
+             token_expires_at, health_detail)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::uuid, $8, $9, $10::jsonb)
         ON CONFLICT (merchant_id, connector_key, external_account_id)
         DO UPDATE SET
+            door_name = COALESCE(EXCLUDED.door_name,
+                                 {INSTALLATION_TABLE}.door_name),
+            door_data = EXCLUDED.door_data,
             display_label = COALESCE(EXCLUDED.display_label,
                                      {INSTALLATION_TABLE}.display_label),
             credential_id = EXCLUDED.credential_id,
             status = EXCLUDED.status,
             token_expires_at = EXCLUDED.token_expires_at,
             health_detail = EXCLUDED.health_detail
-        WHERE {INSTALLATION_TABLE}.status <> $9
+        WHERE {INSTALLATION_TABLE}.status <> $11
         RETURNING {INSTALLATION_READ_COLUMNS}
     """
     return query, [
         merchant_id,
         connector_key,
         external_account_id,
+        door_name,
+        door_data_json,
         display_label,
         credential_id,
         status,
