@@ -72,7 +72,27 @@ def test_open_runs_for_customer_is_merchant_first_and_open_only() -> None:
     sql, params = open_runs_for_customer_query("m1", "c-1")
     assert "WHERE merchant_id = $1 AND customer_id = $2" in sql
     assert "status <> 'exited'" in sql
+    # Names no key and no run: the release statement, no UNION.
+    assert "UNION" not in sql
     assert params == ["m1", "c-1"]
+
+
+def test_open_runs_also_reads_a_keyed_plans_runs_by_key() -> None:
+    """A merchant's customer id on a second phone resolves to a second
+    customer; the key half still finds the run it opened, merchant-first
+    and open-only like the customer half."""
+    sql, params = open_runs_for_customer_query("m1", "c-2", [("wf-1", "fk-9")])
+    assert "unnest($3::uuid[], $4::text[])" in sql
+    assert "WHERE e.merchant_id = $1 AND e.status <> 'exited'" in sql
+    assert params == ["m1", "c-2", ["wf-1"], ["fk-9"], []]
+
+
+def test_open_runs_also_reads_the_runs_a_letter_names_by_id() -> None:
+    sql, params = open_runs_for_customer_query("m1", "c-2", run_ids=["run-1"])
+    assert (
+        "WHERE merchant_id = $1 AND id = ANY($5::uuid[]) AND status <> 'exited'" in sql
+    )
+    assert params == ["m1", "c-2", [], [], ["run-1"]]
 
 
 def test_goal_cancel_is_time_aware_on_the_entry_event_and_null_safe() -> None:
