@@ -13,6 +13,14 @@ from app.database.accessor.breeze_buddy.merchants import (
 )
 from app.schemas import TelephonyNumber, UserInfo
 
+# NOTE: number visibility has exactly one enforcement point —
+# ``filter_numbers_by_rbac``, applied by the router to both the list and the
+# single-number read. A second coarse gate used to live here
+# (``validate_number_access``); it was removed because it was pin-blind (it
+# denied a merchant the shared-pool number its own template pins) and answered
+# 403 where the router answers 404, leaking existence. Do not reintroduce a
+# parallel check: add to ``number_in_rbac_scope`` instead, so one rule governs.
+
 
 def require_admin_access(
     current_user: UserInfo, operation: str = "perform this operation"
