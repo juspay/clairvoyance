@@ -2001,7 +2001,13 @@ class FlavorProtocolConfig(BaseModel):
             "ProductGrid after a successful add_to_cart (one extra LLM "
             "call + catalog search per add, run after the cart is already "
             "on the wire); 'try_on' offers virtual try-on on eligible "
-            "products (each generated image costs the merchant credits)."
+            "products (each generated image costs the merchant credits); "
+            "'order_tracking' adds the get_order_status and "
+            "read_page_content tools and the OrderStatus card flow, when one "
+            "of the template's connectors can look up orders (Shopify, "
+            "WooCommerce); a template that declares either tool itself, or "
+            "maps the order_status or page_read role in ui_intents.tools to "
+            "its own tool, keeps its own."
         ),
     )
 

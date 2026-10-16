@@ -1239,7 +1239,7 @@
       ]
     },
     "features": {
-      "description": "Optional flavor features → on/off. OPT-IN by contract: every feature is OFF unless turned on here, so enabling a flavor never silently starts extra behaviour on an existing merchant. Commerce/ucp: 'upsell' streams a complementary ProductGrid after a successful add_to_cart — one extra LLM call plus a catalog search per add, run after the cart component is already on the wire so the shopper never waits on it. 'try_on' offers virtual try-on on eligible products; each generated image costs the merchant credits.",
+      "description": "Optional flavor features → on/off. OPT-IN by contract: every feature is OFF unless turned on here, so enabling a flavor never silently starts extra behaviour on an existing merchant. Commerce/ucp: 'upsell' streams a complementary ProductGrid after a successful add_to_cart — one extra LLM call plus a catalog search per add, run after the cart component is already on the wire so the shopper never waits on it. 'try_on' offers virtual try-on on eligible products; each generated image costs the merchant credits. 'order_tracking' adds the get_order_status and read_page_content tools and the OrderStatus card flow, when one of the template's connectors can look up orders (Shopify, WooCommerce); a template that declares either tool itself, or maps the order_status or page_read role in ui_intents.tools to its own tool, keeps its own.",
       "example": {
         "upsell": true
       }

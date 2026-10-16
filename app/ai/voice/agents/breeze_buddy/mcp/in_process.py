@@ -39,6 +39,16 @@ def tool_call(platform: str, store: str) -> Optional[ToolCall]:
     return functools.partial(tools.call_tool, tools.store_api_url(store))
 
 
+def store_host(url: str, platform: str) -> Optional[str]:
+    """The store host in a tool-server URL that names our endpoint for
+    ``platform`` (``/mcp/<platform>/<store host>``), or None."""
+    match = _PATH_RE.fullmatch(urlparse(url).path)
+    if match is None or match["platform"] != platform:
+        return None
+    store = match["store"].lower()
+    return store if _HOST_RE.fullmatch(store) else None
+
+
 class _InProcessTransport(httpx.AsyncBaseTransport):
     """Answers the HTTP handler's JSON-RPC POST with ``server.handle`` in this
     process, so the request never leaves the pod."""

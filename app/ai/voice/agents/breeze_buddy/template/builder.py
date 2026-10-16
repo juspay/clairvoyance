@@ -26,6 +26,10 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal import (
 from app.ai.voice.agents.breeze_buddy.handlers.transport.http_handler import (
     http_function_handler,
 )
+from app.ai.voice.agents.breeze_buddy.template.flavor_functions import (
+    append_flavor_functions,
+    synthesize_flavor_functions,
+)
 from app.ai.voice.agents.breeze_buddy.template.global_function import (
     GlobalFunctionRegistry,
 )
@@ -466,6 +470,8 @@ class FlowConfigBuilder:
         # chat both flow through this method, so the tool appears uniformly
         # on both channels.
         kb_tool_function = synthesize_kb_tool_function(bot_instance, log=self._log)
+        # Functions a flavor adds from its switches (flavor_functions.py).
+        flavor_functions = synthesize_flavor_functions(bot_instance, log=self._log)
 
         # Direct mode has a single flat `functions` array. Each entry is
         # routed by `type`: http/builtin/custom go through the global-function
@@ -473,8 +479,9 @@ class FlowConfigBuilder:
         # The KB tool is appended BEFORE the disabled filter so per-channel
         # disabling applies to it like any other function.
         if flow.get("mode") == FlowMode.DIRECT.value:
-            declared_functions = append_kb_tool(
-                flow.get("functions") or [], kb_tool_function
+            declared_functions = append_flavor_functions(
+                append_kb_tool(flow.get("functions") or [], kb_tool_function),
+                flavor_functions,
             )
             direct_functions = filter_disabled_identifiers(
                 declared_functions, self._disabled_names, "function"
@@ -490,8 +497,27 @@ class FlowConfigBuilder:
         # filter is a no-op in voice mode (returns the same list), so we can
         # always run it; we shallow-copy the flow dict to avoid mutating the
         # caller's structure when assigning the filtered list back.
+        # Node functions count as declared too: chat (_tools_schema) and
+        # pipecat-flows join node and global functions without a name check.
+        node_function_names = (
+            {
+                str(func.get("name") or func.get("function_name"))
+                for node in flow.get("nodes") or []
+                for func in filter_disabled_identifiers(
+                    node.get("functions") or [], self._disabled_names, "function"
+                )
+                if isinstance(func, dict)
+                and (func.get("name") or func.get("function_name"))
+            }
+            if flavor_functions
+            else set()
+        )
         global_functions = filter_disabled_identifiers(
-            append_kb_tool(flow.get("global_functions") or [], kb_tool_function),
+            append_flavor_functions(
+                append_kb_tool(flow.get("global_functions") or [], kb_tool_function),
+                flavor_functions,
+                reserved=node_function_names,
+            ),
             self._disabled_names,
             "function",
         )
