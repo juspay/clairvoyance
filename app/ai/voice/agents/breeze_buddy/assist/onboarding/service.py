@@ -241,6 +241,7 @@ def build_merchant_template(
         configurations.pop("mcp", None)
     for key in registry.foreign_tool_config_keys(adapter):
         configurations.pop(key, None)
+    _override_config(configurations, adapter.config_overrides())
     if fields is not None:
         _merge_config(configurations, vertical.update_chat_settings(fields))
 
@@ -286,6 +287,18 @@ def build_merchant_template(
         updated_at=(existing_template.updated_at if existing_template else None),
     )
     return candidate
+
+
+def _override_config(configurations: Dict[str, Any], values: Mapping[str, Any]) -> None:
+    """``values`` onto the blueprint's config: a map merges into the
+    blueprint's, any other value replaces it (a platform's connector list
+    replaces the blueprint's, its features stay)."""
+    for key, value in values.items():
+        existing = configurations.get(key)
+        if isinstance(value, Mapping) and isinstance(existing, dict):
+            _override_config(existing, value)
+        else:
+            configurations[key] = copy.deepcopy(value)
 
 
 def _merge_config(

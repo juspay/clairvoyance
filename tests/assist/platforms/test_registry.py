@@ -96,6 +96,7 @@ def test_host_apps_and_request_platform_resolve_through_the_registry():
     else:
         raise AssertionError("unknown host app resolved")
     assert registry.for_request("shopify").id == "shopify"
+    assert registry.for_request("woocommerce").id == "woocommerce"
     assert registry.for_request("web").id == "generic"
     assert registry.for_request(None).id == "generic"
 
@@ -103,10 +104,29 @@ def test_host_apps_and_request_platform_resolve_through_the_registry():
 def test_foreign_ownership_is_symmetric():
     shopify, generic = registry.resolve("shopify"), registry.resolve("generic")
     assert "shopify-storefront-ucp" in registry.foreign_mcp_server_names(generic)
-    assert registry.foreign_mcp_server_names(shopify) == frozenset()
+    assert registry.foreign_mcp_server_names(shopify) == {"woocommerce-store"}
     assert "state_reducers" in registry.foreign_tool_config_keys(generic)
     assert registry.foreign_tool_config_keys(shopify) == ()
     assert registry.foreign_payload_keys(generic) == ("shopify_customer_token",)
     assert "{{#shopify_operating_section}}" in registry.legacy_section_markers()
     assert shopify.store_name("acme.myshopify.com") == "acme"
     assert generic.store_name("acme.example.com") == "acme.example.com"
+
+
+def test_woocommerce_signals_classify_and_own_the_store_server():
+    signals = [
+        Signal(kind="js_global", pattern="woocommerce_params"),
+        Signal(kind="js_global", pattern="wc_add_to_cart_params"),
+    ]
+    adapter, confidence = registry.classify(signals)
+    assert adapter.id == "woocommerce" and confidence >= registry.CLASSIFY_THRESHOLD
+    # A theme that keeps only the add-to-cart settings is still WooCommerce.
+    lean = [
+        Signal(kind="js_global", pattern="woocommerce-no-js"),
+        Signal(kind="js_global", pattern="wc_add_to_cart_params"),
+    ]
+    assert registry.classify(lean)[0].id == "woocommerce"
+    # Shopify's server, cart plumbing and payload key are all foreign to it.
+    assert "shopify-storefront-ucp" in registry.foreign_mcp_server_names(adapter)
+    assert "ui_intents" in registry.foreign_tool_config_keys(adapter)
+    assert registry.foreign_payload_keys(adapter) == ("shopify_customer_token",)
