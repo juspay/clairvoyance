@@ -23,7 +23,9 @@ call never being retried. What is proven here:
 
 Routes run through FastAPI's TestClient at the app's real prefix. Lead and
 template lookups, Smart Router, and the retry / reconcile side effects are
-patched, so nothing here touches Postgres, Redis or a provider.
+patched, so nothing here touches Postgres, Redis or a provider. Plivo
+webhooks must carry X-Plivo-Signature-V3, so Plivo requests here are signed
+the way Plivo signs them.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from plivo.utils.signature_v3 import construct_post_url, get_signature_v3
 from starlette.datastructures import FormData
 
 # dispatch must import first: managers.calls and dispatch.worker import each
@@ -44,6 +47,7 @@ from starlette.datastructures import FormData
 from app.ai.voice.agents.breeze_buddy import dispatch as _dispatch  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo import (
     recording as plivo_recording,
+    security as plivo_security,
 )
 from app.api.routers.breeze_buddy.telephony import router as telephony_router
 from app.api.routers.breeze_buddy.telephony.answer import handlers as ans_mod
@@ -56,6 +60,7 @@ BASE_URL = "https://bb.example.com"
 TEMPLATE_ID = "tmpl-1"
 FROM_NUMBER = "918000000901"
 TO_NUMBER = "919000000001"
+PLIVO_AUTH_TOKEN = "test-plivo-auth-token"
 
 STREAM_ATTRIBUTES = {
     "bidirectional": "true",
@@ -134,18 +139,32 @@ def outbound_call(monkeypatch: pytest.MonkeyPatch, noise_cancellation: bool) -> 
     monkeypatch.setattr(ans_mod, "APP_BASE_URL", BASE_URL)
     monkeypatch.setattr(plivo_recording, "APP_BASE_URL", BASE_URL)
     monkeypatch.setattr(plivo_recording, "PLIVO_RECORDING_TIME_LIMIT", 3600)
+    monkeypatch.setattr(plivo_security, "APP_BASE_URL", BASE_URL)
+    monkeypatch.setattr(plivo_security, "PLIVO_AUTH_TOKEN", PLIVO_AUTH_TOKEN)
+
+
+def plivo_headers(path: str, data: Dict[str, str]) -> Dict[str, str]:
+    """X-Plivo-Signature-V3 headers for a form POST to BASE_URL + path, signed
+    the way Plivo signs it."""
+    nonce = "test-nonce"
+    signed = construct_post_url(BASE_URL + path, dict(data)).decode()
+    signature = get_signature_v3(PLIVO_AUTH_TOKEN.encode(), signed, nonce.encode())
+    return {
+        "X-Plivo-Signature-V3": signature.decode(),
+        "X-Plivo-Signature-V3-Nonce": nonce,
+    }
 
 
 def answer(client: TestClient, provider: str, call_id: str):
-    return client.post(
-        f"{PREFIX}/{provider}/answer",
-        data={
-            "CallUUID": call_id,
-            "From": FROM_NUMBER,
-            "To": TO_NUMBER,
-            "Direction": "outbound",
-        },
-    )
+    path = f"{PREFIX}/{provider}/answer"
+    data = {
+        "CallUUID": call_id,
+        "From": FROM_NUMBER,
+        "To": TO_NUMBER,
+        "Direction": "outbound",
+    }
+    headers = plivo_headers(path, data) if provider == "plivo" else {}
+    return client.post(path, data=data, headers=headers)
 
 
 # ── /vobiz/answer ────────────────────────────────────────────────────────
@@ -321,6 +340,8 @@ def record_downstream(monkeypatch: pytest.MonkeyPatch) -> List[tuple]:
     monkeypatch.setattr(cb_mod, "spawn_background_task", spawn)
     monkeypatch.setattr(cb_mod, "get_lead_by_call_id", no_lead)
     monkeypatch.setattr(cb_mod, "handle_unanswered_calls", retry)
+    monkeypatch.setattr(plivo_security, "APP_BASE_URL", BASE_URL)
+    monkeypatch.setattr(plivo_security, "PLIVO_AUTH_TOKEN", PLIVO_AUTH_TOKEN)
     return events
 
 
@@ -400,7 +421,9 @@ def test_the_hangup_callback_feeds_the_shared_status_downstream(
     functions for Plivo and Vobiz; only the status read differs."""
     events = record_downstream(monkeypatch)
 
-    r = client.post(f"{PREFIX}/{provider}/callback/status", data=fields)
+    path = f"{PREFIX}/{provider}/callback/status"
+    headers = plivo_headers(path, fields) if provider == "plivo" else {}
+    r = client.post(path, data=fields, headers=headers)
 
     assert r.status_code == 200
     assert events == expected
