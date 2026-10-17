@@ -354,7 +354,8 @@ async def test_in_flight_count_against_postgres():
         await conn.execute("""CREATE TABLE lead_call_tracker (
                 id VARCHAR(255) PRIMARY KEY, telephony_number_id VARCHAR(255),
                 status VARCHAR(50), call_direction VARCHAR(20),
-                execution_mode VARCHAR(50))""")
+                execution_mode VARCHAR(50), meta_data JSONB,
+                call_initiated_time TIMESTAMPTZ)""")
         for provider in ("PLIVO", "EXOTEL", "TWILIO"):
             await conn.execute(
                 "INSERT INTO telephony_numbers (id,number,provider,status) "

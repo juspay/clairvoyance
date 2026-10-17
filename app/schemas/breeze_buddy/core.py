@@ -310,6 +310,13 @@ class PreCheckConfig(BaseModel):
         return self
 
 
+# meta_data key stamped when a call was placed for a lead the merchant had
+# already finished (aborted) during the dial. The call is real and holds a
+# line, but the lead is terminal: its webhooks only return the line, and the
+# answer path hangs up instead of connecting an agent.
+CALL_ATTACHED_AFTER_FINISH = "call_attached_after_finish"
+
+
 class LeadCallTracker(BaseModel):
     """Lead call tracking model"""
 
