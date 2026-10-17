@@ -937,13 +937,24 @@ async def handle_call_completion(
     return updated_lead
 
 
-async def handle_unanswered_calls(call_id: str):
+async def handle_unanswered_calls(
+    call_id: str,
+    *,
+    direction: Optional[str] = None,
+    answered: bool = True,
+):
     """
     Handles unanswered call events.
 
     This is called when a call fails to connect (no-answer, busy, failed).
     It releases the allocated pod (if pod isolation is enabled), cleans up
     resources, and schedules a retry if configured.
+
+    ``direction`` / ``answered`` come from the provider's status form and only
+    matter when no lead exists. An inbound call the caller abandoned while it
+    was still ringing never reached the answer URL, so neither a lead nor a
+    channel was ever created for it — that is not an orphan. Callers that
+    cannot say (missing direction, or an answered call) keep today's alert.
     """
     logger.info(f"Handling unanswered call for call_id: {call_id}")
 
@@ -953,6 +964,16 @@ async def handle_unanswered_calls(call_id: str):
 
     lead = await get_lead_by_call_id(call_id)
     if not lead:
+        if (direction or "").lower() == "inbound" and not answered:
+            # The lead and the channel are both created inside the answer
+            # URL (``_gate_inbound_channel`` -> ``admit_inbound_call`` ->
+            # lead insert). A caller who hung up while ringing never got
+            # there, so there is nothing to release and nothing to page on.
+            logger.info(
+                f"Inbound call {call_id} ended before answer (no lead) — "
+                f"not an orphan, nothing to release."
+            )
+            return
         logger.error(
             f"Could not find lead for call_id: {call_id}. "
             f"Telephony number channel may be leaked — manual cleanup required. "
