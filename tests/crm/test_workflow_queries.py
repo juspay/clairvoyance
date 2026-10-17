@@ -19,6 +19,8 @@ from app.crm.outreach.db.queries.enrollment import (
     source_event_used_query,
 )
 from app.crm.outreach.db.queries.workflow import (
+    live_definition_query,
+    live_plan_versions_query,
     live_workflows_query,
     publish_workflow_query,
     workflow_status_query,
@@ -300,3 +302,35 @@ def test_an_event_moves_a_parked_run_too() -> None:
     assert "status IN ('waiting', 'parked')" in where_clause
     assert "status = 'waiting'" in set_clause
     assert "CASE WHEN status = 'parked' THEN 0 ELSE attempts END" in set_clause
+
+
+def test_routing_read_carries_no_document_at_all() -> None:
+    """Entry asks WHICH plans are live, not what they say. A document on
+    this read is the whole cost the split exists to remove, so neither
+    column may appear — not even the playbook-stripped projection."""
+    sql, values = live_plan_versions_query("m1")
+    assert "definition" not in sql
+    assert "draft" not in sql
+    assert "version" in sql and "status" in sql
+    assert "merchant_id = $1" in sql and "status = 'live'" in sql
+    assert values == ["m1"]
+
+
+def test_the_live_document_read_is_pinned_to_the_version_it_was_asked_for() -> None:
+    """The version is in the WHERE, not only in the cache key: a publish
+    between routing and this read bumps the row, and matching on the
+    version we were routed to is what stops the cache ever holding a
+    document under a version that is not its own."""
+    sql, values = live_definition_query("m1", "wf-1", 7)
+    assert "version = $3" in sql
+    assert "merchant_id = $1" in sql and "id = $2" in sql
+    assert "status = 'live'" in sql
+    assert values == ["m1", "wf-1", 7]
+
+
+def test_the_live_document_read_leaves_the_playbook_in_the_database() -> None:
+    """Same law as the entry read it replaces: the words a call says are
+    read from the run's PINNED version at execute time, never from here."""
+    sql, _ = live_definition_query("m1", "wf-1", 7)
+    assert "definition - 'playbook'" in sql
+    assert "draft" not in sql
