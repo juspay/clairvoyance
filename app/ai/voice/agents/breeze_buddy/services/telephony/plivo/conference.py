@@ -69,6 +69,7 @@ class PlivoConferenceService:
         agent_phone_number: str,
         telephony_number: str,
         customer_call_sid: str,
+        max_duration: Optional[int] = None,
     ) -> Dict:
         """
         Create a new MPC and add the agent as an outbound participant.
@@ -97,6 +98,8 @@ class PlivoConferenceService:
                     stay_alone=True,
                     status_callback_url=status_callback_url,
                     status_callback_events="participant-state-changes",
+                    # MPC-level cap: the rest of the call's max duration.
+                    **({"max_duration": max_duration} if max_duration else {}),
                 ),
             )
 
@@ -179,6 +182,7 @@ class PlivoConferenceService:
         agent_phone_number: str,
         customer_call_sid: str,
         telephony_number: str,
+        max_duration: Optional[int] = None,
     ) -> Dict:
         """
         Execute a warm transfer by dialling the agent into an MPC.
@@ -210,6 +214,7 @@ class PlivoConferenceService:
                 agent_phone_number=agent_phone_number,
                 telephony_number=telephony_number,
                 customer_call_sid=customer_call_sid,
+                max_duration=max_duration,
             )
 
             if not result["success"]:
