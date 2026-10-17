@@ -12,6 +12,7 @@ from app.ai.voice.agents.breeze_buddy.services.daily.zygote import start_zygote
 
 # STEP 3: Now safe to import config and logger
 from app.core.config.static import (
+    DAILY_BOT_ZYGOTE_AT_BOOT,
     ENABLE_REDIS_DYNAMIC_CONFIG,
     HOST,
     PORT,
@@ -80,6 +81,11 @@ if __name__ == "__main__":
             "UVICORN_RELOAD is on: Daily bot zygote disabled (the reloader's "
             "server process cannot reach it). Unset it to use "
             "BB_DAILY_BOT_ZYGOTE; launches fall back to spawning."
+        )
+    elif not DAILY_BOT_ZYGOTE_AT_BOOT:
+        logger.info(
+            "DAILY_BOT_ZYGOTE_AT_BOOT is false: Daily bot zygote not started; "
+            "launches fall back to spawning."
         )
     else:
         try:
