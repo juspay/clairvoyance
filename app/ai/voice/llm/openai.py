@@ -80,6 +80,7 @@ def build_openai_llm(config: OpenAIConfig) -> OpenAILLMService:
             extra["extra_body"] = merged
 
     settings_kwargs: dict[str, Any] = {
+        "model": config.model,
         "temperature": config.temperature,
         "extra": extra,
     }
@@ -91,7 +92,6 @@ def build_openai_llm(config: OpenAIConfig) -> OpenAILLMService:
     service = OpenAILLMService(
         api_key=config.api_key,
         base_url=config.base_url,
-        model=config.model,
         settings=OpenAILLMService.Settings(**settings_kwargs),
         function_call_timeout_secs=config.function_call_timeout_secs,
     )
