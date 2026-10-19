@@ -52,12 +52,12 @@ def test_summary_is_one_merchant_first_statement_with_a_window() -> None:
 
 
 def test_customer_runs_join_the_plan_name_in_entry_order() -> None:
-    sql, params = customer_runs_query("m1", "c-1", 100)
-    assert "e.merchant_id = $1 AND e.customer_id = $2" in sql
+    sql, params = customer_runs_query("m1", ["c-1"], 100)
+    assert "e.merchant_id = $1 AND e.customer_id = ANY($2::uuid[])" in sql
     assert "JOIN crm_workflow w" in sql and "w.name AS workflow_name" in sql
     assert "w.merchant_id = e.merchant_id AND w.id = e.workflow_id" in sql
     assert "ORDER BY e.entered_at, e.id" in sql and "LIMIT $3" in sql
-    assert params == ["m1", "c-1", 100]
+    assert params == ["m1", ["c-1"], 100]
 
 
 def test_goal_cancel_can_stash_the_goal_on_the_runs_it_ends() -> None:

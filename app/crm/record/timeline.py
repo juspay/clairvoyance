@@ -9,6 +9,7 @@ mechanical accessor signature.
 from datetime import datetime
 from typing import List, Optional
 
+from app.crm.identity.contracts import person_records
 from app.crm.record.db import accessor
 from app.crm.record.schemas import JourneyCard
 
@@ -20,6 +21,12 @@ async def get_customer_journey(
     before_started_at: Optional[datetime] = None,
     before_id: Optional[str] = None,
 ) -> List[JourneyCard]:
+    """Her timeline across every record she has (identity's
+    person_records): a merge does not cut the journey in two."""
     return await accessor.get_customer_journey(
-        merchant_id, customer_id, limit, before_started_at, before_id
+        merchant_id,
+        await person_records(merchant_id, customer_id),
+        limit,
+        before_started_at,
+        before_id,
     )

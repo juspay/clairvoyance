@@ -327,6 +327,56 @@ async def test_narrowing_by_topic_and_window_changes_no_answer() -> None:
         await conn.close()
 
 
+async def test_a_merged_record_counts_for_the_survivor_and_is_never_a_member() -> None:
+    """Gap 4 on Postgres: Dev's record (merged) was offered before the merge;
+    Arjun's record (the survivor) was granted after. Grouped by record, the
+    merged one is "offered, not granted" — grouped by person, nobody is. Her
+    two offers on two records are one person's two; the merged id never
+    comes back, and a merchant with no merges reads exactly as before."""
+    conn = await _connect()
+    try:
+        arjun, dev, priya = (str(uuid.UUID(int=n)) for n in (11, 22, 33))
+        merged = {dev: arjun}
+        await _insert(conn, "m", dev, "OFFERED", {})
+        await _insert(conn, "m", arjun, "GRANTED", {})
+        await _insert(conn, "m", priya, "OFFERED", {})
+        rule = {"all": [{"event": "OFFERED"}, {"not": {"event": "GRANTED"}}]}
+
+        async def members(r: Dict[str, Any], m: Optional[Dict[str, str]]) -> List[str]:
+            sql, params = segment_members_query("m", r, _narrow(r), None, 1000, m)
+            return [str(x["customer_id"]) for x in await conn.fetch(sql, *params)]
+
+        async def count(r: Dict[str, Any], m: Optional[Dict[str, str]]) -> int:
+            sql, params = segment_count_query("m", r, _narrow(r), m)
+            return int(await conn.fetchval(sql, *params) or 0)
+
+        # By record (what it was): Dev's record is wrongly in.
+        assert sorted(await members(rule, None)) == sorted([dev, priya])
+        # By person: she was granted, so only Priya.
+        assert await members(rule, merged) == [priya]
+        assert await count(rule, merged) == 1
+        # Twice offered across her two records = twice, as one person.
+        await _insert(conn, "m", arjun, "OFFERED", {})
+        twice = {"event": "OFFERED", "at_least": 2}
+        assert await members(twice, None) == []
+        assert await members(twice, merged) == [arjun]
+        # "Never granted" — the universe is people too: the merged id is gone.
+        never = {"not": {"event": "GRANTED"}}
+        assert await members(never, merged) == [priya]
+        # Keyset pages walk persons once: Arjun, then Priya, then nobody.
+        offered = {"event": "OFFERED"}
+        pages: List[List[str]] = []
+        after: Optional[str] = None
+        for _ in range(3):
+            sql, params = segment_members_query("m", offered, True, after, 1, merged)
+            page = [str(x["customer_id"]) for x in await conn.fetch(sql, *params)]
+            pages.append(page)
+            after = page[-1] if page else after
+        assert pages == [[arjun], [priya], []]
+    finally:
+        await conn.close()
+
+
 async def test_at_least_counts_matching_events_only() -> None:
     conn = await _connect()
     try:
