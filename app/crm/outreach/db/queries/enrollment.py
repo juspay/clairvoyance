@@ -122,6 +122,7 @@ def insert_enrollment_query(
     wake_at: datetime,
     context: Dict[str, Any],
     enrollment_key: str,
+    source_broadcast_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """The token is born. The partial unique (merchant, workflow, key)
     WHERE not exited absorbs the enrol race — a UniqueViolation here
@@ -132,13 +133,16 @@ def insert_enrollment_query(
     not been left — but the arrival has to be on the row before the first
     flush can date it. Equal to entered_at is also what lets
     steps.first_arrival read `door` with no stored flag, for exactly as
-    long as the run has never moved."""
+    long as the run has never moved.
+
+    source_broadcast_id is the spark (canon T20 col 18): the broadcast that
+    admitted the run, stamped at write; NULL for a run an event started."""
     query = f"""
         INSERT INTO {ENROLLMENT_TABLE}
             (merchant_id, workflow_id, workflow_version, customer_id,
              current_node, wake_at, context, enrollment_key,
-             entered_at, node_arrived_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
+             source_broadcast_id, entered_at, node_arrived_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::uuid, now(), now())
         RETURNING {_RUN_COLUMNS}
     """
     return query, [
@@ -150,6 +154,7 @@ def insert_enrollment_query(
         wake_at,
         json.dumps(context),
         enrollment_key,
+        source_broadcast_id,
     ]
 
 

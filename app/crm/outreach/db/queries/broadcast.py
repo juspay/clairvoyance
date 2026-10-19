@@ -5,13 +5,20 @@ one file. $1 placeholders only; merchant_id is $1 on every read and write.
 from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
-from app.crm.outreach.db.queries.tables import BROADCAST_TABLE
+from app.crm.outreach.db.queries.tables import (
+    BROADCAST_RECIPIENT_TABLE,
+    BROADCAST_TABLE,
+    WORKFLOW_TABLE,
+)
 
 _BROADCAST_COLUMNS = """
     id, merchant_id, name, campaign_key, segment_id, workflow_id, status,
     scheduled_for, resolved_at, dispatched_at, closed_at, created_by, created_at,
     attempts, last_error
 """
+_BROADCAST_COLUMNS_OF_B = ", ".join(
+    f"b.{c.strip()}" for c in _BROADCAST_COLUMNS.split(",")
+)
 
 
 def insert_broadcast_query(
@@ -206,3 +213,78 @@ def record_freeze_error_query(
         WHERE merchant_id = $1 AND id = $2 AND status = 'resolving'
     """
     return query, [merchant_id, broadcast_id, last_error]
+
+
+def admission_candidates_query(limit: int) -> Tuple[str, List[Any]]:
+    """Phase 3, the broadcaster's queue across merchants (the claim_due_runs
+    precedent): broadcasts with admission work — dispatching, their workflow
+    not paused (a paused plan holds its broadcast's queue, as the walker
+    holds its runs), and either a queued row to admit or nothing left
+    waiting at all (the last step: sent). One whose only waiting rows are
+    claimed is another pod's page, or a dead pod's the reaper will release.
+    Oldest broadcast first. No lock: the page claim on the rows is the lock
+    (SKIP LOCKED), so two pods share one broadcast safely. The table stays
+    small — broadcasts are a merchant's deliberate launches."""
+    query = f"""
+        SELECT {_BROADCAST_COLUMNS_OF_B}
+        FROM {BROADCAST_TABLE} b
+        JOIN {WORKFLOW_TABLE} w
+          ON w.merchant_id = b.merchant_id AND w.id = b.workflow_id
+        WHERE b.status = 'dispatching' AND w.status <> 'paused'
+          AND (
+            EXISTS (
+                SELECT 1 FROM {BROADCAST_RECIPIENT_TABLE} r
+                WHERE r.broadcast_id = b.id AND r.status = 'queued'
+            )
+            OR NOT EXISTS (
+                SELECT 1 FROM {BROADCAST_RECIPIENT_TABLE} r
+                WHERE r.broadcast_id = b.id AND r.status IN ('queued', 'claimed')
+            )
+          )
+        ORDER BY b.scheduled_for, b.id
+        LIMIT $1
+    """
+    return query, [limit]
+
+
+def share_lock_broadcast_query(
+    merchant_id: str, broadcast_id: str
+) -> Tuple[str, List[Any]]:
+    """Inside an admission atom: the broadcast row FOR SHARE. Admitting pods
+    share it; a cancel (FOR UPDATE) waits for the person being admitted and
+    is then seen by the next one — no run starts after the cancel."""
+    query = f"""
+        SELECT status
+        FROM {BROADCAST_TABLE}
+        WHERE merchant_id = $1 AND id = $2
+        FOR SHARE
+    """
+    return query, [merchant_id, broadcast_id]
+
+
+def mark_fired_query(merchant_id: str, broadcast_id: str) -> Tuple[str, List[Any]]:
+    """The first admission: dispatched_at — "fired" (canon T17: "frozen
+    Friday 09:58, fired 10:00"). Once: a later page never moves it."""
+    query = f"""
+        UPDATE {BROADCAST_TABLE}
+        SET dispatched_at = now()
+        WHERE merchant_id = $1 AND id = $2 AND dispatched_at IS NULL
+    """
+    return query, [merchant_id, broadcast_id]
+
+
+def finish_dispatch_query(merchant_id: str, broadcast_id: str) -> Tuple[str, List[Any]]:
+    """Admission is over: dispatching -> sent (canon T17 col 11: "sent =
+    dispatch over") — only once no row waits, queued or claimed, so a page
+    still in another pod's hands finishes first."""
+    query = f"""
+        UPDATE {BROADCAST_TABLE} b
+        SET status = 'sent'
+        WHERE b.merchant_id = $1 AND b.id = $2 AND b.status = 'dispatching'
+          AND NOT EXISTS (
+            SELECT 1 FROM {BROADCAST_RECIPIENT_TABLE} r
+            WHERE r.broadcast_id = b.id AND r.status IN ('queued', 'claimed')
+          )
+        RETURNING {_BROADCAST_COLUMNS_OF_B}
+    """
+    return query, [merchant_id, broadcast_id]
