@@ -87,13 +87,13 @@ async def quarantine_event(conn: DbTxn, event_id: str, reason: str) -> None:
 
 async def get_customer_journey(
     merchant_id: str,
-    customer_id: str,
+    customer_ids: List[str],
     limit: int = 50,
     before_started_at: Optional[datetime] = None,
     before_id: Optional[str] = None,
 ) -> List[JourneyCard]:
     query, values = get_customer_journey_query(
-        merchant_id, customer_id, limit, before_started_at, before_id
+        merchant_id, customer_ids, limit, before_started_at, before_id
     )
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
@@ -102,13 +102,13 @@ async def get_customer_journey(
 
 async def customer_has_event(
     merchant_id: str,
-    customer_id: str,
+    customer_ids: List[str],
     topics: List[str],
     since: datetime,
     where: Optional[Tuple[str, str]] = None,
 ) -> bool:
     query, values = customer_has_event_query(
-        merchant_id, customer_id, topics, since, where
+        merchant_id, customer_ids, topics, since, where
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
@@ -121,17 +121,22 @@ async def customers_matching(
     narrow: bool,
     after: Optional[str],
     limit: int,
+    merged: Dict[str, str],
 ) -> List[str]:
     """A segment's answer is a report-shaped read over the whole event log:
     the replica, as the console's reports (a few seconds behind; the count
     carries computed_at to say so)."""
-    query, values = segment_members_query(merchant_id, rule, narrow, after, limit)
+    query, values = segment_members_query(
+        merchant_id, rule, narrow, after, limit, merged
+    )
     rows = await crm_replica_read(query, values)
     return [str(row["customer_id"]) for row in rows]
 
 
-async def count_matching(merchant_id: str, rule: Any, narrow: bool) -> int:
-    query, values = segment_count_query(merchant_id, rule, narrow)
+async def count_matching(
+    merchant_id: str, rule: Any, narrow: bool, merged: Dict[str, str]
+) -> int:
+    query, values = segment_count_query(merchant_id, rule, narrow, merged)
     rows = await crm_replica_read(query, values)
     return int(rows[0]["n"]) if rows else 0
 

@@ -112,16 +112,17 @@ async def admission_facts(
     conn: asyncpg.Connection,
     merchant_id: str,
     workflow_id: str,
-    customer_id: str,
+    customer_ids: List[str],
     enrollment_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     query, values = admission_facts_query(
-        merchant_id, workflow_id, customer_id, enrollment_key
+        merchant_id, workflow_id, customer_ids, enrollment_key
     )
     row = await conn.fetchrow(query, *values)
     return {
         "runs": row["runs"] if row else 0,
         "latest_entered_at": row["latest_entered_at"] if row else None,
+        "open_runs": row["open_runs"] if row else 0,
     }
 
 
@@ -129,11 +130,11 @@ async def source_event_used(
     conn: asyncpg.Connection,
     merchant_id: str,
     workflow_id: str,
-    customer_id: str,
+    customer_ids: List[str],
     source_event_id: str,
 ) -> bool:
     query, values = source_event_used_query(
-        merchant_id, workflow_id, customer_id, source_event_id
+        merchant_id, workflow_id, customer_ids, source_event_id
     )
     row = await conn.fetchrow(query, *values)
     return bool(row["used"]) if row else False
@@ -252,9 +253,9 @@ async def get_run(
 
 
 async def open_runs_for_customer(
-    merchant_id: str, customer_id: str
+    merchant_id: str, customer_ids: List[str]
 ) -> List[EnrollmentRun]:
-    query, values = open_runs_for_customer_query(merchant_id, customer_id)
+    query, values = open_runs_for_customer_query(merchant_id, customer_ids)
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_run(row) for row in rows]
@@ -500,9 +501,9 @@ async def workflow_open_runs(merchant_id: str, workflow_id: str) -> WorkflowOpen
 
 
 async def customer_runs(
-    merchant_id: str, customer_id: str, limit: int
+    merchant_id: str, customer_ids: List[str], limit: int
 ) -> List[CustomerRun]:
     """A customer's journey in the console: the replica."""
-    query, values = customer_runs_query(merchant_id, customer_id, limit)
+    query, values = customer_runs_query(merchant_id, customer_ids, limit)
     rows = await crm_replica_read(query, values)
     return [decode_customer_run(row) for row in rows]

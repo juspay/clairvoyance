@@ -401,7 +401,7 @@ class _Admits:
     async def admission_facts(
         self, txn: Any, *args: Any, **kwargs: Any
     ) -> Dict[str, Any]:
-        return {"runs": 0, "latest_entered_at": None}
+        return {"runs": 0, "latest_entered_at": None, "open_runs": 0}
 
     async def lock_templates_shared(self, txn: Any, *args: Any) -> None:
         return None
@@ -516,6 +516,7 @@ def test_a_replayed_letter_is_a_named_refusal_not_a_silence(
             str(uuid4()),
             {"source_event_id": "evt-1"},
             "k1",
+            ["c-1"],
         )
     )
 

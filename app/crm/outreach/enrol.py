@@ -7,9 +7,10 @@ gather (admission facts) -> decide (PURE) -> apply (insert), one atom.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
+from app.crm.identity.contracts import person_records
 from app.crm.outreach.db import DbTxn, UniqueViolation, atomically
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
@@ -102,13 +103,16 @@ async def enrol(
     context: Dict[str, Any],
     enrollment_key: Optional[str] = None,
     door: Optional[WorkflowEntryAt] = None,
+    person: Optional[List[str]] = None,
 ) -> Optional[EnrollmentRun]:
     """Admit one customer into one live plan through one door (phase 15:
     the door names the square the run starts on; None = the plan's first
     door). Returns the run, or None when a guard (or the open-run unique)
     said no — a refusal is a normal outcome, never an error. context
     carries pointers + the small facts the sends need ({source_event_id,
-    phone, ...}), never payloads."""
+    phone, ...}), never payloads. ``person`` is every record of this
+    customer (identity's person_records) when the caller already has it;
+    the guards judge the person's history, never one record's."""
     if workflow.status != "live" or not workflow.definition:
         _log_skipped(
             merchant_id,
@@ -118,6 +122,7 @@ async def enrol(
         )
         return None
     definition = WorkflowDefinition.model_validate(workflow.definition)
+    records = person or await person_records(merchant_id, customer_id)
     try:
         run = await atomically(
             _enrol_in_txn,
@@ -128,6 +133,7 @@ async def enrol(
             customer_id,
             context,
             enrollment_key or customer_id,
+            records,
         )
     except UniqueViolation:
         # The open-run partial unique IS the race arbiter: two entry
@@ -167,6 +173,7 @@ async def _enrol_in_txn(
     customer_id: str,
     context: Dict[str, Any],
     enrollment_key: str,
+    records: List[str],
 ) -> Optional[EnrollmentRun]:
     """ATOMIC: the admission facts and the insert share one fate — the
     guards must judge the same history the new row joins, and the
@@ -175,7 +182,7 @@ async def _enrol_in_txn(
     retirement cannot commit between its count and this insert."""
     source_event_id = context.get("source_event_id")
     if source_event_id and await enrollment_accessor.source_event_used(
-        txn, merchant_id, str(workflow.id), customer_id, str(source_event_id)
+        txn, merchant_id, str(workflow.id), records, str(source_event_id)
     ):
         # This event already made its run (at-least-once scan). Named like
         # every other refusal: unlogged, it is the one way "events arriving,
@@ -190,18 +197,30 @@ async def _enrol_in_txn(
 
     # Keyed plan: the guards judge THIS key's history (B2 — "one run per
     # <field>" means reenter/cooldown are about the order, not the
-    # customer). Unkeyed: the key is the customer id and the read is hers.
+    # customer). Unkeyed: the key is the customer id and the read is hers —
+    # every record of her (a merge staples, never melts).
     facts = await enrollment_accessor.admission_facts(
         txn,
         merchant_id,
         str(workflow.id),
-        customer_id,
+        records,
         enrollment_key=enrollment_key if door.key else None,
     )
     now = datetime.now(timezone.utc)
     admit, reason = _admission(door, facts["runs"], facts["latest_entered_at"], now)
     if not admit:
         _log_skipped(merchant_id, str(workflow.id), reason, customer_id=customer_id)
+        return None
+    if facts["open_runs"]:
+        # Re-entry allowed, but a run of hers is still open — started on
+        # another of her records, which the open-run unique (per key, and
+        # unkeyed the key is the record's id) cannot see. For a customer
+        # never merged this is the same refusal the unique gives below.
+        # ponytail: two records enrolled in the SAME instant both pass this
+        # read; the unique cannot span ids. Only a merge racing an enrol.
+        _log_skipped(
+            merchant_id, str(workflow.id), "open_run_exists", customer_id=customer_id
+        )
         return None
 
     start = next((node for node in definition.nodes if node.id == door.start), None)

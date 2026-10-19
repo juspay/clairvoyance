@@ -59,11 +59,14 @@ beside the Python evaluator over a grid of payloads and every op.
 
 Who is counted (v1):
 
-- A customer is the `customer_id` stamped on the merchant's events. A merge
-  is not followed yet: events stamped before a merge still count under the
-  merged-away id. The follow-up reads across the pair at query time
-  (canon/01-identity.md: `id = $2 OR merged_into_id = $2`), never by
-  re-stamping events — a merge is undone with one UPDATE, a re-stamp is not.
+- A customer is a **person**. When records were merged (identity staples the
+  younger record to the older), the merged-away record's events count for
+  the survivor, and a merged-away id is never a member: record asks identity
+  for the merchant's merged records (`merged_pairs`) and groups by the
+  survivor, reading across the pair at query time (canon/01-identity.md:
+  `id = $2 OR merged_into_id = $2`). Events are never re-stamped — a merge
+  is undone with one UPDATE, a re-stamp is not. A merchant with no merges
+  gets exactly the SQL it got before.
 - A rule that holds with no events ("never ordered" — `{"not": {"event":
   "orders/create"}}`) is answered over everyone who has sent the merchant at
   least one event. Someone known only from an uploaded list is in no dynamic
