@@ -150,6 +150,7 @@ async def insert_enrollment(
     wake_at: datetime,
     context: Dict[str, Any],
     enrollment_key: str,
+    source_broadcast_id: Optional[str] = None,
 ) -> EnrollmentRun:
     query, values = insert_enrollment_query(
         merchant_id,
@@ -160,6 +161,7 @@ async def insert_enrollment(
         wake_at,
         context,
         enrollment_key,
+        source_broadcast_id,
     )
     row = await conn.fetchrow(query, *values)
     assert row is not None  # INSERT ... RETURNING always yields the row

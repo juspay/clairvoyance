@@ -11,8 +11,12 @@ import asyncpg
 
 from app.crm.outreach.db.queries.broadcast_recipient import (
     cancel_queued_recipients_query,
+    claim_page_query,
     insert_recipients_query,
     last_frozen_customer_query,
+    reap_stale_claims_query,
+    release_claims_query,
+    settle_recipient_query,
 )
 from app.crm.shared.db import crm_connection
 
@@ -36,3 +40,38 @@ async def last_frozen_customer(merchant_id: str, broadcast_id: str) -> Optional[
     async with crm_connection() as conn:
         customer_id = await conn.fetchval(query, *values)
     return str(customer_id) if customer_id else None
+
+
+async def claim_page(broadcast_id: str, claimed_by: str, limit: int) -> List[str]:
+    """The claimed customer ids, in key order."""
+    query, values = claim_page_query(broadcast_id, claimed_by, limit)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return sorted(str(row["customer_id"]) for row in rows)
+
+
+async def settle_recipient(
+    conn: asyncpg.Connection,
+    broadcast_id: str,
+    customer_id: str,
+    status: str,
+    skip_reason: Optional[str],
+) -> bool:
+    """Inside the per-person atom. False: the row was no longer claimed."""
+    query, values = settle_recipient_query(
+        broadcast_id, customer_id, status, skip_reason
+    )
+    return await conn.fetchval(query, *values) is not None
+
+
+async def release_claims(broadcast_id: str, customer_ids: List[str]) -> None:
+    query, values = release_claims_query(broadcast_id, customer_ids)
+    async with crm_connection() as conn:
+        await conn.execute(query, *values)
+
+
+async def reap_stale_claims(lease_minutes: int) -> int:
+    """How many rows went back to the queue."""
+    query, values = reap_stale_claims_query(lease_minutes)
+    async with crm_connection() as conn:
+        return len(await conn.fetch(query, *values))

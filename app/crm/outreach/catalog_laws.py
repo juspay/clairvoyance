@@ -51,30 +51,8 @@ def entry_against_catalog(
     if catalogs is None:
         return []  # nothing gathered (pure-unit callers): shape laws only
     problems: List[str] = []
-    mapped = [
-        (node.id, blank, fact)
-        for node in definition.nodes
-        if node.type == "send"
-        for blank, fact in node.variables.items()
-    ]
-    # An action square's args ask the run for facts by the same names a send
-    # node's variables do — `{id}` on an args value and `{id}` on the right of
-    # a variables map are the same lookup against the same run_facts. So they
-    # answer to the same allow-list: without this, `{order_id}` on a door
-    # whose topic declares only `id` publishes cleanly and parks on the first
-    # run, which is the failure the send-side check exists to prevent.
-    asked = [
-        (node.id, name)
-        for node in definition.nodes
-        if node.type == "action"
-        for name in placeholder_names(node.args)
-    ]
-    # A playbook line's {hole} is the same lookup against the same run_facts
-    # as an args placeholder, so it answers to the same allow-list. Without
-    # this, a line naming {order_id} on a door whose topic declares only `id`
-    # publishes cleanly and parks on the first call — with the agent already
-    # dialled, which is later than an args hole fails.
-    asked += [("playbook", name) for name in line_holes(definition)]
+    mapped = _mapped_facts(definition)
+    asked = _asked_facts(definition)
     listened = listened_facts(definition, catalogs)
     open_squares = unenumerable_squares(definition, catalogs)
     blocks = block_names(definition)
@@ -143,6 +121,89 @@ def entry_against_catalog(
 # Facts the walker computes for a template at the square (nodes.run_facts,
 # phase 16) — never a producer's, so no catalog declares them.
 _WALKER_FACTS = frozenset({"current_node", "current_stage"})
+
+#: What a run a broadcast admitted carries (admission.py): it has no
+#: founding event, so no letter's fields — her phone and her name, read
+#: from identity at admission.
+BROADCAST_FACTS = frozenset({"phone", "customer_name"})
+
+
+def _mapped_facts(definition: WorkflowDefinition) -> List[tuple]:
+    """PURE: (node, blank, fact) for every send node's variables map."""
+    return [
+        (node.id, blank, fact)
+        for node in definition.nodes
+        if node.type == "send"
+        for blank, fact in node.variables.items()
+    ]
+
+
+def _asked_facts(definition: WorkflowDefinition) -> List[tuple]:
+    """PURE: (node or "playbook", name) for every fact asked by name.
+
+    An action square's args ask the run for facts by the same names a send
+    node's variables do — `{id}` on an args value and `{id}` on the right of
+    a variables map are the same lookup against the same run_facts. So they
+    answer to the same allow-list: without this, `{order_id}` on a door
+    whose topic declares only `id` publishes cleanly and parks on the first
+    run, which is the failure the send-side check exists to prevent.
+
+    A playbook line's {hole} is the same lookup against the same run_facts
+    as an args placeholder, so it answers to the same allow-list. Without
+    this, a line naming {order_id} on a door whose topic declares only `id`
+    publishes cleanly and parks on the first call — with the agent already
+    dialled, which is later than an args hole fails."""
+    asked = [
+        (node.id, name)
+        for node in definition.nodes
+        if node.type == "action"
+        for name in placeholder_names(node.args)
+    ]
+    return asked + [("playbook", name) for name in line_holes(definition)]
+
+
+def broadcast_problems(definition: WorkflowDefinition, catalogs: Catalogs) -> List[str]:
+    """PURE: what stops a broadcast from launching this plan. A broadcast
+    admits through the plan's first door (canon/06-outreach.md:41-43) with
+    no founding event, so:
+    - a door keyed "one run per <field>" has no <field> to give — every
+      person would be skipped (canon T20 col 13: the key comes from the
+      letter);
+    - a fact a send, an action or a playbook line asks for must be one the
+      run carries (BROADCAST_FACTS), the walker computes, or a listened
+      square delivers — else every run parks at that square, held for the
+      merchant to resume (canon T20 col 6), a broadcast at a time."""
+    problems: List[str] = []
+    key = definition.entries[0].key
+    if key:
+        problems.append(
+            f"workflow_id: the workflow starts one run per {key!r} — a broadcast "
+            f"has no {key!r} to give; launch a workflow without entry.key"
+        )
+    if catalogs is None:
+        return problems
+    allowed = BROADCAST_FACTS | _WALKER_FACTS | listened_facts(definition, catalogs)
+    open_squares = unenumerable_squares(definition, catalogs)
+    carried = ", ".join(sorted(BROADCAST_FACTS))
+    for node_id, blank, fact in _mapped_facts(definition):
+        if fact not in allowed and not _from_open_square(fact, open_squares):
+            problems.append(
+                f"workflow_id: send node {node_id}: variable {blank!r} <- {fact!r} "
+                f"is not something a broadcast run carries — it has no founding "
+                f"event (it carries: {carried})"
+            )
+    for node_id, name in _asked_facts(definition):
+        if name not in allowed and not _from_open_square(name, open_squares):
+            where = (
+                "a playbook line asks"
+                if node_id == "playbook"
+                else f"action node {node_id}: args ask"
+            )
+            problems.append(
+                f"workflow_id: {where} for {{{name}}}, which a broadcast run does "
+                f"not carry — it has no founding event (it carries: {carried})"
+            )
+    return problems
 
 
 def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
