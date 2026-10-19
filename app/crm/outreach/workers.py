@@ -1,7 +1,12 @@
-"""The walker role's two callables for the shared drain loop (registered
-in app/crm/worker_main.py under CRM_ROLE=walker). Loop mechanics are the
-scaffold's; this module supplies the claim (the wake_at lease push, canon
-T20) and the handler (walker.py).
+"""The walker role's and the broadcaster role's callables for the shared
+drain loop (registered in app/crm/worker_main.py under CRM_ROLE=walker and
+CRM_ROLE=broadcaster). Loop mechanics are the scaffold's; this module
+supplies each claim and handler.
+
+The broadcaster runs ONE loop with two jobs (design/worker-runtime.md: no
+pod runs two loops): a due freeze first — an audience must be frozen before
+it can be admitted — else one admission page. Its reaper (canon T18 col 11)
+is housekeeping on the same claim, the retention sweep's pattern below.
 
 The retention sweep (canon T20 exited_at: "exited rows age out") is
 housekeeping on the same loop, not a second one: the claim callable runs
@@ -13,15 +18,25 @@ the event worker's pass calls (entry.py), never a loop of ours.
 """
 
 import time
-from typing import List
+from typing import List, Literal, NamedTuple
 
 from app.core.config.static import CRM_RUN_SWEEP_INTERVAL_SECONDS
 from app.crm.outreach import walker
+from app.crm.outreach.admission import (
+    admission_candidates,
+    admit_page,
+    release_stale_claims,
+)
+from app.crm.outreach.broadcasts import claim_due_freezes, freeze_broadcast
 from app.crm.outreach.runs import run_retention_sweep_tick
-from app.crm.outreach.schemas import EnrollmentRun
+from app.crm.outreach.schemas import Broadcast, EnrollmentRun
 from app.crm.outreach.walker import walk_run
 
 _last_sweep_at = float("-inf")
+_last_reap_at = float("-inf")
+
+#: How often the broadcaster's reaper looks for claims a dead pod left.
+REAP_INTERVAL_SECONDS = 60.0
 
 
 async def claim_due_runs(batch: int) -> List[EnrollmentRun]:
@@ -33,4 +48,40 @@ async def claim_due_runs(batch: int) -> List[EnrollmentRun]:
     return await walker.claim_due_runs(batch)
 
 
-__all__ = ["claim_due_runs", "walk_run"]
+class BroadcasterJob(NamedTuple):
+    """One unit of the broadcaster's work: freeze a broadcast's audience, or
+    admit one page of it."""
+
+    kind: Literal["freeze", "admit"]
+    broadcast: Broadcast
+
+
+async def claim_broadcaster_work(batch: int) -> List[BroadcasterJob]:
+    """Due freezes first; when none, broadcasts with admission work."""
+    global _last_reap_at
+    now = time.monotonic()
+    if now - _last_reap_at >= REAP_INTERVAL_SECONDS:
+        _last_reap_at = now
+        await release_stale_claims()
+    frozen = await claim_due_freezes(batch)
+    if frozen:
+        return [BroadcasterJob("freeze", broadcast) for broadcast in frozen]
+    return [
+        BroadcasterJob("admit", broadcast)
+        for broadcast in await admission_candidates(batch)
+    ]
+
+
+async def do_broadcaster_work(job: BroadcasterJob) -> None:
+    if job.kind == "freeze":
+        await freeze_broadcast(job.broadcast)
+    else:
+        await admit_page(job.broadcast)
+
+
+__all__ = [
+    "claim_due_runs",
+    "walk_run",
+    "claim_broadcaster_work",
+    "do_broadcaster_work",
+]

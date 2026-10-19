@@ -10,18 +10,22 @@ import asyncpg
 
 from app.crm.outreach.db.decoders.broadcast import decode_broadcast
 from app.crm.outreach.db.queries.broadcast import (
+    admission_candidates_query,
     cancel_broadcast_query,
     claim_due_freezes_query,
     count_broadcasts_query,
     fail_freeze_query,
+    finish_dispatch_query,
     finish_freeze_query,
     get_broadcast_query,
     insert_broadcast_query,
     list_broadcasts_query,
     lock_broadcast_query,
+    mark_fired_query,
     record_freeze_error_query,
     renew_freeze_lease_query,
     schedule_broadcast_query,
+    share_lock_broadcast_query,
 )
 from app.crm.outreach.schemas import Broadcast
 from app.crm.shared.db import crm_connection
@@ -133,3 +137,33 @@ async def record_freeze_error(
     query, values = record_freeze_error_query(merchant_id, broadcast_id, last_error)
     async with crm_connection() as conn:
         await conn.execute(query, *values)
+
+
+async def admission_candidates(limit: int) -> List[Broadcast]:
+    query, values = admission_candidates_query(limit)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_broadcast(row) for row in rows]
+
+
+async def share_lock_broadcast(
+    conn: asyncpg.Connection, merchant_id: str, broadcast_id: str
+) -> Optional[str]:
+    """Inside an admission atom: the status, the row held FOR SHARE."""
+    query, values = share_lock_broadcast_query(merchant_id, broadcast_id)
+    row = await conn.fetchrow(query, *values)
+    return row["status"] if row else None
+
+
+async def mark_fired(merchant_id: str, broadcast_id: str) -> None:
+    query, values = mark_fired_query(merchant_id, broadcast_id)
+    async with crm_connection() as conn:
+        await conn.execute(query, *values)
+
+
+async def finish_dispatch(merchant_id: str, broadcast_id: str) -> Optional[Broadcast]:
+    """The broadcast, now sent — or None while a row still waits."""
+    query, values = finish_dispatch_query(merchant_id, broadcast_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_broadcast(row) if row else None
