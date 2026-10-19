@@ -15,12 +15,11 @@ compiler a rule it cannot answer honestly:
   fail the merchant's whole query. Recency is the event's own `within_days`.
 
 Who is counted (v1):
-- a customer is the customer_id stamped on the merchant's events. A merge is
-  not followed yet: events stamped before a merge still count under the
-  merged-away id. The follow-up reads across the pair at query time —
-  canon/01-identity.md's `id = $2 OR merged_into_id = $2` — never by
-  re-stamping events: a merge is undone with one UPDATE, a re-stamp is not.
-  Until then a merged-away id can be in an answer;
+- a customer is a PERSON: the events of a merged-away record count for the
+  survivor (identity's merged_pairs, read across the pair at query time —
+  canon/01-identity.md `id = $2 OR merged_into_id = $2`), and a merged-away
+  id is never in an answer. Events are never re-stamped: a merge is undone
+  with one UPDATE, a re-stamp is not;
 - a rule that holds for a customer with NO events ("never ordered") is
   answered over everyone who has sent this merchant at least one event —
   the people record knows. Someone known only from an uploaded list is in
@@ -29,6 +28,7 @@ Who is counted (v1):
 
 from typing import Any, List, Optional
 
+from app.crm.identity.contracts import merged_pairs
 from app.crm.record.db import ReadUnavailable, accessor
 from app.crm.record.extractors.engine import PAYLOAD_PREFIX
 from app.crm.shared.predicate import EQUALS_OP, ORDER_OPS, as_number
@@ -102,7 +102,12 @@ async def customers_matching(
     _refuse_unanswerable(rule)
     try:
         return await accessor.customers_matching(
-            merchant_id, rule, _narrow(rule), after, limit
+            merchant_id,
+            rule,
+            _narrow(rule),
+            after,
+            limit,
+            await merged_pairs(merchant_id),
         )
     except ReadUnavailable as e:
         raise SegmentAnswerUnavailable(str(e)) from e
@@ -113,7 +118,9 @@ async def count_matching(merchant_id: str, rule: Any) -> int:
     SegmentRuleUnanswerable, or SegmentAnswerUnavailable."""
     _refuse_unanswerable(rule)
     try:
-        return await accessor.count_matching(merchant_id, rule, _narrow(rule))
+        return await accessor.count_matching(
+            merchant_id, rule, _narrow(rule), await merged_pairs(merchant_id)
+        )
     except ReadUnavailable as e:
         raise SegmentAnswerUnavailable(str(e)) from e
 

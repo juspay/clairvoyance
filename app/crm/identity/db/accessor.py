@@ -23,6 +23,8 @@ from app.crm.identity.db.queries import (
     insert_customer_query,
     list_customers_query,
     merge_customer_query,
+    merged_pairs_query,
+    person_records_query,
     probe_customer_query,
     select_attributes_by_id_query,
     select_attributes_for_update_by_id_query,
@@ -90,6 +92,22 @@ async def merge_customer(
 ) -> None:
     query, values = merge_customer_query(loser_id, survivor_id)
     await conn.execute(query, *values)
+
+
+async def person_records(merchant_id: str, customer_id: str) -> List[str]:
+    """The person's record ids, survivor first; empty for an unknown id."""
+    query, values = person_records_query(merchant_id, customer_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [str(row["id"]) for row in rows]
+
+
+async def merged_pairs(merchant_id: str) -> Dict[str, str]:
+    """Stapled row id -> the survivor it points at."""
+    query, values = merged_pairs_query(merchant_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return {str(row["id"]): str(row["merged_into_id"]) for row in rows}
 
 
 async def fetch_attributes_for_update(
