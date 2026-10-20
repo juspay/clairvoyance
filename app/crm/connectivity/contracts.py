@@ -28,10 +28,13 @@ What is here, and why each thing is on the surface:
   is the DEFECT half of the two failures, and the walker parks on it while
   anything else retries. The connector's own ``args_model`` is the contract,
   so no transport, URL or credential is ever authored in a plan.
-- ``onboard`` / ``get_installation`` / ``list_installations`` / ``disconnect``
-  — connector accounts and the pipes under them. Connector-agnostic:
-  ``onboard`` takes a connector_key and a payload, and the CONNECTORS
-  registry decides what that payload means.
+- ``onboard`` / ``get_installation`` / ``get_installation_for_connector`` /
+  ``list_installations`` / ``disconnect`` — connector accounts and the pipes
+  under them. Connector-agnostic: ``onboard`` takes a connector_key and a
+  payload, and the CONNECTORS registry decides what that payload means.
+  ``get_installation_for_connector`` is the fail-closed door read — the same
+  door ``perform_action`` acts through, surfaced so outreach's publish can
+  approve a named door while the author is still editing (phase 08).
 - the ``*_template`` family — the T23 registry that ``send.py`` resolves
   against before any provider call.
 - ``template_status`` / ``registers_templates_for`` — what outreach's
@@ -71,6 +74,7 @@ route resolver, and so do the provider packages.
 """
 
 from app.crm.connectivity.actions import (
+    action_declares,
     action_names,
     perform_action,
     validate_action_args,
@@ -78,10 +82,11 @@ from app.crm.connectivity.actions import (
 from app.crm.connectivity.channels import registers_templates_for
 from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.dispatch import claim_sends, dispatch_send
-from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.ingress import META_INGRESS, XYNE_INGRESS
 from app.crm.connectivity.onboarding import (
     disconnect,
     get_installation,
+    get_installation_for_connector,
     list_installations,
     onboard,
     resubscribe,
@@ -114,12 +119,14 @@ __all__ = [
     # asking a connector to act (the walker's action square)
     "perform_action",
     "action_names",
+    "action_declares",
     "validate_action_args",
     "ActionError",
     # connections
     "signup_config",
     "onboard",
     "get_installation",
+    "get_installation_for_connector",
     "list_installations",
     "disconnect",
     # the template registry
@@ -144,4 +151,5 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    "XYNE_INGRESS",
 ]

@@ -1,0 +1,50 @@
+{
+  "name": "Xyne postMessage -> async reply -> goal (RUNNABLE)",
+  "on_publish": "pin",
+  "entry": {
+    "topic": "message.inbound",
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "goals": [
+    {
+      "topics": [
+        "message.inbound"
+      ],
+      "key": {
+        "event": "conversationId",
+        "run": "conversationId"
+      },
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 7
+  },
+  "nodes": [
+    {
+      "id": "http-post-message",
+      "type": "action",
+      "connector": "merchant_http",
+      "action": "request",
+      "door_name": "mock-xyne",
+      "args": {
+        "path": "/api/apps/chat/postMessage",
+        "method": "POST",
+        "body": {
+          "type": "message",
+          "text": "Demo: entry column waits for the async reply after this form was submitted.",
+          "context": {
+            "userId": "{sender_name}",
+            "conversationId": "{reply}"
+          }
+        },
+        "facts": {
+          "conversationId": "conversationId"
+        }
+      }
+    }
+  ],
+  "edges": [],
+  "purpose_key": "xyne.postmessage.run"
+}

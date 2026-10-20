@@ -78,6 +78,60 @@ def _envelope(*values: Dict[str, Any]) -> bytes:
     ).encode()
 
 
+# --- XyneSpaces: this file covers Meta's whole door, and Xyne's own door. --
+
+
+XYNE_SECRET = "integration-xyne-secret"
+XYNE_URL = "/ingest/webhooks/xyne"
+# Reserved merchant ids, one per merchant plus an orphan nothing owns. Xyne's
+# callback carries no account id: the merchant is read from what WE sent in the
+# form (context.flowJSON.data.merchant_id), so these are the merchant ids.
+XYNE_OUR_MERCHANT = "itest-shop"
+XYNE_OTHER_MERCHANT = "itest-other"
+XYNE_ORPHAN_MERCHANT = "itest-nobody"
+XYNE_EVENT = "e9be4e96-9e96-4c9e-b259-ee75ea8bb499"
+
+
+def _xyne_signed(body: bytes) -> Dict[str, str]:
+    """Headers Xyne's relay would send with these exact bytes — PLAIN HEX per
+    Xyne's Apps guide."""
+    mac = hmac.new(XYNE_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return {
+        "x-xyne-signature": mac,
+        "Content-Type": "application/json",
+    }
+
+
+def _xyne_submission(merchant: str, event_id: str = XYNE_EVENT) -> bytes:
+    """The relay's documented flow_action submission, serialised once so the
+    signature matches the bytes FASTAPI actually receives. Merchant and phone
+    come back from what WE sent in context.flowJSON.data."""
+    return json.dumps(
+        {
+            "actionId": "submit-interview-availability",
+            "type": "submit",
+            "values": {
+                "selected_dates": ["2026-10-15"],
+                "slots_2026-10-15": ["10:00"],
+            },
+            "context": {
+                "flowJSON": {
+                    "version": "2.0",
+                    "screenId": "interview-availability",
+                    "data": {
+                        "merchant_id": merchant,
+                        "customer_mobile_number": "919876543210",
+                        "event": {"pm_name": "PM_name", "stage": "Hackathon"},
+                    },
+                },
+                "messageId": event_id,
+                "conversationId": "conversation-1",
+                "userId": "user-1",
+            },
+        }
+    ).encode()
+
+
 def _status(number: str, wamid: str, status: str) -> Dict[str, Any]:
     """A Meta status entry for test payloads."""
     return {
@@ -164,7 +218,12 @@ async def _purge(conn: asyncpg.Connection) -> None:
         await conn.execute("DELETE FROM crm_customer WHERE merchant_id = $1", merchant)
     await conn.execute(
         "DELETE FROM credentials WHERE name = ANY($1::text[])",
-        [f"{MERCHANT}-wa", f"{OTHER_MERCHANT}-wa"],
+        [
+            f"{MERCHANT}-wa",
+            f"{OTHER_MERCHANT}-wa",
+            f"{MERCHANT}-xyne",
+            f"{OTHER_MERCHANT}-xyne",
+        ],
     )
 
 
@@ -201,6 +260,28 @@ async def _seed(conn: asyncpg.Connection) -> None:
             installation_id,
             number,
         )
+        # Xyne's own door: one merchant_http door named "xyne" per merchant —
+        # the very door the HTTP step sends the form through, and the door the
+        # reply's merchant is verified against (finding 1). No connector 'xyne'
+        # installation: Xyne's callback names the merchant, not an account.
+        xyne_door_credential, xyne_door = uuid.uuid4(), uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO credentials (id, name, credential_type, value)"
+            " VALUES ($1, $2, 'custom', $3)",
+            xyne_door_credential,
+            f"{merchant}-xyne",
+            json.dumps({"auth_header": "Authorization", "auth_value": "Bearer t"}),
+        )
+        await conn.execute(
+            "INSERT INTO crm_connector_installation (id, merchant_id, connector_key,"
+            " external_account_id, door_name, door_data, credential_id, status)"
+            " VALUES ($1, $2, 'merchant_http', $3, 'xyne', $4, $5, 'healthy')",
+            xyne_door,
+            merchant,
+            f"xyne-door-{merchant}",
+            json.dumps({"base_url": "https://xyne.example.test"}),
+            xyne_door_credential,
+        )
     customer_id = uuid.uuid4()
     await conn.execute(
         "INSERT INTO crm_customer (id, merchant_id) VALUES ($1, $2)",
@@ -227,9 +308,11 @@ async def client(monkeypatch, db) -> AsyncIterator[AsyncClient]:
     URL Meta is actually given."""
     from app.crm import api as crm_api
     from app.crm.connectivity.providers.meta import inbound as meta_module
+    from app.crm.connectivity.providers.xyne import inbound as xyne_module
 
     monkeypatch.setattr(meta_module, "META_APP_SECRET", SECRET)
     monkeypatch.setattr(meta_module, "META_WEBHOOK_VERIFY_TOKEN", TOKEN)
+    monkeypatch.setattr(xyne_module, "XYNE_WEBHOOK_SECRET", XYNE_SECRET)
 
     app = FastAPI()
     app.include_router(crm_api.router, prefix="")
@@ -478,3 +561,74 @@ async def test_a_template_letter_is_owned_through_the_waba(client, db) -> None:
     filed = await _letters(db)
     assert [row["topic"] for row in filed] == ["template.status"]
     assert filed[0]["external_id"] == f"waba-{MERCHANT}:tmpl-1:APPROVED:1788177600"
+
+
+# --- XyneSpaces: the response comes through the workflow, in real SQL ----
+
+
+async def test_xyne_a_flow_action_submission_files_under_the_installing_merchant(
+    client, db
+) -> None:
+    """A signed flow_action submission is owned by the merchant whose xyne
+    door sent the form (finding 1) and filed to the spine as a flow_action
+    event, keyed by the messageId the run saved."""
+    body = _xyne_submission(XYNE_OUR_MERCHANT)
+    assert (
+        await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+    ).status_code == 200
+
+    filed = await _letters(db)
+    assert len(filed) == 1
+    assert filed[0]["source"] == "xyne"
+    assert filed[0]["topic"] == "flow_action"
+    assert filed[0]["external_id"] == XYNE_EVENT
+    # The whole relay submission rides verbatim, so the extractor reads its
+    # declared fields unchanged.
+    payload = json.loads(filed[0]["payload"])
+    assert payload["context"]["flowJSON"]["data"]["merchant_id"] == XYNE_OUR_MERCHANT
+    assert payload["values"]["slots_2026-10-15"] == ["10:00"]
+    # Canon T13 col 5: the stamped schema version is xyne's flowJSON API
+    # version (a constant, not an env setting — finding 9).
+    from app.crm.connectivity.providers.xyne.inbound import SCHEMA_VERSION
+
+    assert filed[0]["schema_version"] == SCHEMA_VERSION
+
+
+async def test_xyne_an_orphan_merchant_is_accepted_and_filed_nowhere(
+    client, db
+) -> None:
+    """A callback naming a merchant with no xyne door is accepted (200) but
+    filed nowhere — filing it under a merchant whose door never sent the form
+    would be a cross-tenant write."""
+    body = _xyne_submission(XYNE_ORPHAN_MERCHANT)
+    response = await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+    assert response.status_code == 200
+    assert await _letters(db, MERCHANT) == []
+    assert await _letters(db, OTHER_MERCHANT) == []
+
+
+async def test_xyne_replaying_a_callback_files_nothing_new(client, db) -> None:
+    """THE test a mock cannot run: the spine's UNIQUE index dedupes a replayed
+    xyne callback — a retry must not file the same flow_action twice."""
+    body = _xyne_submission(XYNE_OUR_MERCHANT)
+    for _ in range(3):
+        response = await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+        assert response.status_code == 200
+    assert len(await _letters(db)) == 1
+
+
+async def test_xyne_a_wrong_signature_is_refused(client, db) -> None:
+    """A callback that cannot sign is refused over the bytes fastapi delivers."""
+    body = _xyne_submission(XYNE_OUR_MERCHANT)
+    headers = _xyne_signed(body)
+    headers["x-xyne-signature"] = "f" * 64
+    response = await client.post(XYNE_URL, content=body, headers=headers)
+    assert response.status_code == 403
+    assert await _letters(db) == []
+
+
+async def test_xyne_the_url_we_give_xyne_is_really_mounted(client, db) -> None:
+    """The URL the relay is given is really mounted on app.crm.api's router."""
+    body = _xyne_submission(XYNE_OUR_MERCHANT)
+    response = await client.post(XYNE_URL, content=body, headers=_xyne_signed(body))
+    assert response.status_code == 200

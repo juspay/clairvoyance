@@ -37,6 +37,10 @@ class _FakeSpec:
         self.letters: List[EventIn] = [_letter()]
         self.verified: list = []
         self.enveloped: list = []
+        # The door's optional answer bodies (Meta sets none, so these are
+        # None by default and the door keeps its silent 200 and its 503).
+        self.success_reply = None
+        self.error_reply = None
 
     def verify(self, raw, headers) -> bool:
         """Test double."""
