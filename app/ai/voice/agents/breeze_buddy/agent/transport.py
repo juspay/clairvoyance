@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import WebSocket
-from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
 from pipecat.runner.utils import _create_telephony_transport
 from pipecat.transports.base_transport import BaseTransport
@@ -30,6 +29,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     TemplateModel,
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
+from app.ai.voice.agents.breeze_buddy.utils.aic_filter import FailOpenAICFilter
 from app.ai.voice.agents.breeze_buddy.utils.audio_mixer import (
     create_background_sound_mixer,
 )
@@ -144,12 +144,12 @@ def _create_audio_input_filter(
             if noise_filter_config.enhancement_level is None:
                 # Preserve the existing AIC behavior exactly: omitting this
                 # argument lets the selected model use its own default.
-                aic_filter = AICFilter(
+                aic_filter = FailOpenAICFilter(
                     license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
                     model_path=model_path,
                 )
             else:
-                aic_filter = AICFilter(
+                aic_filter = FailOpenAICFilter(
                     license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
                     model_path=model_path,
                     enhancement_level=noise_filter_config.enhancement_level,
