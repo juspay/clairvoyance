@@ -860,6 +860,15 @@ async def BREEZE_BUDDY_ENABLE_VAD() -> bool:
     return await get_config("BREEZE_BUDDY_ENABLE_VAD", False, bool)
 
 
+async def BREEZE_BUDDY_ENABLE_AIC_FILTER() -> bool:
+    """Returns BREEZE_BUDDY_ENABLE_AIC_FILTER from Redis.
+
+    False (default): every noise_filter template uses the Buddy filter. True:
+    provider "aic" templates use ai-coustics. Read per call; no deploy needed.
+    """
+    return await get_config("BREEZE_BUDDY_ENABLE_AIC_FILTER", False, bool)
+
+
 # --- Outbound Rate Limit Configuration ---
 async def OUTBOUND_RATE_LIMIT_MAX_CALLS() -> int:
     """Returns OUTBOUND_RATE_LIMIT_MAX_CALLS from Redis"""

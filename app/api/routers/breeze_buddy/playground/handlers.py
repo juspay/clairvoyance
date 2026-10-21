@@ -80,7 +80,14 @@ async def get_configuration_options_handler():
 
     # Keep each supported provider/model pair together so clients cannot build
     # invalid combinations. Legacy types remain for older playground versions.
+    # Buddy first (the default); AIC pairs apply when BREEZE_BUDDY_ENABLE_AIC_FILTER is on.
     noise_filter_options = [
+        {
+            "provider": NoiseFilterProvider.BUDDY.value,
+            "model": NoiseFilterModel.NOISE_CANCELLATION.value,
+            "label": "Buddy Noise Cancellation",
+        }
+    ] + [
         {
             "provider": NoiseFilterProvider.AIC.value,
             "model": model.value,

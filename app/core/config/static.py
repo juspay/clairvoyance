@@ -108,6 +108,11 @@ AIC_MODEL_PATH_S_16KHZ = os.environ.get(
     "/app/models/voice/aic/quail_s_16khz.aicmodel",
 )
 
+# Buddy noise filter (app/ai/voice/noise_filter): Docker provisions its models here.
+BREEZE_BUDDY_NOISE_MODEL_DIR = os.environ.get(
+    "BREEZE_BUDDY_NOISE_MODEL_DIR", "/app/models/voice/buddy"
+)
+
 # ElevenLabs — one (url, key) pair per service.
 #
 # URLs are BARE HOSTS, no scheme: the same host is dialled as wss:// by the TTS
