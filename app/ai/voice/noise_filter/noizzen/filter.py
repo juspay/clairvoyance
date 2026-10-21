@@ -1,0 +1,240 @@
+"""NoizzenFilter: the pipecat audio input filter that cleans caller audio.
+
+pipecat's input transport awaits filter() for every caller frame and only
+catches timeouts, so an exception here would leave the bot deaf. filter()
+therefore never raises: any failure, or falling LAG_BUDGET_S behind real time,
+passes the rest of the call through untouched, after handing back the audio
+the filter was still holding, so the caller loses none of it.
+"""
+
+import asyncio
+import os
+import threading
+import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
+from pipecat.frames.frames import FilterControlFrame, FilterEnableFrame
+
+from app.ai.voice.noise_filter.noizzen.models import LoadedModel, load_model
+from app.core.logger import logger
+
+LAG_BUDGET_S = 0.1
+DEFAULT_LEVEL = 0.5
+# Silence-skipping: a caller's line is near-silent for most of a call (networks
+# mute it between words), where the model's output is close to nothing. Hops
+# below GATE_DBFS skip the engine and take its output as zero. The check is on
+# the newest hop, delay_hops ahead of the output, so the engine is already
+# running when speech reaches the output; it keeps running for GATE_HOLD_HOPS
+# hops from the last hop above the gate.
+GATE_DBFS = -55.0
+GATE_HOLD_HOPS = 20  # 200 ms
+_SCALE = 32768.0
+
+
+# Inference runs off the event loop (the engine runs without the GIL), so one
+# call's frames never stall another call's audio. One worker per CPU: a process
+# hosting many calls (an API pod when no voice pod is free) must not queue
+# behind a fixed pool while CPUs sit idle; a voice pod's one call uses one.
+_EXECUTOR = ThreadPoolExecutor(
+    max_workers=min(32, max(4, os.cpu_count() or 4)), thread_name_prefix="noise-filter"
+)
+
+
+def _whole_samples(data: bytes) -> tuple[bytes, bytes]:
+    """`data` cut to whole int16 samples, and the odd byte left over (or b"")."""
+    cut = len(data) - len(data) % 2
+    return data[:cut], data[cut:]
+
+
+class StreamEnhancer:
+    """One call's STFT framing, engine stream (skipped on near-silence, and while
+    the filter is disabled) and overlap-add. Not thread-safe."""
+
+    def __init__(self, model: LoadedModel, sample_rate: int, mix: float = 1.0):
+        spec = model.spec
+        if sample_rate != spec.sample_rate:
+            raise ValueError(
+                f"{spec.name} runs at {spec.sample_rate} Hz, the call at {sample_rate} Hz"
+            )
+        self._name = spec.name
+        self._window = model.window
+        self._mix = float(mix)
+        self._win, self._hop = spec.win_len, spec.hop
+        self._bins = spec.win_len // 2 + 1
+        self._engine = model.open_stream()  # this call's recurrent state
+        self._in_buf = np.zeros(0, dtype=np.float32)
+        self._out_buf = np.zeros(self._win, dtype=np.float32)
+        # The output lags the input by delay_hops, so the blend uses the noisy
+        # frame from that many hops back (the current one would echo 40 ms apart).
+        zero = np.zeros((self._bins, 2), dtype=np.float32)
+        self._noisy = deque([zero] * spec.delay_hops, maxlen=spec.delay_hops + 1)
+        self._gate = self._hop * 10 ** (GATE_DBFS / 10)  # a hop's energy at the gate
+        self._hold = 0  # hops the engine keeps running for
+        self.hops = 0  # hops processed, and how many of them skipped the engine
+        self.skipped = 0
+        # Disabled (FilterEnableFrame): the original comes out at the same delay and
+        # the engine is skipped, so enabling again has nothing stale to emit.
+        self.bypass = False
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        self._in_buf = np.concatenate([self._in_buf, x])
+        frames = []
+        while self._in_buf.size >= self._win:
+            frames.append(self._frame(self._in_buf[: self._win]))
+            self._in_buf = self._in_buf[self._hop :]
+        return np.concatenate(frames) if frames else np.zeros(0, dtype=np.float32)
+
+    def _frame(self, chunk: np.ndarray) -> np.ndarray:
+        self.hops += 1
+        newest = chunk[-self._hop :]
+        if float(np.dot(newest, newest)) >= self._gate:
+            self._hold = GATE_HOLD_HOPS
+        spec = np.fft.rfft(chunk * self._window)
+        ri = np.empty((self._bins, 2), dtype=np.float32)
+        ri[:, 0], ri[:, 1] = spec.real, spec.imag
+        self._noisy.append(ri)
+        if self.bypass:  # disabled: the delayed original, whole
+            self.skipped += 1
+            enh = self._noisy[0]
+        elif self._hold:
+            self._hold -= 1
+            enh = self._engine.step(ri)
+            if not np.isfinite(enh).all():
+                raise FloatingPointError(f"{self._name} produced non-finite output")
+            if self._mix < 1.0:
+                enh = self._mix * enh + (1.0 - self._mix) * self._noisy[0]
+        else:  # near-silent: the engine's output taken as zero, its state kept
+            self.skipped += 1
+            enh = (1.0 - self._mix) * self._noisy[0]
+        frame = np.fft.irfft(enh[:, 0] + 1j * enh[:, 1], n=self._win) * self._window
+        self._out_buf += frame.astype(np.float32)
+        done = self._out_buf[: self._hop].copy()
+        self._out_buf[: -self._hop] = self._out_buf[self._hop :]
+        self._out_buf[-self._hop :] = 0.0
+        return done
+
+
+class NoizzenFilter(BaseAudioFilter):
+    """Real-time noise suppression for one call's incoming audio."""
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        model_path: Path,
+        enhancement_level: Optional[float] = None,
+    ) -> None:
+        if enhancement_level is not None and not 0.0 <= enhancement_level <= 1.0:
+            raise ValueError("'enhancement_level' must be between 0.0 and 1.0.")
+        self._model_name = model
+        self._model_path = str(model_path)
+        self._mix = DEFAULT_LEVEL if enhancement_level is None else enhancement_level
+        self._enhancer: Optional[StreamEnhancer] = None
+        self._stats: Optional[StreamEnhancer] = None  # kept for the summary at stop()
+        self._off: Optional[str] = None  # why filtering stopped mid-call, if it did
+        self._lock = threading.Lock()  # one process() at a time, even after a cancel
+        self._lag = 0.0
+        self._rate = 0
+        self._enabled = True
+        self._raw = bytearray()
+        self._raw_start = 0  # input sample at self._raw[0]
+        self._emitted = 0  # samples returned so far
+        self._delay = 0  # output sample n carries input sample n - self._delay
+        self._odd = b""  # half a sample, kept until the next frame completes it
+
+    async def start(self, sample_rate: int):
+        if self._mix == 0.0:
+            return  # level 0 is untouched audio; skip the model
+        try:
+            model = await asyncio.to_thread(
+                load_model, self._model_name, self._model_path
+            )
+            self._rate = sample_rate
+            self._delay = model.spec.delay_hops * model.spec.hop
+            self._enhancer = self._stats = StreamEnhancer(
+                model, sample_rate, mix=self._mix
+            )
+        except Exception as e:
+            self._enhancer = None
+            logger.warning(f"Noizzen filter unavailable, proceeding without it: {e}")
+
+    async def stop(self):
+        self._enhancer = None
+        self._raw, self._odd = bytearray(), b""
+        stats, self._stats = self._stats, None
+        if stats is not None and stats.hops:
+            # One line per call: the skip share and switch-offs, counted per template
+            state = f"switched off: {self._off}" if self._off else "on to the end"
+            logger.info(
+                f"Noizzen summary: engine skipped on "
+                f"{100 * stats.skipped / stats.hops:.0f}% of {stats.hops} steps; "
+                f"filter {state}"
+            )
+
+    async def process_frame(self, frame: FilterControlFrame):
+        if isinstance(frame, FilterEnableFrame):
+            self._enabled = frame.enable
+
+    def _process(
+        self, enhancer: StreamEnhancer, x: np.ndarray
+    ) -> tuple[np.ndarray, float]:
+        """Enhance on the worker; also return when the work finished."""
+        with self._lock:
+            y = enhancer.process(x)
+        return y, time.perf_counter()
+
+    def _forget_carried(self) -> None:
+        """Drop the raw input the output now carries."""
+        carried = self._emitted - self._delay
+        if carried > self._raw_start:
+            del self._raw[: 2 * (carried - self._raw_start)]
+            self._raw_start = carried
+
+    def _switch_off(self, reason: str) -> bytes:
+        """Pass the rest of the call through. Returns the raw input the output has
+        not carried yet: sent now, the stream stays whole and only its delay goes."""
+        self._enhancer, self._off = None, reason
+        pending, self._raw, self._odd = bytes(self._raw), bytearray(), b""
+        return pending
+
+    async def filter(self, audio: bytes) -> bytes:
+        enhancer = self._enhancer
+        if enhancer is None or not audio:
+            return audio
+        self._raw += audio
+        # Whole samples only: a frame that splits one keeps its odd byte for the
+        # next frame, so the stream never shifts by a byte.
+        data, self._odd = _whole_samples(self._odd + audio)
+        if not data:
+            return b""
+        enhancer.bypass = not self._enabled
+        started = time.perf_counter()
+        try:
+            x = np.frombuffer(data, dtype=np.int16).astype(np.float32) / _SCALE
+            y, finished = await asyncio.get_running_loop().run_in_executor(
+                _EXECUTOR, self._process, enhancer, x
+            )
+            out = np.clip(y * _SCALE, -_SCALE, _SCALE - 1).astype(np.int16).tobytes()
+        except Exception as e:
+            logger.error(f"Noizzen filter failed mid-call, passing audio through: {e}")
+            return self._switch_off("error")
+        self._emitted += y.size
+        self._forget_carried()
+        # Backlog: queue + compute time beyond the audio's own duration, never below
+        # zero. Timed on the worker: an event-loop stall is not the filter falling
+        # behind, and passthrough would not win that time back.
+        took = finished - started
+        self._lag = max(0.0, self._lag + took - x.size / self._rate)
+        if self._lag > LAG_BUDGET_S:
+            behind = f"fell {self._lag * 1e3:.0f} ms behind real time"
+            logger.warning(
+                f"Noizzen filter {behind}; "
+                "passing audio through for the rest of the call"
+            )
+            return out + self._switch_off(behind)
+        return out

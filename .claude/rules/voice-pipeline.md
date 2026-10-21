@@ -25,5 +25,5 @@ paths:
 
 ## Audio
 - Telephony uses mu-law encoding at 8000 Hz -- different from Daily.co web transport
-- AI Coustics (AIC) noise filtering is optional, enabled via template config
+- Noise filtering is optional, enabled via template config: `provider: "noizzen"` uses Noizzen (`app/ai/voice/noise_filter/noizzen`, docs/NOISE_FILTER.md); `provider: "aic"` (and the legacy `type`) uses ai-coustics, falling back to Noizzen when it cannot run; the template alone decides
 - Audio assets (e.g., hold music, thinking sounds) are in `assets/sounds/`

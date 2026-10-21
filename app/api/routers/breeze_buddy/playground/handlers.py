@@ -80,7 +80,14 @@ async def get_configuration_options_handler():
 
     # Keep each supported provider/model pair together so clients cannot build
     # invalid combinations. Legacy types remain for older playground versions.
+    # Noizzen first (use it for new templates); AIC pairs keep ai-coustics.
     noise_filter_options = [
+        {
+            "provider": NoiseFilterProvider.NOIZZEN.value,
+            "model": NoiseFilterModel.NOISE_CANCELLATION.value,
+            "label": "Buddy Noise Cancellation",
+        }
+    ] + [
         {
             "provider": NoiseFilterProvider.AIC.value,
             "model": model.value,

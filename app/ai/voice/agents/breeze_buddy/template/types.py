@@ -829,7 +829,8 @@ class NoiseFilterType(str, Enum):
 class NoiseFilterProvider(str, Enum):
     """Audio-filter integrations available to the voice pipeline."""
 
-    AIC = "aic"
+    AIC = "aic"  # ai-coustics; a call falls back to Noizzen when it cannot run
+    NOIZZEN = "noizzen"  # in-house noise filter, app/ai/voice/noise_filter/noizzen
 
 
 class NoiseFilterModel(str, Enum):
@@ -838,6 +839,7 @@ class NoiseFilterModel(str, Enum):
     The value names the model and its size; the transport picks the 8 or 16 kHz
     file. NOISE_CANCELLATION_S costs about half the CPU of NOISE_CANCELLATION
     (quail-L) per call with the same STT accuracy in lab tests (Sep 2026).
+    Noizzen runs one noise canceller for all three.
     """
 
     NOISE_CANCELLATION = "noise_cancellation"  # quail-L
@@ -860,22 +862,25 @@ class NoiseFilterConfig(BaseModel):
     )
     provider: Optional[NoiseFilterProvider] = Field(
         None,
-        description="Noise-filter integration provider.",
+        description="Noise-filter provider: 'noizzen' (in-house; use it for new templates) or "
+        "'aic' (ai-coustics; a call falls back to Noizzen when ai-coustics cannot "
+        "run).",
         exclude_if=lambda value: value is None,
     )
     model: Optional[NoiseFilterModel] = Field(
         None,
         description="Noise cancellation preserves speech from all speakers "
         "('noise_cancellation' is quail-L, 'noise_cancellation_s' is quail-S at "
-        "about half the CPU); Voice Focus isolates the foreground speaker.",
+        "about half the CPU); Voice Focus isolates the foreground speaker. "
+        "Noizzen uses one noise canceller for all three.",
         exclude_if=lambda value: value is None,
     )
     enhancement_level: Optional[float] = Field(
         None,
         ge=0.0,
         le=1.0,
-        description="ai-coustics enhancement strength. None uses the selected "
-        "model's default; Voice Focus experiments should start at 0.5.",
+        description="Noizzen: share of the denoised audio kept, 0.0-1.0 (None = "
+        "0.5). ai-coustics: its own strength; None uses the model default.",
         exclude_if=lambda value: value is None,
     )
 
