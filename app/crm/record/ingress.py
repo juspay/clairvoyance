@@ -31,17 +31,43 @@ class IngressSpec(NamedTuple):
     door's).
 
     ``verify`` sees the body and the headers — enough for a provider that
-    signs with ONE platform secret (Meta: one app, one secret). Named
-    trigger, not built ahead of its provider: the first provider whose
-    signing secret is PER MERCHANT (a per-account aggregator key) adds a
-    bay token to the path — ``/ingest/webhooks/{provider}/{bay}`` — and
-    ``verify`` gains the request's path params, so the credential can be
-    found before the signature is checked.
+    signs with ONE platform secret (Meta: one app, one secret). A provider
+    whose signing secret is PER ACCOUNT registers a BayIngressSpec instead.
+
+    ``success_reply`` / ``error_reply`` are the door's ANSWER BODY when set.
+    A provider that retries on its own (Meta) sets neither, so the door keeps
+    its empty 200 and its 503-dogged-by-dedupe on a store failure. A provider
+    that shows the answer to a person and never retries (Xyne returns an
+    AppActionResponse in the chat) sets both: ``error_reply`` goes back as a
+    200 with the error JSON, never a 503 — a 503 tells a non-retrying sender
+    to give up, while the error object is what the person sees and resubmits
+    from.
     """
 
     verify: Callable[[bytes, Mapping[str, str]], bool]
     envelope: Callable[[Mapping[str, str], Dict], Awaitable[List[EventIn]]]
     challenge: Callable[[Mapping[str, str]], Optional[str]]
+    success_reply: Optional[Dict] = None
+    error_reply: Optional[Dict] = None
+
+
+class BayIngressSpec(NamedTuple):
+    """A provider whose signing secret is PER ACCOUNT: the bay token in the
+    path — ``/ingest/webhooks/{provider}/{bay}`` — names the account, so the
+    credential can be found before the signature is checked.
+
+    ``verify`` is async because finding that credential is a read; it gets
+    the bay first and must answer False for a bay nobody holds, exactly as
+    for a wrong signature. ``envelope`` gets the same bay, so a letter's owner
+    is the account the URL named — never something the body claims. No
+    ``challenge``: a bayed provider with a subscription handshake can add one
+    the day it exists. The two replies mean what they mean on IngressSpec.
+    """
+
+    verify: Callable[[str, bytes, Mapping[str, str]], Awaitable[bool]]
+    envelope: Callable[[str, Mapping[str, str], Dict], Awaitable[List[EventIn]]]
+    success_reply: Optional[Dict] = None
+    error_reply: Optional[Dict] = None
 
 
 #: The slot. Empty until app/crm/api.py fills it at wiring time — a closed
@@ -56,3 +82,15 @@ def register_ingress(provider: str, spec: IngressSpec) -> None:
     a teardown ritual.
     """
     INGRESS[provider] = spec
+
+
+#: The per-account bays, keyed by provider. A separate slot rather than a
+#: union in INGRESS: the two door shapes take different arguments, and a
+#: provider is one or the other.
+BAY_INGRESS: Dict[str, BayIngressSpec] = {}
+
+
+def register_bay_ingress(provider: str, spec: BayIngressSpec) -> None:
+    """register_ingress's twin for per-account bays — same caller, same
+    last-wins rule."""
+    BAY_INGRESS[provider] = spec

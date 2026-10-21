@@ -6,8 +6,8 @@ Thin routes per module rules §1. ``journey_router`` auths via
 Depends(crm_admin_user) and delegates to timeline.py; ``ingest_router``
 verifies the s2s caller and delegates to ingest.py — store first, 200
 fast, understand later, and nothing here parses the payload;
-``webhook_router`` (GET·POST /{provider}, mounted at /ingest/webhooks)
-carries NO Depends at all — a provider cannot hold a bearer token, so each
+``webhook_router`` (GET·POST /{provider} and the per-account
+POST /{provider}/{bay}, mounted at /ingest/webhooks) carries NO Depends at all — a provider cannot hold a bearer token, so each
 request authenticates by its own ritual inside the registered bay
 (ingress.py records the inversion that keeps rule 12 whole). Separate
 routers, not one, because the doors mount under different prefixes with
@@ -21,7 +21,7 @@ resolved per letter from the receiving endpoint by the bay.
 
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -197,27 +197,105 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         # refused before a single body byte is read.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
+    body = await _bounded_body(request)
+    if body is None:
+        return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    if not spec.verify(body, request.headers):
+        # No detail: a caller who cannot sign has not earned an explanation.
+        return Response(status_code=status.HTTP_403_FORBIDDEN)
+    parsed = _signed_object(provider, body)
+    if parsed is None:
+        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+    return await _file(
+        provider,
+        lambda: spec.envelope(request.headers, parsed),
+        spec.success_reply,
+        spec.error_reply,
+    )
+
+
+@webhook_router.post("/{provider}/{bay}")
+async def provider_bay_webhook_route(
+    provider: str, bay: str, request: Request
+) -> Response:
+    """The per-account door: ``bay`` names the account whose own secret
+    signs this callback (ingress.BayIngressSpec).
+
+    The same order as the shared door — bound the read, verify, parse, file —
+    with the bay handed to both halves. A bay nobody holds answers 403, the
+    same as a wrong signature: a different answer would tell a caller which
+    account ids exist.
+    """
+    set_log_context(component="crm.ingest.webhooks")
+    spec = ingress.BAY_INGRESS.get(provider)
+    if spec is None:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    body = await _bounded_body(request)
+    if body is None:
+        return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    if not await spec.verify(bay, body, request.headers):
+        return Response(status_code=status.HTTP_403_FORBIDDEN)
+    parsed = _signed_object(provider, body)
+    if parsed is None:
+        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+    return await _file(
+        provider,
+        lambda: spec.envelope(bay, request.headers, parsed),
+        spec.success_reply,
+        spec.error_reply,
+    )
+
+
+async def _bounded_body(request: Request) -> Optional[bytes]:
+    """The raw body, or None past MAX_LETTER_BYTES — read as a stream, so a
+    chunked body with no Content-Length is bounded too."""
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > MAX_LETTER_BYTES:
-            return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+            return None
+    return bytes(body)
 
-    if not spec.verify(bytes(body), request.headers):
-        # No detail: a caller who cannot sign has not earned an explanation.
-        return Response(status_code=status.HTTP_403_FORBIDDEN)
 
+def _signed_object(provider: str, body: bytes) -> Optional[Dict[str, Any]]:
+    """The verified body as a JSON object, or None. Signed by the provider
+    but not shaped like anything they document is worth a 400 and a log line
+    rather than a silent 200."""
     try:
-        parsed = json.loads(bytes(body).decode("utf-8"))
+        parsed = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         parsed = None
     if not isinstance(parsed, dict):
-        # Signed by the provider, but not shaped like anything they
-        # document. Worth a 400 and a log line rather than a silent 200.
         logger.error(f"ingress: a signed {provider} body was not a JSON object")
-        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+        return None
+    return parsed
 
-    letters = await spec.envelope(request.headers, parsed)
+
+async def _file(
+    provider: str,
+    envelope: Callable[[], Awaitable[List[EventIn]]],
+    success_reply: Optional[Dict],
+    error_reply: Optional[Dict],
+) -> Response:
+    """Envelope the verified body and store every letter.
+
+    A provider with reply bodies (one that shows the answer to a person and
+    never retries) gets ``error_reply`` when attribution raises, when nothing
+    attributable came in, or when a store fails, and ``success_reply`` when
+    everything filed. Without them the door keeps its empty 200 and its 503
+    on a store failure — the answers a retrying provider understands.
+    """
+    try:
+        letters = await envelope()
+    except Exception:
+        if error_reply is None:
+            raise
+        logger.exception(f"ingress: {provider} callback attribution failed")
+        return JSONResponse(content=error_reply)
+    if not letters and error_reply is not None:
+        return JSONResponse(content=error_reply)
+
     filed = 0
     for letter in letters:
         try:
@@ -238,10 +316,14 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
                 f"ingress: store failed for {letter.source}/{letter.topic} "
                 f"external_id={letter.external_id}: {e}"
             )
+            if error_reply is not None:
+                return JSONResponse(content=error_reply)
             return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
         if event_id is not None:
             filed += 1
     logger.info(f"ingress: {provider} webhook filed {filed}/{len(letters)} letters")
+    if success_reply is not None:
+        return JSONResponse(content=success_reply)
     return Response(status_code=status.HTTP_200_OK)
 
 

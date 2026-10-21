@@ -96,7 +96,7 @@ def entry_against_catalog(
         # named like a walker key slips past the run_facts filter that exists
         # to stop it. Refused here, where the door's declared names are in
         # hand — a name collision is a wrong sentence on a live call.
-        for name in sorted(blocks & allowed):
+        for name in sorted(blocks & (allowed | _ACTION_RUN_FACTS)):
             problems.append(
                 f"playbook block {name!r} shadows a fact of topic {topic!r} — "
                 "a block is merged over the run's facts, so the letter's own "
@@ -110,7 +110,11 @@ def entry_against_catalog(
                     f"{', '.join(sorted(declared)) or 'none'})"
                 )
         for node_id, name in asked:
-            if name not in allowed and not _from_open_square(name, open_squares):
+            if (
+                name not in allowed
+                and not (node_id != "playbook" and name in _ACTION_RUN_FACTS)
+                and not _from_open_square(name, open_squares)
+            ):
                 where = (
                     "playbook: a line asks"
                     if node_id == "playbook"
@@ -143,6 +147,11 @@ def entry_against_catalog(
 # Facts the walker computes for a template at the square (nodes.run_facts,
 # phase 16) — never a producer's, so no catalog declares them.
 _WALKER_FACTS = frozenset({"current_node", "current_stage"})
+
+#: Facts only an ACTION square's args may ask for: nodes/action.py fills them
+#: from the run itself (its id, its customer's phone) for that square alone,
+#: so a send or a playbook line naming them would publish and then park.
+_ACTION_RUN_FACTS = frozenset({"run_id", "customer_mobile_number"})
 
 
 def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:

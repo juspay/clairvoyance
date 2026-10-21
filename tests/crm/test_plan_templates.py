@@ -33,6 +33,10 @@ LINE_MOBILE = PLANS / "line-nudge-mobile.json"
 LINE_PLAYBOOK = PLANS / "line-nudge-playbook.json"
 LINE_CALL_WAIT = PLANS / "line-nudge-call-wait.json"
 LINE_OFFSET = PLANS / "line-nudge-offset.json"
+# Xyne: send a form through the merchant's Xyne app, wait for THIS run's
+# submission (matched on the run id the form carried), post the picked slots.
+XYNE_RESUME = PLANS / "xyne-availability-resume.json"
+XYNE_START = PLANS / "xyne-availability-start.json"
 # The lending journey on a merchant's OWN events (line-nudge.json): eight
 # non-terminal topics the squares listen on, three terminals the goal ends on.
 LINE_OPEN = [
@@ -183,6 +187,8 @@ def test_the_expected_documents_exist() -> None:
         LINE_PLAYBOOK,
         LINE,
         LOAN,
+        XYNE_RESUME,
+        XYNE_START,
     ]
 
 
@@ -525,3 +531,23 @@ def test_the_call_wait_board_names_its_ceiling_and_lets_an_aborted_report_throug
         assert "else" in {
             on for _, on in outgoing[after_id]
         }, f"{after_id}: ABORTED takes else"
+
+
+def test_run_facts_are_allowed_in_action_args_and_nowhere_else() -> None:
+    """`{run_id}` and `{customer_mobile_number}` are filled by the action
+    square alone, so a send asking for them would publish and then park."""
+    doc = _load(XYNE_RESUME)
+    assert validate_definition(doc, catalogs=_catalogs()) == []
+
+    doc["nodes"].append(
+        {
+            "id": "late-send",
+            "type": "send",
+            "channel": "whatsapp",
+            "template": "availability_received",
+            "variables": {"1": "run_id"},
+        }
+    )
+    doc["edges"].append(["process-availability", "late-send"])
+    problems = validate_definition(doc, catalogs=_catalogs())
+    assert any("'run_id' is not a declared variable field" in p for p in problems)

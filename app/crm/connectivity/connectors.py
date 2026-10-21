@@ -41,6 +41,11 @@ from app.crm.connectivity.providers.whatsapp.onboard import (
     WhatsappOnboarder,
 )
 from app.crm.connectivity.providers.whatsapp.templates import WhatsappTemplates
+from app.crm.connectivity.providers.xyne.actions import XYNE_ACTIONS
+from app.crm.connectivity.providers.xyne.onboard import (
+    OnboardXyneRequest,
+    XyneOnboarder,
+)
 
 #: Re-exported so onboarding.py can name the error every onboarder raises,
 #: and actions.py the one every action face raises. Neither can import
@@ -141,6 +146,18 @@ CONNECTORS: Dict[str, ConnectorSpec] = {
         templates=None,
         request_model=OnboardShopifyRequest,
         actions=SHOPIFY_ACTIONS,
+    ),
+    # One account per Xyne app (external_account_id = app id). A door with no
+    # pipe like Shopify: it receives flow_action webhooks on its own per-app
+    # bay (ingress.py) and acts through post_message.
+    "xyne": ConnectorSpec(
+        key="xyne",
+        source="xyne",
+        channel=None,
+        onboarder=XyneOnboarder(),
+        templates=None,
+        request_model=OnboardXyneRequest,
+        actions=XYNE_ACTIONS,
     ),
 }
 
