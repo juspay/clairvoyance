@@ -172,6 +172,8 @@ async def resolve_openai(
 async def _resolve_vertex(
     llm_config: LLMConfiguration,
     account: VertexAccount,
+    *,
+    pooled: bool = False,
 ) -> GoogleVertexLLMService:
     """Build Vertex (Gemini) LLM — all params required from template config,
     the service account from the resolver (accounts.Accounts)."""
@@ -224,7 +226,8 @@ async def _resolve_vertex(
                 if llm_config.function_call_timeout_secs
                 else 10.0
             ),
-        )
+        ),
+        pooled=pooled,
     )
 
 
@@ -379,9 +382,9 @@ async def get_llm_service(
     Args:
         llm_config: Optional template-level LLM configuration.
         pooled: chat-mode opt-in for sharing the underlying client across
-            calls. Today Azure (HTTP/2 httpx pool) and Claude on Vertex
-            (AsyncAnthropicVertex client + OAuth token cache) honour it;
-            Gemini Vertex ignores it (still per-call).
+            calls. Azure (HTTP/2 httpx pool), Claude on Vertex
+            (AsyncAnthropicVertex client + OAuth token cache) and Gemini on
+            Vertex (genai client + OAuth token) honour it.
         accounts: the call's account resolver (accounts.Accounts,
             built from the call's tenant). It answers with the block's own
             row when it names one, else the environment's account. None =
@@ -422,7 +425,7 @@ async def get_llm_service(
             return await _resolve_claude_vertex(llm_config, account, pooled=pooled)
 
         _dispatch_log("Using Gemini on Vertex AI (Google SDK)")
-        return await _resolve_vertex(llm_config, account)
+        return await _resolve_vertex(llm_config, account, pooled=pooled)
 
     if llm_config.provider == LLMProvider.AWS_BEDROCK:
         _dispatch_log("Using AWS Bedrock LLM provider")
