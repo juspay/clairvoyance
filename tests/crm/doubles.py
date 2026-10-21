@@ -51,6 +51,7 @@ UPSERT_INSTALLATION_FIELDS = (
     "merchant_id",
     "connector_key",
     "external_account_id",
+    "door_data_json",
     "display_label",
     "credential_id",
     "status",

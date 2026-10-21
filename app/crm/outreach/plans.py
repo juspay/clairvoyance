@@ -9,7 +9,11 @@ gather -> decide (PURE, returns the problems) -> apply.
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
-from app.crm.connectivity.contracts import registers_templates_for, template_status
+from app.crm.connectivity.contracts import (
+    get_installation_for_connector,
+    registers_templates_for,
+    template_status,
+)
 from app.crm.outreach import playbook
 from app.crm.outreach.catalog_laws import (
     Catalogs,
@@ -422,6 +426,9 @@ async def _publish_in_txn(
     problems = await _template_problems(merchant_id, definition)
     if problems:
         raise WorkflowValidationError(problems)
+    problems = await _installation_problems(merchant_id, definition)
+    if problems:
+        raise WorkflowValidationError(problems)
     published = await workflow_accessor.apply_publish(txn, merchant_id, workflow_id)
     if published is None:  # a racing publish consumed the draft first
         raise WorkflowValidationError(["draft already published"])
@@ -502,8 +509,11 @@ async def _check_draft_in_txn(
             "draft is a ladder saved without its board — save the draft "
             "again (PUT /draft) before publishing; publish copies it verbatim"
         ]
-    return True, await _template_problems(
-        merchant_id, WorkflowDefinition.model_validate(draft)
+    return True, (
+        await _template_problems(merchant_id, WorkflowDefinition.model_validate(draft))
+        + await _installation_problems(
+            merchant_id, WorkflowDefinition.model_validate(draft)
+        )
     )
 
 
@@ -530,6 +540,44 @@ async def _template_problems(
             # never compares a status word across the seam.
             problems.append(
                 f"send node {node.id}: template '{node.template}' {verdict.reason}"
+            )
+    return problems
+
+
+async def _installation_problems(
+    merchant_id: str, definition: WorkflowDefinition
+) -> List[str]:
+    """GATHER for the publish atom: every action node that NAMES a door
+    (``external_account_id`` — crm_connector_installation.external_account_id on a merchant_http
+    node that says which base_url it means) must resolve to a usable door:
+    OF THIS MERCHANT, UNDER THAT NODE'S connector. A lookup, so it lives
+    here beside the atom and validate_definition stays PURE; and it reuses
+    the exact accessor perform_action runs, so the plan can never approve a
+    door the walker would refuse. Drafts are not checked (create/update): a
+    draft may precede its door. Absent ``external_account_id`` there is nothing
+    to ask — the walker's newest-usable fallback is the connector's business.
+
+    Fail closed with the same refusal an execution would give, so an author
+    hears it while still editing: a name of another merchant's door, a door
+    of the wrong connector, a revoked/disabled/degraded door or a plain
+    typo all collapse to "names no usable door here".
+    """
+    problems: List[str] = []
+    for node in definition.nodes:
+        if node.type != "action" or not node.connector or not node.external_account_id:
+            continue  # the validator already demands connector/action on an action node
+        if (
+            await get_installation_for_connector(
+                merchant_id,
+                node.connector,
+                external_account_id=node.external_account_id,
+            )
+            is None
+        ):
+            problems.append(
+                f"action node {node.id}: external_account_id {node.external_account_id} "
+                f"names no usable door of this merchant on connector "
+                f"'{node.connector}'"
             )
     return problems
 

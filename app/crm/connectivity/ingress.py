@@ -24,6 +24,7 @@ reader of every ``providers/<x>/inbound.py`` face.
 from typing import Awaitable, Callable, Dict, List, Mapping, Optional
 
 import app.crm.connectivity.providers.meta.inbound as meta
+import app.crm.connectivity.providers.xyne.inbound as xyne
 from app.core.logger import logger
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
@@ -121,4 +122,43 @@ META_INGRESS = IngressSpec(
     verify=meta.verify_signature,
     envelope=envelope_over(meta.letters),
     challenge=meta.handshake_challenge,
+)
+
+
+async def _xyne_envelope(_headers: Mapping[str, str], body: Dict) -> List[EventIn]:
+    """Attribute a signed callback only to a merchant owning the Xyne account."""
+    events: List[EventIn] = []
+    for letter in xyne.letters(body):
+        installation = await installation_accessor.get_installation_for_connector(
+            letter.owner_id, "merchant_http", external_account_id="xyne"
+        )
+        if installation is None:
+            logger.warning("ingress: Xyne callback has no usable merchant account")
+            continue
+        events.append(
+            EventIn(
+                merchant_id=installation.merchant_id,
+                source=letter.source,
+                topic=letter.topic,
+                external_id=letter.external_id,
+                payload=letter.payload,
+                occurred_at=letter.occurred_at,
+                schema_version=letter.schema_version,
+            )
+        )
+    return events
+
+
+XYNE_INGRESS = IngressSpec(
+    verify=xyne.verify_signature,
+    envelope=_xyne_envelope,
+    challenge=lambda _params: None,
+    success_reply={
+        "type": "close_screen",
+        "finalMessage": "Thanks, your response is saved",
+    },
+    error_reply={
+        "type": "error",
+        "message": "Couldn't save your response, please submit again",
+    },
 )

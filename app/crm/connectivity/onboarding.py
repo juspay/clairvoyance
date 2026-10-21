@@ -309,6 +309,7 @@ async def _onboard_in_txn(
         merchant_id,
         connector_key,
         result.external_account_id,
+        json.dumps(result.door_data),
         result.display_label,
         credential_id,
         status,
@@ -364,6 +365,19 @@ async def get_installation(
 ) -> Optional[InstallationRead]:
     return await installation_accessor.get_installation_read(
         merchant_id, installation_id
+    )
+
+
+async def get_installation_for_connector(
+    merchant_id: str, connector_key: str, external_account_id: Optional[str] = None
+) -> Optional[ConnectorInstallation]:
+    """The account used by both publish validation and action execution.
+
+    Pin the existing external_account_id when supplied; otherwise select
+    the connector's newest usable account. Never fall back for a missing pin.
+    """
+    return await installation_accessor.get_installation_for_connector(
+        merchant_id, connector_key, external_account_id=external_account_id
     )
 
 

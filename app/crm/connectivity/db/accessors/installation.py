@@ -71,6 +71,7 @@ async def upsert_installation(
     merchant_id: str,
     connector_key: str,
     external_account_id: str,
+    door_data_json: str,
     display_label: Optional[str],
     credential_id: Optional[str],
     status: str,
@@ -84,6 +85,7 @@ async def upsert_installation(
         merchant_id,
         connector_key,
         external_account_id,
+        door_data_json,
         display_label,
         credential_id,
         status,
@@ -104,15 +106,17 @@ async def revoke_installation(
 
 
 async def get_installation_for_connector(
-    merchant_id: str, connector_key: str
+    merchant_id: str, connector_key: str, external_account_id: Optional[str] = None
 ) -> Optional[ConnectorInstallation]:
-    """The usable door this merchant acts through on one connector, or None.
+    """The usable account for this merchant/connector, optionally pinned.
 
-    None is the fail-closed answer the action root turns into a refusal: no
-    connection, an unproven one, or a withdrawn one all read the same here,
-    because acting through any of them is the same mistake.
+    external_account_id is compared as text, not as an installation UUID.
+    HTTP URL edits change door_data while retaining the same account id.
+    Missing, foreign, unproven and withdrawn accounts all return None.
     """
-    query, values = installation_for_connector_query(merchant_id, connector_key)
+    query, values = installation_for_connector_query(
+        merchant_id, connector_key, external_account_id=external_account_id
+    )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_installation(row) if row is not None else None

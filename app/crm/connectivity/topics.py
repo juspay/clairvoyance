@@ -40,6 +40,9 @@ TOPIC_STATUS = "message.status"
 #: A customer wrote back to us.
 TOPIC_INBOUND = "message.inbound"
 
+#: A customer submitted an interactive form.
+TOPIC_FLOW_ACTION = "flow_action"
+
 #: A provider said something about the connected account itself (a review
 #: decision, a ban, a tier change) — the letters the health probe will read.
 TOPIC_ACCOUNT = "account.update"

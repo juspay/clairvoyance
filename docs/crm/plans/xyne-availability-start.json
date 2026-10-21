@@ -1,0 +1,45 @@
+{
+  "on_publish": "pin",
+  "entry": {
+    "topic": "flow_action",
+    "where": [
+      {
+        "field": "payload.actionId",
+        "op": "is",
+        "value": "submit-interview-availability"
+      },
+      {
+        "field": "payload.context.flowJSON.data.enrollment_id",
+        "op": "not_exists"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "process-availability",
+      "type": "action",
+      "connector": "merchant_http",
+      "action": "request",
+      "external_account_id": "xyne",
+      "args": {
+        "path": "/api/apps/chat/postMessage",
+        "method": "POST",
+        "body": {
+          "channelId": "REPLACE_WITH_XYNE_CHANNEL_ID",
+          "text": "{selected_slots}"
+        }
+      }
+    }
+  ],
+  "edges": [],
+  "goals": [
+    {
+      "topics": [
+        "interview.completed"
+      ]
+    }
+  ],
+  "exits": {
+    "max_age_days": 7
+  }
+}

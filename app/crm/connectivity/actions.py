@@ -23,7 +23,7 @@ else, and the walker's retry ladder re-sends. Collapsing the two would either
 park runs on a deploy blip or spend attempts on a permanent refusal.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
@@ -73,6 +73,19 @@ def validate_action_args(
     return []
 
 
+def action_declares(connector_key: str, action: str, args: Dict[str, Any]) -> List[str]:
+    """PURE: the fact names this action will write for these args, or [] —
+    the publish validator's read, so a later square may name
+    `{payment_link}` and be admitted. A face that produces no facts for a
+    later square (Shopify's tag) declares nothing and needs no method."""
+    spec = CONNECTORS.get(connector_key)
+    face = spec.actions.get(action) if spec else None
+    declares = getattr(face, "declares", None)
+    if face is None or declares is None:
+        return []
+    return list(declares(args))
+
+
 def _bad_fields(error: ValidationError) -> List[str]:
     """PURE: the dotted field names pydantic refused, deduplicated in order."""
     seen: List[str] = []
@@ -89,12 +102,19 @@ async def perform_action(
     action: str,
     args: Dict[str, Any],
     context: Dict[str, Any],
+    external_account_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Do one thing through one connector, and report it as flat facts.
 
     ``args`` is the plan's, still untyped; ``context`` carries only what a
     transport may need for bookkeeping (the run and node ids behind the
     idempotency key) and never reaches the provider as data.
+
+    ``external_account_id`` pins WHICH of a merchant's doors on this connector the
+    action acts through, by the door's STABLE merchant-chosen name (a merchant
+    can hold several base_urls on merchant_http, each under its own name — a
+    base-URL change edits door_data on the same row, so the name keeps
+    resolving); absent it, the connector's newest usable door is chosen.
 
     Raises ActionError for anything a retry cannot fix.
     """
@@ -109,7 +129,9 @@ async def perform_action(
             f"connector '{connector_key}' has no action '{action}' (has: {known})"
         )
 
-    installation = await get_installation_for_connector(merchant_id, connector_key)
+    installation = await get_installation_for_connector(
+        merchant_id, connector_key, external_account_id=external_account_id
+    )
     if installation is None:
         # Fail CLOSED, unconditionally: the door is the tenancy, and there is
         # no flag a face can set to be excused from it. A `getattr(face,

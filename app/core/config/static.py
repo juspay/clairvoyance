@@ -652,6 +652,8 @@ CRM_MESSAGE_SEND_TIMEOUT_SECONDS = _positive_int("CRM_MESSAGE_SEND_TIMEOUT_SECON
 # tests/crm/test_config_bounds.py asserts the inequality against this module,
 # so raising one dial without the other fails CI.
 CRM_ACTION_TIMEOUT_SECONDS = _positive_int("CRM_ACTION_TIMEOUT_SECONDS", 20)
+# Separate from the outbound bearer token; unset refuses all callbacks.
+XYNE_WEBHOOK_SECRET = os.environ.get("XYNE_WEBHOOK_SECRET", "")
 
 # Nautilus's inbound route for anything WE ask it to do — today a Shopify
 # order action relayed while nautilus still holds the shops' Shopify tokens
