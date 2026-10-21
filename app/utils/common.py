@@ -70,6 +70,12 @@ def parse_json(row, key) -> Optional[Dict[str, Any]]:
     )
 
 
+def json_size_bytes(value: Any) -> int:
+    """Size of ``value`` as the JSON a request body would carry (non-ASCII
+    escaped), for byte caps on client-supplied payloads."""
+    return len(json.dumps(value, default=str))
+
+
 def get_breeze_portal_url(reseller_id: str | None = None) -> str:
     """
     Get the appropriate Breeze portal base URL based on reseller ID.
