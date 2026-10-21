@@ -16,6 +16,8 @@ from app.database.queries.breeze_buddy.meetings import (
     finish_meeting_query,
     get_last_seq_query,
     get_meeting_by_id_query,
+    get_meeting_query,
+    get_meetings_by_lead_query,
     get_recording_meeting_by_lead_query,
     get_segments_query,
     get_stale_recording_meetings_query,
@@ -59,6 +61,28 @@ async def get_meeting_by_id(meeting_id: str, merchant_id: str) -> Optional[Meeti
         return decode_meeting(rows[0]) if rows else None
     except Exception as e:
         logger.error(f"Error reading meeting {meeting_id}: {e}")
+        raise
+
+
+async def get_meeting(meeting_id: str) -> Optional[Meeting]:
+    """One meeting by id, unscoped; the caller enforces tenant access."""
+    query, values = get_meeting_query(meeting_id)
+    try:
+        rows = await run_parameterized_query(query, values)
+        return decode_meeting(rows[0]) if rows else None
+    except Exception as e:
+        logger.error(f"Error reading meeting {meeting_id}: {e}")
+        raise
+
+
+async def get_meetings_by_lead(lead_id: str) -> List[Meeting]:
+    """Every meeting on one lead, newest first."""
+    query, values = get_meetings_by_lead_query(lead_id)
+    try:
+        rows = await run_parameterized_query(query, values)
+        return [decode_meeting(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Error reading meetings for lead {lead_id}: {e}")
         raise
 
 

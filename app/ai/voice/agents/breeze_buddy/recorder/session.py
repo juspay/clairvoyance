@@ -342,6 +342,32 @@ class MeetingSession:
                     logger.error(f"[MEETING] on_finished failed for {meeting_id}: {e}")
             return finished
 
+    async def suspend(self) -> int:
+        """The connection is going away but the meeting is not over.
+
+        Stops the in-process loops and the gate, flushes what is buffered,
+        restores the idle handler, and leaves the row RECORDING so a
+        reconnect within the resume grace can continue it and the sweeper
+        closes it otherwise. Returns lines flushed. Idempotent.
+        """
+        async with self._stop_lock:
+            if not self._recording or self.meeting is None:
+                return 0
+            self._recording = False
+            self._gate.stop_capture()
+            await self._cancel_loops()
+            self._resume_idle()
+            pending = len(self._buffer)
+            for _ in range(3):
+                if not self._buffer.lines:
+                    break
+                await self._flush_batch_once()
+            logger.info(
+                f"[MEETING] suspended {self.meeting.id} with {self._next_seq} "
+                f"line(s) numbered; row stays RECORDING for resume"
+            )
+            return pending - len(self._buffer)
+
     async def _flush_batch_once(self) -> None:
         """One final-flush attempt that never raises and never re-stops."""
         if not self._buffer.lines or self.meeting is None:

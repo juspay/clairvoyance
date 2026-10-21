@@ -204,6 +204,7 @@ async def create_stt_from_config(
 
         language = _normalize_language(config.language)
         enable_lang_id = sx.enable_language_identification if sx else None
+        enable_diarization = sx.enable_speaker_diarization if sx else None
         # Template field wins; 0 (= disabled) must flow through, so the env
         # default only applies when the template left it unset.
         effective_finalize_after = (
@@ -240,6 +241,7 @@ async def create_stt_from_config(
                 log_context="Breeze Buddy",
                 language_hints_strict=bool(language),
                 enable_language_identification=enable_lang_id,
+                enable_speaker_diarization=enable_diarization,
                 finalize_after_secs=effective_finalize_after,
                 ws_ping_interval=BREEZE_BUDDY_SONIOX_WS_PING_INTERVAL,
                 ws_ping_timeout=BREEZE_BUDDY_SONIOX_WS_PING_TIMEOUT,

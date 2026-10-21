@@ -33,6 +33,9 @@ from app.ai.voice.agents.breeze_buddy.template.kb_tool import (
     append_kb_tool,
     synthesize_kb_tool_function,
 )
+from app.ai.voice.agents.breeze_buddy.template.meeting_tool import (
+    synthesize_meeting_recording_function,
+)
 from app.ai.voice.agents.breeze_buddy.template.transition import (
     transition_handler,
 )
@@ -466,6 +469,11 @@ class FlowConfigBuilder:
         # chat both flow through this method, so the tool appears uniformly
         # on both channels.
         kb_tool_function = synthesize_kb_tool_function(bot_instance, log=self._log)
+        # Meeting recording: same shape, same rules (explicit declaration wins,
+        # per-channel disabling applies). See template/meeting_tool.py.
+        meeting_function = synthesize_meeting_recording_function(
+            bot_instance, log=self._log
+        )
 
         # Direct mode has a single flat `functions` array. Each entry is
         # routed by `type`: http/builtin/custom go through the global-function
@@ -474,7 +482,8 @@ class FlowConfigBuilder:
         # disabling applies to it like any other function.
         if flow.get("mode") == FlowMode.DIRECT.value:
             declared_functions = append_kb_tool(
-                flow.get("functions") or [], kb_tool_function
+                append_kb_tool(flow.get("functions") or [], kb_tool_function),
+                meeting_function,
             )
             direct_functions = filter_disabled_identifiers(
                 declared_functions, self._disabled_names, "function"
@@ -491,7 +500,10 @@ class FlowConfigBuilder:
         # always run it; we shallow-copy the flow dict to avoid mutating the
         # caller's structure when assigning the filtered list back.
         global_functions = filter_disabled_identifiers(
-            append_kb_tool(flow.get("global_functions") or [], kb_tool_function),
+            append_kb_tool(
+                append_kb_tool(flow.get("global_functions") or [], kb_tool_function),
+                meeting_function,
+            ),
             self._disabled_names,
             "function",
         )

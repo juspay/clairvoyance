@@ -51,6 +51,7 @@ from app.api.routers.breeze_buddy.evaluations import router as evaluations_route
 # Knowledge base (RAG) management: KBs, documents, retrieval testing
 from app.api.routers.breeze_buddy.knowledge_base import router as knowledge_base_router
 from app.api.routers.breeze_buddy.leads import router as leads_router
+from app.api.routers.breeze_buddy.meetings import router as meetings_router
 from app.api.routers.breeze_buddy.merchants import router as merchants_router
 from app.api.routers.breeze_buddy.numbers import router as numbers_router
 from app.api.routers.breeze_buddy.playground import router as playground_router
@@ -120,6 +121,7 @@ router.include_router(templates_router, prefix="", tags=["templates"])
 router.include_router(template_versions_router, prefix="", tags=["templates"])
 router.include_router(topics_router, prefix="", tags=["topics"])
 router.include_router(evaluations_router, prefix="", tags=["evaluations"])
+router.include_router(meetings_router, prefix="", tags=["meetings"])
 
 # DragonTTS kill switch (admin-only: force kill / restore + status)
 router.include_router(dragontts_router, prefix="", tags=["dragontts"])

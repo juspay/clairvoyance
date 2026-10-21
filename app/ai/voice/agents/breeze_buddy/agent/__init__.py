@@ -84,6 +84,11 @@ from app.ai.voice.agents.breeze_buddy.processors import (
 from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
     coerce_ui_action_text,
 )
+from app.ai.voice.agents.breeze_buddy.recorder.config import (
+    meeting_recording_enabled,
+    prepare_configurations_for_meeting_recording,
+    suspend_meeting_recording,
+)
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     get_block_redirect,
 )
@@ -227,6 +232,10 @@ class Agent:
 
         # RTVI processor for daily mode real-time events
         self._rtvi_processor: Any = None
+        # Meeting recording (template meeting_recording block): the STT handle
+        # the session rotates, and the live session itself once started.
+        self._stt_service: Any = None
+        self._meeting_session: Any = None
 
         # Stream mode transcript collector (replaces LLMContext for transcription)
         self._transcript_collector: Optional[TranscriptCollectorProcessor] = None
@@ -440,6 +449,7 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            prepare_configurations_for_meeting_recording(self.configurations)
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
@@ -663,6 +673,7 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            prepare_configurations_for_meeting_recording(self.configurations)
         except ValueError as e:
             error_msg = f"Template loading failed: {str(e)}"
             logger.error(error_msg)
@@ -1379,6 +1390,12 @@ class Agent:
                 self.pending_transfer = None
                 await apply_transfer(self, transfer)
 
+            # A recording that outlived the connection is NOT finished here:
+            # its row stays RECORDING for the resume grace (device reconnects
+            # with the meeting id) and the sweeper closes it after. Only the
+            # in-process loops stop and the last lines are flushed.
+            await suspend_meeting_recording(self)
+
             # The Agent owns the ONE real teardown at true call end — per-generation
             # teardown is suppressed so transfers never drop the connection.
             # Telephony: close the raw ws (NonClosingWebSocket swallowed pipecat's
@@ -1469,6 +1486,7 @@ class Agent:
                 )
                 logger.info("KB full_injection enabled for this call")
 
+        self._stt_service = stt
         (
             pipeline,
             context,
@@ -1514,6 +1532,7 @@ class Agent:
             self.conversation_id,
             is_daily_mode=self.is_daily_mode,
             metrics_collector=self.metrics_collector,
+            cancel_on_idle_timeout=not meeting_recording_enabled(self.configurations),
         )
 
         if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:

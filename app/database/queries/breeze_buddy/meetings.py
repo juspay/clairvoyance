@@ -69,6 +69,27 @@ def get_meeting_by_id_query(meeting_id: str, merchant_id: str) -> Tuple[str, Lis
     return query, [meeting_id, merchant_id]
 
 
+def get_meeting_query(meeting_id: str) -> Tuple[str, List[Any]]:
+    """One meeting by id, unscoped: the API checks tenant access on the row."""
+    query = f"""
+        SELECT {_MEETING_COLUMNS}
+        FROM {MEETING_TABLE}
+        WHERE id = $1
+    """
+    return query, [meeting_id]
+
+
+def get_meetings_by_lead_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """Every meeting recorded on one connection, newest first."""
+    query = f"""
+        SELECT {_MEETING_COLUMNS}
+        FROM {MEETING_TABLE}
+        WHERE lead_id = $1
+        ORDER BY started_at DESC
+    """
+    return query, [lead_id]
+
+
 def get_recording_meeting_by_lead_query(lead_id: str) -> Tuple[str, List[Any]]:
     """The meeting still RECORDING on this connection, if any.
 

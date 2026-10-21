@@ -673,8 +673,14 @@ async def create_pipeline_task(
     conversation_id: str,
     is_daily_mode: bool = False,
     metrics_collector: Optional[MetricsCollectorProcessor] = None,
+    cancel_on_idle_timeout: bool = True,
 ) -> PipelineTask:
     """Create and configure the pipeline task.
+
+    ``cancel_on_idle_timeout=False`` keeps pipecat's task-level idle watchdog
+    (no Bot/UserSpeakingFrame for ~5 min → cancel) out of a meeting
+    recording, where a quiet stretch is normal; the user-idle handler is
+    suppressed separately by the MeetingSession.
 
     Args:
         pipeline: The built pipeline
@@ -720,6 +726,7 @@ async def create_pipeline_task(
         "observers": get_observers(metrics_collector),
         "enable_rtvi": emit_daily_events,
         "rtvi_observer_params": rtvi_params,
+        "cancel_on_idle_timeout": cancel_on_idle_timeout,
     }
 
     if ENABLE_BREEZE_BUDDY_TRACING:
