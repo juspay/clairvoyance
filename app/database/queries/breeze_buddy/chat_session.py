@@ -229,26 +229,40 @@ def list_chat_sessions_query(
 
     Most-recently-active first. ``message_count`` and ``preview`` (the latest
     prose-bearing message, untruncated here — the accessor truncates) are
-    correlated subqueries; cheap at page-size scale and backed by the
-    chat_message (session_id, idx) PK.
+    backed by the chat_message (session_id, idx) PK.
+
+    The page is picked first and only its rows are enriched. Postgres builds
+    the SELECT list before OFFSET discards rows, so with the two subqueries
+    in the outer SELECT a deep page paid them for every skipped row too
+    (page 1000 of 100 = ~200k message lookups, 0.7s on prod). ``id`` breaks
+    ties on ``last_activity_at`` (the idle sweeper touches many rows at
+    once) so a row can't land on two pages.
     """
     conditions, values, next_idx = _chat_session_filter_clauses(filters)
     where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
     limit_ph, offset_ph = next_idx, next_idx + 1
     query = f"""
+        WITH page AS (
+            SELECT
+                cs.id, cs.template_id, cs.reseller_id, cs.merchant_id,
+                cs.status, cs.outcome, cs.current_channel,
+                cs.created_at, cs.last_activity_at, cs.ended_at
+            FROM {CHAT_SESSION_TABLE} cs
+            {where}
+            ORDER BY cs.last_activity_at DESC, cs.id DESC
+            LIMIT ${limit_ph} OFFSET ${offset_ph}
+        )
         SELECT
-            cs.id, cs.template_id, cs.reseller_id, cs.merchant_id,
-            cs.status, cs.outcome, cs.current_channel,
-            cs.created_at, cs.last_activity_at, cs.ended_at,
+            p.id, p.template_id, p.reseller_id, p.merchant_id,
+            p.status, p.outcome, p.current_channel,
+            p.created_at, p.last_activity_at, p.ended_at,
             (SELECT COUNT(*) FROM {CHAT_MESSAGE_TABLE} m
-             WHERE m.session_id = cs.id) AS message_count,
+             WHERE m.session_id = p.id) AS message_count,
             (SELECT m.content FROM {CHAT_MESSAGE_TABLE} m
-             WHERE m.session_id = cs.id AND m.content IS NOT NULL
+             WHERE m.session_id = p.id AND m.content IS NOT NULL
              ORDER BY m.idx DESC LIMIT 1) AS preview
-        FROM {CHAT_SESSION_TABLE} cs
-        {where}
-        ORDER BY cs.last_activity_at DESC
-        LIMIT ${limit_ph} OFFSET ${offset_ph}
+        FROM page p
+        ORDER BY p.last_activity_at DESC, p.id DESC
     """
     return query, values + [limit, offset]
 
