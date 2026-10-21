@@ -23,12 +23,18 @@ application) are intentionally split.
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, Response, status
 
-from app.core.config.static import WIDGET_CONSOLE_ORIGINS
+from app.core.config.static import (
+    TRUSTED_PROXY_CIDRS,
+    WIDGET_CONSOLE_ORIGINS,
+    WIDGET_KEY_LIMIT_MULTIPLIER,
+    WIDGET_KEY_LIMIT_WINDOW_SECONDS,
+)
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.widget_config import (
     get_widget_config_by_id,
@@ -44,29 +50,48 @@ _RATE_WINDOW_SECONDS = 3600
 _RATE_LIMIT_PREFIX = "widget"
 
 
+# Parsed once at import, so a malformed TRUSTED_PROXY_CIDRS fails the deploy
+# rather than every request.
+_TRUSTED_PROXY_NETWORKS = tuple(
+    ipaddress.ip_network(cidr.strip(), strict=False)
+    for cidr in TRUSTED_PROXY_CIDRS.split(",")
+    if cidr.strip()
+)
+
+
+def _is_own_hop(value: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return any(ip in net for net in _TRUSTED_PROXY_NETWORKS)
+
+
 def client_ip(request: Request) -> str:
     """Best-effort caller IP for rate-limit keying.
 
-    Honours ``X-Forwarded-For`` *last* hop when present — the last entry
-    is the one our trusted proxy / load balancer wrote, every earlier hop
-    is attacker-controllable. Falls back to ``request.client.host`` (the
-    direct peer). Returns ``unknown`` when both are missing — that's one
-    shared bucket, which is the safest default.
+    Behind the GCP load balancer ``X-Forwarded-For`` reads
+    ``<anything the client sent>, <client>, <load balancer>`` followed by any
+    hops our own proxies add. So: drop our trailing hops (addresses in
+    ``TRUSTED_PROXY_CIDRS``), drop the load balancer's own address, and the next
+    entry is the client — the one hop the client cannot write. Everything to
+    its left is client-supplied and ignored.
 
-    Earlier implementations took the first XFF hop, which let any client
-    iterate the header on each request and get unbounded rate-limit
-    buckets — defeating the cap. Last-hop assumes the deployment is
-    behind a known proxy that strips client-supplied XFF. If you ever
-    deploy widget endpoints WITHOUT a trusted proxy in front, set the
-    proxy header explicitly (``X-Real-IP``) and switch to read that.
+    Neither the first hop (spoofable) nor the last (the load balancer, the
+    same for every caller, so every visitor would share one bucket) is the
+    client. With a single remaining entry — a request that did not come
+    through the load balancer — that entry is used. Falls back to
+    ``request.client.host``, then ``unknown`` (one shared bucket).
     """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        # rsplit picks the *last* IP — the one written by our trusted
-        # last-hop. ``unknown`` if the header is malformed / empty.
-        last = forwarded.rsplit(",", 1)[-1].strip()
-        if last:
-            return last
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        while len(hops) > 1 and _is_own_hop(hops[-1]):
+            hops.pop()
+        if len(hops) > 1:
+            hops.pop()  # the load balancer's own address
+        if hops:
+            return hops[-1]
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
@@ -110,9 +135,8 @@ async def _enforce_widget_ip_limit(
     The Redis identifier is ``"{widget_config_id}:{client_ip}"`` so each
     merchant has its OWN per-IP bucket — without this prefix, traffic to
     one merchant's widget would burn another merchant's quota.
-    Combined with the last-hop XFF parsing in ``client_ip``, an attacker
-    rotating XFF values can no longer escape the cap (last hop is
-    proxy-written, not client-controllable).
+    ``client_ip`` reads the hop the load balancer wrote, so an attacker
+    rotating XFF values cannot escape the cap.
 
     ``fail_closed=True`` is passed through to the rate limiter so a
     Redis outage denies new widget traffic instead of opening the
@@ -196,6 +220,46 @@ def enforce_widget_origin(*, request: Request, cfg: WidgetConfigResponse) -> Non
         )
 
 
+async def _enforce_widget_aggregate_limit(
+    *, bucket: str, limit: int, widget_config_id: str
+) -> None:
+    """Raise 429 when one public_widget_key exceeds this action's cross-IP cap.
+
+    The Origin header is spoofable from a non-browser client and the
+    public_widget_key is public, so per-IP limits alone don't bound a merchant's
+    spend once an attacker rotates source IPs (PT-18). Keyed on
+    ``widget_config_id`` ONLY (no client IP), so rotating IPs cannot escape it.
+    The window is short (WIDGET_KEY_LIMIT_WINDOW_SECONDS, a minute by default)
+    so a burst that trips it clears quickly instead of blocking a store's real
+    shoppers for an hour. Fail-closed on Redis outage, like the per-IP cap.
+
+    Note the cap is *per action type*, not one shared budget: the bucket name is
+    part of the key, so ``message`` and ``transcribe`` each carry their own
+    cross-IP ceiling. That is deliberate — the per-action limits differ by an
+    order of magnitude, and collapsing them into one counter would let cheap
+    calls exhaust the budget for expensive ones. It does mean total spend on a
+    key is bounded by the *sum* of the per-action caps, not by any single one.
+    """
+    decision = await check_rate_limit(
+        bucket=f"{bucket}:agg",
+        identifier=widget_config_id,
+        limit=limit,
+        window_seconds=WIDGET_KEY_LIMIT_WINDOW_SECONDS,
+        prefix=_RATE_LIMIT_PREFIX,
+        fail_closed=True,
+    )
+    if decision.allowed:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=(
+            "This widget is receiving unusually heavy traffic. "
+            f"Please try again in {decision.retry_after_seconds} seconds."
+        ),
+        headers={"Retry-After": str(decision.retry_after_seconds)},
+    )
+
+
 async def resolve_widget_config_for_request(
     *,
     request: Request,
@@ -259,6 +323,13 @@ async def resolve_widget_config_for_request(
         limit=effective_limit,
         widget_config_id=cfg.id,
     )
+    # Cross-IP aggregate cap so IP rotation can't run up unbounded spend on this
+    # merchant's public_widget_key (PT-18).
+    await _enforce_widget_aggregate_limit(
+        bucket=rate_bucket,
+        limit=effective_limit * WIDGET_KEY_LIMIT_MULTIPLIER,
+        widget_config_id=cfg.id,
+    )
     return cfg
 
 
@@ -278,6 +349,12 @@ async def enforce_widget_ip_limit(
         request=request,
         bucket=bucket,
         limit=limit,
+        widget_config_id=widget_config_id,
+    )
+    # Cross-IP aggregate cap on this follow-up action too (PT-18).
+    await _enforce_widget_aggregate_limit(
+        bucket=bucket,
+        limit=limit * WIDGET_KEY_LIMIT_MULTIPLIER,
         widget_config_id=widget_config_id,
     )
 

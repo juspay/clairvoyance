@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
+import jwt as pyjwt
 from fastapi import HTTPException, status
 
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
@@ -20,8 +21,9 @@ from app.core.config.static import (
     LOOM_APP_URL,
 )
 from app.core.logger import logger
-from app.core.security.password import verify_password_async
+from app.core.security.password import DUMMY_PASSWORD_HASH, verify_password_async
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
+from app.core.security.token_revocation import revoke_token
 from app.database.accessor.breeze_buddy import merchants as merchant_accessors
 from app.database.accessor.breeze_buddy.users import get_user_by_username
 from app.schemas import (
@@ -77,7 +79,7 @@ async def login_handler(
         # Verify password first to prevent username enumeration
         # Both is_active and password checks return identical error messages
         if not await verify_password_async(login_request.password, user.password_hash):
-            logger.warning(f"Failed login attempt for user: {login_request.username}")
+            logger.warning("Failed login attempt: wrong password")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username or password",
@@ -85,7 +87,7 @@ async def login_handler(
 
         # Check account status after password verification
         if not user.is_active:
-            logger.warning(f"Inactive user attempted login: {login_request.username}")
+            logger.warning("Failed login attempt: account inactive")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid username or password",
@@ -149,8 +151,17 @@ async def login_handler(
             expires_in=expires_in,
         )
 
-    # Authentication failed
-    logger.warning(f"Failed login attempt for unknown user: {login_request.username}")
+    # Authentication failed: no such user. Still spend one bcrypt against a
+    # dummy hash so an unknown username can't be distinguished from a wrong
+    # password by response timing (username-enumeration oracle, PT-16). Uses the
+    # async wrapper for the same reason the real check does: this branch is the
+    # one an attacker can drive at will, so running bcrypt inline here would
+    # freeze the event loop for ~240ms per guess.
+    await verify_password_async(login_request.password, DUMMY_PASSWORD_HASH)
+    # The username is the user's email address, so it never goes to the logs:
+    # these lines are attacker-driven, which makes them both a PII sink and a
+    # place an attacker can write arbitrary text into our retained logs.
+    logger.warning("Failed login attempt: no such user")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid username or password",
@@ -181,23 +192,25 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     # Authenticate user
     user = await get_user_by_username(request.username)
     if not user:
-        logger.warning(f"S2S token request failed: user not found - {request.username}")
+        # Spend one bcrypt against a dummy hash before failing so an unknown
+        # username is timing-indistinguishable from a wrong password — this path
+        # would otherwise reveal whether an admin account exists (PT-16).
+        await verify_password_async(request.password, DUMMY_PASSWORD_HASH)
+        logger.warning("S2S token request failed: no such user")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
 
     # Verify password
     if not await verify_password_async(request.password, user.password_hash):
-        logger.warning(
-            f"S2S token request failed: invalid password - {request.username}"
-        )
+        logger.warning("S2S token request failed: wrong password")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
 
     # Check if user is active
     if not user.is_active:
-        logger.warning(f"S2S token request failed: inactive user - {request.username}")
+        logger.warning("S2S token request failed: account inactive")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account is inactive. Please contact administrator.",
@@ -205,9 +218,7 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
 
     # Security restriction: Only admins can generate S2S tokens
     if user.role != UserRole.ADMIN:
-        logger.warning(
-            f"S2S token request denied: non-admin user - {request.username} (role: {user.role})"
-        )
+        logger.warning(f"S2S token request denied: non-admin user (role: {user.role})")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admin users can generate S2S tokens. Please contact your administrator.",
@@ -421,27 +432,59 @@ async def launch_token_handler(
     )
 
 
-async def logout_handler() -> dict:
+async def logout_handler(token: str) -> dict:
     """
     Handle logout for JWT token-based authentication.
 
-    Since JWT tokens are stateless and stored client-side:
-    - Backend cannot invalidate the token (no session to destroy)
-    - Client must delete the token from localStorage/cookies
-    - Token will naturally expire after its lifetime
+    The token is added to the server-side revocation denylist (keyed by a hash
+    of the token, with a TTL equal to its remaining lifetime), so it can no
+    longer authenticate even though its signature is still valid (PT-22).
 
     Returns:
-        Success message with logout instructions
+        Success message.
     """
-    logger.info("Logout endpoint called (token-based auth - client-side logout)")
+    try:
+        payload = pyjwt.decode(
+            token,
+            rbac_token_manager.jwt_manager.secret_key,
+            algorithms=[rbac_token_manager.jwt_manager.algorithm],
+            options={"verify_exp": False},
+        )
+        exp = int(payload.get("exp", 0))
+        if exp <= 0:
+            # A token carrying no usable expiry is exactly the one that must be
+            # denylisted — nothing else will ever invalidate it. Defaulting to 0
+            # would hand revoke_token a negative TTL, which it reads as "already
+            # expired", so it skips the write and returns True and this handler
+            # reports a revocation that never happened.
+            raise ValueError("token has no usable exp claim; cannot bound its TTL")
+        revoked = await revoke_token(token, exp)
+    except Exception as e:
+        logger.opt(exception=e).error("Logout: failed to revoke token")
+        revoked = False
+
+    logger.info(f"Logout endpoint called (token revoked={revoked})")
+
+    if not revoked:
+        # Do not claim a revocation that did not happen: revoke_token returns
+        # False when the denylist write fails (RedisService.setex swallows
+        # RedisError), and the token stays valid until it expires. A client
+        # that believed the old message would treat a live token as dead.
+        logger.error(
+            "Logout: token could NOT be added to the revocation denylist; it "
+            "remains valid until expiry"
+        )
+        return {
+            "success": False,
+            "message": (
+                "Logged out locally, but the token could not be revoked "
+                "server-side and remains valid until it expires."
+            ),
+            "revoked": False,
+        }
 
     return {
         "success": True,
-        "message": "Logout acknowledged. Client should clear token from storage.",
-        "instructions": {
-            "step_1": "Remove token from localStorage or cookies",
-            "step_2": "Clear user state in your application",
-            "step_3": "Redirect to login page",
-            "note": "Token remains valid until expiration but client discards it",
-        },
+        "message": "Logout successful. Token has been revoked server-side.",
+        "revoked": True,
     }

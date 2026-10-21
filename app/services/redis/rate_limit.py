@@ -25,7 +25,7 @@ from typing import Optional
 from app.core.logger import logger
 from app.services.redis import get_redis_service, is_redis_configured
 
-__all__ = ["RateLimitDecision", "check_rate_limit"]
+__all__ = ["RateLimitDecision", "check_rate_limit", "refund_rate_limit"]
 
 
 @dataclass(frozen=True)
@@ -115,7 +115,19 @@ async def check_rate_limit(
         if count == 1:
             # New bucket — set TTL just past the window edge so the key
             # is readable for the full window before Redis evicts it.
-            await redis.expire(key, window_seconds + 5)
+            #
+            # If the TTL never lands, drop the counter. INCR and EXPIRE are two
+            # round trips, and only the count == 1 branch ever sets a TTL, so a
+            # key that survives a failed EXPIRE is immortal: no later call can
+            # repair it, and once it climbs past `limit` a fail_closed caller
+            # (the widget caps) would 429 that key forever rather than for one
+            # window. Deleting costs at most one under-counted request.
+            if not await redis.expire(key, window_seconds + 5):
+                logger.warning(
+                    f"rate_limit: could not set TTL on bucket={bucket!r}; "
+                    "dropping the counter rather than leaving it immortal"
+                )
+                await redis.delete(key)
     except Exception as exc:
         if fail_closed:
             logger.warning(
@@ -147,3 +159,36 @@ async def check_rate_limit(
         limit=limit,
         retry_after_seconds=retry_after,
     )
+
+
+# Decrement, but never below zero: a refund racing the window's expiry must not
+# leave a negative counter that hands out extra attempts.
+_REFUND_SCRIPT = """
+local v = tonumber(redis.call('GET', KEYS[1]) or '0')
+if v > 0 then return redis.call('DECR', KEYS[1]) end
+return 0
+"""
+
+
+async def refund_rate_limit(
+    *,
+    bucket: str,
+    identifier: str,
+    window_seconds: int,
+    prefix: str = "ratelimit",
+) -> None:
+    """Hand back one event counted by :func:`check_rate_limit` in this window.
+
+    For callers that count only failures: take the slot before the work (so
+    parallel attempts cannot all slip under the limit) and refund it when the
+    work succeeds. Best-effort: on any Redis trouble the event stays counted.
+    """
+    if not is_redis_configured():
+        return
+    window_index = int(time.time()) // window_seconds
+    key = f"{prefix}:{bucket}:{identifier}:{window_index}"
+    try:
+        redis = await get_redis_service()
+        await redis.run_script(_REFUND_SCRIPT, [key], [])
+    except Exception as exc:
+        logger.warning(f"rate_limit: refund failed for bucket={bucket!r}: {exc}")

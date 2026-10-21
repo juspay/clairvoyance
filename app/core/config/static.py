@@ -959,6 +959,42 @@ ENABLE_SIGTERM_HANDLER = (
 BOT_MAX_DRAIN_SECONDS = int(os.environ.get("BOT_MAX_DRAIN_SECONDS", "25"))
 
 # Redis Configuration
+# Brute-force rate limiting for the credential endpoints (/login,
+# /auth/s2s/token, /signup, /auth/accounts, /auth/select-account): FAILED
+# attempts per client IP and per username/email, in a fixed window, layered on
+# top of bcrypt + the timing equalization (PT-16). A successful attempt is not
+# counted. Set a cap to 0 to disable that dimension. Enforcement fails OPEN on
+# a Redis outage (see app/api/routers/breeze_buddy/auth/rate_limit.py) so a
+# Redis blip can't lock every operator out of login.
+AUTH_RATE_LIMIT_WINDOW_SECONDS = int(
+    os.environ.get("AUTH_RATE_LIMIT_WINDOW_SECONDS", "900")
+)
+AUTH_RATE_LIMIT_PER_IP = int(os.environ.get("AUTH_RATE_LIMIT_PER_IP", "20"))
+
+# Per-widget cap across all visitors (PT-18), per action, on top of the
+# per-visitor caps: each window allows (that action's per-visitor hourly limit x
+# WIDGET_KEY_LIMIT_MULTIPLIER) requests to one widget. With the defaults that is
+# 600 session-creates, 6000 messages and 100 voice-connects per minute — sized
+# well above the busiest store's peak (25 session-creates/min in Oct 2026).
+# Set the multiplier to 0 to disable the cap.
+WIDGET_KEY_LIMIT_WINDOW_SECONDS = int(
+    os.environ.get("WIDGET_KEY_LIMIT_WINDOW_SECONDS", "60")
+)
+WIDGET_KEY_LIMIT_MULTIPLIER = int(os.environ.get("WIDGET_KEY_LIMIT_MULTIPLIER", "10"))
+AUTH_RATE_LIMIT_PER_USERNAME = int(os.environ.get("AUTH_RATE_LIMIT_PER_USERNAME", "5"))
+
+# Our own proxies: the hops to the right of the client in X-Forwarded-For,
+# skipped when picking the caller IP that rate limits key on (client_ip in
+# widget_common.py). Private ranges cover in-cluster hops; 35.191.0.0/16 and
+# 130.211.0.0/22 are the ranges Google's load balancers proxy from
+# (https://cloud.google.com/load-balancing/docs/firewall-rules). Only list
+# infrastructure here, never client addresses: a listed address is skipped as
+# a proxy, so the caller would be read from the client-written part instead.
+TRUSTED_PROXY_CIDRS = os.getenv(
+    "TRUSTED_PROXY_CIDRS",
+    "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,35.191.0.0/16,130.211.0.0/22",
+)
+
 REDIS_HOST = os.getenv("REDIS_HOST", "")
 REDIS_PORT = os.getenv("REDIS_PORT", "")
 REDIS_CLUSTER_NODES = os.getenv("REDIS_CLUSTER_NODES", "")
