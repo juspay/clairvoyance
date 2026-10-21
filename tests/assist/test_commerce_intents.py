@@ -930,3 +930,50 @@ async def test_connector_hooks_follow_the_templates_connectors(
     op = next(e.data["op"] for e in events if e.event == "ui_op")
     assert op["type"] == "ProductDetail"
     assert [v["id"] for v in op["props"]["product"]["variants"]] == expected
+
+
+def test_cart_sync_url_reaches_cart_view_on_both_paths():
+    """A cart that carries ``cart_sync_url`` (WooCommerce) has the widget fill
+    the store's own cart in the background. Both render paths pass it to
+    CartView; a cart without it (Shopify) gets no prop."""
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.intents import (
+        _cart_view_show_op,
+    )
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.render_ui import (
+        _finalize_commerce,
+    )
+    from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.schemas import CartView
+    from app.ai.voice.agents.breeze_buddy.chat.ui.binding import BindingStore
+
+    link = "https://shop.example/checkout-link/?products=11:1"
+    woo = {**_cart_payload([]), "continue_url": link, "cart_sync_url": link}
+    shopify = {**_cart_payload([]), "continue_url": "https://shop.example/c/abc"}
+
+    class _Agent:
+        agent_state: dict = {}
+        template = _template()
+
+    # Direct path (widget buttons): a bind, like cart_token.
+    op = _cart_view_show_op("update_cart", _envelope(woo), _Agent())
+    assert op["bind"]["cart_sync_url"] == "$tool:update_cart#/cart_sync_url"
+    op = _cart_view_show_op("update_cart", _envelope(shopify), _Agent())
+    assert "cart_sync_url" not in op["bind"]
+
+    # Model-driven path (render_ui): copied off the bound cart payload.
+    def _props(payload: Dict[str, Any]) -> Dict[str, Any]:
+        store = BindingStore()
+        store.record("get_cart", "tu1", _envelope(payload))
+        props: Dict[str, Any] = {}
+        _finalize_commerce(
+            "CartView",
+            CartView,
+            props,
+            bind={"cart_id": "$tool:get_cart#/id"},
+            store=store,
+            template=_template(),
+            state_values=None,
+        )
+        return props
+
+    assert _props(woo)["cart_sync_url"] == link
+    assert "cart_sync_url" not in _props(shopify)

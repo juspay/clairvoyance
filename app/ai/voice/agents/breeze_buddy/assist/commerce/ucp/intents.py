@@ -690,6 +690,7 @@ def _cart_view_show_op(tool_name: str, result: Any, agent: Any) -> Dict[str, Any
         ("line_items", "line_items"),
         ("totals", "totals"),
         ("cart_token", "cart_token"),
+        ("cart_sync_url", "cart_sync_url"),
     ):
         if payload.get(key) is not None:
             bind[prop] = f"$tool:{tool_name}#/{key}"

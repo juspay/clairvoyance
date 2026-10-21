@@ -296,6 +296,23 @@ def _finalize_commerce(
         )
     if (
         schema_cls is not None
+        and "cart_sync_url" in schema_cls.model_fields
+        and not hydrated_props.get("cart_sync_url")
+    ):
+        # Copied off the bound cart, like the checkout url below.
+        for ref in bind.values():
+            parsed = parse_bind_ref(ref)
+            payload = (
+                store.resolve(parsed.tool_name, parsed.tool_use_id) if parsed else None
+            )
+            sync_url = (
+                payload.get("cart_sync_url") if isinstance(payload, dict) else None
+            )
+            if isinstance(sync_url, str) and sync_url:
+                hydrated_props["cart_sync_url"] = sync_url
+                break
+    if (
+        schema_cls is not None
         and "checkout" in schema_cls.model_fields
         and not hydrated_props.get("checkout")
     ):

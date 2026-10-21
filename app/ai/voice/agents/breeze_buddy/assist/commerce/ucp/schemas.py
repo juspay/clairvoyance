@@ -398,6 +398,8 @@ class CartView(_CatalogBase):
     totals: List[CartTotalP] = Field(default_factory=list)
     checkout: Optional[CheckoutP] = None
     cart_token: Optional[str] = None
+    # Link the widget fetches to fill the store's own cart.
+    cart_sync_url: Optional[str] = None
 
 
 _TAG_RE = re.compile(r"<[^>]+>")

@@ -28,7 +28,7 @@ Widget → clairvoyance → LLM
 |---|---|---|
 | Tool server URL | `https://{shop_url}/api/ucp/mcp` | `https://api.breezebuddy.ai/mcp/woocommerce/<host>`, answered in process |
 | Cart | Stored in Shopify | Stored in the cart id, e.g. `1128598:2,1315323:1` |
-| Checkout button | `ui_intents.urls.checkout_page` plus the `cart` cookie | The cart's `continue_url`: `https://<host>/checkout-link/?products=<cart id>` |
+| Checkout button | `ui_intents.urls.checkout_page` plus the `cart` cookie | The widget fetches the cart's `cart_sync_url` (`https://<host>/checkout-link/?products=<cart id>`) in the background, then opens Breeze on the page. Without Breeze it opens `continue_url`. |
 | Order tracking | Looked up through nautilus | Read from the store's REST API with the merchant's key (section 6) |
 
 The engine, widget and voice are the same for both platforms.
@@ -126,7 +126,7 @@ Search hint:
 | Field | Change | Why |
 |---|---|---|
 | `configurations.flavor` | `{"ucp": {"connectors": ["woocommerce"], "features": {}}}` | Required. It stops Shopify-only data fixes from running on this store's data. |
-| `configurations.ui_intents.urls.checkout_page` | Delete the key | A configured page wins over the checkout link, and would open an empty cart |
+| `configurations.ui_intents.urls.checkout_page` | Delete the key | Without Breeze on the page, checkout opens this page instead of the checkout link |
 
 ### 2.5 Final check
 
@@ -153,7 +153,7 @@ WooCommerce has no app embed. The merchant pastes this into the site footer
 ```html
 <breeze-buddy-assist tenant="<public_widget_key>" shop="<host>"
   api-base="https://clairvoyance.breezelabs.app"></breeze-buddy-assist>
-<script src="https://breezebuddy.ai/widget/assist.js" async></script>
+<script src="https://breezebuddy.ai/widget/ecom/assist.js" async></script>
 ```
 
 ## 5. Test
@@ -168,7 +168,7 @@ Open the store (or any page with the embed, served from an origin in
 | Add to cart on a variable product | A picker with the real variations; sold-out ones are disabled |
 | "+" or remove on the cart card | Quantity and total update |
 | Add by chat, e.g. "add the blue one" | The assistant adds it and shows the cart |
-| Review and checkout | Opens `https://<host>/checkout-link/?products=…`; the store checkout shows the same items and total |
+| Review and checkout | Breeze opens on the page with the same items and total. A store without Breeze opens its own checkout. |
 
 ## 6. Order tracking
 
@@ -379,8 +379,10 @@ curl -s https://api.breezebuddy.ai/mcp/woocommerce/<host> \
 - Each Store API call takes about 1 second. A search with variable products
   also reads their variations: one call per page of variations, at most 10
   pages, 4 at a time.
-- The store's cart icon shows assistant items only after checkout opens.
-- The checkout link replaces the shopper's existing store cart.
+- The widget replaces the shopper's store cart each time the assistant cart
+  renders. Emptying the assistant cart does not empty the store cart.
+- The sync runs only when the widget is on the store's own origin (the host
+  in the tool server URL). Elsewhere checkout opens the checkout link.
 - Tax, shipping and final stock are checked on the store's checkout page.
 - An item that goes out of stock stays in the assistant cart, with a warning, until the shopper removes it; the store's checkout refuses it until it is back in stock. A product the store no longer lists is dropped with a warning.
 - The assistant cart uses catalog prices. A store with cart-level price rules
@@ -395,7 +397,7 @@ curl -s https://api.breezebuddy.ai/mcp/woocommerce/<host> \
 | "The store has no WooCommerce Store API at this address" | The host is not WooCommerce, or its Store API is off | Run the checks in section 1 |
 | "The store answered HTTP 403" | The store blocks our server | Merchant allows `/wp-json/wc/store/v1/` |
 | Prices 100 times too small | A `scale_by_exponent` rule was changed | Keep the blueprint's rules |
-| Checkout opens an empty cart | `checkout_page` is still set | Delete `ui_intents.urls.checkout_page` |
+| Checkout opens the store checkout, not Breeze | The page has no Breeze SDK (`window.breeze.startCheckout`), or the widget runs on another origin than the store host | Check the Breeze plugin; embed the widget on the store host |
 | Cart card does not render after a chat add | A `cart_token` bind is left in `tool_ui_instructions` | Delete it |
 | "Where is my order?" always says the tracking system is unreachable, and the log says `store answered 401` or `store answered 403` | The REST key is wrong or has no Read permission, or the web server drops the `Authorization` header before WordPress sees it | Check the key in WooCommerce. If the key is right, ask the merchant's host to pass the `Authorization` header to PHP. |
 | "Where is my order?" shows only the track-order link and never asks for the order number | An old orders rule in the system prompt says the assistant cannot look up orders | Delete that rule, as in 6.3 |

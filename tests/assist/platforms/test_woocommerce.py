@@ -270,6 +270,8 @@ async def test_cart_lives_in_its_id_and_checks_out_by_link(store):
         f"https://{HOST}/checkout-link/?products=347693:1,1128598:2"
     )
     assert cart["totals"][-1] == {"type": "total", "amount": 1199700, "currency": "INR"}
+    # The widget fetches the same link in the background to fill the store cart.
+    assert cart["cart_sync_url"] == cart["continue_url"]
     assert _verify_cart_mutation(args, cart) is None
     line = CartLineP.model_validate(cart["line_items"][1])
     assert (line.variant_id, line.variant_title, line.qty) == ("1128598", "Blue", 2)

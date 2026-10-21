@@ -154,6 +154,8 @@ async def _cart(
         # installed under a subdirectory keeps it.
         site = base.split("/wp-json", 1)[0].rstrip("/")
         cart["continue_url"] = f"{site}/checkout-link/?products={cart_id}"
+        # The widget fetches this in the shopper's browser to fill the store cart.
+        cart["cart_sync_url"] = cart["continue_url"]
     return cart
 
 
