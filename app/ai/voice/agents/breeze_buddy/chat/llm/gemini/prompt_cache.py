@@ -21,6 +21,11 @@ Constraints discovered by probe:
 
 Process-local registry: caches are cheap (storage is per token-hour on a
 ~10k prefix) and pods just mint their own.
+
+Creation never blocks a turn: a miss returns ``None`` (the caller sends the
+full prefix, which is as fast as a cached one at these sizes) and creates
+the cache in a background task, one per key. A cache near expiry is still
+served while its replacement is created.
 """
 
 import asyncio
@@ -29,12 +34,15 @@ import json
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
 
 _TTL_SECONDS = 3600
-# Recreate when the entry is this close to expiry — a cycle must never
-# start on a cache that lapses mid-stream.
+# Start recreating when the entry is this close to expiry.
 _REFRESH_MARGIN_SECONDS = 300
+# Stop serving an entry this close to expiry — a cycle must never start on
+# a cache that lapses mid-stream.
+_SERVE_FLOOR_SECONDS = 60
 _FAILURE_COOLDOWN_SECONDS = 600
 
 # Registry timestamps are WALL clock (time.time), matching the server's
@@ -44,7 +52,8 @@ _FAILURE_COOLDOWN_SECONDS = 600
 
 _registry: Dict[str, Tuple[str, float]] = {}
 _failed_at: Dict[str, float] = {}
-_lock = asyncio.Lock()
+# Cache key → the background create running for it (one per key).
+_inflight: Dict[str, "asyncio.Task[None]"] = {}
 
 
 def _cache_key(
@@ -75,49 +84,57 @@ async def resolve_prompt_cache(
     system_instruction: Any,
     tools: Any,
 ) -> Optional[str]:
-    """Return a live CachedContent name for this prefix, or ``None`` when
-    caching is unavailable (recent failure / create error) — the caller
-    then sends the full prefix as before, so this can only ever be a
-    no-op, never a regression."""
+    """Return a live CachedContent name for this prefix, or ``None`` — the
+    caller then sends the full prefix as before, so this can only ever be a
+    no-op, never a regression. Never waits on a cache create: a miss (or an
+    entry near expiry) starts one in the background."""
     key = _cache_key(model, system_instruction, tools, _client_scope(client))
     now = time.time()
     failed = _failed_at.get(key)
-    if failed is not None and now - failed < _FAILURE_COOLDOWN_SECONDS:
-        return None
+    cooling = failed is not None and now - failed < _FAILURE_COOLDOWN_SECONDS
     entry = _registry.get(key)
-    if entry is not None and entry[1] - now > _REFRESH_MARGIN_SECONDS:
+    remaining = entry[1] - now if entry is not None else 0.0
+    if remaining <= _REFRESH_MARGIN_SECONDS and key not in _inflight and not cooling:
+        _inflight[key] = spawn_background_task(
+            _create(client, key, model, system_instruction, tools),
+            name=f"prompt-cache:{key[:12]}",
+        )
+    if entry is not None and remaining > _SERVE_FLOOR_SECONDS:
         return entry[0]
-    async with _lock:
-        entry = _registry.get(key)
-        now = time.time()
-        if entry is not None and entry[1] - now > _REFRESH_MARGIN_SECONDS:
-            return entry[0]
-        try:
-            from google.genai.types import CreateCachedContentConfig
+    return None
 
-            cache = await client.aio.caches.create(
-                model=model,
-                config=CreateCachedContentConfig(
-                    system_instruction=system_instruction,
-                    tools=tools,
-                    ttl=f"{_TTL_SECONDS}s",
-                    display_name=f"bb-chat-prefix-{key[:12]}",
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001 — cache is best-effort
-            _failed_at[key] = time.time()
-            logger.warning(
-                f"prompt_cache: create failed ({type(exc).__name__}: "
-                f"{str(exc)[:160]}) — full-prefix requests for "
-                f"{_FAILURE_COOLDOWN_SECONDS}s"
-            )
-            return None
+
+async def _create(
+    client: Any, key: str, model: str, system_instruction: Any, tools: Any
+) -> None:
+    started = time.time()
+    try:
+        from google.genai.types import CreateCachedContentConfig
+
+        cache = await client.aio.caches.create(
+            model=model,
+            config=CreateCachedContentConfig(
+                system_instruction=system_instruction,
+                tools=tools,
+                ttl=f"{_TTL_SECONDS}s",
+                display_name=f"bb-chat-prefix-{key[:12]}",
+            ),
+        )
         _registry[key] = (cache.name, time.time() + _TTL_SECONDS)
         logger.info(
-            f"prompt_cache: created {cache.name} "
+            f"prompt_cache: created {cache.name} in "
+            f"{round((time.time() - started) * 1000)} ms "
             f"({getattr(getattr(cache, 'usage_metadata', None), 'total_token_count', '?')} tokens)"
         )
-        return cache.name
+    except Exception as exc:  # noqa: BLE001 — cache is best-effort
+        _failed_at[key] = time.time()
+        logger.warning(
+            f"prompt_cache: create failed ({type(exc).__name__}: "
+            f"{str(exc)[:160]}) — full-prefix requests for "
+            f"{_FAILURE_COOLDOWN_SECONDS}s"
+        )
+    finally:
+        _inflight.pop(key, None)
 
 
 def invalidate_prompt_cache(name: str) -> None:
