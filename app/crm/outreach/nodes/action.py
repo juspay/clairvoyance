@@ -19,7 +19,7 @@ from app.crm.connectivity.contracts import (
     validate_action_args,
 )
 from app.crm.outreach.nodes.blocks import blocks_for
-from app.crm.outreach.nodes.context import playbook_key, run_facts
+from app.crm.outreach.nodes.context import is_bookkeeping, playbook_key, run_facts
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
@@ -69,6 +69,29 @@ def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
     return problems
 
 
+def _visits_key(node_id: str) -> str:
+    """Where an action square's visit counter lives in the run's context.
+
+    ``action_`` is already a bookkeeping prefix, so run_facts filters it for free
+    and it can never reach an args placeholder or a template. A distinct key from
+    the ``action_<node>`` marker (the result envelope) so the two never collide.
+    """
+    return f"action_visits_{node_id}"
+
+
+def _visits_so_far(context: Dict[str, Any], node_id: str) -> int:
+    """PURE: how many times this run has COMPLETED this action square.
+
+    Absent, or unreadable, reads as 0 — so an old run's next id is the `:1` it
+    would have had. The counter only advances when a visit's `written` patch
+    LANDS; a lease retry of the same visit re-derives the SAME number (and the
+    same idempotency key), while a revisit — the run looped back after the write
+    persisted — gets the next one. Raising here would park a run over bookkeeping.
+    """
+    value = context.get(_visits_key(node_id))
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
 async def execute(
     run: EnrollmentRun, node: WorkflowNode, definition: WorkflowDefinition
 ) -> Dict[str, Any]:
@@ -101,8 +124,9 @@ async def execute(
       parking a run because a deploy was mid-flight.
 
     Retrying is safe by design: the action is at-least-once and carries a
-    deterministic `(run, node)` key, so a re-send after a lost response is
-    recognisable as the same write rather than a second one.
+    deterministic `(run, node, visit)` key, so a re-send after a lost response is
+    recognisable as the same write rather than a second one — and a revisit as a
+    new one.
     """
     if not node.connector or not node.action:
         # The validator refuses this at publish; a version predating the
@@ -110,12 +134,26 @@ async def execute(
         raise NodeParked(f"action node {node.id}: no connector/action to perform")
 
     facts = run_facts(run.context, node)
+    # The RUN's own facts the author must never type (finding 11): the run row's
+    # merchant and the run's own customer's phone (a bookkeeping key run_facts
+    # filters out, so it is re-injected here). A plan says {merchant_id} and
+    # {customer_mobile_number} in the form it sends; they always resolve from
+    # where this run is — a copied plan cannot file a reply under another
+    # merchant, and a typo cannot drop it.
+    facts["merchant_id"] = run.merchant_id
+    customer_phone = run.context.get("phone") or run.context.get(
+        "customer_mobile_number"
+    )
+    if customer_phone not in (None, ""):
+        facts["customer_mobile_number"] = str(customer_phone)
     # An args placeholder may name a block by the same name a send's
     # variables would — one lookup, one allow-list, three squares.
     rendered, chosen = await blocks_for(
         run, node, definition, placeholder_names(node.args)
     )
     facts.update(rendered)
+    # Correlation is this executing run's identity, never a producer's value.
+    facts["run_id"] = str(run.id)
     try:
         args = resolved_args(node.args, facts)
     except KeyError as e:
@@ -123,17 +161,30 @@ async def execute(
             f"action node {node.id}: no fact {e.args[0]} for a placeholder in args"
         ) from e
 
+    # Which VISIT of this square this run is on (call.py's counter, same rule):
+    # a lease retry re-derives the SAME number — the write that would advance it
+    # was the one lost — while a revisit, the run having looped back after the
+    # write landed, gets the next one. The connector builds its deterministic
+    # idempotency key from (run, node, THIS number), so the merchant can tell a
+    # re-sent lost answer from a brand-new write on the same square.
+    visit = _visits_so_far(run.context, node.id) + 1
+
     try:
         result = await perform_action(
             run.merchant_id,
             node.connector,
             node.action,
             args,
-            # Bookkeeping ONLY — the idempotency key's two halves. Never
+            # Bookkeeping ONLY — the idempotency key's three parts. Never
             # data: connectivity's own contract says so, and an action that
             # learned to read a fact from here would couple a provider to
             # this module's context shape.
-            {"run_id": str(run.id), "node_id": node.id},
+            {"run_id": str(run.id), "node_id": node.id, "node_visits": visit},
+            # Which door, when this merchant holds several base_urls on the
+            # connector (merchant_http). Named by its STABLE merchant-chosen
+            # external_account_id, so a base-URL edit on the same door needs no
+            # republish. Absent -> the newest usable door.
+            node.external_account_id,
         )
     except ActionError as e:
         raise NodeParked(f"action node {node.id}: {e}") from e
@@ -144,13 +195,30 @@ async def execute(
         f"walker: run {run.id} performed {node.connector}/{node.action} "
         f"(node {node.id})"
     )
-    # The action's OWN normalised facts, kept under the square's bookkeeping
-    # key rather than discarded. `action_` is a bookkeeping prefix, so this
-    # stays out of run_facts and can never reach a template — but it is on
-    # the run for whoever triages it, and a test asserts its shape, which is
-    # what stops "responses are normalised" from becoming a promise with no
-    # reader.
-    written: Dict[str, Any] = {f"action_{node.id}": result}
+    # The action's own normalised facts, kept under the square's bookkeeping
+    # key for whoever triages the run — the `action_` prefix (a bookkeeping
+    # prefix) keeps the marker out of run_facts and off every template.
+    written: Dict[str, Any] = {
+        f"action_{node.id}": result,
+        # The visit counter for the idempotency key — merged only when THIS visit's
+        # write lands, which is exactly how a lease retry still re-derives the same
+        # visit (the write that would advance it was the one lost) and a revisit the
+        # next one. Bookkeeping: `action_` is filtered by run_facts for free.
+        _visits_key(node.id): visit,
+    }
+    # …and the RESPONSE VALUES the author chose to be readable (declared in
+    # the action's own model, e.g. a merchant_http `facts` map) are merged at
+    # the run's TOP level, where run_facts exposes them — a later square's
+    # `{payment_link}` resolves because the name is a non-bookkeeping key,
+    # exactly as a catalog-declared field would be. Locked under `action_`
+    # these could never reach a later square, which made the action the only
+    # verb whose output stopped at its square. A name that shadows the
+    # walker's own bookkeeping is refused at publish (catalog_laws), but a
+    # version predating that check must not overwrite `phone` or
+    # `source_event_id` either, so such facts are skipped.
+    for name, value in (result.get("facts") or {}).items():
+        if not is_bookkeeping(str(name)):
+            written[str(name)] = value
     if chosen:
         written[playbook_key(node.id)] = chosen
     return written
@@ -173,11 +241,13 @@ def args_for_check(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _stand_in(value: Any) -> Any:
     """PURE: one placeholder -> a plausible non-empty value, recursively
-    through lists (tags are a list of them)."""
+    through lists and dicts (tags are a list, a card body a dict of them)."""
     if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
         return "x"
     if isinstance(value, list):
         return [_stand_in(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _stand_in(item) for key, item in value.items()}
     return value
 
 
@@ -194,6 +264,9 @@ def placeholder_names(args: Dict[str, Any]) -> List[str]:
                 names.append(name)
         elif isinstance(value, list):
             for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
                 walk(item)
 
     for value in args.values():
@@ -213,7 +286,10 @@ def resolved_args(args: Dict[str, Any], facts: Dict[str, Any]) -> Dict[str, Any]
 def _resolve(value: Any, facts: Dict[str, Any]) -> Any:
     """PURE: one arg value, resolved. Whole-string placeholders only — the
     same rule the rest of the board uses — so `{id}` becomes the fact and
-    `order-{id}` is left alone as the literal an author wrote."""
+    `order-{id}` is left alone as the literal an author wrote. Lists and
+    dicts are walked recursively (a card body is a dict of them), matching
+    the placeholders the catalog law and the transport's resolver already
+    reach; a missing or empty fact parks, never half-resolves."""
     if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
         name = value[1:-1]
         fact = facts.get(name)
@@ -222,4 +298,6 @@ def _resolve(value: Any, facts: Dict[str, Any]) -> Any:
         return str(fact)
     if isinstance(value, list):
         return [_resolve(item, facts) for item in value]
+    if isinstance(value, dict):
+        return {key: _resolve(item, facts) for key, item in value.items()}
     return value

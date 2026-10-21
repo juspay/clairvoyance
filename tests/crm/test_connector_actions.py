@@ -60,7 +60,9 @@ def relay(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _door(monkeypatch: pytest.MonkeyPatch, installation: Any) -> None:
-    async def _get(merchant_id: str, connector_key: str) -> Any:
+    async def _get(
+        merchant_id: str, connector_key: str, external_account_id: Optional[str] = None
+    ) -> Any:
         return installation
 
     monkeypatch.setattr(actions_module, "get_installation_for_connector", _get)
@@ -180,7 +182,7 @@ async def test_shopify_refuses_without_a_door(
     assert seen == []
 
 
-async def test_the_door_names_the_shop_not_the_tenant(
+async def test_the_external_account_ids_the_shop_not_the_tenant(
     monkeypatch: pytest.MonkeyPatch, relay: None
 ) -> None:
     """The account id is the installation's, and only the installation's.

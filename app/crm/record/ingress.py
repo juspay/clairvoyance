@@ -42,6 +42,10 @@ class IngressSpec(NamedTuple):
     verify: Callable[[bytes, Mapping[str, str]], bool]
     envelope: Callable[[Mapping[str, str], Dict], Awaitable[List[EventIn]]]
     challenge: Callable[[Mapping[str, str]], Optional[str]]
+    # Interactive providers display these replies to the person submitting.
+    # None preserves the existing empty-200 / retryable-503 behavior.
+    success_reply: Optional[Dict] = None
+    error_reply: Optional[Dict] = None
 
 
 #: The slot. Empty until app/crm/api.py fills it at wiring time — a closed

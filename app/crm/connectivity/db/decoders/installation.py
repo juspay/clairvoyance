@@ -23,6 +23,7 @@ def decode_installation(row: Mapping[str, Any]) -> ConnectorInstallation:
         merchant_id=row["merchant_id"],
         connector_key=row["connector_key"],
         external_account_id=row["external_account_id"],
+        door_data=jsonb_object(row["door_data"]) if "door_data" in row else {},
         display_label=row["display_label"],
         credential_id=uuid_or_none(row["credential_id"]),
         status=row["status"],

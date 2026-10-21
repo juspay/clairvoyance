@@ -18,16 +18,16 @@ INSTALLATION_TABLE = "crm_connector_installation"
 
 # The route's shape — what send.py needs to reach a provider.
 INSTALLATION_COLUMNS = """
-    id, merchant_id, connector_key, external_account_id, display_label,
-    credential_id, status, token_expires_at
+    id, merchant_id, connector_key, external_account_id,
+    door_data, display_label, credential_id, status, token_expires_at
 """
 
 # The console's shape. credential_id is deliberately ABSENT: a read model
 # that names where a secret lives is a map to it.
 INSTALLATION_READ_COLUMNS = """
-    id, merchant_id, connector_key, external_account_id, display_label,
-    status, token_expires_at, last_event_at, health_detail, installed_at,
-    created_at, updated_at
+    id, merchant_id, connector_key, external_account_id,
+    display_label, status, token_expires_at, last_event_at, health_detail,
+    installed_at, created_at, updated_at
 """
 
 
@@ -91,23 +91,32 @@ def installation_by_account_query(
 
 
 def installation_for_connector_query(
-    merchant_id: str, connector_key: str
+    merchant_id: str, connector_key: str, external_account_id: Optional[str] = None
 ) -> Tuple[str, List[Any]]:
-    """The route shape, found by the CONNECTOR alone — the door an action
-    acts through.
+    """The usable account for this merchant and connector.
 
-    Neither of the lookups above fits: an action node names a connector
-    ("shopify"), not our installation id and not the provider's account id,
-    because a plan document must not have to know either. One merchant CAN
-    hold two accounts on one connector (two shops, two WABAs — that is what
-    the account unique index allows), so this takes the newest usable one and
-    is deliberately not the way a multi-shop merchant will address a specific
-    shop; that day the node names the account and this gains a parameter.
-
-    Usable only, bound as a parameter: fail closed on 'connecting',
-    'degraded', 'revoked' and 'disabled' alike — an action performed through
-    an unproven or withdrawn door is a write we cannot stand behind.
+    An explicit external_account_id selects the existing account unique key,
+    never an installation UUID or the HTTP base URL. Without a selector,
+    choose the newest usable account. Both branches enforce tenant,
+    connector and health status; an unresolved pin never falls back.
     """
+    if external_account_id is not None:
+        query = f"""
+            SELECT {INSTALLATION_COLUMNS}
+              FROM {INSTALLATION_TABLE}
+             WHERE merchant_id = $1
+               AND connector_key = $2
+               AND external_account_id = $3
+               AND status = ANY($4::text[])
+             LIMIT 1
+        """
+        return query, [
+            merchant_id,
+            connector_key,
+            external_account_id,
+            sorted(INSTALLATION_USABLE),
+        ]
+
     query = f"""
         SELECT {INSTALLATION_COLUMNS}
           FROM {INSTALLATION_TABLE}
@@ -124,6 +133,7 @@ def upsert_installation_query(
     merchant_id: str,
     connector_key: str,
     external_account_id: str,
+    door_data_json: str,
     display_label: Optional[str],
     credential_id: Optional[str],
     status: str,
@@ -144,29 +154,36 @@ def upsert_installation_query(
     · It never lowers is_primary or resurrects a retired pipe; that is the
       binding's business, and the binding's own upsert states its rules.
 
+    ``door_data`` is updated because re-onboarding edits a merchant's base
+    URL. The existing external_account_id unique key is the stable account
+    name for merchant_http, so a URL edit stays on this row.
+
     token_expires_at rides EXCLUDED because a re-onboard IS a rotation: the
     old token's expiry describes a credential that no longer exists.
     """
     query = f"""
         INSERT INTO {INSTALLATION_TABLE}
-            (merchant_id, connector_key, external_account_id, display_label,
-             credential_id, status, token_expires_at, health_detail)
-        VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8::jsonb)
+            (merchant_id, connector_key, external_account_id,
+             door_data, display_label, credential_id, status,
+             token_expires_at, health_detail)
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6::uuid, $7, $8, $9::jsonb)
         ON CONFLICT (merchant_id, connector_key, external_account_id)
         DO UPDATE SET
+            door_data = EXCLUDED.door_data,
             display_label = COALESCE(EXCLUDED.display_label,
                                      {INSTALLATION_TABLE}.display_label),
             credential_id = EXCLUDED.credential_id,
             status = EXCLUDED.status,
             token_expires_at = EXCLUDED.token_expires_at,
             health_detail = EXCLUDED.health_detail
-        WHERE {INSTALLATION_TABLE}.status <> $9
+        WHERE {INSTALLATION_TABLE}.status <> $10
         RETURNING {INSTALLATION_READ_COLUMNS}
     """
     return query, [
         merchant_id,
         connector_key,
         external_account_id,
+        door_data_json,
         display_label,
         credential_id,
         status,

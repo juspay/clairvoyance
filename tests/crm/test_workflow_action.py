@@ -8,7 +8,7 @@ refusal from the destination) parks; a BAD MOMENT (timeout, 5xx, 429) leaves
 as itself so the walker's lease ladder re-sends it."""
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import pytest
@@ -130,6 +130,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, calls: List[Dict[str, Any]], **kw:
         action: str,
         args: Dict[str, Any],
         context: Dict[str, Any],
+        external_account_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         calls.append(
             {
@@ -138,11 +139,15 @@ def _install(monkeypatch: pytest.MonkeyPatch, calls: List[Dict[str, Any]], **kw:
                 "action": action,
                 "args": args,
                 "context": context,
+                "external_account_id": external_account_id,
             }
         )
         if "raises" in kw:
             raise kw["raises"]
-        return {"ok": True}
+        # Connectivity returns {ok, status, facts}; the facts are the
+        # response values the author declared readable (a merchant_http
+        # `facts` map), and the whole result is the marker too.
+        return {"ok": True, "facts": kw.get("facts", {})}
 
     monkeypatch.setattr(action_node, "perform_action", fake_perform)
 
@@ -160,11 +165,16 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
         _DEFINITION,
     )
 
-    # The action's OWN normalised facts, kept rather than discarded — under
-    # the square's `action_` bookkeeping key, so they stay out of run_facts
-    # and can never reach a template. This assertion is what stops
-    # "responses are normalised" from being a promise with no reader.
-    assert result == {"action_tag-vip": {"ok": True}}
+    # The marker keeps the whole normalised result for whoever triages the
+    # run — `action_<node>`, bookkeeping, so it never reaches a template. An
+    # empty `facts` map (Shopify's tag produces no response values a later
+    # square reads) merges nothing extra at the top level: this assertion is
+    # what stops "responses are normalised" from being a promise with no
+    # reader.
+    assert result == {
+        "action_tag-vip": {"ok": True, "facts": {}},
+        "action_visits_tag-vip": 1,
+    }
     assert calls == [
         {
             "merchant_id": "m1",
@@ -174,10 +184,15 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
             # EVERY value the connector needs is here: the args are the whole
             # contract, resolved from the plan's own placeholders.
             "args": {"order_id": "5408422249", "tags": ["CONFIRM", "vip"]},
-            # Bookkeeping ONLY — the two halves of the idempotency key. A
+            # Bookkeeping ONLY — the three parts of the idempotency key. A
             # provider reading data from here would be reading outreach's
             # context shape from inside connectivity.
-            "context": {"run_id": str(run.id), "node_id": "tag-vip"},
+            "context": {
+                "run_id": str(run.id),
+                "node_id": "tag-vip",
+                "node_visits": 1,
+            },
+            "external_account_id": None,
         }
     ]
 
@@ -185,14 +200,21 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
 async def test_the_marker_is_bookkeeping_and_never_a_template_variable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The `action_<node>` marker — the whole normalised result envelope — is
+    bookkeeping, never a template variable: run_facts drops it. The declared
+    response FACTS it carries are a separate thing, merged at the run's top
+    level (next test); the marker itself must never leak into a message."""
     calls: List[Dict[str, Any]] = []
-    _install(monkeypatch, calls)
+    _install(monkeypatch, calls, facts={"payment_link": "https://pay"})
     run = _run({"id": "1", "cart_value": 900})
     patch = await execute_action(run, _node(), _DEFINITION)
 
     merged = {**run.context, **patch}
     assert "action_tag-vip" not in run_facts(merged)
     assert run_facts(merged)["cart_value"] == 900
+
+    # (run_facts drops `phone` entirely by design — it is bookkeeping — so
+    # the assertion above, not a run_facts read, is the honest check.)
 
 
 async def test_a_missing_fact_for_a_placeholder_parks(

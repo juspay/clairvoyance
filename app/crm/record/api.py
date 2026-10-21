@@ -197,6 +197,8 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         # refused before a single body byte is read.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
+    success_reply = getattr(spec, "success_reply", None)
+    error_reply = getattr(spec, "error_reply", None)
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
@@ -217,7 +219,15 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         logger.error(f"ingress: a signed {provider} body was not a JSON object")
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
-    letters = await spec.envelope(request.headers, parsed)
+    try:
+        letters = await spec.envelope(request.headers, parsed)
+    except Exception:
+        if error_reply is None:
+            raise
+        logger.exception("ingress: callback attribution failed")
+        return JSONResponse(content=error_reply)
+    if not letters and error_reply is not None:
+        return JSONResponse(content=error_reply)
     filed = 0
     for letter in letters:
         try:
@@ -238,10 +248,14 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
                 f"ingress: store failed for {letter.source}/{letter.topic} "
                 f"external_id={letter.external_id}: {e}"
             )
+            if error_reply is not None:
+                return JSONResponse(content=error_reply)
             return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
         if event_id is not None:
             filed += 1
     logger.info(f"ingress: {provider} webhook filed {filed}/{len(letters)} letters")
+    if success_reply is not None:
+        return JSONResponse(content=success_reply)
     return Response(status_code=status.HTTP_200_OK)
 
 

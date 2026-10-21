@@ -1,0 +1,112 @@
+{
+  "actionId": "submit-interview-availability",
+  "type": "submit",
+  "values": {
+    "selected_dates": [],
+    "slots_2026-10-15": ["10:00"],
+    "slots_2026-10-16": ["09:00", "10:00"],
+    "slots_2026-10-17": ["14:00"]
+  },
+  "context": {
+    "flowJSON": {
+      "version": "2.0",
+      "screenId": "interview-availability",
+      "title": "Your PM (PM_name) has requested you to take a Elimination interview (frontend) between 15 October and 17 October 2026. Pick the dates that work for you, and for each date select one or more time slots (9 AM – 7 PM).",
+      "components": [
+        {
+          "id": "time-2026-10-15",
+          "type": "dropdown",
+          "props": {
+            "name": "slots_2026-10-15",
+            "label": "15 October 2026 — time slots",
+            "placeholder": "Pick one or more times",
+            "options": "$timeSlots",
+            "multiple": true
+          }
+        },
+        {
+          "id": "time-2026-10-16",
+          "type": "dropdown",
+          "props": {
+            "name": "slots_2026-10-16",
+            "label": "16 October 2026 — time slots",
+            "placeholder": "Pick one or more times",
+            "options": "$timeSlots",
+            "multiple": true
+          }
+        },
+        {
+          "id": "time-2026-10-17",
+          "type": "dropdown",
+          "props": {
+            "name": "slots_2026-10-17",
+            "label": "17 October 2026 — time slots",
+            "placeholder": "Pick one or more times",
+            "options": "$timeSlots",
+            "multiple": true
+          }
+        },
+        {
+          "id": "submit-btn",
+          "type": "button",
+          "props": {
+            "label": "Submit Availability",
+            "variant": "primary",
+            "action": {
+              "type": "submit",
+              "actionId": "submit-interview-availability"
+            }
+          }
+        }
+      ],
+      "data": {
+        "merchant_id": "flow-shop",
+        "enrollment_id": "00000000-0000-0000-0000-000000000101",
+        "customer_mobile_number": "919876543210",
+        "kind": "interview_availability",
+        "event": {
+          "pm_name": "PM_name",
+          "pm_userID": "PM_userID",
+          "stage": "Hackathon",
+          "role": "frontend",
+          "timeframe_start": "2026-10-15",
+          "timeframe_end": "2026-10-17"
+        },
+        "availableDates": [
+          {"label": "15 October 2026", "value": "2026-10-15"},
+          {"label": "16 October 2026", "value": "2026-10-16"},
+          {"label": "17 October 2026", "value": "2026-10-17"}
+        ],
+        "timeSlots": [
+          {"label": "09:00 AM", "value": "09:00"},
+          {"label": "10:00 AM", "value": "10:00"},
+          {"label": "11:00 AM", "value": "11:00"},
+          {"label": "12:00 PM", "value": "12:00"},
+          {"label": "01:00 PM", "value": "13:00"},
+          {"label": "02:00 PM", "value": "14:00"},
+          {"label": "03:00 PM", "value": "15:00"},
+          {"label": "04:00 PM", "value": "16:00"},
+          {"label": "05:00 PM", "value": "17:00"},
+          {"label": "06:00 PM", "value": "18:00"}
+        ]
+      },
+      "state": {
+        "values": {
+          "selected_dates": [],
+          "slots_2026-10-15": [],
+          "slots_2026-10-16": [],
+          "slots_2026-10-17": []
+        },
+        "touched": {},
+        "errors": {},
+        "submitting": false,
+        "submitted": false,
+        "history": [],
+        "loadingComponentIds": []
+      }
+    },
+    "messageId": "e9be4e96-9e96-4c9e-b259-ee75ea8bb499",
+    "conversationId": "ead0b5ff-32f9-460c-92d6-f52847257465",
+    "userId": "cmo014zxi0dz1rkq60eouxllf"
+  }
+}

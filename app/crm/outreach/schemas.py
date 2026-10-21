@@ -263,6 +263,11 @@ class WorkflowNode(BaseModel):
     # day a relay becomes a direct provider call, this document is unchanged.
     connector: Optional[str] = None
     action: Optional[str] = None
+    # action only: select an existing account on this merchant's connector.
+    # merchant_http stores its stable account name here and its editable URL
+    # in door_data. Absent -> newest usable account. Publish and execution
+    # both enforce merchant, connector and status on an explicit selection.
+    external_account_id: Optional[str] = None
     # action: the action's OWN arguments, validated at publish against the
     # model the connector declares for it. Values may be "{placeholder}" and
     # are resolved from the run's facts at fire time.
@@ -311,6 +316,26 @@ class WorkflowNode(BaseModel):
         if isinstance(data, dict) and data.get("type") == RETIRED_WAIT_EVENT:
             data = {**data, "type": "wait"}
         return data
+
+    @field_validator("external_account_id", mode="before")
+    @classmethod
+    def _external_account_id_is_a_plain_stable_name(cls, value: Any) -> Any:
+        """The door's STABLE merchant-chosen name, full stop. A name is the
+        plan-addressable handle for a merchant_http door (``payments``), so a
+        malformed value — a stray quote, a comma, a URL, a ``{placeholder}`` —
+        is not a doorway anyone could name and is refused here, at the schema
+        boundary, instead of silently matching nothing at run time. Absent
+        (None) is the ordinary case: the connector's newest usable door."""
+        if value is None:
+            return None
+        name = str(value).strip()
+        if not name:
+            raise ValueError("external_account_id must not be empty")
+        if "{" in name or "}" in name:
+            raise ValueError("external_account_id may not contain placeholders")
+        if "/" in name or ":" in name or " " in name:
+            raise ValueError("external_account_id may not contain /, : or spaces")
+        return name
 
 
 # An arrow: [from, to] or [from, to, on]. `on` labels a branch out of a

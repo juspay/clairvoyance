@@ -23,6 +23,7 @@ from app.crm.outreach.schemas import SPLIT_PREFIX, WorkflowNode
 # its canonical key by the call node), per-node results and answers.
 _BOOKKEEPING_KEYS = (
     "source_event_id",
+    "run_id",  # action supplies its own run id for external callback correlation
     "entered_event_at",  # entry.py: when the founding letter happened (G7)
     "goal",  # entry.py: the letter that ended the run, and its amount (phase 09)
     "phone",
