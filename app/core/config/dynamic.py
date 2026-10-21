@@ -1050,3 +1050,51 @@ async def META_GRAPH_TIMEOUT_SECONDS() -> float:
             f"Invalid META_GRAPH_TIMEOUT_SECONDS value {value!r}; using 15.0"
         )
         return 15.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Meeting recording (Buddy on the desk) — all tunable without a deploy
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def MEETING_STOP_PHRASE() -> str:
+    """The sentence that ends a recording. Matched as a WHOLE sentence after
+    lowercasing and stripping punctuation; a longer sentence that merely
+    contains it is a transcript line, not a command."""
+    return await get_config(
+        "MEETING_STOP_PHRASE", "hey buddy stop recording the meeting", str
+    )
+
+
+async def MEETING_STOP_MATCH_THRESHOLD() -> float:
+    """Similarity (0..1) a sentence needs against MEETING_STOP_PHRASE to count
+    as the stop command; absorbs STT slips like "hey body"."""
+    return await get_config("MEETING_STOP_MATCH_THRESHOLD", 0.9, float)
+
+
+async def MEETING_MAX_DURATION_SECONDS() -> int:
+    """Hard cap on one recording; the bot ends it cleanly and says so."""
+    return await get_config("MEETING_MAX_DURATION_SECONDS", 3 * 60 * 60, int)
+
+
+async def MEETING_HEARTBEAT_SECONDS() -> int:
+    """How often the recording bot refreshes meeting.last_heartbeat_at."""
+    return await get_config("MEETING_HEARTBEAT_SECONDS", 30, int)
+
+
+async def MEETING_RESUME_GRACE_SECONDS() -> int:
+    """A RECORDING meeting with no heartbeat for this long is dead: the
+    device may re-attach before it, the sweeper closes it after it."""
+    return await get_config("MEETING_RESUME_GRACE_SECONDS", 300, int)
+
+
+async def MEETING_SEGMENT_FLUSH_SECONDS() -> int:
+    """Lines are batched in memory and inserted every this many seconds (or
+    on stop); bounds both DB hops and crash loss."""
+    return await get_config("MEETING_SEGMENT_FLUSH_SECONDS", 15, int)
+
+
+async def MEETING_STT_ROTATE_SECONDS() -> int:
+    """Open a fresh STT session this often during a recording, before the
+    provider's own session limit; set from the VM soak measurement."""
+    return await get_config("MEETING_STT_ROTATE_SECONDS", 45 * 60, int)
