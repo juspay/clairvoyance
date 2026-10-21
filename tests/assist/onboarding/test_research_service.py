@@ -410,7 +410,14 @@ async def test_a_busy_provider_on_the_home_page_stops_the_run(monkeypatch) -> No
 
 @pytest.mark.parametrize(
     "data",
-    [{"json": None}, {"json": ["x"]}, {"json": "x"}, None],
+    [
+        {"json": None},
+        {"json": ["x"]},
+        {"json": "x"},
+        None,
+        # a missing page: no facts, and no page to link to
+        {"json": {}, "metadata": {"statusCode": 404}},
+    ],
 )
 async def test_a_page_firecrawl_could_not_fill_is_one_failed_page(
     monkeypatch, data
@@ -593,3 +600,22 @@ def test_a_white_button_is_no_brand_colour() -> None:
         }
     )
     assert look.primary_color is None
+
+
+async def test_the_contact_page_read_becomes_the_contact_link(monkeypatch) -> None:
+    _firecrawl(
+        monkeypatch,
+        links=[f"{HOME}/pages/contact-us"],
+        pages={HOME: {}, f"{HOME}/pages/contact-us": {}},
+    )
+    _, notes = await _read()
+    assert notes == [("help_links", f"Contact page: {HOME}/pages/contact-us")]
+
+    # A stale contact link that lands back on the home page is no contact page.
+    _firecrawl(
+        monkeypatch,
+        links=[f"{HOME}/pages/contact-us"],
+        pages={HOME: {}, f"{HOME}/pages/contact-us": (f"{HOME}/", {})},
+    )
+    _, notes = await _read()
+    assert notes == []

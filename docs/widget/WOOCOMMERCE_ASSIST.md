@@ -81,8 +81,7 @@ template in the database) and apply the changes below.
 |---|---|
 | `{{brand_identity_section}}` | The brand block below |
 | `{{#shopify_operating_section}}` … `{{/shopify_operating_section}}` | Delete the whole block, markers included |
-| `https://{{shop_domain}}/pages/contact` | The store's real contact page URL |
-| Any other `{{shop_domain}}` | `<host>` |
+| Any `{{shop_domain}}` | `<host>` |
 | `{{ui_primitives_section}}` | Keep as is. Without it, no cards render. |
 
 Brand block (the format onboarding writes):
@@ -97,7 +96,16 @@ Brand block (the format onboarding writes):
 ### Verified website context
 
 5-10 lines: what the store sells, main categories, brands, currency.
+
+### Escalation channel
+
+- Contact page: <the store's real contact page URL>
 ```
+
+List a contact page only when the store has one that opens; add its URL to
+`configurations.render_ui.trusted_link_urls` too, so its "Contact us" button
+renders. With none, leave the line out: the assistant uses the escalation
+channel's other details.
 
 ### 2.3 Tool server: `configurations.mcp.servers[0]`
 

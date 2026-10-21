@@ -211,7 +211,13 @@ async def read_page(
     # A page Firecrawl could not fill counts as one page not read, not a failed run.
     if not isinstance(filled, dict):
         raise WebsiteScrapingUpstreamError("provider returned no json block")
-    final = metadata.get("url") if isinstance(metadata, dict) else None
+    metadata = metadata if isinstance(metadata, dict) else {}
+    status = metadata.get("statusCode")
+    # A missing page ("404 Not Found") holds no facts and is no page to link;
+    # the home page is read whatever it answers.
+    if not whole_page and isinstance(status, int) and status >= 400:
+        raise WebsiteScrapingUpstreamError(f"page returned {status}")
+    final = metadata.get("url")
     # Where the page landed, if Firecrawl names a real address; else where we asked.
     landed = (
         final

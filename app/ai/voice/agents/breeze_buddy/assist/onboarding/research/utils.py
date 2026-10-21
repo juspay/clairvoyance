@@ -93,6 +93,19 @@ def pick_pages(home: str, home_links: List[str], map_links: List[str]) -> List[s
     return pages
 
 
+def contact_page(pages: List[str]) -> str:
+    """The contact page among ``pick_pages``' picks, or "" when none is."""
+    words = dict(_PAGE_KINDS)["contact"]
+    return next(
+        (
+            page
+            for page in pages
+            if any(w in urlsplit(page).path.lower() for w in words)
+        ),
+        "",
+    )
+
+
 def _is_web_page(link: str) -> bool:
     """A page, not a file: "Annual Return 2022.pdf" is no returns policy and
     "_commonjsHelpers.js" no help page; "returns.php" is a page."""
@@ -176,4 +189,10 @@ def _dedupe_key(text: str) -> Tuple[str, ...]:
     )
 
 
-__all__ = ["contacts_in_links", "pick_pages", "same_site", "to_notes"]
+__all__ = [
+    "contact_page",
+    "contacts_in_links",
+    "pick_pages",
+    "same_site",
+    "to_notes",
+]
