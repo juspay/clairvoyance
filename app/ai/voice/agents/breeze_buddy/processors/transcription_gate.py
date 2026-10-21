@@ -16,7 +16,17 @@ suppression modes:
    processing (LLM) or speaking (TTS). When the bot is idle, keyword-matching
    transcriptions pass through normally.
 
-Both modes can be active simultaneously — either condition causes a drop.
+3. Capture (meeting recording)
+   Activated via start_capture() / stop_capture() by the recorder session.
+   While capturing, every final TranscriptionFrame is split into lines by
+   speaker and handed to ``on_line``, then dropped — nothing reaches the
+   LLM. Each final is first compared, as a WHOLE normalised sentence, with
+   the stop phrase; a match calls ``on_stop`` instead. Interims are
+   dropped (optionally reported via ``on_interim`` for a device display).
+   The processor stays IO-free: it only calls the callbacks it was given.
+
+All modes compose — any active condition causes a drop. Precedence while
+capturing: hard mute → capture → keyword filter.
 
 Pipeline position:
     transport.input()
@@ -31,8 +41,11 @@ it is a transparent passthrough with negligible overhead.
 """
 
 import asyncio
+import difflib
+import time
 import unicodedata
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, List, Optional
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -50,6 +63,26 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     KeywordMatchType,
 )
 from app.core.logger import logger
+
+
+@dataclass(frozen=True)
+class CaptureLine:
+    """One transcript line produced in capture mode.
+
+    ``start_ms``/``end_ms`` are offsets from the moment capture started —
+    from the STT token timings when the provider supplies them, else from the
+    wall clock. ``speaker`` is the provider's diarization label or None.
+    """
+
+    speaker: Optional[str]
+    text: str
+    start_ms: int
+    end_ms: int
+
+
+OnLine = Callable[[CaptureLine], Awaitable[None]]
+OnStop = Callable[[], Awaitable[None]]
+OnInterim = Callable[[str], Awaitable[None]]
 
 
 class TranscriptionGateProcessor(FrameProcessor):
@@ -82,6 +115,18 @@ class TranscriptionGateProcessor(FrameProcessor):
             self._keyword_filter_enabled = False
             self._match_type = KeywordMatchType.EXACT
             self._keywords = []
+
+        # --- Capture (meeting recording) state ---
+        self._capturing: bool = False
+        self._on_line: Optional[OnLine] = None
+        self._on_stop: Optional[OnStop] = None
+        self._on_interim: Optional[OnInterim] = None
+        self._stop_phrase: str = ""
+        self._stop_threshold: float = 1.0
+        self._capture_started_monotonic: float = 0.0
+        # First token start seen after capture began: origin of token-time
+        # offsets, so a provider clock that started minutes earlier is irrelevant.
+        self._capture_token_origin_ms: Optional[int] = None
 
         # --- Bot activity tracking (for keyword filter) ---
         # Track LLM and TTS independently so the BOTH → LLM_PROCESSING transition
@@ -139,6 +184,60 @@ class TranscriptionGateProcessor(FrameProcessor):
         return self._muted
 
     # ------------------------------------------------------------------
+    # Capture (meeting recording) API
+    # ------------------------------------------------------------------
+
+    def start_capture(
+        self,
+        *,
+        on_line: OnLine,
+        on_stop: OnStop,
+        stop_phrase: str,
+        threshold: float = 0.9,
+        on_interim: Optional[OnInterim] = None,
+    ) -> None:
+        """Divert every final transcription to ``on_line`` until the stop phrase.
+
+        ``stop_phrase`` is compared as a whole normalised sentence with
+        difflib similarity ``>= threshold``; a longer sentence that merely
+        contains it is a transcript line, not a command. Calling this while
+        already capturing just replaces the callbacks.
+        """
+        if not stop_phrase.strip():
+            raise ValueError("start_capture: stop_phrase must not be empty")
+        if not 0.0 < threshold <= 1.0:
+            raise ValueError("start_capture: threshold must be in (0, 1]")
+        self._on_line = on_line
+        self._on_stop = on_stop
+        self._on_interim = on_interim
+        self._stop_phrase = self._normalise(stop_phrase)
+        self._stop_threshold = threshold
+        self._capture_started_monotonic = time.monotonic()
+        self._capture_token_origin_ms = None
+        self._capturing = True
+        logger.info("TranscriptionGate: capture engaged (meeting recording)")
+
+    def stop_capture(self) -> None:
+        """Back to pass-through. Safe to call when not capturing."""
+        if not self._capturing:
+            return
+        self._capturing = False
+        self._on_line = None
+        self._on_stop = None
+        self._on_interim = None
+        logger.info("TranscriptionGate: capture released")
+
+    @property
+    def is_capturing(self) -> bool:
+        return self._capturing
+
+    def capture_elapsed_ms(self) -> int:
+        """Milliseconds since capture started (0 when not capturing)."""
+        if not self._capturing:
+            return 0
+        return int((time.monotonic() - self._capture_started_monotonic) * 1000)
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -164,6 +263,83 @@ class TranscriptionGateProcessor(FrameProcessor):
             return normalised in self._keywords
         # INCLUDES
         return any(kw in normalised for kw in self._keywords)
+
+    def _is_stop_command(self, text: str) -> bool:
+        """Whole-sentence similarity against the stop phrase."""
+        normalised = self._normalise(text)
+        if not normalised:
+            return False
+        if normalised == self._stop_phrase:
+            return True
+        ratio = difflib.SequenceMatcher(None, normalised, self._stop_phrase).ratio()
+        return ratio >= self._stop_threshold
+
+    def _split_lines(self, frame: TranscriptionFrame) -> List[CaptureLine]:
+        """Turn one final frame into lines, one per consecutive speaker run.
+
+        Soniox puts the raw token list on ``frame.result`` (``text``, and
+        with diarization ``speaker``, ``start_ms``, ``end_ms``). Any other
+        shape — or a provider without tokens — yields one line from
+        ``frame.text`` timed by the wall clock.
+        """
+        tokens = frame.result if isinstance(frame.result, list) else None
+        if not tokens or not all(isinstance(t, dict) for t in tokens):
+            text = frame.text.strip()
+            if not text:
+                return []
+            end = self.capture_elapsed_ms()
+            return [CaptureLine(speaker=None, text=text, start_ms=end, end_ms=end)]
+
+        lines: List[CaptureLine] = []
+        run: List[dict] = []
+        run_speaker: Any = None
+
+        def flush() -> None:
+            if not run:
+                return
+            text = "".join(str(t.get("text", "")) for t in run).strip()
+            if text:
+                lines.append(
+                    CaptureLine(
+                        speaker=str(run_speaker) if run_speaker is not None else None,
+                        text=text,
+                        start_ms=self._offset_ms(run[0].get("start_ms")),
+                        end_ms=self._offset_ms(run[-1].get("end_ms")),
+                    )
+                )
+            run.clear()
+
+        for token in tokens:
+            speaker = token.get("speaker")
+            if run and speaker != run_speaker:
+                flush()
+            if not run:
+                run_speaker = speaker
+            run.append(token)
+        flush()
+        return lines
+
+    def _offset_ms(self, token_ms: Any) -> int:
+        """Token time → offset from capture start; wall clock when absent."""
+        if not isinstance(token_ms, (int, float)):
+            return self.capture_elapsed_ms()
+        if self._capture_token_origin_ms is None:
+            self._capture_token_origin_ms = int(token_ms)
+        return max(0, int(token_ms) - self._capture_token_origin_ms)
+
+    async def _capture(self, frame: TranscriptionFrame) -> None:
+        """Capture-mode handling of one final frame: stop command or lines."""
+        if self._is_stop_command(frame.text):
+            logger.info("TranscriptionGate: stop phrase matched, ending capture")
+            on_stop = self._on_stop
+            if on_stop is not None:
+                await on_stop()
+            return
+        on_line = self._on_line
+        if on_line is None:
+            return
+        for line in self._split_lines(frame):
+            await on_line(line)
 
     # ------------------------------------------------------------------
     # FrameProcessor implementation
@@ -197,6 +373,15 @@ class TranscriptionGateProcessor(FrameProcessor):
                     f"transcription (hard mute active)"
                 )
                 return  # Silently drop
+
+            # Mode 3: capture — finals become transcript lines (or the stop
+            # command); interims never reach the turn strategies.
+            if self._capturing:
+                if isinstance(frame, TranscriptionFrame):
+                    await self._capture(frame)
+                elif self._on_interim is not None and frame.text.strip():
+                    await self._on_interim(frame.text)
+                return  # Never downstream while capturing
 
             # Mode 2: keyword filter — drop matching words while bot is active.
             # Applies to both final TranscriptionFrames and InterimTranscriptionFrames
