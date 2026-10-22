@@ -9,12 +9,16 @@ from app.crm.connectivity.db.decoders.installation import (
 )
 from app.crm.connectivity.db.queries.installation import (
     connector_accounts_query,
+    door_name_account_query,
     installation_by_account_query,
+    installation_by_door_name_query,
     installation_by_id_query,
     installation_for_connector_query,
     installation_for_inbound_query,
     installation_read_by_id_query,
     list_installations_query,
+    lock_account_query,
+    other_account_holder_query,
     revoke_installation_query,
     update_installation_health_query,
     upsert_installation_query,
@@ -76,6 +80,8 @@ async def upsert_installation(
     status: str,
     token_expires_at: Optional[datetime],
     health_detail_json: str,
+    door_data_json: str,
+    door_name: Optional[str],
 ) -> Optional[InstallationRead]:
     """None means the existing row is 'disabled' and the upsert's WHERE
     declined to touch it — the ops switch stays off. It is the only way this
@@ -89,6 +95,8 @@ async def upsert_installation(
         status,
         token_expires_at,
         health_detail_json,
+        door_data_json,
+        door_name,
     )
     row = await conn.fetchrow(query, *values)
     return decode_installation_read(row) if row is not None else None
@@ -116,6 +124,60 @@ async def get_installation_for_connector(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_installation(row) if row is not None else None
+
+
+async def get_installation_by_door_name(
+    merchant_id: str, connector_key: str, door_name: str
+) -> Optional[ConnectorInstallation]:
+    """The usable door this merchant NAMED on one connector, or None — the
+    same fail-closed None as the connector-only read above."""
+    query, values = installation_by_door_name_query(
+        merchant_id, connector_key, door_name
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_installation(row) if row is not None else None
+
+
+async def account_holding_door_name(
+    merchant_id: str, connector_key: str, door_name: str
+) -> Optional[str]:
+    """The external_account_id of this merchant's door already named
+    ``door_name`` on this connector (any status), or None."""
+    query, values = door_name_account_query(merchant_id, connector_key, door_name)
+    async with crm_connection() as conn:
+        return await conn.fetchval(query, *values)
+
+
+async def peek_other_account_holder(
+    merchant_id: str, connector_key: str, external_account_id: str
+) -> Optional[str]:
+    """Outside any atom: the cheap early answer to "does another merchant
+    hold this account?" — re-asked inside the atom under the account lock."""
+    query, values = other_account_holder_query(
+        merchant_id, connector_key, external_account_id
+    )
+    async with crm_connection() as conn:
+        return await conn.fetchval(query, *values)
+
+
+async def lock_account(
+    conn: DbTxn, connector_key: str, external_account_id: str
+) -> None:
+    """Inside the caller's atom: the account's advisory lock, held to commit."""
+    query, values = lock_account_query(connector_key, external_account_id)
+    await conn.execute(query, *values)
+
+
+async def other_account_holder(
+    conn: DbTxn, merchant_id: str, connector_key: str, external_account_id: str
+) -> Optional[str]:
+    """Inside the caller's atom (after lock_account): the authoritative
+    answer — another merchant's id, or None."""
+    query, values = other_account_holder_query(
+        merchant_id, connector_key, external_account_id
+    )
+    return await conn.fetchval(query, *values)
 
 
 async def get_installation_for_inbound(

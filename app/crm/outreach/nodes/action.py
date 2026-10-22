@@ -110,12 +110,24 @@ async def execute(
         raise NodeParked(f"action node {node.id}: no connector/action to perform")
 
     facts = run_facts(run.context, node)
+    # The run's own customer phone — a bookkeeping key run_facts filters out —
+    # so a form the run sends can carry {customer_mobile_number} and the reply
+    # resolves back to this same customer.
+    customer_phone = run.context.get("phone") or run.context.get(
+        "customer_mobile_number"
+    )
+    if customer_phone not in (None, ""):
+        facts["customer_mobile_number"] = str(customer_phone)
     # An args placeholder may name a block by the same name a send's
     # variables would — one lookup, one allow-list, three squares.
     rendered, chosen = await blocks_for(
         run, node, definition, placeholder_names(node.args)
     )
     facts.update(rendered)
+    # {run_id}: correlation is this executing run's identity, never a
+    # producer's value — what a wait's `match: {run: "id"}` compares the
+    # reply against.
+    facts["run_id"] = str(run.id)
     try:
         args = resolved_args(node.args, facts)
     except KeyError as e:
@@ -134,6 +146,7 @@ async def execute(
             # learned to read a fact from here would couple a provider to
             # this module's context shape.
             {"run_id": str(run.id), "node_id": node.id},
+            door_name=node.door_name,
         )
     except ActionError as e:
         raise NodeParked(f"action node {node.id}: {e}") from e
@@ -173,11 +186,13 @@ def args_for_check(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _stand_in(value: Any) -> Any:
     """PURE: one placeholder -> a plausible non-empty value, recursively
-    through lists (tags are a list of them)."""
+    through lists and dicts (tags are a list, a form's data a dict of them)."""
     if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
         return "x"
     if isinstance(value, list):
         return [_stand_in(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _stand_in(item) for key, item in value.items()}
     return value
 
 
@@ -194,6 +209,9 @@ def placeholder_names(args: Dict[str, Any]) -> List[str]:
                 names.append(name)
         elif isinstance(value, list):
             for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
                 walk(item)
 
     for value in args.values():
@@ -213,7 +231,9 @@ def resolved_args(args: Dict[str, Any], facts: Dict[str, Any]) -> Dict[str, Any]
 def _resolve(value: Any, facts: Dict[str, Any]) -> Any:
     """PURE: one arg value, resolved. Whole-string placeholders only — the
     same rule the rest of the board uses — so `{id}` becomes the fact and
-    `order-{id}` is left alone as the literal an author wrote."""
+    `order-{id}` is left alone as the literal an author wrote. Lists and
+    dicts are walked recursively (a form's data is a dict of them); a
+    missing or empty fact parks, never half-resolves."""
     if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
         name = value[1:-1]
         fact = facts.get(name)
@@ -222,4 +242,6 @@ def _resolve(value: Any, facts: Dict[str, Any]) -> Any:
         return str(fact)
     if isinstance(value, list):
         return [_resolve(item, facts) for item in value]
+    if isinstance(value, dict):
+        return {key: _resolve(item, facts) for key, item in value.items()}
     return value

@@ -27,6 +27,8 @@ def decode_installation(row: Mapping[str, Any]) -> ConnectorInstallation:
         credential_id=uuid_or_none(row["credential_id"]),
         status=row["status"],
         token_expires_at=row["token_expires_at"],
+        door_data=jsonb_object(row["door_data"]),
+        door_name=row["door_name"],
     )
 
 
@@ -44,6 +46,8 @@ def decode_installation_read(row: Mapping[str, Any]) -> InstallationRead:
         # Total: an unreadable health blob must render as "nothing declared",
         # not as a 500 on the connections screen.
         health_detail=jsonb_object(row["health_detail"]),
+        door_data=jsonb_object(row["door_data"]),
+        door_name=row["door_name"],
         installed_at=row["installed_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],

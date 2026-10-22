@@ -6,6 +6,7 @@ health story. One list serving both would leak a pointer to a secret into
 every API response that ever renders a connection.
 """
 
+import hashlib
 from typing import Any, List, Optional, Tuple
 
 from app.crm.connectivity.status import (
@@ -19,15 +20,15 @@ INSTALLATION_TABLE = "crm_connector_installation"
 # The route's shape — what send.py needs to reach a provider.
 INSTALLATION_COLUMNS = """
     id, merchant_id, connector_key, external_account_id, display_label,
-    credential_id, status, token_expires_at
+    credential_id, status, token_expires_at, door_data, door_name
 """
 
 # The console's shape. credential_id is deliberately ABSENT: a read model
 # that names where a secret lives is a map to it.
 INSTALLATION_READ_COLUMNS = """
     id, merchant_id, connector_key, external_account_id, display_label,
-    status, token_expires_at, last_event_at, health_detail, installed_at,
-    created_at, updated_at
+    status, token_expires_at, last_event_at, health_detail, door_data,
+    door_name, installed_at, created_at, updated_at
 """
 
 
@@ -120,6 +121,91 @@ def installation_for_connector_query(
     return query, [merchant_id, connector_key, sorted(INSTALLATION_USABLE)]
 
 
+def other_account_holder_query(
+    merchant_id: str, connector_key: str, external_account_id: str
+) -> Tuple[str, List[Any]]:
+    """Whether a merchant OTHER than this one holds this provider account —
+    the refusal an exclusive connector's onboarding needs.
+
+    Cross-tenant by design, like installation_for_inbound_query below, and
+    with the same status rule: a 'revoked' door is nobody's, every other
+    status still owns the account's callbacks. Answers only a merchant id;
+    the caller says "already connected elsewhere" and never which merchant.
+    """
+    query = f"""
+        SELECT merchant_id
+          FROM {INSTALLATION_TABLE}
+         WHERE connector_key = $1
+           AND external_account_id = $2
+           AND merchant_id <> $3
+           AND status <> $4
+         LIMIT 1
+    """
+    return query, [
+        connector_key,
+        external_account_id,
+        merchant_id,
+        INSTALLATION_REVOKED,
+    ]
+
+
+def account_lock_key(connector_key: str, external_account_id: str) -> int:
+    """PURE: a stable signed 64-bit advisory-lock key for one provider
+    account. hashlib, never hash(): Python salts the latter per process, and
+    two pods must agree."""
+    digest = hashlib.blake2b(
+        f"account\x00{connector_key}\x00{external_account_id}".encode("utf-8"),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+def lock_account_query(
+    connector_key: str, external_account_id: str
+) -> Tuple[str, List[Any]]:
+    """Held for the rest of the transaction: two merchants onboarding the
+    same exclusive account serialise here, so the second one's holder check
+    sees the first one's committed door."""
+    query = "SELECT pg_advisory_xact_lock($1::bigint)"
+    return query, [account_lock_key(connector_key, external_account_id)]
+
+
+def installation_by_door_name_query(
+    merchant_id: str, connector_key: str, door_name: str
+) -> Tuple[str, List[Any]]:
+    """The route shape, found by the door's NAME — the door an action node
+    that says ``door_name`` acts through. Usable only, exactly like the
+    connector-only lookup above: a named door that is revoked or unproven is
+    no door at all, and the caller fails closed rather than falling back to
+    some other account the plan did not name."""
+    query = f"""
+        SELECT {INSTALLATION_COLUMNS}
+          FROM {INSTALLATION_TABLE}
+         WHERE merchant_id = $1
+           AND connector_key = $2
+           AND door_name = $3
+           AND status = ANY($4::text[])
+    """
+    return query, [merchant_id, connector_key, door_name, sorted(INSTALLATION_USABLE)]
+
+
+def door_name_account_query(
+    merchant_id: str, connector_key: str, door_name: str
+) -> Tuple[str, List[Any]]:
+    """Which of this merchant's accounts on one connector holds a door_name,
+    in ANY status — the same rows migration 085's unique index covers, so a
+    None here means the upsert will not trip it (barring a race)."""
+    query = f"""
+        SELECT external_account_id
+          FROM {INSTALLATION_TABLE}
+         WHERE merchant_id = $1
+           AND connector_key = $2
+           AND door_name = $3
+         LIMIT 1
+    """
+    return query, [merchant_id, connector_key, door_name]
+
+
 def upsert_installation_query(
     merchant_id: str,
     connector_key: str,
@@ -129,6 +215,8 @@ def upsert_installation_query(
     status: str,
     token_expires_at: Optional[Any],
     health_detail_json: str,
+    door_data_json: str,
+    door_name: Optional[str],
 ) -> Tuple[str, List[Any]]:
     """Idempotent on (merchant_id, connector_key, external_account_id) —
     re-onboarding the same account updates the existing row in place rather
@@ -145,13 +233,17 @@ def upsert_installation_query(
       binding's business, and the binding's own upsert states its rules.
 
     token_expires_at rides EXCLUDED because a re-onboard IS a rotation: the
-    old token's expiry describes a credential that no longer exists.
+    old token's expiry describes a credential that no longer exists. So does
+    door_data: a re-onboard restates where the account lives. door_name is
+    COALESCEd like display_label: re-onboarding without a name keeps the one
+    the door already has, so a plan that names it keeps working.
     """
     query = f"""
         INSERT INTO {INSTALLATION_TABLE}
             (merchant_id, connector_key, external_account_id, display_label,
-             credential_id, status, token_expires_at, health_detail)
-        VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8::jsonb)
+             credential_id, status, token_expires_at, health_detail,
+             door_data, door_name)
+        VALUES ($1, $2, $3, $4, $5::uuid, $6, $7, $8::jsonb, $9::jsonb, $10)
         ON CONFLICT (merchant_id, connector_key, external_account_id)
         DO UPDATE SET
             display_label = COALESCE(EXCLUDED.display_label,
@@ -159,8 +251,11 @@ def upsert_installation_query(
             credential_id = EXCLUDED.credential_id,
             status = EXCLUDED.status,
             token_expires_at = EXCLUDED.token_expires_at,
-            health_detail = EXCLUDED.health_detail
-        WHERE {INSTALLATION_TABLE}.status <> $9
+            health_detail = EXCLUDED.health_detail,
+            door_data = EXCLUDED.door_data,
+            door_name = COALESCE(EXCLUDED.door_name,
+                                 {INSTALLATION_TABLE}.door_name)
+        WHERE {INSTALLATION_TABLE}.status <> $11
         RETURNING {INSTALLATION_READ_COLUMNS}
     """
     return query, [
@@ -172,6 +267,8 @@ def upsert_installation_query(
         status,
         token_expires_at,
         health_detail_json,
+        door_data_json,
+        door_name,
         INSTALLATION_DISABLED,
     ]
 

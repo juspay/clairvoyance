@@ -23,13 +23,14 @@ else, and the walker's retry ladder re-sends. Collapsing the two would either
 park runs on a deploy blip or spend attempts on a permanent refusal.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
 from app.core.logger import logger
 from app.crm.connectivity.connectors import CONNECTORS, ActionError
 from app.crm.connectivity.db.accessors.installation import (
+    get_installation_by_door_name,
     get_installation_for_connector,
 )
 
@@ -89,8 +90,14 @@ async def perform_action(
     action: str,
     args: Dict[str, Any],
     context: Dict[str, Any],
+    door_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Do one thing through one connector, and report it as flat facts.
+
+    ``door_name`` is optional: given, the action acts through THAT named
+    account and fails closed when it is not usable — never falling back to
+    another account the plan did not name; absent, through the merchant's
+    newest usable account on the connector.
 
     ``args`` is the plan's, still untyped; ``context`` carries only what a
     transport may need for bookkeeping (the run and node ids behind the
@@ -109,7 +116,17 @@ async def perform_action(
             f"connector '{connector_key}' has no action '{action}' (has: {known})"
         )
 
-    installation = await get_installation_for_connector(merchant_id, connector_key)
+    if door_name:
+        installation = await get_installation_by_door_name(
+            merchant_id, connector_key, door_name
+        )
+        if installation is None:
+            raise ActionError(
+                f"merchant has no usable '{connector_key}' connection named "
+                f"'{door_name}' to act through"
+            )
+    else:
+        installation = await get_installation_for_connector(merchant_id, connector_key)
     if installation is None:
         # Fail CLOSED, unconditionally: the door is the tenancy, and there is
         # no flag a face can set to be excused from it. A `getattr(face,
