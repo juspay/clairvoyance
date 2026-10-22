@@ -71,6 +71,7 @@ route resolver, and so do the provider packages.
 """
 
 from app.crm.connectivity.actions import (
+    action_declares,
     action_names,
     perform_action,
     validate_action_args,
@@ -113,6 +114,7 @@ __all__ = [
     "send_behind",
     # asking a connector to act (the walker's action square)
     "perform_action",
+    "action_declares",
     "action_names",
     "validate_action_args",
     "ActionError",

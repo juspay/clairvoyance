@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional
 from app.core.logger import logger
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, listens
-from app.crm.outreach.nodes.action import placeholder_names
+from app.crm.outreach.nodes.action import declared_facts, placeholder_names
+from app.crm.outreach.nodes.context import is_bookkeeping
 from app.crm.outreach.playbook import block_names, line_holes
 from app.crm.outreach.schemas import RETIRED_WAIT_EVENT, WorkflowDefinition
 from app.crm.record.contracts import (
@@ -76,6 +77,20 @@ def entry_against_catalog(
     # dialled, which is later than an args hole fails.
     asked += [("playbook", name) for name in line_holes(definition)]
     listened = listened_facts(definition, catalogs)
+    # What an action square writes onto the run from its answer
+    # (merchant_http's declared `facts`): a later square may name them. A
+    # declared name that is the walker's own would be dropped at fire time
+    # (nodes/action.py never writes one), so it is refused here instead of
+    # publishing a variable that can never fill.
+    written_by_actions = declared_facts(definition)
+    action_facts = {name for names in written_by_actions.values() for name in names}
+    for node_id, names in sorted(written_by_actions.items()):
+        for name in names:
+            if is_bookkeeping(name):
+                problems.append(
+                    f"action node {node_id}: declared fact {name!r} is a name "
+                    "the walker keeps for itself — rename it"
+                )
     open_squares = unenumerable_squares(definition, catalogs)
     blocks = block_names(definition)
     for entry in definition.entries:
@@ -90,7 +105,7 @@ def entry_against_catalog(
                 )
             continue
         declared = {variable_name(f.path) for f in fields.values() if f.variable}
-        allowed = declared | _WALKER_FACTS | listened
+        allowed = declared | _WALKER_FACTS | listened | action_facts
         # A block is merged into the facts LAST (nodes/blocks.py), so a block
         # named like a fact silently wins over the letter's own value, and one
         # named like a walker key slips past the run_facts filter that exists

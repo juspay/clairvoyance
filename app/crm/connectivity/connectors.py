@@ -31,6 +31,11 @@ from app.crm.connectivity.providers.base import (
     TemplateProvider,
     TemplateProviderError,
 )
+from app.crm.connectivity.providers.merchant_http.actions import MERCHANT_HTTP_ACTIONS
+from app.crm.connectivity.providers.merchant_http.onboard import (
+    MerchantHttpOnboarder,
+    OnboardMerchantHttpRequest,
+)
 from app.crm.connectivity.providers.shopify.actions import SHOPIFY_ACTIONS
 from app.crm.connectivity.providers.shopify.onboard import (
     OnboardShopifyRequest,
@@ -176,6 +181,19 @@ CONNECTORS: Dict[str, ConnectorSpec] = {
         request_model=OnboardXyneRequest,
         actions=XYNE_ACTIONS,
         exclusive_account=True,
+    ),
+    # A merchant's OWN endpoint as a door (enh A/03): a named account — its
+    # base URL in door_data, one optional auth header in the `credentials`
+    # table — onboarded once; a plan names only the connector, the verb, its
+    # args and (to pick an account) its door_name. No channel, no templates.
+    "merchant_http": ConnectorSpec(
+        key="merchant_http",
+        source="merchant_http",
+        channel=None,
+        onboarder=MerchantHttpOnboarder(),
+        templates=None,
+        request_model=OnboardMerchantHttpRequest,
+        actions=MERCHANT_HTTP_ACTIONS,
     ),
 }
 

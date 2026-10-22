@@ -162,11 +162,12 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
         _DEFINITION,
     )
 
-    # The action's OWN normalised facts, kept rather than discarded — under
-    # the square's `action_` bookkeeping key, so they stay out of run_facts
-    # and can never reach a template. This assertion is what stops
-    # "responses are normalised" from being a promise with no reader.
-    assert result == {"action_tag-vip": {"ok": True}}
+    # The action's OWN normalised result, kept rather than discarded — under
+    # the square's `action_` bookkeeping key with the visit it was, so it
+    # stays out of run_facts and can never reach a template. This assertion
+    # is what stops "responses are normalised" from being a promise with no
+    # reader. Shopify declares no facts, so nothing else is written.
+    assert result == {"action_tag-vip": {"ok": True, "visit": 1}}
     assert calls == [
         {
             "merchant_id": "m1",
@@ -176,10 +177,10 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
             # EVERY value the connector needs is here: the args are the whole
             # contract, resolved from the plan's own placeholders.
             "args": {"order_id": "5408422249", "tags": ["CONFIRM", "vip"]},
-            # Bookkeeping ONLY — the two halves of the idempotency key. A
-            # provider reading data from here would be reading outreach's
-            # context shape from inside connectivity.
-            "context": {"run_id": str(run.id), "node_id": "tag-vip"},
+            # Bookkeeping ONLY — the idempotency key's parts. A provider
+            # reading data from here would be reading outreach's context
+            # shape from inside connectivity.
+            "context": {"run_id": str(run.id), "node_id": "tag-vip", "visit": 1},
             # No door_name on the node: the connector's newest usable door.
             "door_name": None,
         }

@@ -14,12 +14,13 @@ from typing import Any, Dict, List
 from app.core.logger import logger
 from app.crm.connectivity.contracts import (
     ActionError,
+    action_declares,
     action_names,
     perform_action,
     validate_action_args,
 )
 from app.crm.outreach.nodes.blocks import blocks_for
-from app.crm.outreach.nodes.context import playbook_key, run_facts
+from app.crm.outreach.nodes.context import is_bookkeeping, playbook_key, run_facts
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
 
@@ -110,6 +111,7 @@ async def execute(
         raise NodeParked(f"action node {node.id}: no connector/action to perform")
 
     facts = run_facts(run.context, node)
+    visit = _visits_so_far(run.context, node.id) + 1
     # The run's own customer phone — a bookkeeping key run_facts filters out —
     # so a form the run sends can carry {customer_mobile_number} and the reply
     # resolves back to this same customer.
@@ -141,11 +143,13 @@ async def execute(
             node.connector,
             node.action,
             args,
-            # Bookkeeping ONLY — the idempotency key's two halves. Never
-            # data: connectivity's own contract says so, and an action that
-            # learned to read a fact from here would couple a provider to
-            # this module's context shape.
-            {"run_id": str(run.id), "node_id": node.id},
+            # Bookkeeping ONLY — the idempotency key's parts. Never data:
+            # connectivity's own contract says so, and an action that learned
+            # to read a fact from here would couple a provider to this
+            # module's context shape. `visit` is derived from what the run
+            # has already WRITTEN, so a lease retry of one visit re-derives
+            # the same key and a revisit of the square gets a new one.
+            {"run_id": str(run.id), "node_id": node.id, "visit": visit},
             door_name=node.door_name,
         )
     except ActionError as e:
@@ -157,16 +161,44 @@ async def execute(
         f"walker: run {run.id} performed {node.connector}/{node.action} "
         f"(node {node.id})"
     )
-    # The action's OWN normalised facts, kept under the square's bookkeeping
-    # key rather than discarded. `action_` is a bookkeeping prefix, so this
-    # stays out of run_facts and can never reach a template — but it is on
-    # the run for whoever triages it, and a test asserts its shape, which is
-    # what stops "responses are normalised" from becoming a promise with no
-    # reader.
-    written: Dict[str, Any] = {f"action_{node.id}": result}
+    # The action's OWN normalised result, kept under the square's bookkeeping
+    # key with the visit it was — `action_` is a bookkeeping prefix, so the
+    # record stays out of run_facts and is on the run for whoever triages it.
+    written: Dict[str, Any] = {f"action_{node.id}": {**result, "visit": visit}}
+    # The facts the action DECLARED (merchant_http's `facts`) go onto the run
+    # at the top level, where run_facts reads every later square's
+    # variables from — that is the whole point of declaring them, and what
+    # publish admitted a later `{payment_link}` against. A name that is the
+    # walker's own is never written: publish refuses it, and this is the
+    # fire-time half of the same rule.
+    for name, value in (result.get("facts") or {}).items():
+        if not is_bookkeeping(name):
+            written[name] = value
     if chosen:
         written[playbook_key(node.id)] = chosen
     return written
+
+
+def _visits_so_far(context: Dict[str, Any], node_id: str) -> int:
+    """PURE: how many times this square has already performed, read from
+    its own record (0 when it never has, or the record predates visits)."""
+    record = context.get(f"action_{node_id}")
+    visit = record.get("visit") if isinstance(record, dict) else None
+    return visit if isinstance(visit, int) and visit > 0 else 0
+
+
+def declared_facts(definition: WorkflowDefinition) -> Dict[str, List[str]]:
+    """PURE: action square id -> the fact names it will write onto the run,
+    as its connector declares them for its args (merchant_http's `facts`).
+    What the publish validator adds to a later square's allow-list."""
+    out: Dict[str, List[str]] = {}
+    for node in definition.nodes:
+        if node.type != "action" or not node.connector or not node.action:
+            continue
+        names = action_declares(str(node.connector), str(node.action), node.args)
+        if names:
+            out[node.id] = names
+    return out
 
 
 # --- the pure arg helpers (this square's own; nothing else resolves args) ---
