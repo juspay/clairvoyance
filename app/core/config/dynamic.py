@@ -1077,3 +1077,44 @@ async def META_GRAPH_TIMEOUT_SECONDS() -> float:
             f"Invalid META_GRAPH_TIMEOUT_SECONDS value {value!r}; using 15.0"
         )
         return 15.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Meeting recording (Buddy on the desk) — all tunable without a deploy
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def MEETING_STOP_PHRASE() -> str:
+    """Sentences that end a recording, ``|``-separated. Each final is matched
+    as a WHOLE sentence after lowercasing and stripping punctuation; a longer
+    sentence that merely contains one is a transcript line, not a command."""
+    return await get_config(
+        "MEETING_STOP_PHRASE",
+        "hey buddy stop recording the meeting|hey buddy stop recording"
+        "|hey buddy stop the recording|stop recording the meeting"
+        "|stop the recording|stop recording",
+        str,
+    )
+
+
+async def MEETING_STOP_MATCH_THRESHOLD() -> float:
+    """Similarity (0..1) a sentence needs against MEETING_STOP_PHRASE to count
+    as the stop command; absorbs STT slips like "hey body"."""
+    return await get_config("MEETING_STOP_MATCH_THRESHOLD", 0.9, float)
+
+
+async def MEETING_MAX_DURATION_SECONDS() -> int:
+    """Hard cap on one recording; the bot ends it cleanly and says so."""
+    return await get_config("MEETING_MAX_DURATION_SECONDS", 3 * 60 * 60, int)
+
+
+async def MEETING_SILENCE_TIMEOUT_SECONDS() -> int:
+    """End a recording when nobody has spoken for this long (the meeting is
+    over and nobody said stop); 0 disables."""
+    return await get_config("MEETING_SILENCE_TIMEOUT_SECONDS", 600, int)
+
+
+async def MEETING_LINE_MERGE_GAP_MS() -> int:
+    """Consecutive finals from the same speaker closer than this are joined
+    into one line, so STT fragments read as sentences."""
+    return await get_config("MEETING_LINE_MERGE_GAP_MS", 1500, int)

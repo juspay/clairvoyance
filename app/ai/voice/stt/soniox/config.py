@@ -40,6 +40,7 @@ class SonioxConfig:
     log_context: str = "Soniox"
     language_hints_strict: bool = False
     enable_language_identification: Optional[bool] = None
+    enable_speaker_diarization: Optional[bool] = None
     finalize_after_secs: Optional[float] = 1.0
     ws_ping_interval: Optional[float] = 3.0
     ws_ping_timeout: Optional[float] = 5.0
@@ -152,6 +153,7 @@ def build_soniox_stt(config: SonioxConfig):
         client_reference_id=config.client_reference_id,
         language_hints_strict=config.language_hints_strict,
         enable_language_identification=enable_lang_id,
+        enable_speaker_diarization=config.enable_speaker_diarization,
     )
 
     # Format language hints for logging
