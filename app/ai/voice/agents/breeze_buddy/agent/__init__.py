@@ -131,7 +131,10 @@ from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
 )
 from app.ai.voice.agents.breeze_buddy.utils.warm_transfer import set_transfer_flag
 from app.ai.voice.llm.realtime.gemini.realtime import has_realtime_llm
-from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
+from app.core.config.dynamic import (
+    BB_DAILY_AUDIO_OUT_10MS_CHUNKS,
+    BREEZE_BUDDY_ENABLE_AIC_FILTER,
+)
 from app.core.config.static import ENABLE_BREEZE_BUDDY_TRACING
 from app.core.logger import logger
 from app.core.logger.context import (
@@ -481,6 +484,7 @@ class Agent:
             self.template,
             self.configurations,
             daily_audio_out_10ms_chunks=await BB_DAILY_AUDIO_OUT_10MS_CHUNKS(),
+            use_aic_filter=await BREEZE_BUDDY_ENABLE_AIC_FILTER(),
         )
         self.transport = await create_transport(runner_args, transport_params)
 
@@ -770,7 +774,11 @@ class Agent:
         )
 
         # Get transport params using the detected transport type
-        transport_params = get_transport_params(self.template, self.configurations)
+        transport_params = get_transport_params(
+            self.template,
+            self.configurations,
+            use_aic_filter=await BREEZE_BUDDY_ENABLE_AIC_FILTER(),
+        )
         params = transport_params[transport_type]()
 
         # Store for transport rebuilds on agent-to-agent transfer (generation >= 2).

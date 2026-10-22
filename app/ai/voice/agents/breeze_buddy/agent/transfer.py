@@ -24,7 +24,10 @@ from app.ai.voice.agents.breeze_buddy.template.context import (
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.agent_transfer import PendingAgentTransfer
-from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
+from app.core.config.dynamic import (
+    BB_DAILY_AUDIO_OUT_10MS_CHUNKS,
+    BREEZE_BUDDY_ENABLE_AIC_FILTER,
+)
 from app.core.logger.context import update_log_context
 from app.database.accessor.breeze_buddy.lead_call_tracker import update_lead_template
 
@@ -122,6 +125,7 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
             bot.template,
             bot.configurations,
             daily_audio_out_10ms_chunks=await BB_DAILY_AUDIO_OUT_10MS_CHUNKS(),
+            use_aic_filter=await BREEZE_BUDDY_ENABLE_AIC_FILTER(),
         )
         bot.transport = await create_transport(
             bot._rebuild.runner_args, transport_params
@@ -147,7 +151,11 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
         assert bot._rebuild.telephony_transport_type is not None
         assert bot._rebuild.telephony_call_data is not None
         # Telephony doesn't use the Daily chunk knob; leave the fallback.
-        transport_params = get_transport_params(bot.template, bot.configurations)
+        transport_params = get_transport_params(
+            bot.template,
+            bot.configurations,
+            use_aic_filter=await BREEZE_BUDDY_ENABLE_AIC_FILTER(),
+        )
         params = transport_params[bot._rebuild.telephony_transport_type]()
         bot.transport = await create_telephony_transport(
             cast(WebSocket, bot._rebuild.ws_proxy),
