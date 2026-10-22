@@ -16,7 +16,19 @@ class ConnectorInstallation(BaseModel):
     id: str
     merchant_id: str
     connector_key: str
+    #: The provider's own id for the account — a WABA id, a shop subdomain,
+    #: or (merchant_http) the merchant-chosen door name. Never the base URL:
+    #: that lives in ``door_data`` so editing it is an UPDATE, not a new row.
     external_account_id: str
+    #: The stable, merchant-chosen name a plan addresses when it picks WHICH
+    #: door on ``connector_key`` an action runs through (`payments`,
+    #: `returns`). Unique per (merchant, connector); a URL change never moves
+    #: it, so a plan keeps resolving and pinned runs stay on the same door.
+    door_name: Optional[str] = None
+    #: Connector-shaped address data, never secrets. merchant_http keeps its
+    #: base URL here (``door_data["base_url"]``), so a URL edit is an in-place
+    #: UPDATE to this one row.
+    door_data: Dict[str, Any] = Field(default_factory=dict)
     display_label: Optional[str] = None
     credential_id: Optional[str] = None
     status: str
@@ -61,6 +73,14 @@ class OnboardResult(BaseModel):
 
     #: The provider's own id for the account — a WABA id today.
     external_account_id: str
+    #: The stable, merchant-chosen door name a plan will address this door by
+    #: (`payments`). Absent (a connector with no per-door choice, e.g. one
+    #: WABA per merchant) it backfills to ``external_account_id`` at the door.
+    door_name: Optional[str] = None
+    #: Connector-shaped address data, never secrets. merchant_http stores its
+    #: base URL here (``{"base_url": …}``), freeing ``external_account_id`` to
+    #: hold the stable name and letting a URL edit stay an in-place UPDATE.
+    door_data: Dict[str, Any] = Field(default_factory=dict)
     #: The endpoint under it that becomes the binding's address (a Meta
     #: phone_number_id). What it means is the channel's business.
     #:
@@ -114,6 +134,7 @@ class InstallationRead(BaseModel):
     merchant_id: str
     connector_key: str
     external_account_id: str
+    door_name: Optional[str] = None
     display_label: Optional[str] = None
     status: str
     token_expires_at: Optional[datetime] = None

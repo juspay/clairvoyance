@@ -37,11 +37,24 @@ class IngressSpec(NamedTuple):
     bay token to the path — ``/ingest/webhooks/{provider}/{bay}`` — and
     ``verify`` gains the request's path params, so the credential can be
     found before the signature is checked.
+
+    ``success_reply`` / ``error_reply`` are the door's ANSWER BODY when set.
+    A provider that shows the answer to a person (Xyne returns an
+    AppActionResponse in the chat) gets a JSON reply: ``success_reply`` on a
+    clean store, ``error_reply`` when the store fails. A provider that
+    retries on its own (Meta) sets neither, so the door keeps its empty 200
+    and its 503-dogged-by-dedupe on a store failure — answers the sender
+    understands. ``error_reply`` is returned as a 200 with the error JSON,
+    never a 503: a 503 tells a non-retrying provider (Xyne) to give up, and
+    a 200 with an error object is what Xyne shows the person so they can
+    resubmit.
     """
 
     verify: Callable[[bytes, Mapping[str, str]], bool]
     envelope: Callable[[Mapping[str, str], Dict], Awaitable[List[EventIn]]]
     challenge: Callable[[Mapping[str, str]], Optional[str]]
+    success_reply: Optional[Dict] = None
+    error_reply: Optional[Dict] = None
 
 
 #: The slot. Empty until app/crm/api.py fills it at wiring time — a closed

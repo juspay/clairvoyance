@@ -60,7 +60,9 @@ def relay(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _door(monkeypatch: pytest.MonkeyPatch, installation: Any) -> None:
-    async def _get(merchant_id: str, connector_key: str) -> Any:
+    async def _get(
+        merchant_id: str, connector_key: str, door_name: Optional[str] = None
+    ) -> Any:
         return installation
 
     monkeypatch.setattr(actions_module, "get_installation_for_connector", _get)
@@ -203,6 +205,94 @@ async def test_the_door_names_the_shop_not_the_tenant(
     )
 
     assert json.loads(seen[0].content.decode())["merchant_id"] == "acme.myshopify.com"
+
+
+async def test_an_action_node_may_pin_which_door_to_use(
+    monkeypatch: pytest.MonkeyPatch, relay: None
+) -> None:
+    """The one transport an action node may name: when a merchant holds
+    several base_urls on merchant_http, the plan says WHICH door by its STABLE
+    name, and that name is exactly what reaches the accessor — not the
+    connector's newest."""
+    seen: List[Optional[str]] = []
+
+    async def _get(
+        merchant_id: str, connector_key: str, door_name: Optional[str] = None
+    ) -> ConnectorInstallation:
+        seen.append(door_name)
+        return _installation()
+
+    monkeypatch.setattr(actions_module, "get_installation_for_connector", _get)
+    stub_http(
+        monkeypatch, via_nautilus, lambda r: httpx.Response(200, json={"ok": True})
+    )
+
+    await perform_action(
+        "m1",
+        "shopify",
+        "add_tag",
+        {"order_id": "1", "tags": ["a"]},
+        {"run_id": "r-1", "node_id": "tag-1"},
+        "payments",
+    )
+    assert seen == ["payments"]
+
+
+async def test_an_action_without_a_pinned_door_asks_the_connector_default(
+    monkeypatch: pytest.MonkeyPatch, relay: None
+) -> None:
+    """Absent door_name on the node, the connector's newest usable door
+    is chosen — perform_action forwards None, unchanged behaviour."""
+    seen: List[Optional[str]] = []
+
+    async def _get(
+        merchant_id: str, connector_key: str, door_name: Optional[str] = None
+    ) -> ConnectorInstallation:
+        seen.append(door_name)
+        return _installation()
+
+    monkeypatch.setattr(actions_module, "get_installation_for_connector", _get)
+    stub_http(
+        monkeypatch, via_nautilus, lambda r: httpx.Response(200, json={"ok": True})
+    )
+
+    await perform_action(
+        "m1",
+        "shopify",
+        "add_tag",
+        {"order_id": "1", "tags": ["a"]},
+        {"run_id": "r-1", "node_id": "tag-1"},
+    )
+    assert seen == [None]
+
+
+async def test_a_pinned_door_that_resolves_to_nothing_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, relay: None
+) -> None:
+    """A foreign-door name, a door of the wrong connector, or a withdrawn one
+    all read the same: the accessor answers None and the verb refuses, so a
+    leak from another merchant can never act through its door."""
+
+    async def _get(
+        merchant_id: str, connector_key: str, door_name: Optional[str] = None
+    ) -> Optional[ConnectorInstallation]:
+        return None
+
+    monkeypatch.setattr(actions_module, "get_installation_for_connector", _get)
+    seen = stub_http(
+        monkeypatch, via_nautilus, lambda r: httpx.Response(200, json={"ok": True})
+    )
+
+    with pytest.raises(ActionError, match="no usable 'shopify' connection"):
+        await perform_action(
+            "m1",
+            "shopify",
+            "add_tag",
+            {"order_id": "1", "tags": ["a"]},
+            {"run_id": "r-1", "node_id": "tag-1"},
+            "not-m1s-payments",
+        )
+    assert seen == []
 
 
 async def test_args_that_do_not_fit_are_a_defect(

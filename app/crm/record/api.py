@@ -233,15 +233,25 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         except Exception as e:
             # Front door fails CLOSED, same as the push door above: a 200
             # here would silently drop the provider's letter; 503 tells
-            # them to retry, and dedupe makes the retry safe.
+            # them to retry, and dedupe makes the retry safe. A provider
+            # that does NOT retry (Xyne) and shows the answer to a person
+            # gets its error_reply JSON instead — a 200 with an error
+            # AppActionResponse the person sees and can resubmit (finding 6).
             logger.error(
                 f"ingress: store failed for {letter.source}/{letter.topic} "
                 f"external_id={letter.external_id}: {e}"
             )
+            if spec.error_reply is not None:
+                return JSONResponse(content=spec.error_reply, status_code=200)
             return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
         if event_id is not None:
             filed += 1
     logger.info(f"ingress: {provider} webhook filed {filed}/{len(letters)} letters")
+    if spec.success_reply is not None:
+        # A provider that answers the person in the chat (Xyne) wants an
+        # AppActionResponse, not an empty 200 (finding 5). Meta sets none, so
+        # the door's 200 keeps its silent body.
+        return JSONResponse(content=spec.success_reply, status_code=200)
     return Response(status_code=status.HTTP_200_OK)
 
 

@@ -1,8 +1,10 @@
 """The catalog laws of a plan (design/event-catalog.md §Ownership; canon
 T24): conditions, entry.key and a send node's template variables come
-ONLY from declared fields, an op only from the field's type, a deprecated
-field is a warning. One pure concern, kept apart from the plan lifecycle
-(plans.py: gather -> validate -> apply) so each file stays one thing.
+ONLY from declared fields — or from a fact an action node declares it will
+write (its response values, read off the connector) — an op only from the
+field's type, a deprecated field is a warning. One pure concern, kept apart
+from the plan lifecycle (plans.py: gather -> validate -> apply) so each
+file stays one thing.
 
 gather_catalogs is the cold read; everything else is pure and takes what
 it gathered as an argument.
@@ -11,9 +13,11 @@ it gathered as an argument.
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
+from app.crm.connectivity.contracts import action_declares
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, listens
 from app.crm.outreach.nodes.action import placeholder_names
+from app.crm.outreach.nodes.context import is_bookkeeping
 from app.crm.outreach.playbook import block_names, line_holes
 from app.crm.outreach.schemas import RETIRED_WAIT_EVENT, WorkflowDefinition
 from app.crm.record.contracts import (
@@ -90,7 +94,20 @@ def entry_against_catalog(
                 )
             continue
         declared = {variable_name(f.path) for f in fields.values() if f.variable}
-        allowed = declared | _WALKER_FACTS | listened
+        allowed = (
+            declared | _WALKER_FACTS | listened | action_declared_facts(definition)
+        )
+        # A fact an action writes is merged into the run's context at the TOP
+        # level (nodes/action.py), so a declared name that shadows the walker's
+        # own bookkeeping would overwrite `phone` or `source_event_id` on a live
+        # run. Refused here, where the connector's declared names are in hand —
+        # the same collision law as a playbook block.
+        for name in sorted(action_declared_facts(definition)):
+            if is_bookkeeping(name):
+                problems.append(
+                    f"action declares fact {name!r}, which shadows the walker's "
+                    "own bookkeeping — it would overwrite the run's context"
+                )
         # A block is merged into the facts LAST (nodes/blocks.py), so a block
         # named like a fact silently wins over the letter's own value, and one
         # named like a walker key slips past the run_facts filter that exists
@@ -141,8 +158,14 @@ def entry_against_catalog(
 
 
 # Facts the walker computes for a template at the square (nodes.run_facts,
-# phase 16) — never a producer's, so no catalog declares them.
-_WALKER_FACTS = frozenset({"current_node", "current_stage"})
+# phase 16) — never a producer's, so no catalog declares them. current_node /
+# current_stage come from the square the walker is at; merchant_id is the run
+# row's OWN merchant and customer_mobile_number is the run's own customer's
+# phone — both read from where a run is, never from what an author typed, so a
+# plan may say {merchant_id} for the form it sends (finding 11).
+_WALKER_FACTS = frozenset(
+    {"current_node", "current_stage", "merchant_id", "customer_mobile_number"}
+)
 
 
 def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
@@ -159,6 +182,22 @@ def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
             for field in (catalogs.get(topic) or {}).values():
                 if field.variable:
                     names.add(f"facts_{node.id}_{variable_name(field.path)}")
+    return names
+
+
+def action_declared_facts(definition: WorkflowDefinition) -> set:
+    """PURE: every fact name some action node in this document WRITES — the
+    connector's answer to ``action_declares`` for that action and its args
+    (e.g. a merchant_http ``request``'s ``facts`` map). These are run-produced,
+    never a producer's and never declared by any catalog, so they are admitted
+    for a later square's placeholders and variables alongside the door's own
+    declared fields. An unknown connector or action answers nothing: the shape
+    validator has already said that in its own words."""
+    names: set = set()
+    for node in definition.nodes:
+        if node.type != "action" or not node.connector or not node.action:
+            continue
+        names.update(action_declares(node.connector, node.action, node.args))
     return names
 
 

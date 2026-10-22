@@ -43,3 +43,9 @@ TOPIC_INBOUND = "message.inbound"
 #: A provider said something about the connected account itself (a review
 #: decision, a ban, a tier change) — the letters the health probe will read.
 TOPIC_ACCOUNT = "account.update"
+
+#: XyneSpaces told us a flow advanced — the mailroom word for the
+#: relay's `flow_action` event. `flow_action` is what the sender CALLS it;
+#: this is what the letter carries on the spine, so a consumer never has to
+#: spell a provider's name (the same reason Meta's word stays in its bay).
+TOPIC_FLOW_ACTION = "flow_action"

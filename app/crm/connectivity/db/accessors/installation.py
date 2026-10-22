@@ -71,6 +71,8 @@ async def upsert_installation(
     merchant_id: str,
     connector_key: str,
     external_account_id: str,
+    door_name: Optional[str],
+    door_data_json: str,
     display_label: Optional[str],
     credential_id: Optional[str],
     status: str,
@@ -84,6 +86,8 @@ async def upsert_installation(
         merchant_id,
         connector_key,
         external_account_id,
+        door_name,
+        door_data_json,
         display_label,
         credential_id,
         status,
@@ -104,15 +108,28 @@ async def revoke_installation(
 
 
 async def get_installation_for_connector(
-    merchant_id: str, connector_key: str
+    merchant_id: str, connector_key: str, door_name: Optional[str] = None
 ) -> Optional[ConnectorInstallation]:
     """The usable door this merchant acts through on one connector, or None.
 
+    ``door_name`` pins the door when a plan names one (a merchant can hold
+    several base_urls on merchant_http, each under its own name); absent it,
+    the connector's newest usable door is chosen.
+
     None is the fail-closed answer the action root turns into a refusal: no
-    connection, an unproven one, or a withdrawn one all read the same here,
-    because acting through any of them is the same mistake.
+    connection, an unproven one, a withdrawn one, or a named door that is not
+    this merchant's under this connector all read the same here, because
+    acting through any of them is the same mistake.
+
+    ``door_name`` is the STABLE, merchant-chosen name (not the primary key,
+    and not the base URL): a URL edit rewrites door_data on the same row, so
+    the name a plan pinned keeps resolving to that same door. It is compared
+    as a plain string — a hand-edited row can only fail to match, never raise
+    a driver DataError, since the door_name column is text.
     """
-    query, values = installation_for_connector_query(merchant_id, connector_key)
+    query, values = installation_for_connector_query(
+        merchant_id, connector_key, door_name=door_name
+    )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_installation(row) if row is not None else None
