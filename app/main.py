@@ -39,6 +39,9 @@ from app.ai.voice.llm._pools import close_all_pools as close_llm_http_pools
 from app.ai.voice.tts.catalog import get_enabled_voices as load_tts_voice_catalog
 from app.api.routers import breeze_buddy, devcycle, feature_flags, mcp, systems
 from app.api.routers.breeze_buddy.chat import cancel_bus as chat_cancel_bus
+from app.api.routers.breeze_buddy.smallwebrtc.handlers import (
+    close_smallwebrtc_handler,
+)
 
 # Import background task scheduler
 from app.core.background_tasks import BackgroundTaskScheduler
@@ -380,6 +383,13 @@ async def lifespan(_app: FastAPI):
         logger.info(
             f"Drain period ({BOT_MAX_DRAIN_SECONDS}s) complete. Proceeding with cleanup."
         )
+
+    # Close any live SmallWebRTC peer connections (in-process device/browser
+    # bots) so they don't leak on pod drain.
+    try:
+        await close_smallwebrtc_handler()
+    except Exception as e:
+        logger.error(f"Error closing SmallWebRTC handler: {e}", exc_info=True)
 
     # Close Smart Router client (release HTTP connection pool)
     await close_smart_router_client()

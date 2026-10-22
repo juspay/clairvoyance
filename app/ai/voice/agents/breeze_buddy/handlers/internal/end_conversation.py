@@ -270,13 +270,22 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
 
         # Update database first so the span picks up the final outcome from the DB response
         # (fire-and-forget outcome updates from update_outcome handler may not have completed yet)
-        # For Daily mode: use lead.id (no telephony call_sid exists)
+        # For RTC modes (Daily / SmallWebRTC): use lead.id — neither has a
+        #   telephony call_sid, so completion keys on the lead primary id.
+        #   (webrtc's call_sid is only a "webrtc-<ts>" logging label that
+        #   matches no lead row; using it here left the lead stuck non-FINISHED.)
         # For telephony: use call_sid (how completion_function looks up the lead)
-        is_daily_mode = getattr(context.bot, "transport_type", None) == "daily"
+        # Literals, not imports from agent.transport: this module is imported
+        # while the agent package is still initialising (builder -> handlers),
+        # so importing the agent package here is a circular import.
+        is_rtc_mode = getattr(context.bot, "transport_type", None) in (
+            "daily",
+            "webrtc",
+        )
         updated_lead = None
 
-        if is_daily_mode and context.lead:
-            # Daily mode: update by lead.id
+        if is_rtc_mode and context.lead:
+            # Daily / SmallWebRTC: update by lead.id
             logger.info(
                 f"Updating database with call completion details for lead {context.lead.id}"
             )
