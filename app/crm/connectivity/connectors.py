@@ -42,6 +42,11 @@ from app.crm.connectivity.providers.whatsapp.onboard import (
     signup_config as whatsapp_signup_config,
 )
 from app.crm.connectivity.providers.whatsapp.templates import WhatsappTemplates
+from app.crm.connectivity.providers.xyne.actions import XYNE_ACTIONS
+from app.crm.connectivity.providers.xyne.onboard import (
+    OnboardXyneRequest,
+    XyneOnboarder,
+)
 from app.crm.connectivity.schemas.connector import SignupConfig
 
 #: Re-exported so onboarding.py can name the error every onboarder raises,
@@ -122,6 +127,12 @@ class ConnectorSpec:
     #: settings); they are static config, fixed when the process starts, so
     #: changing META_APP_ID / META_ES_CONFIG_ID takes a restart.
     signup: Optional[Callable[[], SignupConfig]] = None
+    #: True when one provider account belongs to ONE merchant at most. Its
+    #: inbound callbacks resolve their merchant from the account alone, so a
+    #: second merchant connecting the same account would take over where
+    #: those callbacks are filed — onboarding.py refuses it instead (409).
+    #: A Xyne app is the case: its webhook URL names only the app id.
+    exclusive_account: bool = False
 
 
 # Instantiated once: the faces are stateless request builders, exactly like
@@ -151,6 +162,20 @@ CONNECTORS: Dict[str, ConnectorSpec] = {
         templates=None,
         request_model=OnboardShopifyRequest,
         actions=SHOPIFY_ACTIONS,
+    ),
+    # One account per Xyne app (external_account_id = app id). A door with no
+    # pipe like Shopify: it receives flow_action webhooks on its own per-app
+    # bay (ingress.py) and acts through `request`, a call the workflow
+    # configures (url, method, body) under the door's door_data.base_url.
+    "xyne": ConnectorSpec(
+        key="xyne",
+        source="xyne",
+        channel=None,
+        onboarder=XyneOnboarder(),
+        templates=None,
+        request_model=OnboardXyneRequest,
+        actions=XYNE_ACTIONS,
+        exclusive_account=True,
     ),
 }
 

@@ -39,6 +39,7 @@ from pydantic import ValidationError
 from app.crm.auth import merchant_scope
 from app.crm.connectivity import contracts
 from app.crm.connectivity.onboarding import (
+    AccountHeldError,
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,
@@ -76,7 +77,7 @@ def translate(error: Exception) -> Optional[HTTPException]:
     """
     if isinstance(error, (UnknownConnectorError, TemplateNotFoundError)):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
-    if isinstance(error, (TemplateInUseError, ResubscribeRefused)):
+    if isinstance(error, (TemplateInUseError, ResubscribeRefused, AccountHeldError)):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
     if isinstance(error, ValidationError):
         return HTTPException(

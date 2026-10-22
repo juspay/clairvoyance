@@ -21,6 +21,12 @@ class ConnectorInstallation(BaseModel):
     credential_id: Optional[str] = None
     status: str
     token_expires_at: Optional[datetime] = None
+    #: The door's own non-secret settings (a Xyne app's ``base_url``) — what
+    #: the onboarder wrote; its keys are that connector's business.
+    door_data: Dict[str, Any] = Field(default_factory=dict)
+    #: The merchant's name for this account, when it has one — how a
+    #: workflow action addresses one door among several on a connector.
+    door_name: Optional[str] = None
 
 
 class ChannelBinding(BaseModel):
@@ -75,6 +81,12 @@ class OnboardResult(BaseModel):
     display_label: Optional[str] = None
     #: The whole credential bundle, ready for the vault. Never logged.
     bundle: Dict[str, Any] = Field(default_factory=dict, repr=False)
+    #: The door's non-secret settings, stored on the installation row itself
+    #: (``door_data``) — where the account's API lives, never a credential.
+    door_data: Dict[str, Any] = Field(default_factory=dict)
+    #: The merchant's name for this account (``door_name``), or None to leave
+    #: it unnamed — or, on a re-onboard, to keep the name it already has.
+    door_name: Optional[str] = None
     #: None means the provider issues a permanent credential — an HONEST
     #: NULL, not a missing value. Canon T11 col 9: the refresh job watches
     #: non-NULL rows, so a wrong NULL is a connector that dies silently.
@@ -119,6 +131,8 @@ class InstallationRead(BaseModel):
     token_expires_at: Optional[datetime] = None
     last_event_at: Optional[datetime] = None
     health_detail: Dict[str, Any] = Field(default_factory=dict)
+    door_data: Dict[str, Any] = Field(default_factory=dict)
+    door_name: Optional[str] = None
     installed_at: datetime
     created_at: datetime
     updated_at: datetime
