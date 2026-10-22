@@ -31,6 +31,7 @@ from app.ai.voice.agents.breeze_buddy.agent.flow import (
     build_flow_config,
     load_template_config,
     prepare_initial_node,
+    resolve_template_config,
     setup_flow_manager,
 )
 from app.ai.voice.agents.breeze_buddy.agent.inbound import (
@@ -439,7 +440,7 @@ class Agent:
                 self.template,
                 self.configurations,
                 self.template_vars,
-            ) = await load_template_config(self.lead)
+            ) = await resolve_template_config(self.lead, runner_args.body)
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
