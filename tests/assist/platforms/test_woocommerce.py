@@ -157,6 +157,7 @@ async def test_search_maps_to_ucp_products_with_variant_stock(store):
             "max_price": 100000,
             "per_page": 5,
             "page": 1,
+            "stock_status": "instock,onbackorder",
             "_fields": catalog._PRODUCT_FIELDS,
         },
     )
@@ -183,6 +184,24 @@ async def test_search_maps_to_ucp_products_with_variant_stock(store):
     ]
     # One available variation: add-to-cart can default to it, as on Shopify.
     assert variable.default_variant_id == "1128598"
+
+
+async def test_search_hides_a_variable_product_with_every_option_sold_out(
+    store, monkeypatch
+):
+    # The store marks the parent in stock while every variation is out.
+    monkeypatch.setitem(BLUE, "is_in_stock", False)
+    out = await tools.call_tool(
+        STORE_API, "search_catalog", {"catalog": {"query": "mouse"}}
+    )
+
+    assert [p["id"] for p in out["products"]] == ["347693"]
+    assert out["pagination"] == {"has_next_page": True, "cursor": "2"}
+    # A lookup still returns it, so the agent can say it is out of stock.
+    looked_up = await tools.call_tool(
+        STORE_API, "lookup_catalog", {"catalog": {"ids": ["1128586"]}}
+    )
+    assert [p["id"] for p in looked_up["products"]] == ["1128586"]
 
 
 async def test_price_filter_uses_the_store_decimals(store, monkeypatch):
@@ -252,6 +271,19 @@ async def test_lookup_resolves_a_variation_id_to_its_parent(store):
 
     assert [p["id"] for p in out["products"]] == ["347693", "1128586"]
     assert [v["id"] for v in out["products"][1]["variants"]] == ["1128598", "1128599"]
+
+
+async def test_only_search_hides_out_of_stock_products(store):
+    # A cart line or a named product must still resolve when it is out of
+    # stock, so the agent can say so instead of "not found".
+    for tool, args in [
+        ("lookup_catalog", {"catalog": {"ids": ["347693"]}}),
+        ("get_product", {"catalog": {"id": "1128586"}}),
+        ("get_cart", {"id": "347693:1"}),
+    ]:
+        store.clear()
+        await tools.call_tool(STORE_API, tool, args)
+        assert store and all("stock_status" not in (p or {}) for _, p in store)
 
 
 async def test_cart_lives_in_its_id_and_checks_out_by_link(store):
