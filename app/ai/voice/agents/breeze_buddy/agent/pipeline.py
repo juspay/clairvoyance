@@ -306,6 +306,7 @@ async def build_pipeline(
     on_user_idle_timeout: Optional[Callable[[int], Any]] = None,
     mode: Literal["agent", "stream"] = "agent",
     kb_processor: Optional[KnowledgeRetrievalProcessor] = None,
+    extra_mute_strategies: Optional[list[BaseUserMuteStrategy]] = None,
 ) -> tuple[
     Pipeline,
     LLMContext,
@@ -582,6 +583,10 @@ async def build_pipeline(
         logger.info(
             f"Interruption: mode={interruption_config.mode.value} — interruptions enabled"
         )
+    # Feature-owned strategies (e.g. meeting recording keeps speech away from
+    # the LLM while recording) ride the same aggregator parameter.
+    if extra_mute_strategies:
+        user_mute_strategies.extend(extra_mute_strategies)
 
     # The aggregator owns the idle timer (user_idle_timeout above); the
     # callback handler is wired via on_user_turn_idle below. Both were
@@ -673,8 +678,15 @@ async def create_pipeline_task(
     conversation_id: str,
     is_daily_mode: bool = False,
     metrics_collector: Optional[MetricsCollectorProcessor] = None,
+    cancel_on_idle_timeout: bool = True,
+    extra_observers: Optional[list[Any]] = None,
 ) -> PipelineTask:
     """Create and configure the pipeline task.
+
+    ``cancel_on_idle_timeout=False`` keeps pipecat's task-level idle watchdog
+    (no Bot/UserSpeakingFrame for ~5 min → cancel) out of a meeting
+    recording, where a quiet stretch is normal; the user-idle handler is
+    suppressed separately by the MeetingSession.
 
     Args:
         pipeline: The built pipeline
@@ -717,9 +729,10 @@ async def create_pipeline_task(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        "observers": get_observers(metrics_collector),
+        "observers": get_observers(metrics_collector) + list(extra_observers or []),
         "enable_rtvi": emit_daily_events,
         "rtvi_observer_params": rtvi_params,
+        "cancel_on_idle_timeout": cancel_on_idle_timeout,
     }
 
     if ENABLE_BREEZE_BUDDY_TRACING:
