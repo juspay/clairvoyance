@@ -40,6 +40,13 @@ TOPIC_STATUS = "message.status"
 #: A customer wrote back to us.
 TOPIC_INBOUND = "message.inbound"
 
+#: Buddy moved to another binding: the merchant chose a different binding
+#: for Buddy to answer on, and its settings moved with it. Filed by THIS
+#: module after the move commits (settings.py); the conversations module
+#: resolves the old binding's open threads when it hears it. Source = the
+#: channel.
+TOPIC_BUDDY_MOVED = "binding.buddy_moved"
+
 #: A provider said something about the connected account itself (a review
 #: decision, a ban, a tier change) — the letters the health probe will read.
 TOPIC_ACCOUNT = "account.update"
