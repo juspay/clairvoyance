@@ -11,6 +11,7 @@ from app.crm.identity.attributes import (
 )
 from app.crm.identity.db.accessor import get_customer
 from app.crm.identity.facts import assert_facts, customer_facts
+from app.crm.identity.person import merged_pairs, person_records
 from app.crm.identity.resolve import resolve
 from app.crm.identity.schemas import CustomerFacts
 
@@ -29,4 +30,8 @@ __all__ = [
     "find_customer_by_attribute",
     "mutate_customer_attribute",
     "normalize_phone",
+    # One person across a merge (canon: reads across a pair) — every
+    # per-customer read of runs, letters and segments asks through these.
+    "person_records",
+    "merged_pairs",
 ]

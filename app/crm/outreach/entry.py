@@ -23,10 +23,11 @@ stays pending and returns next poll. Our writes commit on their own
 source-event check and the open-run unique — not by that rollback.
 """
 
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
+from app.crm.identity.contracts import person_records
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -130,8 +131,13 @@ async def consume_attributed_event(
     can never see."""
     if customer_id is None:
         return  # not about a person: nothing to admit, end or wake
+    # Every record of the person (identity: a merge staples, never melts).
+    # A run started on the record she was merged out of is still hers: her
+    # order must end it, her reply must reach it, and no second run of the
+    # same plan may start beside it. Never merged: just [customer_id].
+    person = await person_records(event.merchant_id, customer_id)
     open_runs = await enrollment_accessor.open_runs_for_customer(
-        event.merchant_id, customer_id
+        event.merchant_id, person
     )
     goal_patch = _goal_patch(event) if open_runs else None
     # Whose send this letter answers, resolved ONCE for the letter rather
@@ -182,6 +188,7 @@ async def consume_attributed_event(
                     open_runs,
                     variables,
                     addressed,
+                    person,
                 )
                 break  # topics are unique across a plan's doors
 
@@ -541,6 +548,7 @@ async def _try_enrol(
     open_runs: Sequence[EnrollmentRun] = (),
     variables: Optional[Dict[str, Any]] = None,
     addressed: Optional[Addressed] = None,
+    person: Optional[List[str]] = None,
 ) -> None:
     admit, enrollment_key = _enrollment_key(door, event, str(flow.id))
     if not admit:
@@ -565,6 +573,7 @@ async def _try_enrol(
         context=context,
         enrollment_key=enrollment_key,
         door=door,
+        person=person,
     )
     if run is None:
         # Refused — most often because a run for this key is already open.
@@ -576,7 +585,11 @@ async def _try_enrol(
         # number reaches the run — minus the founding pointers
         # (_FOUNDING_KEYS): the id is what patch_open_run_query refuses
         # the founding event by, the time is what goals are measured from.
-        key = enrollment_key or customer_id
+        key = (
+            enrollment_key
+            or _open_run_key(open_runs, flow, person or [customer_id])
+            or customer_id
+        )
         if await _answered_by(open_runs, flow, key, event, addressed):
             logger.bind(
                 component=ENROL_LOG_COMPONENT,
@@ -598,6 +611,23 @@ async def _try_enrol(
             str(event.id),
             repeat_facts,
         )
+
+
+def _open_run_key(
+    open_runs: Sequence[EnrollmentRun], flow: Workflow, person: Sequence[str]
+) -> Optional[str]:
+    """PURE: the key of the person's open UNKEYED run of this plan, for an
+    unkeyed plan's repeat. Unkeyed, a run's key is the customer id it
+    started on — after a merge that is the record she was merged out of,
+    not the one this letter carries, so the repeat must follow the run, not
+    the letter. Only a run keyed by one of HER record ids: a run keyed by
+    an order (a plan that was keyed in an older version) is never taken.
+    Never merged: her own id, exactly as before. None when nothing fits."""
+    records = {str(r) for r in person}
+    for run in open_runs:  # oldest first: the run she has been in longest
+        if str(run.workflow_id) == str(flow.id) and run.enrollment_key in records:
+            return run.enrollment_key
+    return None
 
 
 async def _repeat_door(

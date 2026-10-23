@@ -10,6 +10,7 @@ signature.
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from app.crm.identity.contracts import person_records
 from app.crm.record.db import accessor
 
 
@@ -21,9 +22,16 @@ async def customer_has_event(
     where: Optional[Tuple[str, str]] = None,
 ) -> bool:
     """Did she do one of ``topics`` after ``since``? ``where`` narrows it
-    to the letters whose payload field equals a value (the goal key)."""
+    to the letters whose payload field equals a value (the goal key).
+    "She" is the person, not the record: a letter stamped on any of her
+    records counts (identity's person_records — a run started before a
+    merge still hears the order placed under the record she joined)."""
     return await accessor.customer_has_event(
-        merchant_id, customer_id, topics, since, where
+        merchant_id,
+        await person_records(merchant_id, customer_id),
+        topics,
+        since,
+        where,
     )
 
 
