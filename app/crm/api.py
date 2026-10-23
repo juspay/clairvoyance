@@ -42,5 +42,8 @@ router.include_router(
     outreach_api.customer_router, prefix="/customers", tags=["Workflows"]
 )
 router.include_router(
+    outreach_api.segment_router, prefix="/segments", tags=["Segments"]
+)
+router.include_router(
     connectivity_api.router, prefix="/connectors", tags=["Connectors"]
 )
