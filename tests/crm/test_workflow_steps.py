@@ -48,7 +48,7 @@ from app.crm.outreach.steps import (
     timeline,
 )
 from app.crm.record.schemas import RawEvent
-from tests.crm.doubles import patch_accessors
+from tests.crm.doubles import patch_accessors, stub_merchant_reseller
 
 NOW = datetime(2026, 9, 17, 9, 41, 7, tzinfo=timezone.utc)
 LEASE = NOW + timedelta(seconds=300)
@@ -788,7 +788,13 @@ def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
         return type(
             "T",
             (),
-            {"id": "t-1", "name": "ring", "reseller_id": "r1", "merchant_id": None},
+            {
+                "id": "t-1",
+                "name": "ring",
+                "reseller_id": "r1",
+                "merchant_id": None,
+                "supported_channels": ["voice"],
+            },
         )()
 
     async def config(_id: str) -> Any:
@@ -799,6 +805,7 @@ def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
 
     monkeypatch.setattr(call_node, "create_lead_call_tracker", create)
     monkeypatch.setattr(call_node, "get_template_by_id", template)
+    stub_merchant_reseller(monkeypatch, "r1")
     monkeypatch.setattr(call_node, "get_call_execution_config_by_template_id", config)
     monkeypatch.setattr(call_node, "update_lead_enrollment_id", stamp)
     board = {

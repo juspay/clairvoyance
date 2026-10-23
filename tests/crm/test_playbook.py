@@ -22,6 +22,7 @@ from app.crm.outreach import playbook
 from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.schemas import EnrollmentRun, Playbook, WorkflowDefinition
+from tests.crm.doubles import stub_merchant_reseller
 
 FIXTURE = (
     Path(__file__).resolve().parents[2]
@@ -323,7 +324,13 @@ def _install(monkeypatch: pytest.MonkeyPatch, captured: Dict[str, Any]) -> None:
         return type(
             "T",
             (),
-            {"id": "tpl-1", "name": "n", "reseller_id": "r", "merchant_id": None},
+            {
+                "id": "tpl-1",
+                "name": "n",
+                "reseller_id": "r",
+                "merchant_id": None,
+                "supported_channels": ["voice"],
+            },
         )()
 
     async def fake_config(_id: str) -> Any:
@@ -334,6 +341,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, captured: Dict[str, Any]) -> None:
 
     monkeypatch.setattr(call_node, "create_lead_call_tracker", fake_create)
     monkeypatch.setattr(call_node, "get_template_by_id", fake_template)
+    stub_merchant_reseller(monkeypatch, "r")
     monkeypatch.setattr(
         call_node, "get_call_execution_config_by_template_id", fake_config
     )
