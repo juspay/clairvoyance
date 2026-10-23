@@ -20,7 +20,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import merchant_scope
@@ -28,12 +28,14 @@ from app.crm.outreach import analytics, plans, runs, segments, versions
 from app.crm.outreach.schemas import (
     CustomerRun,
     EnrollmentRun,
+    MembersAdded,
     PublishCheck,
     RunAnchor,
     RunCall,
     RunPage,
     RunStep,
     Segment,
+    SegmentMembersPage,
     SegmentPage,
     VersionMigration,
     Workflow,
@@ -64,6 +66,25 @@ class SegmentCreate(BaseModel):
     # Phase 1 creates static lists only: a name and nothing else. A
     # dynamic segment's definition joins this body with its compiler.
     name: str = Field(min_length=1, max_length=200)
+
+
+class SegmentPerson(BaseModel):
+    # One person on a list, by the handles resolve() probes. Unknown keys are
+    # refused, so a typo ("mobile") is a 422, not a silently skipped line.
+    model_config = ConfigDict(extra="forbid")
+
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    external_ref: Optional[str] = None
+
+
+class SegmentMembersAdd(BaseModel):
+    members: List[SegmentPerson] = Field(
+        min_length=1, max_length=segments.MAX_MEMBERS_PER_ADD
+    )
+    # Where these people came from ("import diwali-vips.csv"); defaults to
+    # the caller.
+    source: Optional[str] = Field(None, max_length=200)
 
 
 class WorkflowStatusChange(BaseModel):
@@ -528,3 +549,62 @@ async def get_segment_route(
             status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found"
         )
     return segment
+
+
+@segment_router.post("/{segment_id}/members", response_model=MembersAdded)
+async def add_segment_members_route(
+    segment_id: UUID,
+    body: SegmentMembersAdd,
+    merchant_id: str = Depends(
+        merchant_scope("add members to a segment", "crm.segments.members.add")
+    ),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> MembersAdded:
+    """Add up to MAX_MEMBERS_PER_ADD people to a static list; the report says
+    what happened to each one. 404 unknown or another merchant's segment ·
+    409 a dynamic segment · 422 no people, too many, or an unknown key."""
+    people = [person.model_dump(exclude_none=True) for person in body.members]
+    source = body.source or f"api: {current_user.email or current_user.username}"
+    try:
+        return await segments.add_members(merchant_id, str(segment_id), people, source)
+    except segments.SegmentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found"
+        )
+    except segments.SegmentIsDynamic:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a dynamic segment computes its members; only a static list takes them",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+
+@segment_router.get("/{segment_id}/members", response_model=SegmentMembersPage)
+async def segment_members_route(
+    segment_id: UUID,
+    after: Optional[UUID] = Query(
+        None, description="The previous page's next_after; omit for page 1"
+    ),
+    limit: int = Query(200, ge=1, le=1000),
+    merchant_id: str = Depends(
+        merchant_scope("read a segment's members", "crm.segments.members.list")
+    ),
+) -> SegmentMembersPage:
+    """One page of a static list's members, in customer_id order. 404
+    unknown or another merchant's segment · 409 a dynamic segment."""
+    try:
+        return await segments.segment_members(
+            merchant_id, str(segment_id), str(after) if after else None, limit
+        )
+    except segments.SegmentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found"
+        )
+    except segments.SegmentIsDynamic:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a dynamic segment computes its members; only a static list has member rows",
+        )
