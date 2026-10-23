@@ -176,6 +176,15 @@ def add_discovered_topics_query(
                 FROM unnest(config.topics) AS existing(label)
                 WHERE lower(btrim(existing.label)) = lower(btrim(discovered.label))
             )
+            AND (
+                position('.' in discovered.label) > 0
+                OR cardinality(config.topics) = 0
+                OR EXISTS (
+                    SELECT 1
+                    FROM unnest(config.topics) AS stored(label)
+                    WHERE position('.' in stored.label) = 0
+                )
+            )
         )
         WHERE config.template_id = $1::uuid
           AND config.evaluation_type = 'TOPIC'
@@ -204,3 +213,72 @@ def remove_topics_query(
         RETURNING {_CONFIG_COLUMNS}
     """
     return query, [template_id, labels]
+
+
+def get_enabled_topic_configs_query() -> Tuple[str, List[Any]]:
+    query = f"""
+        SELECT {_CONFIG_COLUMNS}
+        FROM evaluation_config
+        WHERE evaluation_type = 'TOPIC'
+          AND enabled
+          AND template_id IS NOT NULL
+    """
+    return query, []
+
+
+def replace_topic_tree_query(
+    template_id: str, labels: List[str], system_prompt: str
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        UPDATE evaluation_config config
+        SET topics = $2::text[],
+            configuration = config.configuration || jsonb_build_object(
+                'system_prompt', $3::text,
+                'settings',
+                COALESCE(config.configuration -> 'settings', '{{}}'::jsonb)
+                    || '{{"max_topics": 1}}'::jsonb
+            )
+        WHERE config.template_id = $1::uuid
+          AND config.evaluation_type = 'TOPIC'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM unnest(config.topics) AS stored(label)
+              WHERE position('.' in stored.label) > 0
+          )
+        RETURNING {_CONFIG_COLUMNS}
+    """
+    return query, [template_id, labels, system_prompt]
+
+
+def grow_topic_tree_query(
+    template_id: str, labels: List[str], prompt_lines: str
+) -> Tuple[str, List[Any]]:
+    query = f"""
+        UPDATE evaluation_config config
+        SET topics = config.topics || ARRAY(
+                SELECT added.label
+                FROM unnest($2::text[]) AS added(label)
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM unnest(config.topics) AS stored(label)
+                    WHERE lower(btrim(stored.label)) = lower(btrim(added.label))
+                )
+            ),
+            configuration = jsonb_set(
+                config.configuration,
+                '{{system_prompt}}',
+                to_jsonb(
+                    COALESCE(config.configuration ->> 'system_prompt', '')
+                    || CASE
+                        WHEN config.configuration ->> 'system_prompt' LIKE '%NEWER TOPICS%'
+                        THEN ''
+                        ELSE E'\n\nNEWER TOPICS'
+                    END
+                    || $3::text
+                )
+            )
+        WHERE config.template_id = $1::uuid
+          AND config.evaluation_type = 'TOPIC'
+        RETURNING {_CONFIG_COLUMNS}
+    """
+    return query, [template_id, labels, prompt_lines]

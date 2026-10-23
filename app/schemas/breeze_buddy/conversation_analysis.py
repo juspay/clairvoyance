@@ -33,6 +33,7 @@ class ConversationTopic(BaseModel):
     label: str = Field(min_length=1, max_length=120)
     phrase: str = Field(default="", max_length=500)
     evidence_turns: List[int] = Field(default_factory=list)
+    new_label: Optional[str] = None
 
 
 class TopicExtractionResult(BaseModel):

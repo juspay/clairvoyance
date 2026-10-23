@@ -26,6 +26,9 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
 from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
     close_smart_router_client,
 )
+from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.topics.nightly import (
+    run_topic_night_job,
+)
 from app.ai.voice.agents.breeze_buddy.services.conversation_analysis.worker import (
     start_analysis_worker,
     stop_analysis_worker,
@@ -248,6 +251,12 @@ async def lifespan(_app: FastAPI):
                     func=monitor_dispatch_health,
                     interval_seconds=BB_HEALTH_MONITOR_INTERVAL_S,
                 )
+
+            _background_scheduler.register_task(
+                name="topic_night_job",
+                func=run_topic_night_job,
+                interval_seconds=3600,
+            )
 
             # Start the scheduler only if tasks are registered
             if _background_scheduler.tasks:
