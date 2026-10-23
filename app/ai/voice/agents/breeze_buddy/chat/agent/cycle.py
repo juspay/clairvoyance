@@ -30,6 +30,7 @@ from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
     _ANSWER_NUDGE,
     _CHIPS_NUDGE,
     _MAX_TOOL_CYCLES,
+    TURN_END_REPLY_KEY,
     _chip_labels,
     _KbMessage,
     _partition_gated_calls,
@@ -866,7 +867,14 @@ class CycleLoopMixin:
                 if self.template.configurations
                 else []
             )
+            # A result carrying TURN_END_REPLY_KEY ends the turn after this
+            # cycle's results are recorded (handoff_to_human).
+            end_reply: Optional[str] = None
             for call, result_payload, transition_node in executed:
+                if isinstance(result_payload, dict) and isinstance(
+                    result_payload.get(TURN_END_REPLY_KEY), str
+                ):
+                    end_reply = result_payload[TURN_END_REPLY_KEY]
                 # RFC-002 bookkeeping. ``success`` = the post-pipeline result
                 # passed verification (deterministic gates own step-complete,
                 # not the model's say-so). Use the canonical envelope read so
@@ -952,6 +960,21 @@ class CycleLoopMixin:
                 node_name = cast(str, node.get("name") or node_name)
                 self._apply_node_transition(context, node, global_funcs)
                 yield SSEEvent(event="node_transition", data={"to": node_name})
+
+            if end_reply is not None:
+                # A tool asked to end the turn: its reply is the turn's last
+                # word, written by the normal turn-end path below — no
+                # further LLM call. Gated siblings never ran; they replay as
+                # repaired results on the next turn.
+                if gated_calls:
+                    logger.warning(
+                        f"ChatAgent {self.session_id}: turn ended by a tool; "
+                        f"{len(gated_calls)} gated call(s) not requested"
+                    )
+                if assistant_text_chunks:
+                    assistant_text_chunks.append("\n\n")
+                assistant_text_chunks.append(end_reply)
+                break
 
             if gated_calls:
                 # Order is load-bearing: the ungated results + agent state
