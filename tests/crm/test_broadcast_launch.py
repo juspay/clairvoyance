@@ -195,9 +195,23 @@ class World:
         self.recipients.update({c: "cancelled" for c in queued})
         return len(queued)
 
-    # --- the workflow status read ---
+    # --- the workflow read ---
     async def read_workflow_status(self, merchant_id: str, workflow_id: str):
         return self.workflow_status
+
+    async def get_workflow(self, merchant_id: str, workflow_id: str) -> Any:
+        """A plan a broadcast can launch: unkeyed, asking for no event fact."""
+        return SimpleNamespace(
+            id=workflow_id,
+            status=self.workflow_status,
+            version=1,
+            definition={
+                "entry": {"topic": "OFFERED"},
+                "goals": [{"topics": ["GRANTED"], "exit_reason": "goal_met"}],
+                "nodes": [{"id": "rest", "type": "wait", "minutes": 30}],
+                "edges": [],
+            },
+        )
 
     # --- outreach.segments.segment_member_ids ---
     async def segment_member_ids(
@@ -229,8 +243,15 @@ def world(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(
             broadcasts,
             "workflow_accessor",
-            SimpleNamespace(workflow_status=w.read_workflow_status),
+            SimpleNamespace(
+                workflow_status=w.read_workflow_status, get_workflow=w.get_workflow
+            ),
         )
+
+        async def _no_catalogs(merchant_id: str, raw: Any) -> None:
+            return None  # nothing gathered: the shape laws only
+
+        monkeypatch.setattr(broadcasts, "gather_catalogs", _no_catalogs)
         monkeypatch.setattr(broadcasts, "segment_member_ids", w.segment_member_ids)
         monkeypatch.setattr(broadcasts, "atomically", _atomically)
         monkeypatch.setattr(broadcasts, "FREEZE_PAGE", 1000)
@@ -742,8 +763,9 @@ def test_the_broadcaster_is_its_own_role_one_broadcast_at_a_time(
 ) -> None:
     (broadcaster,) = _loops(monkeypatch, "broadcaster")
     assert broadcaster["name"] == "broadcaster"
-    assert broadcaster["claim"] is worker_main.claim_due_freezes
-    assert broadcaster["handle"] is worker_main.freeze_broadcast
+    # One loop, two jobs (phase 3): a due freeze first, else an admission page.
+    assert broadcaster["claim"] is worker_main.claim_broadcaster_work
+    assert broadcaster["handle"] is worker_main.do_broadcaster_work
     assert broadcaster["batch"] == 1
 
 

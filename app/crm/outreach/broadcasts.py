@@ -30,6 +30,12 @@ Phase 2 — the launch and the freeze:
   succeeded leaves nothing to show.
 - cancel stops future admissions: the broadcast and its still-queued rows,
   one atom; runs already started resolve by their own rules.
+
+Phase 3 — admission (admission.py, run by the same broadcaster loop): every
+queued recipient becomes a run stamped source_broadcast_id, or a skipped row
+with its reason; then dispatching -> sent. The schedule refuses what
+admission could only skip or park: a keyed first door, a fact a broadcast
+run never carries (catalog_laws.broadcast_problems).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -38,6 +44,11 @@ from typing import Any, List, Optional
 from app.core.config.static import CRM_BROADCAST_FREEZE_MAX_ATTEMPTS
 from app.core.logger import logger
 from app.crm.outreach.campaigns import campaign_key, display_name
+from app.crm.outreach.catalog_laws import (
+    WorkflowValidationError,
+    broadcast_problems,
+    gather_catalogs,
+)
 from app.crm.outreach.db import DbTxn, atomically
 from app.crm.outreach.db.accessors import (
     broadcast as broadcast_accessor,
@@ -46,7 +57,13 @@ from app.crm.outreach.db.accessors import (
     segment as segment_accessor,
     workflow as workflow_accessor,
 )
-from app.crm.outreach.schemas import Broadcast, BroadcastPage, Campaign, Segment
+from app.crm.outreach.schemas import (
+    Broadcast,
+    BroadcastPage,
+    Campaign,
+    Segment,
+    WorkflowDefinition,
+)
 from app.crm.outreach.segments import (
     SegmentNotFound,
     SegmentRuleInvalid,
@@ -207,12 +224,28 @@ async def schedule_broadcast(
         raise BroadcastNotFound(broadcast_id)
     if broadcast.status not in ("draft", "scheduled"):
         raise BroadcastStateConflict(broadcast.status)
-    workflow_status = await workflow_accessor.workflow_status(
+    workflow = await workflow_accessor.get_workflow(
         merchant_id, str(broadcast.workflow_id)
     )
     problems = schedule_problems(
-        workflow_status, scheduled_for, datetime.now(timezone.utc)
+        workflow.status if workflow else None,
+        scheduled_for,
+        datetime.now(timezone.utc),
     )
+    if workflow is not None and workflow.status == "live" and workflow.definition:
+        # Phase 3 admits through the plan's first door with no founding
+        # event: a keyed door, or a fact only an event would carry, would
+        # skip or park everyone — refused now, with every reason.
+        try:
+            catalogs = await gather_catalogs(merchant_id, workflow.definition)
+        except WorkflowValidationError as e:
+            problems.extend(e.problems)
+        else:
+            problems.extend(
+                broadcast_problems(
+                    WorkflowDefinition.model_validate(workflow.definition), catalogs
+                )
+            )
     if problems:
         raise BroadcastInvalid(problems)
     scheduled = await broadcast_accessor.schedule_broadcast(
