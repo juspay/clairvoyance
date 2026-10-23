@@ -238,6 +238,7 @@ class Store:
         self.atoms = 0
         self.writes: List[Tuple[str, str]] = []  # (txn, what)
         self.cancel_after: Optional[str] = None
+        self.pause_after: Optional[str] = None
         self.unique_race: set = set()
         self.poison: set = set()
         self.reaped_mid_atom: set = set()
@@ -273,6 +274,8 @@ class Store:
         self.writes.append((txn, f"settle {cid}"))
         if self.cancel_after == cid:
             self.broadcast_status = "cancelled"  # a cancel lands right after her
+        if self.pause_after == cid:
+            self.broadcast_status = "paused"  # a pause lands right after her
         return True
 
     async def release_claims(self, bid: str, ids: List[str]) -> None:
@@ -452,6 +455,19 @@ async def test_a_cancel_mid_page_cancels_everyone_after_it(store) -> None:
     assert [run["customer"] for run in s.runs] == [PRIYA]
 
 
+async def test_a_pause_mid_page_queues_everyone_after_it_again(store) -> None:
+    # Phase 4: the person in flight finishes; the rest go back to the queue
+    # NOW (not after the reaper's lease), nobody else is enrolled or skipped,
+    # and a paused broadcast is never sent.
+    s = store()
+    s.pause_after = PRIYA
+    await admission.admit_page(_broadcast())
+    assert s.rows[PRIYA] == "enrolled"
+    assert {s.rows[c] for c in FROZEN if c != PRIYA} == {"queued"}
+    assert sorted(s.released) == sorted(c for c in FROZEN if c != PRIYA)
+    assert [run["customer"] for run in s.runs] == [PRIYA] and not s.sent
+
+
 async def test_a_paused_plan_holds_the_page_and_fires_nothing(store) -> None:
     s = store(workflow_status="paused")
     await admission.admit_page(_broadcast())
@@ -514,6 +530,10 @@ async def test_the_broadcaster_reaps_then_freezes_first_else_admits(
         order.append("reap")
         return 0
 
+    async def close() -> int:
+        order.append("close")
+        return 0
+
     async def freezes(batch: int) -> List[Any]:
         order.append("freeze?")
         return due
@@ -523,15 +543,17 @@ async def test_the_broadcaster_reaps_then_freezes_first_else_admits(
         return [_broadcast()]
 
     monkeypatch.setattr(workers, "release_stale_claims", reap)
+    monkeypatch.setattr(workers, "close_due_broadcasts", close)
     monkeypatch.setattr(workers, "claim_due_freezes", freezes)
     monkeypatch.setattr(workers, "admission_candidates", candidates)
     monkeypatch.setattr(workers, "_last_reap_at", float("-inf"))
     (job,) = await workers.claim_broadcaster_work(1)
-    assert job.kind == "admit" and order == ["reap", "freeze?", "admit?"]
+    assert job.kind == "admit" and order == ["reap", "close", "freeze?", "admit?"]
     due.append(_broadcast())
     (job,) = await workers.claim_broadcaster_work(1)
     assert job.kind == "freeze"  # an audience is frozen before it is admitted
-    assert order.count("reap") == 1  # the reaper keeps its own interval
+    # The reaper and the close job keep their own interval.
+    assert order.count("reap") == 1 and order.count("close") == 1
 
 
 # --- the schedule refuses what admission could only skip or park ---
