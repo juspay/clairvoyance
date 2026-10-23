@@ -66,6 +66,78 @@ def _door(monkeypatch: pytest.MonkeyPatch, installation: Any) -> None:
     monkeypatch.setattr(actions_module, "get_installation_for_connector", _get)
 
 
+def _named_doors(
+    monkeypatch: pytest.MonkeyPatch, newest: Any, named: Dict[str, Any]
+) -> List[str]:
+    """Two reads: the newest door, and doors by name. Returns the names asked."""
+    asked: List[str] = []
+
+    async def _newest(merchant_id: str, connector_key: str) -> Any:
+        return newest
+
+    async def _by_name(merchant_id: str, connector_key: str, door_name: str) -> Any:
+        asked.append(door_name)
+        return named.get(door_name)
+
+    monkeypatch.setattr(actions_module, "get_installation_for_connector", _newest)
+    monkeypatch.setattr(actions_module, "get_installation_by_door_name", _by_name)
+    return asked
+
+
+class _Recorder:
+    """An action face that reports which door it was handed."""
+
+    args_model: ClassVar[Type[BaseModel]] = AddNoteArgs
+
+    async def perform(self, merchant_id, installation, args, context):
+        return {"ok": True, "door": installation.id}
+
+
+async def test_a_named_door_is_the_door_acted_through(monkeypatch) -> None:
+    named = _installation().model_copy(update={"id": "inst-named"})
+    asked = _named_doors(monkeypatch, _installation(), {"second-shop": named})
+    monkeypatch.setitem(CONNECTORS["shopify"].actions, "record", _Recorder())
+
+    result = await perform_action(
+        "m1",
+        "shopify",
+        "record",
+        {"order_id": "1", "note": "n"},
+        {},
+        door_name="second-shop",
+    )
+    assert asked == ["second-shop"]
+    assert result["door"] == "inst-named"
+
+
+async def test_an_unknown_door_name_fails_closed_never_the_newest(
+    monkeypatch,
+) -> None:
+    """Naming a door that is absent or unusable must not quietly act through
+    some other account the plan did not name."""
+    _named_doors(monkeypatch, _installation(), {})
+    monkeypatch.setitem(CONNECTORS["shopify"].actions, "record", _Recorder())
+    with pytest.raises(ActionError, match="named 'second-shop'"):
+        await perform_action(
+            "m1",
+            "shopify",
+            "record",
+            {"order_id": "1", "note": "n"},
+            {},
+            door_name="second-shop",
+        )
+
+
+async def test_no_door_name_is_the_newest_usable_door(monkeypatch) -> None:
+    asked = _named_doors(monkeypatch, _installation(), {})
+    monkeypatch.setitem(CONNECTORS["shopify"].actions, "record", _Recorder())
+    result = await perform_action(
+        "m1", "shopify", "record", {"order_id": "1", "note": "n"}, {}
+    )
+    assert asked == []
+    assert result["door"] == "inst-1"
+
+
 # --- the registry's read -------------------------------------------------------
 
 

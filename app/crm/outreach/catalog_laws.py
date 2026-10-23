@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional
 from app.core.logger import logger
 from app.crm.outreach.ladder import expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, listens
-from app.crm.outreach.nodes.action import placeholder_names
+from app.crm.outreach.nodes.action import declared_facts, placeholder_names
+from app.crm.outreach.nodes.context import is_bookkeeping
 from app.crm.outreach.playbook import block_names, line_holes
 from app.crm.outreach.schemas import RETIRED_WAIT_EVENT, WorkflowDefinition
 from app.crm.record.contracts import (
@@ -76,6 +77,20 @@ def entry_against_catalog(
     # dialled, which is later than an args hole fails.
     asked += [("playbook", name) for name in line_holes(definition)]
     listened = listened_facts(definition, catalogs)
+    # What an action square writes onto the run from its answer
+    # (merchant_http's declared `facts`): a later square may name them. A
+    # declared name that is the walker's own would be dropped at fire time
+    # (nodes/action.py never writes one), so it is refused here instead of
+    # publishing a variable that can never fill.
+    written_by_actions = declared_facts(definition)
+    action_facts = {name for names in written_by_actions.values() for name in names}
+    for node_id, names in sorted(written_by_actions.items()):
+        for name in names:
+            if is_bookkeeping(name):
+                problems.append(
+                    f"action node {node_id}: declared fact {name!r} is a name "
+                    "the walker keeps for itself — rename it"
+                )
     open_squares = unenumerable_squares(definition, catalogs)
     blocks = block_names(definition)
     for entry in definition.entries:
@@ -90,13 +105,13 @@ def entry_against_catalog(
                 )
             continue
         declared = {variable_name(f.path) for f in fields.values() if f.variable}
-        allowed = declared | _WALKER_FACTS | listened
+        allowed = declared | _WALKER_FACTS | listened | action_facts
         # A block is merged into the facts LAST (nodes/blocks.py), so a block
         # named like a fact silently wins over the letter's own value, and one
         # named like a walker key slips past the run_facts filter that exists
         # to stop it. Refused here, where the door's declared names are in
         # hand — a name collision is a wrong sentence on a live call.
-        for name in sorted(blocks & allowed):
+        for name in sorted(blocks & (allowed | _ACTION_RUN_FACTS)):
             problems.append(
                 f"playbook block {name!r} shadows a fact of topic {topic!r} — "
                 "a block is merged over the run's facts, so the letter's own "
@@ -110,7 +125,11 @@ def entry_against_catalog(
                     f"{', '.join(sorted(declared)) or 'none'})"
                 )
         for node_id, name in asked:
-            if name not in allowed and not _from_open_square(name, open_squares):
+            if (
+                name not in allowed
+                and not (node_id != "playbook" and name in _ACTION_RUN_FACTS)
+                and not _from_open_square(name, open_squares)
+            ):
                 where = (
                     "playbook: a line asks"
                     if node_id == "playbook"
@@ -143,6 +162,11 @@ def entry_against_catalog(
 # Facts the walker computes for a template at the square (nodes.run_facts,
 # phase 16) — never a producer's, so no catalog declares them.
 _WALKER_FACTS = frozenset({"current_node", "current_stage"})
+
+#: Facts only an ACTION square's args may ask for: nodes/action.py fills them
+#: from the run itself (its id, its customer's phone) for that square alone,
+#: so a send or a playbook line naming them would publish and then park.
+_ACTION_RUN_FACTS = frozenset({"run_id", "customer_mobile_number"})
 
 
 def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:

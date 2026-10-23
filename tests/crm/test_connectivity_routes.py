@@ -16,6 +16,7 @@ from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import MERCHANT_SCOPE_MARK
 from app.crm.connectivity import api as connectivity_api
 from app.crm.connectivity.onboarding import (
+    AccountHeldError,
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,
@@ -54,6 +55,7 @@ def test_every_connectors_route_uses_the_translating_route_class() -> None:
         (TemplateNotFoundError("no such template"), 404),
         (TemplateInUseError("still named by 2 runs"), 409),
         (ResubscribeRefused("the provider declined"), 409),
+        (AccountHeldError("connected to another merchant"), 409),
         (OnboardingError("bad code"), 400),
         (TemplateError("not from draft"), 400),
         (RuntimeError("not ours"), None),

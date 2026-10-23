@@ -8,7 +8,7 @@ refusal from the destination) parks; a BAD MOMENT (timeout, 5xx, 429) leaves
 as itself so the walker's lease ladder re-sends it."""
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import pytest
@@ -130,6 +130,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, calls: List[Dict[str, Any]], **kw:
         action: str,
         args: Dict[str, Any],
         context: Dict[str, Any],
+        door_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         calls.append(
             {
@@ -138,6 +139,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, calls: List[Dict[str, Any]], **kw:
                 "action": action,
                 "args": args,
                 "context": context,
+                "door_name": door_name,
             }
         )
         if "raises" in kw:
@@ -160,11 +162,12 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
         _DEFINITION,
     )
 
-    # The action's OWN normalised facts, kept rather than discarded — under
-    # the square's `action_` bookkeeping key, so they stay out of run_facts
-    # and can never reach a template. This assertion is what stops
-    # "responses are normalised" from being a promise with no reader.
-    assert result == {"action_tag-vip": {"ok": True}}
+    # The action's OWN normalised result, kept rather than discarded — under
+    # the square's `action_` bookkeeping key with the visit it was, so it
+    # stays out of run_facts and can never reach a template. This assertion
+    # is what stops "responses are normalised" from being a promise with no
+    # reader. Shopify declares no facts, so nothing else is written.
+    assert result == {"action_tag-vip": {"ok": True, "visit": 1}}
     assert calls == [
         {
             "merchant_id": "m1",
@@ -174,10 +177,12 @@ async def test_the_args_reach_the_connector_with_placeholders_resolved(
             # EVERY value the connector needs is here: the args are the whole
             # contract, resolved from the plan's own placeholders.
             "args": {"order_id": "5408422249", "tags": ["CONFIRM", "vip"]},
-            # Bookkeeping ONLY — the two halves of the idempotency key. A
-            # provider reading data from here would be reading outreach's
-            # context shape from inside connectivity.
-            "context": {"run_id": str(run.id), "node_id": "tag-vip"},
+            # Bookkeeping ONLY — the idempotency key's parts. A provider
+            # reading data from here would be reading outreach's context
+            # shape from inside connectivity.
+            "context": {"run_id": str(run.id), "node_id": "tag-vip", "visit": 1},
+            # No door_name on the node: the connector's newest usable door.
+            "door_name": None,
         }
     ]
 
@@ -234,3 +239,84 @@ async def test_a_version_predating_the_validator_parks_rather_than_calling(
     with pytest.raises(NodeParked, match="no connector/action to perform"):
         await execute_action(_run({"id": "1"}), _node(action=None), _DEFINITION)
     assert calls == []
+
+
+# --- a form's data: nested args, and the run's own facts (a Xyne request) ---
+
+
+async def test_placeholders_inside_a_nested_object_are_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A FlowJSON form is a dict of dicts; its placeholders resolve too —
+    otherwise `{run_id}` reaches the provider as literal text and the reply
+    can never be matched back to this run."""
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+    run = _run({"id": "7", "phone": "+919876543210"})
+    args = {
+        "channel_id": "ch-1",
+        "flow": {
+            "data": {
+                "enrollment_id": "{run_id}",
+                "customer_mobile_number": "{customer_mobile_number}",
+                "order": ["{id}", "literal"],
+                "kind": "interview_availability",
+            }
+        },
+    }
+
+    await execute_action(run, _node(args=args), _DEFINITION)
+
+    assert calls[0]["args"] == {
+        "channel_id": "ch-1",
+        "flow": {
+            "data": {
+                "enrollment_id": str(run.id),
+                "customer_mobile_number": "+919876543210",
+                "order": ["7", "literal"],
+                "kind": "interview_availability",
+            }
+        },
+    }
+
+
+async def test_a_run_without_a_phone_parks_on_customer_mobile_number(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+    node = _node(args={"flow": {"data": {"to": "{customer_mobile_number}"}}})
+    with pytest.raises(NodeParked, match="customer_mobile_number"):
+        await execute_action(_run({"id": "7"}), node, _DEFINITION)
+    assert calls == []
+
+
+def test_run_id_is_bookkeeping_and_never_a_template_fact() -> None:
+    """A producer's own `run_id` field must not pose as the run's identity."""
+    assert "run_id" not in run_facts({"run_id": "spoofed", "id": "1"})
+
+
+# --- door_name: optional, picks one of the merchant's accounts -----------------
+
+
+def test_door_name_is_optional_on_an_action_node() -> None:
+    assert _node().door_name is None
+    assert _node(door_name="second-shop").door_name == "second-shop"
+
+
+async def test_the_node_door_name_reaches_the_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+    await execute_action(_run({"id": "1"}), _node(door_name="second-shop"), _DEFINITION)
+    assert calls[0]["door_name"] == "second-shop"
+
+
+async def test_without_a_door_name_none_is_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: List[Dict[str, Any]] = []
+    _install(monkeypatch, calls)
+    await execute_action(_run({"id": "1"}), _node(), _DEFINITION)
+    assert calls[0]["door_name"] is None

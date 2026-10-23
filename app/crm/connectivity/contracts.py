@@ -71,6 +71,7 @@ route resolver, and so do the provider packages.
 """
 
 from app.crm.connectivity.actions import (
+    action_declares,
     action_names,
     perform_action,
     validate_action_args,
@@ -78,7 +79,7 @@ from app.crm.connectivity.actions import (
 from app.crm.connectivity.channels import registers_templates_for
 from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.dispatch import claim_sends, dispatch_send
-from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.ingress import META_INGRESS, XYNE_INGRESS
 from app.crm.connectivity.onboarding import (
     disconnect,
     get_installation,
@@ -113,6 +114,7 @@ __all__ = [
     "send_behind",
     # asking a connector to act (the walker's action square)
     "perform_action",
+    "action_declares",
     "action_names",
     "validate_action_args",
     "ActionError",
@@ -144,4 +146,5 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    "XYNE_INGRESS",
 ]

@@ -267,6 +267,11 @@ class WorkflowNode(BaseModel):
     # model the connector declares for it. Values may be "{placeholder}" and
     # are resolved from the run's facts at fire time.
     args: Dict[str, Any] = Field(default_factory=dict)
+    # action: OPTIONAL — which of the merchant's accounts on `connector` to
+    # act through, by the door_name it was given at onboarding. Absent, the
+    # newest usable account; named, exactly that one or the run parks (fail
+    # closed — never another account the plan did not name).
+    door_name: Optional[str] = Field(None, min_length=1)
     # Phase 16: an optional stage label the square belongs to. It rides to
     # templates as current_stage ("you stopped at {current_stage}") — one
     # call template for a whole board. The stages ladder (phase 17) sets it
