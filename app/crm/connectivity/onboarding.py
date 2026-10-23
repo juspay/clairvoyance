@@ -74,6 +74,12 @@ _STATUS_FOR_HEALTH = {
 }
 
 
+#: Migration 085's partial unique index on (merchant_id, connector_key,
+#: door_name): a violation of THIS one is the merchant reusing a name, not two
+#: onboards racing for the default route.
+DOOR_NAME_INDEX = "crm_connector_installation_door_name_uq"
+
+
 class OnboardingError(Exception):
     """Onboarding refused before, or instead of, writing a connection."""
 
@@ -82,6 +88,12 @@ class ResubscribeRefused(OnboardingError):
     """The recovery door understood the request and deliberately declined —
     a 409, not a 400: the account is not this connector's to subscribe, holds
     no usable credentials, or the provider refused in its own words."""
+
+
+class AccountHeldError(OnboardingError):
+    """The provider account is already connected to ANOTHER merchant, on a
+    connector whose accounts are exclusive — a 409. Never says which
+    merchant: that would tell a caller who holds an app id."""
 
 
 class UnknownConnectorError(OnboardingError):
@@ -114,6 +126,11 @@ async def _refuse_before_spending(
     Both are re-checked inside the atom, where they are race-safe. This is
     the cheap answer, not the authoritative one — a connector whose ids are
     only knowable after the handshake returns (None, None) and skips it.
+
+    The exclusive-account holder check is deliberately NOT here: answered
+    before the handshake, a 409-vs-400 would tell any caller with a junk
+    token which account ids are connected somewhere. It runs in
+    ``_refuse_before_storing``, once the provider has accepted the token.
     """
     account_id, address = spec.onboarder.identify(request)
     if account_id:
@@ -131,6 +148,49 @@ async def _refuse_before_spending(
         )
         if binding is not None and binding.status == BINDING_RETIRED:
             raise OnboardingError("this endpoint was retired and cannot be reconnected")
+
+
+def _door_name_taken(connector_key: str, door_name: Optional[str]) -> OnboardingError:
+    return OnboardingError(
+        f"door_name '{door_name}' is already used by another "
+        f"{connector_key} connection — pick a different name"
+    )
+
+
+async def _refuse_before_storing(
+    merchant_id: str, spec: ConnectorSpec, connector_key: str, result: OnboardResult
+) -> None:
+    """The refusals the handshake's RESULT makes knowable, run before anything
+    is vaulted.
+
+    - An exclusive account another merchant holds. Asked only now, after the
+      provider accepted the token for this account, so the 409 is never an
+      oracle for "is this id connected anywhere" — the webhook door's rule
+      (record/api.py answers 403 for both). The atom re-checks under a lock.
+    - A door_name another of this merchant's accounts already holds.
+      Migration 085's unique index stays the authority (a racer can still
+      land between this read and the atom); this is what keeps the ordinary
+      case from rotating a credential and then refusing.
+    """
+    if spec.exclusive_account and result.external_account_id:
+        if await installation_accessor.peek_other_account_holder(
+            merchant_id, connector_key, result.external_account_id
+        ):
+            raise _held(connector_key)
+    if not result.door_name:
+        return
+    holder = await installation_accessor.account_holding_door_name(
+        merchant_id, connector_key, result.door_name
+    )
+    if holder is not None and holder != result.external_account_id:
+        raise _door_name_taken(connector_key, result.door_name)
+
+
+def _held(connector_key: str) -> AccountHeldError:
+    return AccountHeldError(
+        f"this {connector_key} account is already connected to another "
+        "merchant — it must be disconnected there first"
+    )
 
 
 async def _merchant_reseller(merchant_id: str) -> Optional[str]:
@@ -233,6 +293,10 @@ async def onboard(
         f"onboarding: {connector_key} handshake reached '{result.health_level}' "
         f"for merchant {merchant_id}"
     )
+    # Refused BEFORE the vault write: a credential rotation is not undone by
+    # the atom rolling back, so a refusal discovered there would leave the
+    # merchant told "refused" with their token already replaced.
+    await _refuse_before_storing(merchant_id, spec, connector_key, result)
 
     # A connector with nothing to authenticate stores nothing, and the empty
     # bundle is the SIGNAL rather than an omission. Shopify's relay-era
@@ -261,6 +325,11 @@ async def onboard(
             _onboard_in_txn, merchant_id, spec, connector_key, result, credential_id
         )
     except UniqueViolation as e:
+        if getattr(e, "constraint_name", None) == DOOR_NAME_INDEX:
+            # The merchant asked for a name another of its accounts on this
+            # connector holds — normally refused before the vault write, and
+            # only reached here by a racer. Theirs to change either way.
+            raise _door_name_taken(connector_key, result.door_name) from e
         # Two onboards for the same merchant and channel can both read "no
         # active primary" and both try to write one. The partial unique index
         # (merchant_id, channel) WHERE is_primary is what actually keeps a
@@ -302,7 +371,20 @@ async def _onboard_in_txn(
 
     A connector with no channel writes the door alone, and that is a COMPLETE
     onboarding: a data connector (Shopify, Zendesk) has nothing to send from,
-    so there is no pipe to be half of."""
+    so there is no pipe to be half of.
+
+    An exclusive connector's account is locked first, then checked for
+    another merchant's door: two merchants onboarding one app at once
+    serialise on the lock, and the second is refused rather than becoming
+    the newer door its callbacks resolve to."""
+    if spec.exclusive_account:
+        await installation_accessor.lock_account(
+            txn, connector_key, result.external_account_id
+        )
+        if await installation_accessor.other_account_holder(
+            txn, merchant_id, connector_key, result.external_account_id
+        ):
+            raise _held(connector_key)
     status = _STATUS_FOR_HEALTH.get(result.health_level, INSTALLATION_DEGRADED)
     installation = await installation_accessor.upsert_installation(
         txn,
@@ -314,6 +396,8 @@ async def _onboard_in_txn(
         status,
         result.token_expires_at,
         json.dumps(_health_detail(result)),
+        json.dumps(result.door_data),
+        result.door_name,
     )
     if installation is None:
         # The upsert's WHERE declined: the existing row is 'disabled', an ops

@@ -53,6 +53,13 @@ OTHER_NUMBER = "999000000000002"
 UNOWNED_NUMBER = "999000000000003"
 SENT_WAMID = "wamid.ITEST-SENT"
 URL = "/ingest/webhooks/meta"
+# Xyne: one app per merchant, each signing with its own vaulted secret.
+XYNE_APP = {MERCHANT: "itest-xyne-app-1", OTHER_MERCHANT: "itest-xyne-app-2"}
+XYNE_SECRET = {
+    MERCHANT: "itest-xyne-secret-one",
+    OTHER_MERCHANT: "itest-xyne-secret-two",
+}
+XYNE_EVENT = "itest-xyne-message-1"
 
 
 def _signed(body: bytes, secret: str = SECRET) -> Dict[str, str]:
@@ -164,7 +171,12 @@ async def _purge(conn: asyncpg.Connection) -> None:
         await conn.execute("DELETE FROM crm_customer WHERE merchant_id = $1", merchant)
     await conn.execute(
         "DELETE FROM credentials WHERE name = ANY($1::text[])",
-        [f"{MERCHANT}-wa", f"{OTHER_MERCHANT}-wa"],
+        [
+            f"{MERCHANT}-wa",
+            f"{OTHER_MERCHANT}-wa",
+            f"{MERCHANT}-xyne",
+            f"{OTHER_MERCHANT}-xyne",
+        ],
     )
 
 
@@ -183,6 +195,30 @@ async def _seed(conn: asyncpg.Connection) -> None:
             credential_id,
             f"{merchant}-wa",
             json.dumps({"system_user_token": "itest-token"}),
+        )
+        # The merchant's Xyne app: a door with no pipe, its webhook secret in
+        # the vault — the row the per-app bay verifies against.
+        xyne_credential = uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO credentials (id, name, credential_type, value)"
+            " VALUES ($1, $2, 'custom', $3)",
+            xyne_credential,
+            f"{merchant}-xyne",
+            json.dumps(
+                {
+                    "api_token": "itest-xyne-token",
+                    "webhook_secret": XYNE_SECRET[merchant],
+                }
+            ),
+        )
+        await conn.execute(
+            "INSERT INTO crm_connector_installation (id, merchant_id, connector_key,"
+            " external_account_id, credential_id, status, door_data)"
+            " VALUES (gen_random_uuid(), $1, 'xyne', $2, $3, 'healthy', $4::jsonb)",
+            merchant,
+            XYNE_APP[merchant],
+            xyne_credential,
+            json.dumps({"base_url": "https://spaces.xyne.juspay.net"}),
         )
         await conn.execute(
             "INSERT INTO crm_connector_installation (id, merchant_id, connector_key,"
@@ -478,3 +514,128 @@ async def test_a_template_letter_is_owned_through_the_waba(client, db) -> None:
     filed = await _letters(db)
     assert [row["topic"] for row in filed] == ["template.status"]
     assert filed[0]["external_id"] == f"waba-{MERCHANT}:tmpl-1:APPROVED:1788177600"
+
+
+# --- Xyne: one URL and one secret per app, in real SQL ------------------------
+
+
+def _xyne_submission(event_id: str = XYNE_EVENT) -> bytes:
+    """A flow_action submission, serialised once so the signature matches the
+    bytes FastAPI receives."""
+    return json.dumps(
+        {
+            "actionId": "submit-interview-availability",
+            "type": "submit",
+            "values": {"selected_dates": ["2026-10-15"], "slots_2026-10-15": ["10:00"]},
+            "context": {
+                "flowJSON": {"data": {"customer_mobile_number": "919876543210"}},
+                "messageId": event_id,
+                "conversationId": "conversation-1",
+                "userId": "user-1",
+            },
+        }
+    ).encode()
+
+
+def _xyne_signed(body: bytes, merchant: str = MERCHANT) -> Dict[str, str]:
+    mac = hmac.new(XYNE_SECRET[merchant].encode(), body, hashlib.sha256).hexdigest()
+    return {"x-xyne-signature": mac, "Content-Type": "application/json"}
+
+
+def _xyne_url(merchant: str = MERCHANT) -> str:
+    return f"/ingest/webhooks/xyne/{XYNE_APP[merchant]}"
+
+
+async def test_xyne_a_submission_files_under_the_apps_merchant(client, db) -> None:
+    body = _xyne_submission()
+    response = await client.post(_xyne_url(), content=body, headers=_xyne_signed(body))
+    assert response.status_code == 200
+    assert response.json()["type"] == "close_screen"
+
+    (filed,) = await _letters(db)
+    assert (filed["source"], filed["topic"]) == ("xyne", "flow_action")
+    assert filed["external_id"].startswith(f"{XYNE_EVENT}:")
+    assert await _letters(db, OTHER_MERCHANT) == []
+
+
+async def test_xyne_a_changed_resubmission_is_stored_an_identical_one_is_not(
+    client, db
+) -> None:
+    """Xyne never retries: a second callback on one form is the person
+    resubmitting. A new answer is a second event; the same answer dedupes."""
+    body = _xyne_submission()
+    for _ in range(2):
+        response = await client.post(
+            _xyne_url(), content=body, headers=_xyne_signed(body)
+        )
+        assert response.json()["type"] == "close_screen"
+    assert len(await _letters(db)) == 1
+
+    changed = body.replace(b'"10:00"', b'"11:00"')
+    response = await client.post(
+        _xyne_url(), content=changed, headers=_xyne_signed(changed)
+    )
+    assert response.json()["type"] == "close_screen"
+    assert len(await _letters(db)) == 2
+
+
+async def test_xyne_one_apps_secret_does_not_open_another_apps_door(client, db) -> None:
+    """Signed with merchant one's secret, posted to merchant two's app URL:
+    refused, and nothing filed anywhere."""
+    body = _xyne_submission()
+    response = await client.post(
+        _xyne_url(OTHER_MERCHANT), content=body, headers=_xyne_signed(body)
+    )
+    assert response.status_code == 403
+    assert await _letters(db) == []
+    assert await _letters(db, OTHER_MERCHANT) == []
+
+
+async def test_xyne_an_app_nobody_holds_is_refused(client, db) -> None:
+    body = _xyne_submission()
+    response = await client.post(
+        "/ingest/webhooks/xyne/itest-xyne-nobody",
+        content=body,
+        headers=_xyne_signed(body),
+    )
+    assert response.status_code == 403
+
+
+async def test_xyne_replaying_a_callback_files_nothing_new(client, db) -> None:
+    body = _xyne_submission()
+    for _ in range(3):
+        response = await client.post(
+            _xyne_url(), content=body, headers=_xyne_signed(body)
+        )
+        assert response.status_code == 200
+    assert len(await _letters(db)) == 1
+
+
+async def test_xyne_an_app_moves_to_a_new_merchant_only_once_revoked(db) -> None:
+    """The holder query against the real table: while MERCHANT's door is live
+    OTHER_MERCHANT is told the app is held (the 409); once MERCHANT revokes,
+    nobody holds it and OTHER_MERCHANT may connect it."""
+    from app.crm.connectivity.db.accessors import installation as accessor
+
+    app_id = XYNE_APP[MERCHANT]
+    assert (
+        await accessor.peek_other_account_holder(OTHER_MERCHANT, "xyne", app_id)
+        == MERCHANT
+    )
+    # The holder's own re-onboard is never refused by its own door.
+    assert await accessor.peek_other_account_holder(MERCHANT, "xyne", app_id) is None
+
+    await db.execute(
+        "UPDATE crm_connector_installation SET status = 'revoked'"
+        " WHERE merchant_id = $1 AND connector_key = 'xyne'",
+        MERCHANT,
+    )
+    assert (
+        await accessor.peek_other_account_holder(OTHER_MERCHANT, "xyne", app_id) is None
+    )
+    async with db.transaction():
+        await accessor.lock_account(db, "xyne", app_id)
+        assert (
+            await accessor.other_account_holder(db, OTHER_MERCHANT, "xyne", app_id)
+            is None
+        )

@@ -56,6 +56,8 @@ UPSERT_INSTALLATION_FIELDS = (
     "status",
     "token_expires_at",
     "health_detail_json",
+    "door_data_json",
+    "door_name",
 )
 
 
@@ -74,10 +76,20 @@ class FakeInstallationAccessor:
         *,
         existing_account: Any = None,
         upsert_returns: Any = None,
+        other_holder: Optional[str] = None,
+        other_holder_in_txn: Optional[str] = None,
+        door_name_holder: Optional[str] = None,
     ) -> None:
         self.installation = installation
         self.existing_account = existing_account
         self.upsert_returns = upsert_returns
+        # Another merchant holding the account: as the early peek sees it, and
+        # as the atom sees it under the lock (a racer may land in between).
+        self.other_holder = other_holder
+        self.other_holder_in_txn = other_holder_in_txn
+        # The external_account_id already holding a door_name, if any.
+        self.door_name_holder = door_name_holder
+        self.locked: List[tuple] = []
         self.written: Optional[Dict[str, Any]] = None
 
     async def get_installation(self, merchant_id, installation_id):
@@ -87,6 +99,18 @@ class FakeInstallationAccessor:
         if self.existing_account is not None:
             return self.existing_account
         return self.installation
+
+    async def account_holding_door_name(self, merchant_id, key, door_name):
+        return self.door_name_holder
+
+    async def peek_other_account_holder(self, merchant_id, key, account_ref):
+        return self.other_holder
+
+    async def lock_account(self, txn, key, account_ref):
+        self.locked.append((key, account_ref))
+
+    async def other_account_holder(self, txn, merchant_id, key, account_ref):
+        return self.other_holder_in_txn
 
     async def upsert_installation(self, txn, *args):
         self.written = dict(zip(UPSERT_INSTALLATION_FIELDS, args, strict=True))

@@ -43,3 +43,7 @@ TOPIC_INBOUND = "message.inbound"
 #: A provider said something about the connected account itself (a review
 #: decision, a ban, a tier change) — the letters the health probe will read.
 TOPIC_ACCOUNT = "account.update"
+
+#: A person submitted an interactive form (a Xyne FlowJSON submission). The
+#: spine's word for it, so a consumer never spells the vendor.
+TOPIC_FLOW_ACTION = "flow_action"

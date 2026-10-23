@@ -5,6 +5,7 @@ so what is under test is the ORDER of the steps and what each one refuses —
 which is where every defect in this path has actually lived.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,7 @@ from app.crm.connectivity import (
 from app.crm.connectivity.channels import CHANNELS
 from app.crm.connectivity.connectors import (
     CONNECTORS,
+    ConnectorHandshakeError,
     ConnectorSpec,
     connector_for,
     connector_for_channel,
@@ -354,6 +356,7 @@ def _patch_onboarding(
     bindings=None,
     onboarder=None,
     channel="whatsapp",
+    exclusive_account=False,
 ):
     """Wire onboarding.py to doubles: merchant, vault, accessors, atom.
 
@@ -370,6 +373,7 @@ def _patch_onboarding(
         onboarder=onboarder,
         templates=CONNECTORS["whatsapp"].templates,
         request_model=OnboardWhatsappRequest,
+        exclusive_account=exclusive_account,
     )
     monkeypatch.setattr(onboarding_module, "connector_for", lambda key: spec)
 
@@ -651,6 +655,182 @@ async def test_racing_the_default_route_is_answered_not_a_500(monkeypatch) -> No
     monkeypatch.setattr(onboarding_module, "atomically", _races)
     with pytest.raises(OnboardingError, match="try again"):
         await onboard("shop", "whatsapp", _request().model_dump())
+
+
+async def test_a_door_name_already_taken_is_the_merchants_to_change(
+    monkeypatch,
+) -> None:
+    """Migration 085's door_name index refusing is a reused name, not a
+    race — 'try again' would fail forever."""
+    _patch_onboarding(monkeypatch)
+
+    async def _taken(fn, *args):
+        """Test double: the door_name index refuses the name."""
+        raise UniqueViolation.new(
+            {"n": onboarding_module.DOOR_NAME_INDEX, "M": "dup", "C": "23505"}
+        )
+
+    monkeypatch.setattr(onboarding_module, "atomically", _taken)
+    with pytest.raises(OnboardingError, match="pick a different name"):
+        await onboard("shop", "whatsapp", _request().model_dump())
+
+
+async def test_a_taken_door_name_is_refused_before_the_credential_is_written(
+    monkeypatch,
+) -> None:
+    """A re-onboard refused for its door_name must not have rotated the
+    token first — the vault write is not undone by the atom rolling back."""
+    vaulted: List[str] = []
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), door_name_holder="waba-OTHER"
+    )
+    _patch_onboarding(
+        monkeypatch, result=_result(door_name="primary"), installations=fake
+    )
+
+    async def _create(reseller_id, name, kind, value, description=None):
+        vaulted.append(name)
+        return _Credential()
+
+    async def _update(credential_id, credential_type=None, value=None):
+        vaulted.append(credential_id)
+        return _Credential()
+
+    monkeypatch.setattr(onboarding_module, "create_credential", _create)
+    monkeypatch.setattr(onboarding_module, "update_credential", _update)
+    with pytest.raises(OnboardingError, match="pick a different name"):
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert vaulted == [] and fake.written is None
+
+
+async def test_re_onboarding_an_account_under_its_own_name_proceeds(
+    monkeypatch,
+) -> None:
+    """The name is held by THIS account: a rotation, not a collision."""
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), door_name_holder="waba-1"
+    )
+    _patch_onboarding(
+        monkeypatch, result=_result(door_name="primary"), installations=fake
+    )
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert fake.written is not None and fake.written["door_name"] == "primary"
+
+
+async def test_the_onboarders_door_data_and_door_name_reach_the_row(
+    monkeypatch,
+) -> None:
+    fake = FakeInstallationAccessor(upsert_returns=_installation_read())
+    _patch_onboarding(
+        monkeypatch,
+        result=_result(door_data={"base_url": "https://x"}, door_name="primary"),
+        installations=fake,
+    )
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert fake.written is not None
+    assert json.loads(fake.written["door_data_json"]) == {"base_url": "https://x"}
+    assert fake.written["door_name"] == "primary"
+
+
+# --- an exclusive account is one merchant's (the Xyne takeover) -------------
+
+
+async def test_an_account_another_merchant_holds_is_refused_before_storing(
+    monkeypatch,
+) -> None:
+    """Merchant B naming merchant A's app id: refused once the handshake has
+    proved the token, before anything is vaulted — A's door stays the only
+    one."""
+    created: List[str] = []
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), other_holder="merchant-a"
+    )
+    onboarder = _patch_onboarding(
+        monkeypatch, installations=fake, exclusive_account=True
+    )
+
+    async def _create(reseller_id, name, kind, value, description=None):
+        created.append(name)
+        return _Credential()
+
+    monkeypatch.setattr(onboarding_module, "create_credential", _create)
+    with pytest.raises(onboarding_module.AccountHeldError) as raised:
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert "merchant-a" not in str(raised.value)
+    assert onboarder.gathered == 1
+    assert created == [] and fake.written is None
+
+
+class _RefusingOnboarder(_StubOnboarder):
+    """A handshake the provider refuses: a junk or another app's token."""
+
+    async def gather(self, request):
+        """Test double: the provider's declared refusal."""
+        self.gathered += 1
+        raise ConnectorHandshakeError("this API token does not belong to app")
+
+
+async def test_a_held_account_is_not_revealed_to_an_unproven_token(
+    monkeypatch,
+) -> None:
+    """The holder check runs only after the provider accepted the token. A
+    junk token for a held app hears the same 400 as for a free one — never
+    the 409 — so onboarding is not an oracle for which app ids are in use."""
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), other_holder="merchant-a"
+    )
+    _patch_onboarding(
+        monkeypatch,
+        installations=fake,
+        onboarder=_RefusingOnboarder(_result()),
+        exclusive_account=True,
+    )
+    with pytest.raises(onboarding_module.OnboardingError) as raised:
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert not isinstance(raised.value, onboarding_module.AccountHeldError)
+    assert "does not belong" in str(raised.value)
+    assert fake.written is None
+
+
+async def test_a_racer_holding_the_account_is_refused_inside_the_atom(
+    monkeypatch,
+) -> None:
+    """Both peeks said free; the lock makes the second atom see the first
+    merchant's committed door, and it writes nothing."""
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), other_holder_in_txn="merchant-a"
+    )
+    _patch_onboarding(monkeypatch, installations=fake, exclusive_account=True)
+    with pytest.raises(onboarding_module.AccountHeldError):
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert fake.locked == [("whatsapp", "waba-1")]
+    assert fake.written is None
+
+
+def test_the_holder_query_lets_a_revoked_door_go() -> None:
+    """A merchant who disconnected must not hold the app forever: the query
+    skips revoked doors, and every other status still holds the account.
+    The fakes never run this SQL, so the rule is pinned here."""
+    from app.crm.connectivity.db.queries.installation import (
+        other_account_holder_query,
+    )
+
+    sql, params = other_account_holder_query("merchant-b", "xyne", "app_abc")
+    assert "status <> $4" in " ".join(sql.split())
+    assert "merchant_id <> $3" in " ".join(sql.split())
+    assert params == ["xyne", "app_abc", "merchant-b", "revoked"]
+
+
+async def test_a_shared_account_connector_skips_the_holder_check(monkeypatch) -> None:
+    """Not every connector is exclusive: without the flag nobody is asked."""
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(),
+        other_holder="merchant-a",
+        other_holder_in_txn="merchant-a",
+    )
+    _patch_onboarding(monkeypatch, installations=fake)
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert fake.locked == [] and fake.written is not None
 
 
 # --- canon T11: a light that is not green carries its reason ---------------
