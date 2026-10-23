@@ -24,6 +24,7 @@ from app.crm.record.db.queries import (
     get_schema_query,
     insert_detected_schema_query,
     insert_event_query,
+    latest_customer_event_query,
     list_schemas_query,
     quarantine_event_query,
     register_schema_query,
@@ -109,6 +110,21 @@ async def customer_has_event(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return bool(row["found"]) if row else False
+
+
+async def latest_customer_event(
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Tuple[str, str],
+) -> Optional[RawEvent]:
+    query, values = latest_customer_event_query(
+        merchant_id, customer_id, topics, since, where
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_raw_event(row) if row else None
 
 
 # --- crm_event_schema (T24) ---------------------------------------------------

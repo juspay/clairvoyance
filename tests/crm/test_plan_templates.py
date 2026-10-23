@@ -28,6 +28,7 @@ CART_SPLIT = PLANS / "cart-recovery-split.json"
 CART_RETRY = PLANS / "cart-recovery-retry.json"
 LOAN = PLANS / "loan-dropoff.json"
 COD = PLANS / "cod-confirm.json"
+COD_EXITS = PLANS / "cod-confirm-exits.json"
 LINE = PLANS / "line-nudge.json"
 LINE_MOBILE = PLANS / "line-nudge-mobile.json"
 LINE_PLAYBOOK = PLANS / "line-nudge-playbook.json"
@@ -163,6 +164,7 @@ def test_the_expected_documents_exist() -> None:
     assert LOAN.is_file(), LOAN
     assert CART_FALLBACK.is_file(), CART_FALLBACK
     assert COD.is_file(), COD
+    assert COD_EXITS.is_file(), COD_EXITS
     assert CART_TIERED.is_file(), CART_TIERED
     assert CART_SPLIT.is_file(), CART_SPLIT
     assert LINE.is_file(), LINE
@@ -176,6 +178,7 @@ def test_the_expected_documents_exist() -> None:
         CART_SPLIT,
         CART_TIERED,
         CART,
+        COD_EXITS,
         COD,
         LINE_CALL_WAIT,
         LINE_MOBILE,
@@ -436,6 +439,31 @@ def test_the_cod_board_declares_no_match_and_does_not_need_one() -> None:
     assert ["confirm", square["id"]] in [e[:2] for e in board["edges"]]
     labels = {e[2] for e in board["edges"] if len(e) > 2}
     assert {"CONFIRM", "CANCEL", "form_submitted", "timeout"} <= labels
+
+
+def test_the_cod_exits_board_ends_on_fulfilment_never_on_any_edit() -> None:
+    """cod-confirm-exits.json (phase 21): the run ends `goal_met` when THIS
+    order is fulfilled — an orders/updated with conditions, keyed to the
+    order — and `withdrawn` when it is cancelled. Our own tag writes echo
+    back as orders/updated too; without the `where`, the first echo would
+    end the run. The conditioned tier must carry its key: the walker judges
+    the order's newest letter."""
+    doc = _load(COD_EXITS)
+    fulfilled, cancelled = doc["goals"]
+    assert fulfilled["topics"] == ["orders/updated"]
+    assert fulfilled["key"] == {"event": "id", "run": "id"}
+    assert fulfilled["where"] == [
+        {"field": "fulfillment_state", "op": "is", "value": "fulfilled"}
+    ]
+    assert (fulfilled["exit_reason"], cancelled["exit_reason"]) == (
+        "goal_met",
+        "withdrawn",
+    )
+    unkeyed = {k: v for k, v in fulfilled.items() if k != "key"}
+    problems = validate_definition(
+        {**doc, "goals": [unkeyed, cancelled]}, catalogs=_catalogs()
+    )
+    assert any("needs a `key`" in p for p in problems), problems
 
 
 def test_the_mobile_door_asks_the_list_its_one_question_and_nothing_else() -> None:

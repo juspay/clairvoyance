@@ -32,6 +32,7 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.core.logger.context import set_log_context, update_log_context
+from app.crm.outreach.conditions import conditions_match
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -57,7 +58,7 @@ from app.crm.outreach.steps import (
     step,
 )
 from app.crm.outreach.window import alarm, opens_at
-from app.crm.record.contracts import customer_has_event
+from app.crm.record.contracts import customer_has_event, latest_customer_event
 
 LOG_COMPONENT = "crm.outreach.walker"
 
@@ -262,11 +263,11 @@ async def _advance(
             _deferred(run, "timed_out")
         return
 
-    # Goal re-check at fire time — one indexed EXISTS per tier via
-    # record's contract, never a foreign SELECT. Tiers are judged
-    # keyed-first (goal_tiers, phase 06): "THIS cart recovered" beats
-    # "she bought something", and the run exits with the tier's reason.
-    # Measured from the founding letter's own time (G7), not the row's.
+    # Goal re-check at fire time — one indexed read per tier via record's
+    # contract, never a foreign SELECT. Tiers are judged keyed-first
+    # (goal_tiers, phase 06): "THIS cart recovered" beats "she bought
+    # something", and the run exits with the tier's reason. Measured from
+    # the founding letter's own time (G7), not the row's.
     since = goal_since(run)
     for tier in definition.goal_tiers():
         where: Optional[Tuple[str, str]] = None
@@ -275,9 +276,24 @@ async def _advance(
             if value in (None, ""):
                 continue  # this run cannot match a keyed tier
             where = (tier.key.event, str(value))
-        if await customer_has_event(
-            run.merchant_id, str(run.customer_id), tier.topics, since, where
-        ):
+        if tier.where:
+            # The EXISTS knows topic and key, never the payload — it would
+            # end the run on any edit of this order. So the newest letter
+            # about it (the order's state now: every edit carries the whole
+            # order), judged as the live consumer judges it. Publish requires
+            # a key here, so `where` is set; a letter consumed before this
+            # run existed (late or out of order) is still seen (phase 21).
+            if where is None:
+                continue
+            letter = await latest_customer_event(
+                run.merchant_id, str(run.customer_id), tier.topics, since, where
+            )
+            hit = letter is not None and conditions_match(tier.where, letter)
+        else:
+            hit = await customer_has_event(
+                run.merchant_id, str(run.customer_id), tier.topics, since, where
+            )
+        if hit:
             if await enrollment_accessor.exit_run(
                 str(run.id),
                 tier.exit_reason,

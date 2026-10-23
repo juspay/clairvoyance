@@ -140,6 +140,75 @@ def entry_against_catalog(
     return problems
 
 
+def goals_against_catalog(
+    definition: WorkflowDefinition, catalogs: Catalogs
+) -> List[str]:
+    """The ownership laws, applied to a GOAL tier's conditions (phase 21).
+
+    A tier WITHOUT a `where` is unchanged — it may name any topic, declared
+    or not. Only one that asks a question about a payload has to prove the
+    payload is one we can read. A tier names several topics only if its
+    `where` holds on every one of them: each condition is checked against
+    each topic's fields.
+
+    The key laws need no catalog, so they run before the early return.
+    """
+    problems: List[str] = []
+    for index, tier in enumerate(definition.goals):
+        if tier.key and "." in tier.key.event:
+            # Both judges read the key at the top level only: entry.py as
+            # payload.get(key), the walker in SQL as payload->>$5. A nested
+            # path matches nothing at either.
+            problems.append(
+                f"goal tier {index}: key.event {tier.key.event!r} must be a "
+                "top-level payload field (it is compared in SQL at fire time)"
+            )
+        if tier.where and tier.key is None:
+            # The walker judges a `where` on the NEWEST letter of the tier's
+            # topics; without a key that letter may be about another order.
+            problems.append(
+                f"goal tier {index}: a tier with `where` needs a `key` — "
+                "without one, any of the customer's orders could answer it"
+            )
+    if catalogs is None:
+        return problems  # nothing gathered (pure-unit callers): shape laws only
+    for index, tier in enumerate(definition.goals):
+        if not tier.where:
+            continue
+        for topic in tier.topics:
+            fields = catalogs.get(topic)
+            if fields is None:
+                problems.append(
+                    f"goal tier {index}: topic {topic!r} is not in the catalog "
+                    "— register its schema (or declare it in code) before "
+                    "filtering on it"
+                )
+                continue
+            for condition in tier.where:
+                problems.extend(
+                    f"goal tier {index}: {p} (topic {topic!r})"
+                    for p in condition_against_catalog(condition, fields)
+                )
+                field = fields.get(condition.field)
+                if (
+                    field is not None
+                    and field.type == "list"
+                    and condition.op == "includes"
+                    and not (
+                        isinstance(condition.value, str) and condition.value.strip()
+                    )
+                ):
+                    # A list holds trimmed, non-blank text (order_tags), and
+                    # 1 never equals "1": this tier would never fire, and we
+                    # would keep calling.
+                    problems.append(
+                        f"goal tier {index}: {condition.field!r} includes needs "
+                        f"a non-blank text value, not {condition.value!r} "
+                        f"(topic {topic!r})"
+                    )
+    return problems
+
+
 # Facts the walker computes for a template at the square (nodes.run_facts,
 # phase 16) — never a producer's, so no catalog declares them.
 _WALKER_FACTS = frozenset({"current_node", "current_stage"})
@@ -251,6 +320,16 @@ async def gather_catalogs(merchant_id: str, raw: Dict[str, Any]) -> Catalogs:
         spec = NODE_TYPES.get("wait" if word == RETIRED_WAIT_EVENT else word)
         if spec is not None and spec.is_wait:
             topics.update(str(t) for t in node.get("topics") or [] if t)
+    if isinstance(raw, dict):
+        # `goal` (singular) is the pre-phase-06 spelling. The MODEL rewrites
+        # it to `goals` (_goal_becomes_one_tier), but this gather runs on the
+        # RAW document — before any model has touched it — so it has to read
+        # both. Version rows are immutable, so those documents never go away.
+        # Only a tier with a `where` reads a field map; a plain tier may name
+        # any topic, so gathering it could only refuse it (AmbiguousTopic).
+        for tier in raw.get("goals") or ([raw["goal"]] if raw.get("goal") else []):
+            if isinstance(tier, dict) and tier.get("where"):
+                topics.update(str(t) for t in tier.get("topics") or [] if t)
     catalogs: Dict[str, Optional[Dict[str, CatalogField]]] = {}
     problems: List[str] = []
     for topic in sorted(topics):
