@@ -494,7 +494,8 @@ def _client(merchants: Tuple[str, ...] = ("m1",)) -> TestClient:
 def test_every_route_declares_the_tenancy_door() -> None:
     for router, expected in (
         (outreach_api.campaign_router, 2),
-        (outreach_api.broadcast_router, 5),
+        # create, list, get, schedule, cancel; phase 4: pause, resume, funnel
+        (outreach_api.broadcast_router, 8),
     ):
         routes = [r for r in router.routes if isinstance(r, APIRoute)]
         assert len(routes) == expected, "a route was added or lost — update this walk"

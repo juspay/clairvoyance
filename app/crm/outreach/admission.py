@@ -22,7 +22,8 @@ merge: the survivor"); her
 current phone and her name in the run's context — the facts a call or a
 send may use, since a broadcast has no founding event. A paused workflow
 holds the queue, as the walker holds its runs; an archived one admits
-nobody.
+nobody. A paused broadcast (phase 4) stops after the person in flight; the
+rest of the page goes back to the queue.
 """
 
 import os
@@ -198,13 +199,21 @@ async def admit_page(broadcast: Broadcast) -> None:
         for loser, survivor in (await merged_pairs(merchant_id)).items():
             losers_of[survivor].append(loser)
     outcomes: Counter = Counter()
+    held: List[str] = []
     for plan in plans:
         records = (
             [plan.person_id, *sorted(losers_of[plan.person_id])]
             if plan.person_id
             else []
         )
-        outcomes[await _admit_one(broadcast, workflow, definition, plan, records)] += 1
+        outcome = await _admit_one(broadcast, workflow, definition, plan, records)
+        outcomes[outcome] += 1
+        if outcome == "held":
+            held.append(plan.customer_id)
+    if held:
+        # Paused mid-page (phase 4): the rest of the page goes back to the
+        # queue now, not after the reaper's lease, so a resume finds it.
+        await recipient_accessor.release_claims(broadcast_id, held)
     log.bind(admitted=outcomes.get("enrolled", 0), **dict(outcomes)).info(
         f"admitted a page of {len(claimed)}: {dict(outcomes)}"
     )
@@ -266,7 +275,7 @@ async def _admit_one_in_txn(
         await _settle(txn, broadcast_id, plan.customer_id, "cancelled", None)
         return "cancelled"
     if status != "dispatching":
-        return "held"  # left claimed; the reaper returns it to the queue
+        return "held"  # paused: admit_page puts the row back in the queue
     if plan.skip or workflow is None or definition is None or plan.person_id is None:
         word = plan.skip or WORKFLOW_NOT_LIVE
         await _settle(txn, broadcast_id, plan.customer_id, "skipped", word)

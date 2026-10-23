@@ -11,7 +11,7 @@ workflow (ten broadcasts may launch the same one). Code:
 | 1 | `crm_campaign` (the badge, T22) and `crm_broadcast` (T17); create a campaign; create a DRAFT broadcast, read one, list them |
 | 2 | the launch: schedule / cancel, and the freeze — the segment read once, late, into recipient rows (T18) |
 | 3 | admitting the frozen recipients into the workflow — its guards as skips with reasons, the rest enrolled with `source_broadcast_id` |
-| 4 | the funnel, and closing a broadcast |
+| 4 | pause and resume, the report (the funnel), and closing a broadcast |
 
 ## A campaign (the badge)
 
@@ -93,13 +93,15 @@ transaction; runs it already started resolve by their own rules (canon). A
 freeze running at that moment stops at its next page. 409 once the broadcast
 is sent, closed, cancelled or failed.
 
-| From | schedule | the freeze | cancel |
-|---|---|---|---|
-| `draft` | → `scheduled` | — | → `cancelled` |
-| `scheduled` | re-aimed | at its moment → `resolving` | → `cancelled` |
-| `resolving` | 409 | → `dispatching` (or `failed`) | → `cancelled`, queue cancelled |
-| `dispatching` | 409 | admission → `sent` | → `cancelled`, queue cancelled |
-| `sent` · `closed` · `cancelled` · `failed` | 409 | — | 409 |
+| From | schedule | the broadcaster | cancel | pause / resume (phase 4) |
+|---|---|---|---|---|
+| `draft` | → `scheduled` | — | → `cancelled` | 409 |
+| `scheduled` | re-aimed | at its moment → `resolving` | → `cancelled` | 409 |
+| `resolving` | 409 | the freeze → `dispatching` (or `failed`) | → `cancelled`, queue cancelled | 409 |
+| `dispatching` | 409 | admission → `sent` | → `cancelled`, queue cancelled | pause → `paused` |
+| `paused` | 409 | — (the queue waits) | → `cancelled`, queue cancelled | resume → `dispatching` |
+| `sent` | 409 | the reporting window ends → `closed` | 409 | 409 |
+| `closed` · `cancelled` · `failed` | 409 | — | 409 | 409 |
 
 ## Admission (phase 3)
 
@@ -152,6 +154,61 @@ is keyed "one run per <field>" (a broadcast has no <field> to give), and a
 workflow whose sends, action args or playbook lines ask for a fact a
 broadcast run never carries (it carries `phone` and `customer_name`) — those
 would skip or park everyone.
+
+## Pause, resume, the report, close (phase 4)
+
+`POST /broadcasts/{id}/pause?merchant_id=` holds a dispatching broadcast: the
+person being admitted finishes, and the rest of the page goes back to the
+queue at once (not after the reaper's lease). `POST /broadcasts/{id}/resume`
+admits the rest from where it stopped. Runs already started carry on by their
+own rules either way — a broadcast never owns them (canon/06-outreach.md:14-16).
+409 when the broadcast is not dispatching (pause) or not paused (resume); a
+scheduled broadcast is re-aimed or cancelled instead. Cancel works from
+`paused` too.
+
+`GET /broadcasts/{id}/funnel?merchant_id=` is the broadcast's report
+(`outreach/broadcast_report.py`; canon/06-outreach.md:45-46 "Funnel read:
+skips on T18; sends/refusals/receipts on the runs' manifest rows — runs WHERE
+source_broadcast_id = B"; ADR 0010 "the funnel reads calls via the stamped
+enrollment id"):
+
+```json
+{ "status": "sent", "dispatched_at": "2026-10-20T04:30:00Z",
+  "closes_at": "2026-10-24T04:31:10Z", "closed_at": null,
+  "recipients": { "frozen": 2600,
+                  "by_status": { "enrolled": 2395, "skipped": 205 },
+                  "skipped_by_reason": { "no_phone": 100, "already_in_flow": 50,
+                                         "cooldown_active": 50, "customer_gone": 5 } },
+  "runs": { "started": 2395, "open": { "waiting": 400 },
+            "by_exit_reason": { "goal_met": 310, "timed_out": 1600, "completed": 85 } },
+  "calls": { "placed": 2380, "answered": 1500, "by_outcome": { "...": 0 },
+             "contacted_runs": 2380, "reached_runs": 1500, "...": "..." },
+  "computed_at": "2026-10-21T09:00:00Z" }
+```
+
+- The workflow's own report counts every run of the plan (from events and
+  from every broadcast that launched it); this one counts only this launch's.
+- Calls are the same lead reads and the same fold as the plan's calls
+  summary (`analytics.calls_of_runs`), so the two never count a run apart.
+  They are read in batches of 20,000 runs: a broadcast is not bounded by a
+  window the way the Performance tab is. Every read is on the replica.
+- **Not counted yet: the runs' WhatsApp messages** (sends, refusals,
+  receipts on `crm_message`, T16). The canon's funnel includes them, but the
+  manifest has no index on the run that sent a message (056), and today's
+  broadcasts call. Adding them is one index on `crm_message (merchant_id,
+  source_id)` plus a connectivity read — the follow-up when the first
+  WhatsApp broadcast is planned.
+
+**Closing** (canon T17 col 11: "closed = the reporting window ended and the
+funnel went final"). The window is the broadcast's **last run's whole life**
+(the workflow's `max_age_days`) after that run entered, plus **one day** for
+the last call reports. The corpus gives no length; its one example — "fired
+Friday 10:00, final Sunday" (T17 col 18) — is a time after the fire, never
+"when every run has ended": a one-call plan's runs end when the call is
+QUEUED (hours before the dialler rings), and one parked run would keep the
+broadcast open forever. The broadcaster's loop runs the close job every
+minute beside the reaper; a broadcast that admitted nobody closes at once.
+`closes_at` in the report says when.
 
 ## Example
 

@@ -142,3 +142,19 @@ def reap_stale_claims_query(lease_minutes: int) -> Tuple[str, List[Any]]:
         RETURNING broadcast_id
     """
     return query, [lease_minutes]
+
+
+def recipient_counts_query(
+    merchant_id: str, broadcast_id: str
+) -> Tuple[str, List[Any]]:
+    """The funnel's first read: how the frozen list stands, by status and
+    skip reason — entered through the parent (merchant_id = $1). The key's
+    leading broadcast_id makes it one range over this broadcast's rows."""
+    query = f"""
+        SELECT r.status, r.skip_reason, count(*)::int AS n
+        FROM {BROADCAST_RECIPIENT_TABLE} r
+        JOIN {BROADCAST_TABLE} b ON b.id = r.broadcast_id
+        WHERE b.merchant_id = $1 AND r.broadcast_id = $2
+        GROUP BY r.status, r.skip_reason
+    """
+    return query, [merchant_id, broadcast_id]
