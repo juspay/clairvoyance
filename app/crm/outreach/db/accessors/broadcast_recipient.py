@@ -5,7 +5,7 @@ transaction; no parameter self-scopes one read through the parent. No
 decisions.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -15,10 +15,11 @@ from app.crm.outreach.db.queries.broadcast_recipient import (
     insert_recipients_query,
     last_frozen_customer_query,
     reap_stale_claims_query,
+    recipient_counts_query,
     release_claims_query,
     settle_recipient_query,
 )
-from app.crm.shared.db import crm_connection
+from app.crm.shared.db import crm_connection, crm_replica_read
 
 
 async def insert_recipients(
@@ -75,3 +76,13 @@ async def reap_stale_claims(lease_minutes: int) -> int:
     query, values = reap_stale_claims_query(lease_minutes)
     async with crm_connection() as conn:
         return len(await conn.fetch(query, *values))
+
+
+async def recipient_counts(
+    merchant_id: str, broadcast_id: str
+) -> Dict[Tuple[str, Optional[str]], int]:
+    """{(status, skip_reason): count} for one broadcast's frozen list. The
+    console's funnel: the replica."""
+    query, values = recipient_counts_query(merchant_id, broadcast_id)
+    rows = await crm_replica_read(query, values)
+    return {(row["status"], row["skip_reason"]): int(row["n"]) for row in rows}

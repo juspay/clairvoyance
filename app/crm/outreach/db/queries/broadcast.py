@@ -288,3 +288,54 @@ def finish_dispatch_query(merchant_id: str, broadcast_id: str) -> Tuple[str, Lis
         RETURNING {_BROADCAST_COLUMNS_OF_B}
     """
     return query, [merchant_id, broadcast_id]
+
+
+def move_broadcast_query(
+    merchant_id: str, broadcast_id: str, from_status: str, to_status: str
+) -> Tuple[str, List[Any]]:
+    """Phase 4's pause and resume: one status to the next, only from the one
+    named. The UPDATE's row lock waits for any admission atom holding the
+    broadcast FOR SHARE, so the person being admitted finishes and the next
+    one sees the new status. No row returned = not this merchant's, or not
+    in from_status — the caller reads which."""
+    query = f"""
+        UPDATE {BROADCAST_TABLE}
+        SET status = $4
+        WHERE merchant_id = $1 AND id = $2 AND status = $3
+        RETURNING {_BROADCAST_COLUMNS}
+    """
+    return query, [merchant_id, broadcast_id, from_status, to_status]
+
+
+def close_candidates_query(limit: int) -> Tuple[str, List[Any]]:
+    """The close job's read, across merchants (the claim_due_freezes
+    precedent): sent broadcasts that may have reached the end of their
+    reporting window. Every window is at least a day past the fire
+    (broadcasts.CLOSE_GRACE), so a broadcast fired less than a day ago is
+    never read; one that admitted nobody (dispatched_at NULL) is read at
+    once. The job decides each one's moment from its workflow. Sent
+    broadcasts are few — a merchant's deliberate launches, closed within
+    days — so the read stays small."""
+    query = f"""
+        SELECT {_BROADCAST_COLUMNS}
+        FROM {BROADCAST_TABLE}
+        WHERE status = 'sent'
+          AND (dispatched_at IS NULL
+               OR dispatched_at <= now() - make_interval(days => 1))
+        ORDER BY dispatched_at NULLS FIRST, id
+        LIMIT $1
+    """
+    return query, [limit]
+
+
+def close_broadcast_query(merchant_id: str, broadcast_id: str) -> Tuple[str, List[Any]]:
+    """The reporting window ended: sent -> closed, closed_at stamped (canon
+    T17 col 11: "closed = the reporting window ended and the funnel went
+    final"). Only from sent, so a second job never closes it twice."""
+    query = f"""
+        UPDATE {BROADCAST_TABLE}
+        SET status = 'closed', closed_at = now()
+        WHERE merchant_id = $1 AND id = $2 AND status = 'sent'
+        RETURNING {_BROADCAST_COLUMNS}
+    """
+    return query, [merchant_id, broadcast_id]
