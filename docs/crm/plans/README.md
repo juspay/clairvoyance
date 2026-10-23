@@ -24,8 +24,10 @@ the PR that makes it.
 
 Placeholders: every `template_id` is the string `TEMPLATE_ID_PLACEHOLDER`
 so the document validates as-is — replace it with the merchant's Breeze
-Buddy template id before publishing (the walker parks a run whose call
-node names a template that does not exist). The loan board names it once,
+Buddy template id before publishing (publish refuses an id that is
+missing, belongs to another merchant or reseller, is a chat agent, or has
+no call_execution_config; a template deleted after publish still parks
+runs). The loan board names it once,
 in `stages.on_idle`; a stage may name its own under
 `stages.overrides.<topic>.on_idle`. The WhatsApp `template` is a NAME
 (`cart_recovery_1`) resolved against the merchant's approved templates;

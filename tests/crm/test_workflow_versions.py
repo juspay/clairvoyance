@@ -30,6 +30,7 @@ from app.crm.outreach.db.queries.version import (
     list_versions_query,
 )
 from app.crm.outreach.db.queries.workflow import live_plans_naming_template_query
+from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.plans import validate_definition, validate_migration
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition
 from scripts.check_crm_boundaries import TABLE_OWNERS
@@ -412,8 +413,17 @@ async def _migrate(
     accessor: _MigrateAccessor,
     from_version: int = 3,
     to_version: int = 4,
+    parked: Optional[str] = None,
 ) -> int:
+    """`parked` = the reason every call square's template is refused with."""
     patch_accessors(monkeypatch, versions, accessor)
+
+    async def dials(merchant_id: str, node: Any) -> Tuple[Any, Any]:
+        if parked:
+            raise NodeParked(parked)
+        return object(), object()
+
+    monkeypatch.setattr(plans, "call_template", dials)
     return await versions._migrate_forward_in_txn(
         cast(DbTxn, object()), "m1", "wf-1", from_version, to_version
     )
@@ -449,6 +459,25 @@ async def test_migrate_forward_needs_both_versions_and_a_real_move(
         await _migrate(monkeypatch, _MigrateAccessor({4: _V4_FIXED}, []), 3, 4)
     with pytest.raises(plans.WorkflowValidationError):
         await _migrate(monkeypatch, _MigrateAccessor({3: _V3}, []), 3, 3)
+
+
+@pytest.mark.asyncio
+async def test_migrate_forward_refuses_a_target_whose_call_template_cannot_dial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publish's call check runs on the target too: no run is moved onto a
+    call square every run would park on."""
+    accessor = _MigrateAccessor({3: _V3, 4: _V4_FIXED}, occupied=["call"])
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _migrate(
+            monkeypatch,
+            accessor,
+            parked="call node call: template tpl-2 not found or could not be read",
+        )
+    assert refused.value.problems == [
+        "call node call: template tpl-2 not found or could not be read"
+    ]
+    assert accessor.repins == []
 
 
 _V4_SENDS: Dict[str, Any] = {
