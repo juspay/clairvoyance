@@ -1170,3 +1170,44 @@ class BroadcastPage(BaseModel):
 
 #: A recipient's own life (canon T18 col 8) — 091's CHECK words.
 RecipientStatus = Literal["queued", "claimed", "skipped", "enrolled", "cancelled"]
+
+
+class BroadcastRecipients(BaseModel):
+    """The frozen list and where each person stands (canon T18): how many
+    were frozen, how many by the queue's own status, and why the skipped
+    were skipped — "the number was smaller than expected" answered."""
+
+    frozen: int
+    by_status: Dict[str, int]
+    skipped_by_reason: Dict[str, int]
+
+
+class BroadcastRuns(BaseModel):
+    """The runs the broadcast started (``runs WHERE source_broadcast_id``):
+    how many, which are still open by status, and how the rest ended."""
+
+    started: int
+    open: Dict[str, int]
+    by_exit_reason: Dict[str, int]
+
+
+class BroadcastFunnel(BaseModel):
+    """One broadcast's report (canon/06-outreach.md:45-46, the funnel read):
+    the frozen list with its skips, the runs it started, and the calls those
+    runs placed (ADR 0010: the funnel reads calls through the run id stamped
+    on the lead). The workflow's own report counts every run of the plan;
+    this one counts only this launch's. ``closes_at`` is when the reporting
+    window ends and the numbers are final (the broadcast becomes closed);
+    None until it fires. Messages (the runs' manifest rows) are not counted
+    yet — the manifest has no index on a run id."""
+
+    broadcast_id: UUID
+    status: BroadcastStatus
+    resolved_at: Optional[datetime] = None
+    dispatched_at: Optional[datetime] = None
+    closes_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    recipients: BroadcastRecipients
+    runs: BroadcastRuns
+    calls: WorkflowCallSummary
+    computed_at: datetime

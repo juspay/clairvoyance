@@ -128,9 +128,27 @@ async def workflow_call_summary(
     endings = await enrollment_accessor.run_endings_in_window(
         merchant_id, workflow_id, since, until
     )
+    return await calls_of_runs(merchant_id, endings)
+
+
+async def calls_of_runs(
+    merchant_id: str, endings: Sequence[RunEnding], batch: Optional[int] = None
+) -> WorkflowCallSummary:
+    """The calls these runs placed — the one fold the plan's calls summary
+    and a broadcast's funnel share, so the two can never count a run apart.
+    Two lead reads over the runs: the per-(template, outcome) rows and the
+    per-run facts for contacted/reached. ``batch`` splits the runs into
+    reads of that many (a broadcast's runs are not bounded by a window);
+    None is one read. The rows sum across batches because the runs are
+    disjoint: every count is per row, and contacted/reached are per run."""
     runs = _lifetimes(endings)
-    rows = await get_call_stats_by_runs(merchant_id, runs)
-    facts = await get_call_facts_by_runs(merchant_id, runs)
+    size = batch or len(runs) or 1
+    rows: List[Dict[str, Any]] = []
+    facts: Dict[Any, Any] = {}
+    for start in range(0, len(runs), size):
+        part = runs[start : start + size]
+        rows.extend(await get_call_stats_by_runs(merchant_id, part))
+        facts.update(await get_call_facts_by_runs(merchant_id, part))
     contacted, reached = _contacted_reached(facts)
     return summarize_calls(
         {"outcomes": rows, "contacted": contacted, "reached": reached}
