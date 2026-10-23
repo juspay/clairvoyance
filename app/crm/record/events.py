@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from app.crm.record.db import accessor
+from app.crm.record.schemas import RawEvent
 
 
 async def customer_has_event(
@@ -23,6 +24,20 @@ async def customer_has_event(
     """Did she do one of ``topics`` after ``since``? ``where`` narrows it
     to the letters whose payload field equals a value (the goal key)."""
     return await accessor.customer_has_event(
+        merchant_id, customer_id, topics, since, where
+    )
+
+
+async def latest_customer_event(
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Tuple[str, str],
+) -> Optional[RawEvent]:
+    """The newest of the letters customer_has_event would find, so a goal
+    tier with conditions is judged at fire time on the order's state now."""
+    return await accessor.latest_customer_event(
         merchant_id, customer_id, topics, since, where
     )
 

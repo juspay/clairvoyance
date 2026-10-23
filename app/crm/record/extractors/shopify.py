@@ -190,6 +190,22 @@ def fulfillment_state(payload: Dict[str, Any]) -> Optional[str]:
     return str(state) if state else "unfulfilled"
 
 
+def order_tags(payload: Dict[str, Any]) -> Optional[List[str]]:
+    """Shopify's tags as the list they are, so `includes` asks about ONE tag.
+
+    REST posts them as one comma string ("Buddy Confirmed, COD"), on which
+    `includes` would compare the whole string and `contains` would let
+    "VIP" match "Non-VIP". GraphQL posts an array. Both become trimmed
+    elements; no tags is None, the absence every op already reads."""
+    tags = payload.get("tags")
+    if isinstance(tags, str):
+        tags = tags.split(",")
+    if not isinstance(tags, list):
+        return None
+    found = [str(t).strip() for t in tags if isinstance(t, str) and t.strip()]
+    return found or None
+
+
 def _line_items_as(item_format: str) -> Deriver:
     """One deriver per declared phrasing: every line of the cart through the
     format, joined and truncated by the engine — the same renderer a vendor
@@ -245,6 +261,7 @@ def first_item_name(payload: Dict[str, Any]) -> Optional[str]:
 DERIVERS: Dict[str, Deriver] = {
     "customer_name": customer_name,
     "fulfillment_state": fulfillment_state,
+    "order_tags": order_tags,
     "items_count": items_count,
     "first_item_name": first_item_name,
     "shipping_address": shipping_address,
@@ -362,6 +379,8 @@ def _order_fields() -> List[CatalogField]:
             values=FULFILLMENT_STATES,
             derived=True,
         ),
+        # payload.tags split into its tags: what `includes` reads.
+        _f("order_tags", "list", "Order tags", derived=True),
         _f("payload.checkout_token", "text", "Checkout token", keyable=True),
         _f("payload.source_name", "text", "Order source"),
         _f("payload.created_at", "datetime", "Placed at"),

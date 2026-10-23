@@ -24,7 +24,10 @@ from app.crm.outreach.db.queries.workflow import (
     workflow_status_query,
 )
 from app.crm.outreach.schemas import WorkflowDefinition
-from app.crm.record.db.queries import customer_has_event_query
+from app.crm.record.db.queries import (
+    customer_has_event_query,
+    latest_customer_event_query,
+)
 
 NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
 PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
@@ -113,6 +116,19 @@ def test_goal_recheck_can_be_keyed_to_the_run_it_is_about() -> None:
     assert params == ["m1", "c-1", ["orders/create"], NOW, "cart_token", "chk-88412"]
     sql, params = customer_has_event_query("m1", "c-1", ["orders/create"], NOW)
     assert "$5" not in sql and len(params) == 4
+
+
+def test_a_conditioned_goal_reads_one_letter_the_newest_about_this_order() -> None:
+    """Phase 21: the same rows the EXISTS asks about, newest first, ONE
+    payload out — never a scan of her letters."""
+    sql, params = latest_customer_event_query(
+        "m1", "c-1", ["orders/updated"], NOW, ("id", "5201000001")
+    )
+    assert "AND payload->>$5 = $6" in sql
+    assert "COALESCE(occurred_at, received_at) > $4" in sql
+    assert "ORDER BY COALESCE(occurred_at, received_at) DESC" in sql
+    assert "LIMIT 1" in sql
+    assert params == ["m1", "c-1", ["orders/updated"], NOW, "id", "5201000001"]
 
 
 def test_live_workflows_read_is_merchant_scoped() -> None:
