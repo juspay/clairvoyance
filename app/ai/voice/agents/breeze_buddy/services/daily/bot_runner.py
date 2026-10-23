@@ -29,6 +29,9 @@ import sys  # noqa: E402
 from pipecat.runner.types import DailyRunnerArguments  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
+# Imported for its side effect: installs the lead taps in this process, so the
+# finished tap sends call.completed and queues the call's post-call job.
+from app.ai.voice.agents.breeze_buddy import crm_mirror  # noqa: F401,E402
 from app.ai.voice.agents.breeze_buddy.agent import daily_bot  # noqa: E402
 from app.ai.voice.agents.breeze_buddy.services.daily.daily import (  # noqa: E402
     daily_completion_function,
@@ -36,6 +39,7 @@ from app.ai.voice.agents.breeze_buddy.services.daily.daily import (  # noqa: E40
 from app.ai.voice.agents.breeze_buddy.services.daily.launch_payload import (  # noqa: E402
     BotLaunchPayload,
 )
+from app.core.concurrency import drain_background_tasks  # noqa: E402
 from app.core.config.static import (  # noqa: E402
     BB_VOICE_BOT_DB_MAX_OVERFLOW,
     BB_VOICE_BOT_DB_POOL_SIZE,
@@ -85,6 +89,15 @@ async def _amain(runner_args: DailyRunnerArguments) -> None:
             runner_args, daily_completion_function, create_aiohttp_session()
         )
     finally:
+        # call.completed and the post-call job run in the background, and can
+        # start more (the outcome check's FAILED row); the exit would cancel
+        # them, so they finish first
+        still_pending = await drain_background_tasks(_TEARDOWN_TIMEOUT_SECS)
+        if still_pending:
+            logger.warning(
+                f"[bot_runner] {still_pending} background task(s) did not "
+                f"finish within {_TEARDOWN_TIMEOUT_SECS}s before teardown"
+            )
         # Best-effort, time-bounded: pool.close() waits indefinitely for
         # acquired connections, and a straggler must not pin a finished
         # child process alive.

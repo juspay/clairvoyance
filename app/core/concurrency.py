@@ -92,3 +92,16 @@ def spawn_background_task(
     task.add_done_callback(_background_tasks.discard)
     task.add_done_callback(_log_background_failure)
     return task
+
+
+async def drain_background_tasks(timeout: float) -> int:
+    """Wait up to ``timeout`` seconds for every background task, including
+    any spawned while waiting, for a process about to exit (a Daily bot's).
+    Returns how many are still running."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while pending := [task for task in _background_tasks if not task.done()]:
+        if loop.time() >= deadline:
+            break
+        await asyncio.wait(pending, timeout=deadline - loop.time())
+    return len(pending)
