@@ -89,7 +89,16 @@ Rules the template encodes:
   adds the FK `crm_workflow_enrollment.source_broadcast_id` waited for since
   058, `NOT VALID`: every existing run's value is NULL, so there is nothing
   to validate, and a validating scan of that hot table would hold the
-  walker's writes — a NOT VALID FK is still enforced on every new write).
+  walker's writes — a NOT VALID FK is still enforced on every new write);
+  `crm_broadcast_recipient` (090, canon T18) is the admission queue under a
+  broadcast — a pure child row with no merchant_id, its composite PK the
+  dedupe a re-run freeze relies on; its `status` index (T18 col 8 IX) is
+  partial, `crm_broadcast_recipient_waiting_ix` over the queued and claimed
+  rows only; 090 also adds `crm_broadcast_due_ix`, the partial index the
+  freeze's claim reads. 091 adds `crm_broadcast.attempts` and `last_error`,
+  a deliberate deviation from T17 on T20's precedent: the freeze's claim
+  spends an attempt, and a freeze past `CRM_BROADCAST_FREEZE_MAX_ATTEMPTS`
+  fails with its reason on the row instead of being claimed again forever.
 - Append-only tables (crm_consent_event) additionally REVOKE UPDATE,
   DELETE and add the refusal trigger in the same migration.
 - Partitioned tables (crm_event_raw, crm_message, crm_decision_log)
