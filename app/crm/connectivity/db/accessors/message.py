@@ -5,6 +5,7 @@ Every function self-scopes; see queries/message.py for why no transaction is
 needed.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.connectivity.db.decoders.message import (
@@ -13,14 +14,16 @@ from app.crm.connectivity.db.decoders.message import (
 )
 from app.crm.connectivity.db.queries.message import (
     apply_outcome_query,
+    apply_receipt_query,
     claim_queued_messages_query,
     insert_message_query,
+    message_by_dedupe_query,
     requeue_stale_claims_query,
     send_behind_provider_id_query,
 )
 from app.crm.connectivity.schemas.message import QueuedMessage, SendBehind
 from app.crm.connectivity.status import MESSAGE_QUEUED
-from app.crm.shared.db import crm_connection
+from app.crm.shared.db import DbTxn, crm_connection
 
 
 async def insert_message(
@@ -51,6 +54,16 @@ async def insert_message(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return str(row["id"]) if row else None
+
+
+async def message_by_dedupe(
+    merchant_id: str, dedupe_key: str
+) -> Optional[QueuedMessage]:
+    """The row a dedupe key already names, or None."""
+    query, values = message_by_dedupe_query(merchant_id, dedupe_key)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_queued_message(row) if row is not None else None
 
 
 async def claim_queued_messages(batch_size: int) -> List[QueuedMessage]:
@@ -112,3 +125,31 @@ async def send_behind(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_send_behind(row) if row is not None else None
+
+
+async def apply_receipt(
+    merchant_id: str,
+    provider_message_id: str,
+    state: str,
+    occurred_at: Optional[datetime],
+    error_code: Optional[str],
+    pricing_category: Optional[str],
+    txn: Optional[DbTxn] = None,
+) -> Optional[str]:
+    """The row's status after the receipt, or None when no row of this
+    merchant carries the provider's id. ``txn`` when the caller's atom owns
+    the fate (the parked-receipt drain)."""
+    query, values = apply_receipt_query(
+        merchant_id,
+        provider_message_id,
+        state,
+        occurred_at,
+        error_code,
+        pricing_category,
+    )
+    if txn is not None:
+        row = await txn.fetchrow(query, *values)
+    else:
+        async with crm_connection() as conn:
+            row = await conn.fetchrow(query, *values)
+    return row["status"] if row is not None else None
