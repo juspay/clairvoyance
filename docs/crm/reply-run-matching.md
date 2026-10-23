@@ -62,8 +62,11 @@ own sends, and there it needs no declaration at all.
 
 ## What stays exactly as it was
 
-Attribution only ever NARROWS, so anything it cannot address behaves as it always did. That is
-why **no published plan has to change** and no run has to be re-pinned:
+Attribution narrows her other runs out, and it also **finds** the run it names: the consumer
+reads that run by id beside her own open runs, so a run whose number later resolved to a
+different customer still hears the answer to its own message. Anything it cannot address
+behaves as it always did. That is why **no published plan has to change** and no run has to be
+re-pinned:
 
 - **She typed instead of tapping.** No thread on the letter, nothing to look up, every
   listening square hears it — as before.

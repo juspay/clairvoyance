@@ -23,7 +23,7 @@ stays pending and returns next poll. Our writes commit on their own
 source-event check and the open-run unique — not by that rollback.
 """
 
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
@@ -130,15 +130,24 @@ async def consume_attributed_event(
     can never see."""
     if customer_id is None:
         return  # not about a person: nothing to admit, end or wake
-    open_runs = await enrollment_accessor.open_runs_for_customer(
-        event.merchant_id, customer_id
-    )
-    goal_patch = _goal_patch(event) if open_runs else None
+    plans = [
+        (flow, WorkflowDefinition.model_validate(flow.definition))
+        for flow in await workflow_accessor.live_workflows(event.merchant_id)
+    ]
     # Whose send this letter answers, resolved ONCE for the letter rather
     # than once per run: a reply is addressed, not matched (see
     # reply_attribution). None for anything that answers nothing of ours,
-    # and then every square below behaves as it always did.
-    addressed = await addressed_run(event) if open_runs else None
+    # and then every square below behaves as it always did. Before the
+    # read, so the run she answered is read even when her number resolved
+    # to another customer.
+    addressed = await addressed_run(event)
+    open_runs = await enrollment_accessor.open_runs_for_customer(
+        event.merchant_id,
+        customer_id,
+        keys=_run_keys(plans, event),
+        run_ids=_named_runs(event, addressed),
+    )
+    goal_patch = _goal_patch(event) if open_runs else None
     if addressed is not None and addressed.run_id not in {str(r.id) for r in open_runs}:
         # She answered a run that has since ended (its goal fired, it timed
         # out, she was ejected). Narrowing to a run nobody is holding would
@@ -167,9 +176,7 @@ async def consume_attributed_event(
             continue  # exited: there is nothing left to wake
         await _wake_on_reply(run, definition, event, variables, addressed)
 
-    flows = await workflow_accessor.live_workflows(event.merchant_id)
-    for flow in flows:
-        definition = WorkflowDefinition.model_validate(flow.definition)
+    for flow, definition in plans:
         for door in definition.entries:
             if door.topic == event.topic and _where_matches(door, event):
                 await _try_enrol(
@@ -184,6 +191,47 @@ async def consume_attributed_event(
                     addressed,
                 )
                 break  # topics are unique across a plan's doors
+
+
+def _run_keys(
+    plans: Sequence[Tuple[Workflow, WorkflowDefinition]], event: RawEvent
+) -> List[Tuple[str, str]]:
+    """PURE: (workflow_id, key) for every live keyed plan this letter
+    carries a key for — the runs it names whichever customer it resolved
+    to. A merchant's own customer id arriving with a second phone resolves
+    to a second customer; by customer alone, her goal and her progress
+    would never reach the run her key opened (Flipkart, 13 Oct 2026)."""
+    keys: List[Tuple[str, str]] = []
+    for flow, definition in plans:
+        for field in {door.key for door in definition.entries if door.key}:
+            value = field_value(
+                event.payload,
+                canonical_path(field),
+                derive_for(event.source, event.topic),
+            )
+            if value not in (None, ""):
+                keys.append((str(flow.id), str(value)))
+    return keys
+
+
+def _named_runs(event: RawEvent, addressed: Optional[Addressed]) -> List[str]:
+    """PURE: the runs this letter names by id — the run our own call report
+    says placed the call (enrollment_id, stamped on the lead by the call
+    square), and the run whose send a reply answers (reply_attribution).
+    Exact whichever phone was dialled or customer it resolved to: a run
+    whose number changed would otherwise never hear its own call's outcome
+    or the answer to its own message.
+
+    Only our own reports are trusted to name a run: an enrollment_id in a
+    merchant's payload is its data, not our pointer. Both ids come from uuid
+    columns; a lead no run placed carries none, and an empty id names
+    nothing."""
+    named: List[str] = []
+    if event.source in CALL_REPORT_SOURCES:
+        named.append(str(event.payload.get("enrollment_id") or ""))
+    if addressed is not None:
+        named.append(addressed.run_id)
+    return [run_id for run_id in named if run_id]
 
 
 async def _end_on_goal(
@@ -613,10 +661,10 @@ async def _repeat_door(
     never find a v3 run. That version's door for this topic; if it has
     none (the door is newer than the run), its first door — the patch's
     guard makes a wrong square a no-op, never a wrong write. The run was
-    read at the top of this pass; when it is not among her open runs (a
-    keyed run that resolved to another customer, or a sibling tick opened
-    it after the read) the latest door stands in — exactly the
-    pre-pinning behaviour."""
+    read at the top of this pass — by her customer and by its key, so a
+    keyed run on another customer is among them; when it is not (a
+    sibling tick opened it after the read) the latest door stands in —
+    exactly the pre-pinning behaviour."""
     for run in open_runs:
         if (
             str(run.workflow_id) == str(flow.id)
