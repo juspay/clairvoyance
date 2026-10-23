@@ -25,6 +25,8 @@ from app.crm.outreach.db.accessors import (
 )
 from app.crm.outreach.ladder import LadderProblem, expand_stages
 from app.crm.outreach.nodes import NODE_TYPES, branches, is_wait, listens
+from app.crm.outreach.nodes.call import call_template
+from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.nodes.wait import TIMEOUT
 from app.crm.outreach.repeat import parse_repeat_policy
 from app.crm.outreach.schemas import (
@@ -513,13 +515,21 @@ async def _template_problems(
     """GATHER for the publish atom (rollout phase 08, G12): every send node
     on a channel that registers templates must name one the registry knows
     AND has approved — otherwise the first sign of a wrong name is a
-    blocked send at dispatch, hours after publish. A lookup, so it lives
+    blocked send at dispatch, hours after publish. Every call node must
+    name a template the square can dial with (call.call_template) —
+    otherwise every run parks on its first call. A lookup, so it lives
     here beside the atom and validate_definition stays PURE. Drafts are
     not checked (create/update): a draft may precede approval. The
     contract takes its own pooled connection beside the atom's — the
     resolve()-inside-the-pass precedent."""
     problems: List[str] = []
     for node in definition.nodes:
+        if node.type == "call" and node.template_id:
+            try:
+                await call_template(merchant_id, node)
+            except NodeParked as unusable:
+                problems.append(str(unusable))
+            continue
         if node.type != "send" or not node.channel or not node.template:
             continue  # the validator already demands both on a send node
         if not registers_templates_for(node.channel):

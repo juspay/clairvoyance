@@ -100,3 +100,22 @@ def patch_accessors(monkeypatch: pytest.MonkeyPatch, module: Any, fake: Any) -> 
     assert names, f"{module.__name__} imports no accessor to patch"
     for name in names:
         monkeypatch.setattr(module, name, fake)
+
+
+def stub_merchant_reseller(
+    monkeypatch: pytest.MonkeyPatch, reseller_id: Optional[str]
+) -> List[str]:
+    """The merchant read call.call_template makes to match the template's
+    reseller. ``None`` = no such merchant. Returns the merchant ids asked."""
+    import app.crm.outreach.nodes.call as call_node
+
+    asked: List[str] = []
+
+    async def merchants(ids: List[str], *_: Any, **__: Any) -> Any:
+        asked.extend(ids)
+        if reseller_id is None:
+            return [], 0
+        return [type("M", (), {"reseller_id": reseller_id})()], 1
+
+    monkeypatch.setattr(call_node, "get_merchants_by_ids", merchants)
+    return asked
