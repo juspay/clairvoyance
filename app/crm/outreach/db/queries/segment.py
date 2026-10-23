@@ -3,7 +3,8 @@ file (module rules §1 at scale). $1 placeholders only — every value
 parameterized; merchant_id is $1 on every read and write (tenancy law).
 """
 
-from typing import Any, List, Optional, Tuple
+import json
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.outreach.db.queries.tables import SEGMENT_MEMBER_TABLE, SEGMENT_TABLE
 
@@ -28,6 +29,20 @@ def insert_static_list_query(
         RETURNING {_SEGMENT_COLUMNS}
     """
     return query, [merchant_id, name, created_by]
+
+
+def insert_dynamic_segment_query(
+    merchant_id: str, name: str, definition: Dict[str, Any], created_by: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """A dynamic segment: the stored question, checked before it got here.
+    No count yet — member_count / computed_at stay NULL until the rule is
+    first counted (phase 4); a NULL stamp says "never counted", not zero."""
+    query = f"""
+        INSERT INTO {SEGMENT_TABLE} (merchant_id, name, definition, created_by)
+        VALUES ($1, $2, $3::jsonb, $4)
+        RETURNING {_SEGMENT_COLUMNS}
+    """
+    return query, [merchant_id, name, json.dumps(definition), created_by]
 
 
 def get_segment_query(merchant_id: str, segment_id: str) -> Tuple[str, List[Any]]:
