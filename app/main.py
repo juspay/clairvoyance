@@ -409,7 +409,16 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Breeze Automatic Server", version=__version__, lifespan=lifespan)
+# No public /openapi.json, /docs or /redoc: the schema is a route map of
+# every endpoint, and prod was serving it to anyone (security review, 2026-10-24).
+app = FastAPI(
+    title="BreezeBuddy-API",
+    version=__version__,
+    lifespan=lifespan,
+    openapi_url=None,
+    docs_url=None,
+    redoc_url=None,
+)
 
 # Ingest archive (app/services/ingest_archive.py): two DevCycle flags copy,
 # or answer from GCS alone, POSTs on the two ingest doors, ahead of routing
