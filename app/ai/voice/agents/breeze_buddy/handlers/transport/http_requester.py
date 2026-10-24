@@ -44,6 +44,12 @@ from app.core.config.static import (
     HTTP_REQUEST_MAX_RESPONSE_BYTES,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import (
+    EgressResolutionError,
+    SSRFError,
+    redact_url,
+    ssrf_safe_request,
+)
 
 
 class HttpRequestExecutor:
@@ -132,14 +138,16 @@ class HttpRequestExecutor:
                         f"HTTP {config.method.value} request to {url} (attempt {attempt}/{config.max_retries})"
                     )
 
-                    async with self.session.request(
-                        method=config.method.value,
-                        url=url,
+                    # Resolves DNS now, refuses internal addresses, connects to the
+                    # checked IP and re-checks every redirect hop.
+                    async with ssrf_safe_request(
+                        self.session,
+                        config.method.value,
+                        url,
                         headers=headers,
                         json=resolved_body if resolved_body else None,
                         timeout=aiohttp.ClientTimeout(total=config.timeout),
                         max_redirects=HTTP_REQUEST_MAX_REDIRECTS,
-                        allow_redirects=HTTP_REQUEST_MAX_REDIRECTS > 0,
                     ) as response:
                         status = response.status
 
@@ -255,17 +263,20 @@ class HttpRequestExecutor:
                     logger.warning(
                         f"HTTP {config.method.value} timeout after {config.timeout}s (attempt {attempt})"
                     )
-                except aiohttp.TooManyRedirects:
+                except EgressResolutionError as e:
+                    # A DNS hiccup, not a refusal: worth another attempt.
+                    logger.warning(
+                        f"HTTP {config.method.value} DNS failure: {e} (attempt {attempt})"
+                    )
+                except SSRFError as e:
+                    # Blocked target or too many redirects: never retried.
                     logger.error(
-                        f"HTTP {config.method.value} exceeded max redirects "
-                        f"({HTTP_REQUEST_MAX_REDIRECTS}), not retrying"
+                        f"HTTP {config.method.value} to {redact_url(url)} refused: {e}"
                     )
                     if fire_and_forget:
                         return None
-                    return (
-                        0,
-                        f"Too many redirects (max: {HTTP_REQUEST_MAX_REDIRECTS})",
-                    )
+                    # Detail stays in our logs; the LLM must not learn internal IPs.
+                    return (0, "Request blocked by egress policy")
                 except aiohttp.ClientError as e:
                     logger.warning(
                         f"HTTP {config.method.value} client error: {e} (attempt {attempt})"

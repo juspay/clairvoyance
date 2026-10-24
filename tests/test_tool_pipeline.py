@@ -239,17 +239,21 @@ class _FakeAsyncClient:
     async def __aexit__(self, *exc):
         return False
 
-    async def post(self, url, json=None, headers=None):
+    async def post(self, url, json=None, headers=None, extensions=None):
         return self._resp
 
 
 def _server_params():
     return StreamableHttpParameters(
-        url="http://x/mcp", headers={}, timeout=timedelta(seconds=5)
+        url="https://mcp.example.com/mcp", headers={}, timeout=timedelta(seconds=5)
     )
 
 
 def _patch_httpx(monkeypatch, resp: _FakeResp):
+    async def public(url):
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(mcp_mod, "_check_mcp_egress", public)
     monkeypatch.setattr(
         mcp_mod.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(resp)
     )

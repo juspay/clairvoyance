@@ -49,6 +49,25 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ToolUiHint,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import (
+    EgressResolutionError,
+    SSRFError,
+    redact_url,
+    validate_egress_url,
+)
+
+
+async def _check_mcp_egress(url: str) -> List[str]:
+    """Resolve the MCP server now and refuse internal targets; returns the
+    checked IPs. The reason is logged, not raised: it reaches the LLM."""
+    try:
+        return await validate_egress_url(url)
+    except EgressResolutionError:
+        raise
+    except SSRFError as e:
+        logger.warning(f"[BUDDY_MCP] egress refused for {redact_url(url)}: {e}")
+        raise SSRFError("MCP server blocked by egress policy") from None
+
 
 # --- HITL approval for MCP tools -------------------------------------------
 # Watchdog budget for a gated MCP tool: approval wait + the handler's dispatch
@@ -199,6 +218,7 @@ async def _acquire_pooled_client(
         existing = pool.get(key)
         if isinstance(existing, MCPClient):
             return existing
+        await _check_mcp_egress(server_params.url)
         client = MCPClient(server_params=server_params)
         await client.start()
         pool[key] = client
@@ -280,10 +300,20 @@ def _create_direct_http_tool_handler(
             server_params.timeout.total_seconds() if server_params.timeout else 30.0
         )
         try:
+            url = httpx.URL(server_params.url)
+            extensions: Dict[str, Any] = {}
+            if transport is None:  # not our own in-process endpoint
+                ips = await _check_mcp_egress(server_params.url)
+                # Connect to the checked address, not the name (rebinding).
+                headers.setdefault("Host", url.netloc.decode("ascii"))
+                extensions["sni_hostname"] = url.host
+                url = url.copy_with(host=ips[0])
             async with httpx.AsyncClient(
                 timeout=timeout_s, transport=transport
             ) as client:
-                resp = await client.post(server_params.url, json=body, headers=headers)
+                resp = await client.post(
+                    url, json=body, headers=headers, extensions=extensions
+                )
         except Exception as e:
             logger.warning(f"[BUDDY_MCP] direct {tool_name!r} transport failed: {e}")
             return cast(
@@ -465,6 +495,7 @@ def _create_mcp_tool_handler(
         # Unpooled path — voice mode (and any caller that hasn't migrated).
         # Fresh MCPClient per call; matches the pre-0.7 behaviour exactly.
         try:
+            await _check_mcp_egress(server_params.url)
             async with MCPClient(server_params=server_params) as mcp_client:
                 await asyncio.wait_for(mcp_client._tool_wrapper(params), timeout=30)
             result = await asyncio.wait_for(future, timeout=30)
@@ -685,6 +716,7 @@ async def _load_server_tools(
     # tool schema dynamically. Used when ``server.tool_schemas`` isn't set
     # — UCP servers go through the declared-schemas branch above and never
     # reach this code.
+    await _check_mcp_egress(server_params.url)
     async with MCPClient(server_params=server_params) as temp_client:
         tools_schema = await asyncio.wait_for(
             temp_client.get_tools_schema(),
