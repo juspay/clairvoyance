@@ -128,7 +128,7 @@ jobs:
       - name: Run crm tests
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          uv run pytest tests/crm -q
+          uv run pytest tests/crm tests/egress -q
         continue-on-error: false
 
       # Step 13: Check commit count (must be exactly 1)

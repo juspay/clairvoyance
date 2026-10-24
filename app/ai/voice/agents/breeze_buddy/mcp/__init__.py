@@ -22,6 +22,11 @@ from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline imp
 )
 from app.ai.voice.agents.breeze_buddy.mcp import in_process
 from app.ai.voice.agents.breeze_buddy.mcp.cache import get_or_discover_server_tools
+from app.ai.voice.agents.breeze_buddy.mcp.egress import (
+    McpEgressTransport,
+    McpServerParameters,
+    _check_mcp_egress,
+)
 
 # gate_call wraps gated MCP tool handlers with the HITL approval gate (voice).
 # Cycle-safe: template.approval only depends on template.context +
@@ -199,6 +204,7 @@ async def _acquire_pooled_client(
         existing = pool.get(key)
         if isinstance(existing, MCPClient):
             return existing
+        await _check_mcp_egress(server_params.url)
         client = MCPClient(server_params=server_params)
         await client.start()
         pool[key] = client
@@ -280,8 +286,11 @@ def _create_direct_http_tool_handler(
             server_params.timeout.total_seconds() if server_params.timeout else 30.0
         )
         try:
+            if transport is None:  # not our own in-process endpoint
+                # The lookup spends the call's budget: a stalled resolver times out.
+                await asyncio.wait_for(_check_mcp_egress(server_params.url), timeout_s)
             async with httpx.AsyncClient(
-                timeout=timeout_s, transport=transport
+                timeout=timeout_s, transport=transport or McpEgressTransport()
             ) as client:
                 resp = await client.post(server_params.url, json=body, headers=headers)
         except Exception as e:
@@ -465,6 +474,7 @@ def _create_mcp_tool_handler(
         # Unpooled path — voice mode (and any caller that hasn't migrated).
         # Fresh MCPClient per call; matches the pre-0.7 behaviour exactly.
         try:
+            await _check_mcp_egress(server_params.url)
             async with MCPClient(server_params=server_params) as mcp_client:
                 await asyncio.wait_for(mcp_client._tool_wrapper(params), timeout=30)
             result = await asyncio.wait_for(future, timeout=30)
@@ -574,7 +584,7 @@ def _build_server_params(
     headers.update(server.headers)  # static headers from config
     headers.update(_build_auth_headers(server, template_vars))  # auth headers
 
-    return StreamableHttpParameters(
+    return McpServerParameters(
         url=resolved_url,
         headers=headers,
         timeout=timedelta(seconds=server.timeout),
@@ -685,6 +695,7 @@ async def _load_server_tools(
     # tool schema dynamically. Used when ``server.tool_schemas`` isn't set
     # — UCP servers go through the declared-schemas branch above and never
     # reach this code.
+    await _check_mcp_egress(server_params.url)
     async with MCPClient(server_params=server_params) as temp_client:
         tools_schema = await asyncio.wait_for(
             temp_client.get_tools_schema(),
