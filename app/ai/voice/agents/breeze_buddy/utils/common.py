@@ -14,6 +14,12 @@ from app.ai.voice.llm.types import RealtimeLLMProvider
 from app.core.config.static import ORDER_CONFIRMATION_WEBHOOK_SECRET_KEY
 from app.core.logger import logger
 from app.core.security.sha import calculate_hmac_sha256
+from app.core.security.ssrf import (
+    EgressResolutionError,
+    SSRFError,
+    redact_url,
+    ssrf_safe_request,
+)
 from app.services.redis.client import get_redis_service
 
 
@@ -165,7 +171,11 @@ async def send_webhook_with_retry(
     for attempt in range(1, max_retries + 1):
         try:
             logger.info(f"Webhook attempt {attempt}/{max_retries} to {url}")
-            async with session.post(url, json=data, headers=headers) as response:
+            # The URL comes from the lead and the body is signed: check DNS at send
+            # time, connect to the checked IP, stay on the host it names.
+            async with ssrf_safe_request(
+                session, "POST", url, json=data, headers=headers, same_origin_only=True
+            ) as response:
                 if response.status == 200:
                     logger.info(f"Webhook succeeded on attempt {attempt}")
                     return True
@@ -174,6 +184,12 @@ async def send_webhook_with_retry(
                     logger.warning(
                         f"Webhook attempt {attempt} failed. Status: {response.status}, Body: {response_text}"
                     )
+        except EgressResolutionError as e:
+            logger.warning(f"Webhook attempt {attempt} DNS failure: {e}")
+        except SSRFError as e:
+            # A refusal, not a fault: another attempt gets the same answer.
+            logger.error(f"Webhook to {redact_url(url)} refused: {e}")
+            return False
         except Exception as e:
             logger.error(f"Webhook attempt {attempt} error: {e}", exc_info=True)
 
