@@ -7,7 +7,7 @@ import hashlib
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import jwt as pyjwt
 from fastapi import Depends, HTTPException, Request, WebSocket, status
@@ -17,11 +17,15 @@ from starlette.requests import HTTPConnection
 from app.core.config.static import JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 from app.core.logger import logger
 from app.core.security.jwt import jwt_manager
+from app.database.accessor.breeze_buddy.merchants import (
+    get_merchant_by_merchant_identifier,
+)
 from app.database.accessor.breeze_buddy.token_registry import (
     find_or_register_seen_token,
     mark_token_seen,
     register_token,
 )
+from app.database.accessor.breeze_buddy.users import get_user_token_state
 from app.schemas import UserInfo, UserRole
 from app.schemas.breeze_buddy.token_registry import TokenKind, TokenRegistryEntry
 
@@ -43,6 +47,39 @@ _REGISTRY_CACHE_MAX = 10_000
 _SEEN_FIELD_MAX_CHARS = 200
 # token hash -> (time.monotonic() of the read, registry row)
 _registry_cache: Dict[str, Tuple[float, TokenRegistryEntry]] = {}
+# The subject of a per-merchant (and launch) token is "merchant:<id>".
+_MERCHANT_SUBJECT_PREFIX = "merchant:"
+
+
+class _Subject(NamedTuple):
+    """What the verifier knows about a token's subject (user or merchant)."""
+
+    found: bool
+    active: bool
+    tokens_valid_after: Optional[datetime]
+
+
+# subject -> (time.monotonic() of the read, its state); same window as above.
+_subject_cache: Dict[str, Tuple[float, _Subject]] = {}
+
+
+def _unauthorized() -> HTTPException:
+    """The verifier's one refusal for a token it won't accept."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def token_times(token: str) -> Tuple[datetime, datetime]:
+    """A token's own iat and exp, read back from the token (no verify:
+    callers hold a token they just minted)."""
+    claims = pyjwt.decode(token, options={"verify_signature": False})
+    return (
+        datetime.fromtimestamp(claims["iat"], timezone.utc),
+        datetime.fromtimestamp(claims["exp"], timezone.utc),
+    )
 
 
 def token_hash_of(token: str) -> str:
@@ -172,9 +209,7 @@ class BreezeBuddyRBACTokenManager:
         )
         # Read iat/exp back from the token itself, so the row matches the
         # claims to the second rather than to a second clock read.
-        claims = pyjwt.decode(
-            token, self.jwt_manager.secret_key, algorithms=[self.jwt_manager.algorithm]
-        )
+        issued_at, expires_at = token_times(token)
         try:
             await register_token(
                 token_id=jti,
@@ -183,12 +218,12 @@ class BreezeBuddyRBACTokenManager:
                 source="minted",
                 subject=user_id,
                 username=username,
-                role=claims["role"],
+                role=role.value if isinstance(role, UserRole) else role,
                 reseller_ids=reseller_ids,
                 merchant_ids=merchant_ids,
                 created_by=created_by,
-                issued_at=datetime.fromtimestamp(claims["iat"], timezone.utc),
-                expires_at=datetime.fromtimestamp(claims["exp"], timezone.utc),
+                issued_at=issued_at,
+                expires_at=expires_at,
             )
         except Exception:
             raise HTTPException(
@@ -200,16 +235,21 @@ class BreezeBuddyRBACTokenManager:
     async def authenticate(
         self, token: str, connection: Optional[HTTPConnection] = None
     ) -> UserInfo:
-        """``verify_rbac_token``, then the token registry (observe mode).
+        """``verify_rbac_token``, then the token's subject, then the token
+        registry (observe mode).
+
+        Every token's subject — a user, or ``merchant:<id>`` — must be
+        active (401 otherwise). A short-lived token must also be issued after
+        its user's ``tokens_valid_after`` (the login cut-off).
 
         A long-lived token (see ``_is_long_lived``) is looked up by hash:
         - revoked → 401;
         - never seen → registered as ``backfilled`` and let through — that is
-          how the tokens in use get found;
-        - registry unreadable → 503: a refusal (fail CLOSED), but not one a
-          caller would read as "your token is bad".
-        Short-lived tokens (login, launch, signup) cost nothing here.
-        ``connection`` (the request or websocket) only feeds last_seen_*.
+          how the tokens in use get found.
+
+        Any lookup that can't be made → 503: a refusal (fail CLOSED), but not
+        one a caller would read as "your token is bad". ``connection`` (the
+        request or websocket) only feeds last_seen_*.
         """
         user_info = self.verify_rbac_token(token)
         # Already verified above; exp is not re-checked so a token expiring
@@ -220,7 +260,9 @@ class BreezeBuddyRBACTokenManager:
             algorithms=[self.jwt_manager.algorithm],
             options={"verify_exp": False},
         )
-        if not _is_long_lived(claims):
+        long_lived = _is_long_lived(claims)
+        await self._check_subject(claims, long_lived)
+        if not long_lived:
             return user_info
 
         token_hash = token_hash_of(token)
@@ -231,11 +273,7 @@ class BreezeBuddyRBACTokenManager:
             logger.warning(
                 f"RBAC verifier: rejected revoked token {entry.id} ({entry.username})"
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            raise _unauthorized()
         await self._note_seen(token_hash, entry, connection)
         return user_info
 
@@ -254,7 +292,7 @@ class BreezeBuddyRBACTokenManager:
                 token_hash=token_hash,
                 kind=(
                     "merchant"
-                    if str(claims["sub"]).startswith("merchant:")
+                    if str(claims["sub"]).startswith(_MERCHANT_SUBJECT_PREFIX)
                     else "admin"
                 ),
                 subject=claims["sub"],
@@ -315,6 +353,75 @@ class BreezeBuddyRBACTokenManager:
     def forget(self, token_hash: str) -> None:
         """Drop this pod's cached read of a token (after a revoke here)."""
         _registry_cache.pop(token_hash, None)
+
+    def forget_subject(self, subject: str) -> None:
+        """Drop this pod's cached read of a user (its id) or a merchant
+        (``merchant:<id>``) after deactivating it or cutting its sessions."""
+        _subject_cache.pop(subject, None)
+
+    async def _check_subject(self, claims: Dict[str, Any], long_lived: bool) -> None:
+        """Refuse a token whose user or merchant is inactive, or a login
+        token issued before its user's cut-off.
+
+        A subject that doesn't exist (deleted) is logged and let through for
+        now — refusing it waits for enforcement (4/4), so a service token
+        minted under a since-deleted user isn't cut off unannounced.
+        """
+        subject = str(claims["sub"])
+        state = await self._subject_state(subject)
+        if not state.found:
+            return
+        if not state.active:
+            logger.warning(f"RBAC verifier: rejected token of inactive {subject}")
+            raise _unauthorized()
+        if long_lived or state.tokens_valid_after is None:
+            return
+        iat = claims.get("iat")
+        # iat is whole seconds: a login in the same second as the cut-off is
+        # refused too (fail closed) — the user signs in again a second later.
+        if iat is None or (
+            datetime.fromtimestamp(iat, timezone.utc) < state.tokens_valid_after
+        ):
+            logger.warning(f"RBAC verifier: rejected cut-off login token of {subject}")
+            raise _unauthorized()
+
+    async def _subject_state(self, subject: str) -> _Subject:
+        """This pod's recent read of a subject, else a fresh one."""
+        cached = _subject_cache.get(subject)
+        now = time.monotonic()
+        if cached and now - cached[0] < _REGISTRY_CACHE_SECONDS:
+            return cached[1]
+        try:
+            if subject.startswith(_MERCHANT_SUBJECT_PREFIX):
+                merchant = await get_merchant_by_merchant_identifier(
+                    subject[len(_MERCHANT_SUBJECT_PREFIX) :]
+                )
+                state = _Subject(
+                    merchant is not None,
+                    bool(merchant and merchant.is_active),
+                    None,
+                )
+            else:
+                user = await get_user_token_state(subject)
+                state = _Subject(
+                    user is not None,
+                    bool(user and user.is_active),
+                    user.tokens_valid_after if user else None,
+                )
+        except Exception:
+            logger.error("RBAC verifier: token subject unreadable — refusing")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication temporarily unavailable",
+            )
+        if not state.found:
+            logger.warning(
+                f"RBAC verifier: token subject {subject} not found — allowed (observe)"
+            )
+        if len(_subject_cache) >= _REGISTRY_CACHE_MAX:
+            _subject_cache.clear()
+        _subject_cache[subject] = (now, state)
+        return state
 
     def verify_rbac_token(self, token: str) -> UserInfo:
         """

@@ -9,13 +9,18 @@ This module contains the business logic for authentication operations:
 """
 
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import HTTPException, status
 
-from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
+from app.api.security.breeze_buddy.rbac_token import (
+    rbac_token_manager,
+    token_hash_of,
+    token_times,
+)
 from app.core.config.static import (
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     LOOM_APP_URL,
@@ -28,7 +33,10 @@ from app.database.accessor.breeze_buddy import (
     merchants as merchant_accessors,
     token_registry as token_accessors,
 )
-from app.database.accessor.breeze_buddy.users import get_user_by_username
+from app.database.accessor.breeze_buddy.users import (
+    get_user_by_id,
+    get_user_by_username,
+)
 from app.schemas import (
     LaunchTokenRequest,
     LaunchTokenResponse,
@@ -42,9 +50,18 @@ from app.schemas import (
 from app.schemas.breeze_buddy.token_registry import (
     RevokeTokenRequest,
     RevokeTokenResponse,
+    RotateTokenRequest,
+    RotateTokenResponse,
     TokenKind,
     TokenListResponse,
 )
+
+# A rotated token lives as long as the one it replaces, within the lifetime
+# caps of its door (S2STokenRequest / MerchantCreate.token_lifetime_days).
+_ROTATE_MAX_LIFETIME = {"admin": timedelta(days=365), "merchant": timedelta(days=3650)}
+# How long an admin token keeps working after its successor is issued, unless
+# the caller says otherwise.
+_DEFAULT_ROTATE_GRACE_HOURS = 24
 
 # Relative-path guard for the `redirect` param: strict allowlist rather than
 # a denylist. Must start with a single leading slash (not `//`), and contain
@@ -503,3 +520,96 @@ async def revoke_token_handler(
     entry, cleared = result
     rbac_token_manager.forget(entry.token_hash)
     return RevokeTokenResponse(token=entry, merchant_tokens_cleared=cleared)
+
+
+async def rotate_token_handler(
+    token_id: str, body: RotateTokenRequest, current_user: UserInfo
+) -> RotateTokenResponse:
+    """Admin only: issue a successor for one live registered token.
+
+    The new token has the old one's subject, role and scopes, and the same
+    lifetime (within its door's cap). Its ``owner_id`` is rebuilt the way
+    the mint builds it — an admin token's from its user today, a merchant
+    token's from whoever minted it — because a wildcard-scoped token with
+    no owner_id would resolve to unrestricted access (core/security/scope.py).
+
+    The old token keeps working for ``grace_hours`` (admin, default 24). A
+    merchant token switches at once: its ``merchants.s2s_token`` is replaced
+    in the same statement, and both its doors compare against that value.
+
+    404 unknown id; 409 already revoked or rotating, or the admin token's user
+    no longer exists; 422 a grace period asked for a merchant token.
+    """
+    require_admin(current_user)
+    old = await token_accessors.get_token_by_id(token_id)
+    if old is None:
+        raise HTTPException(status_code=404, detail="Token not found")
+    if old.revoked_at is not None:
+        raise HTTPException(
+            status_code=409, detail="Token is already revoked or being rotated"
+        )
+
+    if old.kind == "merchant":
+        if body.grace_hours:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A merchant token switches at once: its webhooks and CRM "
+                    "pushes compare against the stored value, so a grace "
+                    "period can't apply"
+                ),
+            )
+        grace_hours = 0
+        email = None
+        owner_id = old.created_by or current_user.id
+    else:
+        grace_hours = (
+            _DEFAULT_ROTATE_GRACE_HOURS
+            if body.grace_hours is None
+            else body.grace_hours
+        )
+        owner = await get_user_by_id(old.subject)
+        if owner is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The token's user no longer exists — mint a new token instead",
+            )
+        email = owner.email
+        owner_id = owner.owner_id
+
+    lifetime = min(old.expires_at - old.issued_at, _ROTATE_MAX_LIFETIME[old.kind])
+    new_id = str(uuid.uuid4())
+    token = rbac_token_manager.create_access_token_with_rbac(
+        user_id=old.subject,
+        username=old.username,
+        # The verifier reads the legacy "shop" role as "user"; mint it so.
+        role=UserRole("user" if old.role == "shop" else old.role),
+        reseller_ids=old.reseller_ids,
+        merchant_ids=old.merchant_ids,
+        email=email,
+        owner_id=owner_id,
+        expires_delta=lifetime,
+        jti=new_id,
+    )
+    issued_at, expires_at = token_times(token)
+    result = await token_accessors.rotate_token(
+        old_id=old.id,
+        new_id=new_id,
+        new_token_hash=token_hash_of(token),
+        new_token=token,
+        rotated_by=current_user.id,
+        grace_hours=grace_hours,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    if result is None:
+        # Revoked or rotated by someone else between the read and the write;
+        # the minted token was never stored or returned.
+        raise HTTPException(
+            status_code=409, detail="Token is already revoked or being rotated"
+        )
+    replaced, new, swapped = result
+    rbac_token_manager.forget(old.token_hash)
+    return RotateTokenResponse(
+        token=token, new=new, replaced=replaced, merchant_tokens_swapped=swapped
+    )
