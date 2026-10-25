@@ -1,19 +1,17 @@
-"""token_registry observe mode + revoke (token registry 2/4).
+"""token_registry: the registry check + revoke (2/4), enforced (4/4).
 
 What is proven here:
 - ``authenticate`` leaves short-lived tokens alone (no registry call), and
   looks every long-lived one up by hash: a live row passes, a revoked row is
   a 401, a revocation dated in the future is not yet one, and an unreadable
   registry is a 503 — never a pass;
-- a token the registry has never seen is registered as ``backfilled`` with
-  its own claims, kind ``merchant`` for a ``merchant:<id>`` subject;
+- enforced (4/4): a long-lived token the registry doesn't hold is a 401,
+  with or without a jti, and that answer isn't cached;
 - a pod reads a token's row at most once per 30 s, and ``forget`` drops
   that read;
 - last_seen_* is written when stale, skipped when fresh, and a failed write
   neither refuses the request nor retries on the next one; the X-Forwarded-
   For chain and the route template are what get written;
-- the accessor's find-or-register: existing row → no insert; absent → one
-  ``ON CONFLICT DO NOTHING`` insert; lost race → re-read; nothing → raises;
 - every verifier door now goes through ``authenticate`` (the dependency,
   the websocket, feature flags, CRM s2s, both webhooks);
 - the admin routes: non-admins get 403, unknown id 404, already revoked 409,
@@ -43,7 +41,6 @@ from app.api.routers.feature_flags import rbac as feature_flag_rbac
 from app.api.security.breeze_buddy import rbac_token
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.crm import auth as crm_auth
-from app.database.accessor.breeze_buddy import token_registry as registry_module
 from app.database.queries.breeze_buddy.token_registry import (
     list_tokens_query,
     register_token_query,
@@ -105,17 +102,18 @@ class _Registry:
 
     def __init__(self, entry: Optional[TokenRegistryEntry] = None) -> None:
         self.entry = entry or _entry()
-        self.reads: List[Dict[str, Any]] = []
+        self.reads: List[str] = []
         self.seen: List[tuple] = []
         self.fail_read = False
         self.fail_seen = False
+        self.unknown = False
 
-    async def find(self, **kwargs: Any) -> TokenRegistryEntry:
-        """find_or_register_seen_token."""
+    async def find(self, token_hash: str) -> Optional[TokenRegistryEntry]:
+        """get_token_by_hash: the row, or None when ``unknown``."""
         if self.fail_read:
             raise RuntimeError("db down")
-        self.reads.append(kwargs)
-        return self.entry
+        self.reads.append(token_hash)
+        return None if self.unknown else self.entry
 
     async def mark_seen(self, token_id, seen_from, route) -> Optional[datetime]:
         """mark_token_seen."""
@@ -139,7 +137,7 @@ def _empty_cache():
 def registry(monkeypatch) -> _Registry:
     """An in-memory registry behind ``authenticate``."""
     fake = _Registry()
-    monkeypatch.setattr(rbac_token, "find_or_register_seen_token", fake.find)
+    monkeypatch.setattr(rbac_token, "get_token_by_hash", fake.find)
     monkeypatch.setattr(rbac_token, "mark_token_seen", fake.mark_seen)
 
     async def active_user(user_id):
@@ -197,7 +195,7 @@ async def test_a_long_lived_token_without_jti_is_checked(registry) -> None:
     """Tokens minted before the registry are looked up too (by hash)."""
     token = _token(lifetime=timedelta(days=2))
     await rbac_token_manager.authenticate(token)
-    assert registry.reads[0]["token_hash"] == rbac_token.token_hash_of(token)
+    assert registry.reads == [rbac_token.token_hash_of(token)]
 
 
 async def test_a_token_without_iat_is_treated_as_long_lived(registry) -> None:
@@ -265,39 +263,32 @@ async def test_a_bad_token_is_refused_before_the_registry(registry) -> None:
     assert registry.reads == []
 
 
-# --- what an unknown token is registered as -------------------------------
+# --- an unknown token (enforced, 4/4) -----------------------------------------
 
 
-async def test_an_unknown_token_is_registered_with_its_own_claims(
-    registry,
-) -> None:
-    """Observe mode hands the accessor everything the token says."""
-    token = _token(lifetime=timedelta(days=10))
-    claims = pyjwt.decode(token, options={"verify_signature": False})
+@pytest.mark.parametrize(
+    "jti", [None, "22222222-2222-2222-2222-222222222222"], ids=["no-jti", "jti"]
+)
+async def test_an_unregistered_long_lived_token_is_401(registry, jti) -> None:
+    """A long-lived token the registry doesn't hold is refused, and nothing
+    is stamped for it."""
+    registry.unknown = True
+    with pytest.raises(HTTPException) as caught:
+        await rbac_token_manager.authenticate(_token(jti=jti))
+    assert caught.value.status_code == 401
+    assert registry.seen == []
+
+
+async def test_an_unknown_token_is_not_cached(registry) -> None:
+    """Not found isn't remembered: a token minted (or rotated) on another
+    pod a moment ago is found on its next use."""
+    registry.unknown = True
+    token = _token()
+    with pytest.raises(HTTPException):
+        await rbac_token_manager.authenticate(token)
+    registry.unknown = False
     await rbac_token_manager.authenticate(token)
-
-    (read,) = registry.reads
-    assert read["kind"] == "admin"
-    assert read["subject"] == "admin-1"
-    assert read["role"] == "reseller"
-    assert read["merchant_ids"] == ["*"]
-    assert read["issued_at"] == datetime.fromtimestamp(claims["iat"], timezone.utc)
-    assert read["expires_at"] == datetime.fromtimestamp(claims["exp"], timezone.utc)
-
-
-async def test_a_merchant_subject_registers_as_kind_merchant(registry) -> None:
-    """``merchant:<id>`` is the per-merchant mint's subject."""
-    await rbac_token_manager.authenticate(
-        _token(user_id="merchant:shop-1", merchant_ids=["shop-1"])
-    )
-    assert registry.reads[0]["kind"] == "merchant"
-
-
-async def test_a_token_with_a_jti_keeps_it_as_the_row_id(registry) -> None:
-    """id = jti whenever the token carries one."""
-    jti = "22222222-2222-2222-2222-222222222222"
-    await rbac_token_manager.authenticate(_token(jti=jti))
-    assert registry.reads[0]["token_id"] == jti
+    assert len(registry.reads) == 2
 
 
 # --- the 30-second read -----------------------------------------------------
@@ -393,85 +384,12 @@ async def test_a_failed_seen_write_neither_refuses_nor_retries(registry) -> None
     assert registry.seen == []
 
 
-# --- the accessor's find-or-register ------------------------------------------
-
-
-def _row(**overrides: Any) -> Dict[str, Any]:
-    """A token_registry row as asyncpg would hand it back."""
-    row = _entry(**overrides).model_dump()
-    return row
-
-
-class _Runner:
-    """Stands in for run_parameterized_query: answers each call in turn."""
-
-    def __init__(self, *answers: List[Dict[str, Any]]) -> None:
-        self.answers = list(answers)
-        self.queries: List[str] = []
-        self.values: List[List[Any]] = []
-
-    async def __call__(self, query, values):
-        """Record the SQL and its values; hand back the next answer."""
-        self.queries.append(query)
-        self.values.append(values)
-        return self.answers.pop(0)
-
-
-async def _find(monkeypatch, runner: _Runner) -> TokenRegistryEntry:
-    """Run find_or_register_seen_token against ``runner``."""
-    monkeypatch.setattr(registry_module, "run_parameterized_query", runner)
-    return await registry_module.find_or_register_seen_token(
-        token_id="33333333-3333-3333-3333-333333333333",
-        token_hash="b" * 64,
-        kind="admin",
-        subject="admin-1",
-        username="svc",
-        role="reseller",
-        reseller_ids=["r1"],
-        merchant_ids=["*"],
-        issued_at=_NOW,
-        expires_at=_NOW + timedelta(days=1),
-    )
-
-
-async def test_an_existing_row_is_returned_without_an_insert(monkeypatch) -> None:
-    """Found by hash → one read, no write."""
-    runner = _Runner([_row(source="minted")])
-    entry = await _find(monkeypatch, runner)
-    assert entry.source == "minted"
-    assert len(runner.queries) == 1
-
-
-async def test_an_absent_row_is_inserted_once_as_backfilled(monkeypatch) -> None:
-    """Not found → one ON CONFLICT DO NOTHING insert."""
-    runner = _Runner([], [_row(source="backfilled")])
-    entry = await _find(monkeypatch, runner)
-    assert entry.source == "backfilled"
-    assert "ON CONFLICT DO NOTHING" in runner.queries[1]
-    assert runner.values[1][3] == "backfilled"  # source
-    assert runner.values[1][9] is None  # created_by: unknown for a seen token
-
-
-async def test_a_lost_insert_race_reads_the_winners_row(monkeypatch) -> None:
-    """Another pod inserted first → the re-read finds its row."""
-    runner = _Runner([], [], [_row(source="backfilled")])
-    entry = await _find(monkeypatch, runner)
-    assert entry.source == "backfilled"
-    assert len(runner.queries) == 3
-
-
-async def test_no_row_found_or_written_raises(monkeypatch) -> None:
-    """Nothing to decide on → raise (the gate turns it into a 503)."""
-    with pytest.raises(RuntimeError):
-        await _find(monkeypatch, _Runner([], [], []))
-
-
 # --- the SQL builders -----------------------------------------------------------
 
 
-def test_only_the_observe_insert_tolerates_a_conflict() -> None:
-    """The mint must fail on a duplicate; the observe path must not."""
-    args: Dict[str, Any] = dict(
+def test_the_mint_insert_never_tolerates_a_conflict() -> None:
+    """A duplicate hash or id must fail the mint, never pass silently."""
+    query, _ = register_token_query(
         token_id="x",
         token_hash="a" * 64,
         kind="admin",
@@ -485,8 +403,7 @@ def test_only_the_observe_insert_tolerates_a_conflict() -> None:
         issued_at=_NOW,
         expires_at=_NOW + timedelta(days=1),
     )
-    assert "ON CONFLICT" not in register_token_query(**args)[0]
-    assert "ON CONFLICT DO NOTHING" in register_token_query(**args, if_absent=True)[0]
+    assert "ON CONFLICT" not in query
 
 
 def test_revoke_clears_only_a_stored_token_with_the_same_hash() -> None:
