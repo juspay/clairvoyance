@@ -33,15 +33,8 @@ def register_token_query(
     created_by: Optional[str],
     issued_at: datetime,
     expires_at: datetime,
-    if_absent: bool = False,
 ) -> Tuple[str, List[Any]]:
-    """Insert one registry row and return it.
-
-    ``if_absent``: a row that already exists (same hash, or same id) is left
-    alone and nothing is returned — the observe path's race with another pod
-    registering the same token.
-    """
-    on_conflict = "ON CONFLICT DO NOTHING" if if_absent else ""
+    """Insert one registry row and return it."""
     query = f"""
         INSERT INTO {TOKEN_REGISTRY_TABLE} (
             id, token_hash, kind, source, subject, username, role,
@@ -49,7 +42,6 @@ def register_token_query(
         ) VALUES (
             $1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
         )
-        {on_conflict}
         RETURNING {_COLUMNS}
     """
     return query, [
