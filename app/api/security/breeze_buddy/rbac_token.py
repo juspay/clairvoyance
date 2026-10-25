@@ -4,22 +4,76 @@ Handles JWT token creation and verification with Breeze Buddy's RBAC model.
 """
 
 import hashlib
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import jwt as pyjwt
-from fastapi import Depends, HTTPException, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.requests import HTTPConnection
 
+from app.core.config.static import JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 from app.core.logger import logger
 from app.core.security.jwt import jwt_manager
-from app.database.accessor.breeze_buddy.token_registry import register_token
+from app.database.accessor.breeze_buddy.token_registry import (
+    find_or_register_seen_token,
+    mark_token_seen,
+    register_token,
+)
 from app.schemas import UserInfo, UserRole
-from app.schemas.breeze_buddy.token_registry import TokenKind
+from app.schemas.breeze_buddy.token_registry import TokenKind, TokenRegistryEntry
 
 # HTTP Bearer security scheme
 security = HTTPBearer()
+
+# A token that lives no longer than a login session (or the fixed 60-minute
+# launch token) and carries no jti skips the registry: it is never registered
+# and costs no DB read. Everything longer is a long-lived token.
+_SHORT_LIVED_SECONDS = max(JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60, 3600)
+# How long a pod trusts its last registry read of a token — the longest a
+# revoke made on another pod takes to land here.
+_REGISTRY_CACHE_SECONDS = 30.0
+# last_seen_* is written at most this often per token.
+_SEEN_WRITE_SECONDS = 300
+# ponytail: the cache is cleared whole when full; long-lived tokens number in
+# the hundreds, so it never fills in practice — an LRU if it ever does.
+_REGISTRY_CACHE_MAX = 10_000
+_SEEN_FIELD_MAX_CHARS = 200
+# token hash -> (time.monotonic() of the read, registry row)
+_registry_cache: Dict[str, Tuple[float, TokenRegistryEntry]] = {}
+
+
+def token_hash_of(token: str) -> str:
+    """The registry key of a token: hex sha256 of the token string."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _is_long_lived(claims: Dict[str, Any]) -> bool:
+    """A jti, or a lifetime past a login session. No iat → long-lived."""
+    if claims.get("jti"):
+        return True
+    iat = claims.get("iat")
+    return iat is None or claims["exp"] - iat > _SHORT_LIVED_SECONDS
+
+
+def _seen_from(connection: Optional[HTTPConnection]) -> Optional[str]:
+    """The X-Forwarded-For chain as received, else the direct peer."""
+    if connection is None:
+        return None
+    chain = connection.headers.get("x-forwarded-for")
+    if not chain and connection.client:
+        chain = connection.client.host
+    return chain[:_SEEN_FIELD_MAX_CHARS] if chain else None
+
+
+def _route_of(connection: Optional[HTTPConnection]) -> Optional[str]:
+    """The route template (no ids in it) when known, else the path."""
+    if connection is None:
+        return None
+    path = getattr(connection.scope.get("route"), "path", None) or connection.url.path
+    return path[:_SEEN_FIELD_MAX_CHARS]
 
 
 class BreezeBuddyRBACTokenManager:
@@ -124,7 +178,7 @@ class BreezeBuddyRBACTokenManager:
         try:
             await register_token(
                 token_id=jti,
-                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                token_hash=token_hash_of(token),
                 kind=kind,
                 source="minted",
                 subject=user_id,
@@ -142,6 +196,125 @@ class BreezeBuddyRBACTokenManager:
                 detail="Could not create access token",
             )
         return token
+
+    async def authenticate(
+        self, token: str, connection: Optional[HTTPConnection] = None
+    ) -> UserInfo:
+        """``verify_rbac_token``, then the token registry (observe mode).
+
+        A long-lived token (see ``_is_long_lived``) is looked up by hash:
+        - revoked → 401;
+        - never seen → registered as ``backfilled`` and let through — that is
+          how the tokens in use get found;
+        - registry unreadable → 503: a refusal (fail CLOSED), but not one a
+          caller would read as "your token is bad".
+        Short-lived tokens (login, launch, signup) cost nothing here.
+        ``connection`` (the request or websocket) only feeds last_seen_*.
+        """
+        user_info = self.verify_rbac_token(token)
+        # Already verified above; exp is not re-checked so a token expiring
+        # between the two reads can't turn into a 500.
+        claims = pyjwt.decode(
+            token,
+            self.jwt_manager.secret_key,
+            algorithms=[self.jwt_manager.algorithm],
+            options={"verify_exp": False},
+        )
+        if not _is_long_lived(claims):
+            return user_info
+
+        token_hash = token_hash_of(token)
+        entry = await self._registry_row(token_hash, claims)
+        if entry.revoked_at is not None and entry.revoked_at <= datetime.now(
+            timezone.utc
+        ):
+            logger.warning(
+                f"RBAC verifier: rejected revoked token {entry.id} ({entry.username})"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        await self._note_seen(token_hash, entry, connection)
+        return user_info
+
+    async def _registry_row(
+        self, token_hash: str, claims: Dict[str, Any]
+    ) -> TokenRegistryEntry:
+        """This pod's recent read of the token's row, else a fresh one."""
+        cached = _registry_cache.get(token_hash)
+        now = time.monotonic()
+        if cached and now - cached[0] < _REGISTRY_CACHE_SECONDS:
+            return cached[1]
+        iat = claims.get("iat")
+        try:
+            entry = await find_or_register_seen_token(
+                token_id=claims.get("jti") or str(uuid.uuid4()),
+                token_hash=token_hash,
+                kind=(
+                    "merchant"
+                    if str(claims["sub"]).startswith("merchant:")
+                    else "admin"
+                ),
+                subject=claims["sub"],
+                username=claims["username"],
+                role=claims["role"],
+                reseller_ids=claims.get("reseller_ids") or [],
+                merchant_ids=claims.get("merchant_ids") or [],
+                issued_at=(
+                    datetime.fromtimestamp(iat, timezone.utc)
+                    if iat is not None
+                    else datetime.now(timezone.utc)
+                ),
+                expires_at=datetime.fromtimestamp(claims["exp"], timezone.utc),
+            )
+        except Exception:
+            logger.error("RBAC verifier: token registry unavailable — refusing")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication temporarily unavailable",
+            )
+        if len(_registry_cache) >= _REGISTRY_CACHE_MAX:
+            _registry_cache.clear()
+        _registry_cache[token_hash] = (now, entry)
+        return entry
+
+    async def _note_seen(
+        self,
+        token_hash: str,
+        entry: TokenRegistryEntry,
+        connection: Optional[HTTPConnection],
+    ) -> None:
+        """Stamp last_seen_* at most every ``_SEEN_WRITE_SECONDS``.
+
+        Bookkeeping, never a decision: a failed write is logged by the
+        accessor and the request goes on. Either way the cached row takes
+        the new stamp, so a failing write isn't retried on every request.
+        """
+        now = datetime.now(timezone.utc)
+        if (
+            entry.last_seen_at is not None
+            and (now - entry.last_seen_at).total_seconds() < _SEEN_WRITE_SECONDS
+        ):
+            return
+        stamped: Optional[datetime] = None
+        try:
+            stamped = await mark_token_seen(
+                entry.id, _seen_from(connection), _route_of(connection)
+            )
+        except Exception:
+            pass
+        cached = _registry_cache.get(token_hash)
+        if cached:
+            _registry_cache[token_hash] = (
+                cached[0],
+                cached[1].model_copy(update={"last_seen_at": stamped or now}),
+            )
+
+    def forget(self, token_hash: str) -> None:
+        """Drop this pod's cached read of a token (after a revoke here)."""
+        _registry_cache.pop(token_hash, None)
 
     def verify_rbac_token(self, token: str) -> UserInfo:
         """
@@ -318,12 +491,14 @@ rbac_token_manager = BreezeBuddyRBACTokenManager()
 
 # FastAPI dependency for Breeze Buddy RBAC authentication
 async def get_current_user_with_rbac(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> UserInfo:
     """
     FastAPI dependency to get current authenticated user with Breeze Buddy RBAC information.
 
     Args:
+        request: The request (feeds the token registry's last_seen_*)
         credentials: HTTP Bearer credentials from request header
 
     Returns:
@@ -339,10 +514,10 @@ async def get_current_user_with_rbac(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return rbac_token_manager.verify_rbac_token(credentials.credentials)
+    return await rbac_token_manager.authenticate(credentials.credentials, request)
 
 
-def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
+async def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
     """Authenticate a WebSocket connection with the standard RBAC bearer token.
 
     The FastAPI ``Depends(HTTPBearer())`` guards are HTTP-only, so WebSocket
@@ -351,8 +526,9 @@ def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
     (browser WebSocket clients cannot set headers).
 
     Raises:
-        HTTPException: 401 when the token is missing or invalid — callers
-        translate this into a WebSocket close.
+        HTTPException: 401 when the token is missing, invalid or revoked; 503
+        when the token registry can't be read — callers translate either into
+        a WebSocket close.
     """
     auth_header = websocket.headers.get("authorization") or ""
     token = ""
@@ -365,7 +541,7 @@ def get_user_from_websocket(websocket: WebSocket) -> UserInfo:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing credentials",
         )
-    return rbac_token_manager.verify_rbac_token(token)
+    return await rbac_token_manager.authenticate(token, websocket)
 
 
 async def get_active_user(

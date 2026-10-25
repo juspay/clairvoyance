@@ -45,10 +45,11 @@ def _s2s(monkeypatch: pytest.MonkeyPatch, stored: str | None) -> None:
     async def fake_get(merchant_id: str) -> str | None:
         return stored
 
+    async def accept(token: str, connection: Any = None) -> None:
+        return None
+
     monkeypatch.setattr(crm_auth, "get_merchant_s2s_token", fake_get)
-    monkeypatch.setattr(
-        crm_auth.rbac_token_manager, "verify_rbac_token", lambda token: None
-    )
+    monkeypatch.setattr(crm_auth.rbac_token_manager, "authenticate", accept)
 
 
 def test_s2s_unknown_merchant_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,7 +89,7 @@ def _caller(
     async def fake_get(merchant_id: str) -> str | None:
         return stored
 
-    def fake_verify(token: str) -> UserInfo:
+    async def fake_authenticate(token: str, connection: Any = None) -> UserInfo:
         return UserInfo(
             id="u1",
             username="caller",
@@ -102,7 +103,7 @@ def _caller(
 
     monkeypatch.setattr(crm_auth, "get_merchant_s2s_token", fake_get)
     monkeypatch.setattr(crm_auth, "check_merchant_identifier_exists", exists)
-    monkeypatch.setattr(crm_auth.rbac_token_manager, "verify_rbac_token", fake_verify)
+    monkeypatch.setattr(crm_auth.rbac_token_manager, "authenticate", fake_authenticate)
 
 
 @pytest.mark.parametrize(
@@ -286,10 +287,10 @@ def test_a_token_the_manager_rejects_is_logged_then_re_raised_unchanged(
     _caller(monkeypatch, stored=None, merchant_ids=["*"])
     refused = HTTPException(status_code=401, detail="Token expired")
 
-    def reject(token: str) -> Any:
+    async def reject(token: str, connection: Any = None) -> Any:
         raise refused
 
-    monkeypatch.setattr(crm_auth.rbac_token_manager, "verify_rbac_token", reject)
+    monkeypatch.setattr(crm_auth.rbac_token_manager, "authenticate", reject)
     lines = _refusals(monkeypatch)
 
     with pytest.raises(HTTPException) as caught:
