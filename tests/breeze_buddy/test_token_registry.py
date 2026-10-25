@@ -20,6 +20,7 @@ so the real query builder, accessor and decoder all run.
 
 import hashlib
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
 
 import jwt as pyjwt
 import pytest
@@ -49,6 +50,15 @@ _COLUMNS = (
     "issued_at",
     "expires_at",
 )
+# Columns a mint never writes (migration 087): NULL on a fresh row.
+_UNSET_AT_MINT = (
+    "revoked_at",
+    "revoked_by",
+    "revoke_reason",
+    "last_seen_at",
+    "last_seen_from",
+    "last_route",
+)
 
 
 class _Registry:
@@ -65,8 +75,9 @@ class _Registry:
             raise RuntimeError("db down")
         if self.empty:
             return []
-        row = dict(zip(_COLUMNS, values))
+        row: Dict[str, Any] = dict(zip(_COLUMNS, values))
         row["created_at"] = datetime.now(timezone.utc)
+        row.update(dict.fromkeys(_UNSET_AT_MINT))
         self.rows.append(row)
         return [row]
 

@@ -1,6 +1,6 @@
 """RBAC dependencies for feature flags."""
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
@@ -10,6 +10,7 @@ security = HTTPBearer()
 
 
 async def get_current_user_with_role(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> UserInfo:
     if not credentials:
@@ -17,7 +18,7 @@ async def get_current_user_with_role(
             status_code=401,
             detail="Authorization header missing",
         )
-    return rbac_token_manager.verify_rbac_token(credentials.credentials)
+    return await rbac_token_manager.authenticate(credentials.credentials, request)
 
 
 def require_admin(current_user: UserInfo) -> None:

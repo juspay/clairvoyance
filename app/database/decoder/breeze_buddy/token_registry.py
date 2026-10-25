@@ -1,4 +1,4 @@
-"""Row → Pydantic decoder for token_registry (migration 086)."""
+"""Row → Pydantic decoder for token_registry (migrations 086, 087)."""
 
 from app.schemas.breeze_buddy.token_registry import TokenRegistryEntry
 
@@ -19,4 +19,10 @@ def decode_token_registry_entry(row) -> TokenRegistryEntry:
         issued_at=row["issued_at"],
         expires_at=row["expires_at"],
         created_at=row["created_at"],
+        revoked_at=row["revoked_at"],
+        revoked_by=row["revoked_by"],
+        revoke_reason=row["revoke_reason"],
+        last_seen_at=row["last_seen_at"],
+        last_seen_from=row["last_seen_from"],
+        last_route=row["last_route"],
     )
