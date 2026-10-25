@@ -38,8 +38,9 @@ class MerchantCreate(BaseModel):
     token_lifetime_days: int = Field(
         default=3650,
         ge=1,
-        le=365000,
-        description="Lifetime of the issued token in days (only when issue_token).",
+        le=3650,
+        description="Lifetime of the issued token in days, at most 3650 "
+        "(only when issue_token).",
     )
 
 

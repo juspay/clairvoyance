@@ -3,7 +3,9 @@ Breeze Buddy specific RBAC token management.
 Handles JWT token creation and verification with Breeze Buddy's RBAC model.
 """
 
-from datetime import timedelta
+import hashlib
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import jwt as pyjwt
@@ -12,7 +14,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.logger import logger
 from app.core.security.jwt import jwt_manager
+from app.database.accessor.breeze_buddy.token_registry import register_token
 from app.schemas import UserInfo, UserRole
+from app.schemas.breeze_buddy.token_registry import TokenKind
 
 # HTTP Bearer security scheme
 security = HTTPBearer()
@@ -35,6 +39,7 @@ class BreezeBuddyRBACTokenManager:
         owner_id: Optional[str] = None,
         expires_delta: Optional[timedelta] = None,
         src: Optional[str] = None,
+        jti: Optional[str] = None,
     ) -> str:
         """
         Create a JWT access token with Breeze Buddy RBAC information.
@@ -49,6 +54,8 @@ class BreezeBuddyRBACTokenManager:
             expires_delta: Optional custom expiration time
             src: Optional provenance marker recorded on the token (e.g.
                 "nautilus" for Shopify-admin launch tokens)
+            jti: Optional token id — the token_registry row id, set only by
+                ``create_registered_token``
 
         Returns:
             Encoded JWT token string with RBAC data
@@ -70,9 +77,71 @@ class BreezeBuddyRBACTokenManager:
 
         if src:
             payload["src"] = src
+        if jti:
+            payload["jti"] = jti
 
         # Use the generic JWT manager to create the token
         return self.jwt_manager.create_access_token(payload, expires_delta)
+
+    async def create_registered_token(
+        self,
+        *,
+        kind: TokenKind,
+        created_by: Optional[str],
+        user_id: str,
+        username: str,
+        role: UserRole,
+        reseller_ids: List[str],
+        merchant_ids: List[str],
+        expires_delta: timedelta,
+        email: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> str:
+        """Mint a long-lived RBAC token and write its token_registry row.
+
+        The token carries the row's id as ``jti``; the row holds the token's
+        sha256 hash (never the token) and its exact ``iat``/``exp``. Fails
+        CLOSED: if the row is not written, the token is never returned, so
+        no long-lived token exists that the registry doesn't know about.
+        """
+        jti = str(uuid.uuid4())
+        token = self.create_access_token_with_rbac(
+            user_id=user_id,
+            username=username,
+            role=role,
+            reseller_ids=reseller_ids,
+            merchant_ids=merchant_ids,
+            email=email,
+            owner_id=owner_id,
+            expires_delta=expires_delta,
+            jti=jti,
+        )
+        # Read iat/exp back from the token itself, so the row matches the
+        # claims to the second rather than to a second clock read.
+        claims = pyjwt.decode(
+            token, self.jwt_manager.secret_key, algorithms=[self.jwt_manager.algorithm]
+        )
+        try:
+            await register_token(
+                token_id=jti,
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                kind=kind,
+                source="minted",
+                subject=user_id,
+                username=username,
+                role=claims["role"],
+                reseller_ids=reseller_ids,
+                merchant_ids=merchant_ids,
+                created_by=created_by,
+                issued_at=datetime.fromtimestamp(claims["iat"], timezone.utc),
+                expires_at=datetime.fromtimestamp(claims["exp"], timezone.utc),
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not create access token",
+            )
+        return token
 
     def verify_rbac_token(self, token: str) -> UserInfo:
         """
@@ -163,7 +232,8 @@ class BreezeBuddyRBACTokenManager:
 
             logger.info(
                 f"RBAC token verified for user: {user_info.username} "
-                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, merchants: {user_info.merchant_ids})"
+                f"(role: {user_info.role}, resellers: {user_info.reseller_ids}, merchants: {user_info.merchant_ids}, "
+                f"jti: {payload.get('jti') or '-'})"
             )
             return user_info
 

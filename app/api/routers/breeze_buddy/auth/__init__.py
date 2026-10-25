@@ -108,7 +108,9 @@ async def generate_s2s_token(request: S2STokenRequest):
     - Rotate tokens before expiration
     - Never commit tokens to version control
     - Monitor token usage for suspicious activity
-    - To revoke access, disable the user account
+    - Each token is recorded in token_registry (by hash) and carries its row
+      id as ``jti``. Disabling the user does NOT stop a token already issued;
+      it stays valid until it expires.
 
     Security:
         - Returns 401 if credentials are invalid or account is inactive

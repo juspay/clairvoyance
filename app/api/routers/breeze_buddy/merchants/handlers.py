@@ -131,7 +131,9 @@ async def create_merchant_handler(
                     detail="reseller_id is required to issue a token",
                 )
             expires_delta = timedelta(days=merchant_data.token_lifetime_days)
-            token = rbac_token_manager.create_access_token_with_rbac(
+            token = await rbac_token_manager.create_registered_token(
+                kind="merchant",
+                created_by=current_user.id,
                 user_id=f"merchant:{merchant_data.merchant_id}",
                 username=f"merchant-{merchant_data.merchant_id}",
                 role=UserRole.MERCHANT,
