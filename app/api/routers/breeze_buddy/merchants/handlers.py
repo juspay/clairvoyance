@@ -289,6 +289,11 @@ async def update_merchant_handler(
         if not updated_merchant:
             raise HTTPException(status_code=404, detail="Merchant entity not found")
 
+        if merchant_data.is_active is not None:
+            # (De)activation reaches its merchant and launch tokens from the
+            # next request on this pod; other pods within their 30 s read.
+            rbac_token_manager.forget_subject(f"merchant:{merchant_id}")
+
         return updated_merchant
 
     except HTTPException:
