@@ -251,7 +251,9 @@ async def generate_s2s_token_handler(request: S2STokenRequest) -> S2STokenRespon
     )
     token_role = UserRole.RESELLER if scopes_are_restricted else user.role
 
-    access_token = rbac_token_manager.create_access_token_with_rbac(
+    access_token = await rbac_token_manager.create_registered_token(
+        kind="admin",
+        created_by=user.id,
         user_id=user.id,
         username=user.username,
         role=token_role,
