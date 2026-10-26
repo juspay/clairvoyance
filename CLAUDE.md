@@ -148,7 +148,10 @@ app/
 
 ## Important
 
-- Secrets are KMS-encrypted in the DB; `SKIP_KMS_DECRYPT=true` locally without AWS
+- Secrets are KMS-encrypted in the DB — AWS KMS or Google Cloud KMS depending on
+  `CLOUD_ENVIRONMENT` (`app/services/kms.py`; GCP decrypts only when
+  `GCP_KMS_KEY_NAME` is set, else passthrough); `SKIP_KMS_DECRYPT=true` locally
+  without either cloud
 - `app/core/security/jwt.py` requires `JWT_SECRET_KEY` + `JWT_ALGORITHM` env vars
   at import — any script importing the API surface transitively needs them
 - Redis distributed locking prevents duplicate background tasks across pods
