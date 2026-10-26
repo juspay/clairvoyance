@@ -25,7 +25,7 @@ from app.core.config.static import (
     POSTGRES_USER,
 )
 from app.core.logger import logger
-from app.services.aws.kms import decrypt_kms
+from app.services.kms import decrypt_kms
 
 pool = None
 reader_pool = None

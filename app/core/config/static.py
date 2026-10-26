@@ -405,11 +405,19 @@ BB_DAILY_BOT_HANDOFF_TIMEOUT_SECS = float(
     os.environ.get("BB_DAILY_BOT_HANDOFF_TIMEOUT_SECS", "10.0")
 )
 
-# KMS Configuration
+# KMS Configuration (app/services/kms.py picks the provider from CLOUD_ENVIRONMENT)
 SKIP_KMS_DECRYPT = os.getenv("SKIP_KMS_DECRYPT", "false").lower() == "true"
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+# Google Cloud KMS. The key's full resource name,
+# projects/P/locations/L/keyRings/R/cryptoKeys/K. Unset = GCP deployments keep
+# today's passthrough (POSTGRES_PASSWORD is used as-is); set = the password env
+# vars are base64 ciphertext decrypted with this key at startup.
+GCP_KMS_KEY_NAME = os.getenv("GCP_KMS_KEY_NAME", "")
+# Service-account JSON for the KMS client (same shape as GCS_CREDENTIALS_JSON).
+# Empty = Application Default Credentials (Workload Identity / metadata server).
+GCP_KMS_CREDENTIALS_JSON = os.getenv("GCP_KMS_CREDENTIALS_JSON", "")
 
 # Credential Encryption (AES-256-GCM)
 # Base64-encoded 32-byte key. Generate with:
