@@ -153,6 +153,22 @@ async def resolve_merchant_ids(user: UserInfo) -> Optional[List[str]]:
     )
 
 
+def _validate_ids_subset(
+    requested_ids: List[str],
+    allowed_ids: Optional[List[str]],
+    error_message: str,
+) -> None:
+    """Shared subset check behind the merchant_ids / reseller_ids validators."""
+    if allowed_ids is None:
+        return  # Unrestricted access
+
+    if not all(rid in allowed_ids for rid in requested_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_message,
+        )
+
+
 def validate_merchant_ids_subset(
     requested_ids: List[str],
     allowed_ids: Optional[List[str]],
@@ -168,14 +184,30 @@ def validate_merchant_ids_subset(
     Raises:
         HTTPException: 403 if requested_ids are not a subset of allowed_ids
     """
-    if allowed_ids is None:
-        return  # Unrestricted access
+    _validate_ids_subset(requested_ids, allowed_ids, error_message)
 
-    if not all(mid in allowed_ids for mid in requested_ids):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=error_message,
-        )
+
+def validate_reseller_ids_subset(
+    requested_ids: List[str],
+    allowed_ids: Optional[List[str]],
+    error_message: str = "Cannot assign reseller_ids outside your scope",
+) -> None:
+    """Validate that requested reseller_ids are a subset of allowed IDs.
+
+    Same subset rule as the merchant variant, kept as its own entry point so
+    reseller-scope call sites don't read as merchant-scope ones. The check is
+    identical by nature — that is exactly why calling the merchant validator on
+    reseller data went unnoticed and stayed correct only by accident.
+
+    Args:
+        requested_ids: The reseller_ids being requested
+        allowed_ids: The allowed reseller_ids (None = unrestricted)
+        error_message: Error message for 403 response
+
+    Raises:
+        HTTPException: 403 if requested_ids are not a subset of allowed_ids
+    """
+    _validate_ids_subset(requested_ids, allowed_ids, error_message)
 
 
 async def _resolve_reseller_scopes(
