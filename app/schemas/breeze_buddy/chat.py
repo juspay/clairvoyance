@@ -7,9 +7,9 @@ analytics over voice + chat use the same field semantics.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
 
@@ -866,6 +866,56 @@ class UpdateWidgetContextResponse(BaseModel):
     revision: Optional[int] = Field(
         None, description="Echo of the applied revision, if one was sent."
     )
+    show_feedback_card: bool = Field(
+        False,
+        description="True when this push matches one of the template's "
+        "end-of-chat event rules and the card is not answered yet: the "
+        "widget shows the card.",
+    )
+
+
+class MessageFeedbackRequest(BaseModel):
+    """Body of ``POST /widget/session/{id}/messages/{idx}/feedback``."""
+
+    rating: Optional[Literal["up", "down"]] = Field(
+        ..., description="'up' / 'down', or null to clear the rating."
+    )
+
+
+class MessageFeedbackResponse(BaseModel):
+    session_id: str
+    idx: int
+    feedback: Optional[Dict[str, Any]] = None
+
+
+#: A pill id as the template stores it (same rule as ``FeedbackPill.id``).
+FeedbackPillId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]{1,40}$")]
+
+
+class ChatFeedbackRequest(BaseModel):
+    """Body of ``POST /widget/session/{id}/feedback`` (the end-of-chat card)."""
+
+    pills: List[FeedbackPillId] = Field(
+        default_factory=list,
+        max_length=6,
+        description="Ids of the chosen pills, from the template's feedback.pills.",
+    )
+    comment: Optional[str] = Field(None, max_length=1000)
+    skipped: bool = Field(
+        False,
+        description="The customer dismissed the card. Stored so the chat is "
+        "not asked again; pills and comment must be empty.",
+    )
+    trigger: Optional[Literal["event", "new_chat", "ended"]] = Field(
+        None,
+        description="What showed the card: a page event, New chat, or the "
+        "chat ended for inactivity (asked on the next open).",
+    )
+
+
+class ChatFeedbackResponse(BaseModel):
+    session_id: str
+    feedback: Dict[str, Any]
 
 
 class WidgetVoiceConnectResponse(BaseModel):
@@ -981,6 +1031,21 @@ class WidgetSessionStateResponse(BaseModel):
             "Unexpired PENDING HITL tool approvals for this session, oldest "
             "first, so the embed can repaint approval cards after a reload. "
             "Empty when nothing is awaiting a decision."
+        ),
+    )
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "The end card answer or skip, if any — the embed does not ask "
+            "again. Per-reply ratings ride on each message."
+        ),
+    )
+    ended_reason: Optional[ChatEndedReason] = Field(
+        None,
+        description=(
+            "Why an ENDED session ended. 'idle_timeout' with no feedback and "
+            "a customer message means the embed may ask about this chat on "
+            "the next open."
         ),
     )
 

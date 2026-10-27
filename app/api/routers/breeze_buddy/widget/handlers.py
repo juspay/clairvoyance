@@ -23,6 +23,7 @@ import re
 import secrets
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from asyncpg.exceptions import UniqueViolationError
@@ -40,6 +41,9 @@ from app.ai.voice.agents.breeze_buddy.chat.client_context import (
 from app.ai.voice.agents.breeze_buddy.chat.custom_components import (
     resolve_custom_components,
 )
+from app.ai.voice.agents.breeze_buddy.chat.feedback_triggers import (
+    matching_feedback_event,
+)
 from app.ai.voice.agents.breeze_buddy.chat.turn_core import (
     negotiate_catalog,
     resolve_session_catalog_version,
@@ -49,6 +53,7 @@ from app.ai.voice.agents.breeze_buddy.services.daily.daily import (
     start_daily_session,
 )
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
+from app.ai.voice.agents.breeze_buddy.template.types import TemplateModel
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import (
     CATALOG_VERSION,
     CATALOG_VERSION_V2,
@@ -96,6 +101,9 @@ from app.database.accessor.breeze_buddy.chat_session import (
     get_chat_session_by_id,
     list_chat_messages_for_session,
     merge_client_context,
+    set_chat_message_feedback,
+    set_chat_session_feedback,
+    set_chat_session_feedback_if_unset,
     upsert_agent_session_state_merge,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
@@ -114,7 +122,10 @@ from app.schemas import (
 )
 from app.schemas.breeze_buddy.chat import (
     ApproveToolRequest,
+    ChatFeedbackRequest,
+    ChatFeedbackResponse,
     ChatMessage,
+    ChatSession,
     ChatSessionStatus,
     CreateChatSessionRequest,
     CreateWidgetSessionRequest,
@@ -124,6 +135,8 @@ from app.schemas.breeze_buddy.chat import (
     FeedbackWire,
     FlavorWire,
     GreetingTileWire,
+    MessageFeedbackRequest,
+    MessageFeedbackResponse,
     QuickReplyWire,
     RateChatWire,
     SendChatMessageRequest,
@@ -898,6 +911,7 @@ async def update_widget_context_handler(
         if template is not None and template.configurations
         else None
     )
+    show_card = _push_ends_chat(template, session, body)
 
     # Read is for the facts size estimate only — NOT a correctness
     # dependency: the authoritative merge (incl. the monotonic revision
@@ -928,7 +942,11 @@ async def update_widget_context_handler(
     # ``facts_patch`` ({} to wipe facts), and those clears MUST be applied.
     if not (state_patch or facts_patch is not None or body.revision is not None):
         return UpdateWidgetContextResponse(
-            applied=True, state_keys=[], facts_keys=[], revision=body.revision
+            applied=True,
+            state_keys=[],
+            facts_keys=[],
+            revision=body.revision,
+            show_feedback_card=show_card,
         )
 
     row = await merge_client_context(
@@ -945,7 +963,141 @@ async def update_widget_context_handler(
         state_keys=state_keys if applied else [],
         facts_keys=facts_keys if applied else [],
         revision=body.revision,
+        show_feedback_card=show_card,
     )
+
+
+def _push_ends_chat(
+    template: Optional[TemplateModel],
+    session: ChatSession,
+    body: UpdateWidgetContextRequest,
+) -> bool:
+    """Whether this push matches one of the template's feedback events while
+    the end card is on and this chat has not been asked yet (answered or
+    skipped). Checks the push as sent, before the client_context allowlist:
+    nothing is stored, so a page can ask on a value the agent never sees."""
+    feedback = getattr(template.configurations, "feedback", None) if template else None
+    if feedback is None or not feedback.rate_chat or session.feedback is not None:
+        return False
+    return matching_feedback_event(feedback.events, body.facts, body.state) is not None
+
+
+# ---------------------------------------------------------------------------
+# POST /widget/session/{id}/messages/{idx}/feedback · POST /widget/session/{id}/feedback
+# ---------------------------------------------------------------------------
+
+
+async def _feedback_config(
+    session_id: str, request: Request, ctx: WidgetSessionContext
+) -> Any:
+    """Shared gate for both feedback routes: IP limit and session ownership.
+    Returns the template's feedback config. Ended sessions are allowed — the
+    end card is shown after the chat ends."""
+    cfg = await resolve_session_widget_config(
+        widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
+    )
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="feedback",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    template = await get_template_by_id_cached(session.template_id)
+    configurations = getattr(template, "configurations", None)
+    return getattr(configurations, "feedback", None)
+
+
+def _feedback_off() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Feedback is turned off for this agent",
+    )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def set_message_feedback_handler(
+    session_id: str,
+    idx: int,
+    body: MessageFeedbackRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+) -> MessageFeedbackResponse:
+    """Rate one bot reply 👍/👎, or clear the rating (``rating: null``)."""
+    feedback_cfg = await _feedback_config(session_id, request, ctx)
+    if feedback_cfg is None or not feedback_cfg.rate_replies:
+        raise _feedback_off()
+
+    feedback = (
+        {"rating": body.rating, "at": _now_iso()} if body.rating is not None else None
+    )
+    row = await set_chat_message_feedback(session_id, idx, feedback)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No bot reply #{idx} in session '{session_id}'",
+        )
+    return MessageFeedbackResponse(
+        session_id=session_id, idx=row.idx, feedback=row.feedback
+    )
+
+
+async def set_chat_feedback_handler(
+    session_id: str,
+    body: ChatFeedbackRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+) -> ChatFeedbackResponse:
+    """Store the end card answer, or a skip. A resend replaces an answer; a
+    skip never overwrites one. Either way the chat is not asked again."""
+    feedback_cfg = await _feedback_config(session_id, request, ctx)
+    if feedback_cfg is None or not feedback_cfg.rate_chat:
+        raise _feedback_off()
+
+    if body.skipped:
+        if body.pills or body.comment:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A skip carries no pills or comment",
+            )
+        skip = {"skipped": True, "trigger": body.trigger, "at": _now_iso()}
+        stored = await set_chat_session_feedback_if_unset(session_id, skip)
+        return ChatFeedbackResponse(session_id=session_id, feedback=stored or skip)
+
+    allowed = {p.id for p in feedback_cfg.pills}
+    unknown = [p for p in body.pills if p not in allowed]
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown pill id(s): {', '.join(unknown)}",
+        )
+    pills = list(dict.fromkeys(body.pills))  # de-dupe, keep the order picked
+    # Postgres jsonb refuses NUL (\u0000), so drop it rather than fail the write.
+    comment = (body.comment or "").replace("\x00", "").strip() or None
+    if not pills and not comment:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Pick at least one pill or write a comment",
+        )
+
+    feedback: Dict[str, Any] = {
+        "pills": pills,
+        "comment": comment,
+        "trigger": body.trigger,
+        "at": _now_iso(),
+    }
+    await set_chat_session_feedback(session_id, feedback)
+    return ChatFeedbackResponse(session_id=session_id, feedback=feedback)
 
 
 # ---------------------------------------------------------------------------
@@ -1411,6 +1563,8 @@ async def get_widget_session_state_handler(
         metadata=session.metadata or {},
         client_context=client_context,
         pending_approvals=pending_approvals,
+        feedback=session.feedback,
+        ended_reason=session.ended_reason,
     )
 
 
