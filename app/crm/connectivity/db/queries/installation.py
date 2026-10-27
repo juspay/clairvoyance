@@ -8,7 +8,7 @@ every API response that ever renders a connection.
 
 from typing import Any, List, Optional, Tuple
 
-from app.crm.connectivity.status import (
+from app.crm.connectivity.vocabulary.status import (
     INSTALLATION_DISABLED,
     INSTALLATION_REVOKED,
     INSTALLATION_USABLE,

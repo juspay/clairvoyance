@@ -34,7 +34,7 @@ would catch arrives as a webhook anyway.
 from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
-from app.crm.connectivity import accounts
+from app.crm.connectivity.accounts import installations
 from app.crm.connectivity.connectors import (
     ConnectorSpec,
     ProviderError,
@@ -48,14 +48,14 @@ from app.crm.connectivity.db.accessors import (
 from app.crm.connectivity.schemas.connector import ConnectorInstallation
 from app.crm.connectivity.schemas.message import CredentialBundle
 from app.crm.connectivity.schemas.template import TemplateDraft, TemplateRead
-from app.crm.connectivity.status import (
+from app.crm.connectivity.templates import retire_guard
+from app.crm.connectivity.vocabulary.status import (
     TEMPLATE_DRAFT,
     TEMPLATE_IN_PLACE_EDIT,
     TEMPLATE_LOCAL_EDIT,
     TEMPLATE_PENDING,
     TEMPLATE_REJECTED,
 )
-from app.crm.connectivity.templates import retire_guard
 
 
 class TemplateError(Exception):
@@ -137,25 +137,25 @@ def _face(spec: ConnectorSpec) -> TemplateProvider:
 async def _healthy_installation(
     merchant_id: str, connector_key: str, provider_account_ref: str
 ) -> ConnectorInstallation:
-    """accounts.py's answer, wearing this module's word for a refusal.
+    """installations.py's answer, wearing this module's word for a refusal.
 
-    The policy — which statuses are usable — lives in accounts.py alone, so
+    The policy — which statuses are usable — lives in installations.py alone, so
     the send door and this one cannot drift apart on it. All that is left here
     is the translation every caller does in its own vocabulary.
     """
     try:
-        return await accounts.healthy_installation(
+        return await installations.healthy_installation(
             merchant_id, connector_key, provider_account_ref
         )
-    except accounts.AccountError as e:
+    except installations.AccountError as e:
         raise TemplateError(str(e)) from e
 
 
 async def _bundle_for(installation: ConnectorInstallation) -> CredentialBundle:
     """The same translation for the credential step."""
     try:
-        return await accounts.bundle_for(installation)
-    except accounts.AccountError as e:
+        return await installations.bundle_for(installation)
+    except installations.AccountError as e:
         raise TemplateError(str(e)) from e
 
 

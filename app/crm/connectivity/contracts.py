@@ -70,16 +70,7 @@ reach a provider without passing the checks in front of it. So does the
 route resolver, and so do the provider packages.
 """
 
-from app.crm.connectivity.actions import (
-    action_names,
-    perform_action,
-    validate_action_args,
-)
-from app.crm.connectivity.channels import registers_templates_for
-from app.crm.connectivity.connectors import ActionError
-from app.crm.connectivity.dispatch import claim_sends, dispatch_send
-from app.crm.connectivity.ingress import META_INGRESS
-from app.crm.connectivity.onboarding import (
+from app.crm.connectivity.accounts.onboarding import (
     disconnect,
     get_installation,
     list_installations,
@@ -87,8 +78,15 @@ from app.crm.connectivity.onboarding import (
     resubscribe,
     signup_config,
 )
-from app.crm.connectivity.queue import queue_message, send_behind
-from app.crm.connectivity.reasons import reason_label
+from app.crm.connectivity.actions.perform import (
+    action_names,
+    perform_action,
+    validate_action_args,
+)
+from app.crm.connectivity.connectors import ActionError
+from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
+from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -102,6 +100,8 @@ from app.crm.connectivity.templates.reads import (
     template_status,
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
+from app.crm.connectivity.vocabulary.channels import registers_templates_for
+from app.crm.connectivity.vocabulary.reasons import reason_label
 
 __all__ = [
     # the dispatcher role

@@ -7,20 +7,19 @@ from pathlib import Path
 
 from app.core.config.static import _positive_float, _positive_int
 from app.core.logger.context import get_log_context
-from app.crm.connectivity import dispatch
-from app.crm.connectivity.channels import CHANNELS, gate_handle_kind_for
 from app.crm.connectivity.db.queries.message import (
     CLAIMED_COLUMNS,
     apply_outcome_query,
     claim_queued_messages_query,
     requeue_stale_claims_query,
 )
-from app.crm.connectivity.dispatch import (
+from app.crm.connectivity.messaging import gate
+from app.crm.connectivity.messaging.outbound import dispatch
+from app.crm.connectivity.messaging.outbound.dispatch import (
     REASON_ATTEMPTS_EXHAUSTED,
     REASON_GATE_UNAVAILABLE,
     REASON_PROVIDER_REJECTED,
     REASON_SEND_ERROR,
-    REASON_SUPPRESSED,
     RETRY_MAX_SECONDS,
     DispatchPlan,
     _jittered,
@@ -29,7 +28,9 @@ from app.crm.connectivity.dispatch import (
     sample_ids,
 )
 from app.crm.connectivity.providers import ADAPTERS
-from app.crm.connectivity.reasons import (
+from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
+from app.crm.connectivity.vocabulary.channels import CHANNELS, gate_handle_kind_for
+from app.crm.connectivity.vocabulary.reasons import (
     PROVIDER_CODE_REASONS,
     REASON_BAD_VARIABLES,
     REASON_CLASS_MERCHANT,
@@ -38,14 +39,14 @@ from app.crm.connectivity.reasons import (
     REASON_GATE_REFUSED,
     REASON_NO_CREDENTIAL,
     REASON_RECLAIMED_STALE_CLAIM,
+    REASON_SUPPRESSED,
     REASON_TEMPLATE_NOT_APPROVED,
     REASON_TIMEOUT,
     REASON_TRANSPORT,
     REASON_UNREADABLE,
     reason_class,
 )
-from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
-from app.crm.connectivity.status import (
+from app.crm.connectivity.vocabulary.status import (
     MESSAGE_ACCEPTED,
     MESSAGE_BLOCKED,
     MESSAGE_DEAD,
@@ -189,7 +190,7 @@ async def test_an_accepted_send_records_the_outcome(monkeypatch) -> None:
         written.update(status=status, mark_sent=mark_sent, attempt=attempt)
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", fake_send)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
@@ -217,7 +218,7 @@ async def test_a_raising_send_becomes_a_retryable_send_error(monkeypatch) -> Non
         written.update(status=status, reason=reason, retry=retry)
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", broken_send)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(attempt=1), 3)
@@ -254,7 +255,7 @@ async def test_a_suppressed_address_is_blocked_and_the_adapter_never_called(
         written.update(status=status, reason=reason, mark_sent=mark_sent)
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", suppressed)
+    monkeypatch.setattr(gate, "is_suppressed", suppressed)
     monkeypatch.setattr(dispatch, "send", exploding_send)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
@@ -316,9 +317,9 @@ async def test_a_hung_gate_probe_is_bounded_and_fails_closed(monkeypatch) -> Non
         written.update(status=status, reason=reason, mark_sent=mark_sent)
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", hanging_probe)
+    monkeypatch.setattr(gate, "is_suppressed", hanging_probe)
     monkeypatch.setattr(dispatch, "send", exploding_send)
-    monkeypatch.setattr(dispatch, "CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(gate, "CRM_MESSAGE_SEND_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
     assert written["status"] == MESSAGE_BLOCKED
@@ -356,7 +357,7 @@ async def test_a_reclaimed_row_discards_the_late_outcome(monkeypatch) -> None:
         calls.append(status)
         return False  # the sweep already handed this row to another worker
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", fake_send)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", reclaimed)
     await dispatch._dispatch_one(_message(), 3)
@@ -854,7 +855,7 @@ async def test_a_provider_code_lands_on_the_row_verbatim(monkeypatch) -> None:
         written.update(status=status, reason=reason)
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", refuses_credentials)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
@@ -879,7 +880,7 @@ async def test_an_unnamed_code_is_written_exactly_as_reported(monkeypatch) -> No
         written.update(reason=reason)
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", refuses_unknown)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
     await dispatch._dispatch_one(_message(), 3)
@@ -961,7 +962,7 @@ async def test_the_outcome_line_names_the_outcome_and_who_asked(monkeypatch) -> 
     async def record_outcome(*args, **kwargs):
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", refused)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
 
@@ -1068,7 +1069,7 @@ async def test_the_outcome_line_says_whose_failure_it_was(monkeypatch) -> None:
     async def record_outcome(*args, **kwargs):
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", token_expired)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
 
@@ -1097,7 +1098,7 @@ async def test_a_row_going_back_on_the_ladder_is_not_a_settled_failure(
     async def record_outcome(*args, **kwargs):
         return True
 
-    monkeypatch.setattr(dispatch, "is_suppressed", _gate_open)
+    monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", flaked)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", record_outcome)
 

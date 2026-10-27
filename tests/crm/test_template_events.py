@@ -48,7 +48,7 @@ from app.crm.connectivity.schemas.connector import ConnectorInstallation
 from app.crm.connectivity.schemas.template import TemplateRead
 from app.crm.connectivity.templates import events as events_module
 from app.crm.connectivity.templates.events import consume_template_event
-from app.crm.connectivity.topics import (
+from app.crm.connectivity.vocabulary.topics import (
     TEMPLATE_TOPICS,
     TOPIC_ACCOUNT,
     TOPIC_INBOUND,

@@ -21,7 +21,7 @@ carry no `match` at all.
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -30,7 +30,7 @@ import app.crm.outreach.entry as entry
 import app.crm.outreach.reply_attribution as attribution
 from app.crm.connectivity.schemas.message import SendBehind
 from app.crm.outreach.entry import consume_attributed_event
-from app.crm.outreach.schemas import EnrollmentRun, Workflow, WorkflowDefinition
+from app.crm.outreach.schemas import EnrollmentRun, Workflow
 from app.crm.record.schemas import RawEvent
 
 NOW = datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc)
@@ -429,7 +429,7 @@ def test_the_word_it_filters_on_is_the_word_the_send_queues_with() -> None:
     """
     import inspect
 
-    from app.crm.connectivity.queue import SOURCE_KINDS
+    from app.crm.connectivity.messaging.outbound.queue import SOURCE_KINDS
     from app.crm.outreach.nodes import send as send_node
 
     assert attribution._WORKFLOW in SOURCE_KINDS

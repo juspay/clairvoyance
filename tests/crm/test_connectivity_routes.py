@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import MERCHANT_SCOPE_MARK
 from app.crm.connectivity import api as connectivity_api
-from app.crm.connectivity.onboarding import (
+from app.crm.connectivity.accounts.onboarding import (
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,

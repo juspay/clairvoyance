@@ -17,7 +17,7 @@ from app.crm.connectivity.schemas.connector import (
     ChannelBinding,
     ConnectorInstallation,
 )
-from app.crm.connectivity.topics import TOPIC_STATUS, TOPIC_TEMPLATE_STATUS
+from app.crm.connectivity.vocabulary.topics import TOPIC_STATUS, TOPIC_TEMPLATE_STATUS
 
 OUR_NUMBER = "812345678901234"
 OTHER_NUMBER = "812999999999999"

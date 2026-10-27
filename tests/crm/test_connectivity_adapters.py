@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from app.crm.connectivity import accounts as accounts_module, send as send_module
+from app.crm.connectivity import send as send_module
+from app.crm.connectivity.accounts import installations as installations_module
 from app.crm.connectivity.db.queries.binding import (
     binding_by_id_query,
     primary_binding_query,
@@ -42,8 +43,8 @@ from app.crm.connectivity.send import (
     send,
     token_grants,
 )
-from app.crm.connectivity.status import BINDING_ACTIVE, TEMPLATE_APPROVED
 from app.crm.connectivity.templates import reads as template_reads_module
+from app.crm.connectivity.vocabulary.status import BINDING_ACTIVE, TEMPLATE_APPROVED
 from app.crm.shared.redact import mask_address, mask_digit_runs
 from app.schemas import Credential, CredentialType
 from scripts.check_crm_boundaries import TABLE_OWNERS
@@ -161,7 +162,7 @@ def _patch_credential(monkeypatch, credential) -> None:
         assert raise_errors is True
         return credential
 
-    monkeypatch.setattr(accounts_module, "get_credential_by_id", _get)
+    monkeypatch.setattr(installations_module, "get_credential_by_id", _get)
 
 
 def _route(**overrides) -> SendRoute:
@@ -426,7 +427,7 @@ async def test_a_vault_outage_retries_instead_of_blocking(monkeypatch) -> None:
         """Test double: the pool dies mid-read."""
         raise ConnectionError("pool exhausted")
 
-    monkeypatch.setattr(accounts_module, "get_credential_by_id", _outage)
+    monkeypatch.setattr(installations_module, "get_credential_by_id", _outage)
     message = _message()
     outcome = await send(_token(message), message)
     assert outcome.status == "failed"
@@ -579,7 +580,7 @@ def test_a_whole_batch_of_worst_case_sends_fits_inside_the_claim_lease() -> None
     assert CRM_MESSAGE_SEND_TIMEOUT_SECONDS < lease_seconds
     # The whole-batch bound. The 2× is no longer just margin: each message
     # may burn one full timeout in the gate probe (its own wait_for in
-    # dispatch._gate) and another in send(), so 2× IS the worst case — at
+    # gate.gate) and another in send(), so 2× IS the worst case — at
     # the defaults 20 × 20s × 2 = 800s against 900s, leaving 100s for pass
     # overhead (DB reads, backoff writes). Nudge one dial and the others
     # must follow.
@@ -663,13 +664,13 @@ def test_the_vault_is_read_through_its_own_accessor() -> None:
     for builder in Path("app/crm/connectivity/db/queries").glob("*.py"):
         assert not vault_in_sql.search(builder.read_text()), builder
     assert (
-        accounts_module.get_credential_by_id.__module__
+        installations_module.get_credential_by_id.__module__
         == "app.database.accessor.breeze_buddy.credentials"
     )
 
 
 def test_one_home_for_the_account_policy() -> None:
-    """The usable-states set and the vault sequence live in accounts.py only.
+    """The usable-states set and the vault sequence live in accounts/installations.py only.
 
     Two definitions of one policy is a policy that changes in one place and
     not the other — the day a degraded door may register templates but not
@@ -683,7 +684,7 @@ def test_one_home_for_the_account_policy() -> None:
         assert "get_credential_by_id" not in src
         assert '!= "healthy"' not in src and 'frozenset({"healthy"})' not in src
     assert "template_accessor" not in send_src
-    assert accounts_module.USABLE_INSTALLATION_STATES == frozenset({"healthy"})
+    assert installations_module.USABLE_INSTALLATION_STATES == frozenset({"healthy"})
 
 
 def test_both_tables_are_created_together() -> None:
@@ -929,7 +930,7 @@ def test_whether_a_channel_registers_templates_is_the_registrys_answer() -> None
     """WhatsApp does; an unregistered channel answers True so the door fails
     CLOSED on it — the same posture the gate takes on a channel CHANNELS
     cannot describe."""
-    from app.crm.connectivity.channels import registers_templates_for
+    from app.crm.connectivity.vocabulary.channels import registers_templates_for
 
     assert registers_templates_for("whatsapp") is True
     assert registers_templates_for("carrier_pigeon") is True

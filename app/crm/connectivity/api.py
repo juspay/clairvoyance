@@ -38,7 +38,7 @@ from pydantic import ValidationError
 
 from app.crm.auth import merchant_scope
 from app.crm.connectivity import contracts
-from app.crm.connectivity.onboarding import (
+from app.crm.connectivity.accounts.onboarding import (
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,

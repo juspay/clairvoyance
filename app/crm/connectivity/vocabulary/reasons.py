@@ -46,7 +46,7 @@ REASON_BAD_ADDRESS = "recipient_address_invalid"
 REASON_BAD_VARIABLES = "template_variables_invalid"
 REASON_UNREADABLE = "provider_response_unreadable"
 
-# --- dispatch policy (dispatch.py) ---
+# --- dispatch policy (messaging/outbound/dispatch.py) ---
 # Must match the literal the stale sweep writes in SQL
 # (db/queries.py::requeue_stale_claims_query) — dead-by-sweep and
 # dead-by-retry are one fact and must carry one word.

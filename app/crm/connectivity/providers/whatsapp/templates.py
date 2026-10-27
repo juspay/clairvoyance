@@ -20,8 +20,8 @@ from app.crm.connectivity.providers.meta.graph import GraphError, call, segment
 from app.crm.connectivity.providers.whatsapp import TOKEN_KEY
 from app.crm.connectivity.schemas.message import CredentialBundle
 from app.crm.connectivity.schemas.template import ProviderTemplateState, TemplateDraft
-from app.crm.connectivity.status import TEMPLATE_PENDING
-from app.crm.connectivity.topics import (
+from app.crm.connectivity.vocabulary.status import TEMPLATE_PENDING
+from app.crm.connectivity.vocabulary.topics import (
     TOPIC_TEMPLATE_CATEGORY,
     TOPIC_TEMPLATE_QUALITY,
     TOPIC_TEMPLATE_STATUS,

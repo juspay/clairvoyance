@@ -18,8 +18,8 @@ from pydantic import BaseModel, ValidationError
 import app.crm.connectivity.providers.shopify.actions as shopify_actions
 import app.crm.connectivity.providers.shopify.via_nautilus as via_nautilus
 from app.core.security.sha import calculate_hmac_sha256
-from app.crm.connectivity import actions as actions_module
-from app.crm.connectivity.actions import (
+from app.crm.connectivity.actions import perform as actions_module
+from app.crm.connectivity.actions.perform import (
     action_names,
     perform_action,
     validate_action_args,
@@ -109,7 +109,7 @@ async def test_a_connector_that_needs_a_door_still_fails_closed(
     """The DEFAULT, pinned on a face that does not opt out.
 
     A missing, unproven or withdrawn door all read the same, and every
-    connector added later inherits this without editing actions.py. Shopify
+    connector added later inherits this without editing actions/perform.py. Shopify
     is the single exception (see below) and must not be allowed to become
     the rule by accident.
     """

@@ -45,7 +45,7 @@ from app.crm.connectivity.providers.whatsapp.templates import WhatsappTemplates
 from app.crm.connectivity.schemas.connector import SignupConfig
 
 #: Re-exported so onboarding.py can name the error every onboarder raises,
-#: and actions.py the one every action face raises. Neither can import
+#: and actions/perform.py the one every action face raises. Neither can import
 #: providers/base itself — boundary rule 11 gives that file its doors, and
 #: this is one of them.
 __all__ = [
@@ -111,7 +111,7 @@ class ConnectorSpec:
     request_model: Type[BaseModel]
     #: What a run may ask this connector to DO, keyed by the word a plan
     #: document says. Empty for a connector that only sends and receives —
-    #: which is why actions.py can answer "this connector declares no
+    #: which is why actions/perform.py can answer "this connector declares no
     #: actions" without a branch, and why adding the fourth verb to an
     #: existing connector is one line here.
     actions: Dict[str, ConnectorAction] = field(default_factory=dict)
