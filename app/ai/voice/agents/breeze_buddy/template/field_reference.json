@@ -446,6 +446,24 @@
       "description": "How the widget reveals assistant prose. 'stream' (default) = paced typewriter as tokens arrive. 'complete' = a typing indicator while the reply is in flight, then the full message at once (Messenger style). Presentation-only: the SSE transport streams either way.",
       "example": "complete"
     },
+    "feedback": {
+      "description": "Customer feedback in the widget: 👍/👎 under each bot reply (message_feedback) and an end-of-chat card with configurable pills (chat_feedback). Unset = both off. Fields documented under FeedbackConfig.",
+      "example": {
+        "message_feedback": {
+          "enabled": true
+        },
+        "chat_feedback": {
+          "enabled": true,
+          "end_on": {
+            "context": {
+              "path": "paymentStatusResponse.orderStatus",
+              "equals": "CHARGED"
+            },
+            "idle_seconds": 120
+          }
+        }
+      }
+    },
     "wake_phrase": {
       "description": "Require the user to say a trigger phrase before the bot responds. Useful for IVR-style consent flows. phrases: list of accepted trigger words. single_activation: if true, phrase required only once per session.",
       "example": {
@@ -1249,6 +1267,87 @@
       "example": {
         "woocommerce": "3f2a9c1e-7b4d-4e8a-9f0c-1d2e3f4a5b6c"
       }
+    }
+  },
+  "FeedbackConfig": {
+    "message_feedback": {
+      "description": "Per-reply 👍/👎. Fields under MessageFeedbackConfig.",
+      "example": {
+        "enabled": true
+      }
+    },
+    "chat_feedback": {
+      "description": "End-of-chat card. Fields under ChatFeedbackConfig.",
+      "example": {
+        "enabled": true,
+        "end_on": {
+          "idle_seconds": 120
+        }
+      }
+    }
+  },
+  "MessageFeedbackConfig": {
+    "enabled": {
+      "description": "Show 👍/👎 under each finished bot reply. Default false.",
+      "example": true
+    }
+  },
+  "ChatFeedbackConfig": {
+    "enabled": {
+      "description": "Show the card when the chat ends. Default false.",
+      "example": true
+    },
+    "pills": {
+      "description": "2–6 multi-select choices; each has a stable id (counted in analytics) and a label. Ids must be unique.",
+      "example": [
+        {
+          "id": "helped",
+          "label": "Yes, it helped"
+        },
+        {
+          "id": "helped_pay",
+          "label": "Helped me pay"
+        }
+      ]
+    },
+    "end_on": {
+      "description": "When the widget treats the chat as ended (first trigger wins). Fields under ChatFeedbackEndOn.",
+      "example": {
+        "idle_seconds": 120
+      }
+    }
+  },
+  "ChatFeedbackEndOn": {
+    "context": {
+      "description": "End when a client-context fact reaches a value. Fields under ChatFeedbackContextRule. Unset = off.",
+      "example": {
+        "path": "paymentStatusResponse.orderStatus",
+        "equals": "CHARGED"
+      }
+    },
+    "idle_seconds": {
+      "description": "End after this many seconds (10–3600) with no message after the bot's last reply. Unset = off.",
+      "example": 120
+    }
+  },
+  "ChatFeedbackContextRule": {
+    "path": {
+      "description": "Dot path into the client-context facts.",
+      "example": "paymentStatusResponse.orderStatus"
+    },
+    "equals": {
+      "description": "Value at path that means the chat is over (string, number or boolean).",
+      "example": "CHARGED"
+    }
+  },
+  "FeedbackPill": {
+    "id": {
+      "description": "Stable key ([a-z0-9_], up to 40 chars) stored with the feedback; keep it when the label changes.",
+      "example": "helped_pay"
+    },
+    "label": {
+      "description": "Text shown on the pill (up to 60 chars).",
+      "example": "Helped me pay"
     }
   }
 }

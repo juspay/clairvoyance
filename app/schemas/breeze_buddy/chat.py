@@ -7,7 +7,7 @@ analytics over voice + chat use the same field semantics.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -123,6 +123,11 @@ class ChatSession(BaseModel):
     last_activity_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     ended_reason: Optional[ChatEndedReason] = None
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="End-of-chat card answer (migration 085): pills, comment, "
+        "trigger, at. None = no answer.",
+    )
 
 
 class ChatMessage(BaseModel):
@@ -149,6 +154,11 @@ class ChatMessage(BaseModel):
     content: Optional[str] = None
     content_blocks: Optional[List[Dict[str, Any]]] = None
     ui_blocks: Optional[List[Dict[str, Any]]] = None
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Customer 👍/👎 on this bot reply (migration 085), e.g. "
+        "{'rating': 'down', 'at': ...}. None = not rated.",
+    )
     created_at: Optional[datetime] = None
 
 
@@ -551,6 +561,43 @@ class FlavorWire(BaseModel):
     )
 
 
+class FeedbackPillWire(BaseModel):
+    """One choice on the end-of-chat card (mirror of ``FeedbackPill``)."""
+
+    id: str
+    label: str
+
+
+class ChatFeedbackEndOnWire(BaseModel):
+    """When the widget ends the chat (mirror of ``ChatFeedbackEndOn``)."""
+
+    context_path: Optional[str] = Field(
+        None, description="Client-context fact to watch. None = off."
+    )
+    context_equals: Optional[Union[str, int, bool]] = Field(
+        None, description="Value of ``context_path`` that ends the chat."
+    )
+    idle_seconds: Optional[int] = Field(
+        None, description="Seconds of silence after the bot's reply. None = off."
+    )
+
+
+class ChatFeedbackWire(BaseModel):
+    """The end-of-chat card (mirror of ``ChatFeedbackConfig``)."""
+
+    pills: List[FeedbackPillWire]
+    end_on: ChatFeedbackEndOnWire
+
+
+class FeedbackWire(BaseModel):
+    """Which feedback the widget shows. Both off unless the template says so."""
+
+    message_feedback: bool = Field(False, description="👍/👎 under bot replies.")
+    chat_feedback: Optional[ChatFeedbackWire] = Field(
+        None, description="End-of-chat card. None = off."
+    )
+
+
 class WidgetSurfaceWire(BaseModel):
     """Everything the embed needs to paint its chrome for one session.
 
@@ -627,6 +674,10 @@ class WidgetSurfaceWire(BaseModel):
             "The widget's declarative interpreter renders these; empty when "
             "catalog_active is 'v1'."
         ),
+    )
+    feedback: FeedbackWire = Field(
+        default_factory=FeedbackWire,
+        description="Customer feedback controls (👍/👎 per reply, end card).",
     )
 
 
