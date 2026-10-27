@@ -123,6 +123,11 @@ class ChatSession(BaseModel):
     last_activity_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     ended_reason: Optional[ChatEndedReason] = None
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="End-of-chat card answer (migration 086): pills, comment, "
+        "trigger, at; or skipped, trigger, at. None = not asked yet.",
+    )
 
 
 class ChatMessage(BaseModel):
@@ -149,6 +154,11 @@ class ChatMessage(BaseModel):
     content: Optional[str] = None
     content_blocks: Optional[List[Dict[str, Any]]] = None
     ui_blocks: Optional[List[Dict[str, Any]]] = None
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Customer 👍/👎 on this bot reply (migration 086), e.g. "
+        "{'rating': 'down', 'at': ...}. None = not rated.",
+    )
     created_at: Optional[datetime] = None
 
 
@@ -551,6 +561,27 @@ class FlavorWire(BaseModel):
     )
 
 
+class FeedbackPillWire(BaseModel):
+    """One choice on the end-of-chat card (mirror of ``FeedbackPill``)."""
+
+    id: str
+    label: str
+
+
+class RateChatWire(BaseModel):
+    """The end card's choices. When to ask is decided by the server (page
+    events, chat ended) and by New chat in the widget, so no rules ship."""
+
+    pills: List[FeedbackPillWire]
+
+
+class FeedbackWire(BaseModel):
+    """Which feedback the widget shows. Both off unless the template says so."""
+
+    rate_replies: bool = Field(False, description="👍/👎 under bot replies.")
+    rate_chat: Optional[RateChatWire] = Field(None, description="End card. None = off.")
+
+
 class WidgetSurfaceWire(BaseModel):
     """Everything the embed needs to paint its chrome for one session.
 
@@ -627,6 +658,10 @@ class WidgetSurfaceWire(BaseModel):
             "The widget's declarative interpreter renders these; empty when "
             "catalog_active is 'v1'."
         ),
+    )
+    feedback: FeedbackWire = Field(
+        default_factory=FeedbackWire,
+        description="Customer feedback controls (👍/👎 per reply, end card).",
     )
 
 
