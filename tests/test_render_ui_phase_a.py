@@ -119,6 +119,38 @@ def test_link_button_renders_with_config_trusted_url():
     assert out.fn_result["url"] == "https://shop.example/cart"
 
 
+def test_link_button_renders_trusted_mailto_url():
+    out = execute_render_ui(
+        {
+            "component": "LinkButton",
+            "link": {"label": "Email us", "url": "mailto:help@shop.example"},
+        },
+        store=BindingStore(),
+        allowlist=ALLOW,
+        components=COMPS,
+        op_id="root",
+        trusted_urls={"mailto:help@shop.example"},
+    )
+    assert out.decision == "rendered"
+    assert out.ops[0]["props"]["url"] == "mailto:help@shop.example"
+
+
+def test_link_button_rejects_trusted_non_https_scheme():
+    out = execute_render_ui(
+        {
+            "component": "LinkButton",
+            "link": {"label": "Open", "url": "http://shop.example/cart"},
+        },
+        store=BindingStore(),
+        allowlist=ALLOW,
+        components=COMPS,
+        op_id="root",
+        trusted_urls={"http://shop.example/cart"},
+    )
+    assert out.decision != "rendered"
+    assert out.ops == []
+
+
 def test_link_button_accepts_url_from_this_turns_tool_results():
     products = [
         {

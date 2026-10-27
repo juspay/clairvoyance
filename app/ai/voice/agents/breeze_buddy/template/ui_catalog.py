@@ -393,12 +393,15 @@ class LinkButton(_CatalogBase):
     ``text_channel=False``: the trust check lives ONLY in the render_ui
     function path, so a hand-typed ``<ui_stream>`` add is rejected at
     parse (``render_ui_only:LinkButton``) — the dual-read window must not
-    be an arbitrary-URL injection surface."""
+    be an arbitrary-URL injection surface.
+
+    ``https://`` or ``mailto:`` — an "Email us" button opens the shopper's
+    mail app, the same handoff ``OpenUrlAction`` already allows."""
 
     text_channel: ClassVar[bool] = False
 
     label: str = Field(..., min_length=1, max_length=40)
-    url: str = Field(..., min_length=8, max_length=2048, pattern=r"^https://")
+    url: str = Field(..., min_length=8, max_length=2048, pattern=r"^(https://|mailto:)")
 
 
 # ---------------------------------------------------------------------------
