@@ -4,6 +4,7 @@ translates this module's exceptions — so a route cannot forget the check
 and two routes cannot map one family to two codes.
 """
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,15 +12,18 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import MERCHANT_SCOPE_MARK
 from app.crm.connectivity import api as connectivity_api
 from app.crm.connectivity.accounts.onboarding import (
+    AccountHeldError,
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,
 )
+from app.crm.connectivity.connectors import CONNECTORS
 from app.crm.connectivity.templates.lifecycle import (
     TemplateError,
     TemplateInUseError,
@@ -54,6 +58,7 @@ def test_every_connectors_route_uses_the_translating_route_class() -> None:
         (TemplateNotFoundError("no such template"), 404),
         (TemplateInUseError("still named by 2 runs"), 409),
         (ResubscribeRefused("the provider declined"), 409),
+        (AccountHeldError("connected to another merchant"), 409),
         (OnboardingError("bad code"), 400),
         (TemplateError("not from draft"), 400),
         (RuntimeError("not ours"), None),
@@ -65,6 +70,26 @@ def test_the_translator_maps_each_family_once(error: Exception, code: Any) -> No
         assert translated is None
     else:
         assert translated is not None and translated.status_code == code
+
+
+def test_a_validator_refusal_is_a_json_422_not_a_500() -> None:
+    """A field validator raising ValueError (the Xyne base-URL check) puts the
+    exception object in the error's context; carried into the detail, the
+    answer could not be serialised and the 422 became a 500. The detail must
+    be plain JSON, keep the reason, and still never echo the input."""
+    with pytest.raises(ValidationError) as raised:
+        CONNECTORS["xyne"].request_model(
+            merchant_id="shop",
+            api_token="secret-token-value",
+            webhook_secret="a-webhook-secret-of-length",
+            base_url="https://evil.example.com",
+        )
+    translated = connectivity_api.translate(raised.value)
+    assert translated is not None and translated.status_code == 422
+    # FastAPI's HTTPException handler serialises the detail with plain JSON.
+    text = json.dumps({"detail": translated.detail})
+    assert "must be a Xyne host" in text
+    assert "secret-token-value" not in text and "evil.example.com" not in text
 
 
 def _client(monkeypatch: pytest.MonkeyPatch, merchants=("shop",)) -> TestClient:
