@@ -18,6 +18,7 @@ from app.crm.connectivity.accounts import (
     onboarding as onboarding_module,
 )
 from app.crm.connectivity.accounts.onboarding import (
+    AccountHeldError,
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,
@@ -26,12 +27,17 @@ from app.crm.connectivity.accounts.onboarding import (
 )
 from app.crm.connectivity.connectors import (
     CONNECTORS,
+    ConnectorHandshakeError,
     ConnectorSpec,
     connector_for,
     connector_for_channel,
     sending_connectors,
 )
 from app.crm.connectivity.db import UniqueViolation
+from app.crm.connectivity.db.queries.installation import (
+    account_lock_key,
+    other_account_holder_query,
+)
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.providers.whatsapp.onboard import (
     OnboardWhatsappRequest,
@@ -354,6 +360,7 @@ def _patch_onboarding(
     bindings=None,
     onboarder=None,
     channel="whatsapp",
+    exclusive_account=False,
 ):
     """Wire onboarding.py to doubles: merchant, vault, accessors, atom.
 
@@ -370,6 +377,7 @@ def _patch_onboarding(
         onboarder=onboarder,
         templates=CONNECTORS["whatsapp"].templates,
         request_model=OnboardWhatsappRequest,
+        exclusive_account=exclusive_account,
     )
     monkeypatch.setattr(onboarding_module, "connector_for", lambda key: spec)
 
@@ -651,6 +659,122 @@ async def test_racing_the_default_route_is_answered_not_a_500(monkeypatch) -> No
     monkeypatch.setattr(onboarding_module, "atomically", _races)
     with pytest.raises(OnboardingError, match="try again"):
         await onboard("shop", "whatsapp", _request().model_dump())
+
+
+# --- an exclusive account is one merchant's (the Xyne takeover) -------------
+
+
+async def test_an_account_another_merchant_holds_is_refused_before_storing(
+    monkeypatch,
+) -> None:
+    """Merchant B connecting merchant A's app: refused once the handshake has
+    proved the token, before anything is vaulted — A's door stays the only
+    one, and the answer never names A."""
+    created: List[str] = []
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), other_holder="merchant-a"
+    )
+    onboarder = _patch_onboarding(
+        monkeypatch, installations=fake, exclusive_account=True
+    )
+
+    async def _create(reseller_id, name, kind, value, description=None):
+        created.append(name)
+        return _Credential()
+
+    monkeypatch.setattr(onboarding_module, "create_credential", _create)
+    with pytest.raises(AccountHeldError) as raised:
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert "merchant-a" not in str(raised.value)
+    assert onboarder.gathered == 1
+    assert created == [] and fake.written is None
+
+
+class _RefusingOnboarder(_StubOnboarder):
+    """A handshake the provider refuses: a junk or another app's token."""
+
+    async def gather(self, request):
+        """Test double: the provider's declared refusal."""
+        self.gathered += 1
+        raise ConnectorHandshakeError("Xyne refused this API token")
+
+
+async def test_a_held_account_is_not_revealed_to_an_unproven_token(
+    monkeypatch,
+) -> None:
+    """The holder check runs only after the provider accepted the token. A
+    junk token for a held app hears the same 400 as for a free one — never
+    the 409 — so onboarding is not an oracle for which app ids are in use."""
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), other_holder="merchant-a"
+    )
+    _patch_onboarding(
+        monkeypatch,
+        installations=fake,
+        onboarder=_RefusingOnboarder(_result()),
+        exclusive_account=True,
+    )
+    with pytest.raises(OnboardingError) as raised:
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert not isinstance(raised.value, AccountHeldError)
+    assert "refused this API token" in str(raised.value)
+    assert fake.written is None
+
+
+async def test_a_racer_holding_the_account_is_refused_inside_the_atom(
+    monkeypatch,
+) -> None:
+    """Both peeks said free; the lock makes the second atom see the first
+    merchant's committed door, and it writes nothing."""
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(), other_holder_in_txn="merchant-a"
+    )
+    _patch_onboarding(monkeypatch, installations=fake, exclusive_account=True)
+    with pytest.raises(AccountHeldError):
+        await onboard("shop", "whatsapp", _request().model_dump())
+    assert fake.locked == [("whatsapp", "waba-1")]
+    assert fake.written is None
+
+
+async def test_the_holder_re_connecting_its_own_account_proceeds(monkeypatch) -> None:
+    """Nobody else holds it: the lock is taken, and the door is written."""
+    fake = FakeInstallationAccessor(upsert_returns=_installation_read())
+    _patch_onboarding(monkeypatch, installations=fake, exclusive_account=True)
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert fake.locked == [("whatsapp", "waba-1")]
+    assert fake.written is not None
+
+
+async def test_a_shared_account_connector_skips_the_holder_check(monkeypatch) -> None:
+    """Not every connector is exclusive: without the flag nobody is asked."""
+    fake = FakeInstallationAccessor(
+        upsert_returns=_installation_read(),
+        other_holder="merchant-a",
+        other_holder_in_txn="merchant-a",
+    )
+    _patch_onboarding(monkeypatch, installations=fake)
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert fake.locked == [] and fake.written is not None
+
+
+def test_the_holder_query_lets_a_revoked_door_go() -> None:
+    """A merchant who disconnected must not hold the app forever: the query
+    skips revoked doors, and every other status still holds the account.
+    The fakes never run this SQL, so the rule is pinned here."""
+    sql, params = other_account_holder_query("merchant-b", "xyne", "app_abc")
+    flat = " ".join(sql.split())
+    assert "merchant_id <> $3" in flat and "status <> $4" in flat
+    assert params == ["xyne", "app_abc", "merchant-b", "revoked"]
+
+
+def test_the_account_lock_key_is_stable_and_per_account() -> None:
+    """Two pods must compute the same key for one account (hashlib, not the
+    per-process salted hash()), and different accounts must not share one."""
+    key = account_lock_key("xyne", "app_abc")
+    assert key == account_lock_key("xyne", "app_abc")
+    assert key != account_lock_key("xyne", "app_abd")
+    assert key != account_lock_key("shopify", "app_abc")
+    assert -(2**63) <= key < 2**63
 
 
 # --- canon T11: a light that is not green carries its reason ---------------

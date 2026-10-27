@@ -6,6 +6,7 @@ health story. One list serving both would leak a pointer to a secret into
 every API response that ever renders a connection.
 """
 
+import hashlib
 from typing import Any, List, Optional, Tuple
 
 from app.crm.connectivity.vocabulary.status import (
@@ -118,6 +119,55 @@ def installation_for_connector_query(
          LIMIT 1
     """
     return query, [merchant_id, connector_key, sorted(INSTALLATION_USABLE)]
+
+
+def other_account_holder_query(
+    merchant_id: str, connector_key: str, external_account_id: str
+) -> Tuple[str, List[Any]]:
+    """Whether a merchant OTHER than this one holds this provider account —
+    the refusal an exclusive connector's onboarding needs.
+
+    Cross-tenant by design, like installation_for_inbound_query below, and
+    with the same status rule: a 'revoked' door is nobody's, every other
+    status still owns the account's callbacks. Answers only a merchant id;
+    the caller says "already connected elsewhere" and never which merchant.
+    """
+    query = f"""
+        SELECT merchant_id
+          FROM {INSTALLATION_TABLE}
+         WHERE connector_key = $1
+           AND external_account_id = $2
+           AND merchant_id <> $3
+           AND status <> $4
+         LIMIT 1
+    """
+    return query, [
+        connector_key,
+        external_account_id,
+        merchant_id,
+        INSTALLATION_REVOKED,
+    ]
+
+
+def account_lock_key(connector_key: str, external_account_id: str) -> int:
+    """PURE: a stable signed 64-bit advisory-lock key for one provider
+    account. hashlib, never hash(): Python salts the latter per process, and
+    two pods must agree."""
+    digest = hashlib.blake2b(
+        f"account\x00{connector_key}\x00{external_account_id}".encode("utf-8"),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+def lock_account_query(
+    connector_key: str, external_account_id: str
+) -> Tuple[str, List[Any]]:
+    """Held for the rest of the transaction: two merchants onboarding the
+    same exclusive account serialise here, so the second one's holder check
+    sees the first one's committed door."""
+    query = "SELECT pg_advisory_xact_lock($1::bigint)"
+    return query, [account_lock_key(connector_key, external_account_id)]
 
 
 def upsert_installation_query(
