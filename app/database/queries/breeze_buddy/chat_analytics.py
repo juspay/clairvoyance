@@ -141,6 +141,7 @@ def get_chat_analytics_summary_query(
                     COUNT(*) FILTER (WHERE b.status = 'ENDED') AS ended_conversations,
                     COUNT(*) FILTER (WHERE b.ended_reason = 'user_ended') AS user_ended_conversations,
                     COUNT(*) FILTER (WHERE b.ended_reason = 'idle_timeout') AS idle_timeout_conversations,
+                    COUNT(*) FILTER (WHERE b.feedback IS NOT NULL) AS chat_feedback_count,
                     COUNT(DISTINCT b.template_id) AS total_agents,
                     AVG(EXTRACT(EPOCH FROM (b.last_activity_at - b.created_at))) AS avg_session_seconds
                 FROM base b
@@ -149,7 +150,9 @@ def get_chat_analytics_summary_query(
                 SELECT
                     COUNT(*) AS total_messages,
                     COUNT(*) FILTER (WHERE m.role = 'user') AS user_messages,
-                    COUNT(*) FILTER (WHERE m.role = 'assistant') AS assistant_messages
+                    COUNT(*) FILTER (WHERE m.role = 'assistant') AS assistant_messages,
+                    COUNT(*) FILTER (WHERE m.feedback->>'rating' = 'up') AS thumbs_up,
+                    COUNT(*) FILTER (WHERE m.feedback->>'rating' = 'down') AS thumbs_down
                 FROM {CHAT_MESSAGE_TABLE} m
                 JOIN base b ON b.id = m.session_id
             ),

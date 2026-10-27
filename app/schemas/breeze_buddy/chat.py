@@ -7,9 +7,9 @@ analytics over voice + chat use the same field semantics.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
 
@@ -884,6 +884,43 @@ class UpdateWidgetContextResponse(BaseModel):
     )
 
 
+class MessageFeedbackRequest(BaseModel):
+    """Body of ``POST /widget/session/{id}/messages/{idx}/feedback``."""
+
+    rating: Optional[Literal["up", "down"]] = Field(
+        ..., description="'up' / 'down', or null to clear the rating."
+    )
+
+
+class MessageFeedbackResponse(BaseModel):
+    session_id: str
+    idx: int
+    feedback: Optional[Dict[str, Any]] = None
+
+
+#: A pill id as the template stores it (same rule as ``FeedbackPill.id``).
+FeedbackPillId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]{1,40}$")]
+
+
+class ChatFeedbackRequest(BaseModel):
+    """Body of ``POST /widget/session/{id}/feedback`` (the end-of-chat card)."""
+
+    pills: List[FeedbackPillId] = Field(
+        default_factory=list,
+        max_length=6,
+        description="Ids of the chosen pills, from the template's chat_feedback.",
+    )
+    comment: Optional[str] = Field(None, max_length=1000)
+    trigger: Optional[Literal["context", "idle", "new_chat"]] = Field(
+        None, description="What ended the chat and showed the card."
+    )
+
+
+class ChatFeedbackResponse(BaseModel):
+    session_id: str
+    feedback: Dict[str, Any]
+
+
 class WidgetVoiceConnectResponse(BaseModel):
     """Body of ``POST /widget/session/{id}/voice/connect``."""
 
@@ -997,6 +1034,13 @@ class WidgetSessionStateResponse(BaseModel):
             "Unexpired PENDING HITL tool approvals for this session, oldest "
             "first, so the embed can repaint approval cards after a reload. "
             "Empty when nothing is awaiting a decision."
+        ),
+    )
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "The end-of-chat card answer, if already sent — the embed does "
+            "not show the card again. Per-reply ratings ride on each message."
         ),
     )
 

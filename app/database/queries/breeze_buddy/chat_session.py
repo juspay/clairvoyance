@@ -413,6 +413,36 @@ def list_chat_messages_for_session_query(
     return query, [session_id, limit]
 
 
+def set_chat_message_feedback_query(
+    session_id: str, idx: int, feedback_json: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """Set (or clear, with NULL) the customer's rating on one bot reply.
+
+    Only assistant rows can be rated; a user row or a missing idx returns no
+    row. The single post-insert write on chat_message (migration 085).
+    """
+    query = f"""
+        UPDATE {CHAT_MESSAGE_TABLE}
+        SET feedback = $3::jsonb
+        WHERE session_id = $1 AND idx = $2 AND role = 'assistant'
+        RETURNING {_MESSAGE_COLUMNS}
+    """
+    return query, [session_id, idx, feedback_json]
+
+
+def set_chat_session_feedback_query(
+    session_id: str, feedback_json: str
+) -> Tuple[str, List[Any]]:
+    """Store the end-of-chat card answer. A resend replaces it."""
+    query = f"""
+        UPDATE {CHAT_SESSION_TABLE}
+        SET feedback = $2::jsonb
+        WHERE id = $1
+        RETURNING {_SESSION_COLUMNS}
+    """
+    return query, [session_id, feedback_json]
+
+
 # -- agent_session_state ------------------------------------------------------
 
 

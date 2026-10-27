@@ -32,6 +32,8 @@ from app.database.queries.breeze_buddy.chat_session import (
     list_idle_chat_sessions_query,
     merge_client_context_query,
     record_chat_turn_metrics_query,
+    set_chat_message_feedback_query,
+    set_chat_session_feedback_query,
     set_chat_session_voice_lead_query,
     update_chat_session_after_turn_query,
     update_chat_session_outcome_query,
@@ -132,6 +134,35 @@ async def end_chat_session(
         return None
     except Exception as e:
         logger.error(f"Error ending chat session {session_id}: {e}")
+        raise
+
+
+async def set_chat_message_feedback(
+    session_id: str, idx: int, feedback: Optional[Dict[str, Any]]
+) -> Optional[ChatMessage]:
+    """Set or clear (None) the rating on a bot reply. Returns the updated
+    row, or None when ``idx`` is not a bot reply in this session."""
+    query, values = set_chat_message_feedback_query(
+        session_id, idx, json.dumps(feedback) if feedback is not None else None
+    )
+    try:
+        result = await run_parameterized_query(query, values)
+        return decode_chat_message(result[0]) if result else None
+    except Exception as e:
+        logger.error(f"Error setting feedback on {session_id}#{idx}: {e}")
+        raise
+
+
+async def set_chat_session_feedback(
+    session_id: str, feedback: Dict[str, Any]
+) -> Optional[ChatSession]:
+    """Store the end-of-chat card answer. Returns the updated session."""
+    query, values = set_chat_session_feedback_query(session_id, json.dumps(feedback))
+    try:
+        result = await run_parameterized_query(query, values)
+        return decode_chat_session(result[0]) if result else None
+    except Exception as e:
+        logger.error(f"Error setting chat feedback on {session_id}: {e}")
         raise
 
 
