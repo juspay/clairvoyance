@@ -24,3 +24,18 @@ def graph_stub(monkeypatch: pytest.MonkeyPatch):
         return doubles.stub_graph(monkeypatch, handler)
 
     return _install
+
+
+@pytest.fixture(autouse=True)
+def _no_receipt_read_back(monkeypatch: pytest.MonkeyPatch):
+    """Both send paths read a message's filed receipts back after recording
+    its outcome — real database work a unit test of dispatch or session must
+    never reach by accident. A no-op here; a test that watches it patches
+    over it (monkeypatch runs in order)."""
+    from app.crm.connectivity import dispatch, session
+
+    async def _read_back(merchant_id, channel, provider_message_id) -> None:
+        return None
+
+    monkeypatch.setattr(dispatch, "apply_filed_receipts", _read_back)
+    monkeypatch.setattr(session, "apply_filed_receipts", _read_back)
