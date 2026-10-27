@@ -616,7 +616,7 @@ CRM_SCHEMA_CACHE_SECONDS = _positive_float("CRM_SCHEMA_CACHE_SECONDS", 60.0)
 
 # CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; pacing rides
 # CRM_WORKER_INTERVAL, but the batch is its own dial below). send() reaches
-# real providers behind a thin permission slice: dispatch._gate probes
+# real providers behind a thin permission slice: gate.gate() probes
 # platform suppression before every send and fails CLOSED. The full
 # may_contact() — consent, purpose, quiet hours — replaces the gate's body
 # at B5; the seam is already load-bearing.
@@ -648,7 +648,7 @@ CRM_DISPATCH_MAX_ATTEMPTS = _positive_int("CRM_DISPATCH_MAX_ATTEMPTS", 3)
 CRM_DISPATCH_RETRY_BASE_SECONDS = _positive_int("CRM_DISPATCH_RETRY_BASE_SECONDS", 30)
 
 # The ceiling on ONE provider call, applied by send() so that no adapter can
-# forget it — and separately on the gate probe before it (dispatch._gate),
+# forget it — and separately on the gate probe before it (gate.gate()),
 # which reads the same pool. Must stay well under CRM_DISPATCH_STALE_MINUTES:
 # a send that outlives its claim gets the row reassigned to a second worker
 # while the first is still sending, and the customer receives the message

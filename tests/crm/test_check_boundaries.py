@@ -230,7 +230,7 @@ def test_adapter_import_outside_the_doors_fails(tmp_path: Path) -> None:
     root = _tree(
         tmp_path,
         {
-            "app/crm/connectivity/dispatch.py": (
+            "app/crm/connectivity/messaging/outbound/dispatch.py": (
                 "from app.crm.connectivity.providers import adapter_for\n"
             )
         },
@@ -241,7 +241,7 @@ def test_adapter_import_outside_the_doors_fails(tmp_path: Path) -> None:
 def test_the_action_face_answers_to_the_registry_and_nowhere_else(
     tmp_path: Path,
 ) -> None:
-    # actions.py drives the action faces THROUGH the registry connectors.py
+    # actions/perform.py drives the action faces THROUGH the registry connectors.py
     # assembles — it never imports a provider, which is why it is not a door.
     # Reaching one directly would skip the installation the registry resolves
     # against, and with it the tenancy the whole verb rests on.
@@ -249,7 +249,7 @@ def test_the_action_face_answers_to_the_registry_and_nowhere_else(
     root = _tree(
         tmp_path,
         {
-            "app/crm/connectivity/actions.py": (
+            "app/crm/connectivity/actions/perform.py": (
                 "from app.crm.connectivity.providers.shopify.actions import S\n"
             )
         },
@@ -379,7 +379,7 @@ def test_onboard_face_outside_connectors_fails(tmp_path: Path) -> None:
     root = _tree(
         tmp_path,
         {
-            "app/crm/connectivity/onboarding.py": (
+            "app/crm/connectivity/accounts/onboarding.py": (
                 "from app.crm.connectivity.providers.whatsapp.onboard import W\n"
             )
         },

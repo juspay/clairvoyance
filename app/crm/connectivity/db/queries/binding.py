@@ -2,7 +2,7 @@
 
 from typing import Any, List, Tuple
 
-from app.crm.connectivity.status import (
+from app.crm.connectivity.vocabulary.status import (
     BINDING_ACTIVE,
     BINDING_PAUSED,
     BINDING_RETIRED,

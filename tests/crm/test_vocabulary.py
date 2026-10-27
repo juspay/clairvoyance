@@ -9,14 +9,15 @@ Why it matters is not tidiness. A status spelled in SQL text is a value
 interpolated into a statement, which CLAUDE.md calls a blocker, and it is a
 second definition of a word whose first definition lives in status.py. The
 day the two disagree, a filter silently returns the wrong half of its rows —
-the scar ProviderTemplateState's docstring records, and the one accounts.py
+the scar ProviderTemplateState's docstring records, and the one accounts/installations.py
 opens with.
 """
 
 import ast
 from pathlib import Path
 
-from app.crm.connectivity import accounts, status
+from app.crm.connectivity.accounts import installations
+from app.crm.connectivity.vocabulary import status
 
 QUERIES_DIR = Path(__file__).resolve().parents[2] / "app/crm/connectivity/db/queries"
 
@@ -121,7 +122,7 @@ def test_every_table_family_has_its_words_in_status_py() -> None:
 
 def test_no_second_home_for_the_manifest_words() -> None:
     """dispatch.py once defined STATUS_QUEUED… beside status.py's words."""
-    from app.crm.connectivity import dispatch
+    from app.crm.connectivity.messaging.outbound import dispatch
 
     assert not [n for n in vars(dispatch) if n.startswith("STATUS_")]
 
@@ -137,7 +138,7 @@ def test_the_builders_were_actually_read() -> None:
 
 
 def test_usable_installation_states_has_one_definition() -> None:
-    """accounts.py keeps the NAME, status.py keeps the words."""
+    """installations.py keeps the NAME, status.py keeps the words."""
     root = Path(__file__).resolve().parents[2] / "app/crm"
     definitions = [
         f"{p}:{n.lineno}"
@@ -151,7 +152,7 @@ def test_usable_installation_states_has_one_definition() -> None:
         and not isinstance(n.value, ast.Name)  # an alias is not a definition
     ]
     assert definitions == [], f"second definition of the policy: {definitions}"
-    assert accounts.USABLE_INSTALLATION_STATES is status.INSTALLATION_USABLE
+    assert installations.USABLE_INSTALLATION_STATES is status.INSTALLATION_USABLE
 
 
 def test_the_vocabularies_match_the_shipped_ddl() -> None:

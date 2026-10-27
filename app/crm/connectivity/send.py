@@ -23,8 +23,9 @@ to a vendor.
 
 Two things this file deliberately does NOT do:
 
-  · Decide what a failure means. It reports; dispatch.py's retry ladder
-    decides. Two deciders would mean two answers to "why was this retried".
+  · Decide what a failure means. It reports; the retry ladder in
+    messaging/outbound/dispatch.py decides. Two deciders would mean two
+    answers to "why was this retried".
   · Write to the route tables — only READ them. Acting on a credential
     rejection (marking degraded, alerting, re-auth) belongs to channel
     lifecycle code; two owners for one lifecycle is how a status flaps.
@@ -35,15 +36,22 @@ from typing import Optional, Union
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
-from app.crm.connectivity import accounts
-from app.crm.connectivity.channels import registers_templates_for
+from app.crm.connectivity.accounts import installations
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
 )
 from app.crm.connectivity.providers import adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
-from app.crm.connectivity.reasons import (
+from app.crm.connectivity.schemas.message import (
+    QueuedMessage,
+    SendOutcome,
+    SendRoute,
+    SendToken,
+)
+from app.crm.connectivity.templates import reads as template_reads
+from app.crm.connectivity.vocabulary.channels import registers_templates_for
+from app.crm.connectivity.vocabulary.reasons import (
     REASON_GATE_REFUSED,
     REASON_INSTALLATION_UNHEALTHY,
     REASON_NO_ADAPTER,
@@ -55,13 +63,6 @@ from app.crm.connectivity.reasons import (
     REASON_TEMPLATE_NOT_APPROVED,
     REASON_TIMEOUT,
 )
-from app.crm.connectivity.schemas.message import (
-    QueuedMessage,
-    SendOutcome,
-    SendRoute,
-    SendToken,
-)
-from app.crm.connectivity.templates import reads as template_reads
 from app.crm.shared.redact import mask_address
 
 # All REASON_* words live in reasons.py — one file, one name per failure
@@ -125,7 +126,7 @@ async def resolve_send_route(
     )
     if installation is None:
         return REASON_NO_INSTALLATION
-    if not accounts.is_usable(installation):
+    if not installations.is_usable(installation):
         logger.warning(
             f"connectivity: installation {installation.id} is "
             f"'{installation.status}' — no route for {merchant_id}/{channel}"
@@ -154,8 +155,8 @@ async def resolve_send_route(
         # refusal should never pay for the dearest step. A DB failure here
         # RAISES rather than answering "no credential" — it rides send()'s
         # catch into a retryable send_error, like a blip on any other read.
-        bundle = await accounts.bundle_for(installation)
-    except accounts.AccountError:
+        bundle = await installations.bundle_for(installation)
+    except installations.AccountError:
         # Vault row gone, deactivated, or it would not decrypt — none of it
         # worth a retry.
         return REASON_NO_CREDENTIAL

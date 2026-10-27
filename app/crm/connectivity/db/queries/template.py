@@ -26,7 +26,7 @@ from app.core.config.static import (
     CRM_TEMPLATE_CLAIM_CRASHED_AFTER_SECONDS,
     CRM_TEMPLATE_EVENT_SKEW_SECONDS,
 )
-from app.crm.connectivity.status import (
+from app.crm.connectivity.vocabulary.status import (
     TEMPLATE_APPROVED,
     TEMPLATE_DELETED,
     TEMPLATE_DRAFT,

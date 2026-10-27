@@ -1,6 +1,6 @@
 """WhatsApp's onboarding face — Meta's Embedded Signup, end to end.
 
-Everything vendor-shaped lives here so `connectivity/onboarding.py` can be
+Everything vendor-shaped lives here so `connectivity/accounts/onboarding.py` can be
 four generic steps: look up the merchant, ask this face for facts, write the
 credential, write the door and its pipe. Reached only through
 connectivity/connectors.py (boundary rule 11).

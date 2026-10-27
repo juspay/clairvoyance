@@ -13,11 +13,17 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.crm.connectivity import (
-    accounts as accounts_module,
+from app.crm.connectivity.accounts import (
+    installations as installations_module,
     onboarding as onboarding_module,
 )
-from app.crm.connectivity.channels import CHANNELS
+from app.crm.connectivity.accounts.onboarding import (
+    OnboardingError,
+    ResubscribeRefused,
+    UnknownConnectorError,
+    disconnect,
+    onboard,
+)
 from app.crm.connectivity.connectors import (
     CONNECTORS,
     ConnectorSpec,
@@ -26,13 +32,6 @@ from app.crm.connectivity.connectors import (
     sending_connectors,
 )
 from app.crm.connectivity.db import UniqueViolation
-from app.crm.connectivity.onboarding import (
-    OnboardingError,
-    ResubscribeRefused,
-    UnknownConnectorError,
-    disconnect,
-    onboard,
-)
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.providers.whatsapp.onboard import (
     OnboardWhatsappRequest,
@@ -45,6 +44,7 @@ from app.crm.connectivity.schemas.connector import (
     InstallationRead,
     OnboardResult,
 )
+from app.crm.connectivity.vocabulary.channels import CHANNELS
 from tests.crm.doubles import (
     FakeInstallationAccessor,
     stub_graph,
@@ -580,7 +580,7 @@ async def test_disconnect_tells_the_provider_before_it_touches_the_rows(
         """Test double: the vault read behind the revoke."""
         return _Credential()
 
-    monkeypatch.setattr(accounts_module, "get_credential_by_id", _credential)
+    monkeypatch.setattr(installations_module, "get_credential_by_id", _credential)
 
     result = await disconnect("shop", "i-1")
     assert result is not None and result.status == "revoked"
@@ -971,7 +971,7 @@ def _patch_resubscribe(
             raise bundle
         return bundle
 
-    monkeypatch.setattr(onboarding_module.accounts, "bundle_for", _bundle_for)
+    monkeypatch.setattr(onboarding_module.installations, "bundle_for", _bundle_for)
 
     if spec == "default":
         built = ConnectorSpec(
@@ -1072,7 +1072,9 @@ async def test_a_connector_without_the_verb_is_refused_before_the_vault(
         """Test double: must never be reached."""
         vault_reads.append(installation.id)
 
-    monkeypatch.setattr(onboarding_module.accounts, "bundle_for", _recording_bundle)
+    monkeypatch.setattr(
+        onboarding_module.installations, "bundle_for", _recording_bundle
+    )
     with pytest.raises(OnboardingError) as caught:
         await onboarding_module.resubscribe("m-1", "i-1")
     assert "no webhook subscription" in str(caught.value)
@@ -1081,7 +1083,7 @@ async def test_a_connector_without_the_verb_is_refused_before_the_vault(
 
 async def test_unusable_credentials_are_a_refusal_not_a_crash(monkeypatch) -> None:
     """Unusable credentials are a refusal, not a crash."""
-    _patch_resubscribe(monkeypatch, bundle=accounts_module.AccountError("gone"))
+    _patch_resubscribe(monkeypatch, bundle=installations_module.AccountError("gone"))
     with pytest.raises(OnboardingError) as caught:
         await onboarding_module.resubscribe("m-1", "i-1")
     assert "credentials" in str(caught.value)

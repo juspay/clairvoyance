@@ -12,9 +12,9 @@ producer as the owner of the validating dictionary.
 
 from typing import Any, Dict, Optional
 
-from app.crm.connectivity.channels import gate_handle_kind_for
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.schemas.message import SendBehind
+from app.crm.connectivity.vocabulary.channels import gate_handle_kind_for
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
 # T16 col 7. What caused the send; every funnel groups on this.

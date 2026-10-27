@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.logger import logger
 from app.core.logger.context import update_log_context
-from app.crm.connectivity import accounts
+from app.crm.connectivity.accounts import installations
 from app.crm.connectivity.connectors import (
     ConnectorHandshakeError,
     ConnectorSpec,
@@ -46,7 +46,7 @@ from app.crm.connectivity.schemas.connector import (
     OnboardResult,
     SignupConfig,
 )
-from app.crm.connectivity.status import (
+from app.crm.connectivity.vocabulary.status import (
     BINDING_RETIRED,
     INSTALLATION_CONNECTING,
     INSTALLATION_DEGRADED,
@@ -411,9 +411,9 @@ async def _revoke_at_provider(
     if spec is None or not installation.credential_id:
         return
     try:
-        bundle = await accounts.bundle_for(installation)
+        bundle = await installations.bundle_for(installation)
         await spec.onboarder.revoke(bundle, installation.external_account_id)
-    except accounts.AccountError:
+    except installations.AccountError:
         # No usable credential to revoke WITH. Nothing to tell the provider,
         # and nothing to warn about — the local disconnect proceeds.
         return
@@ -485,8 +485,8 @@ async def resubscribe(
         )
 
     try:
-        bundle = await accounts.bundle_for(installation)
-    except accounts.AccountError:
+        bundle = await installations.bundle_for(installation)
+    except installations.AccountError:
         # Vault row gone, deactivated, or undecryptable — one fact from
         # here: no usable secret to subscribe with. (A vault OUTAGE raises
         # past this except and surfaces as the route's 500, never as

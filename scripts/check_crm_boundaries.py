@@ -106,7 +106,7 @@ PROVIDER_FACES = (
         ("connectors",),
     ),
     # the action face: what a run may ask a connector to DO. Same root as
-    # the other non-send faces — actions.py drives them THROUGH the registry
+    # the other non-send faces — actions/perform.py drives them THROUGH the registry
     # connectors.py assembles, so it never imports a provider and needs no
     # door of its own. Its transport (shopify/via_nautilus.py) matches
     # nothing here on purpose: like meta/graph.py it never leaves

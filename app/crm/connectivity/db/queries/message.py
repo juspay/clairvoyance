@@ -12,11 +12,11 @@ reads it through that layer's accessor, never SQL from here.
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.crm.connectivity.reasons import (
+from app.crm.connectivity.vocabulary.reasons import (
     REASON_ATTEMPTS_EXHAUSTED,
     REASON_RECLAIMED_STALE_CLAIM,
 )
-from app.crm.connectivity.status import (
+from app.crm.connectivity.vocabulary.status import (
     MESSAGE_DEAD,
     MESSAGE_QUEUED,
     MESSAGE_SENDING,

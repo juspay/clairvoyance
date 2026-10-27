@@ -53,7 +53,7 @@ def gate_handle_kind_for(channel: str) -> Optional[str]:
     """The handle kind the gate probes for ``channel``.
 
     None means unregistered, and the gate fails CLOSED on it
-    (dispatch._gate) — a channel this registry cannot describe must not
+    (gate.gate()) — a channel this registry cannot describe must not
     slip past the one check a person who said STOP is protected by.
     """
     entry = CHANNELS.get(channel)

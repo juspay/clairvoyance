@@ -13,8 +13,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
-from app.crm.connectivity import api as connectivity_api, onboarding
-from app.crm.connectivity.onboarding import UnknownConnectorError
+from app.crm.connectivity import api as connectivity_api
+from app.crm.connectivity.accounts import onboarding
+from app.crm.connectivity.accounts.onboarding import UnknownConnectorError
 from app.crm.connectivity.providers.whatsapp import onboard as whatsapp_onboard
 
 

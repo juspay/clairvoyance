@@ -16,7 +16,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.crm.connectivity import accounts as accounts_module
+from app.crm.connectivity.accounts import installations as installations_module
 from app.crm.connectivity.db.accessors import template as template_accessor_module
 from app.crm.connectivity.db.queries.template import (
     claim_for_submit_query,
@@ -355,9 +355,9 @@ def _patch(monkeypatch, *, templates=None, installation=None, provider=None):
         return (0, 0)
 
     monkeypatch.setattr(templates_module, "template_accessor", accessor)
-    monkeypatch.setattr(accounts_module, "installation_accessor", installations)
+    monkeypatch.setattr(installations_module, "installation_accessor", installations)
     monkeypatch.setattr(templates_module, "atomically", _atomically)
-    monkeypatch.setattr(accounts_module, "get_credential_by_id", _credential)
+    monkeypatch.setattr(installations_module, "get_credential_by_id", _credential)
     monkeypatch.setattr(templates_module, "connector_for_channel", lambda c: spec)
     monkeypatch.setattr(retire_guard_module, "_retire_guard", _no_open_runs)
     return accessor, face
@@ -377,7 +377,7 @@ async def test_a_draft_on_an_unconnected_account_is_refused(monkeypatch) -> None
     to submit with, so it is refused here rather than at submit."""
     _patch(monkeypatch, installation=None)
     monkeypatch.setattr(
-        accounts_module, "installation_accessor", FakeInstallationAccessor(None)
+        installations_module, "installation_accessor", FakeInstallationAccessor(None)
     )
     with pytest.raises(TemplateError, match="no connected account"):
         await create_draft("shop", "whatsapp", "waba-9", "n", "en_US", [])
@@ -863,12 +863,13 @@ def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
 
 # --- rollout phase 08: the registry's publish-time read ----------------------
 
-from app.crm.connectivity import channels as channels_module, contracts
+from app.crm.connectivity import contracts
 from app.crm.connectivity.db.queries.template import templates_by_name_query
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.connectivity.templates.lifecycle import (  # noqa: F401
     TemplateInUseError as _InUse,
 )
+from app.crm.connectivity.vocabulary import channels as channels_module
 
 
 def test_templates_by_name_read_is_merchant_first_and_parameterised() -> None:

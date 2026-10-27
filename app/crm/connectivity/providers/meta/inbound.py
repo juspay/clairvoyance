@@ -36,7 +36,7 @@ from app.crm.connectivity.schemas.ingress import (
     OWNER_ENDPOINT,
     ProviderLetter,
 )
-from app.crm.connectivity.topics import (
+from app.crm.connectivity.vocabulary.topics import (
     TOPIC_ACCOUNT,
     TOPIC_INBOUND,
     TOPIC_STATUS,

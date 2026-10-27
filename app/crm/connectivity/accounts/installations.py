@@ -26,7 +26,7 @@ not decrypt) is a refusal.
 from app.crm.connectivity.db.accessors import installation as installation_accessor
 from app.crm.connectivity.schemas.connector import ConnectorInstallation
 from app.crm.connectivity.schemas.message import CredentialBundle
-from app.crm.connectivity.status import INSTALLATION_USABLE
+from app.crm.connectivity.vocabulary.status import INSTALLATION_USABLE
 from app.database.accessor.breeze_buddy.credentials import get_credential_by_id
 
 #: Kept as a name here because this file IS the door policy and three callers

@@ -29,7 +29,6 @@ import httpx
 from pydantic import BaseModel
 
 from app.core.logger import logger
-from app.crm.connectivity.reasons import REASON_TRANSPORT
 from app.crm.connectivity.schemas.connector import (
     ConnectorInstallation,
     OnboardResult,
@@ -41,6 +40,7 @@ from app.crm.connectivity.schemas.message import (
     SendRoute,
 )
 from app.crm.connectivity.schemas.template import ProviderTemplateState, TemplateDraft
+from app.crm.connectivity.vocabulary.reasons import REASON_TRANSPORT
 from app.crm.shared.redact import mask_address
 
 # All REASON_* words live in reasons.py — one file, one name per failure

@@ -13,7 +13,7 @@ import hmac
 import pytest
 
 from app.crm.connectivity.providers.meta import inbound
-from app.crm.connectivity.topics import (
+from app.crm.connectivity.vocabulary.topics import (
     TOPIC_ACCOUNT,
     TOPIC_INBOUND,
     TOPIC_STATUS,

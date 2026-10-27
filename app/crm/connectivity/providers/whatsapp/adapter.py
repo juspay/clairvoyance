@@ -34,13 +34,13 @@ from app.crm.connectivity.providers.whatsapp.payload import (
     flow_button_indexes,
     to_meta_recipient,
 )
-from app.crm.connectivity.reasons import (
+from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendRoute
+from app.crm.connectivity.vocabulary.reasons import (
     REASON_BAD_ADDRESS,
     REASON_BAD_VARIABLES,
     REASON_NO_CREDENTIAL,
     REASON_NO_TEMPLATE,
 )
-from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendRoute
 from app.crm.shared.redact import mask_address, mask_digit_runs
 
 # The Cloud API's own default, used only when the route carries no registry

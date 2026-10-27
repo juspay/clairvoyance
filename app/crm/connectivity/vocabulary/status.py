@@ -17,7 +17,7 @@ PROVIDER's, "Meta has renamed categories before and will add statuses we have
 not seen", and the provider face normalises an unknown word to lowercase
 rather than rejecting it. So this file is not a validator and must never grow
 into one. It is the one home for the words we BRANCH on, so that a filter and
-the statement it filters cannot drift apart — the scar accounts.py opens with,
+the statement it filters cannot drift apart — the scar accounts/installations.py opens with,
 where "usable installation" had two definitions and the day they diverged the
 miss was silent.
 

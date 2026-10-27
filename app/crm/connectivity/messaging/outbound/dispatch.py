@@ -8,13 +8,10 @@ The loop itself is not here: claim_sends()/dispatch_send() plug into the
 shared drain-loop scaffold (app/crm/shared/worker.py) as the "dispatcher"
 role in app/crm/worker_main.py. This file owns only what a row means.
 
-The gate exists as a thin slice: _gate() below probes platform suppression
-(fail closed) before every send, and a refusal writes a 'blocked' row. The
-full may_contact() — consent, purpose, quiet hours — replaces _gate's body
-with B5; the call site never changes.
+The gate (messaging/gate.py) is asked before every send, and a refusal
+writes a 'blocked' row.
 """
 
-import asyncio
 import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,30 +21,27 @@ from app.core.config.static import (
     CRM_DISPATCH_MAX_ATTEMPTS,
     CRM_DISPATCH_RETRY_BASE_SECONDS,
     CRM_DISPATCH_STALE_MINUTES,
-    CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
 )
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
-from app.crm.connectivity.channels import gate_handle_kind_for
 from app.crm.connectivity.db.accessors import message as message_accessor
-from app.crm.connectivity.reasons import (
+from app.crm.connectivity.messaging.gate import gate, mint_send_token
+from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
+from app.crm.connectivity.send import send
+from app.crm.connectivity.vocabulary.reasons import (
     REASON_ATTEMPTS_EXHAUSTED,
     REASON_GATE_UNAVAILABLE,
     REASON_PROVIDER_REJECTED,
     REASON_SEND_ERROR,
-    REASON_SUPPRESSED,
     reason_class,
 )
-from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome, SendToken
-from app.crm.connectivity.send import send
-from app.crm.connectivity.status import (
+from app.crm.connectivity.vocabulary.status import (
     MESSAGE_ACCEPTED,
     MESSAGE_BLOCKED,
     MESSAGE_DEAD,
     MESSAGE_FAILED,
     MESSAGE_QUEUED,
 )
-from app.crm.platform.contracts import is_suppressed
 
 LOG_COMPONENT = "crm.connectivity.dispatch"
 
@@ -175,65 +169,6 @@ def plan_for_outcome(
     )
 
 
-async def _gate(message: QueuedMessage) -> Optional[str]:
-    """Returns a refusal reason, or None to allow. may_contact() (B5)
-    replaces this body; the call site never changes.
-
-    The thin slice that exists today is the one check a person who said
-    STOP is protected by: platform's suppression probe, which itself fails
-    closed (a DB error inside it reads as suppressed). Consent, purpose and
-    quiet hours arrive with the full gate.
-    """
-    # TODO(permission): the full gate must ALSO call may_contact() (B5) —
-    # consent from the consent table, purpose authorisation, quiet hours.
-    # Suppression stays as check #1; may_contact() joins it here, and its
-    # decision_id flows into mint_send_token below.
-    kind = gate_handle_kind_for(message.channel)
-    if kind is None:
-        # A channel the gate cannot check must not slip through unchecked.
-        return REASON_GATE_UNAVAILABLE
-    try:
-        # Same deadline law as send(): the probe reads the same pool, and a
-        # hung probe stalls the serial batch past the claim lease exactly
-        # like a hung provider — same reassigned tail, same double send. The
-        # lease-pin test bounds BATCH × timeout × 2, which covers this
-        # deadline plus send()'s.
-        if await asyncio.wait_for(
-            is_suppressed({kind: message.sent_to_address}),
-            timeout=CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
-        ):
-            return REASON_SUPPRESSED
-    except asyncio.TimeoutError:
-        # Fail closed, not retry-later-by-word: nothing was sent, so this is
-        # OUR refusal, same as a probe that raised.
-        logger.error(
-            f"gate probe timed out after {CRM_MESSAGE_SEND_TIMEOUT_SECONDS}s "
-            f"for {message.id}"
-        )
-        return REASON_GATE_UNAVAILABLE
-    except Exception as e:
-        # is_suppressed is total by contract; this catches an escape from
-        # OUR plumbing around it. Unknown gate input → NO (ADR 0018).
-        logger.opt(exception=e).error(f"gate probe raised for {message.id}")
-        return REASON_GATE_UNAVAILABLE
-    return None
-
-
-def mint_send_token(message: QueuedMessage) -> SendToken:
-    """The token that names the one message _gate() just allowed.
-
-    Policy lives in _gate(); this mints identity, and send() refuses a token
-    that does not name this exact message — so no adapter was ever wired
-    without one. When may_contact() (B5) replaces _gate's body, its
-    decision_id lands here, tracing a send back to the grant.
-    """
-    return SendToken(
-        message_id=message.id,
-        purpose_key=message.purpose_key,
-        granted=True,
-    )
-
-
 def _jittered(seconds: Optional[int]) -> Optional[int]:
     """Spread retries by +-20%, so a provider outage does not produce a
     synchronised stampede when every backed-off row comes due at once."""
@@ -329,7 +264,7 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         source_kind=message.source_kind,
         source_id=message.source_id,
     )
-    refusal = await _gate(message)
+    refusal = await gate(message)
     if refusal is not None:
         # Blocked before the adapter is ever touched — the row records OUR
         # refusal with its reason, and nothing reaches the provider.

@@ -46,7 +46,7 @@ from app.crm.connectivity.db.accessors import (
     template as template_accessor,
 )
 from app.crm.connectivity.schemas.template import ProviderTemplateState, TemplateRead
-from app.crm.connectivity.topics import (
+from app.crm.connectivity.vocabulary.topics import (
     TEMPLATE_TOPICS,
     TOPIC_TEMPLATE_CATEGORY,
     TOPIC_TEMPLATE_QUALITY,

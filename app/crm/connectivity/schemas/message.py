@@ -76,7 +76,7 @@ class SendOutcome(BaseModel):
 class SendToken(BaseModel):
     """The gate's grant for ONE message. Presented to send(), consumed there.
 
-    dispatch.py mints one only after _gate() allows the message — today the
+    gate.py mints one only after gate() allows the message — today the
     suppression slice (fail closed), until the full may_contact() (consent,
     purpose, quiet hours — the permission module's B5) replaces the gate's
     body. send() refuses a token that does not name this exact message, so

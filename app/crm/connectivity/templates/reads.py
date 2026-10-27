@@ -26,7 +26,7 @@ from app.crm.connectivity.schemas.template import (
     TemplateRead,
     TemplateVerdict,
 )
-from app.crm.connectivity.status import TEMPLATE_APPROVED
+from app.crm.connectivity.vocabulary.status import TEMPLATE_APPROVED
 
 
 async def get(merchant_id: str, template_id: str) -> Optional[TemplateRead]:
