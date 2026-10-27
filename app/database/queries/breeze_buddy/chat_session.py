@@ -18,11 +18,12 @@ _SESSION_COLUMNS = """
     id, template_id, reseller_id, merchant_id,
     status, outcome, current_node, metadata,
     current_channel, voice_lead_id,
-    created_at, last_activity_at, ended_at, ended_reason
+    created_at, last_activity_at, ended_at, ended_reason, feedback
 """
 
 _MESSAGE_COLUMNS = """
-    session_id, idx, role, content, content_blocks, ui_blocks, created_at
+    session_id, idx, role, content, content_blocks, ui_blocks, feedback,
+    created_at
 """
 
 _AGENT_STATE_COLUMNS = """
