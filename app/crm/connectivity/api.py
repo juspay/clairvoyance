@@ -43,6 +43,7 @@ from app.crm.auth import merchant_scope
 from app.crm.connectivity import contracts
 from app.crm.connectivity.accounts.channel_settings import SettingsError
 from app.crm.connectivity.accounts.onboarding import (
+    AccountHeldError,
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,
@@ -80,17 +81,20 @@ def translate(error: Exception) -> Optional[HTTPException]:
     declined (a template still in use, a recovery the provider refused);
     422 for a body the registry's own model rejects — ``include_input=False``
     because pydantic v2 puts each error's INPUT in the detail, and a bad
-    onboard body would echo the one-shot signup code straight back; 400 for
-    every other refusal, with the reason.
+    onboard body would echo the one-shot signup code straight back;
+    ``include_context=False`` because a field validator's ValueError rides in
+    the context as the exception object itself, which is not JSON and turned
+    the 422 into a 500 (the message is already in ``msg``); 400 for every
+    other refusal, with the reason.
     """
     if isinstance(error, (UnknownConnectorError, TemplateNotFoundError)):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
-    if isinstance(error, (TemplateInUseError, ResubscribeRefused)):
+    if isinstance(error, (TemplateInUseError, ResubscribeRefused, AccountHeldError)):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
     if isinstance(error, ValidationError):
         return HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=error.errors(include_input=False),
+            detail=error.errors(include_input=False, include_context=False),
         )
     if isinstance(error, (OnboardingError, TemplateError, SettingsError)):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
