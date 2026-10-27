@@ -601,12 +601,19 @@ async def test_websocket_created_lead_owns_the_channel(monkeypatch):
 
     captured: dict = {}
 
+    class _Configurations:
+        enable_inbound = True
+
     class _Template:
         id = "tmpl-1"
         name = "support"
         reseller_id = "res-1"
         merchant_id = "merchant-1"
         telephony_number_id = "num-1"
+        configurations = _Configurations()
+
+    class _Number:
+        id = "num-1"
 
     async def no_existing_lead(_call_sid):
         return None
@@ -614,20 +621,27 @@ async def test_websocket_created_lead_owns_the_channel(monkeypatch):
     async def fake_get_template(_id):
         return _Template()
 
+    async def fake_get_number(_to):
+        return _Number()
+
     async def fake_create(**kwargs):
         captured.update(kwargs)
         return make_inbound_lead()
 
     monkeypatch.setattr(ws_inbound, "get_lead_by_call_id", no_existing_lead)
     monkeypatch.setattr(ws_inbound, "get_template_by_id", fake_get_template)
+    monkeypatch.setattr(ws_inbound, "get_telephony_number_by_number", fake_get_number)
     monkeypatch.setattr(ws_inbound, "create_lead_call_tracker", fake_create)
 
     from datetime import datetime, timezone
 
+    # The fallback builder (PT-02) only runs for a socket whose lead is missing,
+    # and now requires the dialed number to resolve to the template's own
+    # inbound-enabled binding.
     await ws_inbound.create_lead_from_template_id(
         template_id="tmpl-1",
         call_sid="CALL-1",
-        call_data={},
+        call_data={"to": "+918000000000"},
         call_initiated_time=datetime.now(timezone.utc),
     )
 
