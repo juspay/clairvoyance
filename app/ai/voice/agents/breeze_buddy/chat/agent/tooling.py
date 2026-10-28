@@ -8,8 +8,8 @@ this mixin holds no state of its own — every attribute lives on
 import asyncio
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
+from pipecat.flows import FlowsFunctionSchema
 from pipecat.frames.frames import FunctionCallFromLLM
-from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
     _CHIPS_NUDGE,

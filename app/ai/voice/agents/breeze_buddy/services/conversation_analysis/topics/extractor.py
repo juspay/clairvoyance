@@ -234,7 +234,7 @@ async def _request_llm(
     if runtime["settings"]["stream"]:
         llm = cast(OpenAILLMService, llm)
         params = llm.build_chat_completion_params(
-            llm.get_llm_adapter().get_llm_invocation_params(
+            await llm.get_llm_adapter().get_llm_invocation_params(
                 context,
                 system_instruction=instruction,
                 convert_developer_to_user=not llm.supports_developer_role,

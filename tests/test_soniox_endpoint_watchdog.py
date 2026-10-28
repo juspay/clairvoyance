@@ -246,7 +246,7 @@ async def test_template_finalize_after_secs_flows_to_service(monkeypatch):
     assert svc_default._finalize_after_secs == BREEZE_BUDDY_SONIOX_FINALIZE_AFTER_SECS
     assert svc_default._ws_ping_interval == 3.0
     assert svc_default._ws_ping_timeout == 5.0
-    assert svc_default._ws_close_timeout == 3.0
+    assert svc_default._close_timeout == 3.0
 
 
 def test_soniox_stt_config_accepts_finalize_after_secs():

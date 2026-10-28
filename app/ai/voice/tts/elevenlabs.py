@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import httpx
+import websockets
 from pipecat.services.elevenlabs.tts import (
     ElevenLabsTTSService,
+    ElevenLabsTTSSettings,
     language_to_elevenlabs_language,
 )
 from pipecat.services.tts_service import TextAggregationMode
@@ -19,7 +22,12 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 
-__all__ = ["ElevenLabsConfig", "build_elevenlabs_tts", "_generate_elevenlabs_audio"]
+__all__ = [
+    "ElevenLabsConfig",
+    "ElevenLabsTTSServiceWithQuickClose",
+    "build_elevenlabs_tts",
+    "_generate_elevenlabs_audio",
+]
 
 
 @dataclass
@@ -39,18 +47,36 @@ class ElevenLabsConfig:
     enable_ssml_parsing: bool = False
 
 
+class ElevenLabsTTSServiceWithQuickClose(ElevenLabsTTSService):
+    async def _disconnect_websocket(self):
+        try:
+            await self.stop_all_metrics()
+            if self._websocket:
+                await self._websocket.send(json.dumps({"close_socket": True}))
+                await self._websocket.close()
+        except websockets.ConnectionClosed:
+            pass
+        except Exception as e:
+            await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
+        finally:
+            self._websocket = None
+            self._clear_connection_state()
+            await self._call_event_handler("on_disconnected")
+
+
 def build_elevenlabs_tts(config: ElevenLabsConfig):
     """Create an ElevenLabs TTS service."""
 
     text_filters = list(config.text_filters) if config.text_filters else None
 
-    return ElevenLabsTTSService(
+    return ElevenLabsTTSServiceWithQuickClose(
+        max_consecutive_zero_audio_contexts=0,
         api_key=config.api_key,
         voice_id=config.voice_id,
         model=config.model,
         url=config.url,
         enable_ssml_parsing=config.enable_ssml_parsing,
-        settings=ElevenLabsTTSService.Settings(
+        settings=ElevenLabsTTSSettings(
             speed=config.speed,
             stability=config.stability,
             similarity_boost=config.similarity_boost,

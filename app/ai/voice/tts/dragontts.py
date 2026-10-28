@@ -365,6 +365,7 @@ def build_dragontts_tts(config: DragonTTSConfig) -> DragonTTSService:
         Configured DragonTTSService instance.
     """
     return DragonTTSService(
+        max_consecutive_zero_audio_contexts=0,
         url=config.url,
         model_id=config.model_id,
         voice_id=config.voice_id,

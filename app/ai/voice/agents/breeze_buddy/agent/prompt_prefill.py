@@ -45,6 +45,8 @@ import time
 from typing import Any, Dict, List, NamedTuple, Optional, cast
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.flows.types import FlowsDirectFunctionWrapper, FlowsFunctionSchema
+from pipecat.processors.aggregators.async_tool_messages import ASYNC_TOOL_INSTRUCTIONS
 from pipecat.processors.aggregators.llm_context import (
     NOT_GIVEN,
     LLMContext,
@@ -52,7 +54,6 @@ from pipecat.processors.aggregators.llm_context import (
 )
 from pipecat.services.aws.llm import AWSBedrockLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
-from pipecat_flows.types import FlowsDirectFunctionWrapper, FlowsFunctionSchema
 
 from app.ai.voice.llm import is_openai_model
 from app.ai.voice.llm.types import LLMConfiguration, LLMProvider
@@ -116,16 +117,16 @@ def spawn_prefill(
             logger.info(f"prefill: skipped ({skip})")
             return None
 
-        messages = list(initial_node_config.get("role_messages") or []) + list(
-            initial_node_config.get("task_messages") or []
-        )
-        if not messages:
+        role_message = initial_node_config.get("role_message")
+        messages = list(initial_node_config.get("task_messages") or [])
+        if not messages and not role_message:
             return None
 
         return spawn_background_task(
             prefill_system_prompt(
                 llm_service=llm_service,
                 messages=messages,
+                role_message=role_message,
                 # Evaluated in THIS frame — a bad function entry can raise
                 # here, outside prefill_system_prompt's try. The except below
                 # keeps the never-raises contract: this runs before
@@ -144,10 +145,20 @@ def spawn_prefill(
         return None
 
 
+def prefill_system_instruction(
+    role_message: Optional[str], function_entries: List[Any]
+) -> Optional[str]:
+    parts = [role_message]
+    if any(not entry.cancel_on_interruption for entry in function_entries):
+        parts.append(ASYNC_TOOL_INSTRUCTIONS)
+    return "\n\n".join(part for part in parts if part) or None
+
+
 async def prefill_system_prompt(
     *,
     llm_service: Any,
     messages: List[Dict[str, Any]],
+    role_message: Optional[str],
     function_entries: List[Any],
 ) -> None:
     """Fire the parity request and log the outcome. All failures are logged,
@@ -184,10 +195,11 @@ async def prefill_system_prompt(
             messages=cast(List[LLMContextMessage], messages),
             tools=tools,
         )
+        system_instruction = prefill_system_instruction(role_message, function_entries)
         if isinstance(llm_service, AWSBedrockLLMService):
-            request = _bedrock_prefill(llm_service, context)
+            request = _bedrock_prefill(llm_service, context, system_instruction)
         else:
-            request = _chat_prefill(llm_service, context)
+            request = _chat_prefill(llm_service, context, system_instruction)
         usage = await asyncio.wait_for(request, timeout=_PREFILL_TIMEOUT_SECS)
     except Exception as exc:  # noqa: BLE001 — prefill is best-effort by design
         logger.opt(exception=exc).warning(
@@ -213,12 +225,14 @@ class _PrefillUsage(NamedTuple):
     cache_write: Any
 
 
-async def _chat_prefill(llm_service: Any, context: LLMContext) -> _PrefillUsage:
+async def _chat_prefill(
+    llm_service: Any, context: LLMContext, system_instruction: Optional[str]
+) -> _PrefillUsage:
     """The /chat/completions parity request (see module docstring)."""
     adapter = llm_service.get_llm_adapter()
-    invocation = adapter.get_llm_invocation_params(
+    invocation = await adapter.get_llm_invocation_params(
         context,
-        system_instruction=llm_service._settings.system_instruction,
+        system_instruction=system_instruction,
         convert_developer_to_user=not llm_service.supports_developer_role,
     )
     params = llm_service.build_chat_completion_params(invocation)
@@ -251,7 +265,9 @@ async def _chat_prefill(llm_service: Any, context: LLMContext) -> _PrefillUsage:
 
 
 async def _bedrock_prefill(
-    llm_service: AWSBedrockLLMService, context: LLMContext
+    llm_service: AWSBedrockLLMService,
+    context: LLMContext,
+    system_instruction: Optional[str],
 ) -> _PrefillUsage:
     """The Converse parity request. Bedrock caches the prompt prefix
     (system + tools + messages) automatically, so the request mirrors the
@@ -259,8 +275,8 @@ async def _bedrock_prefill(
     seconds later: turn 1 benefits when the greeting outlasts that, and
     every later call sharing the prefix benefits regardless."""
     adapter = llm_service.get_llm_adapter()
-    invocation = adapter.get_llm_invocation_params(
-        context, system_instruction=llm_service._settings.system_instruction
+    invocation = await adapter.get_llm_invocation_params(
+        context, system_instruction=system_instruction
     )
     # Converse wants alternating roles: the adapter converts any second system
     # or task message to the user role, so the synthetic turn joins that
@@ -287,7 +303,7 @@ async def _bedrock_prefill(
     if invocation["tools"]:
         params["toolConfig"] = {"tools": invocation["tools"]}
 
-    async with llm_service._aws_session.client(
+    async with llm_service._aws_session.create_client(
         service_name="bedrock-runtime", **llm_service._aws_params
     ) as client:
         response = await client.converse(**params)

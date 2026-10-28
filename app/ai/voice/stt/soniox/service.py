@@ -43,7 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Optional
+from typing import Any, Optional, cast
 
 from loguru import logger
 from pipecat.frames.frames import TranscriptionFrame
@@ -98,7 +98,7 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
         self._finalize_after_secs = finalize_after_secs
         self._ws_ping_interval = ws_ping_interval
         self._ws_ping_timeout = ws_ping_timeout
-        self._ws_close_timeout = ws_close_timeout
+        self._close_timeout = ws_close_timeout
         self._finalize_watchdog_task: Optional[asyncio.Task] = None
         self._finalize_sent_this_idle = False
         self._watchdog_finalizes_sent = 0
@@ -149,18 +149,24 @@ class SonioxSTTServiceWithEndpointDelay(SonioxSTTService):
                 # pong the library waits close_timeout (default 10s) for a
                 # graceful close that a dead path can never answer — measured
                 # detection was interval+timeout+~close_timeout.
-                if self._ws_close_timeout is not None:
-                    self._websocket = await websocket_connect(
-                        self._url,
-                        ping_interval=self._ws_ping_interval,
-                        ping_timeout=self._ws_ping_timeout,
-                        close_timeout=self._ws_close_timeout,
+                if self._close_timeout is not None:
+                    self._websocket = cast(
+                        Any,
+                        await websocket_connect(
+                            self._url,
+                            ping_interval=self._ws_ping_interval,
+                            ping_timeout=self._ws_ping_timeout,
+                            close_timeout=self._close_timeout,
+                        ),
                     )
                 else:
-                    self._websocket = await websocket_connect(
-                        self._url,
-                        ping_interval=self._ws_ping_interval,
-                        ping_timeout=self._ws_ping_timeout,
+                    self._websocket = cast(
+                        Any,
+                        await websocket_connect(
+                            self._url,
+                            ping_interval=self._ws_ping_interval,
+                            ping_timeout=self._ws_ping_timeout,
+                        ),
                     )
             else:
                 self._websocket = await websocket_connect(self._url)

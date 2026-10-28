@@ -20,10 +20,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
-    LLMAssistantAggregator,
-    LLMAssistantAggregatorParams,
     LLMContextAggregatorPair,
-    LLMUserAggregator,
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi import (
@@ -33,6 +30,7 @@ from pipecat.processors.frameworks.rtvi import (
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy, BaseUserMuteStrategy
 from pipecat.turns.user_start import (
     BaseUserTurnStartStrategy,
+    ExternalUserTurnStartStrategy,
     MinWordsUserTurnStartStrategy,
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
@@ -44,7 +42,6 @@ from pipecat.turns.user_stop import (
     TurnAnalyzerUserTurnStopStrategy,
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
-from pipecat.utils.utils import obj_count
 
 from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
@@ -76,72 +73,6 @@ from app.core.config.static import (
     ENVIRONMENT,
 )
 from app.core.logger import logger
-
-
-class BreezeAssistantAggregator(LLMAssistantAggregator):
-    """Assistant aggregator that reaps pipecat-flows' orphaned node switches.
-
-    An outcome function that ends the call is still an edge function (a node
-    function would set run_llm=True and the LLM would speak once more before
-    the EndFrame drains — see agent_transfer's inert node), so pipecat-flows
-    schedules its node switch as a follow-up task here
-    (``<fn>:<tool_call_id>:on_context_updated``) after our handler queued
-    EndFrame. Neither pipecat 1.1.0 nor flows 1.0.0 cancels that set on
-    EndFrame: the task waits on a pipeline that is gone until the GC logs
-    "Task was destroyed but it is pending!" once per such call.
-
-    cleanup() is the one race-free place: the pipeline runs it after this
-    processor's input task stopped (no new follow-up can appear) and before
-    PipelineTask checks for dangling tasks. Once the pipeline ended no node
-    switch can run, so every pending one is cancelled.
-    """
-
-    def __init__(self, context: LLMContext, *, params: LLMAssistantAggregatorParams):
-        # Keep the stock name: log filters key on "LLMAssistantAggregator#N".
-        super().__init__(
-            context, params=params, name=f"LLMAssistantAggregator#{obj_count(self)}"
-        )
-
-    async def cleanup(self) -> None:
-        await super().cleanup()
-        # pipecat-private set; say so if an upgrade moved it rather than
-        # silently leaving the orphans (and their noise) behind.
-        tasks = getattr(self, "_context_updated_tasks", None)
-        if tasks is None:
-            logger.warning(
-                f"{self}: pipecat no longer exposes _context_updated_tasks; "
-                "orphaned node switches are not reaped"
-            )
-            return
-        for task in list(tasks):
-            if task.done():
-                continue
-            try:
-                await self.cancel_task(task)
-            except Exception as e:
-                logger.warning(f"{self}: could not cancel {task.get_name()}: {e}")
-
-
-class ContextAggregatorPair(LLMContextAggregatorPair):
-    """LLMContextAggregatorPair whose assistant side is BreezeAssistantAggregator.
-
-    The parent __init__ is the two assignments below; it is not called so no
-    stock assistant aggregator is built and thrown away per pipeline.
-    """
-
-    def __init__(
-        self,
-        context: LLMContext,
-        *,
-        user_params: Optional[LLMUserAggregatorParams] = None,
-        assistant_params: Optional[LLMAssistantAggregatorParams] = None,
-    ):
-        self._user = LLMUserAggregator(
-            context, params=user_params or LLMUserAggregatorParams()
-        )
-        self._assistant = BreezeAssistantAggregator(
-            context, params=assistant_params or LLMAssistantAggregatorParams()
-        )
 
 
 def get_observers(
@@ -407,9 +338,11 @@ async def build_pipeline(
         # UserStartedSpeakingFrame / UserStoppedSpeakingFrame from server-side
         # turn detection. user_idle still works because on_user_turn_idle
         # fires on the aggregator regardless of upstream source.
-        context_aggregator = ContextAggregatorPair(
+        context_aggregator = LLMContextAggregatorPair(
             context,
-            user_params=LLMUserAggregatorParams(user_idle_timeout=user_idle_timeout),
+            user_params=LLMUserAggregatorParams(
+                user_idle_timeout=user_idle_timeout, empty_user_turn=None
+            ),
         )
         user_aggregator = context_aggregator.user()
         _wire_user_idle_event(user_aggregator, user_idle_callback_handler)
@@ -525,6 +458,13 @@ async def build_pipeline(
     else:
         start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
 
+    if (
+        hasattr(stt, "set_self_interrupt")
+        and interruption_config.mode == InterruptionMode.ENABLED
+        and not interruption_config.min_words
+    ):
+        start_strategies.append(ExternalUserTurnStartStrategy())
+
     # --- User turn stop strategy (driven by stt_configuration.turn_detection) ---
     stop_strategies: list[BaseUserTurnStopStrategy] = []
     if turn_detection_mode == TurnDetectionMode.SMART_TURN:
@@ -586,13 +526,14 @@ async def build_pipeline(
     # The aggregator owns the idle timer (user_idle_timeout above); the
     # callback handler is wired via on_user_turn_idle below. Both were
     # resolved before the realtime branch.
-    context_aggregator = ContextAggregatorPair(
+    context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             user_turn_strategies=user_turn_strategies,
             user_mute_strategies=user_mute_strategies,
             vad_analyzer=vad_analyzer,
             user_idle_timeout=user_idle_timeout,
+            empty_user_turn=None,
         ),
     )
 

@@ -18,13 +18,13 @@ from typing import (
     cast,
 )
 
+from pipecat.flows import FlowsFunctionSchema
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import (
     LLMContext,
     LLMContextMessage,
     LLMSpecificMessage,
 )
-from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import (  # noqa: F401
     _ANSWER_NUDGE,

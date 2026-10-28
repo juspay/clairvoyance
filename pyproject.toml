@@ -2,7 +2,7 @@
 name = "clairvoyance"
 version = "0.1.0"
 description = "Clairvoyance AI voice conversation platform"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi==0.115.12",
     "uvicorn==0.34.2",
@@ -15,8 +15,9 @@ dependencies = [
     "websockets>=11.0.3",
     "starlette>=0.27.0",
     "python-dotenv>=1.0.0",
-    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia,aws,smallest]==1.1.0",
-    "pipecat-ai-flows==1.0.0",
+    "pipecat-ai[daily,google,assemblyai,silero,openai,azure,elevenlabs,aic,anthropic,deepgram,soniox,mcp,sarvam,cartesia,aws,smallest]==1.14.0",
+    "anthropic>=0.108.0,<1",
+    "openai<3",
     "loguru",
     "opentelemetry-api",
     "opentelemetry-sdk",

@@ -105,7 +105,9 @@ async def force_teardown_daily_client(client: Any) -> None:
     try:
         cleanup = getattr(client, "_bb_held_cleanup", None)
         if cleanup is not None:
-            await asyncio.wait_for(cleanup(), timeout=_CLEANUP_TIMEOUT_SECS)
+            await asyncio.wait_for(
+                cleanup.__wrapped__(client), timeout=_CLEANUP_TIMEOUT_SECS
+            )
         else:
             # Client was never held (shouldn't happen) — fall back to the
             # raw release, still strictly off-loop.

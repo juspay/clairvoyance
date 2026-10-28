@@ -11,6 +11,7 @@ from typing import Any, Optional
 from fastapi import WebSocket
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
+from pipecat.runner.types import CallData
 from pipecat.runner.utils import _create_telephony_transport
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.daily.transport import DailyParams
@@ -273,7 +274,7 @@ async def create_telephony_transport(
     websocket: WebSocket,
     params: Any,
     transport_type: str,
-    call_data: dict,
+    call_data: CallData,
 ) -> BaseTransport:
     """Build the telephony transport for an already-parsed call.
 

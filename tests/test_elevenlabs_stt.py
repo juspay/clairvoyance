@@ -158,7 +158,7 @@ async def test_language_and_timestamps_flow_to_service(monkeypatch):
         )
     )
     assert isinstance(svc, ElevenLabsRealtimeSTTService)
-    assert svc._settings.language == "hi"
+    assert svc._settings.language == "hin"
     assert svc._include_language_detection is True
     assert svc._include_timestamps is True
 
@@ -265,7 +265,7 @@ async def test_secondary_languages_reach_the_url(monkeypatch):
     ``&`` becomes ``%26`` and Scribe silently gets one nonsense language code
     instead of two real ones — this pins the exact query string so that
     change fails here rather than on a live call."""
-    import pipecat.services.elevenlabs.stt as el_stt
+    import pipecat.services.websocket_service as el_stt
 
     captured = {}
 
@@ -290,7 +290,7 @@ async def test_secondary_languages_reach_the_url(monkeypatch):
     assert captured["url"] == (
         "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
         "?model_id=scribe_v2_realtime"
-        "&language_code=hi"
+        "&language_code=hin"
         "&secondary_languages=en"
         "&audio_format=pcm_16000"
         "&commit_strategy=vad"
@@ -298,11 +298,11 @@ async def test_secondary_languages_reach_the_url(monkeypatch):
         "&enable_logging=false"
     )
     # settings must be restored — a second connect cannot double-append
-    assert svc._settings.language == "hi"
+    assert svc._settings.language == "hin"
 
 
 async def test_no_secondary_languages_leaves_url_untouched(monkeypatch):
-    import pipecat.services.elevenlabs.stt as el_stt
+    import pipecat.services.websocket_service as el_stt
 
     captured = {}
 
@@ -340,7 +340,7 @@ async def test_languages_flow_from_template_to_service(monkeypatch):
         )
     )
     assert isinstance(svc, ElevenLabsRealtimeSTTServiceWithSecondaryLanguages)
-    assert svc._settings.language == "hi"
+    assert svc._settings.language == "hin"
     assert svc._secondary_languages == ["en"]
 
 
@@ -350,7 +350,7 @@ async def test_malformed_secondary_language_cannot_inject_params(monkeypatch):
     pipecat interpolates the value raw, so an ``&`` inside a language code
     would be read as a real query separator — ``"en&enable_logging=true"``
     would switch on logging at ElevenLabs without anyone asking."""
-    import pipecat.services.elevenlabs.stt as el_stt
+    import pipecat.services.websocket_service as el_stt
 
     captured = {}
 
@@ -377,7 +377,7 @@ async def test_malformed_secondary_language_cannot_inject_params(monkeypatch):
     # would read as a regression. What must never appear is the INJECTED value.
     assert "enable_logging=true" not in captured["url"]
     assert "secondary_languages=ta" in captured["url"]
-    assert svc._settings.language == "hi"
+    assert svc._settings.language == "hin"
 
 
 def test_requires_vad_analyzer_only_under_manual_commit():
@@ -432,7 +432,7 @@ def test_unicode_lookalikes_are_rejected():
 
 
 async def test_primary_injection_never_reaches_the_url(monkeypatch):
-    import pipecat.services.elevenlabs.stt as el_stt
+    import pipecat.services.websocket_service as el_stt
 
     captured = {}
 
@@ -487,7 +487,7 @@ async def test_enable_logging_false_reaches_the_wire(monkeypatch):
     """pipecat guards on truthiness, so a plain False is dropped and
     ElevenLabs applies its own retention default. The string "false" is
     truthy and renders as enable_logging=false."""
-    import pipecat.services.elevenlabs.stt as el_stt
+    import pipecat.services.websocket_service as el_stt
 
     captured = {}
 
@@ -528,7 +528,7 @@ async def test_concurrent_connects_do_not_poison_settings(monkeypatch):
     protects the two paths from each other. Without the lock the second
     entrant captures the already-smuggled value as its `original` and, if it
     restores last, leaves settings.language permanently wrong."""
-    import pipecat.services.elevenlabs.stt as el_stt
+    import pipecat.services.websocket_service as el_stt
 
     urls = []
 
@@ -556,7 +556,7 @@ async def test_concurrent_connects_do_not_poison_settings(monkeypatch):
         svc._connect_websocket(),
     )
 
-    assert svc._settings.language == "hi"
+    assert svc._settings.language == "hin"
     # Neither connect may carry a doubled secondary.
     for url in urls:
         assert url.count("secondary_languages=en") == 1
@@ -564,7 +564,7 @@ async def test_concurrent_connects_do_not_poison_settings(monkeypatch):
 
 async def test_repeated_reconnects_never_accumulate(monkeypatch):
     """Sequential reconnects are the common case — the value must stay flat."""
-    import pipecat.services.elevenlabs.stt as el_stt
+    import pipecat.services.websocket_service as el_stt
 
     urls = []
 
@@ -588,7 +588,7 @@ async def test_repeated_reconnects_never_accumulate(monkeypatch):
     for _ in range(5):
         await svc._connect_websocket()
 
-    assert svc._settings.language == "hi"
+    assert svc._settings.language == "hin"
     assert all(u.count("secondary_languages=en") == 1 for u in urls)
 
 
