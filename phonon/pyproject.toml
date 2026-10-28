@@ -7,19 +7,31 @@ dependencies = [
     "loguru>=0.7.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.35.0",  # websockets-sansio
+    "websockets>=13.0",
+    "orjson>=3.10.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
     "pyrefly",
+    # The official Deepgram SDK, as a reference client: proves the protocol
+    # really follows Deepgram's format (tests/test_deepgram_client.py).
+    "deepgram-sdk==6.1.1",
 ]
-# Later PRs add: fastapi/uvicorn/websockets/orjson (front-end), and a `gpu`
-# extra with torch and NeMo (real engine). Only stt/model/ may ever import torch.
+# PR-03 adds a `gpu` extra with torch and NeMo (the real engine). Only
+# stt/model/ may ever import torch.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = [
+    # The Deepgram SDK (test-only) still imports websockets' legacy API.
+    "ignore::DeprecationWarning:deepgram.core.websocket_compat",
+    "ignore::DeprecationWarning:websockets.legacy",
+]
 
 [tool.pyrefly]
-project-includes = ["stt", "tests"]
+project-includes = ["stt", "tests", "tools"]

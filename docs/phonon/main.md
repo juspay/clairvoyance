@@ -5,7 +5,7 @@ Nemotron 3.5 model (`mix2_full`) on our own GPUs. It is first used alongside Sar
 (shadow mode) and then, if it holds up, as the main STT provider.
 
 **Status:** design agreed · design load-tested with prototypes · production server not built yet.
-**Start here:** PR-01 is built in three parts — [PR-01.1 Core](prs/pr-01-1-core.md), then [PR-01.2 Model process](prs/pr-01-2-model-process.md), then PR-01.3 Front-end + supervisor.
+**Start here:** PR-01 is built in three parts — [PR-01.1 Core](prs/pr-01-1-core.md), then [PR-01.2 Model process](prs/pr-01-2-model-process.md), then [PR-01.3 Front-end + supervisor](prs/pr-01-3-frontend-supervisor.md).
 **Full design doc (reasoning, diagrams, review):** https://claude.ai/artifact/CiNPw3DLD1Gr2HdpbK7vkP
 
 ## This folder
@@ -16,6 +16,7 @@ docs/phonon/
   prs/                                 one doc per PR, written when we reach it
     pr-01-1-core.md
     pr-01-2-model-process.md
+    pr-01-3-frontend-supervisor.md
   reference/
     load-test-design-guide.md          measured rules and numbers (wins on any measured fact)
 ```
@@ -32,20 +33,23 @@ it updates this file in the same commit.
 | Piece | Where | What it does |
 |---|---|---|
 | **STT server** | `phonon/` at the repo root: self-contained, own `pyproject.toml`, `uv.lock`, `Dockerfile`, image | Loads the model once per GPU and serves hundreds of concurrent calls over WebSocket, one socket per call |
-| **Clairvoyance side** | `STTProvider.NEMOTRON` (`app/ai/voice/agents/breeze_buddy/template/types.py`) + a branch in `create_stt_from_config` (`app/ai/voice/agents/breeze_buddy/stt/__init__.py`) | The server speaks the **Deepgram protocol**, so Pipecat's `DeepgramSTTService(base_url=...)` connects to it. We add provider wiring, fallback, shadow mode |
+| **Clairvoyance side** | `STTProvider.NEMOTRON` (`app/ai/voice/agents/breeze_buddy/template/types.py`) + a branch in `create_stt_from_config` (`app/ai/voice/agents/breeze_buddy/stt/__init__.py`) | Its own **`NemotronSTTService`** (`app/ai/voice/stt/nemotron.py`, a Pipecat STT service) speaks Phonon's Deepgram-style protocol. We add that client, provider wiring, fallback, shadow mode |
 | **Infrastructure** | GKE (asia-south1, `breeze-automatic-prod`), GPU node pool, GCS model bucket | Runs the server next to Clairvoyance, internal-only |
 
 Telephony, VAD/turn detection, LLM and TTS are unchanged.
 
-### Why Deepgram-compatible
+### Why a Deepgram-style protocol
 
-Checked in Pipecat 1.1.0 (`pipecat/services/deepgram/stt.py`):
-- `DeepgramSTTService(base_url=...)` points the client at any host.
-- On `VADUserStoppedSpeakingFrame` it sends `{"type":"Finalize"}`, which is our "finalize now".
-- It sends `KeepAlive` messages and has built-in reconnect (`_do_reconnect`).
-- Auth header is `Authorization: Token <api_key>` (Deepgram SDK `client_wrapper.py`).
-
-So no custom WebSocket client is needed in Clairvoyance.
+Clairvoyance talks to Phonon through its own `NemotronSTTService`, but the
+messages follow Deepgram's live format instead of something invented:
+- It is a well-known, documented shape for streaming STT (connect params in the
+  URL, `Results` with `is_final` / `speech_final` / `from_finalize`,
+  `Finalize` / `KeepAlive` / `CloseStream`).
+- `NemotronSTTService` can follow the structure of Pipecat's Deepgram service
+  (`pipecat/services/deepgram/stt.py`): send `Finalize` on the VAD stop, a
+  `KeepAlive` every few seconds, reconnect on close.
+- A standard Deepgram client works against Phonon too, which the official SDK
+  test proves (`phonon/tests/test_deepgram_client.py`).
 
 ### Why a sub-service inside this repo (the DragonTTS pattern)
 
@@ -95,7 +99,7 @@ One batched step for 200 streams takes 90 ms. The first single-process server to
 for the same step because socket handling and VAD were fighting it for the GIL.
 
 ```
-        Clairvoyance (DeepgramSTTService, base_url → us)   one WebSocket per call
+        Clairvoyance (NemotronSTTService)                   one WebSocket per call
                                │
             port 8098 ── SO_REUSEPORT inside the pod / Service across pods
           ┌──────────────┬─────┴────────┬──────────────┐
@@ -158,8 +162,7 @@ while True:
 
 | Endpoint | Who uses it | Shape |
 |---|---|---|
-| `/v1/listen` | Clairvoyance via Pipecat's `DeepgramSTTService` | **Deepgram-compatible**: query params, binary audio, `Results` (`is_final`, `speech_final`, `from_finalize`), `SpeechStarted`, `UtteranceEnd`; accepts `Finalize`, `KeepAlive`, `CloseStream` |
-| `/v1/audio/stream` | Our tools and tests | Minimal native JSON protocol (start/ready, binary audio, partial/final, close) |
+| `/v1/listen` | Clairvoyance's `NemotronSTTService`; also our tools and tests | **Deepgram-style**: query params, binary audio, `Results` (`is_final`, `speech_final`, `from_finalize`), `SpeechStarted`, `UtteranceEnd`; accepts `Finalize`, `KeepAlive`, `CloseStream` |
 
 - Accept 8–48 kHz PCM16 in 20–100 ms frames; recommend **100 ms**.
 - Every partial carries `audio_end_s`; every final carries `speech_end_s`, `detect_s`, `server_ms`.
@@ -240,7 +243,7 @@ Logs carry `call_id` / stream id; never tokens or raw audio.
 phonon/                project: pyproject.toml  uv.lock  README.md  .env.example  tests/  tools/
   stt/                 the package (`python -m stt`)
     supervisor.py  config.py  ipc.py  log.py  proc.py  metrics.py  auth.py
-    protocol/  native.py  deepgram.py
+    protocol/  deepgram.py
     frontend/  main.py  app.py  session.py  model_link.py  vad.py
     model/     main.py  ingest.py  streams.py  scheduler.py  engine.py  fake_engine.py  nemo_engine.py  vad_gpu.py
 ```
@@ -263,8 +266,8 @@ Each PR leaves the server working end to end; later PRs replace a piece, never r
 |---|---|---|---|
 | PR-01.1 | **Core**: engine contract, fake engine, stream table (turns, chunks, finals, overload), IPC message vocabulary, logging and crash safety nets, repo wiring and CI | Table and engine behaviour pinned by tests; no processes yet | [pr-01.1](prs/pr-01-1-core.md) |
 | PR-01.2 | **Model process**: settings, IPC transport, feeder and writers, ingest, model process entry point | The model side works end to end over IPC | [pr-01.2](prs/pr-01-2-model-process.md) |
-| PR-01.3 | **Front-end + supervisor**: protocol, WebSocket front-end, supervisor, end-to-end and failure tests, tools | A socket sends audio and gets fake text back through the full path, on a Mac | later |
-| PR-02 | **Clairvoyance can connect**: Deepgram-compatible `/v1/listen` (`Results`, `Finalize`, `KeepAlive`, `CloseStream`, `SpeechStarted`, `UtteranceEnd`) | Pipecat's `DeepgramSTTService` runs a call against the fake engine | later |
+| PR-01.3 | **Front-end + supervisor**: protocol, WebSocket front-end, supervisor, end-to-end and failure tests, tools | A socket sends audio and gets fake text back through the full path, on a Mac | [pr-01.3](prs/pr-01-3-frontend-supervisor.md) |
+| PR-02 | **Clairvoyance-ready protocol**: the Deepgram endpoint itself landed in PR-01.3; this adds `resume` + a replay allowance in the rate limit (reconnecting clients resend up to 30 s), `SpeechStarted` / `UtteranceEnd` if templates need them, | `NemotronSTTService` (PR-15) runs a call against the fake engine, including a reconnect and replay | later |
 | PR-03 | **Real transcripts**: load the model, batched cache-aware step grouped by step kind (first/later × final/not), batched features, `[gpu]` extra; CUDA errors raised as `FatalEngineError`; a bad stream fails only itself, not its batch | Batched output = one-stream-at-a-time output, token for token | later |
 | PR-04 | **End of speech**: Silero per connection on the front-end, per-tenant silence/pre-roll/max-turn, finals on VAD end or `Finalize` | Finals arrive with the last word, no split mid-sentence on recorded calls | later |
 | PR-05 | **We can measure**: `load_client.py` (staged real-audio load) and `score_run.py` (WER under load) | Baseline capacity, lag and WER recorded for this version | later |
@@ -291,7 +294,7 @@ Each PR leaves the server working end to end; later PRs replace a piece, never r
 
 | # | What | Done when |
 |---|---|---|
-| PR-15 | **Provider wiring**: `STTProvider.NEMOTRON` → `DeepgramSTTService(base_url=...)`, `NEMOTRON_STT_URL` and credential in config, per-template selection and endpointing values validated at template save | A test template runs a full call on Nemotron |
+| PR-15 | **Client + provider wiring**: `NemotronSTTService` (`app/ai/voice/stt/nemotron.py`, a Pipecat STT service speaking Phonon's protocol), `STTProvider.NEMOTRON` → it, `NEMOTRON_STT_URL` and credential in config, per-template selection and endpointing values validated at template save | A test template runs a full call on Nemotron |
 | PR-16 | **Resilience**: Sarvam fallback on 1008 / repeated 1011 / 1013 for the rest of the call, kill switch like DragonTTS's | Server down or full → calls continue on Sarvam |
 | PR-17 | **Shadow mode**: send the same audio to Nemotron while Sarvam's text drives the call; log both | Running on a slice of traffic |
 | Work-5 | Compare shadow results: real-call WER and latency vs Sarvam over several days | Go / no-go decision |
@@ -320,7 +323,7 @@ Each PR leaves the server working end to end; later PRs replace a piece, never r
 | Home | `phonon/` in this repo, DragonTTS pattern | **Decided** |
 | Process model | 1 model process + 4–8 front-ends per GPU | **Decided (measured)** |
 | Batching | Continuous, no timer | **Decided (measured)** |
-| Protocol | Deepgram-compatible `/v1/listen` + native `/v1/audio/stream` | **Decided** |
+| Protocol | Deepgram-compatible `/v1/listen` only (built in PR-01.3); tests and tools use it too, so they exercise what production uses | **Decided** |
 | Final | `Finalize` or VAD end → final step with `keep_all_outputs=True` | **Decided** |
 | Shutdown | Finish open utterances, then 1001 | **Decided** |
 | Precision | fp32; bf16 only after WER parity | **Decided for now** |
@@ -332,8 +335,7 @@ Each PR leaves the server working end to end; later PRs replace a piece, never r
 
 ## 12. Open checks
 
-- How Pipecat 1.1's Deepgram client reacts to close codes 1001 / 1011 / 1013 (PR-02).
-- Which Deepgram query params Clairvoyance sends that the server must accept or ignore (PR-02).
+- How `NemotronSTTService` should react to each close code (1001 / 1011 / 1013): reconnect and replay, or Sarvam (PR-15/16).
 - Whether training call audio was 8 kHz upsampled to 16 kHz, and with which resampler (PR-03).
 - Token expiry on reconnects during calls longer than 1 h (PR-13).
 - CI disk space for a torch image on `ubuntu-latest` (Work-2).
