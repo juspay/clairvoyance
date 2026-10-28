@@ -112,3 +112,8 @@ coverage.xml
 # clairvoyance image. Do NOT remove it thinking it's redundant. dragontts ships
 # its own image via dragontts-docker-publish.yml (context: dragontts).
 dragontts/
+
+# phonon — self-contained STT server (own pyproject/venv under
+# phonon/), same reason as dragontts/ above: LOAD-BEARING, because the
+# clairvoyance Dockerfile does `COPY . .`. Pinned by phonon/tests/test_repo_wiring.py.
+phonon/
