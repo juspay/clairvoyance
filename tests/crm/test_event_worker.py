@@ -27,7 +27,6 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import pytest
 
 import app.crm.record.consumers as record_consumers
-import app.crm.record.extractors.flat as flat_extractor
 import app.crm.record.workers as workers
 import app.crm.shared.worker as worker_mod
 from app.crm.record import catalog
@@ -1080,7 +1079,9 @@ def test_heartbeat_counts_rows_since_the_last_beat(
     assert all(isinstance(n, int) for n in counted)
 
 
-def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
+def test_pass_hands_the_extractors_handles_to_the_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # THE divergence this closes: the extractor searches four places for a
     # phone, the consumer's own payload reader searches three — and the
     # canonical Shopify order keeps its number in customer.default_address,
@@ -1099,16 +1100,19 @@ def test_pass_hands_the_extractors_handles_to_the_consumer() -> None:
     async def fake_consume(event, customer_id, handles, variables):  # type: ignore[no-untyped-def]
         seen["handles"] = handles
 
-    workers.crm_resolve = fake_resolve  # type: ignore[assignment]
-    workers.assert_facts = fake_facts  # type: ignore[assignment]
-    record_consumers._CONSUMERS = [fake_consume]
+    # monkeypatch, not assignment: these are module attributes every later
+    # test in the process reads — set by hand, the fakes outlived this test
+    # (the event worker's DB-backed tests then stamped nobody).
+    monkeypatch.setattr(workers, "crm_resolve", fake_resolve)
+    monkeypatch.setattr(workers, "assert_facts", fake_facts)
+    monkeypatch.setattr(record_consumers, "_CONSUMERS", [fake_consume])
 
     async def fake_stamp(*a: Any, **k: Any) -> None:
         return None
 
-    workers.accessor.stamp_event = fake_stamp  # type: ignore[assignment]
+    monkeypatch.setattr(workers.accessor, "stamp_event", fake_stamp)
     # the discovery nudge writes through the same accessor on a real txn
-    workers.accessor.insert_detected_schema = fake_stamp  # type: ignore[assignment]
+    monkeypatch.setattr(workers.accessor, "insert_detected_schema", fake_stamp)
 
     event = RawEvent(
         id="e1",

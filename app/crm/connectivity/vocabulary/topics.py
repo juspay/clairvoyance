@@ -50,3 +50,11 @@ TOPIC_BUDDY_BOT_MOVED = "binding.buddy_bot_moved"
 #: A provider said something about the connected account itself (a review
 #: decision, a ban, a tier change) — the letters the health probe will read.
 TOPIC_ACCOUNT = "account.update"
+
+#: A person submitted a form a Xyne app posted (Xyne's own event name,
+#: X-Xyne-Event: flow_action). A provider's word, unlike the words above,
+#: and on purpose: a door names its topic alone (canon T19 — entry.source is
+#: a ruling owed), so a topic two sources declare cannot be validated
+#: (record/catalog.py, AmbiguousTopic). Filing these as message.inbound
+#: would make every WhatsApp-reply plan unpublishable.
+TOPIC_FLOW_ACTION = "flow_action"
