@@ -13,9 +13,8 @@ otherwise the pod's default AWS credential chain.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
-import aioboto3
 from aiobotocore.session import AioSession
 from botocore.config import Config
 from botocore.tokens import ScopedEnvTokenProvider
@@ -95,19 +94,19 @@ def build_bedrock_llm(config: BedrockConfig) -> AWSBedrockLLMService:
         # pipecat 1.1.0 builds the session and client config in __init__ with
         # no hook to supply them; re-verify on upgrade.
         service._aws_session = _api_key_session(config.api_key)
-        service._aws_params["config"] = service._aws_params["config"].merge(
-            Config(signature_version="bearer")
-        )
+        service._aws_params["config"] = cast(
+            Config, service._aws_params["config"]
+        ).merge(Config(signature_version="bearer"))
     return service
 
 
-def _api_key_session(api_key: str) -> aioboto3.Session:
+def _api_key_session(api_key: str) -> AioSession:
     session = AioSession()
     session.register_component(
         "token_provider",
         ScopedEnvTokenProvider(session, environ={_BEARER_TOKEN_ENV: api_key}),
     )
-    return aioboto3.Session(botocore_session=session)
+    return session
 
 
 class _StreamClosingBedrockLLMService(AWSBedrockLLMService):

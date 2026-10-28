@@ -13,14 +13,20 @@ import asyncio
 import base64
 from types import SimpleNamespace
 from typing import Any, Optional
+from unittest.mock import MagicMock
 
 import pytest
+from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
-    AudioRawFrame,
+    InputAudioRawFrame,
     TranscriptionFrame,
     VADUserStartedSpeakingFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import (
+    FrameDirection,
+    FrameProcessor,
+    FrameProcessorSetup,
+)
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pydantic import ValidationError
 
@@ -130,9 +136,9 @@ class Harness:
         async def broadcast_interruption():
             pass
 
-        svc.create_task = create_task
+        monkeypatch.setattr(svc, "create_task", create_task)
         svc.cancel_task = cancel_task
-        svc.push_error = push_error
+        monkeypatch.setattr(svc, "push_error", push_error)
         svc.broadcast_frame = broadcast_frame
         svc.broadcast_interruption = broadcast_interruption
         svc._sample_rate = 8000
@@ -157,7 +163,7 @@ class Harness:
         svc._websocket_context = None
 
     async def audio(self, payload: bytes) -> None:
-        frame = AudioRawFrame(audio=payload, sample_rate=8000, num_channels=1)
+        frame = InputAudioRawFrame(audio=payload, sample_rate=8000, num_channels=1)
         await self.svc.process_audio_frame(frame, FrameDirection.DOWNSTREAM)
 
 
@@ -267,7 +273,11 @@ async def test_a_short_pause_does_not_close_the_turn_on_its_first_piece():
     fired = asyncio.Event()
     strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)
     strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-    await strat.setup(tm)
+    await strat.setup(
+        FrameProcessorSetup(
+            clock=SystemClock(), task_manager=tm, pipeline_worker=MagicMock()
+        )
+    )
     await strat.process_frame(
         STTMetadataFrame(service_name="sarvam", ttfs_p99_latency=SARVAM_TTFS_P99)
     )
@@ -307,7 +317,11 @@ async def test_a_finalized_segment_ends_the_turn_without_the_stt_timer():
         fired = asyncio.Event()
         strat = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0)
         strat.add_event_handler("on_user_turn_stopped", lambda *_a, **_k: fired.set())
-        await strat.setup(tm)
+        await strat.setup(
+            FrameProcessorSetup(
+                clock=SystemClock(), task_manager=tm, pipeline_worker=MagicMock()
+            )
+        )
         await strat.process_frame(
             STTMetadataFrame(service_name="sarvam", ttfs_p99_latency=SARVAM_TTFS_P99)
         )
@@ -500,22 +514,6 @@ def test_a_bad_silence_window_is_refused_at_parse(block, message):
 def test_a_silence_window_with_the_default_model_parses():
     cfg = _sarvam(negative_frames_count=12, negative_frames_window=16)
     assert cfg.sarvam is not None and cfg.sarvam.negative_frames_window == 16
-
-
-def test_a_default_model_without_vad_params_drops_the_window_at_build(monkeypatch):
-    log = Recorder()
-    monkeypatch.setattr(sarvam_mod, "logger", log)
-    svc = build_sarvam_stt(
-        SarvamConfig(
-            api_key="k",
-            model="saarika:v2.5",
-            sample_rate=8000,
-            negative_frames_count=12,
-            negative_frames_window=16,
-        )
-    )
-    assert svc._settings.negative_frames_count is None
-    assert log.having("warning", "silence window")
 
 
 async def test_a_segment_handled_while_our_vad_start_is_processed_sees_it(
@@ -720,7 +718,9 @@ async def test_with_the_switch_off_the_frame_order_is_unchanged(monkeypatch):
     speech = loop.create_task(h.svc._handle_message(_signal("START_SPEECH")))
     await text
     await speech
-    assert order.index("TranscriptionFrame") < order.index("UserStartedSpeakingFrame")
+    assert order.index("TranscriptionFrame") < order.index(
+        "ProposedUserStartedSpeakingFrame"
+    )
 
 
 def test_a_template_window_wins_over_high_vad_sensitivity(monkeypatch):
@@ -827,7 +827,11 @@ async def test_a_vad_start_crossing_real_processor_queues_is_seen(monkeypatch, h
         upstream.link(p)
         upstream = p
     for p in [stt_queue, *chain]:
-        await p.setup(FrameProcessorSetup(clock=SystemClock(), task_manager=tm))
+        await p.setup(
+            FrameProcessorSetup(
+                clock=SystemClock(), task_manager=tm, pipeline_worker=MagicMock()
+            )
+        )
         await p.queue_frame(StartFrame())
     await asyncio.sleep(0.05)  # every processor started, queues idle
     try:

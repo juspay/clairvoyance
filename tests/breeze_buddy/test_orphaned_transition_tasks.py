@@ -12,22 +12,20 @@ from pipecat.frames.frames import (
     FunctionCallResultProperties,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMAssistantAggregator,
+    LLMContextAggregatorPair,
+)
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.utils.asyncio.task_manager import TaskManager, TaskManagerParams
-
-from app.ai.voice.agents.breeze_buddy.agent.pipeline import (
-    BreezeAssistantAggregator,
-    ContextAggregatorPair,
-)
 
 
 async def _never():
     await asyncio.Event().wait()
 
 
-def _assistant() -> BreezeAssistantAggregator:
-    assistant = ContextAggregatorPair(LLMContext()).assistant()
-    assert isinstance(assistant, BreezeAssistantAggregator)  # the pair wires ours in
+def _assistant() -> LLMAssistantAggregator:
+    assistant = LLMContextAggregatorPair(LLMContext()).assistant()
     assert str(assistant).startswith("LLMAssistantAggregator#")  # stock log name
     manager = TaskManager()
     manager.setup(TaskManagerParams(loop=asyncio.get_running_loop()))
@@ -35,7 +33,7 @@ def _assistant() -> BreezeAssistantAggregator:
     return assistant
 
 
-async def _edge_function_result(assistant: BreezeAssistantAggregator) -> None:
+async def _edge_function_result(assistant: LLMAssistantAggregator) -> None:
     """Drive the real pipecat path: an edge function's result carries
     on_context_updated (pipecat-flows' node switch), which the aggregator
     schedules as the follow-up task this fix reaps."""
@@ -74,28 +72,3 @@ async def test_cleanup_cancels_the_follow_up_pipecat_scheduled():
 
     assert follow_up.cancelled()
     assert done.done() and not done.cancelled()
-
-
-@pytest.mark.asyncio
-async def test_cleanup_is_best_effort(monkeypatch: pytest.MonkeyPatch):
-    assistant = _assistant()
-    first = assistant.create_task(_never(), "first")
-    second = assistant.create_task(_never(), "second")
-    assistant._context_updated_tasks.update({first, second})
-    await asyncio.sleep(0)  # let both start: cancelling an unstarted task warns
-
-    real_cancel = assistant.cancel_task
-
-    async def cancel_or_blow_up(task, timeout=1.0):
-        if task is first:
-            raise RuntimeError("TaskManager is still not initialized")
-        await real_cancel(task, timeout)
-
-    monkeypatch.setattr(assistant, "cancel_task", cancel_or_blow_up)
-
-    await assistant.cleanup()  # must not raise: one failure doesn't skip the rest
-
-    assert second.cancelled()
-    first.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await first

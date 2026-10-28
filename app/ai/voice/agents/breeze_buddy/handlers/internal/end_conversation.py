@@ -102,6 +102,18 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 f"Collecting transcription from {len(history)} messages for call {context.call_sid}"
             )
 
+            nodes = (getattr(context.bot, "flow_config", None) or {}).get("nodes", {})
+            template_id = getattr(getattr(context.bot, "template", None), "id", None)
+            entered = [
+                entry.get("node_name")
+                for entry in context.lead.metaData.get("node_traversal", [])
+                if entry.get("template_id") == template_id
+            ]
+            for node_name in dict.fromkeys(entered):
+                role_message = (nodes.get(node_name) or {}).get("role_message")
+                if role_message:
+                    transcription.append({"role": "system", "content": role_message})
+
             for msg in history:
                 if (
                     isinstance(msg, dict)
@@ -109,11 +121,14 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                     and "content" in msg
                     and isinstance(msg["content"], str)
                 ):
+                    role = "system" if msg["role"] == "developer" else msg["role"]
                     if (
                         kb_header
-                        and msg["role"] == "system"
+                        and role == "system"
                         and msg["content"].startswith(kb_header)
                     ):
+                        continue
+                    if role == "tool" and msg["content"] == "COMPLETED":
                         continue
                     # Skip Pipecat internal async-tool protocol messages
                     # (tool/developer-role JSON blobs coordinating async tool
@@ -128,12 +143,10 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-                    transcription.append(
-                        {"role": msg["role"], "content": msg["content"]}
-                    )
-                    if msg["role"] in ("user", "assistant"):
+                    transcription.append({"role": role, "content": msg["content"]})
+                    if role in ("user", "assistant"):
                         filtered_transcript.append(
-                            {"role": msg["role"], "content": msg["content"]}
+                            {"role": role, "content": msg["content"]}
                         )
 
             context.lead.metaData["transcription"] = transcription

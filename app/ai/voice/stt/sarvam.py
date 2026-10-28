@@ -164,12 +164,8 @@ class SarvamSTTServiceWithInterruptionPolicy(SarvamSTTService):
     ) -> None:
         # Decided at push time, after pipecat's own awaits in its message
         # handler, so a VAD start handled meanwhile is seen.
-        if (
-            isinstance(frame, TranscriptionFrame)
-            and _SARVAM_DATA_MESSAGE.get()
-            and self._should_finalize()
-        ):
-            frame.finalized = True
+        if isinstance(frame, TranscriptionFrame) and _SARVAM_DATA_MESSAGE.get():
+            frame.finalized = self._should_finalize()
         await super().push_frame(frame, direction)
 
     async def _handle_message(self, message: Any) -> None:
@@ -264,18 +260,12 @@ def build_sarvam_stt(config: SarvamConfig):
         if capabilities
         else "saaras" not in config.model.lower()
     )
-    takes_prompt = (
-        capabilities.supports_prompt
-        if capabilities
-        else "saaras" in config.model.lower()
-    )
-    takes_vad_params = bool(capabilities and capabilities.supports_vad_params)
+    takes_vad_params = capabilities is not None
     language_param = (
         get_sarvam_language(language_code=config.language_code)
         if takes_language
         else None
     )
-    prompt_param = (config.prompt or None) if takes_prompt else None
     if config.language_code and not takes_language:
         logger.warning(
             f"Sarvam model {config.model} does not accept a language; "
@@ -302,7 +292,7 @@ def build_sarvam_stt(config: SarvamConfig):
         high_vad_sensitivity = False
 
     logger.info(
-        f"Using Sarvam STT service with model={config.model}, language={'set' if language_param else 'none'}, prompt={'set' if prompt_param else 'none'}, vad_signals={config.vad_signals}, high_vad_sensitivity={config.high_vad_sensitivity}, negative_frames={negative_frames_count}/{negative_frames_window}, finalize_on_segment={config.finalize_on_segment}"
+        f"Using Sarvam STT service with model={config.model}, language={'set' if language_param else 'none'}, vad_signals={config.vad_signals}, high_vad_sensitivity={config.high_vad_sensitivity}, negative_frames={negative_frames_count}/{negative_frames_window}, finalize_on_segment={config.finalize_on_segment}"
     )
 
     return SarvamSTTServiceWithInterruptionPolicy(
@@ -313,7 +303,6 @@ def build_sarvam_stt(config: SarvamConfig):
         sample_rate=config.sample_rate,
         settings=SarvamSTTService.Settings(
             language=language_param,
-            prompt=prompt_param,
             vad_signals=config.vad_signals if config.vad_signals is not None else True,
             high_vad_sensitivity=(
                 high_vad_sensitivity if high_vad_sensitivity is not None else False

@@ -9,6 +9,7 @@ from fastapi import WebSocket
 from opentelemetry import trace
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.flows import FlowManager
 from pipecat.frames.frames import LLMMessagesAppendFrame, TTSSpeakFrame
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
@@ -16,7 +17,6 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport, parse_telephony_websocket
-from pipecat_flows import FlowManager
 
 from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.agent.approval import (
@@ -32,6 +32,8 @@ from app.ai.voice.agents.breeze_buddy.agent.flow import (
     load_template_config,
     prepare_initial_node,
     setup_flow_manager,
+    task_role_for,
+    with_task_role,
 )
 from app.ai.voice.agents.breeze_buddy.agent.inbound import (
     create_lead_from_template_id,
@@ -1163,7 +1165,7 @@ class Agent:
             self.flow_config,
             self.end_conversation_callbacks,
             self.expected_callback_response_schema,
-        ) = build_flow_config(self.flow_builder, self.template)
+        ) = build_flow_config(self.flow_builder, self.template, self.llm_service)
 
         lead_payload = self.lead.payload or {}
 
@@ -1186,15 +1188,16 @@ class Agent:
             has_greeting_source=bool(self.greeting_source),
             greeting_text=self.greeting_text,
             kb_text=kb_text,
+            llm=self.llm_service,
         )
 
         # Agent-to-agent transfer: seed the incoming generation's initial node
         # with the handoff note (and, in "full" mode, the prior transcript) so
         # the new agent knows it was transferred in. Cleared after use.
         if self._handoff_messages:
-            initial_node_config["task_messages"] = list(self._handoff_messages) + list(
-                initial_node_config.get("task_messages", [])
-            )
+            initial_node_config["task_messages"] = with_task_role(
+                list(self._handoff_messages), task_role_for(self.llm_service)
+            ) + list(initial_node_config.get("task_messages", []))
             self._handoff_messages = []
 
         # Turn-1 prompt-cache prefill (opt-in via llm_configurations).

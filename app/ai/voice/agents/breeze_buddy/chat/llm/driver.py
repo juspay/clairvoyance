@@ -31,6 +31,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+from pipecat.utils.types import assert_given
 
 from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (
     compact_tool_results,
@@ -144,9 +145,9 @@ async def _stream_openai(
     and flush on index advance / stream close.
     """
     adapter = service.get_llm_adapter()
-    invocation_params = adapter.get_llm_invocation_params(
+    invocation_params = await adapter.get_llm_invocation_params(
         context,
-        system_instruction=service._settings.system_instruction,
+        system_instruction=assert_given(service._settings.system_instruction),
         convert_developer_to_user=not service.supports_developer_role,
     )
 
@@ -260,7 +261,7 @@ async def _stream_anthropic(
     # VertexAnthropicLLMService overrides this hook to append a dummy user
     # turn when context ends on assistant — go through the service so the
     # override kicks in.
-    invocation_params = service._get_llm_invocation_params(context)
+    invocation_params = await service._get_llm_invocation_params(context)
 
     settings = service._settings
     params: dict[str, Any] = {

@@ -306,7 +306,7 @@ class SarvamSTTConfig(BaseModel):
             from pipecat.services.sarvam.stt import MODEL_CONFIGS
 
             capabilities = MODEL_CONFIGS.get(self.model)
-            if capabilities is None or not capabilities.supports_vad_params:
+            if capabilities is None:
                 raise ValueError(
                     f"sarvam: model {self.model!r} does not take "
                     "negative_frames_count / negative_frames_window "

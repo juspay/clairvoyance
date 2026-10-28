@@ -15,12 +15,14 @@ from typing import Any, List, Optional, Tuple, cast
 
 import pytest
 from fastapi import WebSocket
-from starlette.responses import HTMLResponse
 
 # dispatch must import first: managers.calls and dispatch.worker import each
 # other, and only this order resolves it (the order the app itself loads them
 # in). "...breeze_buddy" sorts before "...breeze_buddy.managers", so isort
 # keeps this line above the next one on its own.
+from pipecat.runner.types import CallData
+from starlette.responses import HTMLResponse
+
 from app.ai.voice.agents.breeze_buddy import dispatch as _dispatch  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.managers import (
     calls as calls_mod,
@@ -627,7 +629,7 @@ async def test_websocket_created_lead_owns_the_channel(monkeypatch):
     await ws_inbound.create_lead_from_template_id(
         template_id="tmpl-1",
         call_sid="CALL-1",
-        call_data={},
+        call_data=CallData(),
         call_initiated_time=datetime.now(timezone.utc),
     )
 

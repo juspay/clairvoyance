@@ -15,43 +15,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from pipecat.frames.frames import InterimTranscriptionFrame
 from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 from pipecat.transcriptions.language import Language
-from pipecat.utils.time import time_now_iso8601
 
 from app.core.logger import logger
 
 __all__ = [
     "DeepgramFluxConfig",
-    "DeepgramFluxSTTServiceWithInterims",
     "build_deepgram_flux_stt",
 ]
-
-
-class DeepgramFluxSTTServiceWithInterims(DeepgramFluxSTTService):
-    """Flux that also pushes its live ``Update`` transcripts as interim frames.
-
-    Flux sends the running transcript of the caller's turn as ``Update``
-    events, but pipecat 1.1.0 only hands them to an ``on_update`` handler and
-    never pushes a frame. Every other provider pushes interims, and the
-    pipeline's barge-in and ``interruption.min_words`` count words from them.
-    Pushing the updates here, in order and before any final, makes Flux
-    interrupt exactly like Soniox / Nova / ElevenLabs: a "haan" under
-    ``min_words: 10`` does not stop the bot, ten words do.
-
-    Pushed inline (not from the ``on_update`` event handler, which may run
-    as a task) so an interim can never arrive after its turn's final.
-    """
-
-    async def _handle_update(self, transcript: str):
-        await super()._handle_update(transcript)
-        if transcript:
-            await self.push_frame(
-                InterimTranscriptionFrame(
-                    transcript, self._user_id, time_now_iso8601(), None
-                )
-            )
 
 
 @dataclass
@@ -83,7 +55,7 @@ def _hints(codes: list[str]) -> Optional[list[Language]]:
 
 def build_deepgram_flux_stt(
     config: DeepgramFluxConfig,
-) -> DeepgramFluxSTTServiceWithInterims:
+) -> DeepgramFluxSTTService:
     """Create a Deepgram Flux STT service.
 
     ``should_interrupt=False``: with interims flowing, barge-in is the
@@ -111,7 +83,7 @@ def build_deepgram_flux_stt(
         config.eot_timeout_ms,
         config.mip_opt_out,
     )
-    return DeepgramFluxSTTServiceWithInterims(
+    return DeepgramFluxSTTService(
         api_key=config.api_key,
         mip_opt_out=config.mip_opt_out,
         should_interrupt=False,

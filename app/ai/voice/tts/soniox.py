@@ -70,6 +70,7 @@ def build_soniox_tts(config: SonioxTTSConfig) -> SonioxTTSService:
     )
 
     return SonioxTTSService(
+        max_consecutive_zero_audio_contexts=0,
         api_key=config.api_key,
         sample_rate=config.sample_rate,
         audio_format=config.audio_format,

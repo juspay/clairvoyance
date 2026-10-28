@@ -67,6 +67,7 @@ def build_sarvam_tts(config: SarvamTTSConfig):
     )
 
     return SarvamTTSService(
+        max_consecutive_zero_audio_contexts=0,
         api_key=config.api_key,
         voice_id=config.voice_id,
         model=config.model,

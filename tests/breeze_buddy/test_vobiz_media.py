@@ -46,6 +46,7 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     StartFrame,
 )
+from pipecat.runner.types import CallData
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport
 from starlette.websockets import WebSocketState
@@ -437,7 +438,7 @@ async def test_vobiz_transport_hangs_up_through_vobiz_with_the_vobiz_keys(
     params = transport_mod.get_transport_params()["vobiz"]().model_copy(
         update={"add_wav_header": True}
     )
-    call_data = {"stream_id": STREAM_ID, "call_id": CALL_ID}
+    call_data = CallData(stream_id=STREAM_ID, call_id=CALL_ID)
 
     transport = await transport_mod.create_telephony_transport(
         cast(WebSocket, object()), params, "vobiz", call_data
@@ -465,7 +466,7 @@ async def test_vobiz_transport_speaks_the_vobiz_stream_protocol(vobiz_keys):
         cast(WebSocket, object()),
         params,
         "vobiz",
-        {"stream_id": STREAM_ID, "call_id": CALL_ID},
+        CallData(stream_id=STREAM_ID, call_id=CALL_ID),
     )
     serializer = params.serializer
     assert serializer is not None
@@ -497,7 +498,7 @@ async def test_other_providers_still_get_pipecat_s_own_builder(
     pipecat_builder, transport_type
 ):
     params = transport_mod.get_transport_params()[transport_type]()
-    call_data = {"stream_id": STREAM_ID, "call_id": CALL_ID}
+    call_data = CallData(stream_id=STREAM_ID, call_id=CALL_ID)
     ws = cast(WebSocket, object())
 
     transport = await transport_mod.create_telephony_transport(

@@ -50,6 +50,7 @@ def build_cartesia_tts(config: CartesiaConfig) -> CartesiaTTSService:
     """
 
     return CartesiaTTSService(
+        max_consecutive_zero_audio_contexts=0,
         api_key=config.api_key,
         voice_id=config.voice_id,
         model=config.model,

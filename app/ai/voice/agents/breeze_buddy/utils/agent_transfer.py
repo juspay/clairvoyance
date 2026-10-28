@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from pipecat.runner.types import CallData
+
 from app.core.logger import logger
 
 if TYPE_CHECKING:
@@ -63,7 +65,7 @@ class TransportRebuildContext:
     ws_proxy: Any = None  # NonClosingWebSocket over the raw call ws
     runner_args: Optional[RunnerArguments] = None  # daily rebuild
     telephony_transport_type: Optional[str] = None  # telephony rebuild
-    telephony_call_data: Optional[dict] = None
+    telephony_call_data: Optional[CallData] = None
 
 
 def suppress_auto_hangup(transport: Any) -> None:

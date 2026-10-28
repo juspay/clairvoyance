@@ -11,7 +11,6 @@ from .assemblyai import AssemblyAIConfig, build_assemblyai_stt
 from .deepgram import DeepgramConfig, build_deepgram_stt
 from .deepgram_flux import (
     DeepgramFluxConfig,
-    DeepgramFluxSTTServiceWithInterims,
     build_deepgram_flux_stt,
 )
 from .elevenlabs import ElevenLabsConfig, build_elevenlabs_stt
@@ -34,7 +33,6 @@ __all__ = [
     "DeepgramConfig",
     "build_deepgram_stt",
     "DeepgramFluxConfig",
-    "DeepgramFluxSTTServiceWithInterims",
     "build_deepgram_flux_stt",
     # ElevenLabs
     "ElevenLabsConfig",
