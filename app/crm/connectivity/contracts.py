@@ -98,7 +98,7 @@ from app.crm.connectivity.actions.perform import (
     validate_action_args,
 )
 from app.crm.connectivity.connectors import ActionError
-from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.ingress import META_INGRESS, XYNE_INGRESS
 from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
 from app.crm.connectivity.messaging.receipts import consume_status_event
@@ -158,8 +158,9 @@ __all__ = [
     # reason_class stays module-local until something outside connectivity
     # imports it — alert rules read it off the log stream (#1014 lesson).
     "reason_label",
-    # the inbound bay, for app/crm/api.py's one registration line
+    # the inbound bays, for app/crm/api.py's registration lines
     "META_INGRESS",
+    "XYNE_INGRESS",
     # the receipts consumer (worker_main registers)
     "consume_status_event",
     # the merchant's bindings: the template binding, Buddy's binding, settings

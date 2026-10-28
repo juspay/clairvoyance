@@ -6,8 +6,8 @@ Thin routes per module rules §1. ``journey_router`` auths via
 Depends(crm_admin_user) and delegates to timeline.py; ``ingest_router``
 verifies the s2s caller and delegates to ingest.py — store first, 200
 fast, understand later, and nothing here parses the payload;
-``webhook_router`` (GET·POST /{provider}, mounted at /ingest/webhooks)
-carries NO Depends at all — a provider cannot hold a bearer token, so each
+``webhook_router`` (GET·POST /{provider} and the per-account
+POST /{provider}/{bay}, mounted at /ingest/webhooks) carries NO Depends at all — a provider cannot hold a bearer token, so each
 request authenticates by its own ritual inside the registered bay
 (ingress.py records the inversion that keeps rule 12 whole). Separate
 routers, not one, because the doors mount under different prefixes with
@@ -21,7 +21,7 @@ resolved per letter from the receiving endpoint by the bay.
 
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -197,24 +197,16 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         # refused before a single body byte is read.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
-    body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_LETTER_BYTES:
-            return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    body = await _bounded_body(request)
+    if body is None:
+        return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
-    if not spec.verify(bytes(body), request.headers):
+    if not spec.verify(body, request.headers):
         # No detail: a caller who cannot sign has not earned an explanation.
         return Response(status_code=status.HTTP_403_FORBIDDEN)
 
-    try:
-        parsed = json.loads(bytes(body).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        parsed = None
-    if not isinstance(parsed, dict):
-        # Signed by the provider, but not shaped like anything they
-        # document. Worth a 400 and a log line rather than a silent 200.
-        logger.error(f"ingress: a signed {provider} body was not a JSON object")
+    parsed = _signed_object(provider, body)
+    if parsed is None:
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
     letters = await spec.envelope(request.headers, parsed)
@@ -243,6 +235,104 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
             filed += 1
     logger.info(f"ingress: {provider} webhook filed {filed}/{len(letters)} letters")
     return Response(status_code=status.HTTP_200_OK)
+
+
+@webhook_router.post("/{provider}/{bay}")
+async def provider_bay_webhook_route(
+    provider: str, bay: str, request: Request
+) -> Response:
+    """The per-account bay: ``bay`` names the account whose own secret signs
+    this callback (ingress.BayIngressSpec).
+
+    The shared bay's order — bound the read, verify, parse, file — with the
+    merchant the verify ANSWERED handed to the envelope, never resolved a
+    second time. A bay nobody holds is a 403, the same as a wrong
+    signature. A read or a store that fails is a 503 (with the provider's
+    failure body, where it has one): the status a retrying sender
+    understands, the words a person can act on.
+    """
+    set_log_context(component="crm.ingest.webhooks")
+    spec = ingress.BAY_INGRESS.get(provider)
+    if spec is None:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    body = await _bounded_body(request)
+    if body is None:
+        return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    try:
+        merchant_id = await spec.verify(bay, body, request.headers)
+    except Exception:
+        logger.exception(f"ingress: {provider} callback could not be verified")
+        return _bay_answer(spec.failed_reply, status.HTTP_503_SERVICE_UNAVAILABLE)
+    if merchant_id is None:
+        return Response(status_code=status.HTTP_403_FORBIDDEN)
+    set_log_context(merchant_id=merchant_id)
+
+    parsed = _signed_object(provider, body)
+    if parsed is None:
+        return Response(status_code=status.HTTP_400_BAD_REQUEST)
+    try:
+        letters = await spec.envelope(bay, merchant_id, request.headers, parsed)
+    except Exception:
+        logger.exception(f"ingress: {provider} callback could not be enveloped")
+        return _bay_answer(spec.failed_reply, status.HTTP_503_SERVICE_UNAVAILABLE)
+    if not letters:
+        # Genuine, and nothing in it we keep: acknowledged, never an error.
+        return _bay_answer(spec.empty_reply, status.HTTP_200_OK)
+    filed = 0
+    for letter in letters:
+        try:
+            event_id = await ingest_event(
+                merchant_id=letter.merchant_id,
+                source=letter.source,
+                topic=letter.topic,
+                external_id=letter.external_id,
+                payload=letter.payload,
+                occurred_at=letter.occurred_at,
+                schema_version=letter.schema_version,
+            )
+        except Exception as e:
+            logger.error(
+                f"ingress: store failed for {letter.source}/{letter.topic} "
+                f"external_id={letter.external_id}: {e}"
+            )
+            return _bay_answer(spec.failed_reply, status.HTTP_503_SERVICE_UNAVAILABLE)
+        if event_id is not None:
+            filed += 1
+    logger.info(f"ingress: {provider} bay filed {filed}/{len(letters)} letters")
+    return _bay_answer(spec.stored_reply, status.HTTP_200_OK)
+
+
+async def _bounded_body(request: Request) -> Optional[bytes]:
+    """The raw body, or None past MAX_LETTER_BYTES — read as a stream, so a
+    chunked body with no Content-Length is bounded too."""
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_LETTER_BYTES:
+            return None
+    return bytes(body)
+
+
+def _signed_object(provider: str, body: bytes) -> Optional[Dict[str, Any]]:
+    """The verified body as a JSON object, or None. Signed by the provider
+    but not shaped like anything they document: worth a 400 and a log line
+    rather than a silent 200."""
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        parsed = None
+    if not isinstance(parsed, dict):
+        logger.error(f"ingress: a signed {provider} body was not a JSON object")
+        return None
+    return parsed
+
+
+def _bay_answer(reply: Optional[Dict[str, Any]], status_code: int) -> Response:
+    """A bay's answer: the provider's body where it has one, else empty."""
+    if reply is None:
+        return Response(status_code=status_code)
+    return JSONResponse(content=reply, status_code=status_code)
 
 
 # --- The event catalog (design/event-catalog.md; canon T24) -----------------

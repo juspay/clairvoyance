@@ -33,6 +33,7 @@ LINE_MOBILE = PLANS / "line-nudge-mobile.json"
 LINE_PLAYBOOK = PLANS / "line-nudge-playbook.json"
 LINE_CALL_WAIT = PLANS / "line-nudge-call-wait.json"
 LINE_OFFSET = PLANS / "line-nudge-offset.json"
+XYNE_AVAILABILITY = PLANS / "xyne-interview-availability.json"
 # The lending journey on a merchant's OWN events (line-nudge.json): eight
 # non-terminal topics the squares listen on, three terminals the goal ends on.
 LINE_OPEN = [
@@ -170,6 +171,7 @@ def test_the_expected_documents_exist() -> None:
     assert LINE_PLAYBOOK.is_file(), LINE_PLAYBOOK
     assert LINE_CALL_WAIT.is_file(), LINE_CALL_WAIT
     assert LINE_OFFSET.is_file(), LINE_OFFSET
+    assert XYNE_AVAILABILITY.is_file(), XYNE_AVAILABILITY
     assert _every_plan() == [
         CART_FALLBACK,
         CART_RETRY,
@@ -183,6 +185,7 @@ def test_the_expected_documents_exist() -> None:
         LINE_PLAYBOOK,
         LINE,
         LOAN,
+        XYNE_AVAILABILITY,
     ]
 
 

@@ -29,7 +29,12 @@ from app.crm.record.events import (
 from app.crm.record.extractors import CALL_REPORT_SOURCES
 from app.crm.record.extractors.engine import field_value, list_values, variable_name
 from app.crm.record.ingest import record_event
-from app.crm.record.ingress import IngressSpec, register_ingress
+from app.crm.record.ingress import (
+    BayIngressSpec,
+    IngressSpec,
+    register_bay_ingress,
+    register_ingress,
+)
 from app.crm.record.schemas import CatalogField, EventIn, RawEvent, TopicCount
 from app.crm.record.timeline import get_customer_journey
 
@@ -51,6 +56,8 @@ __all__ = [
     # both doors is "one mailroom" made literal.
     "IngressSpec",
     "register_ingress",
+    "BayIngressSpec",
+    "register_bay_ingress",
     "EventIn",
     "CatalogField",
     "TopicCount",
