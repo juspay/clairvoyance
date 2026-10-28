@@ -65,7 +65,10 @@ class FakeInstallationAccessor:
     ``installation`` / ``existing_account``: what the door read answers
     (``get_installation_by_account``) — two names because the templates suite
     seeds "the door behind this template" and the onboarding suite seeds
-    "what is already connected"; ``upsert_returns``: what the write answers.
+    "what is already connected"; ``upsert_returns``: what the write answers;
+    ``other_holder`` / ``other_holder_in_txn``: another merchant holding the
+    account, as the early peek sees it and as the atom sees it under the lock
+    (a racer may land in between).
     """
 
     def __init__(
@@ -74,10 +77,15 @@ class FakeInstallationAccessor:
         *,
         existing_account: Any = None,
         upsert_returns: Any = None,
+        other_holder: Optional[str] = None,
+        other_holder_in_txn: Optional[str] = None,
     ) -> None:
         self.installation = installation
         self.existing_account = existing_account
         self.upsert_returns = upsert_returns
+        self.other_holder = other_holder
+        self.other_holder_in_txn = other_holder_in_txn
+        self.locked: List[tuple] = []
         self.written: Optional[Dict[str, Any]] = None
 
     async def get_installation(self, merchant_id, installation_id):
@@ -87,6 +95,15 @@ class FakeInstallationAccessor:
         if self.existing_account is not None:
             return self.existing_account
         return self.installation
+
+    async def peek_other_account_holder(self, merchant_id, key, account_ref):
+        return self.other_holder
+
+    async def lock_account(self, txn, key, account_ref):
+        self.locked.append((key, account_ref))
+
+    async def other_account_holder(self, txn, merchant_id, key, account_ref):
+        return self.other_holder_in_txn
 
     async def upsert_installation(self, txn, *args):
         self.written = dict(zip(UPSERT_INSTALLATION_FIELDS, args, strict=True))
