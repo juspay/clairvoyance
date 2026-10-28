@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 
 from app.crm.record.extractors import flat
 from app.crm.record.schemas import ABOUT_CUSTOMER, CatalogEntry, Extracted
+from app.crm.shared.handles import ROW_KINDS
 from app.crm.shared.normalize import normalize_email, normalize_phone
 from app.crm.shared.predicate import matches
 
@@ -47,10 +48,13 @@ PAYLOAD_PREFIX = "payload."
 # (core/config/dynamic.py, CRM_CONTEXT_VALUE_MAX_CHARS) moved with it: a
 # value that survives here must also survive the walk into the run.
 VARIABLE_MAX_CHARS = 1000
-# Roles that are handles resolve() probes on — everything but the name.
+# Roles that are handles resolve() probes on — everything but the name. A
+# row kind normalizes by its own entry, so a junk id is dropped here exactly
+# as an unparseable phone is.
 _NORMALIZE: Dict[str, Callable[[str], Optional[str]]] = {
     "phone": normalize_phone,
     "email": normalize_email,
+    **ROW_KINDS,
 }
 _SCALARS = (str, int, float, bool)
 # The declared type whose value is an ARRAY. It is a template variable and
@@ -391,7 +395,13 @@ def extract(payload: Dict[str, Any], spec: DecodeSpec) -> Extracted:
                 facts["name"] = name
             continue
         normalize = _NORMALIZE.get(role)
-        value = normalize(str(raw)) if normalize else str(raw).strip()
+        if role in ROW_KINDS:
+            # Handed over as found: a row kind's normalizer refuses anything
+            # that is not text, where str() would turn True or 0 into an id
+            # many people share.
+            value = normalize(raw) if normalize else None
+        else:
+            value = normalize(str(raw)) if normalize else str(raw).strip()
         if value:
             handles[role] = value
 
