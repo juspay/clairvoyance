@@ -2,9 +2,9 @@
 
 GENERIC on purpose: every inbound face yields the same neutral shape
 (schemas.ProviderLetter), so the owner-to-merchant resolution below works
-for any provider unchanged. The ONLY provider names in this file are the
-spec assemblies at the bottom — one registry-style entry per provider,
-exactly like ADAPTERS and CONNECTORS. Everything provider-specific (wire
+for any provider unchanged. Provider names appear only at the bottom: one
+spec per provider, exactly like ADAPTERS and CONNECTORS — and, for a
+per-account bay (Xyne), the verify that finds that account's secret. Everything provider-specific (wire
 shape, signature, topics, versions) lives in that provider's face under
 providers/.
 
@@ -24,13 +24,15 @@ reader of every ``providers/<x>/inbound.py`` face.
 from typing import Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import app.crm.connectivity.providers.meta.inbound as meta
+import app.crm.connectivity.providers.xyne.inbound as xyne
 from app.core.logger import logger
+from app.crm.connectivity.accounts import installations
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
 )
 from app.crm.connectivity.schemas.ingress import OWNER_ENDPOINT, ProviderLetter
-from app.crm.record.contracts import EventIn, IngressSpec
+from app.crm.record.contracts import BayIngressSpec, EventIn, IngressSpec
 
 
 async def _merchant_for(letter: ProviderLetter) -> Optional[str]:
@@ -85,18 +87,21 @@ async def resolve_letters(letters: List[ProviderLetter]) -> List[EventIn]:
                 f"{letter.owner_kind} no merchant owns"
             )
             continue
-        out.append(
-            EventIn(
-                merchant_id=merchant_id,
-                source=letter.source,
-                topic=letter.topic,
-                external_id=letter.external_id,
-                payload=letter.payload,
-                occurred_at=letter.occurred_at,
-                schema_version=letter.schema_version,
-            )
-        )
+        out.append(_event_in(letter, merchant_id))
     return out
+
+
+def _event_in(letter: ProviderLetter, merchant_id: str) -> EventIn:
+    """A provider letter as record's letter, filed under ``merchant_id``."""
+    return EventIn(
+        merchant_id=merchant_id,
+        source=letter.source,
+        topic=letter.topic,
+        external_id=letter.external_id,
+        payload=letter.payload,
+        occurred_at=letter.occurred_at,
+        schema_version=letter.schema_version,
+    )
 
 
 def envelope_over(
@@ -141,3 +146,65 @@ def status_letter_keys(
         if found is not None:
             return found
     return None
+
+
+async def _xyne_verify(
+    app_id: str, raw_body: bytes, headers: Mapping[str, str]
+) -> Optional[str]:
+    """This app's secret, found by the app id in the URL, checks these bytes;
+    the answer is the merchant whose connection that secret came from.
+
+    That merchant is the one the envelope files under — one lookup for both
+    halves, so the connection that verified a callback is the one that owns
+    it. Fail closed at every step: an app nobody holds, a revoked or
+    disabled connection, a credential that will not load, or a bundle
+    without a signing secret all answer None — the same 403 as a wrong
+    signature. Only a read that fails outright (the database) raises, and
+    the bay answers that with its failure reply.
+    """
+    installation = await installation_accessor.get_installation_for_inbound(
+        xyne.CONNECTOR_KEY, app_id
+    )
+    if installation is None or not installations.is_usable(installation):
+        logger.warning("ingress: xyne callback for an app with no usable connection")
+        return None
+    try:
+        bundle = await installations.bundle_for(installation)
+    except installations.AccountError as e:
+        logger.warning(f"ingress: xyne app credential unusable — {e}")
+        return None
+    if not xyne.verify_signature(
+        raw_body, headers, bundle.secret(xyne.WEBHOOK_SECRET_KEY)
+    ):
+        return None
+    return installation.merchant_id
+
+
+async def _xyne_envelope(
+    app_id: str, merchant_id: str, headers: Mapping[str, str], body: Dict
+) -> List[EventIn]:
+    """Parse (the face's), then file under the merchant verify proved — no
+    second owner lookup, so nothing can change between the two."""
+    return [
+        _event_in(letter, merchant_id) for letter in xyne.letters(body, headers, app_id)
+    ]
+
+
+#: Registered by app/crm/api.py as a PER-APP bay:
+#: POST /ingest/webhooks/xyne/{app_id}. Xyne waits up to 30 s for an
+#: AppActionResponse and shows it in the chat, and never retries — so the
+#: bay answers in its words: the form closes on a stored answer, a plain ack
+#: for what we do not file (a field edit), and on a failure a 503 with the
+#: typed error Xyne renders to the person, who can submit again
+#: (flowController.ts: a non-2xx with {"type":"error"} is shown as sent).
+XYNE_INGRESS = BayIngressSpec(
+    verify=_xyne_verify,
+    envelope=_xyne_envelope,
+    stored_reply={"type": "close_screen", "finalMessage": "Response received"},
+    empty_reply={"type": "ack"},
+    failed_reply={
+        "type": "error",
+        "message": "Couldn't save your response, please submit again",
+        "retryable": True,
+    },
+)
