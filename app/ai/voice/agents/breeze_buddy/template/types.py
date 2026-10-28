@@ -64,6 +64,7 @@ class STTProvider(str, Enum):
     ELEVENLABS = "elevenlabs"
     ASSEMBLYAI = "assemblyai"
     SMALLEST = "smallest"
+    PHONON = "phonon"  # Phonon, our self-hosted STT server
 
 
 class SonioxSTTConfig(BaseModel):
@@ -353,6 +354,27 @@ class SmallestSTTConfig(BaseModel):
                 f"{', '.join(sorted(SMALLEST_LANGUAGES))}"
             )
         return value
+
+
+class PhononSTTConfig(BaseModel):
+    """Phonon, our self-hosted STT server.
+
+    Phonon only transcribes; turn-taking stays with the pipeline's VAD / turn
+    detection, so it takes no ``stt_configuration.end_of_speech_ms`` and needs
+    ``turn_detection='smart_turn'``. Its address and key are the deployment's
+    (PHONON_STT_URL / PHONON_STT_API_KEY), never a template's: a template
+    choosing the address would choose who receives the key.
+    """
+
+    fallback: Literal["sarvam", "none"] = Field(
+        "none",
+        description="STT for the rest of the call when Phonon cannot serve it "
+        "(connect refused, a non-retryable close, retries spent). Opt-in: "
+        "'none' (the default) fails the call's STT instead; 'sarvam' switches "
+        "to Sarvam on the environment's Sarvam key, with this template's "
+        "sarvam block (model, language, ...) except its silence window "
+        "(negative_frames_*), which applies only to provider='sarvam'.",
+    )
 
 
 class ElevenLabsSTTConfig(BaseModel):
@@ -732,6 +754,7 @@ class STTConfiguration(BaseModel):
     elevenlabs: Optional[ElevenLabsSTTConfig] = None
     assemblyai: Optional[AssemblyAISTTConfig] = None
     smallest: Optional[SmallestSTTConfig] = None
+    phonon: Optional[PhononSTTConfig] = None
 
     # SmartTurn ML config — only used when turn_detection='smart_turn'
     smart_turn: Optional[SmartTurnConfig] = None
@@ -751,6 +774,22 @@ class STTConfiguration(BaseModel):
                 "deepgram Flux ends turns itself and ignores SmartTurn: use "
                 "turn_detection='stt_native' (tune eot_threshold / "
                 "eot_timeout_ms) or 'timeout'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _phonon_needs_smart_turn(self) -> "STTConfiguration":
+        """Phonon ends a turn only when the client sends Finalize, on the
+        local VAD's stop. Only smart_turn guarantees a VAD (the global
+        BREEZE_BUDDY_ENABLE_VAD flag is off by default); without one no
+        final arrives until Phonon's 30 s cut, and the bot never replies."""
+        if (
+            self.provider == STTProvider.PHONON
+            and self.turn_detection != TurnDetectionMode.SMART_TURN
+        ):
+            raise ValueError(
+                "provider='phonon' needs turn_detection='smart_turn': Phonon "
+                "has no endpointing of its own; the local VAD ends each turn"
             )
         return self
 
