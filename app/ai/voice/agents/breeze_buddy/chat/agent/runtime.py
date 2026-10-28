@@ -10,6 +10,7 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat_flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.ui.chips import carries_identifier
+from app.crm.connectivity.contracts import conversation_channels
 
 # Each tool-call → handler → re-invoke counts as one cycle. The guard stops a
 # pathological template (handler always returns a transition that loops back)
@@ -21,6 +22,19 @@ from app.ai.voice.agents.breeze_buddy.chat.ui.chips import carries_identifier
 # stops re-searching what it already found, which keeps real turns well under
 # this ceiling; 20 is headroom, not a target.
 _MAX_TOOL_CYCLES = 20
+
+#: A tool result carrying this key ENDS the turn: its value is the turn's
+#: last reply, and no further LLM call runs. Opt-in — only a handler that
+#: means "nothing more should be said" sets it (handoff_to_human: once a
+#: person is asked for, Buddy adds nothing after the waiting message).
+TURN_END_REPLY_KEY = "_end_turn_with"
+
+#: The channels whose sessions answer an inbox thread — every channel that
+#: carries a conversation (connectivity's registry). Their sessions are text
+#: only (no UI catalog, no render_ui, no chips: Buddy replies in text, D32),
+#: and only theirs carry a thread id the agent may act on; on any other
+#: session, metadata is the caller's.
+CONVERSATION_CHANNELS = frozenset(conversation_channels())
 
 # The forced final chips cycle's user-role nudge (quick_replies=
 # 'forced_final'). It rides an internal USER row so live context and

@@ -25,6 +25,7 @@ from app.ai.voice.agents.breeze_buddy.accounts import (
     accounts_for_template,
 )
 from app.ai.voice.agents.breeze_buddy.chat.agent import ChatAgent
+from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import CONVERSATION_CHANNELS
 from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     WIRE_STATUS_BY_DB_STATUS,
     WIRE_STATUS_SUPERSEDED,
@@ -167,6 +168,19 @@ async def build_render_template_vars(
     return merged
 
 
+def thread_of(session: Any) -> Optional[str]:
+    """The inbox thread a session answers, if the server opened it for one.
+
+    Web and widget sessions store caller-supplied metadata, so a
+    ``conversation_id`` there is never trusted: only a thread-bound channel's
+    session (opened by Buddy's inbox answer) carries one."""
+    channel = getattr(session, "channel", None)
+    if channel not in CONVERSATION_CHANNELS or not isinstance(session.metadata, dict):
+        return None
+    thread_id = session.metadata.get("conversation_id")
+    return str(thread_id) if thread_id else None
+
+
 async def run_chat_turn(
     *,
     session_id: str,
@@ -298,6 +312,8 @@ async def run_chat_turn(
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
         custom_components=model_renderable(await resolve_custom_components(template)),
+        channel=getattr(session, "channel", None),
+        conversation_id=thread_of(session),
     )
     async for event in agent.run_turn(
         user_content=user_content,
@@ -395,6 +411,8 @@ async def run_chat_approval_continuation(
         catalog_version=resolve_session_catalog_version(session.metadata),
         merchant_id=session.merchant_id,
         custom_components=model_renderable(await resolve_custom_components(template)),
+        channel=getattr(session, "channel", None),
+        conversation_id=thread_of(session),
     )
     async for event in agent.run_approval_turn(
         approval=claimed,
