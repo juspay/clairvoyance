@@ -320,9 +320,9 @@ class LLMConfiguration(BaseModel):
 
     provider: Optional[LLMProvider] = Field(
         None,
-        description="Text-LLM provider. When unset, defaults to Azure inside "
-        "``get_llm_service``. Ignored when ``realtime`` is set (the realtime "
-        "service handles audio in/out natively).",
+        description="Text-LLM provider. When unset, ``get_llm_service`` uses "
+        "the default: luna (in.openai.gpt-5.6-luna) on AWS Bedrock. Ignored when "
+        "``realtime`` is set (the realtime service handles audio in/out natively).",
     )
     sdk: Optional[LLMSdk] = Field(
         None,

@@ -41,12 +41,13 @@ def kind_of(block: Any) -> str:
 
 def vendor_of(block: Any) -> str:
     """PURE: the vendor a block's provider word names. An unknown word is
-    named ``<kind>:<word>`` so a refusal can say so; no block = Azure,
-    today's default for the text LLM."""
+    named ``<kind>:<word>`` so a refusal can say so; no provider = AWS
+    Bedrock, the text LLM's default (``get_llm_service``), so save-time
+    checks a provider-less block's credential as the call will use it."""
     kind = kind_of(block)
     word = _word(getattr(block, "provider", None))
     if kind == "llm":
-        word = word or "azure"
+        word = word or "aws_bedrock"
         return LLM_VENDOR.get(word) or f"llm:{word}"
     if kind == "realtime":
         return REALTIME_VENDOR.get(str(word)) or f"realtime:{word}"
