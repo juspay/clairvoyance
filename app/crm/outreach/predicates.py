@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Se
 from app.crm.identity.contracts import CustomerFacts
 from app.crm.outreach import ceiling
 from app.crm.outreach.schemas import ConditionRule
+from app.crm.shared.handles import ROW_KIND_NAMES
 from app.crm.shared.predicate import matches
 
 #: The one spelling of "this field reads the customer", shared by the
@@ -76,16 +77,20 @@ class RunLens(NamedTuple):
 
 # Attribute names a predicate may never name: a handle value read into a
 # branch is a handle value read into a log (module rules: logs never carry
-# a phone/email), and the history bucket is not an attribute at all.
-HANDLE_LIKE = frozenset(
-    {
-        "phone",
-        "email",
-        "igsid",
-        "shopify_customer_id",
-        "external_ref",
-        "_handle_history",
-    }
+# a phone/email), the same holds for every row kind, and the history bucket
+# is not an attribute at all.
+HANDLE_LIKE = (
+    frozenset(
+        {
+            "phone",
+            "email",
+            "igsid",
+            "shopify_customer_id",
+            "external_ref",
+            "_handle_history",
+        }
+    )
+    | ROW_KIND_NAMES
 )
 
 _FIELD = re.compile(

@@ -8,7 +8,7 @@ run inside the caller's transaction; the standalone reads manage their
 own. Same file name, same shape, in every module.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -21,9 +21,15 @@ from app.crm.identity.db.queries import (
     find_customer_by_attribute_query,
     get_customer_query,
     insert_customer_query,
+    insert_row_handle_query,
     list_customers_query,
+    live_row_handles_query,
+    lock_live_customer_query,
     merge_customer_query,
     probe_customer_query,
+    probe_row_handle_query,
+    release_live_row_handles_query,
+    release_row_handle_query,
     select_attributes_by_id_query,
     select_attributes_for_update_by_id_query,
     select_attributes_for_update_query,
@@ -90,6 +96,57 @@ async def merge_customer(
 ) -> None:
     query, values = merge_customer_query(loser_id, survivor_id)
     await conn.execute(query, *values)
+
+
+async def probe_row_handle(
+    conn: asyncpg.Connection, merchant_id: str, kind: str, scope: str, value: str
+) -> Optional[asyncpg.Record]:
+    query, values = probe_row_handle_query(merchant_id, kind, scope, value)
+    return await conn.fetchrow(query, *values)
+
+
+async def live_row_handles(
+    conn: asyncpg.Connection, merchant_id: str, customer_id: str
+) -> List[asyncpg.Record]:
+    query, values = live_row_handles_query(merchant_id, customer_id)
+    return await conn.fetch(query, *values)
+
+
+async def insert_row_handle(
+    conn: asyncpg.Connection,
+    merchant_id: str,
+    customer_id: str,
+    kind: str,
+    scope: str,
+    value: str,
+) -> None:
+    query, values = insert_row_handle_query(
+        merchant_id, customer_id, kind, scope, value
+    )
+    await conn.execute(query, *values)
+
+
+async def release_row_handle(
+    conn: asyncpg.Connection, merchant_id: str, customer_id: str, kind: str, scope: str
+) -> None:
+    query, values = release_row_handle_query(merchant_id, customer_id, kind, scope)
+    await conn.execute(query, *values)
+
+
+async def release_live_row_handles(
+    conn: asyncpg.Connection, merchant_id: str, customer_id: str
+) -> List[Tuple[str, str, str]]:
+    """The released rows as (kind, scope, value)."""
+    query, values = release_live_row_handles_query(merchant_id, customer_id)
+    rows = await conn.fetch(query, *values)
+    return [(row["kind"], row["scope"], row["value"]) for row in rows]
+
+
+async def lock_live_customer(
+    conn: asyncpg.Connection, merchant_id: str, customer_id: str
+) -> bool:
+    query, values = lock_live_customer_query(merchant_id, customer_id)
+    return await conn.fetchrow(query, *values) is not None
 
 
 async def fetch_attributes_for_update(

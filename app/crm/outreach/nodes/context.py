@@ -27,6 +27,10 @@ _BOOKKEEPING_KEYS = (
     "goal",  # entry.py: the letter that ended the run, and its amount (phase 09)
     "phone",
     "customer_mobile_number",
+    # Every row-kind handle (app/crm/shared/handles.py; pinned by
+    # tests/crm/test_customer_handles.py): a send reads it from the
+    # customer, so a copy in the context is only a way for it to leak.
+    "xyne_user_id",
     "repeat_event_ids",  # repeat.py: which letters already patched this run
     "repeat_items",  # repeat.py: accumulate's list — never a template variable
     "facts",  # entry.py: each square's letter, by square (phase 16) — flattened below
