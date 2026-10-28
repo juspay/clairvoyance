@@ -18,7 +18,9 @@ from tests.accounts.conftest import ROW
 
 
 def test_each_block_names_the_vendor_its_provider_word_means() -> None:
-    assert vendor_of(LLMConfiguration()) == "azure_openai"
+    # no provider = the text LLM's default (luna on Bedrock), as the call runs it
+    assert vendor_of(LLMConfiguration()) == "aws_bedrock"
+    assert vendor_of(LLMConfiguration(provider="azure")) == "azure_openai"
     assert vendor_of(LLMConfiguration(provider="google_vertex")) == "google_vertex"
     assert vendor_of(LLMConfiguration(provider="aws_bedrock")) == "aws_bedrock"
     assert vendor_of(RealtimeConfig(provider="azure")) == "azure_openai_realtime"

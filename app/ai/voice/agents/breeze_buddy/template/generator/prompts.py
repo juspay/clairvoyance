@@ -426,8 +426,9 @@ Apply these rules exactly when setting `configurations.stt_configuration`,
 `tts_selection_config`.
 
 ### LLM
-Always use `{"provider": "azure", "model": "gpt-4.1-mini"}` unless the
-user explicitly requests a different model.
+Always use exactly this block (luna on AWS Bedrock) unless the user explicitly
+requests a different model. Copy every field as written:
+`{"provider": "aws_bedrock", "model": "in.openai.gpt-5.6-luna", "region": "ap-south-1", "api_key_name": "OPENAI_API_KEY", "temperature": 0.65, "max_tokens": 500, "thinking": {"enabled": false}, "tool_choice": "auto", "function_call_timeout_secs": 10, "prefill_system_prompt": false}`
 
 ### TTS
 | Scenario | Primary TTS | voice_id / model | Overrides | tts_selection_config |
@@ -742,7 +743,7 @@ Before writing the final JSON, verify every item:
 - [ ] `expected_callback_response_schema` contains all fields set via `"source": "llm"` in hooks
 
 **Configuration**
-- [ ] `llm_configurations` set to `azure` / `gpt-4.1-mini` (unless overridden)
+- [ ] `llm_configurations` set to the luna block, every field (unless overridden)
 - [ ] TTS provider chosen from the correct row of the TTS selection table
 - [ ] STT provider chosen from the correct row of the STT selection table
 - [ ] Mixed North+South India templates have `tts_configuration_overrides` + `tts_selection_config`
@@ -843,7 +844,7 @@ mute→unmute pattern, single shared end node for all outcomes.
     "reason": {"type": "string", "optional": true}
   },
   "configurations": {
-    "llm_configurations": {"provider": "azure", "model": "gpt-4.1-mini"},
+    "llm_configurations": {"provider": "aws_bedrock", "model": "in.openai.gpt-5.6-luna", "region": "ap-south-1", "api_key_name": "OPENAI_API_KEY", "temperature": 0.65, "max_tokens": 500, "thinking": {"enabled": false}, "tool_choice": "auto", "function_call_timeout_secs": 10, "prefill_system_prompt": false},
     "tts_configuration":  {"provider": "elevenlabs", "voice_id": "iB2rIwm9cQCRGWoKDRtX", "model": "eleven_flash_v2_5", "speed": 1.0},
     "stt_configuration":  {"provider": "deepgram"},
     "initial_greeting": "Hi {customer_name}, I'm calling from City Clinic to remind you about your appointment on {appointment_date} at {appointment_time}. Will you be able to make it?",
@@ -997,7 +998,7 @@ keyword_filter for Hindi filler words.
     "cancellation_reason": { "optional": true }
   },
   "configurations": {
-    "llm_configurations": { "provider": "azure", "model": "gpt-4.1-mini" },
+    "llm_configurations": {"provider": "aws_bedrock", "model": "in.openai.gpt-5.6-luna", "region": "ap-south-1", "api_key_name": "OPENAI_API_KEY", "temperature": 0.65, "max_tokens": 500, "thinking": {"enabled": false}, "tool_choice": "auto", "function_call_timeout_secs": 10, "prefill_system_prompt": false},
     "stt_configuration": { "provider": "soniox", "language": ["en", "hi"], "soniox": { "enable_language_identification": true } },
     "tts_configuration": { "provider": "cartesia", "voice_id": "a167e0f3-df7e-4d52-a786-6f69d05e5b73", "model": "sonic-2", "language": "hi", "speed": 1.0 },
     "tts_configuration_overrides": {
@@ -1142,7 +1143,7 @@ deepgram STT for English-only inbound.
     "outcome": {}
   },
   "configurations": {
-    "llm_configurations": { "provider": "azure", "model": "gpt-4.1-mini" },
+    "llm_configurations": {"provider": "aws_bedrock", "model": "in.openai.gpt-5.6-luna", "region": "ap-south-1", "api_key_name": "OPENAI_API_KEY", "temperature": 0.65, "max_tokens": 500, "thinking": {"enabled": false}, "tool_choice": "auto", "function_call_timeout_secs": 10, "prefill_system_prompt": false},
     "stt_configuration": { "provider": "deepgram" },
     "tts_configuration": { "provider": "elevenlabs", "voice_id": "iB2rIwm9cQCRGWoKDRtX", "model": "eleven_flash_v2_5", "speed": 1.0 },
     "enable_inbound": true,
@@ -1200,7 +1201,7 @@ supported_channels chat-only.
   },
   "expected_callback_response_schema": {},
   "configurations": {
-    "llm_configurations": { "provider": "azure", "model": "gpt-4.1-mini" },
+    "llm_configurations": {"provider": "aws_bedrock", "model": "in.openai.gpt-5.6-luna", "region": "ap-south-1", "api_key_name": "OPENAI_API_KEY", "temperature": 0.65, "max_tokens": 500, "thinking": {"enabled": false}, "tool_choice": "auto", "function_call_timeout_secs": 10, "prefill_system_prompt": false},
     "ui_catalog": { "enabled_groups": ["core"], "enabled_primitives": [], "disabled_primitives": [] }
   },
   "secrets": null,

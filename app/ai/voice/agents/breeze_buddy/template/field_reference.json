@@ -79,8 +79,16 @@
       "description": "All voice pipeline settings (LLM, STT, TTS, VAD, interruption, etc.). See ConfigurationModel for full field docs. Null means use reseller-level defaults.",
       "example": {
         "llm_configurations": {
-          "provider": "azure",
-          "model": "gpt-4.1-mini"
+          "provider": "aws_bedrock",
+          "model": "in.openai.gpt-5.6-luna",
+          "region": "ap-south-1",
+          "api_key_name": "OPENAI_API_KEY",
+          "temperature": 0.65,
+          "max_tokens": 500,
+          "thinking": {"enabled": false},
+          "tool_choice": "auto",
+          "function_call_timeout_secs": 10,
+          "prefill_system_prompt": false
         },
         "tts_configuration": {
           "provider": "cartesia",
@@ -136,10 +144,18 @@
   },
   "ConfigurationModel": {
     "llm_configurations": {
-      "description": "LLM provider, model, and inference parameters. Always set provider=azure and model=gpt-4.1-mini unless a different LLM is explicitly required.",
+      "description": "LLM provider, model, and inference parameters. Always use this exact block (luna on AWS Bedrock), every field as written, unless a different LLM is explicitly required.",
       "example": {
-        "provider": "azure",
-        "model": "gpt-4.1-mini"
+        "provider": "aws_bedrock",
+        "model": "in.openai.gpt-5.6-luna",
+        "region": "ap-south-1",
+        "api_key_name": "OPENAI_API_KEY",
+        "temperature": 0.65,
+        "max_tokens": 500,
+        "thinking": {"enabled": false},
+        "tool_choice": "auto",
+        "function_call_timeout_secs": 10,
+        "prefill_system_prompt": false
       }
     },
     "stt_configuration": {
@@ -1167,8 +1183,16 @@
     },
     "configurations": {
       "llm_configurations": {
-        "provider": "azure",
-        "model": "gpt-4.1-mini"
+        "provider": "aws_bedrock",
+        "model": "in.openai.gpt-5.6-luna",
+        "region": "ap-south-1",
+        "api_key_name": "OPENAI_API_KEY",
+        "temperature": 0.65,
+        "max_tokens": 500,
+        "thinking": {"enabled": false},
+        "tool_choice": "auto",
+        "function_call_timeout_secs": 10,
+        "prefill_system_prompt": false
       },
       "stt_configuration": {
         "provider": "soniox",

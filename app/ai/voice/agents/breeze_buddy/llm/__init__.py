@@ -4,7 +4,8 @@ Thin wrapper around the shared LLM builders. Reads agent-specific
 environment / dynamic configuration and dispatches to the correct builder.
 
 Dispatch logic:
-  - No config or provider == AZURE  -> build_azure_llm (env defaults, template overrides)
+  - No config / no provider  -> luna on Bedrock (DEFAULT_LLM_CONFIGURATION)
+  - provider == AZURE -> build_azure_llm (env defaults, template overrides)
   - provider == GOOGLE_VERTEX + sdk == ANTHROPIC -> build_claude_vertex_llm (template-only params)
   - provider == GOOGLE_VERTEX + sdk is None/GOOGLE -> build_vertex_llm (template-only params)
   - provider == AWS_BEDROCK -> build_bedrock_llm (template-only params)
@@ -34,6 +35,7 @@ from app.ai.voice.llm import (
     LLMProvider,
     LLMSdk,
     OpenAIConfig,
+    ThinkingConfiguration,
     VertexConfig,
     build_azure_llm,
     build_bedrock_llm,
@@ -54,6 +56,41 @@ from app.core.config.static import (
     OPENAI_MODEL,
 )
 from app.core.logger import logger
+
+# The LLM a template runs on when it names none: luna on Bedrock
+DEFAULT_LLM_CONFIGURATION = LLMConfiguration(
+    provider=LLMProvider.AWS_BEDROCK,
+    model="in.openai.gpt-5.6-luna",
+    region="ap-south-1",
+    api_key_name="OPENAI_API_KEY",
+    temperature=0.65,
+    max_tokens=500,
+    thinking=ThinkingConfiguration(enabled=False),
+    tool_choice="auto",
+    function_call_timeout_secs=10,
+)
+_DEFAULT_LLM_OVERRIDABLE = (
+    "temperature",
+    "max_tokens",
+    "function_call_timeout_secs",
+    "credential_id",
+)
+
+
+def default_llm_configuration(
+    llm_config: LLMConfiguration | None,
+) -> LLMConfiguration:
+    """The luna block, keeping the caller's own temperature, max tokens, tool
+    timeout and credential row when it set them. Reasoning stays off: luna
+    refuses a temperature other than 1 while reasoning is on."""
+    if llm_config is None:
+        return DEFAULT_LLM_CONFIGURATION
+    keep = {
+        name: getattr(llm_config, name)
+        for name in _DEFAULT_LLM_OVERRIDABLE
+        if getattr(llm_config, name) is not None
+    }
+    return DEFAULT_LLM_CONFIGURATION.model_copy(update=keep)
 
 
 async def _resolve_azure(
@@ -371,7 +408,9 @@ async def get_llm_service(
     """Get LLM service instance based on configuration.
 
     Dispatch:
-      - No config / provider == AZURE  -> Azure (env defaults + template overrides)
+      - No config / no provider -> luna on Bedrock Converse
+        (``default_llm_configuration``)
+      - provider == AZURE -> Azure (env defaults + template overrides)
       - provider == GOOGLE_VERTEX, sdk == ANTHROPIC -> Claude on Vertex (all from template)
       - provider == GOOGLE_VERTEX, sdk is None/GOOGLE -> Gemini on Vertex (all from template)
       - provider == AWS_BEDROCK -> Bedrock Converse (all from template)
@@ -401,11 +440,16 @@ async def get_llm_service(
     resolver = accounts or Accounts()
     block = llm_config or LLMConfiguration()
 
-    if (
-        not llm_config
-        or not llm_config.provider
-        or llm_config.provider == LLMProvider.AZURE
-    ):
+    if llm_config is None or not llm_config.provider:
+        llm_config = default_llm_configuration(llm_config)
+        _dispatch_log(
+            f"No LLM provider set — using the default {llm_config.model} "
+            f"on AWS Bedrock ({llm_config.region})"
+        )
+        account = await resolver.get(llm_config, BedrockAccount)
+        return await _resolve_bedrock(llm_config, account)
+
+    if llm_config.provider == LLMProvider.AZURE:
         _dispatch_log("Using Azure LLM provider")
         account = await resolver.get(block, AzureAccount)
         return await _resolve_azure(llm_config, account, pooled=pooled)
@@ -429,9 +473,12 @@ async def get_llm_service(
         account = await resolver.get(block, BedrockAccount)
         return await _resolve_bedrock(llm_config, account)
 
-    # Fallback — shouldn't happen with the enum, but be safe
+    # Shouldn't happen with the enum — fail open to the default so the call
+    # still connects.
     logger.warning(
-        f"Unknown LLM provider '{llm_config.provider}', falling back to Azure"
+        f"Unknown LLM provider '{llm_config.provider}', using the default "
+        f"{DEFAULT_LLM_CONFIGURATION.model}"
     )
-    account = await resolver.get(block, AzureAccount)
-    return await _resolve_azure(llm_config, account, pooled=pooled)
+    llm_config = default_llm_configuration(llm_config)
+    account = await resolver.get(llm_config, BedrockAccount)
+    return await _resolve_bedrock(llm_config, account)
