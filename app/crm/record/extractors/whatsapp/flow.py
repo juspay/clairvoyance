@@ -12,6 +12,7 @@ event row — these are readings, and the evidence is not theirs to edit.
 import json
 from typing import Any, Dict, Optional
 
+from app.crm.record.extractors.forms import render_answers
 from app.crm.record.extractors.whatsapp.shared import _item
 
 # Meta's own literal for "this send named no flow_token" — their API returns
@@ -25,12 +26,8 @@ UNUSED_FLOW_TOKEN = "unused"
 # answers arrive with it mixed in.
 FLOW_TOKEN_KEY = "flow_token"
 
-# The ANSWER a completed form gives on `reply` — what a plan author labels
-# an arrow with, beside timeout/else/$topic (design/event-catalog.md). A
-# word, not the form's JSON: the walker matches arrow labels, and a blob
-# equals none. Published edges store the literal, so the VALUE is pinned
-# by test; a second source with forms answers with this same word.
-FORM_SUBMITTED = "form_submitted"
+# The ANSWER a completed form gives on `reply` (FORM_SUBMITTED) and the
+# answers' rendering are shared with every form source: extractors/forms.py.
 
 
 def _nfm_reply(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -95,26 +92,7 @@ def flow_response(payload: Dict[str, Any]) -> Optional[Any]:
         return raw  # an unexpected shape is still her answer
     if not isinstance(parsed, dict):
         return raw
-    lines = [
-        f"{key}: {_readable(value)}"
-        for key, value in parsed.items()
-        if key != FLOW_TOKEN_KEY
-    ]
-    return "\n".join(lines) if lines else None
-
-
-def _readable(value: Any) -> str:
-    """One answer as text. A scalar is itself; a multi-select (Meta sends a
-    list) reads as a comma list rather than as ['a', 'b']; anything else
-    falls back to JSON, which is at least complete."""
-    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-        return str(value)
-    if isinstance(value, list) and all(
-        isinstance(item, (str, int, float)) and not isinstance(item, bool)
-        for item in value
-    ):
-        return ", ".join(str(item) for item in value)
-    return json.dumps(value, ensure_ascii=False)
+    return render_answers(parsed, skip=frozenset({FLOW_TOKEN_KEY}))
 
 
 def flow_token(payload: Dict[str, Any]) -> Optional[Any]:

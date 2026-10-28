@@ -84,7 +84,7 @@ from app.crm.connectivity.actions.perform import (
     validate_action_args,
 )
 from app.crm.connectivity.connectors import ActionError
-from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.ingress import META_INGRESS, XYNE_INGRESS
 from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
 from app.crm.connectivity.templates.events import consume_template_event
@@ -144,4 +144,5 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    "XYNE_INGRESS",
 ]

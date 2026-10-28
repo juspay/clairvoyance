@@ -35,7 +35,12 @@ from app.crm.record.contracts import (
     derive_for,
     field_value,
 )
-from app.crm.record.extractors import EXTRACTORS, engine, whatsapp as whatsapp_spec
+from app.crm.record.extractors import (
+    EXTRACTORS,
+    engine,
+    forms,
+    whatsapp as whatsapp_spec,
+)
 from app.crm.record.schemas import Extracted, RawEvent
 
 WA_FROM = "919876543210"
@@ -256,7 +261,7 @@ def test_a_submitted_form_answers_the_square_that_was_waiting() -> None:
         _submission('{"flow_token":"m-42","address":"221B Baker Street"}')
     )
     assert extracted.variables["reply"] == "form_submitted"
-    assert whatsapp_spec.flow.FORM_SUBMITTED == "form_submitted"
+    assert forms.FORM_SUBMITTED == "form_submitted"
 
 
 def test_the_form_reads_as_lines_for_whoever_opens_the_order() -> None:
