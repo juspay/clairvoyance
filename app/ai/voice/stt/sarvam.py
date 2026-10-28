@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from pipecat.frames.frames import (
     Frame,
+    ServiceSwitcherRequestMetadataFrame,
     TranscriptionFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -25,6 +27,9 @@ from app.core.logger import logger
 # transcription_gate, transcript_collector (stream mode), our own input
 # queue, plus one spare.
 _VAD_START_HOPS = 4
+# A held fallback (hold_connection_until_active) keeps at most this much of
+# the caller's audio while its socket connects, then sends it first.
+_HELD_AUDIO_MAX_SECS = 5.0
 
 _SARVAM_DATA_MESSAGE: ContextVar[bool] = ContextVar(
     "sarvam_data_message", default=False
@@ -96,6 +101,57 @@ class SarvamSTTServiceWithInterruptionPolicy(SarvamSTTService):
         # (and again if it changes), for asking Sarvam about a slow or
         # dropped session.
         self._logged_request_id: Optional[str] = None
+        # Standby: a fallback behind a ServiceSwitcher opens no Sarvam
+        # session until the switcher makes it the active service.
+        self._standby = False
+        # Held mode: audio that arrives before the socket is up, in order.
+        self._held = False
+        self._held_audio: deque[bytes] = deque()
+        self._held_bytes = 0
+
+    def hold_connection_until_active(self) -> None:
+        """Open no Sarvam session at start; connect when a ServiceSwitcher
+        activates this service (its ServiceSwitcherRequestMetadataFrame).
+
+        A fallback that most calls never use must not hold a Sarvam session
+        (and a concurrency slot) for the whole call. Audio routed here while
+        the socket connects is kept (up to _HELD_AUDIO_MAX_SECS) and sent
+        first, so the caller's words right after the switch are not lost.
+        """
+        self._standby = True
+        self._held = True
+
+    async def run_stt(self, audio: bytes):
+        if self._held and not self._socket_client:
+            self._held_audio.append(audio)
+            self._held_bytes += len(audio)
+            cap = int(_HELD_AUDIO_MAX_SECS * (self.sample_rate or 16000) * 2)
+            while self._held_bytes > cap and self._held_audio:
+                self._held_bytes -= len(self._held_audio.popleft())
+            yield None
+            return
+        # Connected: the held audio first, then never hold again (a later
+        # reconnect behaves as for any Sarvam call).
+        self._held = False
+        while self._held_audio:
+            held = self._held_audio.popleft()
+            self._held_bytes -= len(held)
+            async for frame in super().run_stt(held):
+                yield frame
+        async for frame in super().run_stt(audio):
+            yield frame
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        if (
+            self._standby
+            and isinstance(frame, ServiceSwitcherRequestMetadataFrame)
+            and frame.service is self
+        ):
+            self._standby = False
+            logger.info("Sarvam STT activated as the fallback; connecting")
+            if self.sample_rate:  # started: connect now, else start() will
+                await self._connect()
+        await super().process_frame(frame, direction)
 
     def set_self_interrupt(self, enabled: bool) -> None:
         """Follow a node-level interruption override mid-call."""
@@ -211,6 +267,8 @@ class SarvamSTTServiceWithInterruptionPolicy(SarvamSTTService):
             _SARVAM_DATA_MESSAGE.reset(token)
 
     async def _connect(self) -> None:
+        if self._standby:
+            return
         await super()._connect()
         # A new socket is a new Sarvam session with no speech open yet; an
         # END_SPEECH the old socket never sent must not block finalizing.
