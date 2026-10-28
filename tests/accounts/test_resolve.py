@@ -122,7 +122,7 @@ def test_without_a_row_the_environment_answers_with_the_same_rules(
     env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     accounts = Accounts("r-1", "m-1")
-    az = resolved(accounts.get(LLMConfiguration()))
+    az = resolved(accounts.get(LLMConfiguration(provider="azure")))
     assert (az.api_key, az.endpoint) == ("env-az", "https://env.openai.azure.com/")
     # a custom endpoint needs a named key — never the default key to a stranger
     with pytest.raises(AccountRefused, match="api_key_name or credential_id"):
@@ -157,7 +157,7 @@ def test_without_a_row_the_environment_answers_with_the_same_rules(
     # a missing env key is AccountRefused, never pydantic's error
     monkeypatch.setattr(static, "AZURE_OPENAI_API_KEY", "")
     with pytest.raises(AccountRefused, match="AZURE_OPENAI_API_KEY is required"):
-        resolved(Accounts("r-1", "m-1").get(LLMConfiguration()))
+        resolved(Accounts("r-1", "m-1").get(LLMConfiguration(provider="azure")))
     assert (
         resolved(accounts.get(STTConfiguration(provider="deepgram"))).api_key
         == "env-dg"
@@ -253,3 +253,35 @@ def test_the_template_save_gate_answers_422_with_every_problem(store: Store) -> 
     assert len(found) == 2 and found[0].startswith("stt_configuration:")
     clean = _configurations(tts_configuration={"provider": "elevenlabs"})
     resolved(refuse_bad_provider_accounts(clean, "r-1", "m-1"))
+
+
+def test_a_providerless_llm_block_is_checked_and_run_on_its_bedrock_row(
+    store: Store,
+) -> None:
+    # No provider = the text LLM's default, luna on Bedrock. Save-time checks
+    # the block's row as a Bedrock one, and the call runs on that same row:
+    # an Azure row is refused at save instead of being dropped at call time.
+    from pipecat.services.aws.llm import AWSBedrockLLMService
+
+    from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
+
+    store.rows[ROW2] = cred(
+        id=ROW2,
+        provider="azure_openai",
+        value={"api_key": "az", "endpoint": "https://a.openai.azure.com"},
+    )
+    store.rows[ROW3] = cred(id=ROW3, provider="aws_bedrock", value={"api_key": "br"})
+    on_azure_row = _configurations(llm_configurations={"credential_id": ROW2})
+    found = resolved(Accounts("r-1", "m-1").problems(on_azure_row))
+    assert len(found) == 1 and "this block needs aws_bedrock" in found[0]
+    on_bedrock_row = _configurations(llm_configurations={"credential_id": ROW3})
+    assert resolved(Accounts("r-1", "m-1").problems(on_bedrock_row)) == []
+
+    svc = resolved(
+        get_llm_service(
+            LLMConfiguration(credential_id=ROW3), accounts=Accounts("r-1", "m-1")
+        )
+    )
+    assert isinstance(svc, AWSBedrockLLMService)
+    token = svc._aws_session._session.get_component("token_provider")
+    assert token.load_token(signing_name="bedrock").token == "br"
