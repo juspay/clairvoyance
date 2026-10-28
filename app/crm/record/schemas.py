@@ -129,7 +129,10 @@ class EventReceipt(BaseModel):
 # where-grammar's operators (record/catalog.py OPS_BY_TYPE). Unknown types
 # are rejected at registration, never discovered at flow-publish.
 FieldType = Literal["text", "number", "choice", "boolean", "datetime", "phone", "list"]
-IdentityRole = Literal["phone", "name", "email", "shopify_customer_id"]
+# xyne_user_id is a ROW kind (app/crm/shared/handles.py) — this leaf cannot
+# import that list, so tests/crm/test_customer_handles.py pins every row
+# kind into this one.
+IdentityRole = Literal["phone", "name", "email", "shopify_customer_id", "xyne_user_id"]
 
 
 class CatalogField(BaseModel):

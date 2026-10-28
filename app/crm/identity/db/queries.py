@@ -1,14 +1,18 @@
-"""SQL builders for crm_customer (T05). $1 placeholders only.
+"""SQL builders for crm_customer (T05) and crm_customer_handle (086).
+$1 placeholders only.
 
 Handle column names come exclusively from HANDLE_COLUMNS — never from
 caller input — so the f-string column interpolation below is safe.
 apply_handles_query is THE ONLY builder that writes handle columns
-(ADR 0021 lock #3); a second one is a review failure.
+(ADR 0021 lock #3); a second one is a review failure. The row handles have
+their own writers below — insert, release, and a staple's release —
+and nothing else writes crm_customer_handle.
 """
 
 from typing import Any, Dict, List, Tuple
 
 CRM_CUSTOMER_TABLE = "crm_customer"
+CRM_CUSTOMER_HANDLE_TABLE = "crm_customer_handle"
 
 # The probe order IS the law (canon 01): fixed, deterministic, no fuzz.
 HANDLE_COLUMNS = ("phone", "email", "igsid", "shopify_customer_id", "external_ref")
@@ -88,6 +92,109 @@ def merge_customer_query(loser_id: str, survivor_id: str) -> Tuple[str, List[Any
         WHERE id = $1 AND status = 'active'
     """
     return query, [loser_id, survivor_id]
+
+
+# ---- crm_customer_handle: the ids that are ROWS (086) ------------------------
+# Kinds and their normal forms live in app/crm/shared/handles.py; every value
+# here arrives through resolve(), already normalized. A release stamps
+# clock_timestamp(), not now(): a row another transaction inserted is only
+# visible here once that transaction committed, so the wall clock is the
+# time that can never be earlier than the row's created_at (the table CHECK).
+
+
+def probe_row_handle_query(
+    merchant_id: str, kind: str, scope: str, value: str
+) -> Tuple[str, List[Any]]:
+    """The ACTIVE customer holding this live row handle, in the shape
+    probe_customer_query returns (id, first_seen_at, the handle columns) —
+    so resolve gathers an owner found either way identically."""
+    columns = ", ".join(f"c.{column}" for column in HANDLE_COLUMNS)
+    query = f"""
+        SELECT c.id, c.first_seen_at, {columns}
+        FROM {CRM_CUSTOMER_HANDLE_TABLE} h
+        JOIN {CRM_CUSTOMER_TABLE} c
+          ON c.merchant_id = h.merchant_id AND c.id = h.customer_id
+        WHERE h.merchant_id = $1 AND h.kind = $2 AND h.scope = $3
+          AND h.value = $4 AND h.released_at IS NULL
+          AND c.status = 'active'
+    """
+    return query, [merchant_id, kind, scope, value]
+
+
+def live_row_handles_query(merchant_id: str, customer_id: str) -> Tuple[str, List[Any]]:
+    """The customer's live row handles — at most one per (kind, scope), by
+    the slot index."""
+    query = f"""
+        SELECT kind, scope, value
+        FROM {CRM_CUSTOMER_HANDLE_TABLE}
+        WHERE merchant_id = $1 AND customer_id = $2 AND released_at IS NULL
+    """
+    return query, [merchant_id, customer_id]
+
+
+def insert_row_handle_query(
+    merchant_id: str, customer_id: str, kind: str, scope: str, value: str
+) -> Tuple[str, List[Any]]:
+    """Attach a live row handle. Both partial uniques referee it: an id
+    another customer holds, or a second live id in this customer's slot, is
+    a UniqueViolation — resolve's re-probe answers it."""
+    query = f"""
+        INSERT INTO {CRM_CUSTOMER_HANDLE_TABLE}
+            (merchant_id, customer_id, kind, scope, value)
+        VALUES ($1, $2, $3, $4, $5)
+    """
+    return query, [merchant_id, customer_id, kind, scope, value]
+
+
+def release_row_handle_query(
+    merchant_id: str, customer_id: str, kind: str, scope: str
+) -> Tuple[str, List[Any]]:
+    """Release the customer's live id in one slot: it stays as history and
+    stops blocking anyone. The ADR 0021 overwrite, done as a row."""
+    query = f"""
+        UPDATE {CRM_CUSTOMER_HANDLE_TABLE}
+        SET released_at = clock_timestamp()
+        WHERE merchant_id = $1 AND customer_id = $2 AND kind = $3 AND scope = $4
+          AND released_at IS NULL
+    """
+    return query, [merchant_id, customer_id, kind, scope]
+
+
+def release_live_row_handles_query(
+    merchant_id: str, customer_id: str
+) -> Tuple[str, List[Any]]:
+    """A staple: every live handle of the loser is released — the loser
+    keeps its copies as audit + undo (modules/02-identity.md), the rows
+    still pointing at it — and the released ids come back so the survivor
+    can attach its own copies."""
+    query = f"""
+        UPDATE {CRM_CUSTOMER_HANDLE_TABLE}
+        SET released_at = clock_timestamp()
+        WHERE merchant_id = $1 AND customer_id = $2 AND released_at IS NULL
+        RETURNING kind, scope, value
+    """
+    return query, [merchant_id, customer_id]
+
+
+def lock_live_customer_query(
+    merchant_id: str, customer_id: str
+) -> Tuple[str, List[Any]]:
+    """Take the survivor's row lock BEFORE any row handle is written, and
+    prove it is still active. A resolve that touches row handles waits here
+    for a racing one to commit, so it never reads stale rows, never writes
+    onto a record a concurrent staple just merged away, and never takes the
+    survivor's slot ahead of its lock (the order a deadlock needs).
+
+    FOR NO KEY UPDATE: the same lock the UPDATE in apply_handles_query takes
+    today, taken earlier — so it adds no new conflict (a foreign-key check
+    from another table still passes), it only moves the wait to before the
+    first row write."""
+    query = f"""
+        SELECT id FROM {CRM_CUSTOMER_TABLE}
+        WHERE merchant_id = $1 AND id = $2 AND status = 'active'
+        FOR NO KEY UPDATE
+    """
+    return query, [merchant_id, customer_id]
 
 
 def get_customer_query(merchant_id: str, customer_id: str) -> Tuple[str, List[Any]]:
