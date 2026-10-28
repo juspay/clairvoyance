@@ -15,7 +15,7 @@ from app.database.accessor.breeze_buddy.evaluation_result import (
     save_evaluation_results,
 )
 from app.schemas.breeze_buddy.evals import EvaluationType
-from app.services.model_provider import ProviderError
+from app.services.model_provider import ProviderError, ReplyError
 
 from .extractor import (
     TopicFirstTokenTimeout,
@@ -68,6 +68,7 @@ def classify_failure(exc: Exception) -> str:
         exc,
         (
             TopicModelResponseError,
+            ReplyError,
             json.JSONDecodeError,
             ValidationError,
         ),

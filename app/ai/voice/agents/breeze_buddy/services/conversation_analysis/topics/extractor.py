@@ -4,15 +4,17 @@ import asyncio
 import json
 import re
 import time
-from typing import Any, Dict, List, Mapping, Optional, cast
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple, Type, cast
 
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.openai.llm import OpenAILLMService
+from pydantic import AfterValidator, BaseModel, WithJsonSchema, create_model
 
-from app.ai.voice.agents.breeze_buddy.accounts.types import KeyAccount
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
+from app.ai.voice.agents.breeze_buddy.accounts.types import KeyAccount, VertexAccount
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service, resolve_openai
 from app.ai.voice.llm import LLMConfiguration, LLMProvider, LLMSdk
-from app.ai.voice.llm._pools import get_openai_httpx_client
+from app.ai.voice.llm._pools import get_genai_vertex_client, get_openai_httpx_client
 from app.core.config import static
 from app.core.logger import logger
 from app.schemas.breeze_buddy.conversation_analysis import TopicExtractionResult
@@ -22,11 +24,17 @@ from app.services.model_provider import (
     GenerateRequest,
     GenerationSettings,
     Message,
+    ModelProvider,
+    OpenRouterProvider,
+    ProviderConfig,
+    VertexProvider,
+    fill,
 )
 
 from .segments import validate_segments
 
 _FIRST_TOKEN_TIMEOUT_SECONDS = 30
+_GATEWAY_TIMEOUT_SECONDS = 240
 
 
 class TopicModelResponseError(ValueError):
@@ -152,76 +160,155 @@ def _decode_json_object(content: Any) -> Dict[str, Any]:
     return value
 
 
+class _Need(BaseModel):
+    summary: str
+    evidence_turns: List[int]
+
+
+class _Topic(BaseModel):
+    type: str
+    label: str
+    phrase: str
+    evidence_turns: List[int]
+
+
+class _TopicReply(BaseModel):
+    customer_needs: List[_Need]
+    topics: List[_Topic]
+
+
+def _one_of(values: Tuple[str, ...]) -> Any:
+    def check(value: str) -> str:
+        if value not in values:
+            raise ValueError(f"{value[:80]!r} is not in the known list")
+        return value
+
+    return Annotated[
+        str,
+        AfterValidator(check),
+        WithJsonSchema({"type": "string", "enum": list(values)}),
+    ]
+
+
+def _reply_form(catalog: List[Dict[str, str]]) -> Type[BaseModel]:
+    two_level = bool(catalog) and all("." in entry["label"] for entry in catalog)
+    if not two_level:
+        return _TopicReply
+    types = tuple(entry["type"] for entry in catalog)
+    labels = tuple(entry["label"] for entry in catalog)
+    topic = create_model(
+        "Topic",
+        type=(_one_of(types), ...),
+        label=(_one_of(labels), ...),
+        phrase=(str, ...),
+        evidence_turns=(List[int], ...),
+    )
+    return create_model(
+        "TopicReply",
+        customer_needs=(List[_Need], ...),
+        topics=(List[topic], ...),
+    )
+
+
+async def _openai_account(runtime: Mapping[str, Any]) -> KeyAccount:
+    grid = (await get_config("LITELLM_BASE_URL", "", str)).strip()
+    if grid:
+        if not static.GRID_TOPICS_API_KEY:
+            raise ValueError("GRID_TOPICS_API_KEY is not set in the pod environment")
+        endpoint = grid.rstrip("/").removesuffix("/chat/completions")
+        return KeyAccount(api_key=static.GRID_TOPICS_API_KEY, endpoint=endpoint)
+    gateway = (await get_config("OPENAI_GATEWAY_BASE_URL", "", str)).strip()
+    if not gateway:
+        raise ValueError(
+            "OpenAI gateway base URL is not configured; set OPENAI_GATEWAY_BASE_URL"
+        )
+    block = LLMConfiguration(
+        provider=LLMProvider.OPENAI,
+        model=runtime["model"],
+        endpoint=gateway.rstrip("/").removesuffix("/chat/completions"),
+        api_key_name="OPENAI_GATEWAY_API_KEY",
+    )
+    return await Accounts().get(block, KeyAccount)
+
+
+async def _fill_provider(runtime: Mapping[str, Any]) -> Optional[ModelProvider]:
+    if runtime["provider"] == OPENROUTER.name:
+        return OPENROUTER
+    if (
+        runtime["provider"] == LLMProvider.OPENAI.value
+        and not runtime["settings"]["stream"]
+    ):
+        account = await _openai_account(runtime)
+        return OpenRouterProvider(
+            ProviderConfig(
+                api_key=account.api_key,
+                base_url=f"{account.endpoint}/chat/completions",
+                timeout_seconds=_GATEWAY_TIMEOUT_SECONDS,
+                max_retries=0,
+            ),
+            name=LLMProvider.OPENAI.value,
+        )
+    if (
+        runtime["provider"] == LLMProvider.GOOGLE_VERTEX.value
+        and runtime.get("sdk") != LLMSdk.ANTHROPIC.value
+    ):
+        block = LLMConfiguration(
+            provider=LLMProvider.GOOGLE_VERTEX,
+            model=runtime["model"],
+            region=runtime["region"],
+        )
+        account = await Accounts().get(block, VertexAccount)
+        client = get_genai_vertex_client(
+            credentials_json=account.credentials_json,
+            project_id=account.project_id,
+            location=runtime["region"],
+        )
+        return VertexProvider(client)
+    return None
+
+
 async def _request_llm(
     prompt: str,
     transcript: str,
     runtime: Mapping[str, Any],
+    catalog: List[Dict[str, str]],
 ) -> Dict[str, Any]:
     instruction = prompt + "\n\n" + _PROMPT_ONLY_RESPONSE_INSTRUCTION
-    if runtime["provider"] == OPENROUTER.name:
+    provider = await _fill_provider(runtime)
+    if provider is not None:
         started_at = time.monotonic()
-        response = await OPENROUTER.generate(
-            GenerateRequest(
-                model=runtime["model"],
-                input=[Message(role="user", content=transcript)],
-                system_prompt=instruction,
-                settings=GenerationSettings(
-                    temperature=runtime["settings"]["temperature"],
-                    max_tokens=runtime["settings"]["max_output_tokens"],
+        try:
+            reply = await fill(
+                provider,
+                GenerateRequest(
+                    model=runtime["model"],
+                    input=[Message(role="user", content=transcript)],
+                    system_prompt=instruction,
+                    settings=GenerationSettings(
+                        temperature=runtime["settings"]["temperature"],
+                        max_tokens=runtime["settings"]["max_output_tokens"],
+                    ),
                 ),
+                _reply_form(catalog),
             )
-        )
-        usage = response.usage
+        finally:
+            if provider is not OPENROUTER:
+                await provider.close()
         logger.info(
-            f"Topic model answered by {runtime['provider']} ({response.model}) in "
-            f"{time.monotonic() - started_at:.1f}s: "
-            f"{usage.input_tokens if usage else '?'} input tokens, "
-            f"{usage.output_tokens if usage else '?'} output tokens"
+            f"Topic model answered by {runtime['provider']} ({runtime['model']}) "
+            f"in {time.monotonic() - started_at:.1f}s"
         )
-        if response.finish_reason == "length":
-            limit = runtime["settings"]["max_output_tokens"]
-            if response.content.strip():
-                what = f"{response.model} hit the {limit}-token output limit mid-answer"
-            else:
-                what = (
-                    f"{response.model} spent all {limit} output tokens thinking "
-                    "and wrote no answer"
-                )
-            raise TopicModelResponseError(
-                f"{what}. Fix: raise settings.max_output_tokens (now {limit})."
-            )
-        return _decode_json_object(response.content)
-    endpoint = None
-    api_key_name = None
-    on_grid = False
-    if runtime["provider"] == LLMProvider.OPENAI.value:
-        endpoint = (await get_config("LITELLM_BASE_URL", "", str)).strip()
-        on_grid = bool(endpoint)
-        if not endpoint:
-            endpoint = (await get_config("OPENAI_GATEWAY_BASE_URL", "", str)).strip()
-            api_key_name = "OPENAI_GATEWAY_API_KEY"
-        if not endpoint:
-            raise ValueError(
-                "OpenAI gateway base URL is not configured; set OPENAI_GATEWAY_BASE_URL"
-            )
-        endpoint = endpoint.rstrip("/").removesuffix("/chat/completions")
+        return reply.model_dump()
     llm_config = LLMConfiguration(
         provider=runtime["provider"],
         sdk=runtime.get("sdk"),
         model=runtime["model"],
         region=runtime.get("region"),
-        endpoint=endpoint,
-        api_key_name=api_key_name,
         temperature=runtime["settings"]["temperature"],
         max_tokens=runtime["settings"]["max_output_tokens"],
     )
-    if on_grid:
-        if not static.GRID_TOPICS_API_KEY:
-            raise ValueError("GRID_TOPICS_API_KEY is not set in the pod environment")
-        llm = await resolve_openai(
-            llm_config,
-            KeyAccount(api_key=static.GRID_TOPICS_API_KEY, endpoint=endpoint),
-        )
+    if runtime["provider"] == LLMProvider.OPENAI.value:
+        llm = await resolve_openai(llm_config, await _openai_account(runtime))
     else:
         llm = await get_llm_service(llm_config)
     # AzureLLMService subclasses OpenAILLMService, so Azure evaluations share
@@ -443,7 +530,7 @@ async def extract_topics(
                 + agent_prompt
                 + "\n</agent_instructions>"
             )
-    raw_topics = await _request_llm(prompt, formatted, runtime)
+    raw_topics = await _request_llm(prompt, formatted, runtime, approved_catalog)
     topics = normalize_topics(
         raw_topics,
         max_topics=max_topics,

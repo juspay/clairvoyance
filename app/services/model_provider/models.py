@@ -96,3 +96,7 @@ class ProviderError(Exception):
         self.provider = provider
         self.status = status
         self.retryable = retryable
+
+
+class ReplyError(ProviderError):
+    pass
