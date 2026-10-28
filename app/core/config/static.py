@@ -217,6 +217,14 @@ SMALLEST_API_KEY = os.getenv("SMALLEST_API_KEY")  # Smallest.ai Pulse STT
 # --- Sarvam STT & TTS Configuration ---
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 
+# --- Phonon STT (our self-hosted STT server) ---
+# Phonon's base WebSocket address; a template may point elsewhere with
+# stt_configuration.phonon.url.
+PHONON_STT_URL = os.environ.get("PHONON_STT_URL", "ws://127.0.0.1:8098")
+# Sent as "Authorization: Token <key>" on the upgrade; empty = no header
+# (local Phonon without auth). Never in a URL or a template.
+PHONON_STT_API_KEY = os.getenv("PHONON_STT_API_KEY", "")
+
 # --- Soniox STT Configuration ---
 # Soniox is optimized to solve the 0.5-second speech pause issue experienced with Deepgram
 SONIOX_API_KEY = os.getenv(

@@ -64,6 +64,7 @@ class STTProvider(str, Enum):
     ELEVENLABS = "elevenlabs"
     ASSEMBLYAI = "assemblyai"
     SMALLEST = "smallest"
+    PHONON = "phonon"  # Phonon, our self-hosted STT server
 
 
 class SonioxSTTConfig(BaseModel):
@@ -353,6 +354,39 @@ class SmallestSTTConfig(BaseModel):
                 f"{', '.join(sorted(SMALLEST_LANGUAGES))}"
             )
         return value
+
+
+class PhononSTTConfig(BaseModel):
+    """Phonon, our self-hosted STT server.
+
+    Phonon only transcribes; turn-taking stays with the pipeline's VAD / turn
+    detection, so it takes no ``stt_configuration.end_of_speech_ms``.
+    """
+
+    url: Optional[str] = Field(
+        None,
+        description="Phonon's base WebSocket address, e.g. "
+        "'ws://phonon.stt.svc:8098'. Unset = PHONON_STT_URL.",
+    )
+    fallback: Literal["sarvam", "none"] = Field(
+        "none",
+        description="STT for the rest of the call when Phonon cannot serve it "
+        "(connect refused, a non-retryable close, retries spent). Opt-in: "
+        "'none' (the default) fails the call's STT instead; 'sarvam' switches "
+        "to Sarvam using this template's sarvam block (or Sarvam defaults).",
+    )
+
+    @field_validator("url")
+    @classmethod
+    def _websocket_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        if not value.startswith(("ws://", "wss://")) or any(c in value for c in "?#"):
+            raise ValueError(
+                "phonon.url must be a ws:// or wss:// base address with no "
+                "query or fragment (the /v1/listen path is added by the client)"
+            )
+        return value.rstrip("/")
 
 
 class ElevenLabsSTTConfig(BaseModel):
@@ -732,6 +766,7 @@ class STTConfiguration(BaseModel):
     elevenlabs: Optional[ElevenLabsSTTConfig] = None
     assemblyai: Optional[AssemblyAISTTConfig] = None
     smallest: Optional[SmallestSTTConfig] = None
+    phonon: Optional[PhononSTTConfig] = None
 
     # SmartTurn ML config — only used when turn_detection='smart_turn'
     smart_turn: Optional[SmartTurnConfig] = None

@@ -17,6 +17,7 @@ from .deepgram_flux import (
 from .elevenlabs import ElevenLabsConfig, build_elevenlabs_stt
 from .google import build_google_stt
 from .openai import build_openai_stt
+from .phonon import PhononConfig, PhononSTTService, build_phonon_stt
 from .sarvam import SarvamConfig, build_sarvam_stt, get_sarvam_language
 from .smallest import SmallestConfig, build_smallest_stt
 from .soniox import SonioxConfig, build_soniox_stt
@@ -41,6 +42,10 @@ __all__ = [
     "build_elevenlabs_stt",
     # Google
     "build_google_stt",
+    # Phonon (self-hosted)
+    "PhononConfig",
+    "PhononSTTService",
+    "build_phonon_stt",
     # OpenAI
     "build_openai_stt",
     # Sarvam
