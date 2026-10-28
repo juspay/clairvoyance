@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, List
 
 from app.crm.connectivity.db.queries.message import apply_receipt_query
-from app.crm.connectivity.messaging import receipts
+from app.crm.connectivity.messaging.shared import receipts
 from app.crm.connectivity.vocabulary.reasons import REASON_PROVIDER_REJECTED
 from app.crm.connectivity.vocabulary.status import (
     MESSAGE_ACCEPTED,
@@ -143,7 +143,7 @@ async def test_the_stamp_reads_the_messages_filed_receipts_back_in_ladder_order(
 
     monkeypatch.setattr(receipts, "letters_by_external_ids", letters)
     monkeypatch.setattr(receipts.message_accessor, "apply_receipt", apply)
-    await receipts.apply_filed_receipts("shop", "whatsapp", "wamid.9")
+    await receipts.backfill_early_receipts("shop", "whatsapp", "wamid.9")
     assert asked == [
         (
             "shop",
@@ -162,7 +162,7 @@ async def test_a_read_back_that_fails_is_logged_never_raised(monkeypatch) -> Non
         raise ConnectionError("pool gone")
 
     monkeypatch.setattr(receipts, "letters_by_external_ids", broken)
-    await receipts.apply_filed_receipts("shop", "whatsapp", "wamid.9")  # no raise
+    await receipts.backfill_early_receipts("shop", "whatsapp", "wamid.9")  # no raise
 
 
 async def test_nothing_is_read_back_without_an_id_or_a_face_for_the_channel(
@@ -172,8 +172,8 @@ async def test_nothing_is_read_back_without_an_id_or_a_face_for_the_channel(
         raise AssertionError("no read-back expected")
 
     monkeypatch.setattr(receipts, "letters_by_external_ids", never)
-    await receipts.apply_filed_receipts("shop", "whatsapp", None)
-    await receipts.apply_filed_receipts("shop", "carrier_pigeon", "id-1")
+    await receipts.backfill_early_receipts("shop", "whatsapp", None)
+    await receipts.backfill_early_receipts("shop", "carrier_pigeon", "id-1")
 
 
 def test_the_read_back_rides_the_spines_dedupe_index_tenant_first() -> None:

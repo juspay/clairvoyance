@@ -41,12 +41,12 @@ from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.security.authorization import require_role
 from app.crm.auth import merchant_scope
 from app.crm.connectivity import contracts
-from app.crm.connectivity.accounts.channel_settings import SettingsError
 from app.crm.connectivity.accounts.onboarding import (
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,
 )
+from app.crm.connectivity.channels.settings import SettingsError
 from app.crm.connectivity.schemas.connector import (
     InstallationRead,
     SignupConfig,

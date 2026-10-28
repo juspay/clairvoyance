@@ -37,4 +37,4 @@ def _no_receipt_read_back(monkeypatch: pytest.MonkeyPatch):
     async def _read_back(merchant_id, channel, provider_message_id) -> None:
         return None
 
-    monkeypatch.setattr(dispatch, "apply_filed_receipts", _read_back)
+    monkeypatch.setattr(dispatch, "backfill_early_receipts", _read_back)

@@ -18,8 +18,8 @@ from typing import Optional
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
+from app.crm.connectivity.channels.registry import gate_handle_kind_for
 from app.crm.connectivity.schemas.message import QueuedMessage, SendToken
-from app.crm.connectivity.vocabulary.channels import gate_handle_kind_for
 from app.crm.connectivity.vocabulary.reasons import (
     REASON_GATE_UNAVAILABLE,
     REASON_SUPPRESSED,

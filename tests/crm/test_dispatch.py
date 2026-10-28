@@ -8,13 +8,13 @@ from typing import List
 
 from app.core.config.static import _positive_float, _positive_int
 from app.core.logger.context import get_log_context
+from app.crm.connectivity.channels.registry import CHANNELS, gate_handle_kind_for
 from app.crm.connectivity.db.queries.message import (
     CLAIMED_COLUMNS,
     apply_outcome_query,
     claim_queued_messages_query,
     requeue_stale_claims_query,
 )
-from app.crm.connectivity.messaging import gate
 from app.crm.connectivity.messaging.outbound import dispatch
 from app.crm.connectivity.messaging.outbound.dispatch import (
     REASON_ATTEMPTS_EXHAUSTED,
@@ -28,9 +28,9 @@ from app.crm.connectivity.messaging.outbound.dispatch import (
     plan_for_outcome,
     sample_ids,
 )
+from app.crm.connectivity.messaging.shared import gate
 from app.crm.connectivity.providers import ADAPTERS
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
-from app.crm.connectivity.vocabulary.channels import CHANNELS, gate_handle_kind_for
 from app.crm.connectivity.vocabulary.reasons import (
     PROVIDER_CODE_REASONS,
     REASON_BAD_VARIABLES,
@@ -329,12 +329,13 @@ async def test_a_hung_gate_probe_is_bounded_and_fails_closed(monkeypatch) -> Non
 
 
 def test_every_adapter_channel_is_registered_in_channels() -> None:
-    """Every adapter channel is registered in channels.py (ADAPTERS ⊆ CHANNELS).
+    """Every adapter channel is registered in channels/registry.py
+    (ADAPTERS ⊆ CHANNELS).
 
     The fail-closed default above means an unregistered channel blocks every
     send — safe but useless. Registering an adapter without an entry in the
     channel registry fails here, in CI. The pin lives in the tests because
-    channels.py itself may not import providers/ (rule 11 confines them
+    channels/registry.py itself may not import providers/ (rule 11 confines them
     behind the send door — the reason the registry is a separate file).
     """
     assert set(ADAPTERS) <= set(CHANNELS)
@@ -384,7 +385,7 @@ async def test_the_stamp_reads_back_receipts_that_beat_it(monkeypatch) -> None:
     monkeypatch.setattr(gate, "is_suppressed", _gate_open)
     monkeypatch.setattr(dispatch, "send", fake_send)
     monkeypatch.setattr(dispatch.message_accessor, "apply_outcome", recorded)
-    monkeypatch.setattr(dispatch, "apply_filed_receipts", watch)
+    monkeypatch.setattr(dispatch, "backfill_early_receipts", watch)
     await dispatch._dispatch_one(_message(), 3)
     assert read_back == [("m-1000", "whatsapp", "wamid.T")]
 

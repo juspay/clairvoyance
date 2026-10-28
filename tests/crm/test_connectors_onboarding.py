@@ -24,6 +24,7 @@ from app.crm.connectivity.accounts.onboarding import (
     disconnect,
     onboard,
 )
+from app.crm.connectivity.channels.registry import CHANNELS
 from app.crm.connectivity.connectors import (
     CONNECTORS,
     ConnectorSpec,
@@ -44,7 +45,6 @@ from app.crm.connectivity.schemas.connector import (
     InstallationRead,
     OnboardResult,
 )
-from app.crm.connectivity.vocabulary.channels import CHANNELS
 from tests.crm.doubles import (
     FakeInstallationAccessor,
     stub_graph,
@@ -57,7 +57,7 @@ def test_every_connector_serves_a_registered_channel() -> None:
     """CONNECTORS ⊆ CHANNELS.
 
     The pin every registry in this module carries. A connector whose channel
-    is unknown to channels.py has no gate_handle_kind, and the suppression
+    is unknown to channels/registry.py has no gate_handle_kind, and the suppression
     gate fails closed on it — so onboarding would happily build a door that
     can never send.
     """

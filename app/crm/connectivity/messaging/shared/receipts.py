@@ -24,7 +24,7 @@ manifest when the dispatcher records the send's outcome, and a fast webhook
 can be filed and consumed before that write lands: it matches no row, and
 this consumer lets it go. It is not lost — the letter stays on the spine,
 and the dispatcher, straight after the stamp, reads the message's status
-letters back and applies them (``apply_filed_receipts``). The two sides
+letters back and applies them (``backfill_early_receipts``). The two sides
 cannot both miss: the stamp commits before the read-back, so a letter filed
 before it is found there, and one filed after it is consumed after the
 stamp and matches. A receipt that matches no row at all names a message this
@@ -149,14 +149,14 @@ async def _apply(merchant_id: str, receipt: ProviderReceipt) -> Optional[str]:
     )
 
 
-async def apply_filed_receipts(
+async def backfill_early_receipts(
     merchant_id: str, channel: str, provider_message_id: Optional[str]
 ) -> None:
-    """Apply the receipts already filed for a message whose row has just
-    learned its provider id — the dispatcher calls this straight after the
-    stamp. Read back from the spine by the ids the channel's face files them
-    under, applied in LADDER order; the write is monotonic, so one the
-    consumer already applied changes nothing.
+    """Backfill the receipts that came in early: filed before this message's
+    row learned its provider id, they matched nothing then. The dispatcher
+    calls this straight after the stamp. Read back from the spine by the ids
+    the channel's face files them under, applied in LADDER order; the write
+    is monotonic, so one the consumer already applied changes nothing.
 
     Never raises: the send happened and its outcome is recorded. A receipt
     that cannot be read back now is logged, and the message's later

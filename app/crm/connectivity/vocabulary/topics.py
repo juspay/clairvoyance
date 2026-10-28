@@ -42,9 +42,9 @@ TOPIC_INBOUND = "message.inbound"
 
 #: Buddy moved to another binding: the merchant chose a different binding
 #: for Buddy to answer on, and its settings moved with it. Filed by THIS
-#: module after the move commits (accounts/channel_settings.py); the conversations module
-#: resolves the old binding's open threads when it hears it. Source = the
-#: channel.
+#: module after the move commits (channels/settings.py); the conversations
+#: module resolves the old binding's open threads when it hears it. Source =
+#: the channel.
 TOPIC_BUDDY_BOT_MOVED = "binding.buddy_bot_moved"
 
 #: A provider said something about the connected account itself (a review

@@ -83,7 +83,7 @@ class ConnectorSpec:
     #: A filed letter keeps only its source — EventIn has no room for the
     #: other two — so the spine consumer has nothing else to dispatch on.
     #: Without this field it would have to ASSUME source == key, which is
-    #: the "two parallel answers" scar channels.py opens with; with it, the
+    #: the "two parallel answers" scar channels/registry.py opens with; with it, the
     #: day the two diverge is one line in this dict.
     source: str
 

@@ -8,7 +8,7 @@ The loop itself is not here: claim_sends()/dispatch_send() plug into the
 shared drain-loop scaffold (app/crm/shared/worker.py) as the "dispatcher"
 role in app/crm/worker_main.py. This file owns only what a row means.
 
-The gate (messaging/gate.py) is asked before every send, and a refusal
+The gate (messaging/shared/gate.py) is asked before every send, and a refusal
 writes a 'blocked' row.
 """
 
@@ -25,8 +25,8 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.crm.connectivity.db.accessors import message as message_accessor
-from app.crm.connectivity.messaging.gate import gate, mint_send_token
-from app.crm.connectivity.messaging.receipts import apply_filed_receipts
+from app.crm.connectivity.messaging.shared.gate import gate, mint_send_token
+from app.crm.connectivity.messaging.shared.receipts import backfill_early_receipts
 from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
 from app.crm.connectivity.send import send
 from app.crm.connectivity.vocabulary.reasons import (
@@ -63,7 +63,8 @@ RETRY_MAX_SECONDS = 300
 
 # All REASON_* words live in reasons.py — one file, one name per failure
 # mode. Channel metadata (which handle kind the gate probes) lives in
-# channels.py — one registry, pinned ADAPTERS ⊆ CHANNELS by the test suite.
+# channels/registry.py — one registry, pinned ADAPTERS ⊆ CHANNELS by the
+# test suite.
 
 
 def sample_ids(ids: Sequence[str], limit: int = LOG_ID_SAMPLE) -> str:
@@ -323,8 +324,8 @@ async def _dispatch_one(message: QueuedMessage, max_attempts: int) -> None:
         return
 
     # The row knows its provider id now: a receipt that beat this write was
-    # filed but matched nothing — read it back and apply it (receipts.py).
-    await apply_filed_receipts(
+    # filed but matched nothing — backfill it now (shared/receipts.py).
+    await backfill_early_receipts(
         message.merchant_id, message.channel, plan.provider_message_id
     )
 

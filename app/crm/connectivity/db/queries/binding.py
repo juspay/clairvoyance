@@ -204,7 +204,7 @@ def merchant_bindings_query(merchant_id: str) -> Tuple[str, List[Any]]:
 # ---------------------------------------------------------------------------
 # Bindings: the template binding (is_primary) and Buddy's binding (the one row
 # holding capabilities["conversation"], migration 085). The writes below run
-# inside accounts/channel_settings.py's bindings atom, after
+# inside channels/settings.py's bindings atom, after
 # lock_channel_bindings_query.
 # ---------------------------------------------------------------------------
 
@@ -277,7 +277,9 @@ def update_conversation_channel_query(
     ]
 
 
-def buddy_binding_query(merchant_id: str, channel: str) -> Tuple[str, List[Any]]:
+def get_current_buddy_binding_query(
+    merchant_id: str, channel: str
+) -> Tuple[str, List[Any]]:
     """The active binding Buddy answers on, if the merchant has picked one.
     The predicate is 085's, so the unique index answers it."""
     query = f"""

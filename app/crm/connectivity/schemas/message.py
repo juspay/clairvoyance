@@ -118,7 +118,7 @@ class SendRoute(BaseModel):
     binding: ChannelBinding
     bundle: CredentialBundle
     # The approved registry row (T23) this send renders — or None on a
-    # channel that does not pre-register templates (channels.py decides
+    # channel that does not pre-register templates (channels/registry.py decides
     # which do). Channel-neutral on purpose: the WhatsApp adapter reads its
     # language, an SMS-DLT adapter will read its provider_template_id, an
     # email adapter reads nothing. The route carries the ROW and each adapter

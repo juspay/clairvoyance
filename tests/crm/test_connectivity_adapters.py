@@ -930,7 +930,7 @@ def test_whether_a_channel_registers_templates_is_the_registrys_answer() -> None
     """WhatsApp does; an unregistered channel answers True so the door fails
     CLOSED on it — the same posture the gate takes on a channel CHANNELS
     cannot describe."""
-    from app.crm.connectivity.vocabulary.channels import registers_templates_for
+    from app.crm.connectivity.channels.registry import registers_templates_for
 
     assert registers_templates_for("whatsapp") is True
     assert registers_templates_for("carrier_pigeon") is True

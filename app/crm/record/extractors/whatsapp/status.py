@@ -68,9 +68,10 @@ def fields() -> List[CatalogField]:
             keyable=True,
             derived=True,
         ),
-        # connectivity/messaging/receipts.py reads these two to move the manifest: the
-        # failure code on a failed receipt, and what the message was billed
-        # as. Spelled there again (rule 12); a test pins the names equal.
+        # connectivity/messaging/shared/receipts.py reads these two to move the
+        # manifest: the failure code on a failed receipt, and what the message
+        # was billed as. Spelled there again (rule 12); a test pins the names
+        # equal.
         _f("status_error", "text", "Failure code", derived=True),
         _f("billed_category", "text", "Billed as", derived=True),
     ]

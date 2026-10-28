@@ -37,6 +37,7 @@ from typing import Optional, Union
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
 from app.crm.connectivity.accounts import installations
+from app.crm.connectivity.channels.registry import registers_templates_for
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
@@ -50,7 +51,6 @@ from app.crm.connectivity.schemas.message import (
     SendToken,
 )
 from app.crm.connectivity.templates import reads as template_reads
-from app.crm.connectivity.vocabulary.channels import registers_templates_for
 from app.crm.connectivity.vocabulary.reasons import (
     REASON_GATE_REFUSED,
     REASON_INSTALLATION_UNHEALTHY,

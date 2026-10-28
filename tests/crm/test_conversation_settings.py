@@ -15,9 +15,9 @@ from pydantic import ValidationError
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.connectivity import api as connectivity_api
-from app.crm.connectivity.accounts import channel_settings
+from app.crm.connectivity.channels import settings
 from app.crm.connectivity.db.queries.binding import (
-    buddy_binding_query,
+    get_current_buddy_binding_query,
     lock_channel_bindings_query,
     update_conversation_channel_query,
     update_template_message_channel_query,
@@ -55,7 +55,7 @@ def _binding(
 
 
 def test_settings_never_saved_have_handoff_off() -> None:
-    read = channel_settings.settings_of(_binding(conversation={}))
+    read = settings.settings_of(_binding(conversation={}))
     assert read.human_handoff is False
     assert read.default_agent_id is None
     assert read.closing_message == DEFAULT_CLOSING_MESSAGE
@@ -65,23 +65,20 @@ def test_settings_never_saved_have_handoff_off() -> None:
 def test_a_blob_that_does_not_parse_reads_as_the_defaults() -> None:
     """A stored value that no longer validates must never turn handoff ON."""
     broken = _binding(conversation={"human_handoff": True, "closing_lead_minutes": 0})
-    assert channel_settings.settings_of(broken).human_handoff is False
-    assert (
-        channel_settings.settings_of(_binding(conversation="yes")).human_handoff
-        is False
-    )
+    assert settings.settings_of(broken).human_handoff is False
+    assert settings.settings_of(_binding(conversation="yes")).human_handoff is False
 
 
 def test_saved_settings_are_read_back() -> None:
-    read = channel_settings.settings_of(
+    read = settings.settings_of(
         _binding(conversation={"human_handoff": True, "default_agent_id": "t-9"})
     )
     assert read.human_handoff is True and read.default_agent_id == "t-9"
 
 
 def test_only_buddys_binding_shows_buddys_settings() -> None:
-    buddy = channel_settings._read(_binding(is_primary=False, conversation={}))
-    other = channel_settings._read(_binding(id="b-2"))
+    buddy = settings._read(_binding(is_primary=False, conversation={}))
+    other = settings._read(_binding(id="b-2"))
     assert buddy.is_buddy_binding and buddy.conversation == ConversationSettings()
     assert not other.is_buddy_binding and other.conversation is None
     assert other.is_primary and other.installation_id == "i-1"
@@ -91,8 +88,8 @@ async def test_no_buddy_binding_reads_the_defaults(monkeypatch) -> None:
     async def none(*args: Any) -> None:
         return None
 
-    monkeypatch.setattr(channel_settings.binding_accessor, "buddy_binding", none)
-    assert await channel_settings.conversation_settings("shop", "whatsapp") == (
+    monkeypatch.setattr(settings.binding_accessor, "get_current_buddy_binding", none)
+    assert await settings.conversation_settings("shop", "whatsapp") == (
         ConversationSettings()
     )
 
@@ -103,8 +100,8 @@ async def test_a_binding_that_isnt_buddys_reads_the_defaults(monkeypatch) -> Non
     async def primary(*args: Any) -> ChannelBinding:
         return _binding()
 
-    monkeypatch.setattr(channel_settings.binding_accessor, "get_binding", primary)
-    read = await channel_settings.conversation_settings("shop", "whatsapp", "b-1")
+    monkeypatch.setattr(settings.binding_accessor, "get_binding", primary)
+    read = await settings.conversation_settings("shop", "whatsapp", "b-1")
     assert read == ConversationSettings()
 
 
@@ -179,14 +176,14 @@ class _Bindings:
         async def letter(**fields: Any) -> None:
             self.letters.append(fields)
 
-        accessor = channel_settings.binding_accessor
-        monkeypatch.setattr(channel_settings, "file_buddy_bot_moved_letter", letter)
-        monkeypatch.setattr(channel_settings, "atomically", atomically)
+        accessor = settings.binding_accessor
+        monkeypatch.setattr(settings, "file_buddy_bot_moved_letter", letter)
+        monkeypatch.setattr(settings, "atomically", atomically)
         monkeypatch.setattr(accessor, "lock_channel_bindings", lock)
         monkeypatch.setattr(accessor, "update_template_message_channel", mark)
         monkeypatch.setattr(accessor, "update_conversation_channel", update)
-        monkeypatch.setattr(channel_settings, "get_template_by_id", get_template)
-        monkeypatch.setattr(channel_settings, "get_merchants_by_ids", merchants)
+        monkeypatch.setattr(settings, "get_template_by_id", get_template)
+        monkeypatch.setattr(settings, "get_merchants_by_ids", merchants)
 
 
 def _template(**overrides: Any) -> SimpleNamespace:
@@ -208,7 +205,7 @@ def _patch(**fields: Any) -> ConversationSettingsPatch:
 async def test_only_the_fields_sent_are_saved(monkeypatch) -> None:
     bindings = _Bindings(_binding(conversation={"closing_lead_minutes": 20}))
     bindings.install(monkeypatch)
-    read = await channel_settings.update_channel_settings(
+    read = await settings.update_channel_settings(
         "shop", "b-1", _patch(human_handoff=True)
     )
     # The stored field stays, the sent one lands, nothing else is written.
@@ -224,9 +221,7 @@ async def test_only_the_fields_sent_are_saved(monkeypatch) -> None:
 async def test_null_restores_a_default_without_checking_an_agent(monkeypatch) -> None:
     bindings = _Bindings(_binding(conversation={"default_agent_id": "t-9"}))
     bindings.install(monkeypatch, template=None)
-    await channel_settings.update_channel_settings(
-        "shop", "b-1", _patch(default_agent_id=None)
-    )
+    await settings.update_channel_settings("shop", "b-1", _patch(default_agent_id=None))
     assert bindings.writes == [("b-1", {})]
     assert bindings["b-1"].capabilities["conversation"] == {}
 
@@ -247,8 +242,8 @@ async def test_the_agent_must_be_a_chat_agent_this_merchant_may_use(
 ) -> None:
     bindings = _Bindings(_binding(conversation={}))
     bindings.install(monkeypatch, template=template)
-    with pytest.raises(channel_settings.SettingsError, match=match):
-        await channel_settings.update_channel_settings(
+    with pytest.raises(settings.SettingsError, match=match):
+        await settings.update_channel_settings(
             "shop", "b-1", _patch(default_agent_id="t-9")
         )
     assert bindings.writes == []
@@ -257,7 +252,7 @@ async def test_the_agent_must_be_a_chat_agent_this_merchant_may_use(
 async def test_a_resellers_shared_chat_agent_may_be_the_agent(monkeypatch) -> None:
     bindings = _Bindings(_binding(conversation={}))
     bindings.install(monkeypatch, template=_template(merchant_id=None))
-    await channel_settings.update_channel_settings(
+    await settings.update_channel_settings(
         "shop", "b-1", _patch(default_agent_id="t-9")
     )
     assert bindings.writes == [("b-1", {"default_agent_id": "t-9"})]
@@ -275,7 +270,7 @@ async def test_picking_buddys_binding_moves_the_whole_config(monkeypatch) -> Non
         _binding(id="b-2", is_primary=False),
     )
     bindings.install(monkeypatch)
-    read = await channel_settings.update_channel_settings(
+    read = await settings.update_channel_settings(
         "shop", "b-2", _patch(is_buddy_binding=True)
     )
     assert "conversation" not in bindings["b-1"].capabilities
@@ -293,9 +288,7 @@ async def test_a_field_sent_to_another_binding_moves_buddy_there_first(
         _binding(id="b-2", is_primary=False),
     )
     bindings.install(monkeypatch)
-    await channel_settings.update_channel_settings(
-        "shop", "b-2", _patch(claim_sla_minutes=30)
-    )
+    await settings.update_channel_settings("shop", "b-2", _patch(claim_sla_minutes=30))
     assert "conversation" not in bindings["b-1"].capabilities
     moved = {"human_handoff": True, "claim_sla_minutes": 30}
     assert bindings["b-2"].capabilities["conversation"] == moved
@@ -305,7 +298,7 @@ async def test_a_field_sent_to_another_binding_moves_buddy_there_first(
 async def test_the_first_buddy_binding_starts_from_the_defaults(monkeypatch) -> None:
     bindings = _Bindings(_binding(), _binding(id="b-2", is_primary=False))
     bindings.install(monkeypatch)
-    read = await channel_settings.update_channel_settings(
+    read = await settings.update_channel_settings(
         "shop", "b-2", _patch(is_buddy_binding=True)
     )
     assert read is not None and read.conversation == ConversationSettings()
@@ -322,9 +315,7 @@ async def test_a_move_files_the_letter_and_a_save_in_place_does_not(
         _binding(conversation={}), _binding(id="b-2", is_primary=False)
     )
     bindings.install(monkeypatch)
-    await channel_settings.update_channel_settings(
-        "shop", "b-2", _patch(is_buddy_binding=True)
-    )
+    await settings.update_channel_settings("shop", "b-2", _patch(is_buddy_binding=True))
     assert bindings.letters == [
         {
             "merchant_id": "shop",
@@ -333,9 +324,7 @@ async def test_a_move_files_the_letter_and_a_save_in_place_does_not(
             "to_binding_id": "b-2",
         }
     ]
-    await channel_settings.update_channel_settings(
-        "shop", "b-2", _patch(human_handoff=True)
-    )
+    await settings.update_channel_settings("shop", "b-2", _patch(human_handoff=True))
     assert len(bindings.letters) == 1
 
 
@@ -345,8 +334,8 @@ async def test_buddy_cannot_move_to_a_paused_binding(monkeypatch) -> None:
         _binding(id="b-2", is_primary=False, status="paused"),
     )
     bindings.install(monkeypatch)
-    with pytest.raises(channel_settings.SettingsError, match="paused"):
-        await channel_settings.update_channel_settings(
+    with pytest.raises(settings.SettingsError, match="paused"):
+        await settings.update_channel_settings(
             "shop", "b-2", _patch(is_buddy_binding=True)
         )
     assert bindings.writes == []  # refused before anything is written
@@ -355,7 +344,7 @@ async def test_buddy_cannot_move_to_a_paused_binding(monkeypatch) -> None:
 async def test_the_primary_moves_within_one_account(monkeypatch) -> None:
     bindings = _Bindings(_binding(), _binding(id="b-2", is_primary=False))
     bindings.install(monkeypatch)
-    read = await channel_settings.update_channel_settings(
+    read = await settings.update_channel_settings(
         "shop", "b-2", _patch(is_primary=True)
     )
     assert read is not None and read.is_primary
@@ -370,10 +359,8 @@ async def test_the_primary_never_moves_to_another_account(monkeypatch) -> None:
         _binding(), _binding(id="b-2", installation_id="i-2", is_primary=False)
     )
     bindings.install(monkeypatch)
-    with pytest.raises(channel_settings.SettingsError, match="same account"):
-        await channel_settings.update_channel_settings(
-            "shop", "b-2", _patch(is_primary=True)
-        )
+    with pytest.raises(settings.SettingsError, match="same account"):
+        await settings.update_channel_settings("shop", "b-2", _patch(is_primary=True))
     assert bindings["b-1"].is_primary and not bindings["b-2"].is_primary
     assert bindings.marks == []  # refused before anything is written
 
@@ -384,7 +371,7 @@ async def test_with_no_primary_any_active_binding_may_take_over(monkeypatch) -> 
         _binding(id="b-2", installation_id="i-2", is_primary=False),
     )
     bindings.install(monkeypatch)
-    read = await channel_settings.update_channel_settings(
+    read = await settings.update_channel_settings(
         "shop", "b-2", _patch(is_primary=True)
     )
     assert read is not None and read.is_primary
@@ -395,15 +382,11 @@ async def test_a_binding_that_is_not_the_merchants_is_none(monkeypatch) -> None:
     bindings = _Bindings(_binding(), _binding(id="b-9", status=BINDING_RETIRED))
     bindings.install(monkeypatch)
     assert (
-        await channel_settings.update_channel_settings(
-            "shop", "b-2", _patch(is_primary=True)
-        )
+        await settings.update_channel_settings("shop", "b-2", _patch(is_primary=True))
         is None
     )
     assert (
-        await channel_settings.update_channel_settings(
-            "shop", "b-9", _patch(is_primary=True)
-        )
+        await settings.update_channel_settings("shop", "b-9", _patch(is_primary=True))
         is None
     )
 
@@ -416,7 +399,7 @@ def test_neither_flag_can_be_turned_off(flag) -> None:
 
 
 def test_buddys_settings_are_built_from_what_is_stored_and_what_was_sent() -> None:
-    build = channel_settings.build_conversation_settings
+    build = settings.build_conversation_settings
     stored = {"human_handoff": True, "default_agent_id": "t-9"}
     assert build(stored, {"claim_sla_minutes": 30}) == {
         "human_handoff": True,
@@ -464,7 +447,10 @@ def test_buddys_binding_is_read_by_the_unique_indexs_predicate() -> None:
         / "app/database/migrations/085_add_message_receipts_and_buddy_binding.sql"
     ).read_text()
     assert "WHERE capabilities ? 'conversation'" in ddl
-    assert "capabilities ? 'conversation'" in buddy_binding_query("shop", "whatsapp")[0]
+    assert (
+        "capabilities ? 'conversation'"
+        in get_current_buddy_binding_query("shop", "whatsapp")[0]
+    )
 
 
 # --- the routes: any user reads, only admins write (D14) ----------------------
@@ -496,7 +482,7 @@ def _patch_contracts(monkeypatch, updated: Optional[Any] = "ok") -> List[tuple]:
             return None
         if isinstance(updated, Exception):
             raise updated
-        return channel_settings._read(_binding(conversation={}))
+        return settings._read(_binding(conversation={}))
 
     monkeypatch.setattr(
         connectivity_api.contracts, "list_channel_settings", list_settings
@@ -544,7 +530,7 @@ def test_an_unknown_binding_is_404_and_a_bad_agent_is_400(monkeypatch) -> None:
     body = {"merchant_id": "shop", "human_handoff": True}
     assert client.patch(f"/connectors/bindings/{UNKNOWN}", json=body).status_code == 404
     _patch_contracts(
-        monkeypatch, updated=channel_settings.SettingsError("that agent cannot chat")
+        monkeypatch, updated=settings.SettingsError("that agent cannot chat")
     )
     response = client.patch(f"/connectors/bindings/{BINDING}", json=body)
     assert response.status_code == 400 and "cannot chat" in response.text
@@ -571,7 +557,7 @@ def test_a_timing_out_of_bounds_is_refused_by_the_body_model(monkeypatch) -> Non
 
 
 def test_the_moved_letter_keys_are_spelled_the_same_on_both_sides() -> None:
-    """channel_settings.py writes them, record declares them (rule 12 forbids the
+    """channels/settings.py writes them, record declares them (rule 12 forbids the
     import) — renamed on one side only, the consumer would read nothing."""
     from pathlib import Path
 
@@ -579,7 +565,5 @@ def test_the_moved_letter_keys_are_spelled_the_same_on_both_sides() -> None:
         f.path.removeprefix("payload.")
         for f in catalog.CATALOG[("whatsapp", "binding.buddy_bot_moved")].fields
     }
-    source = (
-        Path(__file__).parents[2] / "app/crm/connectivity/accounts/channel_settings.py"
-    )
+    source = Path(__file__).parents[2] / "app/crm/connectivity/channels/settings.py"
     assert all(f'"{key}"' in source.read_text() for key in declared)
