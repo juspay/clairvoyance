@@ -50,7 +50,7 @@ def build_azure_realtime_llm(config: AzureRealtimeConfig) -> AzureRealtimeLLMSer
     because Azure Realtime is API-compatible with OpenAI Realtime.
     """
     audio_input = AudioInput(
-        transcription=InputAudioTranscription(),
+        transcription=InputAudioTranscription(model="gpt-4o-transcribe"),
         turn_detection=SemanticTurnDetection(),
         noise_reduction=InputAudioNoiseReduction(type="near_field"),
     )
