@@ -129,6 +129,18 @@ jobs:
           uv run pytest tests/crm -q
         continue-on-error: false
 
+      # Step 12b: Phonon (self-hosted STT server, phonon/) — its own venv.
+      # Root pyrefly and pytest exclude it, so this is the only place its
+      # type check and tests (including the .dockerignore pin) run.
+      - name: Check phonon (types + tests)
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cd phonon
+          uv sync --extra dev --frozen
+          uv run pyrefly check
+          uv run pytest -q
+        continue-on-error: false
+
       # Step 13: Check commit count (must be exactly 1)
       - name: Check commit count
         if: github.event_name == 'pull_request'
