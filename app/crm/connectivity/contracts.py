@@ -68,22 +68,17 @@ What is here, and why each thing is on the surface:
 - ``consume_status_event`` — the receipts consumer (worker_main registers
   it): message.status letters move the manifest along sent -> delivered ->
   read, or to failed with the provider's code.
-- ``buddy_binding`` / ``conversation_settings`` / ``list_channel_settings``
-  / ``update_channel_settings`` — the merchant's bindings: the one templates
-  go out from, and the one Buddy answers on with Buddy's settings (R1,
-  D13–D15, D24–D28); read total and fail-closed (no agent, handoff off).
+- ``get_current_buddy_binding`` / ``conversation_settings`` /
+  ``list_channel_settings`` / ``update_channel_settings`` — the merchant's
+  bindings: the one templates go out from, and the one Buddy answers on with
+  Buddy's settings (R1, D13–D15, D24–D28); read total and fail-closed (no
+  agent, handoff off).
 
 ``send()`` stays OFF this surface so that nothing outside the module can
 reach a provider without passing the checks in front of it. So does the
 route resolver, and so do the provider packages.
 """
 
-from app.crm.connectivity.accounts.channel_settings import (
-    buddy_binding,
-    conversation_settings,
-    list_channel_settings,
-    update_channel_settings,
-)
 from app.crm.connectivity.accounts.onboarding import (
     disconnect,
     get_installation,
@@ -97,11 +92,18 @@ from app.crm.connectivity.actions.perform import (
     perform_action,
     validate_action_args,
 )
+from app.crm.connectivity.channels.registry import registers_templates_for
+from app.crm.connectivity.channels.settings import (
+    conversation_settings,
+    get_current_buddy_binding,
+    list_channel_settings,
+    update_channel_settings,
+)
 from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.ingress import META_INGRESS
 from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
-from app.crm.connectivity.messaging.receipts import consume_status_event
+from app.crm.connectivity.messaging.shared.receipts import consume_status_event
 from app.crm.connectivity.schemas.conversation import ConversationSettings
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
@@ -116,7 +118,6 @@ from app.crm.connectivity.templates.reads import (
     template_status,
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
-from app.crm.connectivity.vocabulary.channels import registers_templates_for
 from app.crm.connectivity.vocabulary.reasons import reason_label
 
 __all__ = [
@@ -163,7 +164,7 @@ __all__ = [
     # the receipts consumer (worker_main registers)
     "consume_status_event",
     # the merchant's bindings: the template binding, Buddy's binding, settings
-    "buddy_binding",
+    "get_current_buddy_binding",
     "conversation_settings",
     "list_channel_settings",
     "update_channel_settings",

@@ -44,12 +44,12 @@ def test_writer_normalizes_the_address(monkeypatch: pytest.MonkeyPatch) -> None:
     is seeded here because no email channel is registered yet — the point is
     that an email-kind channel lowercases and a phone-kind one parses E.164,
     and that the writer never guesses which from the channel's name."""
-    from app.crm.connectivity.vocabulary import channels
+    from app.crm.connectivity.channels import registry
 
     monkeypatch.setitem(
-        channels.CHANNELS,
+        registry.CHANNELS,
         "email",
-        channels.Channel(gate_handle_kind="email", registers_templates=False),
+        registry.Channel(gate_handle_kind="email", registers_templates=False),
     )
     assert queue.normalize_address("whatsapp", "98450 12345") == "+919845012345"
     assert queue.normalize_address("email", " Priya@Shop.IN ") == "priya@shop.in"
@@ -108,12 +108,12 @@ def test_the_address_kind_is_the_channel_registrys_answer(
     CHANNELS registry that already knew each channel's handle kind — two
     answers to one question. The registry is the only answer now: a channel
     it describes as email-kind is lowercased, not parsed as a phone."""
-    from app.crm.connectivity.vocabulary import channels
+    from app.crm.connectivity.channels import registry
 
     monkeypatch.setitem(
-        channels.CHANNELS,
+        registry.CHANNELS,
         "mail",
-        channels.Channel(gate_handle_kind="email", registers_templates=False),
+        registry.Channel(gate_handle_kind="email", registers_templates=False),
     )
     assert (
         queue.normalize_address("mail", "  Priya@Example.COM ") == "priya@example.com"

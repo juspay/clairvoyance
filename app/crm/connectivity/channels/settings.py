@@ -101,10 +101,12 @@ def _read(binding: ChannelBinding) -> ChannelSettingsRead:
     )
 
 
-async def buddy_binding(merchant_id: str, channel: str) -> Optional[ChannelBinding]:
+async def get_current_buddy_binding(
+    merchant_id: str, channel: str
+) -> Optional[ChannelBinding]:
     """The active binding Buddy answers on, or None when the merchant has not
     picked one (or it is paused)."""
-    return await binding_accessor.buddy_binding(merchant_id, channel)
+    return await binding_accessor.get_current_buddy_binding(merchant_id, channel)
 
 
 async def conversation_settings(
@@ -116,7 +118,7 @@ async def conversation_settings(
     if binding_id:
         binding = await binding_accessor.get_binding(merchant_id, channel, binding_id)
     else:
-        binding = await buddy_binding(merchant_id, channel)
+        binding = await get_current_buddy_binding(merchant_id, channel)
     if binding is None or not holds_buddy(binding):
         return ConversationSettings()
     return settings_of(binding)

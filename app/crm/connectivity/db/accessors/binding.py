@@ -11,7 +11,7 @@ from app.crm.connectivity.db.decoders.binding import decode_binding
 from app.crm.connectivity.db.queries.binding import (
     binding_by_address_query,
     binding_by_id_query,
-    buddy_binding_query,
+    get_current_buddy_binding_query,
     has_active_primary_binding_query,
     inbound_binding_query,
     lock_channel_bindings_query,
@@ -135,9 +135,11 @@ async def list_merchant_bindings(merchant_id: str) -> List[ChannelBinding]:
     return [decode_binding(row) for row in rows]
 
 
-async def buddy_binding(merchant_id: str, channel: str) -> Optional[ChannelBinding]:
+async def get_current_buddy_binding(
+    merchant_id: str, channel: str
+) -> Optional[ChannelBinding]:
     """The active binding Buddy answers on, or None when none is picked."""
-    query, values = buddy_binding_query(merchant_id, channel)
+    query, values = get_current_buddy_binding_query(merchant_id, channel)
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_binding(row) if row is not None else None

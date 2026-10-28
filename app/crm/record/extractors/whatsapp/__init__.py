@@ -72,7 +72,7 @@ ENTRIES: List[CatalogEntry] = [
     _entry(
         "binding.buddy_bot_moved",
         "Buddy moved to another binding",
-        bindings.buddy_bot_moved_fields(),
+        bindings.buddy_bot_binding_switch_fields(),
         about="merchant",
     ),
     _entry(

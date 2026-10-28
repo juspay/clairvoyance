@@ -9,8 +9,9 @@ Importers name the file they mean:
     dispatch.py     the dispatcher — claims queued rows, runs the gate,
                     hands each to send(), and walks the retry ladder
 
-The gate (``messaging/gate.py``) and the send door (``connectivity/send.py``)
-sit outside this folder: every message passes them, not only these. The
-manifest's mechanics stay in ``connectivity/db/`` (the boundary checker
-pins a table's SQL to its owning module's db/ package).
+The gate (``messaging/shared/gate.py``) and the send door
+(``connectivity/send.py``) sit outside this folder: every message passes
+them, not only these. The manifest's mechanics stay in ``connectivity/db/``
+(the boundary checker pins a table's SQL to its owning module's db/
+package).
 """

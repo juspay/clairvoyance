@@ -864,12 +864,12 @@ def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
 # --- rollout phase 08: the registry's publish-time read ----------------------
 
 from app.crm.connectivity import contracts
+from app.crm.connectivity.channels import registry
 from app.crm.connectivity.db.queries.template import templates_by_name_query
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.connectivity.templates.lifecycle import (  # noqa: F401
     TemplateInUseError as _InUse,
 )
-from app.crm.connectivity.vocabulary import channels as channels_module
 
 
 def test_templates_by_name_read_is_merchant_first_and_parameterised() -> None:
@@ -1059,7 +1059,7 @@ async def test_template_status_with_no_primary_pipe_says_so(monkeypatch) -> None
 def test_the_publish_check_is_on_the_contract_surface() -> None:
     assert "template_status" in contracts.__all__
     assert "registers_templates_for" in contracts.__all__
-    assert contracts.registers_templates_for is channels_module.registers_templates_for
+    assert contracts.registers_templates_for is registry.registers_templates_for
 
 
 def test_a_draft_keeps_the_category_the_merchant_picked() -> None:
