@@ -60,6 +60,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # ---- the ownership map (rule 6 keeps it complete) -------------------------
 TABLE_OWNERS = {
     "crm_customer": "identity",
+    "crm_customer_handle": "identity",
     "platform_identity": "platform",
     "crm_event_raw": "record",
     "crm_event_schema": "record",
