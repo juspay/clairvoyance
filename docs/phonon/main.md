@@ -5,7 +5,7 @@ Nemotron 3.5 model (`mix2_full`) on our own GPUs. It is first used alongside Sar
 (shadow mode) and then, if it holds up, as the main STT provider.
 
 **Status:** design agreed · design load-tested with prototypes · production server not built yet.
-**Start here:** PR-01 is built in three parts — [PR-01.1 Core](prs/pr-01-1-core.md) (in review), then PR-01.2 Model process, then PR-01.3 Front-end + supervisor.
+**Start here:** PR-01 is built in three parts — [PR-01.1 Core](prs/pr-01-1-core.md), then [PR-01.2 Model process](prs/pr-01-2-model-process.md), then PR-01.3 Front-end + supervisor.
 **Full design doc (reasoning, diagrams, review):** https://claude.ai/artifact/CiNPw3DLD1Gr2HdpbK7vkP
 
 ## This folder
@@ -15,6 +15,7 @@ docs/phonon/
   main.md                              this file: the whole plan, every piece of work
   prs/                                 one doc per PR, written when we reach it
     pr-01-1-core.md
+    pr-01-2-model-process.md
   reference/
     load-test-design-guide.md          measured rules and numbers (wins on any measured fact)
 ```
@@ -261,7 +262,7 @@ Each PR leaves the server working end to end; later PRs replace a piece, never r
 | # | Problem it solves | Done when | Doc |
 |---|---|---|---|
 | PR-01.1 | **Core**: engine contract, fake engine, stream table (turns, chunks, finals, overload), IPC message vocabulary, logging and crash safety nets, repo wiring and CI | Table and engine behaviour pinned by tests; no processes yet | [pr-01.1](prs/pr-01-1-core.md) |
-| PR-01.2 | **Model process**: settings, IPC transport, feeder and writers, ingest, model process entry point | The model side works end to end over IPC | later |
+| PR-01.2 | **Model process**: settings, IPC transport, feeder and writers, ingest, model process entry point | The model side works end to end over IPC | [pr-01.2](prs/pr-01-2-model-process.md) |
 | PR-01.3 | **Front-end + supervisor**: protocol, WebSocket front-end, supervisor, end-to-end and failure tests, tools | A socket sends audio and gets fake text back through the full path, on a Mac | later |
 | PR-02 | **Clairvoyance can connect**: Deepgram-compatible `/v1/listen` (`Results`, `Finalize`, `KeepAlive`, `CloseStream`, `SpeechStarted`, `UtteranceEnd`) | Pipecat's `DeepgramSTTService` runs a call against the fake engine | later |
 | PR-03 | **Real transcripts**: load the model, batched cache-aware step grouped by step kind (first/later × final/not), batched features, `[gpu]` extra; CUDA errors raised as `FatalEngineError`; a bad stream fails only itself, not its batch | Batched output = one-stream-at-a-time output, token for token | later |
