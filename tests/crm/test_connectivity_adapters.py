@@ -936,6 +936,22 @@ def test_whether_a_channel_registers_templates_is_the_registrys_answer() -> None
     assert registers_templates_for("carrier_pigeon") is True
 
 
+def test_the_conversation_channels_are_the_ones_with_a_profile() -> None:
+    """Generic code iterates these instead of naming a channel: a channel
+    joins the inbox, the closing sweep and Buddy by declaring a profile."""
+    from app.crm.connectivity.vocabulary.channels import (
+        CHANNELS,
+        conversation_channels,
+        conversation_profile,
+    )
+
+    channels = conversation_channels()
+    assert channels and set(channels) == {
+        name for name, entry in CHANNELS.items() if entry.conversation is not None
+    }
+    assert all(conversation_profile(name) is not None for name in channels)
+
+
 async def test_a_channel_that_does_not_register_templates_skips_the_registry(
     monkeypatch, counting_adapter
 ) -> None:

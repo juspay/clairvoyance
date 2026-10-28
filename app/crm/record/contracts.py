@@ -21,7 +21,11 @@ from app.crm.record.catalog import (
     derive_for,
     topic_counts,
 )
-from app.crm.record.events import customer_has_event, event_topics
+from app.crm.record.events import (
+    customer_has_event,
+    event_topics,
+    letters_by_external_ids,
+)
 from app.crm.record.extractors import CALL_REPORT_SOURCES
 from app.crm.record.extractors.engine import field_value, list_values, variable_name
 from app.crm.record.ingest import record_event
@@ -36,6 +40,10 @@ __all__ = [
     "customer_has_event",
     # A run's trail keeps letter ids (T26); this names their topics.
     "event_topics",
+    # A producer reading back the letters it filed, by the external ids it
+    # composed (connectivity's receipts, once a message's row knows the
+    # provider's id).
+    "letters_by_external_ids",
     # The provider bays' seam (ingress.py): the module that owns a
     # provider's webhook mechanics builds an IngressSpec, and app/crm/api.py
     # registers it — record never imports the registrant back (rule 12).

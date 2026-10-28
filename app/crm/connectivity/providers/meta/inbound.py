@@ -23,7 +23,7 @@ needs the secret.
 import hashlib
 import hmac
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, NamedTuple, Optional
+from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
 from app.core.config.static import (
     META_APP_SECRET,
@@ -249,7 +249,7 @@ def _message_letters(words: _Words, value: Dict[str, Any]) -> List[ProviderLette
                     channel=words.channel,
                     connector_key=words.connector_key,
                     topic=TOPIC_STATUS,
-                    external_id=f"{message_id}:{state}",
+                    external_id=status_letter_id(message_id, state),
                     payload=_narrowed(value, "statuses", status),
                     occurred_at=_provider_timestamp(status.get("timestamp")),
                     schema_version=META_WHATSAPP_GRAPH_VERSION,
@@ -279,6 +279,26 @@ def _message_letters(words: _Words, value: Dict[str, Any]) -> List[ProviderLette
                 )
             )
     return out
+
+
+def status_letter_id(message_id: str, state: str) -> str:
+    """The external id a status letter is filed under: Meta sends one
+    status per transition on the same message id, so the state rides with
+    it to keep four letters four."""
+    return f"{message_id}:{state}"
+
+
+def status_letter_keys(
+    channel: str, message_id: str, states: Iterable[str]
+) -> Optional[Tuple[str, List[str]]]:
+    """Where this face filed one of our messages' status letters: (the spine
+    source, an external id per state), or None for a channel it does not
+    serve. How a message's receipts are read back once its row knows the id
+    (ingress.status_letter_keys) — the composition never leaves this face."""
+    for words in _WORDS_FOR_OBJECT.values():
+        if words.channel == channel:
+            return words.source, [status_letter_id(message_id, s) for s in states]
+    return None
 
 
 def _account_letter(

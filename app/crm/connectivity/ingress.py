@@ -21,7 +21,7 @@ dispatches knowing no provider by name. Rule 11 makes this file the one
 reader of every ``providers/<x>/inbound.py`` face.
 """
 
-from typing import Awaitable, Callable, Dict, List, Mapping, Optional
+from typing import Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import app.crm.connectivity.providers.meta.inbound as meta
 from app.core.logger import logger
@@ -122,3 +122,22 @@ META_INGRESS = IngressSpec(
     envelope=envelope_over(meta.letters),
     challenge=meta.handshake_challenge,
 )
+
+#: Each inbound face's answer to "where did you file this message's status
+#: letters?", asked in turn by channel — a second provider is one more entry.
+_STATUS_LETTER_KEYS = (meta.status_letter_keys,)
+
+
+def status_letter_keys(
+    channel: str, provider_message_id: str, states: Iterable[str]
+) -> Optional[Tuple[str, List[str]]]:
+    """Where a message's status letters were filed — (spine source, external
+    ids) — answered by the face that files them; None when no face serves
+    the channel. The receipts code reads a message's receipts back through
+    this, never by composing a provider's ids itself (rule 11)."""
+    wanted = list(states)
+    for keys_of in _STATUS_LETTER_KEYS:
+        found = keys_of(channel, provider_message_id, wanted)
+        if found is not None:
+            return found
+    return None
