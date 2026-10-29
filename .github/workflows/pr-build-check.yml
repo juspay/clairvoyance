@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - release
+      - crm
       - assist
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -132,9 +133,10 @@ jobs:
 
       # Step 13: Check commit count (must be exactly 1)
       - name: Check commit count
-        # The assist integration branch brings several reviewed one-commit PRs
-        # into release together; every PR INTO assist is still held to one commit.
-        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'assist')
+        # The crm and assist integration branches bring several reviewed
+        # one-commit PRs into release together; every PR INTO them is still
+        # held to one commit.
+        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'crm' || github.head_ref == 'assist'))
         run: |
           COMMIT_COUNT=${{ github.event.pull_request.commits }}
           echo "Commit count: $COMMIT_COUNT"
