@@ -75,6 +75,7 @@ from app.core.middleware.widget_cors_bypass import CustomWidgetCorsBypassMiddlew
 from app.crm import api as crm_api
 from app.crm.worker_main import start_worker_role, stop_worker_role
 from app.database import close_db_pool, init_db_pool
+from app.services.encryption import credential_encryption_ready
 from app.services.ingest_archive import IngestArchiveMiddleware
 from app.services.knowledge_base import (
     process_pending_documents as process_pending_kb_documents,
@@ -126,6 +127,13 @@ async def lifespan(_app: FastAPI):
             logger.info("Redis not configured - skipping Redis initialization")
     except Exception as e:
         logger.error(f"Failed to initialize Redis client: {e}")
+
+    # Credential writes fail closed without a usable key
+    if not credential_encryption_ready():
+        logger.error(
+            "CREDENTIAL_ENCRYPTION_KEY is missing or invalid: every credential "
+            "save will be refused (503) until it is set"
+        )
 
     # Start the chat cancel-bus pubsub subscriber. Fans cross-pod cancel
     # publishes out to the local in-flight task registry so the widget

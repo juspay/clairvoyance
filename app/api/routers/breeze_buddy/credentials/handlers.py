@@ -25,6 +25,14 @@ from app.schemas import (
     UpdateCredentialRequest,
     UserInfo,
 )
+from app.services.encryption import CredentialEncryptionError
+
+# The write was refused, not lost: without a usable encryption key the value
+# is never stored as plain text
+ENCRYPTION_UNAVAILABLE_DETAIL = (
+    "Credential encryption is not configured on this server; "
+    "the credential was not saved."
+)
 
 
 async def create_credential_handler(
@@ -64,6 +72,11 @@ async def create_credential_handler(
 
     except HTTPException:
         raise
+    except CredentialEncryptionError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=ENCRYPTION_UNAVAILABLE_DETAIL,
+        )
     except Exception as e:
         logger.error(f"Error creating credential: {e}", exc_info=True)
         raise HTTPException(
@@ -223,6 +236,11 @@ async def update_credential_handler(
             detail="Credential is named by a template as its provider account — "
             "point the template at another credential before deactivating "
             "or re-labelling this one.",
+        )
+    except CredentialEncryptionError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=ENCRYPTION_UNAVAILABLE_DETAIL,
         )
     except Exception as e:
         logger.error(f"Error updating credential {credential_id}: {e}", exc_info=True)

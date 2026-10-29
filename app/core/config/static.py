@@ -422,7 +422,8 @@ GCP_KMS_CREDENTIALS_JSON = os.getenv("GCP_KMS_CREDENTIALS_JSON", "")
 # Credential Encryption (AES-256-GCM)
 # Base64-encoded 32-byte key. Generate with:
 #   python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
-# When empty, credentials are stored as plain JSON (acceptable for dev/local).
+# Required to save credentials: when empty or invalid, every credential write is
+# refused (fail closed) rather than stored as plain JSON.
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
 
 # JWT Authentication Configuration
