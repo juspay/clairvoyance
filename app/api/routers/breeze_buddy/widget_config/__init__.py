@@ -1,12 +1,13 @@
 """RBAC-gated CRUD for widget_config rows (CHAT_MODE.md §14).
 
-Five endpoints under ``/agent/voice/breeze-buddy/widget-config``:
+Six endpoints under ``/agent/voice/breeze-buddy/widget-config``:
 
 - ``POST   /widget-config``            — create (admin / scoped reseller)
 - ``GET    /widget-config/list``       — list (RBAC-filtered)
 - ``GET    /widget-config/{id}``       — get by id
 - ``PUT    /widget-config/{id}``       — partial update
 - ``DELETE /widget-config/{id}``       — delete (admin only)
+- ``POST   /widget-config/{id}/preview/session`` — console preview session
 
 Mirrors the templates router (see ``templates/__init__.py``) — thin
 routes that validate auth + RBAC, then delegate to handlers.
@@ -21,6 +22,10 @@ from fastapi import APIRouter, Depends, Query, status
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
+from app.schemas.breeze_buddy.chat import (
+    CreateWidgetSessionResponse,
+    WidgetSessionOptions,
+)
 from app.schemas.breeze_buddy.widget_config import (
     DeleteWidgetConfigResponse,
     WidgetConfigCreate,
@@ -30,6 +35,7 @@ from app.schemas.breeze_buddy.widget_config import (
 )
 
 from .handlers import (
+    create_preview_session_handler,
     create_widget_config_handler,
     delete_widget_config_handler,
     get_widget_config_by_id_handler,
@@ -93,6 +99,22 @@ async def get_widget_config(
     """Get a widget_config by id. RBAC: must have access to its
     reseller / merchant (403 otherwise)."""
     return await get_widget_config_by_id_handler(widget_config_id, current_user)
+
+
+@router.post(
+    "/widget-config/{widget_config_id}/preview/session",
+    response_model=CreateWidgetSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_preview_session(
+    widget_config_id: str,
+    body: WidgetSessionOptions,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> CreateWidgetSessionResponse:
+    """A chat session for the console's preview frame, on a paused widget
+    too. RBAC: same access as reading the widget_config (403 otherwise).
+    The widget token it returns works for this one session, for an hour."""
+    return await create_preview_session_handler(widget_config_id, body, current_user)
 
 
 @router.put("/widget-config/{widget_config_id}", response_model=WidgetConfigResponse)
