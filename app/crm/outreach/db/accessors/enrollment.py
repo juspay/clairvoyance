@@ -19,6 +19,7 @@ from app.crm.outreach.db.decoders.enrollment import (
 from app.crm.outreach.db.queries.enrollment import (
     admission_facts_query,
     advance_run_query,
+    broadcast_run_endings_query,
     cancel_run_query,
     claim_due_runs_query,
     count_runs_query,
@@ -26,6 +27,7 @@ from app.crm.outreach.db.queries.enrollment import (
     exit_run_query,
     get_run_query,
     insert_enrollment_query,
+    last_broadcast_entry_query,
     list_runs_query,
     occupied_nodes_on_version_query,
     occupied_nodes_query,
@@ -427,6 +429,35 @@ async def run_endings_in_window(
         )
         for row in rows
     ]
+
+
+async def broadcast_run_endings(merchant_id: str, broadcast_id: str) -> List[RunEnding]:
+    """One RunEnding per run the broadcast started. The console's funnel:
+    the replica."""
+    query, values = broadcast_run_endings_query(merchant_id, broadcast_id)
+    rows = await crm_replica_read(query, values)
+    return [
+        RunEnding(
+            str(row["id"]),
+            str(row["enrollment_key"]),
+            str(row["status"]),
+            row["exit_reason"],
+            row["exited_at"],
+            row["entered_at"],
+            row["current_node"],
+        )
+        for row in rows
+    ]
+
+
+async def last_broadcast_entry(
+    merchant_id: str, broadcast_id: str
+) -> Optional[datetime]:
+    """When the broadcast's last run entered; None when it started none. The
+    broadcaster's close job: the writer, never the replica."""
+    query, values = last_broadcast_entry_query(merchant_id, broadcast_id)
+    async with crm_connection() as conn:
+        return await conn.fetchval(query, *values)
 
 
 async def resume_run(
