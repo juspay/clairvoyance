@@ -208,8 +208,9 @@ Note the `id` in the response. Section 6.3 puts it in the template.
 | `reseller_id` and `merchant_id` are the template's own | Template variables never load a merchant row, so the key never becomes a `{placeholder}`. The lookup refuses any other row, including a reseller-wide or global one. |
 | `value` has exactly these two fields, none empty | The lookup refuses any other shape |
 
-The key is encrypted at rest where `CREDENTIAL_ENCRYPTION_KEY` is set, as in
-production. It never reaches the model, a prompt or the session.
+The key is encrypted at rest with `CREDENTIAL_ENCRYPTION_KEY`; without that key
+the save is refused, never stored as plain text. It never reaches the model, a
+prompt or the session.
 
 ### 6.3 Declare the two tools in the template
 

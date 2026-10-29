@@ -1,8 +1,10 @@
 """
 AES-256-GCM encryption for credential values at rest.
 
-Uses a symmetric key from the CREDENTIAL_ENCRYPTION_KEY env var.
-When the key is not set, credentials are stored as plain JSON (dev/local).
+Uses a symmetric key from the CREDENTIAL_ENCRYPTION_KEY env var. Writes FAIL
+CLOSED: with no usable key, or when encryption itself fails, the credential is
+refused (CredentialEncryptionError), never stored readable. Rows written as
+plain JSON before this rule (``is_encrypted=False``) still decrypt.
 
 Key generation (run once, store in env):
     python -c "import os, base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
@@ -22,6 +24,11 @@ from app.core.logger import logger
 _NONCE_SIZE = 12
 
 
+class CredentialEncryptionError(Exception):
+    """A credential could not be encrypted — no usable key, or AES-GCM
+    failed. The write is refused rather than stored as plain JSON."""
+
+
 def _get_key_bytes() -> Optional[bytes]:
     """Decode the base64-encoded 256-bit encryption key."""
     if not CREDENTIAL_ENCRYPTION_KEY:
@@ -38,6 +45,12 @@ def _get_key_bytes() -> Optional[bytes]:
     except Exception as e:
         logger.error(f"Failed to decode CREDENTIAL_ENCRYPTION_KEY: {e}")
         return None
+
+
+def credential_encryption_ready() -> bool:
+    """True when CREDENTIAL_ENCRYPTION_KEY decodes to a usable 32-byte key —
+    the startup check; without it every credential write is refused."""
+    return _get_key_bytes() is not None
 
 
 def encrypt_value(plaintext: str) -> Optional[str]:
@@ -93,23 +106,22 @@ def decrypt_value(encrypted_b64: str) -> Optional[str]:
         return None
 
 
-def encrypt_credential(value_dict: dict) -> tuple[str, bool]:
+def encrypt_credential(value_dict: dict) -> str:
     """
     Encrypt a credential value dictionary for storage.
 
-    Returns:
-        (stored_value, is_encrypted) tuple.
-        - If key is configured: (base64_ciphertext, True)
-        - If key is not configured: (json_string, False)
+    Returns the base64 ciphertext. Raises CredentialEncryptionError when the
+    key is missing or invalid, or encryption fails — the value is never
+    returned in a storable plain form (fail closed).
     """
-    json_str = json.dumps(value_dict)
-    encrypted = encrypt_value(json_str)
-
-    if encrypted is not None:
-        return encrypted, True
-
-    # Fallback: store as plain JSON string
-    return json_str, False
+    encrypted = encrypt_value(json.dumps(value_dict))
+    if encrypted is None:
+        logger.error(
+            "Refusing to store a credential: CREDENTIAL_ENCRYPTION_KEY is missing "
+            "or invalid, or encryption failed (would otherwise be stored as plain text)"
+        )
+        raise CredentialEncryptionError("credential encryption is not available")
+    return encrypted
 
 
 def decrypt_credential(stored_value: str, is_encrypted: bool) -> Optional[dict]:
