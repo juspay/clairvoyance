@@ -63,9 +63,12 @@ class WorkflowCreate(BaseModel):
 
 
 class SegmentCreate(BaseModel):
-    # Phase 1 creates static lists only: a name and nothing else. A
-    # dynamic segment's definition joins this body with its compiler.
     name: str = Field(min_length=1, max_length=200)
+    # Omitted: a static list (members are added to it). Present: a dynamic
+    # segment — the rule, checked against the merchant's event catalog
+    # before it is saved (shared/segment_format.py has the format,
+    # outreach/segment_rules.py the laws).
+    definition: Optional[Dict[str, Any]] = None
 
 
 class SegmentPerson(BaseModel):
@@ -512,11 +515,20 @@ async def create_segment_route(
     ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ) -> Segment:
-    """A new, empty static list. 409 when the merchant already has a segment
-    by this name; 422 when the name is blank once trimmed."""
+    """A new static list (no definition) or dynamic segment (a definition).
+    409 when the merchant already has a segment by this name; 422 when the
+    name is blank once trimmed, or with every problem the rule has."""
     try:
-        return await segments.create_static_list(
-            merchant_id, body.name, current_user.email
+        if body.definition is None:
+            return await segments.create_static_list(
+                merchant_id, body.name, current_user.email
+            )
+        return await segments.create_dynamic_segment(
+            merchant_id, body.name, body.definition, current_user.email
+        )
+    except segments.SegmentRuleInvalid as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
         )
     except segments.SegmentNameTaken as e:
         raise HTTPException(

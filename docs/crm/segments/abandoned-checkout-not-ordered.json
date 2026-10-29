@@ -1,0 +1,10 @@
+{
+  "all": [
+    {
+      "event": "checkouts/create",
+      "within_days": 3,
+      "where": [{"field": "payload.total_price", "op": ">", "value": 2000}]
+    },
+    {"not": {"event": "orders/create", "within_days": 3}}
+  ]
+}
