@@ -1107,3 +1107,59 @@ class SegmentMembersPage(BaseModel):
 
     items: List[SegmentMember]
     next_after: Optional[UUID] = None
+
+
+class Campaign(BaseModel):
+    """A badge (canon T22): names a season, never contains it. ``key`` is
+    the identity every broadcast wears; ``name`` is presentation. The window
+    is for the report's header — a campaign never blocks a send."""
+
+    merchant_id: str
+    key: str
+    name: str
+    starts_at: Optional[date] = None
+    ends_at: Optional[date] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+
+
+BroadcastStatus = Literal[
+    "draft",
+    "scheduled",
+    "resolving",
+    "dispatching",
+    "paused",
+    "sent",
+    "closed",
+    "cancelled",
+    "failed",
+]
+
+
+class Broadcast(BaseModel):
+    """One deliberate execution (canon T17): ``segment_id`` admitted into
+    ``workflow_id``, now or at ``scheduled_for``. The clocks tell its story —
+    authored at created_at, frozen at resolved_at (late, just before
+    dispatch), fired at dispatched_at, final at closed_at. It never sends:
+    the workflow does."""
+
+    id: UUID
+    merchant_id: str
+    name: str
+    campaign_key: Optional[str] = None
+    segment_id: UUID
+    workflow_id: UUID
+    status: BroadcastStatus
+    scheduled_for: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    dispatched_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+
+
+class BroadcastPage(BaseModel):
+    """One page of a merchant's broadcasts, newest first, and the total."""
+
+    items: List[Broadcast]
+    total: int
