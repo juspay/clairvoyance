@@ -7,6 +7,7 @@ decoders from decoder.breeze_buddy.users.
 """
 
 import json
+from datetime import datetime
 from typing import List, Optional, Tuple
 
 from app.core.logger import logger
@@ -16,7 +17,10 @@ from app.database.accessor.breeze_buddy.access_grants import (
     ensure_reseller_on_conn,
     sync_user_access_on_conn,
 )
-from app.database.decoder.breeze_buddy.users import decode_user
+from app.database.decoder.breeze_buddy.users import (
+    decode_user,
+    decode_user_token_state,
+)
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.merchants import create_merchant_query
 from app.database.queries.breeze_buddy.users import (
@@ -29,11 +33,13 @@ from app.database.queries.breeze_buddy.users import (
     get_user_by_id_query,
     get_user_by_username_query,
     get_user_in_db_by_id_query,
+    get_user_token_state_query,
     get_users_by_email_query,
+    revoke_user_sessions_query,
     update_user_query,
 )
 from app.schemas.breeze_buddy.auth import UserInDB, UserRole
-from app.schemas.breeze_buddy.users import UserResponse
+from app.schemas.breeze_buddy.users import UserResponse, UserTokenState
 
 
 async def check_username_exists(username: str) -> bool:
@@ -446,4 +452,31 @@ async def delete_user(user_id: str) -> bool:
         return False
     except Exception:
         logger.exception(f"Error deleting user {user_id}")
+        raise
+
+
+async def get_user_token_state(user_id: str) -> Optional[UserTokenState]:
+    """Whether a user is active and their login-token cut-off; None if no
+    such user."""
+    query, values = get_user_token_state_query(user_id)
+    try:
+        result = await run_parameterized_query(query, values)
+        return decode_user_token_state(result[0]) if result else None
+    except Exception as e:
+        logger.error(f"Error reading token state for user {user_id}: {e}")
+        raise
+
+
+async def revoke_user_sessions(user_id: str) -> Optional[datetime]:
+    """Stamp tokens_valid_after = now(); returns the stamp, None if no such
+    user."""
+    query, values = revoke_user_sessions_query(user_id)
+    try:
+        result = await run_parameterized_query(query, values)
+        if not result:
+            return None
+        logger.warning(f"Revoked login sessions of user {user_id}")
+        return result[0]["tokens_valid_after"]
+    except Exception as e:
+        logger.error(f"Error revoking sessions of user {user_id}: {e}")
         raise

@@ -3,7 +3,7 @@ User accessors - response builders for user queries.
 """
 
 from app.schemas import UserRole
-from app.schemas.breeze_buddy.users import UserResponse
+from app.schemas.breeze_buddy.users import UserResponse, UserTokenState
 from app.utils.common import parse_json_field
 
 
@@ -27,4 +27,13 @@ def decode_user(row) -> UserResponse:
         owner_id=str(row["owner_id"]) if row.get("owner_id") else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def decode_user_token_state(row) -> UserTokenState:
+    """Build UserTokenState from an ``is_active, tokens_valid_after`` row.
+    A NULL is_active reads as inactive, the same as the login check."""
+    return UserTokenState(
+        is_active=bool(row["is_active"]),
+        tokens_valid_after=row["tokens_valid_after"],
     )

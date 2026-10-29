@@ -1,4 +1,4 @@
-"""Pydantic models for token_registry rows (migrations 086, 087).
+"""Pydantic models for token_registry rows (migrations 086–088).
 
 One row per long-lived RBAC token: the S2S token from ``POST /auth/s2s/token``,
 the per-merchant token from ``POST /merchant``, and any older long-lived token
@@ -43,6 +43,7 @@ class TokenRegistryEntry(BaseModel):
     last_seen_at: Optional[datetime] = None
     last_seen_from: Optional[str] = None
     last_route: Optional[str] = None
+    replaced_by: Optional[str] = None
 
 
 class TokenListResponse(BaseModel):
@@ -73,3 +74,25 @@ class RevokeTokenResponse(BaseModel):
 
     token: TokenRegistryEntry
     merchant_tokens_cleared: int
+
+
+class RotateTokenRequest(BaseModel):
+    """Body of ``POST /auth/tokens/{token_id}/rotate``.
+
+    ``grace_hours``: how long the old token keeps working after the new one
+    is issued. Default 24 for an admin token. A merchant token switches at once
+    (0): its webhooks and CRM pushes compare against the stored value, which
+    the rotation replaces in the same statement.
+    """
+
+    grace_hours: Optional[int] = Field(None, ge=0, le=168)
+
+
+class RotateTokenResponse(BaseModel):
+    """The new token (shown once), its row, the old row as rotated, and how
+    many ``merchants.s2s_token`` values were switched to the new token."""
+
+    token: str
+    new: TokenRegistryEntry
+    replaced: TokenRegistryEntry
+    merchant_tokens_swapped: int

@@ -58,6 +58,7 @@ _UNSET_AT_MINT = (
     "last_seen_at",
     "last_seen_from",
     "last_route",
+    "replaced_by",
 )
 
 
