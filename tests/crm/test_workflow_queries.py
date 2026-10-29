@@ -43,9 +43,16 @@ def test_enrollment_insert_binds_everything_positionally() -> None:
     sql, params = insert_enrollment_query(
         "m1", "wf-1", 3, "c-1", "wait-30m", NOW, {"phone": "+91"}, "c-1"
     )
-    assert "$8" in sql and "$9" not in sql
+    assert "$9::uuid" in sql and "$10" not in sql
     assert params[0] == "m1"  # merchant first — tenancy reads first
     assert json.loads(params[6]) == {"phone": "+91"}
+    # The spark (canon T20 col 18): NULL for a run an event started, the
+    # broadcast's id for a run a broadcast admitted.
+    assert "source_broadcast_id" in sql and params[8] is None
+    _, sparked = insert_enrollment_query(
+        "m1", "wf-1", 3, "c-1", "call-1", NOW, {}, "c-1", "b-7"
+    )
+    assert sparked[8] == "b-7"
 
 
 def test_goal_cancel_ends_every_open_run_including_parked() -> None:

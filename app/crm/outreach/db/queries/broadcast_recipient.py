@@ -1,11 +1,15 @@
 """SQL builders for crm_broadcast_recipient (T18, canon/06-outreach.md) — one
-table, one file. A pure child row with no merchant_id: every write runs
-inside an atom that has already locked the parent broadcast under
-merchant_id = $1 (lock_broadcast_query), and every read enters through the
-parent — joined on ``crm_broadcast.merchant_id = $1`` (the T21 precedent).
+table, one file. A pure child row with no merchant_id: every write that
+decides a row's fate runs inside an atom that has already locked the parent
+broadcast under merchant_id = $1 (lock_broadcast_query), and every read
+enters through the parent — joined on ``crm_broadcast.merchant_id = $1``
+(the T21 precedent). Admission's claim, its hold and the reaper are the
+broadcaster's queue across merchants (the claim_due_runs precedent): they
+only move a row between queued and claimed, keyed by a broadcast the
+candidates read already scoped.
 """
 
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from app.crm.outreach.db.queries.tables import (
     BROADCAST_RECIPIENT_TABLE,
@@ -68,3 +72,73 @@ def last_frozen_customer_query(
         LIMIT 1
     """
     return query, [merchant_id, broadcast_id]
+
+
+def claim_page_query(
+    broadcast_id: str, claimed_by: str, limit: int
+) -> Tuple[str, List[Any]]:
+    """Admission's claim (canon T18 cols 10-11, canon/06-outreach.md: "workers
+    claim with FOR UPDATE SKIP LOCKED"): the next page of a broadcast's
+    queued rows becomes claimed — by whom, since when. Two pods never take
+    one person; the partial waiting index (091) walks only rows still
+    waiting, in key order."""
+    query = f"""
+        UPDATE {BROADCAST_RECIPIENT_TABLE} r
+        SET status = 'claimed', claimed_by = $2, claimed_at = now()
+        FROM (
+            SELECT customer_id
+            FROM {BROADCAST_RECIPIENT_TABLE}
+            WHERE broadcast_id = $1 AND status = 'queued'
+            ORDER BY customer_id
+            LIMIT $3
+            FOR UPDATE SKIP LOCKED
+        ) AS page
+        WHERE r.broadcast_id = $1 AND r.customer_id = page.customer_id
+        RETURNING r.customer_id
+    """
+    return query, [broadcast_id, claimed_by, limit]
+
+
+def settle_recipient_query(
+    broadcast_id: str, customer_id: str, status: str, skip_reason: Optional[str]
+) -> Tuple[str, List[Any]]:
+    """Inside admission's per-person atom: a claimed row's end — enrolled,
+    skipped with its reason, or cancelled. Only from claimed: a row the
+    reaper already released is not this worker's to settle."""
+    query = f"""
+        UPDATE {BROADCAST_RECIPIENT_TABLE}
+        SET status = $3, skip_reason = $4
+        WHERE broadcast_id = $1 AND customer_id = $2 AND status = 'claimed'
+        RETURNING customer_id
+    """
+    return query, [broadcast_id, customer_id, status, skip_reason]
+
+
+def release_claims_query(
+    broadcast_id: str, customer_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    """A held page goes back to the queue (its workflow was paused after the
+    claim): claimed -> queued, nobody holding it."""
+    query = f"""
+        UPDATE {BROADCAST_RECIPIENT_TABLE}
+        SET status = 'queued', claimed_by = NULL, claimed_at = NULL
+        WHERE broadcast_id = $1 AND customer_id = ANY($2::uuid[])
+          AND status = 'claimed'
+    """
+    return query, [broadcast_id, customer_ids]
+
+
+def reap_stale_claims_query(lease_minutes: int) -> Tuple[str, List[Any]]:
+    """The reaper (canon T18 col 11: "releases anything claimed longer than
+    N minutes"): a pod that died mid-page leaves its rows claimed; after the
+    lease they are queued again and the next page takes them. Safe to
+    repeat a person: the run and its "enrolled" share one atom, so a row
+    still claimed never started a run."""
+    query = f"""
+        UPDATE {BROADCAST_RECIPIENT_TABLE}
+        SET status = 'queued', claimed_by = NULL, claimed_at = NULL
+        WHERE status = 'claimed'
+          AND claimed_at < now() - make_interval(mins => $1)
+        RETURNING broadcast_id
+    """
+    return query, [lease_minutes]
