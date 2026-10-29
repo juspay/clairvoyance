@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import HTTPException
 
 from app.ai.voice.agents.breeze_buddy.services.daily.daily import start_daily_session
+from app.api.routers.breeze_buddy.leads.rbac import validate_lead_read_access
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_id, get_template_by_id
 from app.schemas import (
@@ -39,10 +40,16 @@ async def breeze_buddy_daily_connect_handler(
         # 1. Validate lead exists
         lead = await get_lead_by_id(request.lead_id)
         if not lead:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Lead not found with id: {request.lead_id}",
-            )
+            # Same body as the access-denied 404 from validate_lead_read_access
+            # below, so the two cannot be told apart to enumerate lead ids.
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        # RBAC: the caller may only connect to a lead in their own tenant scope.
+        # Without this, any authenticated user could pass another tenant's
+        # lead_id and receive a Daily room + join token (N-TEL-2). Raises 404 on
+        # denial (not 403) to avoid leaking lead existence, matching the leads
+        # router.
+        validate_lead_read_access(current_user, lead, operation="connect")
 
         logger.info(
             f"Found lead for Daily session: {lead.id}, template: {lead.template}, "

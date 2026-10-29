@@ -7,52 +7,28 @@ from typing import Optional
 
 import aiohttp
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.recording_download import (
+    download_recording_via_ssrf,
+)
 from app.core.config.static import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
-from app.core.logger import logger
-from app.core.transport.http_client import get_proxy_config
+
+# Host the Twilio account credentials may be sent to (recording URLs live on the
+# API host and 302 to a CDN, which is followed without the keys).
+_RECORDING_HOSTS = ["api.twilio.com"]
 
 
 async def download_call_recording(
     recording_url: str, call_sid: str
 ) -> Optional[BytesIO]:
-    """
-    Download a recording from Twilio directly into memory.
+    """Download a Twilio recording into memory (keys go only to api.twilio.com)."""
 
-    Args:
-        recording_url (str): The URL of the recording to download
-        call_sid (str): The call SID for logging purposes
+    async def _auth() -> aiohttp.BasicAuth:
+        return aiohttp.BasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-    Returns:
-        Optional[BytesIO]: In-memory file object containing the recording, or None if download failed
-    """
-    try:
-        # Twilio recordings require authentication
-        auth = aiohttp.BasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-        # Get proxy configuration
-        proxy_url = get_proxy_config()
-
-        logger.info(f"Downloading Twilio recording from: {recording_url}")
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                recording_url, auth=auth, proxy=proxy_url
-            ) as response:
-                if response.status != 200:
-                    logger.error(
-                        f"Failed to download Twilio recording. Status: {response.status}"
-                    )
-                    return None
-
-                # Read the recording into memory
-                audio_data = await response.read()
-                audio_file = BytesIO(audio_data)
-
-        logger.info(
-            f"Successfully downloaded Twilio recording for call: {call_sid} ({len(audio_data)} bytes)"
-        )
-        return audio_file
-
-    except Exception as e:
-        logger.error(f"Error downloading Twilio recording: {e}", exc_info=True)
-        return None
+    return await download_recording_via_ssrf(
+        recording_url,
+        call_sid,
+        provider="Twilio",
+        recording_hosts=_RECORDING_HOSTS,
+        make_auth=_auth,
+    )
