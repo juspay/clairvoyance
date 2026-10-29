@@ -675,14 +675,13 @@ class CreateDemoSessionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class CreateWidgetSessionRequest(BaseModel):
-    """Body of ``POST /widget/session``."""
+class WidgetSessionOptions(BaseModel):
+    """What a client may ask of a new widget session.
 
-    public_widget_key: str = Field(
-        ...,
-        min_length=10,
-        description="Opaque per-merchant widget key (server-generated, see widget_config).",
-    )
+    Body of ``POST /widget-config/{id}/preview/session`` (the console
+    preview, RBAC), and the base of ``CreateWidgetSessionRequest``.
+    """
+
     template_vars: Dict[str, Any] = Field(
         default_factory=dict,
         description="Render-time variables (customer_name, etc.). "
@@ -705,6 +704,16 @@ class CreateWidgetSessionRequest(BaseModel):
     )
 
 
+class CreateWidgetSessionRequest(WidgetSessionOptions):
+    """Body of ``POST /widget/session``."""
+
+    public_widget_key: str = Field(
+        ...,
+        min_length=10,
+        description="Opaque per-merchant widget key (server-generated, see widget_config).",
+    )
+
+
 class CreateWidgetSessionResponse(BaseModel):
     """Body of ``POST /widget/session``.
 
@@ -720,7 +729,8 @@ class CreateWidgetSessionResponse(BaseModel):
     greeting: Optional[GreetingMessage] = None
     widget_token: str = Field(..., description="Bearer token for follow-up calls.")
     ttl_seconds: int = Field(
-        ..., description="Lifetime of widget_token in seconds (24h)."
+        ...,
+        description="Lifetime of widget_token in seconds (24h; 1h for a preview).",
     )
     quick_replies: List[QuickReplyWire] = Field(
         default_factory=list,
@@ -981,6 +991,7 @@ __all__ = [
     "CreateDemoSessionRequest",
     "CreateDemoSessionResponse",
     "CreateWidgetSessionRequest",
+    "WidgetSessionOptions",
     "QuickReplyWire",
     "CreateWidgetSessionResponse",
     "UpdateWidgetContextRequest",

@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import HTTPException, status
 
 from app.api.routers.breeze_buddy.templates.rbac import validate_template_access
+from app.api.routers.breeze_buddy.widget.handlers import open_widget_session
 from app.core.logger import logger
 from app.database.accessor import get_template_by_id
 from app.database.accessor.breeze_buddy.widget_config import (
@@ -28,6 +29,10 @@ from app.database.accessor.breeze_buddy.widget_config import (
     update_widget_config,
 )
 from app.schemas import UserInfo
+from app.schemas.breeze_buddy.chat import (
+    CreateWidgetSessionResponse,
+    WidgetSessionOptions,
+)
 from app.schemas.breeze_buddy.widget_config import (
     DeleteWidgetConfigResponse,
     WidgetConfigCreate,
@@ -195,6 +200,21 @@ async def get_widget_config_by_id_handler(
         operation="read widget_config",
     )
     return cfg
+
+
+async def create_preview_session_handler(
+    widget_config_id: str, body: WidgetSessionOptions, current_user: UserInfo
+) -> CreateWidgetSessionResponse:
+    """A console preview session on a widget the caller may read, paused or
+    not (N-WID-3). The login is the proof: nothing on the public
+    ``/widget/session`` path can open a paused widget."""
+    cfg = await get_widget_config_by_id_handler(widget_config_id, current_user)
+    if not cfg.active:
+        logger.info(
+            "widget: console preview session for an inactive widget_config "
+            f"(id={cfg.id}, user={current_user.username})"
+        )
+    return await open_widget_session(cfg, body, preview=True)
 
 
 async def update_widget_config_handler(
