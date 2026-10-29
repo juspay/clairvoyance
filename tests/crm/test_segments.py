@@ -294,7 +294,7 @@ def _client(merchants: Tuple[str, ...] = ("m1",)) -> TestClient:
 
 def test_every_segment_route_declares_the_tenancy_door() -> None:
     routes = [r for r in outreach_api.segment_router.routes if isinstance(r, APIRoute)]
-    assert len(routes) == 5, "the router lost or gained routes — update this walk"
+    assert len(routes) == 6, "the router lost or gained routes — update this walk"
     missing = [
         r.path
         for r in routes

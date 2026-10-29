@@ -32,8 +32,12 @@ from app.crm.record.db.queries import (
     stamp_event_query,
     topic_counts_query,
 )
+from app.crm.record.db.queries_segments import (
+    segment_count_query,
+    segment_members_query,
+)
 from app.crm.record.schemas import EventSchema, JourneyCard, RawEvent, TopicCount
-from app.crm.shared.db import crm_connection
+from app.crm.shared.db import crm_connection, crm_replica_read
 
 
 async def insert_event(
@@ -110,6 +114,27 @@ async def customer_has_event(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return bool(row["found"]) if row else False
+
+
+async def customers_matching(
+    merchant_id: str,
+    rule: Any,
+    narrow: bool,
+    after: Optional[str],
+    limit: int,
+) -> List[str]:
+    """A segment's answer is a report-shaped read over the whole event log:
+    the replica, as the console's reports (a few seconds behind; the count
+    carries computed_at to say so)."""
+    query, values = segment_members_query(merchant_id, rule, narrow, after, limit)
+    rows = await crm_replica_read(query, values)
+    return [str(row["customer_id"]) for row in rows]
+
+
+async def count_matching(merchant_id: str, rule: Any, narrow: bool) -> int:
+    query, values = segment_count_query(merchant_id, rule, narrow)
+    rows = await crm_replica_read(query, values)
+    return int(rows[0]["n"]) if rows else 0
 
 
 # --- crm_event_schema (T24) ---------------------------------------------------
