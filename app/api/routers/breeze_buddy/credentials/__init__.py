@@ -58,7 +58,8 @@ async def create_credential_endpoint(
     - Merchant credentials (reseller_id + merchant_id): only that merchant; wins over the
       reseller row of the same name
 
-    Values are encrypted at rest when CREDENTIAL_ENCRYPTION_KEY is configured.
+    Values are encrypted at rest with CREDENTIAL_ENCRYPTION_KEY; without a
+    usable key the save is refused, never stored as plain text.
     """
     # A merchant row always sits under its reseller (DB CHECK says the same).
     if req.merchant_id and not req.reseller_id:
@@ -198,7 +199,7 @@ async def update_credential_endpoint(
     Update a credential.
 
     - Send '******' for value fields you want to keep unchanged
-    - New values will be re-encrypted if CREDENTIAL_ENCRYPTION_KEY is configured
+    - New values are re-encrypted with CREDENTIAL_ENCRYPTION_KEY
     - Admin: can update any credential
     - Reseller user: reseller-wide rows and merchant rows of their reseller
     - Merchant user: only their own merchant's rows (never reseller-wide or global)

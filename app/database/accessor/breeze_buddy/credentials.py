@@ -25,7 +25,7 @@ from app.database.queries.breeze_buddy.credentials import (
     update_credential_query,
 )
 from app.schemas import Credential, CredentialType
-from app.services.encryption import encrypt_credential
+from app.services.encryption import CredentialEncryptionError, encrypt_credential
 
 
 class CredentialInUseError(Exception):
@@ -107,7 +107,11 @@ async def create_credential(
     merchant_id: Optional[str] = None,
     provider: Optional[str] = None,
 ) -> Optional[Credential]:
-    """Create a new credential with optional KMS encryption."""
+    """Create a new credential, encrypted at rest.
+
+    Raises CredentialEncryptionError when the value cannot be encrypted: the
+    credential is refused, never stored as plain text.
+    """
     logger.info(
         f"Creating credential '{name}' for reseller: {reseller_id or 'GLOBAL'}"
         + (f" merchant: {merchant_id}" if merchant_id else "")
@@ -117,7 +121,7 @@ async def create_credential(
         # Validate value structure matches credential_type
         _validate_credential_value(credential_type, value)
 
-        stored_value, is_encrypted = encrypt_credential(value)
+        stored_value = encrypt_credential(value)
 
         query_text, values = insert_credential_query(
             id=str(uuid4()),
@@ -125,7 +129,7 @@ async def create_credential(
             name=name,
             credential_type=credential_type.value,
             value=stored_value,
-            is_encrypted=is_encrypted,
+            is_encrypted=True,
             description=description,
             merchant_id=merchant_id,
             provider=provider,
@@ -134,14 +138,14 @@ async def create_credential(
         result = await run_parameterized_query(query_text, values)
         if result and len(result) > 0:
             credential = decode_single_credential(result, mask=True)
-            logger.info(
-                f"Credential '{name}' created successfully (encrypted={is_encrypted})"
-            )
+            logger.info(f"Credential '{name}' created successfully")
             return credential
 
         logger.error(f"Failed to create credential '{name}'")
         return None
 
+    except CredentialEncryptionError:
+        raise
     except Exception as e:
         logger.error(f"Error creating credential '{name}': {e}", exc_info=True)
         return None
@@ -292,7 +296,8 @@ async def update_credential(
             # Validate merged value structure matches credential_type
             _validate_credential_value(credential_type, merged_value)
 
-            stored_value, is_encrypted = encrypt_credential(merged_value)
+            stored_value = encrypt_credential(merged_value)
+            is_encrypted = True
 
         query_text, values = update_credential_query(
             credential_id=credential_id,
@@ -318,8 +323,8 @@ async def update_credential(
         logger.error(f"Failed to update credential {credential_id}")
         return None
 
-    except (ValueError, CredentialInUseError):
-        # Re-raise validation errors and the refusal
+    except (ValueError, CredentialInUseError, CredentialEncryptionError):
+        # Re-raise validation errors and the refusals
         raise
     except Exception as e:
         logger.error(f"Error updating credential {credential_id}: {e}", exc_info=True)
