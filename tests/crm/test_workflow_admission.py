@@ -187,13 +187,17 @@ class _History:
         conn: Any,
         merchant_id: str,
         workflow_id: str,
-        customer_id: str,
+        customer_ids: List[str],
         enrollment_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         self.judged.append(enrollment_key)
         if enrollment_key in (None, "ORD-1"):
-            return {"runs": 1, "latest_entered_at": NOW - timedelta(minutes=5)}
-        return {"runs": 0, "latest_entered_at": None}
+            return {
+                "runs": 1,
+                "latest_entered_at": NOW - timedelta(minutes=5),
+                "open_runs": 0,
+            }
+        return {"runs": 0, "latest_entered_at": None, "open_runs": 0}
 
     async def insert_enrollment(
         self,
@@ -240,6 +244,7 @@ def _enrol(history: _History, workflow: Workflow, key: str) -> Optional[Enrollme
             CUSTOMER,
             {},
             key,
+            [CUSTOMER],
         )
     )
 

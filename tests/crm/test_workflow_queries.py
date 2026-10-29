@@ -69,10 +69,11 @@ def test_goal_cancel_and_reply_name_the_run_they_are_about() -> None:
 
 
 def test_open_runs_for_customer_is_merchant_first_and_open_only() -> None:
-    sql, params = open_runs_for_customer_query("m1", "c-1")
-    assert "WHERE merchant_id = $1 AND customer_id = $2" in sql
+    # Every record of the person (identity's person_records).
+    sql, params = open_runs_for_customer_query("m1", ["c-1", "c-0"])
+    assert "WHERE merchant_id = $1 AND customer_id = ANY($2::uuid[])" in sql
     assert "status <> 'exited'" in sql
-    assert params == ["m1", "c-1"]
+    assert params == ["m1", ["c-1", "c-0"]]
 
 
 def test_goal_cancel_is_time_aware_on_the_entry_event_and_null_safe() -> None:
@@ -107,11 +108,11 @@ def test_goal_cancel_can_be_keyed_to_the_run_it_is_about() -> None:
 
 def test_goal_recheck_can_be_keyed_to_the_run_it_is_about() -> None:
     sql, params = customer_has_event_query(
-        "m1", "c-1", ["orders/create"], NOW, where=("cart_token", "chk-88412")
+        "m1", ["c-1"], ["orders/create"], NOW, where=("cart_token", "chk-88412")
     )
     assert "AND payload->>$5 = $6" in sql
-    assert params == ["m1", "c-1", ["orders/create"], NOW, "cart_token", "chk-88412"]
-    sql, params = customer_has_event_query("m1", "c-1", ["orders/create"], NOW)
+    assert params == ["m1", ["c-1"], ["orders/create"], NOW, "cart_token", "chk-88412"]
+    sql, params = customer_has_event_query("m1", ["c-1"], ["orders/create"], NOW)
     assert "$5" not in sql and len(params) == 4
 
 
@@ -230,8 +231,8 @@ def test_event_side_writes_stay_unconditional() -> None:
 
 def test_admission_and_source_reads_are_merchant_first() -> None:
     for sql, params in (
-        admission_facts_query("m1", "wf-1", "c-1"),
-        source_event_used_query("m1", "wf-1", "c-1", "e-1"),
+        admission_facts_query("m1", "wf-1", ["c-1"]),
+        source_event_used_query("m1", "wf-1", ["c-1"], "e-1"),
     ):
         assert "merchant_id = $1" in sql
         assert params[0] == "m1"
@@ -242,13 +243,16 @@ def test_admission_facts_scope_to_the_key_on_keyed_plans() -> None:
     history the reenter/cooldown guards judge is that KEY's, not the
     customer's whole history — otherwise her second order is refused as a
     re-entry. The customer predicate stays, for tenancy paranoia."""
-    sql, params = admission_facts_query("m1", "wf-1", "c-1", enrollment_key="ORD-2")
-    assert "enrollment_key = $3" in sql and "customer_id = $4" in sql
-    assert params == ["m1", "wf-1", "ORD-2", "c-1"]
-    # the unkeyed form is untouched
-    sql, params = admission_facts_query("m1", "wf-1", "c-1")
-    assert "enrollment_key" not in sql and "customer_id = $3" in sql
-    assert params == ["m1", "wf-1", "c-1"]
+    person = ["c-1", "c-0"]  # every record of her (identity's person_records)
+    sql, params = admission_facts_query("m1", "wf-1", person, enrollment_key="ORD-2")
+    assert "enrollment_key = $3" in sql and "customer_id = ANY($4::uuid[])" in sql
+    assert params == ["m1", "wf-1", "ORD-2", person]
+    # the unkeyed form judges her whole history, on every record
+    sql, params = admission_facts_query("m1", "wf-1", person)
+    assert "enrollment_key" not in sql and "customer_id = ANY($3::uuid[])" in sql
+    assert params == ["m1", "wf-1", person]
+    # both count her runs still open, across her records
+    assert "count(*) FILTER (WHERE status <> 'exited') AS open_runs" in sql
 
 
 def test_claim_skips_paused_plans_and_counts_the_claim() -> None:
@@ -265,9 +269,9 @@ def test_transient_error_writes_the_retry_into_wake_at() -> None:
 
 
 def test_goal_recheck_survives_a_null_occurred_at() -> None:
-    sql, params = customer_has_event_query("m1", "c-1", ["order.placed"], NOW)
+    sql, params = customer_has_event_query("m1", ["c-1"], ["order.placed"], NOW)
     assert "COALESCE(occurred_at, received_at) > $4" in sql
-    assert params == ["m1", "c-1", ["order.placed"], NOW]
+    assert params == ["m1", ["c-1"], ["order.placed"], NOW]
 
 
 # --- rollout phase 16: a letter carries its facts into the run, and moves a
