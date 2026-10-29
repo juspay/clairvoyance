@@ -48,17 +48,28 @@ TYP_WIDGET = "widget"
 
 # Default lifetime — see module docstring.
 DEFAULT_WIDGET_TOKEN_TTL_MINUTES = 24 * 60
+# A console preview session may chat with a PAUSED widget, so its token
+# lives an hour, not a day (N-WID-3).
+PREVIEW_SESSION_TTL_MINUTES = 60
 
 
 class WidgetSessionContext:
     """Resolved widget-token claims, returned by ``require_widget_session``."""
 
-    __slots__ = ("session_id", "widget_config_id", "subject")
+    __slots__ = ("session_id", "widget_config_id", "subject", "preview")
 
-    def __init__(self, *, session_id: str, widget_config_id: str, subject: str) -> None:
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        widget_config_id: str,
+        subject: str,
+        preview: bool = False,
+    ) -> None:
         self.session_id = session_id
         self.widget_config_id = widget_config_id
         self.subject = subject
+        self.preview = preview
 
 
 def mint_widget_token(
@@ -66,6 +77,7 @@ def mint_widget_token(
     widget_session_id: str,
     widget_config_id: str,
     ttl_minutes: int = DEFAULT_WIDGET_TOKEN_TTL_MINUTES,
+    preview: bool = False,
 ) -> str:
     """Issue a widget JWT bound to ``widget_session_id``.
 
@@ -83,6 +95,8 @@ def mint_widget_token(
         "widget_session_id": widget_session_id,
         "widget_config_id": widget_config_id,
     }
+    if preview:
+        payload["preview"] = True
     return jwt_manager.create_access_token(
         payload, expires_delta=timedelta(minutes=ttl_minutes)
     )
@@ -153,6 +167,7 @@ def require_widget_session(
         session_id=session_id,
         widget_config_id=widget_config_id,
         subject=str(payload.get("sub", "")),
+        preview=payload.get("preview") is True,
     )
 
 
