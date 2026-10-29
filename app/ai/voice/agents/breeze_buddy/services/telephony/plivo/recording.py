@@ -13,25 +13,17 @@ import aiohttp
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
     lead_plivo_account,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.recording_hosts import (
+    is_provider_recording_url,
+)
 from app.core.config.static import (
     APP_BASE_URL,
     PLIVO_RECORDING_TIME_LIMIT,
 )
 from app.core.logger import logger
-from app.core.security.ssrf import host_matches_allowlist
+from app.core.security.ssrf import redact_url, ssrf_safe_request
 from app.core.transport.http_client import get_proxy_config
 from app.database.accessor import get_lead_by_call_id
-
-# Keys go only to Plivo's recording hosts (media.plivo.com and its regions,
-# e.g. aps1.media.plivo.com) over https; any other URL is fetched without them.
-_RECORDING_HOSTS = ["media.plivo.com"]
-
-
-def _is_plivo_recording_url(recording_url: str) -> bool:
-    """Is this recording on Plivo (keys needed), not our own copy?"""
-    return recording_url.startswith("https://") and host_matches_allowlist(
-        recording_url, _RECORDING_HOSTS
-    )
 
 
 def _recording_callback_url(call_uuid: str) -> str:
@@ -67,6 +59,11 @@ async def download_call_recording(
     """
     Download a recording from Plivo directly into memory.
 
+    Every redirect hop is checked (ssrf_safe_request), so none can reach an
+    internal or metadata address. The URL is logged redacted (redact_url): a
+    recording URL can carry a signed query or token, and scheme, host and path
+    are all a log line needs.
+
     Args:
         recording_url (str): The URL of the recording to download
         call_sid (str): The call SID; a recording on Plivo is fetched with
@@ -76,8 +73,11 @@ async def download_call_recording(
         Optional[BytesIO]: In-memory file object containing the recording, or None if download failed
     """
     try:
+        # Keys go only to Plivo's recording hosts (media.plivo.com and its
+        # regions, e.g. aps1.media.plivo.com) over https; our self-hosted copy
+        # (or anything else) is fetched without them.
         auth = None
-        if _is_plivo_recording_url(recording_url):
+        if is_provider_recording_url("plivo", recording_url):
             lead = await get_lead_by_call_id(call_sid)
             if lead is None:
                 raise LookupError(f"no lead for call {call_sid}")
@@ -87,11 +87,12 @@ async def download_call_recording(
         # Get proxy configuration
         proxy_url = get_proxy_config()
 
-        logger.info(f"Downloading Plivo recording from: {recording_url}")
+        logger.info(f"Downloading Plivo recording from: {redact_url(recording_url)}")
 
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                recording_url, auth=auth, proxy=proxy_url
+            # A redirect off Plivo's origin drops the keys.
+            async with ssrf_safe_request(
+                session, "GET", recording_url, auth=auth, proxy=proxy_url
             ) as response:
                 if response.status != 200:
                     logger.error(

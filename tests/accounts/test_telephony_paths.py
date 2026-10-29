@@ -5,6 +5,7 @@ a recording's keys go only to Plivo."""
 import asyncio
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -16,6 +17,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
     lead_plivo_account,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import ConfigurationModel
+from app.core.security import ssrf
 from app.schemas import LeadCallTracker
 from tests.accounts.conftest import Store
 from tests.accounts.test_telephony import (  # noqa: F401 — fixtures
@@ -87,23 +89,30 @@ def test_the_mpc_callback_always_answers_the_waiting_bot(
 
 @pytest.fixture
 def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
-    """aiohttp.ClientSession, faked: each GET's (url, auth), answered 200."""
+    """DNS and aiohttp.ClientSession, faked: every name resolves to a public
+    address, and each GET's (url, auth) is recorded and answered 200. The
+    download goes through ssrf_safe_request, which connects to the checked
+    address and carries the name in the Host header; the URL recorded is the
+    one asked for."""
     seen: List[Tuple[str, Any]] = []
 
     class Response:
         status = 200
+        headers: dict = {}
 
         async def read(self) -> bytes:
             return b"mp3"
 
-        async def __aenter__(self) -> "Response":
-            return self
-
-        async def __aexit__(self, *_a: Any) -> None:
+        def release(self) -> None:
             return None
 
     class Session:
-        def get(self, url: str, auth: Any = None, proxy: Any = None) -> Response:
+        async def request(
+            self, method: str, url: str, *, auth: Any = None, **kwargs: Any
+        ) -> Response:
+            host = (kwargs.get("headers") or {}).get("Host")
+            if host:
+                url = urlsplit(url)._replace(netloc=host).geturl()
             seen.append((url, auth))
             return Response()
 
@@ -113,7 +122,12 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
         async def __aexit__(self, *_a: Any) -> None:
             return None
 
+    async def resolve(hostname: str, port: int) -> List[str]:
+        return ["8.8.8.8"]
+
     monkeypatch.setattr(recording.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(ssrf, "_resolve_host", resolve)
+    monkeypatch.setattr(ssrf, "_ALLOW_PRIVATE_EGRESS", False)
     return seen
 
 
@@ -128,7 +142,6 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
         # our uploaded copy on the storage CDN: fetched, but without keys
         ("https://sdk.beta.breezesdk.store/breeze-buddy/recordings/r.mp3", False),
         ("https://attacker.example/rec.mp3", False),
-        ("http://media.plivo.com/v1/Account/x/Recording/y.mp3", False),
         ("https://plivo.com.attacker.example/rec.mp3", False),
     ],
 )
@@ -162,6 +175,16 @@ def test_a_recordings_keys_go_only_to_plivo_over_https(
         # any other URL is fetched without keys, and without reading the
         # lead's account at all
         assert auth is None and looked_up == []
+
+
+def test_a_cleartext_recording_url_is_not_fetched(
+    gets: List[Tuple[str, Any]],
+) -> None:
+    """Not even without keys: every hop of the download must be https."""
+    url = "http://media.plivo.com/v1/Account/x/Recording/y.mp3"
+
+    assert asyncio.run(recording.download_call_recording(url, "CA-1")) is None
+    assert gets == []
 
 
 @pytest.mark.parametrize(

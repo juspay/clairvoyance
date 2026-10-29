@@ -36,6 +36,7 @@ from starlette.requests import Request
 # keeps this line above the next one on its own.
 from app.ai.voice.agents.breeze_buddy import dispatch as _dispatch  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
+from app.ai.voice.agents.breeze_buddy.services.telephony import recording_hosts
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo import (
     recording as plivo_rec,
 )
@@ -45,6 +46,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz import (
 from app.api.routers.breeze_buddy.leads import handlers as leads_mod
 from app.api.routers.breeze_buddy.telephony.answer import handlers as ans_mod
 from app.api.routers.breeze_buddy.telephony.callbacks import handlers as cb_mod
+from app.core.security import ssrf
 from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.auth import UserInfo, UserRole
 from app.schemas.breeze_buddy.core import (
@@ -78,8 +80,12 @@ def vobiz_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rec, "VOBIZ_AUTH_ID", AUTH_ID)
     monkeypatch.setattr(rec, "VOBIZ_AUTH_TOKEN", AUTH_TOKEN)
     monkeypatch.setattr(rec, "VOBIZ_RECORDING_TIME_LIMIT", LIMIT)
-    monkeypatch.setattr(rec, "_VOBIZ_API_HOST", API_HOST)
-    monkeypatch.setattr(rec, "_VOBIZ_API_SCHEME", "http")
+    monkeypatch.setattr(recording_hosts, "_VOBIZ_API_HOST", API_HOST)
+    monkeypatch.setattr(recording_hosts, "_VOBIZ_API_SCHEME", "http")
+    monkeypatch.setattr(recording_hosts, "VOBIZ_RECORDING_HOSTS", ["media.vobiz.ai"])
+    # The local servers below are on loopback, which the download's SSRF check
+    # refuses in production (SSRF_ALLOW_PRIVATE_EGRESS is the dev override).
+    monkeypatch.setattr(ssrf, "_ALLOW_PRIVATE_EGRESS", True)
     monkeypatch.setattr(rec, "get_proxy_config", lambda: None)
     monkeypatch.setattr(rec, "APP_BASE_URL", APP_BASE)
     monkeypatch.setattr(plivo_rec, "APP_BASE_URL", APP_BASE)
@@ -320,10 +326,13 @@ async def test_plivo_answer_xml_is_byte_identical_to_release(
 @pytest.mark.parametrize(
     "url,expected",
     [
-        ("https://api.vobiz.ai/api/v1/Account/MA/Recording/r1.mp3", CREDS),
         ("https://media.vobiz.ai/recordings/r1.mp3", CREDS),
-        ("https://vobiz.ai/r1.mp3", CREDS),
         ("https://MEDIA.Vobiz.AI/r1.mp3", CREDS),
+        # VOBIZ_RECORDING_HOSTS is media.vobiz.ai, not the whole domain; the
+        # API host counts only as the configured base (the stand-in, here)
+        ("https://api.vobiz.ai/api/v1/Account/MA/Recording/r1.mp3", {}),
+        ("https://vobiz.ai/r1.mp3", {}),
+        ("https://docs.vobiz.ai/r1.mp3", {}),
         # cleartext to a Vobiz host: the token would cross the wire in the clear
         ("http://api.vobiz.ai/api/v1/r1.mp3", {}),
         ("http://media.vobiz.ai/r1.mp3", {}),
@@ -347,8 +356,9 @@ async def test_plivo_answer_xml_is_byte_identical_to_release(
 def test_auth_headers_go_only_to_vobiz_over_https_or_the_api_host(url, expected):
     """RecordUrl arrives on an unauthenticated callback, so whoever can POST it
     chooses where we send the X-Auth headers
-    (https://www.vobiz.ai/docs/api-reference/authentication). Only *.vobiz.ai
-    over https, or the configured VOBIZ_API_BASE_URL host on its own scheme."""
+    (https://www.vobiz.ai/docs/api-reference/authentication). Only
+    VOBIZ_RECORDING_HOSTS over https, or the configured VOBIZ_API_BASE_URL host
+    on its own scheme."""
     assert rec._vobiz_auth_headers(url) == expected
 
 
@@ -389,15 +399,18 @@ async def test_download_returns_the_bytes_and_sends_credentials_to_the_vobiz_hos
     assert seen.hits == [("/rec.mp3", CREDS)]
 
 
-async def test_download_from_another_host_sends_no_credentials():
+async def test_a_cleartext_url_off_vobiz_is_not_fetched():
+    """Plain http is allowed only for the configured API host (the stand-in);
+    another host over http is refused before any request. (A host off Vobiz
+    over https is fetched without credentials: test_recording_hosts.py.)"""
     seen = Seen()
     async with serve({"/rec.mp3": seen.file(ID3)}) as port:
         audio = await rec.download_call_recording(
             f"http://{OTHER_HOST}:{port}/rec.mp3", "CA-1"
         )
 
-    assert audio is not None and audio.getvalue() == ID3
-    assert seen.hits == [("/rec.mp3", {})]
+    assert audio is None
+    assert seen.hits == []
 
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
@@ -691,7 +704,17 @@ async def test_gcs_object_is_named_from_the_bytes(
     downloads: List[tuple[str, str]] = []
 
     async def fake_lead(cid: str) -> LeadCallTracker:
-        return LeadCallTracker(id="lead-1", reseller_id="res-1", template="t")
+        return LeadCallTracker(
+            id="lead-1", reseller_id="res-1", template="t", telephony_number_id="n-1"
+        )
+
+    async def fake_number(number_id: str) -> TelephonyNumber:
+        return TelephonyNumber(
+            id=number_id,
+            number="+918000000001",
+            provider=CallProvider.VOBIZ,
+            status=TelephonyNumberStatus.AVAILABLE,
+        )
 
     async def fake_vobiz_download(u: str, cid: str) -> BytesIO:
         downloads.append((u, cid))
@@ -702,6 +725,7 @@ async def test_gcs_object_is_named_from_the_bytes(
 
     monkeypatch.setattr(calls_mod, "UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD", True)
     monkeypatch.setattr(calls_mod, "get_lead_by_call_id", fake_lead)
+    monkeypatch.setattr(calls_mod, "get_telephony_number_by_id", fake_number)
     monkeypatch.setattr(calls_mod, "download_call_recording_vobiz", fake_vobiz_download)
     monkeypatch.setattr(calls_mod, "download_call_recording_plivo", other_download)
     monkeypatch.setattr(calls_mod, "upload_file_to_gcs", uploads.upload)

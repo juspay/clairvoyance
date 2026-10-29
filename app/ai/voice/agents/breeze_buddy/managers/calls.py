@@ -53,6 +53,9 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     download_call_recording as download_call_recording_plivo,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.recording_hosts import (
+    is_provider_recording_url,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
@@ -70,6 +73,7 @@ from app.core.config.static import (
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import redact_url
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
@@ -1128,13 +1132,35 @@ async def update_call_recording(
     logger.info(
         f"Processing call recording for call_id: {call_id} from provider: {provider}"
     )
-    lead = await get_lead_by_call_id(call_id)
     provider = provider.lower()
+    lead = await get_lead_by_call_id(call_id)
     if not lead:
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
 
     try:
+        # The callback is unauthenticated and names its own provider, and the
+        # URL is linked from the console and fetched with the provider's keys:
+        # store only a recording on the media host of the provider the lead's
+        # own number is on. Never a script, an internal address, another site,
+        # or another provider's recording swapped onto this call.
+        number = (
+            await get_telephony_number_by_id(lead.telephony_number_id)
+            if lead.telephony_number_id
+            else None
+        )
+        lead_provider = number.provider.value.lower() if number else None
+        if lead_provider != provider or not is_provider_recording_url(
+            provider, provider_recording_url
+        ):
+            logger.error(
+                f"Refusing recording URL for call_id: {call_id} (lead: {lead.id}, "
+                f"merchant: {lead.merchant_id}): callback provider {provider}, "
+                f"lead's number on {lead_provider or 'no number'}, "
+                f"URL {redact_url(provider_recording_url)}"
+            )
+            return
+
         # If cloud upload is disabled, just store the provider URL in DB
         if not UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD:
             logger.info(

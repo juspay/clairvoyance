@@ -7,32 +7,30 @@ import asyncio
 from html import escape as html_escape
 from io import BytesIO
 from typing import Optional
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote
 
 import aiohttp
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.recording_hosts import (
+    is_provider_recording_url,
+)
 from app.core.config.static import (
     APP_BASE_URL,
-    VOBIZ_API_BASE_URL,
     VOBIZ_AUTH_ID,
     VOBIZ_AUTH_TOKEN,
     VOBIZ_RECORDING_TIME_LIMIT,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import redact_url, ssrf_safe_request
 from app.core.transport.http_client import get_proxy_config
 
 # Vobiz may serve a WAV file under an .mp3 URL; a WAV starts with "RIFF".
 _WAV_MAGIC = b"RIFF"
-# Besides https *.vobiz.ai, the REST host on its own scheme (the local harness
-# points it at an http stand-in).
-_VOBIZ_API_HOST = urlsplit(VOBIZ_API_BASE_URL).hostname
-_VOBIZ_API_SCHEME = urlsplit(VOBIZ_API_BASE_URL).scheme
 _MAX_RECORDING_REDIRECTS = 5
 # One deadline for the whole download, every redirect hop included (a
 # session ClientTimeout is per request). Console playback awaits this, so a
 # silent media host must not hold it for aiohttp's 300 s default.
 _DOWNLOAD_TIMEOUT_SECONDS = 60
-_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
 def _recording_callback_url(call_uuid: str) -> str:
@@ -47,13 +45,7 @@ def _vobiz_auth_headers(url: str) -> dict[str, str]:
     """Vobiz's X-Auth headers if ``url`` is on a Vobiz host, else none."""
     # The URL comes from an unauthenticated callback: never send credentials off
     # Vobiz, nor over cleartext to a vobiz.ai host.
-    parts = urlsplit(url)
-    host = parts.hostname or ""
-    on_vobiz = parts.scheme == "https" and (
-        host == "vobiz.ai" or host.endswith(".vobiz.ai")
-    )
-    on_api = host == _VOBIZ_API_HOST and parts.scheme == _VOBIZ_API_SCHEME
-    if on_vobiz or on_api:
+    if is_provider_recording_url("vobiz", url):
         return {"X-Auth-ID": VOBIZ_AUTH_ID, "X-Auth-Token": VOBIZ_AUTH_TOKEN}
     return {}
 
@@ -85,39 +77,39 @@ def recording_file_format(audio: bytes) -> str:
 async def download_call_recording(
     recording_url: str, call_sid: str
 ) -> Optional[BytesIO]:
-    """Download a Vobiz recording into memory (media.vobiz.ai needs auth headers)."""
+    """Download a Vobiz recording into memory (media.vobiz.ai needs auth headers).
+
+    Every redirect hop is checked (ssrf_safe_request), so none can reach an
+    internal or metadata address; a hop off the first URL's origin drops the
+    X-Auth headers. The URL is logged redacted (redact_url): a recording URL
+    can carry a signed query or token, and scheme, host and path are all a log
+    line needs.
+    """
     try:
         proxy_url = get_proxy_config()
-        logger.info(f"Downloading Vobiz recording from: {recording_url}")
-        url = recording_url
+        logger.info(f"Downloading Vobiz recording from: {redact_url(recording_url)}")
+        headers = _vobiz_auth_headers(recording_url)
+        # Plain http only for the configured API host on http (the local
+        # harness); anything else must be https.
+        allow_http = bool(headers) and recording_url.startswith("http://")
         async with asyncio.timeout(_DOWNLOAD_TIMEOUT_SECONDS):
             async with aiohttp.ClientSession() as session:
-                # Redirects are followed by hand: aiohttp forwards custom headers
-                # (X-Auth-*) cross-origin, so each hop gets its own header decision.
-                for _ in range(_MAX_RECORDING_REDIRECTS + 1):
-                    async with session.get(
-                        url,
-                        headers=_vobiz_auth_headers(url),
-                        proxy=proxy_url,
-                        allow_redirects=False,
-                    ) as response:
-                        location = response.headers.get("Location")
-                        if response.status in _REDIRECT_STATUSES and location:
-                            url = urljoin(url, location)
-                            continue
-                        if response.status != 200:
-                            logger.error(
-                                "Failed to download Vobiz recording. "
-                                f"Status: {response.status}"
-                            )
-                            return None
-                        audio_data = await response.read()
-                        break
-                else:
-                    logger.error(
-                        f"Too many redirects downloading Vobiz recording: {recording_url}"
-                    )
-                    return None
+                async with ssrf_safe_request(
+                    session,
+                    "GET",
+                    recording_url,
+                    headers=headers,
+                    proxy=proxy_url,
+                    allow_http=allow_http,
+                    max_redirects=_MAX_RECORDING_REDIRECTS,
+                ) as response:
+                    if response.status != 200:
+                        logger.error(
+                            "Failed to download Vobiz recording. "
+                            f"Status: {response.status}"
+                        )
+                        return None
+                    audio_data = await response.read()
         logger.info(
             f"Successfully downloaded Vobiz recording for call: {call_sid} "
             f"({len(audio_data)} bytes)"
@@ -126,7 +118,7 @@ async def download_call_recording(
     except TimeoutError:
         logger.error(
             f"Timed out after {_DOWNLOAD_TIMEOUT_SECONDS}s downloading Vobiz "
-            f"recording: {recording_url}"
+            f"recording: {redact_url(recording_url)}"
         )
         return None
     except Exception as e:
