@@ -10,6 +10,7 @@ import asyncpg
 from app.crm.outreach.db.decoders.segment_member import decode_segment_member
 from app.crm.outreach.db.queries.segment_member import (
     insert_members_query,
+    member_ids_query,
     member_page_query,
 )
 from app.crm.outreach.schemas import SegmentMember
@@ -36,3 +37,12 @@ async def member_page(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_segment_member(row) for row in rows]
+
+
+async def member_ids(
+    merchant_id: str, segment_id: str, after: Optional[str], limit: int
+) -> List[str]:
+    query, values = member_ids_query(merchant_id, segment_id, after, limit)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [str(row["customer_id"]) for row in rows]
