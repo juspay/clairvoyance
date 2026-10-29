@@ -7,6 +7,7 @@ Five endpoints under ``/agent/voice/breeze-buddy/widget-config``:
 - ``GET    /widget-config/{id}``       — get by id
 - ``PUT    /widget-config/{id}``       — partial update
 - ``DELETE /widget-config/{id}``       — delete (admin only)
+- ``POST   /widget-config/{id}/preview`` — console preview grant
 
 Mirrors the templates router (see ``templates/__init__.py``) — thin
 routes that validate auth + RBAC, then delegate to handlers.
@@ -27,6 +28,7 @@ from app.schemas.breeze_buddy.widget_config import (
     WidgetConfigListResponse,
     WidgetConfigResponse,
     WidgetConfigUpdate,
+    WidgetPreviewGrantResponse,
 )
 
 from .handlers import (
@@ -34,6 +36,7 @@ from .handlers import (
     delete_widget_config_handler,
     get_widget_config_by_id_handler,
     list_widget_configs_handler,
+    mint_preview_grant_handler,
     update_widget_config_handler,
 )
 
@@ -93,6 +96,20 @@ async def get_widget_config(
     """Get a widget_config by id. RBAC: must have access to its
     reseller / merchant (403 otherwise)."""
     return await get_widget_config_by_id_handler(widget_config_id, current_user)
+
+
+@router.post(
+    "/widget-config/{widget_config_id}/preview",
+    response_model=WidgetPreviewGrantResponse,
+)
+async def mint_preview_grant(
+    widget_config_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+) -> WidgetPreviewGrantResponse:
+    """Short-lived grant the console hands its preview frame, so the widget
+    can open a session on a paused widget. RBAC: same access as reading the
+    widget_config (403 otherwise)."""
+    return await mint_preview_grant_handler(widget_config_id, current_user)
 
 
 @router.put("/widget-config/{widget_config_id}", response_model=WidgetConfigResponse)

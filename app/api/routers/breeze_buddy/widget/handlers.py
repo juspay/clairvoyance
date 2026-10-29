@@ -412,11 +412,12 @@ async def create_widget_session_handler(
     body: CreateWidgetSessionRequest, request: Request
 ) -> CreateWidgetSessionResponse:
     """Create a widget session backed by a chat_session row."""
-    cfg = await resolve_widget_config_for_request(
+    cfg, preview = await resolve_widget_config_for_request(
         request=request,
         public_widget_key=body.public_widget_key,
         rate_bucket="session_create",
         rate_limit=None,  # use cfg.max_sessions_per_ip_hour default
+        preview_grant=body.preview_grant,
     )
 
     template = await get_template_by_id_cached(cfg.template_id)
@@ -473,6 +474,7 @@ async def create_widget_session_handler(
         widget_session_id=create_resp.session_id,
         widget_config_id=cfg.id,
         ttl_minutes=DEFAULT_WIDGET_TOKEN_TTL_MINUTES,
+        preview=preview,
     )
 
     surface = _extract_widget_config(template)
@@ -517,7 +519,8 @@ async def send_widget_message_handler(
 ):
     """Drive one chat turn. 409 if voice is currently active."""
     cfg = await resolve_session_widget_config(
-        request=request, widget_config_id=ctx.widget_config_id
+        widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
     )
 
     await enforce_widget_ip_limit(
@@ -582,7 +585,8 @@ async def send_widget_intent_handler(
     an intent is a turn, not a side channel.
     """
     cfg = await resolve_session_widget_config(
-        request=request, widget_config_id=ctx.widget_config_id
+        widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
     )
 
     await enforce_widget_ip_limit(
@@ -641,7 +645,8 @@ async def transcribe_widget_audio_handler(
     drops it into the composer for the user to edit and send via ``/message``.
     """
     cfg = await resolve_session_widget_config(
-        request=request, widget_config_id=ctx.widget_config_id
+        widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
     )
 
     # Separate "transcribe" bucket (same per-merchant hourly cap as messages)
@@ -715,7 +720,8 @@ async def approve_widget_tool_handler(
     from ``already_decided`` / ``lock_contended``.
     """
     cfg = await resolve_session_widget_config(
-        request=request, widget_config_id=ctx.widget_config_id
+        widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
     )
 
     await enforce_widget_ip_limit(
@@ -806,7 +812,8 @@ async def update_widget_context_handler(
     client-context keys, so the two never clobber each other.
     """
     cfg = await resolve_session_widget_config(
-        request=request, widget_config_id=ctx.widget_config_id
+        widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
     )
 
     await enforce_widget_ip_limit(
@@ -910,8 +917,8 @@ async def voice_connect_handler(
     + end_conversation.py for the resume + drain mechanics.
     """
     cfg = await resolve_session_widget_config(
-        request=request,
         widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
         preview_paused=False,
     )
 
@@ -1396,8 +1403,8 @@ async def try_on_widget_handler(
     history, ui_blocks, session state, or a log line.
     """
     cfg = await resolve_session_widget_config(
-        request=request,
         widget_config_id=ctx.widget_config_id,
+        preview=ctx.preview,
         preview_paused=False,
     )
 

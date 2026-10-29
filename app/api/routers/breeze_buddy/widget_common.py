@@ -23,12 +23,12 @@ application) are intentionally split.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, Response, status
 
-from app.core.config.static import WIDGET_CONSOLE_ORIGINS
+from app.api.security.breeze_buddy.widget_token import is_preview_grant_for
 from app.core.logger import logger
 from app.database.accessor.breeze_buddy.widget_config import (
     get_widget_config_by_id,
@@ -139,27 +139,16 @@ async def _enforce_widget_ip_limit(
     )
 
 
-def is_console_origin(request: Request) -> bool:
-    """Is this our own console asking, rather than a merchant's storefront?
-
-    Our console is the one place an operator looks at their own agent before
-    anyone else can, so it is exempt from the two rules written for anonymous
-    visitors: the site allow-list, and the active flag. See
-    ``WIDGET_CONSOLE_ORIGINS`` for what that exemption is and is not worth.
-    """
-    origin = _caller_origin(request)
-    return bool(origin) and origin.rstrip("/") in WIDGET_CONSOLE_ORIGINS
-
-
 async def resolve_session_widget_config(
-    *, request: Request, widget_config_id: str, preview_paused: bool = True
+    *, widget_config_id: str, preview: bool, preview_paused: bool = True
 ) -> WidgetConfigResponse:
     """The widget a session token names; 401 if it is gone or switched off.
-    Our console may still chat with a switched-off widget (preview), unless
-    ``preview_paused=False`` (voice and try-on)."""
+
+    A console preview session (``preview`` — the server-signed claim on its
+    widget token, never a request header) may still chat with a switched-off
+    widget, unless ``preview_paused=False`` (voice and try-on)."""
     cfg = await get_widget_config_by_id(widget_config_id)
-    preview = preview_paused and is_console_origin(request)
-    if cfg is None or (not cfg.active and not preview):
+    if cfg is None or (not cfg.active and not (preview and preview_paused)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Widget configuration not found or inactive",
@@ -168,23 +157,27 @@ async def resolve_session_widget_config(
     return cfg
 
 
-def enforce_widget_origin(*, request: Request, cfg: WidgetConfigResponse) -> None:
+def enforce_widget_origin(
+    *, request: Request, cfg: WidgetConfigResponse, preview: bool = False
+) -> None:
     """403 unless the caller's Origin (or Referer-derived origin) is in the
     row's ``allowed_origins``. Empty list = deny-all. Shared by the
     key-resolved session path and the shop-resolved storefront-config path
     so the two doors can never drift on origin policy.
 
-    Our own console is always permitted: a merchant should not have to add us
-    to their production allow-list to look at their own agent.
+    A console preview (``preview``, proven by a preview grant minted behind
+    the console login) is exempt: a merchant should not have to add us to
+    their production allow-list to look at their own agent. The Origin header
+    alone never grants that — any non-browser client can set it (N-WID-3).
     """
+    if preview:
+        return
     origin = _caller_origin(request)
     if origin is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Origin required for widget routes",
         )
-    if origin.rstrip("/") in WIDGET_CONSOLE_ORIGINS:
-        return
     if not cfg.allowed_origins or origin not in cfg.allowed_origins:
         logger.warning(
             f"widget: origin {origin!r} not in allowed_origins for "
@@ -202,7 +195,8 @@ async def resolve_widget_config_for_request(
     public_widget_key: str,
     rate_bucket: str,
     rate_limit: Optional[int] = None,
-) -> WidgetConfigResponse:
+    preview_grant: Optional[str] = None,
+) -> Tuple[WidgetConfigResponse, bool]:
     """Load the widget_config + enforce origin + per-IP rate limit.
 
     Args:
@@ -215,22 +209,30 @@ async def resolve_widget_config_for_request(
             ``None``, the route is expected to pick a value off the
             loaded ``WidgetConfigResponse`` itself — used when the row
             hadn't been loaded yet.
+        preview_grant: A console preview grant (``mint_preview_grant``),
+            if the caller sent one.
+
+    Returns:
+        The config, and whether this is a console preview (a live grant
+        for this widget).
 
     Behaviour:
         - Returns 404 (no echo) when the key is unknown or the row is
-          inactive — same reconnaissance-hardening as the demo router.
+          inactive and no preview grant covers it — same
+          reconnaissance-hardening as the demo router.
         - Returns 403 when the caller's origin (or Referer-derived
           origin) isn't in ``allowed_origins`` — same status when
-          ``allowed_origins`` is empty (deny-all by default).
+          ``allowed_origins`` is empty (deny-all by default). A preview
+          is exempt.
         - Returns 429 with ``Retry-After`` when the per-IP bucket for
           ``rate_bucket`` is over ``rate_limit``.
     """
     cfg = await get_widget_config_by_public_key(public_widget_key)
-    # A paused widget still previews for us. Pausing is how a merchant stops
-    # serving shoppers, and the moment they most want to look at their agent
-    # is before they have ever unpaused it.
-    preview = cfg is not None and not cfg.active and is_console_origin(request)
-    if cfg is not None and preview:
+    # A paused widget still previews for the console. Pausing is how a
+    # merchant stops serving shoppers, and the moment they most want to look
+    # at their agent is before they have ever unpaused it.
+    preview = cfg is not None and is_preview_grant_for(preview_grant, cfg.id)
+    if cfg is not None and preview and not cfg.active:
         logger.info(
             "widget: console preview session for an inactive widget_config "
             f"(id={cfg.id})"
@@ -248,7 +250,7 @@ async def resolve_widget_config_for_request(
             detail="Widget configuration not found",
         )
 
-    enforce_widget_origin(request=request, cfg=cfg)
+    enforce_widget_origin(request=request, cfg=cfg, preview=preview)
 
     effective_limit = (
         rate_limit if rate_limit is not None else cfg.max_sessions_per_ip_hour
@@ -259,7 +261,7 @@ async def resolve_widget_config_for_request(
         limit=effective_limit,
         widget_config_id=cfg.id,
     )
-    return cfg
+    return cfg, preview
 
 
 async def enforce_widget_ip_limit(

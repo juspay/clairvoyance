@@ -187,6 +187,13 @@ class DeleteWidgetConfigResponse(BaseModel):
     deleted_id: str
 
 
+class WidgetPreviewGrantResponse(BaseModel):
+    """``POST /widget-config/{id}/preview`` — see ``mint_preview_grant``."""
+
+    preview_grant: str
+    ttl_seconds: int
+
+
 __all__ = [
     "StorefrontWidgetConfigResponse",
     "WidgetAppearance",
@@ -195,4 +202,5 @@ __all__ = [
     "WidgetConfigResponse",
     "WidgetConfigListResponse",
     "DeleteWidgetConfigResponse",
+    "WidgetPreviewGrantResponse",
 ]
