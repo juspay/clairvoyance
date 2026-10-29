@@ -96,58 +96,6 @@ async def get_token_by_id(token_id: str) -> Optional[TokenRegistryEntry]:
         raise
 
 
-async def find_or_register_seen_token(
-    *,
-    token_id: str,
-    token_hash: str,
-    kind: TokenKind,
-    subject: str,
-    username: str,
-    role: str,
-    reseller_ids: List[str],
-    merchant_ids: List[str],
-    issued_at: datetime,
-    expires_at: datetime,
-) -> TokenRegistryEntry:
-    """The row for a token a verifier just accepted; registered as
-    ``backfilled`` the first time it is seen. Raises on any DB error — and
-    when no row can be found or written, which leaves the caller nothing to
-    decide on."""
-    existing = await get_token_by_hash(token_hash)
-    if existing:
-        return existing
-    query, values = register_token_query(
-        token_id=token_id,
-        token_hash=token_hash,
-        kind=kind,
-        source="backfilled",
-        subject=subject,
-        username=username,
-        role=role,
-        reseller_ids=reseller_ids,
-        merchant_ids=merchant_ids,
-        created_by=None,
-        issued_at=issued_at,
-        expires_at=expires_at,
-        if_absent=True,
-    )
-    try:
-        result = await run_parameterized_query(query, values)
-    except Exception as e:
-        logger.error(f"Error registering seen {kind} token {token_id}: {e}")
-        raise
-    if result:
-        logger.info(f"Registered backfilled {kind} token {token_id} for {username}")
-        return decode_token_registry_entry(result[0])
-    # Another pod registered it between the read and the insert.
-    raced = await get_token_by_hash(token_hash)
-    if raced is None:
-        raise RuntimeError(
-            f"token_registry row for {token_id} neither found nor written"
-        )
-    return raced
-
-
 async def mark_token_seen(
     token_id: str, seen_from: Optional[str], route: Optional[str]
 ) -> Optional[datetime]:

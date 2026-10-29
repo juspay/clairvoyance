@@ -21,7 +21,7 @@ from app.database.accessor.breeze_buddy.merchants import (
     get_merchant_by_merchant_identifier,
 )
 from app.database.accessor.breeze_buddy.token_registry import (
-    find_or_register_seen_token,
+    get_token_by_hash,
     mark_token_seen,
     register_token,
 )
@@ -236,16 +236,16 @@ class BreezeBuddyRBACTokenManager:
         self, token: str, connection: Optional[HTTPConnection] = None
     ) -> UserInfo:
         """``verify_rbac_token``, then the token's subject, then the token
-        registry (observe mode).
+        registry (enforced).
 
-        Every token's subject — a user, or ``merchant:<id>`` — must be
-        active (401 otherwise). A short-lived token must also be issued after
-        its user's ``tokens_valid_after`` (the login cut-off).
+        Every token's subject — a user, or ``merchant:<id>`` — must exist and
+        be active (401 otherwise). A short-lived token must also be issued
+        after its user's ``tokens_valid_after`` (the login cut-off).
 
-        A long-lived token (see ``_is_long_lived``) is looked up by hash:
-        - revoked → 401;
-        - never seen → registered as ``backfilled`` and let through — that is
-          how the tokens in use get found.
+        A long-lived token (see ``_is_long_lived``) must be in the registry,
+        looked up by hash: unknown → 401, revoked → 401. Rows come from the
+        mint, from rotation, and from the observe period of 2/4 — a token the
+        registry has never seen is no longer let through.
 
         Any lookup that can't be made → 503: a refusal (fail CLOSED), but not
         one a caller would read as "your token is bad". ``connection`` (the
@@ -266,7 +266,13 @@ class BreezeBuddyRBACTokenManager:
             return user_info
 
         token_hash = token_hash_of(token)
-        entry = await self._registry_row(token_hash, claims)
+        entry = await self._registry_row(token_hash)
+        if entry is None:
+            logger.warning(
+                f"RBAC verifier: rejected unregistered token of {claims['sub']} "
+                f"({claims['username']}, jti: {claims.get('jti') or '-'})"
+            )
+            raise _unauthorized()
         if entry.revoked_at is not None and entry.revoked_at <= datetime.now(
             timezone.utc
         ):
@@ -277,42 +283,24 @@ class BreezeBuddyRBACTokenManager:
         await self._note_seen(token_hash, entry, connection)
         return user_info
 
-    async def _registry_row(
-        self, token_hash: str, claims: Dict[str, Any]
-    ) -> TokenRegistryEntry:
-        """This pod's recent read of the token's row, else a fresh one."""
+    async def _registry_row(self, token_hash: str) -> Optional[TokenRegistryEntry]:
+        """This pod's recent read of the token's row, else a fresh one;
+        None when the registry has no such token (not cached, so a token
+        minted on another pod a moment ago is found on its next use)."""
         cached = _registry_cache.get(token_hash)
         now = time.monotonic()
         if cached and now - cached[0] < _REGISTRY_CACHE_SECONDS:
             return cached[1]
-        iat = claims.get("iat")
         try:
-            entry = await find_or_register_seen_token(
-                token_id=claims.get("jti") or str(uuid.uuid4()),
-                token_hash=token_hash,
-                kind=(
-                    "merchant"
-                    if str(claims["sub"]).startswith(_MERCHANT_SUBJECT_PREFIX)
-                    else "admin"
-                ),
-                subject=claims["sub"],
-                username=claims["username"],
-                role=claims["role"],
-                reseller_ids=claims.get("reseller_ids") or [],
-                merchant_ids=claims.get("merchant_ids") or [],
-                issued_at=(
-                    datetime.fromtimestamp(iat, timezone.utc)
-                    if iat is not None
-                    else datetime.now(timezone.utc)
-                ),
-                expires_at=datetime.fromtimestamp(claims["exp"], timezone.utc),
-            )
+            entry = await get_token_by_hash(token_hash)
         except Exception:
             logger.error("RBAC verifier: token registry unavailable — refusing")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Authentication temporarily unavailable",
             )
+        if entry is None:
+            return None
         if len(_registry_cache) >= _REGISTRY_CACHE_MAX:
             _registry_cache.clear()
         _registry_cache[token_hash] = (now, entry)
@@ -360,17 +348,13 @@ class BreezeBuddyRBACTokenManager:
         _subject_cache.pop(subject, None)
 
     async def _check_subject(self, claims: Dict[str, Any], long_lived: bool) -> None:
-        """Refuse a token whose user or merchant is inactive, or a login
-        token issued before its user's cut-off.
-
-        A subject that doesn't exist (deleted) is logged and let through for
-        now — refusing it waits for enforcement (4/4), so a service token
-        minted under a since-deleted user isn't cut off unannounced.
-        """
+        """Refuse a token whose user or merchant is gone or inactive, or a
+        login token issued before its user's cut-off."""
         subject = str(claims["sub"])
         state = await self._subject_state(subject)
         if not state.found:
-            return
+            logger.warning(f"RBAC verifier: rejected token of unknown {subject}")
+            raise _unauthorized()
         if not state.active:
             logger.warning(f"RBAC verifier: rejected token of inactive {subject}")
             raise _unauthorized()
@@ -413,10 +397,6 @@ class BreezeBuddyRBACTokenManager:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Authentication temporarily unavailable",
-            )
-        if not state.found:
-            logger.warning(
-                f"RBAC verifier: token subject {subject} not found — allowed (observe)"
             )
         if len(_subject_cache) >= _REGISTRY_CACHE_MAX:
             _subject_cache.clear()
