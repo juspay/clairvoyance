@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -35,6 +39,7 @@ from app.crm.auth import _extract_token
 from app.crm.record.schemas import EventIn
 from app.schemas.breeze_buddy.auth import UserInfo, UserRole
 
+REPO = Path(__file__).resolve().parents[2]
 TEMPLATE_ID = "6b1f0d3c-8a2e-4f5b-9c7d-1e2a3b4c5d6e"
 EVENTS = "/ingest/events"
 LEADS = "/agent/voice/breeze-buddy/leads"
@@ -482,6 +487,37 @@ def test_oversize_event_takes_the_normal_path(monkeypatch: pytest.MonkeyPatch) -
 
     assert response.status_code == 413  # the door's own size limit
     assert bucket.written == [] and calls.store == []
+
+
+def test_the_archive_and_the_events_door_follow_one_cap() -> None:
+    """Both read CRM_INGEST_MAX_BODY_BYTES. Apart, a raised dial would send a
+    letter between the two past park mode into auth, which reads the Postgres
+    park mode exists to spare (5xx, retried into more 5xx); a lowered one would
+    park a letter the door then refuses at replay, after the producer was told
+    it succeeded. Booted fresh: static config is read once at import."""
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO),
+        "CRM_INGEST_MAX_BODY_BYTES": "2097152",
+    }
+    env.setdefault("JWT_SECRET_KEY", "test")
+    env.setdefault("JWT_ALGORITHM", "HS256")
+    booted = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import app.services.ingest_archive as a, app.crm.record.api as r; "
+            "print(a.MAX_BODY_BYTES, r.MAX_LETTER_BYTES)",
+        ],
+        env=env,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert booted.returncode == 0, booted.stderr[-2000:]
+    assert booted.stdout.split()[-2:] == ["2097152", "2097152"]
 
 
 def test_a_bug_in_the_archive_never_breaks_the_door(

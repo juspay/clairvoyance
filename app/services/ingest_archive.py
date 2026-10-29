@@ -52,7 +52,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import dynamic as dyn_cfg
-from app.core.config.static import INGEST_ARCHIVE_GCS_BUCKET
+from app.core.config.static import CRM_INGEST_MAX_BODY_BYTES, INGEST_ARCHIVE_GCS_BUCKET
 from app.core.logger import logger
 from app.services.gcp.storage.client import get_gcs_bucket
 
@@ -64,11 +64,13 @@ FOLDERS = {COPY: "copied", PARK: "parked"}
 
 #: How long a write may take. nautilus gives the events door 3 s end to end.
 UPLOAD_TIMEOUT_S = 2.0
-#: The events door refuses bodies over 1 MB (MAX_LETTER_BYTES in
-#: app/crm/record/api.py), so a bigger one could never be replayed; it takes
-#: the normal path instead. The cap also bounds what an unauthenticated
-#: request can make the middleware hold in memory.
-MAX_BODY_BYTES = 1 * 1024 * 1024
+#: The events door's own cap (CRM_INGEST_MAX_BODY_BYTES, read by
+#: app/crm/record/api.py), so park and replay agree: a body over it could
+#: never be replayed, so it takes the normal path and meets the door's 413
+#: before auth; a body under it is parked, not sent to an auth that reads the
+#: Postgres park mode exists to spare. The cap also bounds what an
+#: unauthenticated request can make the middleware hold in memory.
+MAX_BODY_BYTES = CRM_INGEST_MAX_BODY_BYTES
 
 #: Uploads run on their own small pool, never the loop's shared default
 #: executor (BLOCKING_THREAD_POOL_SIZE in app/core/config/static.py), so a

@@ -21,11 +21,14 @@ resolved per letter from the receiving endpoint by the bay.
 
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Callable, Coroutine, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.routing import APIRoute
+from starlette.requests import ClientDisconnect
 
+from app.core.config.static import CRM_INGEST_MAX_BODY_BYTES
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.crm.auth import crm_admin_user, verify_s2s_caller
@@ -43,8 +46,71 @@ from app.crm.record.schemas import (
 from app.crm.record.timeline import get_customer_journey
 from app.schemas import UserInfo
 
+# A letter is stored verbatim and forever, so "store first" must not mean
+# "store anything of any size". Nothing in front of this app caps a request
+# body today (no ingress rule, no uvicorn flag), so the door does it, on the
+# bytes READ: a declared Content-Length is only a fast first answer, and a
+# chunked body has none to check. CRM_INGEST_MAX_BODY_BYTES, default 1 MB.
+MAX_LETTER_BYTES = CRM_INGEST_MAX_BODY_BYTES
+
+
+async def read_bounded(request: Request) -> Optional[bytes]:
+    """The request body, or None once it passes MAX_LETTER_BYTES.
+
+    A declared Content-Length over the cap is refused before a byte is read;
+    otherwise the read itself stops at the cap, so a chunked or understated
+    body cannot buffer more than the cap allows. A client that hangs up
+    mid-body gets FastAPI's own answer to a body it could not read, a 400,
+    rather than a 500 and an ERROR traceback for a caller who simply left."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_LETTER_BYTES:
+        return None
+    body = bytearray()
+    try:
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_LETTER_BYTES:
+                return None
+    except ClientDisconnect:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="There was an error parsing the body",
+        )
+    return bytes(body)
+
+
+class BoundedBodyRoute(APIRoute):
+    """Every route on the ingest router reads its body through read_bounded
+    before FastAPI's own handler runs.
+
+    A size check declared as a dependency comes too late: FastAPI reads and
+    parses a body parameter whole before any dependency runs, auth included,
+    so an unauthenticated caller could make it buffer any size. The cap sits
+    on the route class, ahead of that read, and FastAPI then parses the bytes
+    already read: its validation, its 422s and its OpenAPI stay its own. Set
+    on the router, so the next route added beside these gets the cap without
+    declaring anything."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def bounded_handler(request: Request) -> Response:
+            body = await read_bounded(request)
+            if body is None:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"Request body exceeds {MAX_LETTER_BYTES} bytes",
+                )
+            # Starlette's request.body() answers from _body once it is set, so
+            # FastAPI's read inside the handler gets these bytes, nothing more.
+            request._body = body
+            return await handler(request)
+
+        return bounded_handler
+
+
 journey_router = APIRouter()
-ingest_router = APIRouter()
+ingest_router = APIRouter(route_class=BoundedBodyRoute)
 webhook_router = APIRouter()
 catalog_router = APIRouter()
 
@@ -66,24 +132,6 @@ async def get_customer_journey_route(
     return await get_customer_journey(
         merchant_id, customer_id, limit, before_started_at, before_id
     )
-
-
-# A letter is stored verbatim and forever, so "store first" must not mean
-# "store anything of any size". Nothing in front of this app caps a request
-# body today (no ingress rule, no uvicorn flag), so the door does it.
-MAX_LETTER_BYTES = 1 * 1024 * 1024
-
-
-async def within_size_limit(request: Request) -> None:
-    """413 before the row exists. Declared beside the auth dependency for
-    the same reason: a door's limits belong on the door, not in a handler
-    that the next route beside it might forget to copy."""
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > MAX_LETTER_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Event exceeds {MAX_LETTER_BYTES} bytes",
-        )
 
 
 async def verified_caller(event: EventIn, request: Request) -> str:
@@ -120,7 +168,6 @@ async def verified_merchant_caller(
 async def push_event_route(
     event: EventIn,
     _caller: str = Depends(verified_caller),
-    _size: None = Depends(within_size_limit),
 ) -> EventReceipt:
     set_log_context(component="crm.ingest.push", merchant_id=event.merchant_id)
     try:
@@ -153,10 +200,9 @@ async def push_event_route(
 # --- the provider bays (design/ingest-doors) ----------------------------------
 #
 # One cap, one door: a letter is stored verbatim and forever whichever
-# entrance it came through, so the bays share the envelope door's constant.
-# Here the read ITSELF is bounded (streamed) rather than a declared
-# Content-Length — a chunked body has no header to check, and these are the
-# routes that buffer bytes from callers they have not authenticated yet.
+# entrance it came through, so the bays share the envelope door's constant
+# and its read_bounded. They call it themselves rather than take the route
+# class: an unknown bay is refused before a single body byte is read.
 
 
 @webhook_router.get("/{provider}", response_class=PlainTextResponse)
@@ -197,18 +243,16 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         # refused before a single body byte is read.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
-    body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_LETTER_BYTES:
-            return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    body = await read_bounded(request)
+    if body is None:
+        return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
-    if not spec.verify(bytes(body), request.headers):
+    if not spec.verify(body, request.headers):
         # No detail: a caller who cannot sign has not earned an explanation.
         return Response(status_code=status.HTTP_403_FORBIDDEN)
 
     try:
-        parsed = json.loads(bytes(body).decode("utf-8"))
+        parsed = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         parsed = None
     if not isinstance(parsed, dict):
