@@ -201,9 +201,10 @@ async def verify_s2s_merchant(merchant_id: str, request: Request) -> str:
             detail="Invalid s2s token",
         )
     # The stored token is a JWT — verifying it rejects expired/rotated
-    # tokens even when the byte-compare still matches.
+    # tokens even when the byte-compare still matches, and the token
+    # registry rejects a revoked one.
     try:
-        rbac_token_manager.verify_rbac_token(stored_token)
+        await rbac_token_manager.authenticate(stored_token, request)
     except HTTPException:
         # Re-raised unchanged: the answer stays the token manager's.
         _log_refusal(merchant_id, "stored_token_expired")
@@ -236,8 +237,9 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
     that revoked it would be dead code. What a per-merchant token can
     never carry is a wildcard: the mint hard-codes exactly one
     merchant_id. So ``"*"`` is proof the caller is NOT a per-merchant
-    token, and only then is skipping the stored-value check safe — which
-    is also what keeps the relay's hot path free of a DB round trip.
+    token, and only then is skipping the stored-value check safe. (The
+    relay's token is still checked against the token registry, which each
+    pod caches for 30 s — a revoked relay token is refused too.)
 
     Fails closed throughout: a DB error reading the stored token raises
     rather than falling through to the weaker check.
@@ -252,10 +254,10 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
             detail="Missing s2s token",
         )
 
-    # Local decode, no DB. Raises 401 on a bad signature, an expiry, or a
-    # widget/demo token.
+    # Raises 401 on a bad signature, an expiry, a widget/demo token or a
+    # revoked token; 503 when the token registry can't be read.
     try:
-        caller = rbac_token_manager.verify_rbac_token(presented)
+        caller = await rbac_token_manager.authenticate(presented, request)
     except HTTPException:
         _log_refusal(merchant_id, "bad_token")
         raise
@@ -286,8 +288,8 @@ async def verify_s2s_caller(merchant_id: str, request: Request) -> str:
         return merchant_id
 
     # Narrowly scoped: this may well BE the merchant's provisioned token,
-    # so it has to clear the stored value — the only instant revocation
-    # this system has. A merchant with nothing provisioned gets 404 from
+    # so it has to clear the stored value — revoking it clears that value,
+    # and a rotated-out one no longer matches it. A merchant with nothing provisioned gets 404 from
     # there, not a pass: missing/NULL is NO on a permission-adjacent
     # check, and accepting the token's own claim instead would mean
     # CLEARING a merchant's s2s_token widened its access instead of

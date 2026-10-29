@@ -10,6 +10,7 @@ This module contains the business logic for authentication operations:
 
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.parse import quote
 
 from fastapi import HTTPException, status
@@ -20,9 +21,13 @@ from app.core.config.static import (
     LOOM_APP_URL,
 )
 from app.core.logger import logger
+from app.core.security.authorization import require_admin
 from app.core.security.password import verify_password_async
 from app.core.security.scope import resolve_merchant_ids, resolve_reseller_ids
-from app.database.accessor.breeze_buddy import merchants as merchant_accessors
+from app.database.accessor.breeze_buddy import (
+    merchants as merchant_accessors,
+    token_registry as token_accessors,
+)
 from app.database.accessor.breeze_buddy.users import get_user_by_username
 from app.schemas import (
     LaunchTokenRequest,
@@ -33,6 +38,12 @@ from app.schemas import (
     TokenResponse,
     UserInfo,
     UserRole,
+)
+from app.schemas.breeze_buddy.token_registry import (
+    RevokeTokenRequest,
+    RevokeTokenResponse,
+    TokenKind,
+    TokenListResponse,
 )
 
 # Relative-path guard for the `redirect` param: strict allowlist rather than
@@ -447,3 +458,48 @@ async def logout_handler() -> dict:
             "note": "Token remains valid until expiration but client discards it",
         },
     }
+
+
+async def list_tokens_handler(
+    current_user: UserInfo,
+    kind: Optional[TokenKind],
+    merchant_id: Optional[str],
+    include_revoked: bool,
+    limit: int,
+    offset: int,
+) -> TokenListResponse:
+    """Admin only: the token registry, newest first. Rows hold hashes and
+    claims, never a token."""
+    require_admin(current_user)
+    tokens = await token_accessors.list_tokens(
+        kind=kind,
+        merchant_id=merchant_id,
+        include_revoked=include_revoked,
+        limit=limit,
+        offset=offset,
+    )
+    return TokenListResponse(tokens=tokens, limit=limit, offset=offset)
+
+
+async def revoke_token_handler(
+    token_id: str, body: RevokeTokenRequest, current_user: UserInfo
+) -> RevokeTokenResponse:
+    """Admin only: revoke one registered token.
+
+    Refused from the next request on this pod, and within 30 s on every
+    other pod (their cached registry reads expire). A merchant row holding
+    the token as its s2s_token is cleared in the same statement, so its
+    webhooks and CRM pushes stop too.
+
+    404 unknown id; 409 already revoked.
+    """
+    require_admin(current_user)
+    result = await token_accessors.revoke_token(token_id, current_user.id, body.reason)
+    if result is None:
+        existing = await token_accessors.get_token_by_id(token_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Token not found")
+        raise HTTPException(status_code=409, detail="Token is already revoked")
+    entry, cleared = result
+    rbac_token_manager.forget(entry.token_hash)
+    return RevokeTokenResponse(token=entry, merchant_tokens_cleared=cleared)

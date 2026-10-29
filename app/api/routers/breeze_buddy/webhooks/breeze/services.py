@@ -83,11 +83,11 @@ async def handle_breeze(
             detail="Invalid webhook token",
         )
 
-    # The stored token is a JWT — verify it so an expired/rotated token is
-    # rejected even though it still matches the presented value (this is how it
-    # is "revoked": let it expire or re-register the merchant to mint a fresh
-    # one).
-    rbac_token_manager.verify_rbac_token(stored_token)
+    # The stored token is a JWT — verify it so an expired token is rejected
+    # even though it still matches the presented value, and check it against
+    # the token registry (POST /auth/tokens/{id}/revoke also clears it from
+    # the row).
+    await rbac_token_manager.authenticate(stored_token, request)
 
     try:
         order = json.loads(raw_body) if raw_body else {}

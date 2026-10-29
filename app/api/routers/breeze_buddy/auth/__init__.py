@@ -6,6 +6,8 @@ This module provides JWT token-based authentication endpoints for breeze buddy.
 Endpoints:
 - POST   /login              - Authenticate user and get JWT token
 - POST   /auth/s2s/token     - Generate long-lived S2S token (admin only)
+- GET    /auth/tokens        - List registered long-lived tokens (admin only)
+- POST   /auth/tokens/{id}/revoke - Revoke a registered token (admin only)
 - GET    /auth/me            - Get current user info from token
 - POST   /auth/logout        - Logout (client-side token removal)
 - GET    /logout             - Legacy logout endpoint (deprecated)
@@ -13,7 +15,10 @@ Endpoints:
 For backward compatibility, old session-based logout is also supported.
 """
 
-from fastapi import APIRouter, Depends
+from typing import Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -26,13 +31,21 @@ from app.schemas import (
     TokenResponse,
     UserInfo,
 )
+from app.schemas.breeze_buddy.token_registry import (
+    RevokeTokenRequest,
+    RevokeTokenResponse,
+    TokenKind,
+    TokenListResponse,
+)
 
 from .handlers import (
     generate_s2s_token_handler,
     get_user_info_handler,
     launch_token_handler,
+    list_tokens_handler,
     login_handler,
     logout_handler,
+    revoke_token_handler,
 )
 
 router = APIRouter()
@@ -109,14 +122,53 @@ async def generate_s2s_token(request: S2STokenRequest):
     - Never commit tokens to version control
     - Monitor token usage for suspicious activity
     - Each token is recorded in token_registry (by hash) and carries its row
-      id as ``jti``. Disabling the user does NOT stop a token already issued;
-      it stays valid until it expires.
+      id as ``jti``. To stop one, revoke it: POST /auth/tokens/{jti}/revoke.
+      Disabling the user does NOT stop a token already issued.
 
     Security:
         - Returns 401 if credentials are invalid or account is inactive
         - Returns 403 if user is not an admin
     """
     return await generate_s2s_token_handler(request)
+
+
+@router.get("/auth/tokens", response_model=TokenListResponse)
+async def list_tokens(
+    kind: Optional[TokenKind] = None,
+    merchant_id: Optional[str] = None,
+    include_revoked: bool = False,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    List registered long-lived tokens (S2S and per-merchant), newest first.
+
+    Admin only. Each row carries the token's sha256 hash and claims, when it
+    was last used (route, X-Forwarded-For chain) and whether it is revoked —
+    never the token itself. ``source`` says whether the row was written at
+    mint or registered the first time an older token was seen.
+    """
+    return await list_tokens_handler(
+        current_user, kind, merchant_id, include_revoked, limit, offset
+    )
+
+
+@router.post("/auth/tokens/{token_id}/revoke", response_model=RevokeTokenResponse)
+async def revoke_token(
+    token_id: UUID,
+    body: RevokeTokenRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Revoke one registered token (its ``id`` is the token's ``jti``).
+
+    Admin only. The token is refused on this pod at once and on every pod
+    within 30 s. If a merchant row holds it as ``s2s_token`` (the webhook
+    secret), that value is cleared too, so the merchant's webhooks and CRM
+    pushes stop with it. 404 unknown id, 409 already revoked.
+    """
+    return await revoke_token_handler(str(token_id), body, current_user)
 
 
 @router.post("/auth/launch-token", response_model=LaunchTokenResponse)

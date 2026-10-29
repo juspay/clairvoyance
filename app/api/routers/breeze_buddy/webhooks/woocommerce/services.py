@@ -86,10 +86,10 @@ async def handle_woocommerce(
             detail="Invalid webhook signature",
         )
 
-    # The stored token is a JWT — verify it so an expired/rotated token is
-    # rejected even though its HMAC still matches (this is how it is "revoked":
-    # let it expire or re-register the merchant to mint a fresh one).
-    rbac_token_manager.verify_rbac_token(token)
+    # The stored token is a JWT — verify it so an expired token is rejected
+    # even though its HMAC still matches, and check it against the token
+    # registry (POST /auth/tokens/{id}/revoke also clears it from the row).
+    await rbac_token_manager.authenticate(token, request)
 
     try:
         order = json.loads(raw_body) if raw_body else {}
