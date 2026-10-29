@@ -6,11 +6,14 @@ from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.evaluation_config import (
     add_discovered_topics_query,
     get_enabled_evaluations_query,
+    get_enabled_topic_configs_query,
     get_evaluation_config_query,
     get_outcome_correctness_query,
+    grow_topic_tree_query,
     has_enabled_evaluations_query,
     initialize_evaluation_config_query,
     remove_topics_query,
+    replace_topic_tree_query,
     save_evaluation_configuration_query,
     set_evaluation_enabled_query,
     update_evaluation_configuration_query,
@@ -97,5 +100,26 @@ async def remove_topics(
     template_id: str, labels: List[str]
 ) -> Optional[Dict[str, Any]]:
     query, values = remove_topics_query(template_id, labels)
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None
+
+
+async def get_enabled_topic_configs() -> List[Dict[str, Any]]:
+    query, values = get_enabled_topic_configs_query()
+    return [dict(row) for row in await run_parameterized_query(query, values)]
+
+
+async def replace_topic_tree(
+    template_id: str, labels: List[str], system_prompt: str
+) -> Optional[Dict[str, Any]]:
+    query, values = replace_topic_tree_query(template_id, labels, system_prompt)
+    rows = await run_parameterized_query(query, values)
+    return dict(rows[0]) if rows else None
+
+
+async def grow_topic_tree(
+    template_id: str, labels: List[str], prompt_lines: str
+) -> Optional[Dict[str, Any]]:
+    query, values = grow_topic_tree_query(template_id, labels, prompt_lines)
     rows = await run_parameterized_query(query, values)
     return dict(rows[0]) if rows else None

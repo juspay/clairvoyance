@@ -73,3 +73,28 @@ def save_evaluation_failure_query(
         started_at,
         error_message,
     ]
+
+
+def get_topic_day_query(
+    template_id: str, start: datetime, end: datetime
+) -> Tuple[str, List[Any]]:
+    query = """
+        WITH day AS (
+            SELECT source_id, metadata
+            FROM evaluation_result
+            WHERE template_id = $1::uuid
+              AND evaluation_type = 'TOPIC'
+              AND status = 'COMPLETED'
+              AND started_at >= $2
+              AND started_at < $3
+        )
+        SELECT
+            metadata ->> 'label' AS label,
+            COALESCE(metadata ->> 'new_label', '') AS new_label,
+            count(DISTINCT source_id) AS calls,
+            min(metadata ->> 'phrase') AS phrase,
+            (SELECT count(DISTINCT source_id) FROM day) AS topic_calls
+        FROM day
+        GROUP BY 1, 2
+    """
+    return query, [template_id, start, end]
