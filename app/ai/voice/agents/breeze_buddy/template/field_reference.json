@@ -118,19 +118,19 @@
   },
   "NoiseFilterConfig": {
     "enable": {
-      "description": "Whether to process incoming audio with the selected ai-coustics model before VAD and STT.",
+      "description": "Whether to clean incoming caller audio with the noise filter before VAD and STT.",
       "example": true
     },
     "provider": {
-      "description": "Noise-filter integration provider. Currently 'aic'. New configurations must provide this together with model.",
-      "example": "aic"
+      "description": "Noise-filter provider: 'noizzen' (in-house; use it for new templates) or 'aic' (ai-coustics; a call falls back to Noizzen when ai-coustics cannot run). New configurations must provide this together with model.",
+      "example": "noizzen"
     },
     "model": {
-      "description": "'noise_cancellation' (quail-L) enhances audio while preserving speakers; 'noise_cancellation_s' (quail-S) does the same at about half the CPU per call; 'voice_focus' isolates the foreground/primary speaker. New configurations must provide this together with provider. If the quail-S file is missing from the image, noise_cancellation is used.",
-      "example": "voice_focus"
+      "description": "'noise_cancellation' (quail-L) enhances audio while preserving speakers; 'noise_cancellation_s' (quail-S) does the same at about half the CPU per call; 'voice_focus' isolates the foreground/primary speaker. New configurations must provide this together with provider. If the quail-S file is missing from the image, noise_cancellation is used. Noizzen uses one noise canceller for all three.",
+      "example": "noise_cancellation"
     },
     "enhancement_level": {
-      "description": "ai-coustics enhancement strength from 0.0 to 1.0. Null uses the model default; start Voice Focus experiments at 0.5.",
+      "description": "Noizzen: share of the denoised audio kept, 0.0-1.0 (null = 0.5). ai-coustics: strength from 0.0 to 1.0; null uses the model default.",
       "example": 0.5
     }
   },
@@ -201,7 +201,7 @@
       }
     },
     "noise_filter": {
-      "description": "Processes incoming audio before VAD and STT. New configurations use provider='aic' with model='noise_cancellation', 'noise_cancellation_s' (quail-S, about half the CPU) or 'voice_focus'. Existing configurations using type='aic' or type='aic_voice_focus' remain supported without being rewritten.",
+      "description": "Processes incoming audio before VAD and STT. New configurations use provider='noizzen' with model='noise_cancellation'. provider='aic' and the legacy type='aic' / 'aic_voice_focus' use ai-coustics, falling back to Noizzen when it cannot run.",
       "example": {
         "enable": true,
         "provider": "aic",

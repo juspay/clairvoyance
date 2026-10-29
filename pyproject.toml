@@ -80,8 +80,10 @@ combine_as_imports = true
 
 [tool.pyrefly]
 # dragontts/ is a self-contained sub-service (own pyproject/venv, ported from a
-# non-pyrefly repo) — exclude it from clairvoyance's type-check.
-project-excludes = ["dragontts"]
+# non-pyrefly repo) — exclude it from clairvoyance's type-check. The noise filter
+# engine's build.py runs at image build in its own environment (it needs onnx,
+# which the app does not) — see the Dockerfile.
+project-excludes = ["dragontts", "app/ai/voice/noise_filter/noizzen/engine/build.py"]
 
 [dependency-groups]
 dev = [
