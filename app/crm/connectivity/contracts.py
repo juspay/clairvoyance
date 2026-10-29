@@ -65,6 +65,10 @@ What is here, and why each thing is on the surface:
   state, and there is deliberately no timer beside it: the periodic sync
   was removed before it ever ran.
 
+- ``get_conversation_limits`` — the channel's limits, so a caller shapes a
+  reply to fit instead of having it refused; ``get_channels_with_conversations`` is
+  every channel that carries a conversation at all, so a caller iterates
+  them instead of naming one.
 - ``consume_status_event`` — the receipts consumer (worker_main registers
   it): message.status letters move the manifest along sent -> delivered ->
   read, or to failed with the provider's code.
@@ -92,7 +96,11 @@ from app.crm.connectivity.actions.perform import (
     perform_action,
     validate_action_args,
 )
-from app.crm.connectivity.channels.registry import registers_templates_for
+from app.crm.connectivity.channels.registry import (
+    get_channels_with_conversations,
+    get_conversation_limits,
+    registers_templates_for,
+)
 from app.crm.connectivity.channels.settings import (
     conversation_settings,
     get_current_buddy_binding,
@@ -119,6 +127,7 @@ from app.crm.connectivity.templates.reads import (
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
 from app.crm.connectivity.vocabulary.reasons import reason_label
+from app.crm.connectivity.vocabulary.topics import TOPIC_QUEUED
 
 __all__ = [
     # the dispatcher role
@@ -161,8 +170,13 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    # free-form replies inside the customer-service window
+    "get_conversation_limits",
+    "get_channels_with_conversations",
     # the receipts consumer (worker_main registers)
     "consume_status_event",
+    # the topic of our own send's echo — outreach must never react to it
+    "TOPIC_QUEUED",
     # the merchant's bindings: the template binding, Buddy's binding, settings
     "get_current_buddy_binding",
     "conversation_settings",

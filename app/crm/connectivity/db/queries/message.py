@@ -76,6 +76,20 @@ def insert_message_query(
     ]
 
 
+def get_message_by_dedupe_key_query(
+    merchant_id: str, dedupe_key: str
+) -> Tuple[str, List[Any]]:
+    """The row a dedupe key already names — one point read on the
+    (merchant_id, dedupe_key) unique, for a retry the insert absorbed."""
+    query = f"""
+        SELECT {CLAIMED_COLUMNS}
+          FROM {MESSAGE_TABLE}
+         WHERE merchant_id = $1
+           AND dedupe_key = $2
+    """
+    return query, [merchant_id, dedupe_key]
+
+
 def claim_queued_messages_query(batch_size: int) -> Tuple[str, List[Any]]:
     """Take up to ``batch_size`` queued rows for this worker.
 

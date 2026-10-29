@@ -5,7 +5,8 @@ Exports nothing (module rules §1: an ``__init__`` is not a re-export hub).
 Importers name the file they mean:
 
     shared/         what every message passes, however it goes out — the
-                    gate before it leaves, and its receipts after
+                    gate before it leaves, the letter that records it, and
+                    its receipts after
     outbound/       we start it — an approved template, queued and sent by
                     the dispatcher, one message per send
 

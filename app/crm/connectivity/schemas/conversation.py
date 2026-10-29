@@ -23,7 +23,7 @@ DEFAULT_NON_TEXT_MESSAGE = (
 #: leave a customer waiting a day for a teammate.
 CLOSING_LEAD_MINUTES_RANGE = (1, 120)
 CLAIM_SLA_MINUTES_RANGE = (1, 240)
-#: Longest custom message — well under every channel's ``text_max``; these
+#: Longest custom message — well under every channel's ``max_text_chars``; these
 #: are one-line notices.
 SETTINGS_MESSAGE_MAX = 1000
 

@@ -3,12 +3,17 @@ what it does not know, the writer normalizes the address, and the dedupe
 unique makes a retry a no-op (None), never a second row."""
 
 import asyncio
-from typing import Any, List, Optional
+from datetime import datetime, timezone
+from typing import Any, List, Optional, Tuple
 
 import pytest
 
 import app.crm.connectivity.messaging.outbound.queue as queue
-from app.crm.connectivity.db.queries.message import insert_message_query
+from app.crm.connectivity.db.queries.message import (
+    get_message_by_dedupe_key_query,
+    insert_message_query,
+)
+from app.crm.connectivity.schemas.message import QueuedMessage
 
 
 def _proposal(**overrides: Any) -> dict:
@@ -83,11 +88,76 @@ def test_queue_message_returns_id_then_none_on_retry(
         seen.append(args[3])  # the normalized address
         return "msg-1" if len(seen) == 1 else None
 
+    lookups: List[Tuple[str, str]] = []
+
+    async def fake_get_message_by_dedupe_key(
+        merchant_id: str, dedupe_key: str
+    ) -> QueuedMessage:
+        lookups.append((merchant_id, dedupe_key))
+        return QueuedMessage(
+            id="msg-1",
+            merchant_id="m1",
+            customer_id="c1",
+            channel="whatsapp",
+            sent_to_address="+919845012345",
+            source_kind="workflow",
+            source_id="run-1",
+            purpose_key="utility.order.cod_confirm",
+            template_id="cod_confirm",
+            variables={"name": "Priya"},
+            dedupe_key="run-1:ask",
+            next_attempt_at=datetime.now(timezone.utc),
+        )
+
+    letters: List[dict] = []
+
+    async def fake_file_queued_letter(**fields: Any) -> Optional[str]:
+        letters.append(fields)
+        return "evt-1"
+
     monkeypatch.setattr(queue.message_accessor, "insert_message", fake_insert)
+    monkeypatch.setattr(
+        queue.message_accessor,
+        "get_message_by_dedupe_key",
+        fake_get_message_by_dedupe_key,
+    )
+    monkeypatch.setattr(queue, "file_queued_letter", fake_file_queued_letter)
     first = asyncio.run(queue.queue_message(**_proposal()))
     second = asyncio.run(queue.queue_message(**_proposal()))
     assert (first, second) == ("msg-1", None)
     assert seen == ["+919845012345", "+919845012345"]
+    # The absorbed retry files the STORED row's letter again, under the same
+    # message id: a first try that died before its letter still gets one, and
+    # the spine's (merchant, source, external_id) unique keeps one, so the
+    # timeline never shows a template twice.
+    assert lookups == [("m1", "run-1:ask")]
+    assert len(letters) == 2 and letters[1] == letters[0]
+    assert letters[0]["message_id"] == "msg-1"
+    assert letters[0]["customer_id"] == "c1"
+    assert letters[0]["sent_to_address"] == "+919845012345"
+    assert letters[0]["template_id"] == "cod_confirm"
+    assert letters[0].get("body") is None
+
+
+def test_the_retry_reads_its_row_by_the_dedupe_unique() -> None:
+    sql, values = get_message_by_dedupe_key_query("m1", "run-1:ask")
+    assert "WHERE merchant_id = $1" in sql and "AND dedupe_key = $2" in sql
+    assert values == ["m1", "run-1:ask"]
+
+
+def test_a_template_send_cannot_claim_the_service_purpose() -> None:
+    """'service' is Meta's category for a free-form reply inside the window
+    (D8). A template is billed and policed under its approved category, so a
+    template proposal naming 'service' is refused while the author can still
+    fix it."""
+    with pytest.raises(ValueError, match="service"):
+        queue.validate_proposal("workflow", "service.conversation")
+
+
+def test_a_teammate_is_a_known_producer() -> None:
+    """A teammate replying from the inbox writes rows as 'human' (ADR 0014's
+    CHECK extension, kept here now the CHECK is gone)."""
+    queue.validate_proposal("human", "utility.order.update")
 
 
 def test_unusable_address_is_refused_before_any_write(
@@ -136,3 +206,34 @@ def test_an_unregistered_channel_is_refused_before_any_write(
     assert queue.normalize_address("carrier_pigeon", "+919876543210") is None
     with pytest.raises(ValueError):
         asyncio.run(queue.queue_message(**_proposal(channel="carrier_pigeon")))
+
+
+def test_a_channel_without_conversations_files_no_queued_letter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """message.queued feeds the inbox timeline, so only a channel that HAS
+    conversations pays for the extra spine row — a large broadcast on any
+    other channel files none."""
+    from app.crm.connectivity.channels import registry
+
+    monkeypatch.setitem(
+        registry.CHANNELS,
+        "mail",
+        registry.Channel(gate_handle_kind="email", registers_templates=False),
+    )
+
+    async def fake_insert(*args: Any) -> Optional[str]:
+        return "msg-9"
+
+    letters: List[dict] = []
+
+    async def fake_file_queued_letter(**fields: Any) -> Optional[str]:
+        letters.append(fields)
+        return "evt-9"
+
+    monkeypatch.setattr(queue.message_accessor, "insert_message", fake_insert)
+    monkeypatch.setattr(queue, "file_queued_letter", fake_file_queued_letter)
+    message_id = asyncio.run(
+        queue.queue_message(**_proposal(channel="mail", address="priya@shop.in"))
+    )
+    assert message_id == "msg-9" and letters == []
