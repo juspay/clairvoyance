@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.ai.voice.agents.breeze_buddy.assist.engine.identity import own_shop_url
 from app.ai.voice.agents.breeze_buddy.chat.turn_core import negotiate_catalog
 from app.ai.voice.agents.breeze_buddy.template.cache import get_template_by_id_cached
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import CATALOG_VERSION_V2
@@ -226,9 +227,16 @@ async def create_demo_session(
     # the real widget path uses keeps one resolver
     # (resolve_session_catalog_version) across every surface.
     catalog_active, ui_flavors = negotiate_catalog(template, CATALOG_VERSION_V2)
+    saved_shop_url = (template.secrets or {}).get("shop_url")
     create_req = CreateChatSessionRequest(
         template_id=template_id,
-        template_vars=req.template_vars,
+        # Same guard as the widget: a public caller's shop_url is kept only
+        # when it names the demo template's own store (N-WID-2).
+        template_vars=own_shop_url(
+            req.template_vars,
+            [saved_shop_url, template.merchant_id],
+            saved_shop_url,
+        ),
         metadata={
             "demo": {"slug": req.slug, "cap": cap},
             **(
