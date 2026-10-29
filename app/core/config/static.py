@@ -614,6 +614,13 @@ CRM_EVENT_MAX_ATTEMPTS = _positive_int("CRM_EVENT_MAX_ATTEMPTS", 5)
 # identity mapping (T24 is cold by design; the hot path reads the cache).
 CRM_SCHEMA_CACHE_SECONDS = _positive_float("CRM_SCHEMA_CACHE_SECONDS", 60.0)
 
+# The largest body the ingest doors accept (/ingest/events, /ingest/schemas and
+# the provider webhooks), in bytes. Counted on the bytes READ, not a declared
+# Content-Length (app/crm/record/api.py read_bounded), so it is also the most
+# an unauthenticated caller can make a pod buffer. Static, not dynamic: a
+# letter is stored verbatim and forever, so the cap changes by deploy.
+CRM_INGEST_MAX_BODY_BYTES = _positive_int("CRM_INGEST_MAX_BODY_BYTES", 1024 * 1024)
+
 # CRM outbound dispatcher (runs only when CRM_ROLE=dispatcher; pacing rides
 # CRM_WORKER_INTERVAL, but the batch is its own dial below). send() reaches
 # real providers behind a thin permission slice: gate.gate() probes

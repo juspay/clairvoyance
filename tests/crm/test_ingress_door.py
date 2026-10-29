@@ -166,6 +166,16 @@ def test_an_oversized_body_is_refused_while_streaming(
     an unauthenticated caller is the cost the route must not pay.
     """
     monkeypatch.setattr(record_api, "MAX_LETTER_BYTES", 64)
+    # Chunked, so no Content-Length: the read itself has to stop.
+    chunks = iter([b"x" * 40, b"x" * 40])
+    assert client.post(URL, content=chunks).status_code == 413
+    assert spec.verified == [] and spine == []
+
+
+def test_a_declared_oversized_body_is_refused_before_it_is_read(
+    client, spec, spine, monkeypatch
+) -> None:
+    monkeypatch.setattr(record_api, "MAX_LETTER_BYTES", 64)
     assert client.post(URL, content=b"x" * 65).status_code == 413
     assert spec.verified == [] and spine == []
 

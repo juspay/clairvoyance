@@ -4,19 +4,26 @@ auth-before-store ordering, receipt shapes, and the two fail postures
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from starlette.types import Message
 
 import app.crm.record.api as record_api
 import app.crm.record.ingest as record_ingest
 from app.crm.record.api import push_event_route
 from app.crm.record.schemas import EventIn, EventReceipt
+
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _event(**overrides: Any) -> EventIn:
@@ -317,43 +324,259 @@ def test_record_event_stays_fail_open_on_store_failure(
     assert result is None
 
 
-# --- the size gate: "store first" is not "store anything of any size" ---
+# --- the size cap: "store first" is not "store anything of any size" ---
+#
+# Through the real route, behind a wrapper that counts the body bytes the app
+# pulls from the client: the cap must hold on the bytes READ, before FastAPI
+# parses the body and before auth, which a direct handler call cannot show.
+
+CAP = 1024  # MAX_LETTER_BYTES for these tests; the real 1 MB behaves the same
+CHUNK = 256
 
 
-def _request_with_content_length(value: str) -> Request:
-    return Request(
-        scope={
+class _Answer:
+    def __init__(self, status_code: int, body: bytes) -> None:
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> Any:
+        return json.loads(self._body)
+
+
+class _Door:
+    """The ingest router as an ASGI app, posted to directly so a body can
+    arrive as it does on the wire: declared (Content-Length, one message) or
+    chunked (no Content-Length, CHUNK bytes per message). TestClient cannot
+    show the second: it gathers a generator body into one message. Records
+    what the app read, verified and stored."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, authed: bool = True):
+        self.read = 0
+        self.stored: List[Dict[str, Any]] = []
+        self.verified: List[str] = []
+
+        async def verify(merchant_id: str, request: Request) -> str:
+            self.verified.append(merchant_id)
+            if not authed:
+                raise HTTPException(status_code=401, detail="Invalid s2s token")
+            return merchant_id
+
+        async def fake_ingest(**kwargs: Any) -> Optional[str]:
+            self.stored.append(kwargs)
+            return None
+
+        monkeypatch.setattr(record_api, "MAX_LETTER_BYTES", CAP)
+        monkeypatch.setattr(record_api, "verify_s2s_caller", verify)
+        monkeypatch.setattr(record_api, "ingest_event", fake_ingest)
+        self.app = FastAPI()
+        self.app.include_router(record_api.ingest_router, prefix="/ingest")
+
+    def post(
+        self,
+        body: bytes,
+        *,
+        chunked: bool,
+        url: str = "/ingest/events",
+        hang_up_after: Optional[int] = None,
+    ) -> _Answer:
+        """``hang_up_after``: the client disconnects after that many chunks,
+        with more of the body still promised."""
+        path, _, query = url.partition("?")
+        headers = [(b"content-type", b"application/json")]
+        if chunked:
+            parts = [body[i : i + CHUNK] for i in range(0, len(body), CHUNK)]
+        else:
+            headers.append((b"content-length", str(len(body)).encode()))
+            parts = [body]
+        promised = len(parts)
+        if hang_up_after is not None:
+            parts = parts[:hang_up_after]
+        scope = {
             "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
             "method": "POST",
-            "headers": [(b"content-length", value.encode())],
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": query.encode(),
+            "root_path": "",
+            "headers": headers,
+            "client": ("test", 1),
+            "server": ("testserver", 80),
         }
+        sent: List[Message] = []
+
+        async def receive() -> Message:
+            if not parts:
+                return {"type": "http.disconnect"}
+            part = parts.pop(0)
+            self.read += len(part)
+            more = bool(parts) or hang_up_after is not None and promised > hang_up_after
+            return {"type": "http.request", "body": part, "more_body": more}
+
+        async def send(message: Message) -> None:
+            sent.append(message)
+
+        asyncio.run(self.app(scope, receive, send))
+        [start] = [m for m in sent if m["type"] == "http.response.start"]
+        return _Answer(
+            start["status"],
+            b"".join(
+                m.get("body", b"") for m in sent if m["type"] == "http.response.body"
+            ),
+        )
+
+
+def _letter_of(size: int) -> bytes:
+    """A valid envelope serialised to exactly ``size`` bytes."""
+    empty = json.dumps(_event_body(payload={"blob": ""})).encode()
+    return json.dumps(_event_body(payload={"blob": "x" * (size - len(empty))})).encode()
+
+
+@pytest.mark.parametrize("chunked", [False, True], ids=["declared", "chunked"])
+def test_a_letter_over_the_cap_is_413_and_never_stored(monkeypatch, chunked) -> None:
+    # chunked is N-CRM-4: no Content-Length to check, and the old cap only
+    # ever read that header, so this letter was stored
+    door = _Door(monkeypatch)
+
+    response = door.post(_letter_of(CAP + 1), chunked=chunked)
+
+    assert response.status_code == 413
+    assert door.stored == [] and door.verified == []
+
+
+def test_a_declared_length_over_the_cap_is_refused_before_a_byte_is_read(
+    monkeypatch,
+) -> None:
+    door = _Door(monkeypatch)
+
+    assert door.post(_letter_of(CAP * 8), chunked=False).status_code == 413
+    assert door.read == 0
+
+
+def test_an_unauthenticated_body_is_read_no_further_than_the_cap(monkeypatch) -> None:
+    # FastAPI reads a body parameter whole before any dependency runs, auth
+    # included: before this cap an unauthenticated caller could make the
+    # server buffer and parse any size before its 401.
+    door = _Door(monkeypatch, authed=False)
+    body = _letter_of(CAP * 8)
+
+    response = door.post(body, chunked=True)
+
+    assert response.status_code == 413
+    assert door.read <= CAP + 256  # the cap, plus the chunk that crossed it
+    assert door.verified == []
+
+
+@pytest.mark.parametrize("chunked", [False, True], ids=["declared", "chunked"])
+def test_a_letter_at_the_cap_is_stored(monkeypatch, chunked) -> None:
+    door = _Door(monkeypatch)
+
+    response = door.post(_letter_of(CAP), chunked=chunked)
+
+    assert response.status_code == 200
+    assert [s["external_id"] for s in door.stored] == ["ord-42"]
+
+
+def test_fastapi_still_answers_a_bad_body_with_its_own_422(monkeypatch) -> None:
+    # The cap reads the bytes; FastAPI still parses and validates them, so a
+    # producer gets the same 422 as before.
+    door = _Door(monkeypatch)
+
+    malformed = door.post(b'{"merchant_id": ', chunked=True)
+    incomplete = door.post(json.dumps({"merchant_id": "m1"}).encode(), chunked=False)
+
+    assert malformed.status_code == 422
+    assert malformed.json()["detail"][0]["type"] == "json_invalid"
+    assert incomplete.status_code == 422
+    assert ["body", "source"] in [e["loc"] for e in incomplete.json()["detail"]]
+    assert door.stored == []
+
+
+def test_the_schema_door_is_capped_too(monkeypatch) -> None:
+    door = _Door(monkeypatch)
+
+    response = door.post(
+        b"x" * (CAP + 1), chunked=True, url="/ingest/schemas?merchant_id=m1"
     )
 
-
-def test_an_oversized_letter_is_413_before_the_row_exists() -> None:
-    too_big = str(record_api.MAX_LETTER_BYTES + 1)
-    with pytest.raises(HTTPException) as e:
-        asyncio.run(record_api.within_size_limit(_request_with_content_length(too_big)))
-    assert e.value.status_code == 413
+    assert response.status_code == 413
+    assert door.verified == []
 
 
-def test_a_normal_letter_passes_the_size_gate() -> None:
-    ok = str(record_api.MAX_LETTER_BYTES)
-    assert (
-        asyncio.run(record_api.within_size_limit(_request_with_content_length(ok)))
-        is None
+def test_a_client_that_hangs_up_mid_body_gets_a_400_not_a_500(monkeypatch) -> None:
+    # FastAPI answers a body it could not read with this 400. Unhandled in
+    # read_bounded, the ClientDisconnect was a 500 and an ERROR traceback for
+    # a caller who simply went away.
+    door = _Door(monkeypatch)
+
+    response = door.post(_letter_of(CAP - 1), chunked=True, hang_up_after=2)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "There was an error parsing the body"}
+    assert door.stored == [] and door.verified == []
+
+
+def _cap_at_boot(value: Optional[str]) -> str:
+    """CRM_INGEST_MAX_BODY_BYTES as a fresh interpreter reads it: static config
+    is read once at import, and reloading the shared module here would leak
+    into every other test."""
+    env = {k: v for k, v in os.environ.items() if k != "CRM_INGEST_MAX_BODY_BYTES"}
+    if value is not None:
+        env["CRM_INGEST_MAX_BODY_BYTES"] = value
+    booted = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import app.core.config.static as s; print(s.CRM_INGEST_MAX_BODY_BYTES)",
+        ],
+        env={**env, "PYTHONPATH": str(REPO)},
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
+    assert booted.returncode == 0, booted.stderr
+    return booted.stdout.strip()
 
 
-def test_size_gate_is_declared_on_the_route() -> None:
-    # Same structure as the auth pin: a door's limit is a declared
-    # dependency, so the next route added beside this one cannot quietly
-    # ship without it.
-    route = next(
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, "1048576"),
+        ("2097152", "2097152"),
+        # a bad dial falls back to the default rather than stopping the pod
+        ("", "1048576"),
+        ("1MB", "1048576"),
+        ("0", "1048576"),
+        ("-5", "1048576"),
+    ],
+)
+def test_the_cap_is_set_by_env(value, expected) -> None:
+    assert _cap_at_boot(value) == expected
+
+
+def test_the_door_reads_the_configured_cap() -> None:
+    from app.core.config.static import CRM_INGEST_MAX_BODY_BYTES
+
+    assert record_api.MAX_LETTER_BYTES == CRM_INGEST_MAX_BODY_BYTES
+
+
+def test_every_ingest_route_reads_through_the_cap() -> None:
+    # The cap rides the router's route class, not a declared dependency, so
+    # the next route added beside these gets it without declaring anything;
+    # including the router elsewhere must keep it.
+    from app.crm.api import router as crm_router
+
+    routes = [r for r in record_api.ingest_router.routes if isinstance(r, APIRoute)]
+    mounted = [
         r
-        for r in record_api.ingest_router.routes
-        if isinstance(r, APIRoute) and r.path == "/events"
-    )
-    assert record_api.within_size_limit in [
-        d.call for d in route.dependant.dependencies
+        for r in crm_router.routes
+        if isinstance(r, APIRoute)
+        and r.path.startswith("/ingest/")
+        and not r.path.startswith("/ingest/webhooks")
     ]
+    assert {r.path for r in routes} == {"/events", "/schemas"}
+    assert {r.path for r in mounted} == {"/ingest/events", "/ingest/schemas"}
+    assert all(isinstance(r, record_api.BoundedBodyRoute) for r in routes + mounted)
