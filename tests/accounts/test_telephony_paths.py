@@ -3,6 +3,7 @@ lead's template names, the MPC callback always answers the waiting bot, and
 a recording's keys go only to Plivo."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
 
@@ -11,6 +12,7 @@ import pytest
 import app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account as plivo_account
 import app.ai.voice.agents.breeze_buddy.services.telephony.plivo.plivo as plivo_mod
 import app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording as recording
+import app.ai.voice.agents.breeze_buddy.services.telephony.recording_download as recording_download
 from app.ai.voice.agents.breeze_buddy.accounts import AccountRefused, PlivoAccount
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
     lead_plivo_account,
@@ -87,7 +89,12 @@ def test_the_mpc_callback_always_answers_the_waiting_bot(
 
 @pytest.fixture
 def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
-    """aiohttp.ClientSession, faked: each GET's (url, auth), answered 200."""
+    """ssrf_safe_request, faked: each request's (url, auth), answered 200.
+
+    The real SSRF/redirect/egress behaviour is covered in
+    tests/test_ssrf_credential_scope.py; here we assert only what the recording
+    code decides to send (the credential scoping).
+    """
     seen: List[Tuple[str, Any]] = []
 
     class Response:
@@ -96,16 +103,9 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
         async def read(self) -> bytes:
             return b"mp3"
 
-        async def __aenter__(self) -> "Response":
-            return self
-
-        async def __aexit__(self, *_a: Any) -> None:
-            return None
-
     class Session:
-        def get(self, url: str, auth: Any = None, proxy: Any = None) -> Response:
-            seen.append((url, auth))
-            return Response()
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            pass
 
         async def __aenter__(self) -> "Session":
             return self
@@ -113,7 +113,15 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
         async def __aexit__(self, *_a: Any) -> None:
             return None
 
-    monkeypatch.setattr(recording.aiohttp, "ClientSession", Session)
+    @asynccontextmanager
+    async def fake_ssrf_safe_request(
+        _session: Any, _method: str, url: str, *, auth: Any = None, **_kw: Any
+    ) -> Any:
+        seen.append((url, auth))
+        yield Response()
+
+    monkeypatch.setattr(recording_download.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(recording_download, "ssrf_safe_request", fake_ssrf_safe_request)
     return seen
 
 
