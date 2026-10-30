@@ -24,8 +24,9 @@ Reached only through connectivity/connectors.py (boundary rule 11).
 
 from typing import Any, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from app.crm.connectivity.providers.base import ConnectorHandshakeError
 from app.crm.connectivity.schemas.connector import OnboardResult
 from app.crm.connectivity.schemas.message import CredentialBundle
 
@@ -47,6 +48,12 @@ class OnboardShopifyRequest(BaseModel):
     display_label: Optional[str] = Field(
         None, description="What the merchant calls this shop in the console"
     )
+
+    @field_validator("shop_domain")
+    @classmethod
+    def _lowercase(cls, value: str) -> str:
+        """Shopify domains are lowercase; a typed capital is the same shop."""
+        return value.strip().lower()
 
 
 class ShopifyOnboarder:
@@ -72,7 +79,15 @@ class ShopifyOnboarder:
         ``healthy`` is also honest at this rung: nothing is degraded. There
         is no subscription to have failed and no token to have expired; the
         door is exactly as complete as a relay-era Shopify door can be.
+
+        Ownership: nautilus registers each shop with its domain as the
+        merchant id, so a merchant may connect only the shop it IS.
         """
+        if request.shop_domain != request.merchant_id:
+            raise ConnectorHandshakeError(
+                "this merchant can connect only its own shop "
+                f"({request.merchant_id})"
+            )
         return OnboardResult(
             external_account_id=request.shop_domain,
             address=None,

@@ -199,7 +199,9 @@ async def onboard(
         raise UnknownConnectorError(f"unknown connector '{connector_key}'")
 
     update_log_context(connector_key=connector_key)
-    request = spec.request_model(**payload)
+    # The body's merchant_id is pinned to the authorised one: merchant_scope
+    # reads ?merchant_id first, so the two can differ.
+    request = spec.request_model(**{**payload, "merchant_id": merchant_id})
 
     # Everything cheap and refusable happens before the one-shot code is
     # spent: the merchant must exist, the door must not be switched off, and
