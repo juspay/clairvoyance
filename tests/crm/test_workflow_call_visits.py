@@ -106,6 +106,20 @@ def _install(
         call_node, "get_call_execution_config_by_template_id", fake_config
     )
     monkeypatch.setattr(call_node, "update_lead_enrollment_id", fake_stamp)
+    monkeypatch.setattr(
+        call_node,
+        "get_merchant_by_merchant_identifier",
+        _merchant_under("r1"),
+    )
+
+
+def _merchant_under(reseller_id: Optional[str]) -> Any:
+    """The merchant lookup, answering with a merchant under ``reseller_id``."""
+
+    async def fake_merchant(_merchant_id: str) -> Any:
+        return type("M", (), {"reseller_id": reseller_id})()
+
+    return fake_merchant
 
 
 def _expected(run_id: str, node_id: str, visit: int) -> str:

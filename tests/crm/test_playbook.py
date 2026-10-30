@@ -338,6 +338,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, captured: Dict[str, Any]) -> None:
         call_node, "get_call_execution_config_by_template_id", fake_config
     )
     monkeypatch.setattr(call_node, "update_lead_enrollment_id", fake_stamp)
+    monkeypatch.setattr(call_node, "get_merchant_by_merchant_identifier", fake_merchant)
+
+
+async def fake_merchant(_merchant_id: str) -> Any:
+    return type("M", (), {"reseller_id": "r"})()
 
 
 def test_a_call_square_carries_its_blocks_in_the_lead_payload(
