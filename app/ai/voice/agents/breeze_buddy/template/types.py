@@ -2567,6 +2567,97 @@ class AgentTransferConfig(BaseModel):
     )
 
 
+class FeedbackPill(BaseModel):
+    """One choice on the end-of-chat feedback card."""
+
+    id: str = Field(
+        ...,
+        pattern=r"^[a-z0-9_]{1,40}$",
+        description="Stable key stored with the feedback and counted in "
+        "analytics. Keep it fixed when the label changes.",
+    )
+    label: str = Field(
+        ..., min_length=1, max_length=60, description="Text shown on the pill."
+    )
+
+
+class MessageFeedbackConfig(BaseModel):
+    """Per-reply thumbs up / down under each finished bot reply."""
+
+    enabled: bool = Field(False, description="Show 👍/👎 under bot replies.")
+
+
+class ChatFeedbackContextRule(BaseModel):
+    """End the chat when a pushed client-context fact reaches a value."""
+
+    path: str = Field(
+        ...,
+        min_length=1,
+        description="Dot path into the client-context facts, e.g. "
+        "'paymentStatusResponse.orderStatus'.",
+    )
+    equals: Union[str, int, bool] = Field(
+        ..., description="Value at `path` that means the chat is over."
+    )
+
+
+class ChatFeedbackEndOn(BaseModel):
+    """When the widget treats the chat as ended and shows the card.
+
+    Whichever trigger fires first wins. All are evaluated in the widget,
+    while the customer is still on the page.
+    """
+
+    context: Optional[ChatFeedbackContextRule] = Field(
+        None, description="End when a client-context fact matches. Unset = off."
+    )
+    idle_seconds: Optional[int] = Field(
+        None,
+        ge=10,
+        le=3600,
+        description="End after this many seconds with no message following "
+        "the bot's last reply. Unset = off.",
+    )
+
+
+def _default_feedback_pills() -> List[FeedbackPill]:
+    return [
+        FeedbackPill(id="helped", label="Yes, it helped"),
+        FeedbackPill(id="helped_pay", label="Helped me pay"),
+        FeedbackPill(id="not_answered", label="Didn't answer my question"),
+        FeedbackPill(id="wrong_info", label="Wrong information"),
+    ]
+
+
+class ChatFeedbackConfig(BaseModel):
+    """The end-of-chat feedback card."""
+
+    enabled: bool = Field(False, description="Show the card when the chat ends.")
+    pills: List[FeedbackPill] = Field(
+        default_factory=_default_feedback_pills,
+        min_length=2,
+        max_length=6,
+        description="Choices on the card (multi-select).",
+    )
+    end_on: ChatFeedbackEndOn = Field(default_factory=ChatFeedbackEndOn)
+
+    @model_validator(mode="after")
+    def _unique_pill_ids(self):
+        ids = [p.id for p in self.pills]
+        if len(ids) != len(set(ids)):
+            raise ValueError("chat_feedback.pills ids must be unique")
+        return self
+
+
+class FeedbackConfig(BaseModel):
+    """Customer feedback on the chat: per reply and per conversation."""
+
+    message_feedback: MessageFeedbackConfig = Field(
+        default_factory=MessageFeedbackConfig
+    )
+    chat_feedback: ChatFeedbackConfig = Field(default_factory=ChatFeedbackConfig)
+
+
 class ConfigurationModel(BaseModel):
     # --- Agent session state (generic) ---
     state_reducers: List[StateReducer] = Field(
@@ -2774,6 +2865,13 @@ class ConfigurationModel(BaseModel):
             "indicator while the reply is in flight, then the full message "
             "at once (Messenger style). Presentation-only: the SSE "
             "transport streams either way."
+        ),
+    )
+    feedback: Optional[FeedbackConfig] = Field(
+        None,
+        description=(
+            "Customer feedback in the widget: 👍/👎 per bot reply and an "
+            "end-of-chat card with pills. Unset = both off."
         ),
     )
     ivr_configuration: Optional[IvrConfig] = None  # IVR-specific configuration
