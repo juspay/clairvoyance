@@ -280,7 +280,7 @@ def _wire(
         return [flow] if merchant_id == flow.merchant_id else []
 
     async def open_runs_for_customer(
-        merchant_id: str, customer_id: str
+        merchant_id: str, customer_id: str, keys: Any = (), run_ids: Any = ()
     ) -> List[EnrollmentRun]:
         return [run] if merchant_id == flow.merchant_id else []
 
