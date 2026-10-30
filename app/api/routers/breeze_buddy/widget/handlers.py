@@ -31,6 +31,7 @@ from fastapi import HTTPException, Request, UploadFile, status
 from app.ai.voice.agents.breeze_buddy.assist.commerce.ucp.try_on_policy import (
     verify_try_on_image,
 )
+from app.ai.voice.agents.breeze_buddy.assist.engine.identity import own_shop_url
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     CLIENT_CONTEXT_KEY,
     ClientContextTooLarge,
@@ -442,9 +443,21 @@ async def create_widget_session_handler(
     catalog_active, ui_flavors = negotiate_catalog(template, body.catalog_version)
 
     synthetic_user = _synthetic_widget_user(cfg.id)
+    saved_shop_url = (template.secrets or {}).get("shop_url")
     create_req = CreateChatSessionRequest(
         template_id=cfg.template_id,
-        template_vars=body.template_vars,
+        # The client's shop_url picks the host the commerce tools call; keep it
+        # only when it names this store (N-WID-2).
+        template_vars=own_shop_url(
+            body.template_vars,
+            [
+                saved_shop_url,
+                template.merchant_id,
+                cfg.merchant_id,
+                *cfg.allowed_origins,
+            ],
+            saved_shop_url,
+        ),
         # Server-owned widget marker beats anything the client supplies
         # via metadata — same precedence rule as ``template_vars`` in
         # ``create_chat_session_handler``.
