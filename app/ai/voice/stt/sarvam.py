@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from pipecat.frames.frames import (
     Frame,
+    ServiceSwitcherRequestMetadataFrame,
     TranscriptionFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -96,6 +97,30 @@ class SarvamSTTServiceWithInterruptionPolicy(SarvamSTTService):
         # (and again if it changes), for asking Sarvam about a slow or
         # dropped session.
         self._logged_request_id: Optional[str] = None
+        # Standby: a fallback behind a ServiceSwitcher opens no Sarvam
+        # session until the switcher makes it the active service.
+        self._standby = False
+
+    def hold_connection_until_active(self) -> None:
+        """Open no Sarvam session at start; connect when a ServiceSwitcher
+        activates this service (its ServiceSwitcherRequestMetadataFrame).
+
+        A fallback that most calls never use must not hold a Sarvam session
+        (and a concurrency slot) for the whole call.
+        """
+        self._standby = True
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        if (
+            self._standby
+            and isinstance(frame, ServiceSwitcherRequestMetadataFrame)
+            and frame.service is self
+        ):
+            self._standby = False
+            logger.info("Sarvam STT activated as the fallback; connecting")
+            if self.sample_rate:  # started: connect now, else start() will
+                await self._connect()
+        await super().process_frame(frame, direction)
 
     def set_self_interrupt(self, enabled: bool) -> None:
         """Follow a node-level interruption override mid-call."""
@@ -211,6 +236,8 @@ class SarvamSTTServiceWithInterruptionPolicy(SarvamSTTService):
             _SARVAM_DATA_MESSAGE.reset(token)
 
     async def _connect(self) -> None:
+        if self._standby:
+            return
         await super()._connect()
         # A new socket is a new Sarvam session with no speech open yet; an
         # END_SPEECH the old socket never sent must not block finalizing.
