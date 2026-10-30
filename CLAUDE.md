@@ -80,7 +80,7 @@ app/
 ├── crm/                            # Buddy CPaaS (docs/crm/building-modules.md)
 │   ├── api.py, auth.py             # /crm surface plumbing (root holds nothing else)
 │   ├── identity/                   # crm_customer · resolve(), assert_facts()
-│   ├── preview/uap/            # PREVIEW (logic not final): UPI payment agents in crm_customer.attributes.agents
+│   ├── preview/uap/            # PREVIEW (logic not final): UPI payment agents in crm_customer.attributes.agents. Routes off by default (UAP_ROUTES_ENABLED)
 │   ├── platform/                   # platform_identity · suppression contracts
 │   ├── record/                     # crm_event_raw · record_event() (the spine)
 │   └── shared/                     # db.py (atomically/crm_connection), normalize.py
