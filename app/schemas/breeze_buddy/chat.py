@@ -703,6 +703,14 @@ class CreateWidgetSessionRequest(BaseModel):
             "'widget' block."
         ),
     )
+    preview_grant: Optional[str] = Field(
+        None,
+        description=(
+            "Console preview grant from POST /widget-config/{id}/preview. "
+            "Lets the console open a session on a paused widget and skip the "
+            "site allow-list. Storefronts never send it."
+        ),
+    )
 
 
 class CreateWidgetSessionResponse(BaseModel):

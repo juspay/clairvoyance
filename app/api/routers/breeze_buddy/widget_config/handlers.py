@@ -17,6 +17,10 @@ from typing import Optional
 from fastapi import HTTPException, status
 
 from app.api.routers.breeze_buddy.templates.rbac import validate_template_access
+from app.api.security.breeze_buddy.widget_token import (
+    PREVIEW_GRANT_TTL_MINUTES,
+    mint_preview_grant,
+)
 from app.core.logger import logger
 from app.database.accessor import get_template_by_id
 from app.database.accessor.breeze_buddy.widget_config import (
@@ -34,6 +38,7 @@ from app.schemas.breeze_buddy.widget_config import (
     WidgetConfigListResponse,
     WidgetConfigResponse,
     WidgetConfigUpdate,
+    WidgetPreviewGrantResponse,
 )
 
 # 32 url-safe bytes → ~43 chars; well inside the column's varchar(128)
@@ -195,6 +200,17 @@ async def get_widget_config_by_id_handler(
         operation="read widget_config",
     )
     return cfg
+
+
+async def mint_preview_grant_handler(
+    widget_config_id: str, current_user: UserInfo
+) -> WidgetPreviewGrantResponse:
+    """A console preview grant for a widget the caller may read (N-WID-3)."""
+    cfg = await get_widget_config_by_id_handler(widget_config_id, current_user)
+    return WidgetPreviewGrantResponse(
+        preview_grant=mint_preview_grant(widget_config_id=cfg.id),
+        ttl_seconds=PREVIEW_GRANT_TTL_MINUTES * 60,
+    )
 
 
 async def update_widget_config_handler(

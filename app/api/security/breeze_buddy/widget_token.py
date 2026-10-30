@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from typing import Annotated, Any, Dict
+from typing import Annotated, Any, Dict, Optional
 
 import jwt as pyjwt
 from fastapi import Depends, HTTPException, Path, status
@@ -45,20 +45,31 @@ from app.core.security.jwt import jwt_manager
 _widget_bearer = HTTPBearer(auto_error=True, scheme_name="WidgetBearer")
 
 TYP_WIDGET = "widget"
+TYP_WIDGET_PREVIEW = "widget_preview"
 
 # Default lifetime — see module docstring.
 DEFAULT_WIDGET_TOKEN_TTL_MINUTES = 24 * 60
+# A preview grant only has to outlive the console building its preview frame.
+PREVIEW_GRANT_TTL_MINUTES = 15
 
 
 class WidgetSessionContext:
     """Resolved widget-token claims, returned by ``require_widget_session``."""
 
-    __slots__ = ("session_id", "widget_config_id", "subject")
+    __slots__ = ("session_id", "widget_config_id", "subject", "preview")
 
-    def __init__(self, *, session_id: str, widget_config_id: str, subject: str) -> None:
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        widget_config_id: str,
+        subject: str,
+        preview: bool = False,
+    ) -> None:
         self.session_id = session_id
         self.widget_config_id = widget_config_id
         self.subject = subject
+        self.preview = preview
 
 
 def mint_widget_token(
@@ -66,6 +77,7 @@ def mint_widget_token(
     widget_session_id: str,
     widget_config_id: str,
     ttl_minutes: int = DEFAULT_WIDGET_TOKEN_TTL_MINUTES,
+    preview: bool = False,
 ) -> str:
     """Issue a widget JWT bound to ``widget_session_id``.
 
@@ -83,8 +95,44 @@ def mint_widget_token(
         "widget_session_id": widget_session_id,
         "widget_config_id": widget_config_id,
     }
+    if preview:
+        payload["preview"] = True
     return jwt_manager.create_access_token(
         payload, expires_delta=timedelta(minutes=ttl_minutes)
+    )
+
+
+def mint_preview_grant(*, widget_config_id: str) -> str:
+    """Issue a console preview grant for one widget_config (N-WID-3).
+
+    Minted only behind the console login (RBAC, widget access checked), it
+    lets a session be created on a PAUSED widget and from the console's own
+    origin. It is not a session token: ``require_widget_session`` rejects it
+    (``typ``), and the RBAC verifier rejects it (no ``username``).
+    """
+    payload: Dict[str, Any] = {
+        "sub": f"widget-preview-{uuid.uuid4().hex[:12]}",
+        "typ": TYP_WIDGET_PREVIEW,
+        "widget_config_id": widget_config_id,
+    }
+    return jwt_manager.create_access_token(
+        payload, expires_delta=timedelta(minutes=PREVIEW_GRANT_TTL_MINUTES)
+    )
+
+
+def is_preview_grant_for(grant: Optional[str], widget_config_id: str) -> bool:
+    """True when ``grant`` is a live preview grant for this widget_config."""
+    if not grant:
+        return False
+    try:
+        payload = pyjwt.decode(
+            grant, jwt_manager.secret_key, algorithms=[jwt_manager.algorithm]
+        )
+    except pyjwt.InvalidTokenError:
+        return False
+    return (
+        payload.get("typ") == TYP_WIDGET_PREVIEW
+        and payload.get("widget_config_id") == widget_config_id
     )
 
 
@@ -153,6 +201,7 @@ def require_widget_session(
         session_id=session_id,
         widget_config_id=widget_config_id,
         subject=str(payload.get("sub", "")),
+        preview=payload.get("preview") is True,
     )
 
 
