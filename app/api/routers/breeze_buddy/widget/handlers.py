@@ -1087,7 +1087,9 @@ async def voice_connect_handler(
 
         # ── Start Daily room (no recording for widget mode; see §14) -------
         try:
-            session_info = await start_daily_session(lead_id, enable_recording=False)
+            session_info = await start_daily_session(
+                lead_id, enable_recording=False, preload_template=True
+            )
         except Exception as exc:
             # loguru: no ``exc_info`` kwarg — it would re-format the message
             # and crash on brace-bearing provider error text.

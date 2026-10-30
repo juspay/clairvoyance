@@ -24,6 +24,7 @@ from pipecat.transports.daily.utils import (
 )
 
 from app.ai.voice.agents.breeze_buddy.agent import daily_bot
+from app.ai.voice.agents.breeze_buddy.agent.flow import load_template_config
 from app.ai.voice.agents.breeze_buddy.services.daily import zygote
 from app.ai.voice.agents.breeze_buddy.services.daily.launch_payload import (
     BotLaunchPayload,
@@ -42,6 +43,7 @@ from app.core.config.static import (
 from app.core.logger import logger
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    get_lead_by_id,
     update_lead_call_completion_details,
     update_lead_call_id_by_id,
     update_lead_call_recording_url,
@@ -238,8 +240,32 @@ async def _launch_daily_bot(runner_args: DailyRunnerArguments) -> None:
     logger.info(f"Spawned Daily bot subprocess (pid={proc.pid}) for lead_id: {lead_id}")
 
 
+async def _preload_template(lead_id: str) -> Dict[str, Any]:
+    """Template + vars for the launch payload, read on the API's warm pool.
+
+    Best-effort: on any failure the bot gets no preload and reads the
+    template itself, as it did before.
+    """
+    try:
+        lead = await get_lead_by_id(lead_id)
+        if lead is None:
+            return {}
+        template, _, template_vars = await load_template_config(lead)
+    except Exception as exc:
+        logger.warning(f"Template preload failed for lead {lead_id}: {exc}")
+        return {}
+    return {
+        # reveal_secrets: the default JSON dump masks SecretStr auth fields
+        # (MCP / HTTP tool tokens) as "**********" — see template/cache.py.
+        "preloaded_template": template.model_dump(
+            mode="json", context={"reveal_secrets": True}
+        ),
+        "preloaded_template_vars": template_vars,
+    }
+
+
 async def start_daily_session(
-    lead_id: str, *, enable_recording: bool = True
+    lead_id: str, *, enable_recording: bool = True, preload_template: bool = False
 ) -> Dict[str, Any]:
     """Create a Daily room and start the bot for a lead.
 
@@ -260,6 +286,9 @@ async def start_daily_session(
             attachments — the lead is reused across attachments and a
             single recording_url field cannot represent N
             recordings, so we drop the feature for widget v1.
+        preload_template: When True, load the template and its vars here
+            (alongside room creation) and hand them to the bot in the launch
+            payload, so the bot skips those DB reads before joining.
 
     Returns:
         Dict containing room_url, token (for user), session_id, and lead_id
@@ -280,6 +309,10 @@ async def start_daily_session(
 
     # Generate session ID
     session_id = str(uuid.uuid4())
+
+    preload_task = (
+        asyncio.create_task(_preload_template(lead_id)) if preload_template else None
+    )
 
     # Create Daily room on-demand
     async with create_aiohttp_session() as aiohttp_session:
@@ -361,6 +394,7 @@ async def start_daily_session(
         body={
             "lead_id": lead_id,
             "session_id": session_id,
+            **(await preload_task if preload_task else {}),
         },
     )
 
