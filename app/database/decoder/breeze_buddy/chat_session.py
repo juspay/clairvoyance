@@ -1,5 +1,6 @@
 """Decoders for chat_session, chat_message, and agent_session_state rows."""
 
+import json
 from typing import Any, Dict, List, Optional, cast
 
 import asyncpg
@@ -19,6 +20,15 @@ from app.utils.common import parse_json
 
 # Cap the list-rail preview so a long message can't bloat the list payload.
 _PREVIEW_MAX_CHARS = 160
+
+
+def _feedback(row: asyncpg.Record) -> Optional[Dict[str, Any]]:
+    """The ``feedback`` column (migration 086), or None when the SELECT
+    didn't list it or the row has none."""
+    raw = row.get("feedback")
+    if raw is None:
+        return None
+    return raw if isinstance(raw, dict) else json.loads(raw)
 
 
 def decode_chat_session(row: asyncpg.Record) -> Optional[ChatSession]:
@@ -47,6 +57,7 @@ def decode_chat_session(row: asyncpg.Record) -> Optional[ChatSession]:
         last_activity_at=row["last_activity_at"],
         ended_at=row.get("ended_at"),
         ended_reason=(ChatEndedReason(ended_reason_raw) if ended_reason_raw else None),
+        feedback=_feedback(row),
     )
 
 
@@ -68,6 +79,7 @@ def decode_chat_message(row: asyncpg.Record) -> Optional[ChatMessage]:
         content=row.get("content"),
         content_blocks=blocks_raw,
         ui_blocks=ui_raw,
+        feedback=_feedback(row),
         created_at=row["created_at"],
     )
 
