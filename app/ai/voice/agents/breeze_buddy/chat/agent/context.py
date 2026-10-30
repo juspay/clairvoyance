@@ -154,7 +154,8 @@ class ContextSeedMixin:
         turn so they always reflect current truth (latest-wins).
 
         KB placement follows the same logic: full-injection text sits right
-        after task messages (stable across turns → prompt-cache friendly);
+        after task messages (its data markers carry a new random tag each
+        turn, so a provider's automatic prefix cache stops at this block);
         per-turn retrieved chunks sit just before the user turn (fresh each
         turn, invalidates only the suffix). Both are ephemeral like the
         client-context blocks.
