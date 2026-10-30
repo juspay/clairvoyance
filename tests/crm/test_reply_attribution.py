@@ -135,7 +135,9 @@ class _Spine:
     async def live_workflows(self, merchant_id: str) -> List[Workflow]:
         return []
 
-    async def open_runs_for_customer(self, merchant_id, customer_id):
+    async def open_runs_for_customer(
+        self, merchant_id, customer_id, keys=(), run_ids=()
+    ):
         return list(self.runs)
 
     async def get_definition(self, merchant_id, workflow_id, version):
@@ -434,3 +436,35 @@ def test_the_word_it_filters_on_is_the_word_the_send_queues_with() -> None:
 
     assert attribution._WORKFLOW in SOURCE_KINDS
     assert f'source_kind="{attribution._WORKFLOW}"' in inspect.getsource(send_node)
+
+
+def test_a_reply_finds_its_run_when_her_number_resolved_to_another_customer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run's number changed to one that resolves to another customer:
+    by customer alone the read finds nothing. The reply names the run that
+    sent the message, so the read takes that run by id and it hears its
+    answer."""
+    flow = _flow()
+    run = _run(flow)
+
+    class _Elsewhere(_Spine):
+        async def open_runs_for_customer(
+            self, merchant_id, customer_id, keys=(), run_ids=()
+        ):
+            return [r for r in self.runs if str(r.id) in run_ids]
+
+    spine = _Elsewhere(flow, [run])
+    _install(
+        monkeypatch,
+        spine,
+        SendBehind(
+            source_kind="workflow",
+            source_id=str(run.id),
+            dedupe_key=f"{run.id}:confirm",
+        ),
+    )
+
+    _consume(_tap())
+
+    assert {r for r, _ in spine.resumes} == {str(run.id)}
