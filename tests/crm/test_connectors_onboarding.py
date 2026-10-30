@@ -18,6 +18,7 @@ from app.crm.connectivity.accounts import (
     onboarding as onboarding_module,
 )
 from app.crm.connectivity.accounts.onboarding import (
+    SHOPIFY_RESELLER_ID,
     OnboardingError,
     ResubscribeRefused,
     UnknownConnectorError,
@@ -336,10 +337,6 @@ def _result(**overrides) -> OnboardResult:
     return OnboardResult(**fields)
 
 
-class _Merchant:
-    reseller_id = "reseller-1"
-
-
 class _Credential:
     id = "cred-1"
     is_active = True
@@ -354,6 +351,7 @@ def _patch_onboarding(
     bindings=None,
     onboarder=None,
     channel="whatsapp",
+    reseller_id="reseller-1",
 ):
     """Wire onboarding.py to doubles: merchant, vault, accessors, atom.
 
@@ -375,7 +373,7 @@ def _patch_onboarding(
 
     async def _merchants(ids):
         """Test double: one known merchant."""
-        return [_Merchant()], None
+        return [SimpleNamespace(reseller_id=reseller_id)], None
 
     async def _by_name(reseller_id, name, mask=True):
         """Test double: no existing credential, so the create path runs."""
@@ -757,7 +755,12 @@ async def test_a_door_with_no_channel_onboards_without_a_binding(
     with no pipe. A Shopify OAuth install is a COMPLETE onboarding with
     nothing to bind, so the atom must not try."""
     bindings = _FakeBindingAccessor()
-    _patch_onboarding(monkeypatch, bindings=bindings, channel=None)
+    _patch_onboarding(
+        monkeypatch,
+        bindings=bindings,
+        channel=None,
+        reseller_id=SHOPIFY_RESELLER_ID,
+    )
     installation = await onboard("shop", "shopify", _request().model_dump())
     assert installation is not None
     assert bindings.upserts == [], "a door with no channel writes no pipe"
@@ -780,7 +783,11 @@ async def test_a_door_with_no_credential_vaults_nothing(monkeypatch) -> None:
         raise AssertionError("an empty bundle must not reach the vault")
 
     _patch_onboarding(
-        monkeypatch, result=_result(bundle={}), bindings=bindings, channel=None
+        monkeypatch,
+        result=_result(bundle={}),
+        bindings=bindings,
+        channel=None,
+        reseller_id=SHOPIFY_RESELLER_ID,
     )
     monkeypatch.setattr(onboarding_module, "_store_credential", _never)
 
@@ -799,7 +806,11 @@ async def test_a_door_with_no_channel_needs_no_address_at_all(monkeypatch) -> No
     """
     bindings = _FakeBindingAccessor()
     _patch_onboarding(
-        monkeypatch, result=_result(address=None), bindings=bindings, channel=None
+        monkeypatch,
+        result=_result(address=None),
+        bindings=bindings,
+        channel=None,
+        reseller_id=SHOPIFY_RESELLER_ID,
     )
     installation = await onboard("shop", "shopify", _request().model_dump())
     assert installation is not None
@@ -1264,3 +1275,143 @@ def test_the_subscribe_route_refuses_a_foreign_merchant_before_the_door(
     )
     assert response.status_code == 403
     assert reached == []
+
+
+# --- a Shopify shop belongs to the merchant that connects it -----------------
+
+
+async def test_the_shop_is_the_merchant_itself() -> None:
+    """The merchant id IS the shop: it is the account id and the label."""
+    from app.crm.connectivity.providers.shopify.onboard import (
+        OnboardShopifyRequest,
+        ShopifyOnboarder,
+    )
+
+    request = OnboardShopifyRequest(merchant_id="merchant-a.myshopify.com")
+    onboarder = ShopifyOnboarder()
+    assert onboarder.identify(request) == ("merchant-a.myshopify.com", None)
+    result = await onboarder.gather(request)
+    assert result.external_account_id == "merchant-a.myshopify.com"
+    assert result.display_label == "merchant-a.myshopify.com"
+    assert result.health_level == "healthy"
+
+
+async def test_a_typed_shop_domain_is_never_the_shop(monkeypatch) -> None:
+    """The relay writes with whichever shop's token the domain names, so a
+    domain from the body would let this merchant's workflows tag and note
+    another store's orders. Sent anyway, it is ignored."""
+    installations = FakeInstallationAccessor(upsert_returns=_installation_read())
+    _patch_onboarding(
+        monkeypatch, installations=installations, reseller_id=SHOPIFY_RESELLER_ID
+    )
+    monkeypatch.setattr(
+        onboarding_module, "connector_for", lambda key: CONNECTORS["shopify"]
+    )
+    await onboard(
+        "merchant-a.myshopify.com",
+        "shopify",
+        {
+            "merchant_id": "merchant-a.myshopify.com",
+            "shop_domain": "merchant-b.myshopify.com",
+        },
+    )
+    assert installations.written is not None
+    assert installations.written["external_account_id"] == "merchant-a.myshopify.com"
+
+
+async def test_the_body_cannot_name_a_second_merchant(monkeypatch) -> None:
+    """merchant_scope may clear the tenant from the query string; a body that
+    names the victim as merchant_id is refused, and nothing is written."""
+    installations = FakeInstallationAccessor(upsert_returns=_installation_read())
+    _patch_onboarding(
+        monkeypatch, installations=installations, reseller_id=SHOPIFY_RESELLER_ID
+    )
+    monkeypatch.setattr(
+        onboarding_module, "connector_for", lambda key: CONNECTORS["shopify"]
+    )
+    with pytest.raises(OnboardingError, match="does not match"):
+        await onboard(
+            "merchant-a.myshopify.com",
+            "shopify",
+            {"merchant_id": "merchant-b.myshopify.com"},
+        )
+    assert installations.written is None
+
+
+def test_the_route_answers_400_when_query_and_body_name_two_merchants(
+    monkeypatch,
+) -> None:
+    """The query passes the tenancy check, so the mismatch is caught after
+    it — and answered as a refusal, before the connector does anything."""
+    response = _client(monkeypatch).post(
+        "/connectors/shopify/onboard",
+        params={"merchant_id": "shop"},
+        json={"merchant_id": "rival"},
+    )
+    assert response.status_code == 400
+    assert "does not match" in response.text
+
+
+async def test_a_body_repeating_the_merchant_is_accepted(monkeypatch) -> None:
+    """The check refuses a mismatch only."""
+    installations = FakeInstallationAccessor(upsert_returns=_installation_read())
+    _patch_onboarding(
+        monkeypatch, installations=installations, reseller_id=SHOPIFY_RESELLER_ID
+    )
+    monkeypatch.setattr(
+        onboarding_module, "connector_for", lambda key: CONNECTORS["shopify"]
+    )
+    await onboard("shop", "shopify", {"merchant_id": "shop"})
+    assert installations.written is not None
+
+
+def test_the_route_answers_422_when_the_body_omits_the_merchant(monkeypatch) -> None:
+    """The request models require merchant_id, so naming it in the query alone
+    is not enough for this route."""
+    response = _client(monkeypatch).post(
+        "/connectors/shopify/onboard",
+        params={"merchant_id": "shop"},
+        json={},
+    )
+    assert response.status_code == 422
+    assert "merchant_id" in response.text
+
+
+@pytest.mark.parametrize("reseller_id", ["breeze-self-serve", "some-reseller"])
+async def test_a_myshopify_id_not_made_by_the_install_is_refused(
+    monkeypatch, reseller_id
+) -> None:
+    """Self-signup and POST /merchant also accept a myshopify-shaped id. A
+    merchant made that way, before the real shop installs, would squat the
+    store: the relay later writes its orders under the squatter's workflows.
+    Only the install proves the shop, so nothing else connects."""
+    installations = FakeInstallationAccessor(upsert_returns=_installation_read())
+    _patch_onboarding(monkeypatch, installations=installations, reseller_id=reseller_id)
+    monkeypatch.setattr(
+        onboarding_module, "connector_for", lambda key: CONNECTORS["shopify"]
+    )
+    with pytest.raises(OnboardingError, match="installed through the Breeze Buddy app"):
+        await onboard(
+            "victim-store.myshopify.com",
+            "shopify",
+            {"merchant_id": "victim-store.myshopify.com"},
+        )
+    assert installations.written is None
+
+
+async def test_a_merchant_the_install_created_connects(monkeypatch) -> None:
+    """The install's reseller is the proof: that merchant's shop connects."""
+    installations = FakeInstallationAccessor(upsert_returns=_installation_read())
+    _patch_onboarding(
+        monkeypatch, installations=installations, reseller_id=SHOPIFY_RESELLER_ID
+    )
+    monkeypatch.setattr(
+        onboarding_module, "connector_for", lambda key: CONNECTORS["shopify"]
+    )
+    await onboard(
+        "merchant-a.myshopify.com",
+        "shopify",
+        {"merchant_id": "merchant-a.myshopify.com"},
+    )
+    assert installations.written is not None
+    assert installations.written["external_account_id"] == "merchant-a.myshopify.com"
