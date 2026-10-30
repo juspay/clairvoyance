@@ -28,6 +28,10 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     download_call_recording as download_call_recording_plivo,
 )
+from app.ai.voice.agents.breeze_buddy.services.telephony.recording_hosts import (
+    is_provider_recording_url,
+    is_self_hosted_recording_url,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
 )
@@ -56,6 +60,7 @@ from app.ai.voice.agents.breeze_buddy.utils.tts_utils.tts_provider_selector impo
 )
 from app.core.concurrency import spawn_background_task
 from app.core.logger import logger
+from app.core.security.ssrf import redact_url
 from app.database.accessor import (
     append_metadata_field,
     create_lead_call_tracker,
@@ -573,8 +578,26 @@ async def get_call_recording_handler(
 
     call_provider = telephony_number.provider.value
 
-    # Step 6: Fetch audio with provider-specific credentials
-    logger.info(f"Fetching recording from URL: {lead.recording_url}")
+    # Step 6: The stored URL came from an unauthenticated callback (rows older
+    # than the check in update_call_recording were never checked): fetch only
+    # the provider's own media host or our self-hosted copy, never another site
+    # or an internal address.
+    if not (
+        is_provider_recording_url(call_provider, lead.recording_url)
+        or is_self_hosted_recording_url(lead.recording_url)
+    ):
+        logger.error(
+            f"Refusing to fetch recording for call_sid: {call_sid}: not a "
+            f"{call_provider} recording host ({redact_url(lead.recording_url)})"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Recording not found for call_sid: {call_sid}",
+        )
+
+    # Step 7: Fetch audio with provider-specific credentials. Logged redacted:
+    # a recording URL can carry a signed query or token.
+    logger.info(f"Fetching recording from URL: {redact_url(lead.recording_url)}")
 
     if call_provider.upper() == "TWILIO":
         audio_file = await download_call_recording_twilio(lead.recording_url, call_sid)

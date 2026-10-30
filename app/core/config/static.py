@@ -1,5 +1,6 @@
 import math
 import os
+import re
 from urllib.parse import urlparse
 
 # --- Configuration ---
@@ -837,6 +838,51 @@ if not _vobiz_api_url.hostname or not (
 VOBIZ_RECORDING_TIME_LIMIT = int(
     os.getenv("VOBIZ_RECORDING_TIME_LIMIT", "14400")
 )  # Default: 4 hours. Vobiz's <Record> itself defaults to 60 s.
+
+# Recording hosts (app/ai/voice/agents/breeze_buddy/services/telephony/
+# recording_hosts.py). A recording URL arrives on an unauthenticated provider
+# callback and the server fetches it with that provider's keys, so only an
+# https URL on one of these hosts (or a subdomain) is stored, sent keys or
+# fetched. Comma-separated host suffixes; the defaults are the media hosts
+# lead_call_tracker.recording_url has ever held (as of October 2026), not the
+# providers' whole domains, so the keys never reach a help desk or docs site on
+# another subdomain. Static, not dynamic: the list decides where provider keys
+# go, so it changes by deploy, never at runtime.
+_HOST_SUFFIX = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
+
+
+def _recording_hosts(env_var: str, default: str) -> list[str]:
+    def parse(raw: str) -> list[str]:
+        return [h.strip().lower().lstrip(".") for h in raw.split(",") if h.strip()]
+
+    # A set-but-empty value (an empty chart secret) falls back to the default
+    # rather than refusing every recording.
+    hosts = parse(os.getenv(env_var, "")) or parse(default)
+    for host in hosts:
+        # Suffix match: a bare "com" would trust every .com host with the keys.
+        if not _HOST_SUFFIX.fullmatch(host):
+            raise ValueError(
+                f"{env_var} must be host names with at least one dot "
+                f"(e.g. media.plivo.com), got {host!r}"
+            )
+    return hosts
+
+
+TWILIO_RECORDING_HOSTS = _recording_hosts("TWILIO_RECORDING_HOSTS", "api.twilio.com")
+# media.plivo.com and its regions, e.g. aps1.media.plivo.com
+PLIVO_RECORDING_HOSTS = _recording_hosts("PLIVO_RECORDING_HOSTS", "media.plivo.com")
+# recordings.mum1.exotel.com is not a subdomain of recordings.exotel.com
+EXOTEL_RECORDING_HOSTS = _recording_hosts(
+    "EXOTEL_RECORDING_HOSTS", "recordings.exotel.com,recordings.mum1.exotel.com"
+)
+# media.vobiz.ai serves the file itself (no redirect); the VOBIZ_API_BASE_URL
+# host also counts, on its own scheme
+VOBIZ_RECORDING_HOSTS = _recording_hosts("VOBIZ_RECORDING_HOSTS", "media.vobiz.ai")
+# Recordings hosted by us: what upload_file_to_gcs returns, fetched without
+# provider keys.
+SELF_HOSTED_RECORDING_HOSTS = _recording_hosts(
+    "SELF_HOSTED_RECORDING_HOSTS", "sdk.beta.breezesdk.store"
+)
 
 # Proxy Configuration
 AWS_PROXY_HOST = os.environ.get("AWS_PROXY_HOST")
