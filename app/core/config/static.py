@@ -1153,6 +1153,12 @@ CRM_RUN_SWEEP_INTERVAL_SECONDS = _positive_float(
     "CRM_RUN_SWEEP_INTERVAL_SECONDS", 3600.0
 )
 
+# UAP routes (/uap/*). Off by default for security, and nobody uses them today.
+# Fix these before turning them on:
+# - Parallel payments can pass the rider's spending limit.
+# - A missing provider fare falls back to the amount the client sent.
+# - The routes have no caller auth.
+UAP_ROUTES_ENABLED = os.environ.get("UAP_ROUTES_ENABLED", "false").lower() == "true"
 UAP_ENVIRONMENT = os.environ.get("UAP_ENVIRONMENT", "production").strip().lower()
 _UAP_HOSTS = {
     "sandbox": "https://sandbox.juspay.in",
