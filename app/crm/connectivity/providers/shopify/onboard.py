@@ -19,6 +19,25 @@ nothing to bind — no address, no pipe, no send path. ``_onboard_in_txn``
 already returns early for that shape, so the binding machinery is never
 entered.
 
+The shop is the merchant itself. A nautilus merchant's id IS its myshopify
+domain, and the relay writes with whichever shop's token the domain names —
+so no separate shop field exists: a typed domain would let one merchant's
+workflows tag and note another store's orders. ``request.merchant_id`` is the
+only source, and onboarding.py refuses a body whose merchant_id is not the one
+the token was cleared for.
+
+That holds only for merchants the Breeze Buddy app install created (reseller
+BB_SHOPIFY): the install is the proof of the shop. Self-signup and POST
+/merchant also accept a myshopify-shaped id, so onboarding.py refuses a
+Shopify connect for any other merchant.
+
+Corpus trail: canon/04-connectivity.md T11 makes external_account_id the
+PROVIDER's id for the account, so one merchant could hold two shops. Here it
+is our merchant id, which means one shop per merchant and our tenant id as
+the source of truth. That is right while nautilus keys the tenant by domain;
+it changes the day a real Shopify OAuth install lands, when the handshake
+names the shop and this file grows it.
+
 Reached only through connectivity/connectors.py (boundary rule 11).
 """
 
@@ -38,11 +57,11 @@ class OnboardShopifyRequest(BaseModel):
     model's only consumer is this package's ConnectorSpec entry.
     """
 
-    merchant_id: str = Field(..., description="Tenant scope — required")
-    shop_domain: str = Field(
+    merchant_id: str = Field(
         ...,
-        min_length=1,
-        description="The myshopify domain — the provider's own id for this shop",
+        description="Tenant scope — required, and must match the merchant this "
+        "request is scoped to. A nautilus merchant's id IS its myshopify domain, "
+        "so this is also the shop being connected",
     )
     display_label: Optional[str] = Field(
         None, description="What the merchant calls this shop in the console"
@@ -53,13 +72,13 @@ class ShopifyOnboarder:
     """The no-op handshake that still produces a real door."""
 
     def identify(self, request: Any) -> Tuple[Optional[str], Optional[str]]:
-        """PURE: the account id from the body alone, and no address.
+        """PURE: the account id — the merchant's own shop — and no address.
 
         Lets the generic pre-checks refuse a disabled door before anything
         irreversible happens — there is nothing irreversible here yet, but
         the port is the same one the real handshake will use.
         """
-        return request.shop_domain, None
+        return request.merchant_id, None
 
     async def gather(self, request: Any) -> OnboardResult:
         """No provider call: report the shop, and no credential.
@@ -74,9 +93,9 @@ class ShopifyOnboarder:
         door is exactly as complete as a relay-era Shopify door can be.
         """
         return OnboardResult(
-            external_account_id=request.shop_domain,
+            external_account_id=request.merchant_id,
             address=None,
-            display_label=request.display_label or request.shop_domain,
+            display_label=request.display_label or request.merchant_id,
             bundle={},
             token_expires_at=None,
             health_level="healthy",
