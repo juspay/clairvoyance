@@ -49,7 +49,7 @@ def _public_https_url(value: str, *, origin_only: bool) -> str:
     )
 
 
-OnboardingPlatform = Literal["shopify", "web"]
+OnboardingPlatform = Literal["shopify", "woocommerce", "web"]
 OnboardingVertical = Literal["commerce"]
 
 

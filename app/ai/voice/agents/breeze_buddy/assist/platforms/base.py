@@ -10,7 +10,7 @@ needs, how a host app maps to a tenant, how a blueprint must look.
 
 from __future__ import annotations
 
-from typing import FrozenSet, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Any, FrozenSet, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from app.ai.voice.agents.breeze_buddy.assist.engine.models import (
@@ -60,6 +60,8 @@ class PlatformAdapter(Protocol):
     def tool_config_keys(self) -> Tuple[str, ...]: ...
 
     def payload_keys(self) -> Tuple[str, ...]: ...
+
+    def config_overrides(self) -> Mapping[str, Any]: ...
 
     def tools(
         self, identity: TenantIdentity, research: SiteResearch
@@ -151,6 +153,11 @@ class GenericAdapter:
 
     def payload_keys(self) -> Tuple[str, ...]:
         return ()
+
+    def config_overrides(self) -> Mapping[str, Any]:
+        """Config a build sets for this platform: a map merges into the
+        blueprint's, any other value replaces it."""
+        return {}
 
     def tools(
         self, identity: TenantIdentity, research: SiteResearch

@@ -18,10 +18,13 @@ from app.ai.voice.agents.breeze_buddy.assist.platforms.generic.adapter import (
 from app.ai.voice.agents.breeze_buddy.assist.platforms.shopify.adapter import (
     adapter as shopify,
 )
+from app.ai.voice.agents.breeze_buddy.assist.platforms.woocommerce.adapter import (
+    adapter as woocommerce,
+)
 
 # Order = classification priority among equal scores. ``generic`` is last and
 # scores zero by construction, so it only wins when nothing else matches.
-PLATFORMS: Tuple[PlatformAdapter, ...] = (shopify, generic)
+PLATFORMS: Tuple[PlatformAdapter, ...] = (shopify, woocommerce, generic)
 CLASSIFY_THRESHOLD = 0.5
 
 
