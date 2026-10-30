@@ -8,7 +8,7 @@ mints its own lead.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
@@ -34,6 +34,9 @@ from app.database.accessor import (
     get_lead_by_id,
     get_template_by_id,
     update_lead_enrollment_id,
+)
+from app.database.accessor.breeze_buddy.merchants import (
+    get_merchant_by_merchant_identifier,
 )
 from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
 
@@ -74,6 +77,12 @@ def _visits_so_far(context: Dict[str, Any], node_id: str) -> int:
     """
     value = context.get(_visits_key(node_id))
     return value if isinstance(value, int) and value >= 0 else 0
+
+
+async def _merchant_reseller(merchant_id: str) -> Optional[str]:
+    """The merchant's reseller, or None if unknown. A DB error raises (retried)."""
+    merchant = await get_merchant_by_merchant_identifier(merchant_id)
+    return merchant.reseller_id if merchant else None
 
 
 async def execute(
@@ -118,8 +127,15 @@ async def execute(
     template = await get_template_by_id(str(node.template_id))
     if template is None:
         raise NodeParked(f"call node {node.id}: template {node.template_id} not found")
-    if template.merchant_id is not None and template.merchant_id != run.merchant_id:
-        raise NodeParked(f"call node {node.id}: template belongs to another merchant")
+    if template.merchant_id is not None:
+        if template.merchant_id != run.merchant_id:
+            raise NodeParked(
+                f"call node {node.id}: template belongs to another merchant"
+            )
+    elif template.reseller_id != await _merchant_reseller(run.merchant_id):
+        # The lead is born under template.reseller_id. Fail closed: no reseller
+        # (or no merchant) matches no shared template.
+        raise NodeParked(f"call node {node.id}: template belongs to another reseller")
     config = await get_call_execution_config_by_template_id(str(template.id))
     if config is None:
         raise NodeParked(

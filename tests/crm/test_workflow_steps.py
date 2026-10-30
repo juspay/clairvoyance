@@ -801,6 +801,11 @@ def test_a_capped_call_square_walks_on_and_says_why_on_its_row(
     monkeypatch.setattr(call_node, "get_template_by_id", template)
     monkeypatch.setattr(call_node, "get_call_execution_config_by_template_id", config)
     monkeypatch.setattr(call_node, "update_lead_enrollment_id", stamp)
+
+    async def merchant(_merchant_id: str) -> Any:
+        return type("M", (), {"reseller_id": "r1"})()
+
+    monkeypatch.setattr(call_node, "get_merchant_by_merchant_identifier", merchant)
     board = {
         **_BOARD,
         "nodes": [
