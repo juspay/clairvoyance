@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Clairvoyance AI voice conversation platform"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi==0.115.12",
+    # <0.137: FastAPI 0.137 nests included routers (router.routes holds
+    # _IncludedRouter wrappers, not APIRoutes), which the route-mount tests
+    # walk. 0.136.x already runs on the patched Starlette 1.x.
+    "fastapi>=0.115.12,<0.137",
     "uvicorn==0.34.2",
     # 3.10 is the floor for aiohttp.abc.ResolveResult, which the assist
     # engine's pinned resolver imports at module load; on an older aiohttp
@@ -87,3 +90,10 @@ project-excludes = ["dragontts"]
 dev = [
     "pytest>=9.0.3",
 ]
+
+[tool.uv]
+# pipecat-ai 1.1.0 caps Pillow <13, but every Pillow 12.x carries open CVEs
+# fixed only in 13.0.0. pipecat touches Pillow only through frombytes/open/
+# save/tobytes, and pipecat 1.14+ itself allows Pillow 13. Drop this override
+# once pipecat is bumped to a release that permits Pillow >=13.
+override-dependencies = ["pillow>=13.0.0"]
