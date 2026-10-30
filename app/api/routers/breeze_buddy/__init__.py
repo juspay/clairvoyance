@@ -85,6 +85,7 @@ from app.api.routers.breeze_buddy.websocket import router as websocket_router
 # (anonymous, public_widget_key + Origin gated).
 from app.api.routers.breeze_buddy.widget import router as widget_router
 from app.api.routers.breeze_buddy.widget_config import router as widget_config_router
+from app.core.config.static import UAP_ROUTES_ENABLED
 
 router = APIRouter()
 
@@ -109,7 +110,10 @@ router.include_router(configurations_router, prefix="", tags=["configurations"])
 
 # Credentials (API keys, tokens - centralized secret management)
 router.include_router(credentials_router, prefix="", tags=["credentials"])
-router.include_router(uap_router, prefix="/uap", tags=["UAP"])
+
+# UAP routes. Off by default for security: see UAP_ROUTES_ENABLED.
+if UAP_ROUTES_ENABLED:
+    router.include_router(uap_router, prefix="/uap", tags=["UAP"])
 
 # Telephony numbers (caller IDs + inbound DIDs)
 router.include_router(numbers_router, prefix="", tags=["numbers"])
