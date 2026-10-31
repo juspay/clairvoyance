@@ -7,7 +7,7 @@ analytics over voice + chat use the same field semantics.
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -123,6 +123,11 @@ class ChatSession(BaseModel):
     last_activity_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     ended_reason: Optional[ChatEndedReason] = None
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="End-of-chat card answer (migration 085): pills, comment, "
+        "trigger, at. None = no answer.",
+    )
 
 
 class ChatMessage(BaseModel):
@@ -149,6 +154,11 @@ class ChatMessage(BaseModel):
     content: Optional[str] = None
     content_blocks: Optional[List[Dict[str, Any]]] = None
     ui_blocks: Optional[List[Dict[str, Any]]] = None
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Customer 👍/👎 on this bot reply (migration 085), e.g. "
+        "{'rating': 'down', 'at': ...}. None = not rated.",
+    )
     created_at: Optional[datetime] = None
 
 
@@ -551,6 +561,43 @@ class FlavorWire(BaseModel):
     )
 
 
+class FeedbackPillWire(BaseModel):
+    """One choice on the end-of-chat card (mirror of ``FeedbackPill``)."""
+
+    id: str
+    label: str
+
+
+class ChatFeedbackEndOnWire(BaseModel):
+    """When the widget ends the chat (mirror of ``ChatFeedbackEndOn``)."""
+
+    context_path: Optional[str] = Field(
+        None, description="Client-context fact to watch. None = off."
+    )
+    context_equals: Optional[Union[str, int, bool]] = Field(
+        None, description="Value of ``context_path`` that ends the chat."
+    )
+    idle_seconds: Optional[int] = Field(
+        None, description="Seconds of silence after the bot's reply. None = off."
+    )
+
+
+class ChatFeedbackWire(BaseModel):
+    """The end-of-chat card (mirror of ``ChatFeedbackConfig``)."""
+
+    pills: List[FeedbackPillWire]
+    end_on: ChatFeedbackEndOnWire
+
+
+class FeedbackWire(BaseModel):
+    """Which feedback the widget shows. Both off unless the template says so."""
+
+    message_feedback: bool = Field(False, description="👍/👎 under bot replies.")
+    chat_feedback: Optional[ChatFeedbackWire] = Field(
+        None, description="End-of-chat card. None = off."
+    )
+
+
 class WidgetSurfaceWire(BaseModel):
     """Everything the embed needs to paint its chrome for one session.
 
@@ -627,6 +674,10 @@ class WidgetSurfaceWire(BaseModel):
             "The widget's declarative interpreter renders these; empty when "
             "catalog_active is 'v1'."
         ),
+    )
+    feedback: FeedbackWire = Field(
+        default_factory=FeedbackWire,
+        description="Customer feedback controls (👍/👎 per reply, end card).",
     )
 
 
@@ -823,6 +874,39 @@ class UpdateWidgetContextResponse(BaseModel):
     )
 
 
+class MessageFeedbackRequest(BaseModel):
+    """Body of ``POST /widget/session/{id}/messages/{idx}/feedback``."""
+
+    rating: Optional[Literal["up", "down"]] = Field(
+        ..., description="'up' / 'down', or null to clear the rating."
+    )
+
+
+class MessageFeedbackResponse(BaseModel):
+    session_id: str
+    idx: int
+    feedback: Optional[Dict[str, Any]] = None
+
+
+class ChatFeedbackRequest(BaseModel):
+    """Body of ``POST /widget/session/{id}/feedback`` (the end-of-chat card)."""
+
+    pills: List[str] = Field(
+        default_factory=list,
+        max_length=6,
+        description="Ids of the chosen pills, from the template's chat_feedback.",
+    )
+    comment: Optional[str] = Field(None, max_length=1000)
+    trigger: Optional[Literal["context", "idle", "new_chat"]] = Field(
+        None, description="What ended the chat and showed the card."
+    )
+
+
+class ChatFeedbackResponse(BaseModel):
+    session_id: str
+    feedback: Dict[str, Any]
+
+
 class WidgetVoiceConnectResponse(BaseModel):
     """Body of ``POST /widget/session/{id}/voice/connect``."""
 
@@ -936,6 +1020,13 @@ class WidgetSessionStateResponse(BaseModel):
             "Unexpired PENDING HITL tool approvals for this session, oldest "
             "first, so the embed can repaint approval cards after a reload. "
             "Empty when nothing is awaiting a decision."
+        ),
+    )
+    feedback: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "The end-of-chat card answer, if already sent — the embed does "
+            "not show the card again. Per-reply ratings ride on each message."
         ),
     )
 

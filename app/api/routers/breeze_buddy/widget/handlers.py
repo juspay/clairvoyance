@@ -23,7 +23,8 @@ import re
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from asyncpg.exceptions import UniqueViolationError
 from fastapi import HTTPException, Request, UploadFile, status
@@ -95,6 +96,8 @@ from app.database.accessor.breeze_buddy.chat_session import (
     get_chat_session_by_id,
     list_chat_messages_for_session,
     merge_client_context,
+    set_chat_message_feedback,
+    set_chat_session_feedback,
     upsert_agent_session_state_merge,
 )
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
@@ -113,14 +116,23 @@ from app.schemas import (
 )
 from app.schemas.breeze_buddy.chat import (
     ApproveToolRequest,
+    ChatFeedbackEndOnWire,
+    ChatFeedbackRequest,
+    ChatFeedbackResponse,
+    ChatFeedbackWire,
     ChatMessage,
+    ChatSession,
     ChatSessionStatus,
     CreateChatSessionRequest,
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
     CustomComponentWire,
+    FeedbackPillWire,
+    FeedbackWire,
     FlavorWire,
     GreetingTileWire,
+    MessageFeedbackRequest,
+    MessageFeedbackResponse,
     QuickReplyWire,
     SendChatMessageRequest,
     UpdateWidgetContextRequest,
@@ -216,6 +228,33 @@ class _WidgetSurface:
     enable_text_input: bool = True
     greeting_tiles: List[GreetingTileWire] = field(default_factory=list)
     response_reveal: Literal["stream", "complete"] = "stream"
+    feedback: FeedbackWire = field(default_factory=FeedbackWire)
+
+
+def _feedback_wire(configurations: object) -> FeedbackWire:
+    """``configurations.feedback`` as the widget sees it. Unset = both off;
+    the end card ships only when enabled, so a disabled card never reaches
+    the embed."""
+    cfg = getattr(configurations, "feedback", None)
+    if cfg is None:
+        return FeedbackWire()
+    chat = cfg.chat_feedback
+    rule = chat.end_on.context
+    return FeedbackWire(
+        message_feedback=cfg.message_feedback.enabled,
+        chat_feedback=(
+            ChatFeedbackWire(
+                pills=[FeedbackPillWire(id=p.id, label=p.label) for p in chat.pills],
+                end_on=ChatFeedbackEndOnWire(
+                    context_path=rule.path if rule else None,
+                    context_equals=rule.equals if rule else None,
+                    idle_seconds=chat.end_on.idle_seconds,
+                ),
+            )
+            if chat.enabled
+            else None
+        ),
+    )
 
 
 def _extract_widget_config(template: object) -> _WidgetSurface:
@@ -251,6 +290,7 @@ def _extract_widget_config(template: object) -> _WidgetSurface:
             for t in (getattr(configurations, "greeting_tiles", None) or [])
         ],
         response_reveal=getattr(configurations, "response_reveal", "stream"),
+        feedback=_feedback_wire(configurations),
     )
 
 
@@ -280,6 +320,7 @@ async def _surface_wire(
         ui_flavors=ui_flavors,
         flavor=_template_flavor(template),
         custom_components=await _custom_components_wire(template, catalog_active),
+        feedback=surface.feedback,
     )
 
 
@@ -899,6 +940,118 @@ async def update_widget_context_handler(
 
 
 # ---------------------------------------------------------------------------
+# POST /widget/session/{id}/messages/{idx}/feedback · POST /widget/session/{id}/feedback
+# ---------------------------------------------------------------------------
+
+
+async def _feedback_session(
+    session_id: str, request: Request, ctx: WidgetSessionContext
+) -> Tuple[ChatSession, Any]:
+    """Shared gate for both feedback routes: IP limit, session ownership,
+    and the template's feedback config. Ended sessions are allowed — the
+    end card is shown after the chat ends."""
+    cfg = await resolve_session_widget_config(
+        request=request, widget_config_id=ctx.widget_config_id
+    )
+    await enforce_widget_ip_limit(
+        request=request,
+        bucket="feedback",
+        limit=cfg.max_messages_per_ip_hour,
+        widget_config_id=cfg.id,
+    )
+    session = await get_chat_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    assert_widget_session_ownership(session, ctx)
+    template = await get_template_by_id_cached(session.template_id)
+    configurations = getattr(template, "configurations", None)
+    return session, getattr(configurations, "feedback", None)
+
+
+def _feedback_off() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Feedback is turned off for this agent",
+    )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def set_message_feedback_handler(
+    session_id: str,
+    idx: int,
+    body: MessageFeedbackRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+) -> MessageFeedbackResponse:
+    """Rate one bot reply 👍/👎, or clear the rating (``rating: null``)."""
+    _, feedback_cfg = await _feedback_session(session_id, request, ctx)
+    if feedback_cfg is None or not feedback_cfg.message_feedback.enabled:
+        raise _feedback_off()
+
+    feedback = (
+        {"rating": body.rating, "at": _now_iso()} if body.rating is not None else None
+    )
+    row = await set_chat_message_feedback(session_id, idx, feedback)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No bot reply #{idx} in session '{session_id}'",
+        )
+    return MessageFeedbackResponse(
+        session_id=session_id, idx=row.idx, feedback=row.feedback
+    )
+
+
+async def set_chat_feedback_handler(
+    session_id: str,
+    body: ChatFeedbackRequest,
+    request: Request,
+    ctx: WidgetSessionContext,
+) -> ChatFeedbackResponse:
+    """Store the end-of-chat card answer. A resend replaces it."""
+    _, feedback_cfg = await _feedback_session(session_id, request, ctx)
+    if feedback_cfg is None or not feedback_cfg.chat_feedback.enabled:
+        raise _feedback_off()
+
+    allowed = {p.id for p in feedback_cfg.chat_feedback.pills}
+    unknown = [p for p in body.pills if p not in allowed]
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unknown pill id(s): {', '.join(unknown)}",
+        )
+    pills = list(dict.fromkeys(body.pills))  # de-dupe, keep the order picked
+    comment = (body.comment or "").strip() or None
+    if not pills and not comment:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Pick at least one pill or write a comment",
+        )
+
+    feedback: Dict[str, Any] = {
+        "pills": pills,
+        "comment": comment,
+        "trigger": body.trigger,
+        "at": _now_iso(),
+    }
+    row = await set_chat_session_feedback(session_id, feedback)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Widget session '{session_id}' not found",
+        )
+    return ChatFeedbackResponse(
+        session_id=session_id, feedback=row.feedback or feedback
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /widget/session/{id}/voice/connect
 # ---------------------------------------------------------------------------
 
@@ -1361,6 +1514,7 @@ async def get_widget_session_state_handler(
         metadata=session.metadata or {},
         client_context=client_context,
         pending_approvals=pending_approvals,
+        feedback=session.feedback,
     )
 
 

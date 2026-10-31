@@ -8,6 +8,8 @@ Routes under ``/agent/voice/breeze-buddy/widget``:
 - ``POST /widget/session/{id}/intent``                  typed UI intent (SSE)
 - ``POST /widget/session/{id}/cancel``                  cancel in-flight turn
 - ``POST /widget/session/{id}/context``                 push state/facts (no LLM turn)
+- ``POST /widget/session/{id}/messages/{idx}/feedback`` rate one bot reply 👍/👎
+- ``POST /widget/session/{id}/feedback``                end-of-chat card answer
 - ``POST /widget/session/{id}/try-on``                  virtual try-on (no turn)
 - ``POST /widget/session/{id}/voice/connect``           open voice attachment
 - ``POST /widget/session/{id}/voice/end``               close voice attachment
@@ -24,13 +26,14 @@ Origin + per-IP rate limit. All other routes use the session-bound
 ``widget_token`` minted at create-time.
 """
 
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
+    Path,
     Request,
     Response,
     UploadFile,
@@ -44,9 +47,13 @@ from app.api.security.breeze_buddy.widget_token import (
 )
 from app.schemas.breeze_buddy.chat import (
     ApproveToolRequest,
+    ChatFeedbackRequest,
+    ChatFeedbackResponse,
     CreateWidgetSessionRequest,
     CreateWidgetSessionResponse,
     EndChatSessionResponse,
+    MessageFeedbackRequest,
+    MessageFeedbackResponse,
     SendChatMessageRequest,
     UpdateWidgetContextRequest,
     UpdateWidgetContextResponse,
@@ -67,6 +74,8 @@ from .handlers import (
     get_widget_session_state_handler,
     send_widget_intent_handler,
     send_widget_message_handler,
+    set_chat_feedback_handler,
+    set_message_feedback_handler,
     transcribe_widget_audio_handler,
     try_on_widget_handler,
     update_widget_context_handler,
@@ -130,6 +139,16 @@ async def widget_approval_preflight(session_id: str) -> Response:
 
 @router.options("/session/{session_id}/context")
 async def widget_context_preflight(session_id: str) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/messages/{idx}/feedback")
+async def widget_message_feedback_preflight(session_id: str, idx: int) -> Response:
+    return options_cors_response()
+
+
+@router.options("/session/{session_id}/feedback")
+async def widget_chat_feedback_preflight(session_id: str) -> Response:
     return options_cors_response()
 
 
@@ -335,6 +354,39 @@ async def update_widget_context(
     ctx: WidgetSessionContext = Depends(require_widget_session),
 ) -> UpdateWidgetContextResponse:
     return await update_widget_context_handler(session_id, body, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/messages/{idx}/feedback",
+    response_model=MessageFeedbackResponse,
+    summary="Rate one bot reply 👍/👎, or clear the rating",
+)
+async def set_message_feedback(
+    session_id: str,
+    idx: Annotated[int, Path(ge=0, le=2**31 - 1)],  # chat_message.idx is int4
+    body: MessageFeedbackRequest,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+) -> MessageFeedbackResponse:
+    """403 when the template has per-reply feedback off; 404 when ``idx`` is
+    not a bot reply in this session. Works after the chat has ended."""
+    return await set_message_feedback_handler(session_id, idx, body, request, ctx)
+
+
+@router.post(
+    "/session/{session_id}/feedback",
+    response_model=ChatFeedbackResponse,
+    summary="Store the end-of-chat feedback card answer",
+)
+async def set_chat_feedback(
+    session_id: str,
+    body: ChatFeedbackRequest,
+    request: Request,
+    ctx: WidgetSessionContext = Depends(require_widget_session),
+) -> ChatFeedbackResponse:
+    """403 when the template has the end card off; 422 for an unknown pill id
+    or an empty answer. Works after the chat has ended."""
+    return await set_chat_feedback_handler(session_id, body, request, ctx)
 
 
 @router.post(
