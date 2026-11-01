@@ -8,10 +8,9 @@ operation is pub/sub for real-time result delivery between pods.
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
-from openai.types.chat import ChatCompletionMessageParam
-from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
+from pipecat.processors.aggregators.llm_context import LLMContext
 
 from app.ai.voice.agents.breeze_buddy.llm import get_llm_service
 from app.core.logger import logger
@@ -70,7 +69,7 @@ async def summarize_transcription(
     transcription: List[Dict[str, Any]],
     reason: str = "",
 ) -> Optional[str]:
-    """Summarize a hold-transfer outbound transcription using Azure OpenAI.
+    """Summarize a hold-transfer outbound transcription with the default LLM.
 
     Args:
         transcription: List of {role, content} dicts (user/assistant turns).
@@ -98,24 +97,11 @@ async def summarize_transcription(
         if reason:
             system_prompt += f"\n\nReason for call: {reason}"
 
-        params = OpenAILLMInvocationParams(  # type: ignore[call-overload]
-            messages=cast(
-                list[ChatCompletionMessageParam],
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": conversation_text},
-                ],
-            )
-        )
-        chunks = await llm.get_chat_completions(params)  # type: ignore[arg-type]
-        parts = [
-            chunk.choices[0].delta.content
-            async for chunk in chunks
-            if chunk.choices
-            and chunk.choices[0].delta
-            and chunk.choices[0].delta.content
-        ]
-        summary = "".join(parts)
+        # run_inference is provider-neutral
+        context = LLMContext([{"role": "user", "content": conversation_text}])
+        summary = (
+            await llm.run_inference(context, system_instruction=system_prompt) or ""
+        ).strip()
         if summary:
             logger.info(
                 f"[hold_transfer] Summarized transcription "
