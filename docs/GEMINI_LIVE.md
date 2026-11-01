@@ -96,21 +96,22 @@ No separate STT or TTS service is created (`pipeline.py` realtime branch returns
 from its server-side STT/VAD; the user aggregator's default strategies react to
 those (it is given no custom strategies).
 
-## Noise cancellation (AIC)
+## Noise cancellation
 
 Already wired — **no code change needed**. The transport input filter
-(`agent/transport.py`, `get_transport_params`) attaches an `AICFilter` to **every**
-transport (8 kHz model for telephony, 16 kHz for Daily), and the realtime pipeline
-uses that same `transport.input()`. Enable per template:
+(`agent/transport.py`, `get_transport_params`) attaches the Noizzen noise filter
+(`app/ai/voice/noise_filter/noizzen`, see `docs/NOISE_FILTER.md`) to **every**
+transport (DPDFNet-8k for telephony, DPDFNet-base for Daily), and the realtime
+pipeline uses that same `transport.input()`. Enable per template:
 
 ```jsonc
-"noise_filter": { "enable": true, "provider": "aic", "model": "noise_cancellation" }
-// or "voice_focus" to isolate the foreground speaker
+"noise_filter": { "enable": true, "provider": "noizzen", "model": "noise_cancellation" }
 ```
 
-Prerequisites: `BREEZE_BUDDY_AIC_LICENSE_KEY` set and the model file present
-(`transport.py` logs a warning and proceeds without filtering if either is
-missing). AIC adds a small processing cost — weigh against the min-latency goal.
+If the model file is not provisioned, `transport.py` logs a warning and proceeds
+without filtering. ai-coustics remains available for `"provider": "aic"`
+templates, falling back to Noizzen when it cannot run. The filter adds ~50 ms of delay (40 ms model look-ahead) —
+weigh against the min-latency goal.
 
 ## Opening line (per-template, static-only) & `dial_tone`
 
