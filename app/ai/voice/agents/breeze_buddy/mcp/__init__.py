@@ -5,17 +5,16 @@ import base64
 import json
 import re
 import uuid
-from datetime import timedelta
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from mcp.client.session_group import StreamableHttpParameters
+from pipecat.flows.types import FlowResult, FlowsFunctionSchema
 from pipecat.services.llm_service import (
     FunctionCallParams,
     FunctionCallResultProperties,
 )
 from pipecat.services.mcp_service import MCPClient
-from pipecat_flows.types import FlowResult, FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.handlers.transport.utils.tool_pipeline import (
     apply_result_pipeline_json_str,
@@ -276,9 +275,7 @@ def _create_direct_http_tool_handler(
         headers.setdefault("Content-Type", "application/json")
         headers.setdefault("Accept", "application/json")
 
-        timeout_s = (
-            server_params.timeout.total_seconds() if server_params.timeout else 30.0
-        )
+        timeout_s = server_params.timeout
         try:
             async with httpx.AsyncClient(
                 timeout=timeout_s, transport=transport
@@ -420,6 +417,7 @@ def _create_mcp_tool_handler(
             tool_call_id="",
             arguments=merged_args,
             llm=None,  # type: ignore[arg-type]
+            pipeline_worker=cast(Any, None),
             context=None,  # type: ignore[arg-type]
             result_callback=result_callback,
         )
@@ -577,8 +575,8 @@ def _build_server_params(
     return StreamableHttpParameters(
         url=resolved_url,
         headers=headers,
-        timeout=timedelta(seconds=server.timeout),
-        sse_read_timeout=timedelta(seconds=server.timeout),
+        timeout=server.timeout,
+        sse_read_timeout=server.timeout,
         terminate_on_close=True,
     )
 

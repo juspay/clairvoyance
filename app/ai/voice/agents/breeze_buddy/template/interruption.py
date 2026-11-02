@@ -20,6 +20,7 @@ see agent/pipeline.py.
 from pipecat.turns.user_mute import AlwaysUserMuteStrategy
 from pipecat.turns.user_start import (
     BaseUserTurnStartStrategy,
+    ExternalUserTurnStartStrategy,
     MinWordsUserTurnStartStrategy,
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
@@ -222,6 +223,13 @@ async def _apply_interruption_config(
     else:
         start_strategies.append(TranscriptionUserTurnStartStrategy(use_interim=True))
 
+    stt = getattr(bot, "stt_service", None) if bot is not None else None
+    stt_self_interrupt = (
+        config.mode == InterruptionMode.ENABLED and not config.min_words
+    )
+    if stt_self_interrupt and hasattr(stt, "set_self_interrupt"):
+        start_strategies.append(ExternalUserTurnStartStrategy())
+
     # pipecat 1.1.0's SpeechTimeoutUserTurnStopStrategy handles the no-VAD
     # multi-turn case natively (per-turn reset + independent wait flags), so the
     # turn ends after user_speech_timeout seconds of silence following the last
@@ -245,7 +253,7 @@ async def _apply_interruption_config(
 
     if config.mode == InterruptionMode.DISABLED_DISCARD:
         mute_strategy = AlwaysUserMuteStrategy()
-        await mute_strategy.setup(user_aggregator.task_manager)
+        await mute_strategy.setup(user_aggregator.processor_setup)
         old_mute.append(mute_strategy)
     else:
         # When switching from muted → unmuted, clear the mute flag so frames
@@ -255,11 +263,8 @@ async def _apply_interruption_config(
     # --- 3. STT self-interruption (Sarvam) follows the active rule ---
     # Sarvam interrupts the bot on its first START_SPEECH; allowed only when
     # interruptions are on and no min_words rule needs to judge the words.
-    stt = getattr(bot, "stt_service", None) if bot is not None else None
     if stt is not None and hasattr(stt, "set_self_interrupt"):
-        stt.set_self_interrupt(
-            config.mode == InterruptionMode.ENABLED and not config.min_words
-        )
+        stt.set_self_interrupt(stt_self_interrupt)
 
     # Track the active config so subsequent calls can short-circuit
     if bot is not None:

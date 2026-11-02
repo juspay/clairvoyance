@@ -39,7 +39,7 @@ def test_builder_maps_reasoning_scopes_key_and_omits_temperature(monkeypatch):
     assert svc._settings.temperature is None
     assert svc._aws_params["region_name"] == "ap-south-1"
     assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
-    provider = svc._aws_session._session.get_component("token_provider")
+    provider = svc._aws_session.get_component("token_provider")
     assert provider.load_token(signing_name="bedrock").token == "k"
     assert getattr(svc._aws_params["config"], "signature_version") == "bearer"
 
@@ -107,7 +107,7 @@ async def test_observer_call_parses_tool_use(monkeypatch):
                 }
             }
 
-    monkeypatch.setattr(svc._aws_session, "client", lambda **kw: _Client())
+    monkeypatch.setattr(svc._aws_session, "create_client", lambda **kw: _Client())
     tools = [
         FunctionSchema(name="end_call", description="d", properties={}, required=[])
     ]
@@ -208,7 +208,7 @@ async def test_bedrock_prefill_merges_synthetic_turn_into_last_user_message(
             sent.update(params)
             return {"usage": {"inputTokens": 2, "cacheWriteInputTokens": 50}}
 
-    monkeypatch.setattr(svc._aws_session, "client", lambda **kw: _Client())
+    monkeypatch.setattr(svc._aws_session, "create_client", lambda **kw: _Client())
     context = LLMContext(
         messages=[
             {"role": "system", "content": "manual"},
@@ -216,7 +216,7 @@ async def test_bedrock_prefill_merges_synthetic_turn_into_last_user_message(
         ]
     )
 
-    await prompt_prefill._bedrock_prefill(svc, context)
+    await prompt_prefill._bedrock_prefill(svc, context, None)
 
     roles = [m["role"] for m in sent["messages"]]
     assert roles == ["user"]

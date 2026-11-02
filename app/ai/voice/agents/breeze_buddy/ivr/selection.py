@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import WebSocket
+from pipecat.runner.types import CallData
 
 from app.ai.voice.agents.breeze_buddy.accounts import Accounts
 from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import (
@@ -73,7 +74,7 @@ async def get_template_id_from_call(
     ws: WebSocket,
     stream_sid: str,
     call_sid: str,
-    call_data: dict,
+    call_data: CallData,
     provider: str,
     telephony_service: Optional[VoiceCallProvider] = None,
     from_number: str = "",
