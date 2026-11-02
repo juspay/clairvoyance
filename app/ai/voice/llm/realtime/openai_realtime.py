@@ -55,7 +55,7 @@ def build_openai_realtime_llm(
     ``functions`` flow through unchanged.
     """
     audio_input = AudioInput(
-        transcription=InputAudioTranscription(),
+        transcription=InputAudioTranscription(model="gpt-4o-transcribe"),
         # Server-side semantic turn detection — replaces BB's STT-based
         # turn-start strategies (MinWordsUserTurnStartStrategy etc.) which
         # are not wired into the realtime pipeline topology.

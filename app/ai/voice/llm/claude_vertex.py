@@ -55,10 +55,10 @@ class VertexAnthropicLLMService(AnthropicLLMService):
     See: https://github.com/pipecat-ai/pipecat/issues/4020
     """
 
-    def _get_llm_invocation_params(
+    async def _get_llm_invocation_params(
         self, context: LLMContext
     ) -> AnthropicLLMInvocationParams:
-        params = super()._get_llm_invocation_params(context)
+        params = await super()._get_llm_invocation_params(context)
         messages = params.get("messages", [])
 
         if messages and messages[-1].get("role") == "assistant":

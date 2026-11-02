@@ -45,6 +45,7 @@ def build_google_tts(config: GoogleConfig):
     text_filters = list(config.text_filters) if config.text_filters else None
 
     return GoogleTTSService(
+        max_consecutive_zero_audio_contexts=0,
         voice_id=config.voice_id,
         settings=GoogleTTSService.Settings(language=config.language),
         credentials=config.credentials,

@@ -40,6 +40,8 @@ from fastapi import Response, WebSocket
 # other, and only this order resolves it (the order the app itself loads them
 # in). "...breeze_buddy" sorts before "...breeze_buddy.<sub>", so isort keeps
 # this line above the next ones on its own.
+from pipecat.runner.types import CallData
+
 from app.ai.voice.agents.breeze_buddy import dispatch as _dispatch  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.agent import inbound as ws_inbound
 from app.ai.voice.agents.breeze_buddy.ivr import (
@@ -628,7 +630,7 @@ async def test_the_websocket_accepts_inbound_calls_from_each_inbound_provider(
 
     lead, error = await ws_inbound.handle_inbound_call(
         call_sid="CALL-1",
-        call_data={},
+        call_data=CallData(),
         call_initiated_time=datetime.now(timezone.utc),
         provider=provider,
     )
@@ -671,7 +673,7 @@ async def test_a_vobiz_websocket_lead_is_made_from_the_url_and_owns_the_channel(
 
     lead, error = await ws_inbound.handle_inbound_call(
         call_sid="CALL-1",
-        call_data={"stream_id": "stream-1", "call_id": "CALL-1"},
+        call_data=CallData(stream_id="stream-1", call_id="CALL-1"),
         call_initiated_time=datetime.now(timezone.utc),
         provider=CallProvider.VOBIZ,
         url_query_params={"to_number": CALLED, "from_number": CALLER},
@@ -705,7 +707,7 @@ async def test_a_vobiz_stream_reads_its_template_from_the_websocket_url(
         ws=cast(WebSocket, ws),
         stream_sid="stream-1",
         call_sid="CALL-1",
-        call_data={},
+        call_data=CallData(),
         provider=provider,
     )
 

@@ -127,8 +127,8 @@ class AdjacentMergeGeminiAdapter(GeminiLLMAdapter):
     signature on any functionCall message still unsigned after all of the
     above (see module docstring)."""
 
-    def get_llm_invocation_params(self, *args, **kwargs):
-        params = super().get_llm_invocation_params(*args, **kwargs)
+    async def get_llm_invocation_params(self, *args, **kwargs):
+        params = await super().get_llm_invocation_params(*args, **kwargs)
         messages = params.get("messages")
         if isinstance(messages, list):
             params["messages"] = self._coalesce_function_responses(messages)
