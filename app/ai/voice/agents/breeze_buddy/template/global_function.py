@@ -56,6 +56,7 @@ _APPROVAL_BUDGET_MARGIN_SECS = 15.0
 _TRANSFER_FUNCTION_TIMEOUT_SECS = 45.0
 
 PRE_TTS_WAIT_SECS = 15
+_END_CONVERSATION_TIMEOUT_SECS = 60.0
 
 
 def _flows_async_kwargs(
@@ -91,6 +92,10 @@ def _flows_async_kwargs(
         # default (esp. MPC dial-first). Force a safe ceiling unless the
         # template set an explicit override above.
         extra["timeout_secs"] = _TRANSFER_FUNCTION_TIMEOUT_SECS
+    elif isinstance(func, GlobalBuiltinFunction) and func.handler == "end_conversation":
+        extra["timeout_secs"] = _END_CONVERSATION_TIMEOUT_SECS + (
+            PRE_TTS_WAIT_SECS if func.pre_tts_message else 0
+        )
     elif isinstance(func, GlobalBuiltinFunction) and func.pre_tts_message:
         llm_config = getattr(
             getattr(bot_instance, "configurations", None), "llm_configurations", None

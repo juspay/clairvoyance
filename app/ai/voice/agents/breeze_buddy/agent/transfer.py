@@ -24,6 +24,7 @@ from app.ai.voice.agents.breeze_buddy.template.context import (
 )
 from app.ai.voice.agents.breeze_buddy.template.vad import create_vad_analyzer
 from app.ai.voice.agents.breeze_buddy.utils.agent_transfer import PendingAgentTransfer
+from app.ai.voice.agents.breeze_buddy.utils.stored_transcript import generation_rows
 from app.core.config.dynamic import BB_DAILY_AUDIO_OUT_10MS_CHUNKS
 from app.core.logger.context import update_log_context
 from app.database.accessor.breeze_buddy.lead_call_tracker import update_lead_template
@@ -51,10 +52,10 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
 
     # 1. Snapshot the outgoing generation's transcript (context still alive).
     if bot.context:
+        kb_config = getattr(bot.configurations, "knowledge_base", None)
+        kb_header = kb_config.injection_header if kb_config is not None else None
         bot.prior_generation_messages.extend(
-            m
-            for m in bot.context.messages
-            if isinstance(m, dict) and isinstance(m.get("content"), str)
+            generation_rows(bot, bot.lead, bot.context.messages, kb_header)
         )
         bot.prior_generation_messages.append(
             {

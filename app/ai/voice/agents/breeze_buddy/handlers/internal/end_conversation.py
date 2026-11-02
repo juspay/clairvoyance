@@ -1,6 +1,6 @@
-import json
+import asyncio
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 from pipecat.frames.frames import EndFrame
 
@@ -18,6 +18,7 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
     publish_hold_transfer_result,
     summarize_transcription,
 )
+from app.ai.voice.agents.breeze_buddy.utils.stored_transcript import generation_rows
 from app.core.logger import logger
 from app.core.logger.context import clear_log_context
 from app.database.accessor.breeze_buddy.chat_session import (
@@ -30,7 +31,17 @@ callback_map = {
 }
 
 
+_finalizing: Set[asyncio.Task] = set()
+
+
 async def end_conversation(context: TemplateContext, args, transition_to=None):
+    task = asyncio.create_task(_finalize_call(context, args))
+    _finalizing.add(task)
+    task.add_done_callback(_finalizing.discard)
+    return await asyncio.shield(task)
+
+
+async def _finalize_call(context: TemplateContext, args):
     """
     End the conversation by finalizing the call.
 
@@ -102,52 +113,11 @@ async def end_conversation(context: TemplateContext, args, transition_to=None):
                 f"Collecting transcription from {len(history)} messages for call {context.call_sid}"
             )
 
-            nodes = (getattr(context.bot, "flow_config", None) or {}).get("nodes", {})
-            template_id = getattr(getattr(context.bot, "template", None), "id", None)
-            entered = [
-                entry.get("node_name")
-                for entry in context.lead.metaData.get("node_traversal", [])
-                if entry.get("template_id") == template_id
+            rows = generation_rows(context.bot, context.lead, history, kb_header)
+            transcription.extend(rows)
+            filtered_transcript = [
+                row for row in rows if row["role"] in ("user", "assistant")
             ]
-            for node_name in dict.fromkeys(entered):
-                role_message = (nodes.get(node_name) or {}).get("role_message")
-                if role_message:
-                    transcription.append({"role": "system", "content": role_message})
-
-            for msg in history:
-                if (
-                    isinstance(msg, dict)
-                    and "role" in msg
-                    and "content" in msg
-                    and isinstance(msg["content"], str)
-                ):
-                    role = "system" if msg["role"] == "developer" else msg["role"]
-                    if (
-                        kb_header
-                        and role == "system"
-                        and msg["content"].startswith(kb_header)
-                    ):
-                        continue
-                    if role == "tool" and msg["content"] == "COMPLETED":
-                        continue
-                    # Skip Pipecat internal async-tool protocol messages
-                    # (tool/developer-role JSON blobs coordinating async tool
-                    # calls; matched by parsed content, not by role)
-                    try:
-                        parsed = json.loads(msg["content"])
-                        if (
-                            isinstance(parsed, dict)
-                            and parsed.get("type") == "async_tool"
-                        ):
-                            continue
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-                    transcription.append({"role": role, "content": msg["content"]})
-                    if role in ("user", "assistant"):
-                        filtered_transcript.append(
-                            {"role": role, "content": msg["content"]}
-                        )
 
             context.lead.metaData["transcription"] = transcription
             logger.info(
