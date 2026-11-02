@@ -61,6 +61,10 @@ from app.database.accessor.breeze_buddy.credentials import (
 from app.database.accessor.breeze_buddy.merchants import get_merchants_by_ids
 from app.schemas import CredentialType
 
+#: The reseller of every merchant the Breeze Buddy Shopify app install
+#: creates — the only merchants allowed to connect Shopify.
+SHOPIFY_RESELLER_ID = "BB_SHOPIFY"
+
 #: canon T11's ladder -> the traffic light on the row. Only 'subscribed' and
 #: above may show green: a door with no event subscription receives no
 #: delivery receipts and no inbound STOP, and send() fails closed on anything
@@ -208,6 +212,13 @@ async def onboard(
     # the merchant has already burned a signup code and Meta is already
     # subscribed to an account we then refuse.
     reseller_id = await _merchant_reseller(merchant_id)
+    if connector_key == "shopify" and reseller_id != SHOPIFY_RESELLER_ID:
+        # Fail closed: a Shopify merchant's id IS its shop, and only the app
+        # install proves that shop. Any other merchant could carry a
+        # myshopify id it does not own.
+        raise OnboardingError(
+            "Shopify connects only for shops installed through the Breeze Buddy app"
+        )
     await _refuse_before_spending(merchant_id, spec, connector_key, request)
 
     try:

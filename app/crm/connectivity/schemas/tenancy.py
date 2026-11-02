@@ -4,7 +4,7 @@
 PATCH exactly as it reads ``merchant_id`` from a GET's query — so a route
 never spells the tenancy check itself, and a request model that forgets
 to inherit this base is a body the dependency cannot scope (a 400, never a
-silent pass).
+silent pass). A body naming a different merchant from the query is a 400 too.
 """
 
 from pydantic import BaseModel, Field

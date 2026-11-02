@@ -116,8 +116,8 @@ def merchant_scope(operation: str, component: str) -> Callable[..., Awaitable[st
     what a test can walk the router for.
 
     ``operation`` is the audit word ("retire a template"); ``component`` is
-    the log context's. Fail closed: no merchant in the request is a 400
-    before anything reads or writes.
+    the log context's. Fail closed: no merchant in the request, or a query
+    and a body naming two, is a 400 before anything reads or writes.
     """
 
     async def _scope(
@@ -125,16 +125,24 @@ def merchant_scope(operation: str, component: str) -> Callable[..., Awaitable[st
         current_user: UserInfo = Depends(get_current_user_with_rbac),
     ) -> str:
         merchant_id: Optional[str] = request.query_params.get("merchant_id")
-        if not merchant_id and request.method in ("POST", "PUT", "PATCH"):
+        if request.method in ("POST", "PUT", "PATCH"):
             # Starlette caches the body, so the handler's own model parse
             # reads the same bytes afterwards — one read, two readers.
             try:
                 body = await request.json()
             except Exception:
                 body = None
-            if isinstance(body, dict):
-                candidate = body.get("merchant_id")
-                merchant_id = candidate if isinstance(candidate, str) else None
+            if isinstance(body, dict) and "merchant_id" in body:
+                candidate = body["merchant_id"]
+                if merchant_id and candidate != merchant_id:
+                    # Two tenants in one request: the check below clears one,
+                    # and a handler reading its body would act on the other.
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="merchant_id in the query and the body differ",
+                    )
+                if not merchant_id:
+                    merchant_id = candidate if isinstance(candidate, str) else None
         if not merchant_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
