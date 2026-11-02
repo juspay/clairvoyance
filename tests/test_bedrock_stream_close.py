@@ -52,7 +52,7 @@ class _Session:
     def __init__(self, events: int | None) -> None:
         self.client_obj = _Client(events)
 
-    def client(self, service_name, **kwargs):
+    def create_client(self, service_name, **kwargs):
         return self.client_obj
 
 

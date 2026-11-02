@@ -2,9 +2,10 @@
 
 from typing import Any, Dict, List, Optional, cast
 
+from pipecat.flows import FlowManager, NodeConfig
+from pipecat.flows.types import FlowsDirectFunction, FlowsFunctionSchema
 from pipecat.services.azure.llm import AzureLLMService
-from pipecat_flows import FlowManager, NodeConfig
-from pipecat_flows.types import FlowsDirectFunction, FlowsFunctionSchema
+from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
 from app.ai.voice.agents.breeze_buddy.services.knowledge_base import (
     build_kb_system_message,
@@ -114,7 +115,7 @@ def setup_flow_manager(
 
     return FlowManager(
         task=task,
-        llm=llm,
+        llm=cast(Any, llm),
         context_aggregator=context_aggregator,
         transport=transport,
         global_functions=cast(
@@ -124,9 +125,42 @@ def setup_flow_manager(
     )
 
 
+def is_realtime(llm: Any) -> bool:
+    return llm is not None and llm.service_metadata_frame().is_realtime_service
+
+
+def task_role_for(llm: Any) -> str:
+    if isinstance(llm, BaseOpenAILLMService) or is_realtime(llm):
+        return "system"
+    return "developer"
+
+
+def with_task_role(messages: List[Dict[str, Any]], role: str) -> List[Dict[str, Any]]:
+    return [
+        {**message, "role": role} if message.get("role") == "system" else message
+        for message in messages
+    ]
+
+
+def _flows_node(node: NodeConfig, task_role: str) -> NodeConfig:
+    converted: Dict[str, Any] = {
+        key: value for key, value in node.items() if key != "role_messages"
+    }
+    role_messages = node.get("role_messages") or []
+    if role_messages:
+        converted["role_message"] = "\n\n".join(
+            message["content"] for message in role_messages
+        )
+    converted["task_messages"] = with_task_role(
+        list(node.get("task_messages") or []), task_role
+    )
+    return cast(NodeConfig, converted)
+
+
 def build_flow_config(
     flow_builder: FlowConfigBuilder,
     template: TemplateModel,
+    llm: Any = None,
 ) -> tuple[Dict[str, Any], List, Any]:
     """Build flow configuration from template.
 
@@ -141,6 +175,12 @@ def build_flow_config(
     # splice) is deferred — see docs/widget/VOICE_GENERATIVE_UI_TODO.md. The
     # builder leaves the placeholder inert when no ui_allowlist is passed.
     flow_config = flow_builder.build_flow_config(template)
+    if not is_realtime(llm):
+        task_role = task_role_for(llm)
+        flow_config["nodes"] = {
+            name: _flows_node(node, task_role)
+            for name, node in flow_config["nodes"].items()
+        }
     end_conversation_callbacks = flow_config.get("end_conversation_callbacks", [])
     expected_callback_response_schema = flow_config.get(
         "expected_callback_response_schema", None
@@ -162,6 +202,7 @@ def prepare_initial_node(
     has_greeting_source: bool,
     greeting_text: Optional[str] = None,
     kb_text: Optional[str] = None,
+    llm: Any = None,
 ) -> NodeConfig:
     """Prepare the initial node configuration with language injection.
 
@@ -188,17 +229,17 @@ def prepare_initial_node(
     else:
         getattr(configurations, "payload_based_language_selection", False)
 
+    if is_realtime(llm):
+        persona = list(node_config.get("role_messages") or [])
+    elif node_config.get("role_message"):
+        persona = [{"role": "system", "content": node_config["role_message"]}]
+    else:
+        persona = []
     role_messages = inject_language_rules(
-        node_config.get("role_messages", []),
+        persona,
         lead_payload.get("language_name", "English"),
         getattr(configurations, "payload_based_language_selection", False),
     )
-
-    if kb_text and configurations and configurations.knowledge_base:
-        role_messages = list(role_messages or []) + [
-            build_kb_system_message(kb_text, configurations.knowledge_base)
-        ]
-        logger.info(f"Injected full KB text into initial node ({len(kb_text)} chars)")
 
     # Add greeting context to task messages if greeting was played
     task_messages = list(node_config["task_messages"])
@@ -211,6 +252,16 @@ def prepare_initial_node(
         # Prepend the greeting message to task messages
         task_messages = [greeting_context_message] + task_messages
         logger.info(f"Injected greeting into LLM context: {greeting_text[:50]}...")
+
+    if kb_text and configurations and configurations.knowledge_base:
+        kb_message = build_kb_system_message(kb_text, configurations.knowledge_base)
+        if is_realtime(llm):
+            role_messages = list(role_messages or []) + [kb_message]
+        else:
+            task_messages = (
+                with_task_role([kb_message], task_role_for(llm)) + task_messages
+            )
+        logger.info(f"Injected full KB text into initial node ({len(kb_text)} chars)")
 
     # Gemini Live must ALWAYS get its flow-init LLMRunFrame, even when a
     # greeting played. pipecat 1.1.0's Gemini Live drops all input audio
@@ -231,12 +282,18 @@ def prepare_initial_node(
         realtime is not None and realtime.provider == RealtimeLLMProvider.GEMINI
     )
 
-    return NodeConfig(
+    node = NodeConfig(
         name=node_config["name"],
         task_messages=task_messages,
-        role_messages=role_messages,
         functions=node_config.get("functions", []),
         pre_actions=node_config.get("pre_actions", []),
         post_actions=node_config.get("post_actions", []),
         respond_immediately=(not has_greeting_source) or is_gemini_realtime,
     )
+    if is_realtime(llm):
+        node["role_messages"] = role_messages
+    else:
+        node["role_message"] = "\n\n".join(
+            message["content"] for message in role_messages
+        )
+    return node

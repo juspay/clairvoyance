@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from pipecat.frames.frames import FunctionCallFromLLM
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.google.llm import GoogleLLMService
+from pipecat.utils.types import assert_given
 
 from app.ai.voice.agents.breeze_buddy.chat.history.compactor import (
     compact_tool_results_universal,
@@ -104,8 +105,9 @@ async def stream_gemini(
             tool_choice=context._tool_choice,
         )
 
-    invocation_params = adapter.get_llm_invocation_params(
-        call_context, system_instruction=service._settings.system_instruction
+    invocation_params = await adapter.get_llm_invocation_params(
+        call_context,
+        system_instruction=assert_given(service._settings.system_instruction),
     )
 
     # Per-cycle forced tool choice (RFC-002): mode=ANY constrains the model
@@ -128,7 +130,6 @@ async def stream_gemini(
         tools=invocation_params["tools"] or [],
         tool_config=tool_config,
     )
-    service._maybe_unset_thinking_budget(generation_params)
     if thinking_level_override:
         # Per-call thinking swap (e.g. cycle-1 routing and the final
         # quick-replies cycle run 'minimal'). ONLY when the resolved

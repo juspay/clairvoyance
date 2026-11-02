@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from pipecat_flows import FlowsFunctionSchema
+from pipecat.flows import FlowsFunctionSchema
 
 from app.ai.voice.agents.breeze_buddy.chat.client_context import (
     strip_client_context_keys,

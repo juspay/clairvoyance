@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NLTK_DATA=/usr/local/nltk_data\
     AIC_MODEL_PATH=/app/models/voice/aic/quail_l_8khz.aicmodel \
     AIC_MODEL_PATH_16KHZ=/app/models/voice/aic/quail_l_16khz.aicmodel \
-    AIC_VOICE_FOCUS_MODEL_PATH=/app/models/voice/aic/quail_vf_2_1_l_16khz.aicmodel \
+    AIC_VOICE_FOCUS_MODEL_PATH=/app/models/voice/aic/quail_vf_2_2_l_16khz.aicmodel \
     AIC_MODEL_PATH_S=/app/models/voice/aic/quail_s_8khz.aicmodel \
     AIC_MODEL_PATH_S_16KHZ=/app/models/voice/aic/quail_s_16khz.aicmodel \
     UV_CACHE_DIR=/app/.uv-cache
@@ -54,7 +54,7 @@ RUN uv sync --frozen --no-dev --no-install-project --compile-bytecode && \
 # The installed SDK picks the model-file version compatible with itself and verifies
 # the checksum; files are saved under the fixed names in AIC_*_PATH above.
 # No cloud credentials needed. The build fails if any model can't be downloaded.
-RUN /app/.venv/bin/python -c "import shutil, aic_sdk; [shutil.move(aic_sdk.Model.download(m, '/tmp/aic'), '/app/models/voice/aic/' + n) for m, n in [('quail-l-8khz', 'quail_l_8khz.aicmodel'), ('quail-l-16khz', 'quail_l_16khz.aicmodel'), ('quail-vf-2.1-l-16khz', 'quail_vf_2_1_l_16khz.aicmodel'), ('quail-s-8khz', 'quail_s_8khz.aicmodel'), ('quail-s-16khz', 'quail_s_16khz.aicmodel')]]" && \
+RUN /app/.venv/bin/python -c "import shutil, aic_sdk; [shutil.move(aic_sdk.Model.download(m, '/tmp/aic'), '/app/models/voice/aic/' + n) for m, n in [('quail-l-8khz', 'quail_l_8khz.aicmodel'), ('quail-l-16khz', 'quail_l_16khz.aicmodel'), ('quail-vf-2.2-l-16khz', 'quail_vf_2_2_l_16khz.aicmodel'), ('quail-s-8khz', 'quail_s_8khz.aicmodel'), ('quail-s-16khz', 'quail_s_16khz.aicmodel')]]" && \
     ls -l /app/models/voice/aic && rm -rf /tmp/aic
 
 # Create NLTK data directory and download required data
