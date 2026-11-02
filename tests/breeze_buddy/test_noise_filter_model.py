@@ -15,6 +15,7 @@ from pydantic import ValidationError
 # isort: off
 # template.types must load before the agent modules (circular import otherwise).
 from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
     NoiseFilterConfig,
     NoiseFilterModel,
 )
@@ -31,7 +32,7 @@ from app.ai.voice.agents.breeze_buddy.agent.transport import (
 NAMES = {
     "AIC_MODEL_PATH": "quail_l_8khz.aicmodel",
     "AIC_MODEL_PATH_16KHZ": "quail_l_16khz.aicmodel",
-    "AIC_VOICE_FOCUS_MODEL_PATH": "quail_vf_2_1_l_16khz.aicmodel",
+    "AIC_VOICE_FOCUS_MODEL_PATH": "quail_vf_2_2_l_16khz.aicmodel",
     "AIC_MODEL_PATH_S": "quail_s_8khz.aicmodel",
     "AIC_MODEL_PATH_S_16KHZ": "quail_s_16khz.aicmodel",
 }
@@ -56,8 +57,8 @@ def models(tmp_path, monkeypatch):
         (NC, TRANSPORT_TYPE_DAILY, "quail_l_16khz.aicmodel"),
         (NC_S, TRANSPORT_TYPE_TELEPHONY, "quail_s_8khz.aicmodel"),
         (NC_S, TRANSPORT_TYPE_DAILY, "quail_s_16khz.aicmodel"),
-        (VF, TRANSPORT_TYPE_TELEPHONY, "quail_vf_2_1_l_16khz.aicmodel"),
-        (VF, TRANSPORT_TYPE_DAILY, "quail_vf_2_1_l_16khz.aicmodel"),
+        (VF, TRANSPORT_TYPE_TELEPHONY, "quail_vf_2_2_l_16khz.aicmodel"),
+        (VF, TRANSPORT_TYPE_DAILY, "quail_vf_2_2_l_16khz.aicmodel"),
     ],
 )
 def test_model_selects_artifact(models: Path, model, transport_type, expected_file):
@@ -96,3 +97,19 @@ def test_legacy_type_still_means_quail_l():
     """type="aic" templates keep resolving to noise_cancellation (quail-L)."""
     cfg = NoiseFilterConfig(enable=True, type="aic")
     assert cfg.model is None and cfg.provider is None
+
+
+def test_a_model_file_that_does_not_load_fails_open(models: Path, monkeypatch):
+    monkeypatch.setattr(transport.static, "BREEZE_BUDDY_AIC_LICENSE_KEY", "test-key")
+    transport._aic_model_error.cache_clear()
+    configurations = ConfigurationModel(
+        noise_filter=NoiseFilterConfig(
+            enable=True, provider="aic", model="noise_cancellation"
+        )
+    )
+
+    audio_filter = transport._create_audio_input_filter(
+        configurations, TRANSPORT_TYPE_TELEPHONY
+    )
+
+    assert audio_filter is None

@@ -61,6 +61,7 @@ async def build_gemini_tts(config: GeminiConfig) -> GeminiTTSService:
     model = config.model or await GEMINI_TTS_MODEL()
 
     return GeminiTTSService(
+        max_consecutive_zero_audio_contexts=0,
         credentials=config.credentials or GOOGLE_CREDENTIALS_JSON or None,
         settings=GeminiTTSService.Settings(
             model=model,

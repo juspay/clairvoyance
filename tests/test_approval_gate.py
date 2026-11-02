@@ -230,3 +230,27 @@ def test_async_kwargs_additive_budget_with_func_timeout():
     # budget — max() would not (the review's watchdog finding).
     func = _builtin(timeout_secs=90.0, approval={"timeout_secs": 120})
     assert _flows_async_kwargs(func)["timeout_secs"] == 120 + 90 + 15
+
+
+def test_async_kwargs_pre_tts_builtin_gets_the_wait_on_top_of_the_default():
+    func = _builtin(pre_tts_message="Connecting you now")
+    assert _flows_async_kwargs(func)["timeout_secs"] == 25.0
+
+
+def test_async_kwargs_pre_tts_builtin_keeps_the_template_timeout():
+    func = _builtin(pre_tts_message="Connecting you now")
+    bot = SimpleNamespace(
+        configurations=SimpleNamespace(
+            llm_configurations=SimpleNamespace(function_call_timeout_secs=40.0)
+        )
+    )
+    assert _flows_async_kwargs(func, bot)["timeout_secs"] == 55.0
+
+
+def test_async_kwargs_pre_tts_builtin_explicit_timeout_wins():
+    func = _builtin(pre_tts_message="Connecting you now", timeout_secs=12.0)
+    assert _flows_async_kwargs(func)["timeout_secs"] == 12.0
+
+
+def test_async_kwargs_builtin_without_pre_tts_message_sets_no_timeout():
+    assert "timeout_secs" not in _flows_async_kwargs(_builtin())

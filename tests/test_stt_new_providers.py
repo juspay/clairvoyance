@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
 from pipecat.services.smallest.stt import SmallestSTTService
 from pydantic import ValidationError
 
@@ -26,7 +27,6 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
 )
 from app.ai.voice.stt import (
     DeepgramFluxConfig,
-    DeepgramFluxSTTServiceWithInterims,
     SarvamConfig,
     SmallestConfig,
     build_deepgram_flux_stt,
@@ -309,7 +309,7 @@ def test_flux_hands_barge_in_to_the_pipeline():
             api_key="k", language_hints=["hi", "en"], eot_timeout_ms=1500
         )
     )
-    assert isinstance(svc, DeepgramFluxSTTServiceWithInterims)
+    assert isinstance(svc, DeepgramFluxSTTService)
     assert svc._should_interrupt is False
     assert svc._settings.eot_timeout_ms == 1500
     hints = svc._settings.language_hints
@@ -328,8 +328,8 @@ async def test_flux_pushes_its_live_updates_as_interims(monkeypatch):
         pushed.append(frame)
 
     monkeypatch.setattr(svc, "push_frame", capture)
-    await svc._handle_update("haan kal nahi")
-    await svc._handle_update("")
+    await svc._handle_update("haan kal nahi", {})
+    await svc._handle_update("", {})
     assert [type(f) for f in pushed] == [InterimTranscriptionFrame]
     assert pushed[0].text == "haan kal nahi"
 
@@ -374,7 +374,6 @@ def test_eager_eot_must_not_exceed_deepgrams_default_eot():
         ("saaras:v3", "hi-IN", "hi-IN"),
         # Unset stays auto-detect: no language is sent, exactly as before.
         ("saaras:v3", None, None),
-        ("saarika:v2.5", "hi-IN", "hi-IN"),
     ],
 )
 def test_sarvam_pins_the_language_on_models_that_accept_one(model, language, expected):
@@ -678,12 +677,12 @@ async def test_node_interruption_override_reaches_sarvam(interruption, expected)
     aggregator = SimpleNamespace(
         _user_turn_controller=Controller(),
         _params=SimpleNamespace(user_mute_strategies=[]),
-        task_manager=None,
+        processor_setup=None,
         _user_is_muted=False,
     )
 
     class Mute:
-        async def setup(self, task_manager):
+        async def setup(self, setup):
             pass
 
     import app.ai.voice.agents.breeze_buddy.template.interruption as interruption_mod

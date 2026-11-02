@@ -97,7 +97,7 @@ AIC_MODEL_PATH_16KHZ = os.environ.get(
 )
 AIC_VOICE_FOCUS_MODEL_PATH = os.environ.get(
     "AIC_VOICE_FOCUS_MODEL_PATH",
-    "/app/models/voice/aic/quail_vf_2_1_l_16khz.aicmodel",
+    "/app/models/voice/aic/quail_vf_2_2_l_16khz.aicmodel",
 )
 # quail-S, selected per template with noise_filter.model = "noise_cancellation_s"
 AIC_MODEL_PATH_S = os.environ.get(

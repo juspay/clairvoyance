@@ -51,7 +51,7 @@ jobs:
           tags: asia-south1-docker.pkg.dev/breeze-automatic-prod/clairvoyance/clairvoyance:${{ env.SHORT_SHA }}
           build-args: |
             KRISP_BUCKET_PATH=gs://breeze-clairvoyance-models/krisp
-            AIC_BUCKET_PATH=gs://breeze-clairvoyance-models/aic
+            AIC_BUCKET_PATH=gs://breeze-clairvoyance-models/aic/v7
           secrets: |
             gcp_token=${{ env.GCP_ACCESS_TOKEN }}
           provenance: false

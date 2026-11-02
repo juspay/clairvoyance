@@ -65,7 +65,7 @@ async def _call_openai(
     context.set_tool_choice("auto")
 
     adapter = svc.get_llm_adapter()
-    invocation_params = adapter.get_llm_invocation_params(
+    invocation_params = await adapter.get_llm_invocation_params(
         context,
         system_instruction=system_prompt,
         convert_developer_to_user=not svc.supports_developer_role,
@@ -100,9 +100,10 @@ async def _call_anthropic(
     context.set_tools(ToolsSchema(standard_tools=tools))
 
     adapter = svc.get_llm_adapter()
-    invocation_params = adapter.get_llm_invocation_params(
+    invocation_params = await adapter.get_llm_invocation_params(
         context,
         system_instruction=system_prompt,
+        enable_prompt_caching=False,
     )
 
     params: dict[str, Any] = {
@@ -139,7 +140,7 @@ async def _call_google(
     context.set_tools(ToolsSchema(standard_tools=tools))
 
     adapter = svc.get_llm_adapter()
-    invocation_params = adapter.get_llm_invocation_params(
+    invocation_params = await adapter.get_llm_invocation_params(
         context,
         system_instruction=system_prompt,
     )
@@ -180,7 +181,7 @@ async def _call_bedrock(
     context.set_tools(ToolsSchema(standard_tools=tools))
 
     adapter = svc.get_llm_adapter()
-    invocation_params = adapter.get_llm_invocation_params(
+    invocation_params = await adapter.get_llm_invocation_params(
         context,
         system_instruction=system_prompt,
     )
@@ -197,7 +198,7 @@ async def _call_bedrock(
     if inference_config:
         params["inferenceConfig"] = inference_config
 
-    async with svc._aws_session.client(
+    async with svc._aws_session.create_client(
         service_name="bedrock-runtime", **svc._aws_params
     ) as client:
         response = await client.converse(**params)
