@@ -401,6 +401,12 @@ def _sarvam(**block: Any) -> STTConfiguration:
     return STTConfiguration.model_validate({"provider": "sarvam", "sarvam": block})
 
 
+@pytest.mark.parametrize("model", ["saarika:v2.5", "saaras:v2.5"])
+def test_a_model_pipecat_removed_falls_back_to_saaras_v3(model):
+    svc = build_sarvam_stt(SarvamConfig(api_key="k", model=model, sample_rate=8000))
+    assert svc._settings.model == "saaras:v3"
+
+
 def test_the_silence_window_reaches_the_service_settings():
     svc = build_sarvam_stt(
         SarvamConfig(

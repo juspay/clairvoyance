@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from pipecat.frames.frames import (
@@ -253,6 +253,9 @@ def build_sarvam_stt(config: SarvamConfig):
     is checked here and dropped with a warning, since pipecat would refuse
     the whole service and the call would have no STT at all.
     """
+    if config.model not in MODEL_CONFIGS:
+        logger.warning(f"Sarvam model {config.model} is gone; using saaras:v3")
+        config = replace(config, model="saaras:v3")
     capabilities = MODEL_CONFIGS.get(config.model)
     # Unknown model: fall back to the old family rule; pipecat validates it.
     takes_language = (

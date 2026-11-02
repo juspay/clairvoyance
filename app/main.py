@@ -418,6 +418,7 @@ app = FastAPI(
     openapi_url=None,
     docs_url=None,
     redoc_url=None,
+    strict_content_type=False,
 )
 
 # Ingest archive (app/services/ingest_archive.py): two DevCycle flags copy,

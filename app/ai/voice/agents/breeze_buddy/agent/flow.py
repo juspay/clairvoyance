@@ -113,7 +113,7 @@ def setup_flow_manager(
             f"Registering {len(global_functions)} global functions with FlowManager"
         )
 
-    return FlowManager(
+    return BuddyFlowManager(
         task=task,
         llm=cast(Any, llm),
         context_aggregator=context_aggregator,
@@ -123,6 +123,14 @@ def setup_flow_manager(
             global_functions or None,
         ),
     )
+
+
+OPENING_TURN_MESSAGE = "Begin the conversation now."
+
+
+class BuddyFlowManager(FlowManager):
+    def _render_node(self, node_id: str, node_config: NodeConfig) -> NodeConfig:
+        return node_config
 
 
 def is_realtime(llm: Any) -> bool:
@@ -142,18 +150,20 @@ def with_task_role(messages: List[Dict[str, Any]], role: str) -> List[Dict[str, 
     ]
 
 
-def _flows_node(node: NodeConfig, task_role: str) -> NodeConfig:
+def _flows_node(node: NodeConfig, task_role: str, is_initial: bool) -> NodeConfig:
     converted: Dict[str, Any] = {
         key: value for key, value in node.items() if key != "role_messages"
     }
-    role_messages = node.get("role_messages") or []
-    if role_messages:
-        converted["role_message"] = "\n\n".join(
-            message["content"] for message in role_messages
-        )
-    converted["task_messages"] = with_task_role(
-        list(node.get("task_messages") or []), task_role
-    )
+    role_messages = list(node.get("role_messages") or [])
+    task_messages = list(node.get("task_messages") or [])
+    if is_initial:
+        if role_messages:
+            converted["role_message"] = "\n\n".join(
+                message["content"] for message in role_messages
+            )
+    else:
+        task_messages = role_messages + task_messages
+    converted["task_messages"] = with_task_role(task_messages, task_role)
     return cast(NodeConfig, converted)
 
 
@@ -178,7 +188,7 @@ def build_flow_config(
     if not is_realtime(llm):
         task_role = task_role_for(llm)
         flow_config["nodes"] = {
-            name: _flows_node(node, task_role)
+            name: _flows_node(node, task_role, name == flow_config["initial_node"])
             for name, node in flow_config["nodes"].items()
         }
     end_conversation_callbacks = flow_config.get("end_conversation_callbacks", [])
@@ -282,13 +292,17 @@ def prepare_initial_node(
         realtime is not None and realtime.provider == RealtimeLLMProvider.GEMINI
     )
 
+    respond_immediately = (not has_greeting_source) or is_gemini_realtime
+    if respond_immediately and not task_messages and task_role_for(llm) == "developer":
+        task_messages = [{"role": "developer", "content": OPENING_TURN_MESSAGE}]
+
     node = NodeConfig(
         name=node_config["name"],
         task_messages=task_messages,
         functions=node_config.get("functions", []),
         pre_actions=node_config.get("pre_actions", []),
         post_actions=node_config.get("post_actions", []),
-        respond_immediately=(not has_greeting_source) or is_gemini_realtime,
+        respond_immediately=respond_immediately,
     )
     if is_realtime(llm):
         node["role_messages"] = role_messages
@@ -296,4 +310,5 @@ def prepare_initial_node(
         node["role_message"] = "\n\n".join(
             message["content"] for message in role_messages
         )
+        node_config["role_message"] = node["role_message"]
     return node
