@@ -93,7 +93,10 @@ async def handle_callback_details_get(
         HTTPException: 404 if provider is not supported
     """
     query_params = dict(request.query_params)
-    logger.info(f"Received call-details with {provider} query params: {query_params}")
+    # Field names only: the values carry caller phone numbers.
+    logger.info(
+        f"Received call-details from {provider} with fields: {sorted(query_params)}"
+    )
 
     if provider.lower() != "exotel":
         raise HTTPException(
@@ -208,7 +211,8 @@ async def handle_callback_details_post(
         HTTPException: 404 if provider is not supported
     """
     form = await request.form()
-    logger.info(f"Received callback from {provider} with form data: {form}")
+    # Field names only: the values carry caller phone numbers.
+    logger.info(f"Received callback from {provider} with fields: {sorted(form.keys())}")
 
     provider_lower = provider.lower()
     if provider_lower not in ["twilio", "plivo", "vobiz"]:
@@ -314,7 +318,8 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
         200 OK response
     """
     form = await request.form()
-    logger.info(f"Received callback from {provider} with form data: {form}")
+    # Field names only: the values carry caller phone numbers.
+    logger.info(f"Received callback from {provider} with fields: {sorted(form.keys())}")
 
     call_sid = form.get("CallSid")
     call_status = None

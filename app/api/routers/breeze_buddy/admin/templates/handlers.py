@@ -107,7 +107,7 @@ async def purge_template_handler(
         logger.error(f"Template purge failed for {template_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Purge failed and was rolled back: {exc}",
+            detail="Purge failed and was rolled back",
         ) from exc
     if result is None:
         raise HTTPException(

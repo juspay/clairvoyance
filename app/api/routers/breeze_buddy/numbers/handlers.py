@@ -100,7 +100,7 @@ async def create_number_handler(
         logger.error(f"Error creating telephony number: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating telephony number: {str(e)}",
+            detail="Error creating telephony number",
         )
 
 
@@ -171,7 +171,7 @@ async def update_number_handler(
         logger.error(f"Error updating telephony number {number_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating telephony number: {str(e)}",
+            detail="Error updating telephony number",
         )
 
 
@@ -211,7 +211,7 @@ async def list_numbers_handler(
         logger.error(f"Error listing telephony numbers: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error listing telephony numbers: {str(e)}",
+            detail="Error listing telephony numbers",
         )
 
 
@@ -251,7 +251,7 @@ async def get_number_handler(number_id: str, current_user: UserInfo) -> Telephon
         logger.error(f"Error getting telephony number {number_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting telephony number: {str(e)}",
+            detail="Error getting telephony number",
         )
 
 
@@ -297,5 +297,5 @@ async def delete_number_handler(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error disabling telephony number: {str(e)}",
+            detail="Error disabling telephony number",
         )

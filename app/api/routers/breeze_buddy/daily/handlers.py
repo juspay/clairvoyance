@@ -92,5 +92,5 @@ async def breeze_buddy_daily_connect_handler(
         logger.error(f"Failed to create Breeze Buddy Daily session: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to create Breeze Buddy Daily session: {str(e)}",
+            detail="Failed to create Breeze Buddy Daily session",
         )

@@ -197,7 +197,9 @@ class JWTManager:
                 "resellerId": payload.get("resellerId"),
             }
 
-            logger.info(user_context)
+            logger.info(
+                f"Verified breeze token for merchant: {user_context['merchantId']}"
+            )
             return user_context
 
         except jwt.ExpiredSignatureError:

@@ -20,6 +20,7 @@ from app.ai.voice.agents.breeze_buddy.tts.dragontts.kill_switch import (
 )
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.config.dynamic import DRAGONTTS_URL
+from app.core.logger import logger
 from app.core.security.authorization import require_admin
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.dragontts import (
@@ -75,7 +76,8 @@ async def _forward(method: str, path: str, **kwargs) -> Response:
         async with httpx.AsyncClient(timeout=_PROXY_TIMEOUT) as client:
             resp = await client.request(method, url, **kwargs)
     except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"DragonTTS unreachable: {e}")
+        logger.warning(f"DragonTTS unreachable for {method} {path}: {e}")
+        raise HTTPException(status_code=502, detail="DragonTTS unreachable")
     # Relay DragonTTS's response verbatim, INCLUDING non-2xx. DragonTTS already
     # returns a JSON {"detail": "upstream <provider> returned an error: ..."}
     # with the real provider reason; re-raising as HTTPException(detail=resp.text)
