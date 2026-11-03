@@ -1,0 +1,74 @@
+{
+  "_comment": "COD confirmation that ends on what happened to the ORDER (rollout phase 21; docs/crm/workflow-rollout/21-goal-conditions-and-tags.md). Door: orders/create for a cash-on-delivery order, one run per order (key id) -> hold 30m -> call -> wait 1d. The goal is an orders/updated tier WITH conditions: fulfillment_state is \"fulfilled\", keyed to this order -> goal_met; orders/cancelled -> withdrawn. Shopify fires orders/updated for every edit, our own tag writes included, so without the `where` the first echo would end the run. A tier with a `where` must carry a `key`: the walker re-checks it at every claim on the order's NEWEST letter (every edit carries the whole order), so a fulfilment consumed before the run existed still ends it.",
+  "on_publish": "pin",
+  "entry": {
+    "topic": "orders/create",
+    "key": "id",
+    "where": [
+      {
+        "field": "payload.gateway",
+        "op": "is",
+        "value": "Cash on Delivery (COD)"
+      }
+    ]
+  },
+  "goals": [
+    {
+      "topics": [
+        "orders/updated"
+      ],
+      "key": {
+        "event": "id",
+        "run": "id"
+      },
+      "where": [
+        {
+          "field": "fulfillment_state",
+          "op": "is",
+          "value": "fulfilled"
+        }
+      ],
+      "exit_reason": "goal_met"
+    },
+    {
+      "topics": [
+        "orders/cancelled"
+      ],
+      "key": {
+        "event": "id",
+        "run": "id"
+      },
+      "exit_reason": "withdrawn"
+    }
+  ],
+  "exits": {
+    "max_age_days": 3
+  },
+  "nodes": [
+    {
+      "id": "hold-30m",
+      "type": "wait",
+      "minutes": 30
+    },
+    {
+      "id": "call",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    {
+      "id": "wait-1d",
+      "type": "wait",
+      "minutes": 1440
+    }
+  ],
+  "edges": [
+    [
+      "hold-30m",
+      "call"
+    ],
+    [
+      "call",
+      "wait-1d"
+    ]
+  ]
+}

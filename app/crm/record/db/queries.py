@@ -163,6 +163,33 @@ def customer_has_event_query(
     return query, params
 
 
+def latest_customer_event_query(
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Tuple[str, str],
+) -> Tuple[str, List[Any]]:
+    """The newest letter behind customer_has_event_query's EXISTS — the same
+    rows, newest first, one payload out. For a goal tier with conditions:
+    every orders/updated carries the whole order, so the newest letter about
+    ONE order is that order's state now. Keyed only (publish requires it):
+    unkeyed, the newest letter could be about another order."""
+    query = f"""
+        SELECT id, merchant_id, source, topic, schema_version, external_id,
+               payload, received_at, occurred_at, customer_id, attempts
+        FROM {EVENT_RAW_TABLE}
+        WHERE merchant_id = $1
+          AND customer_id = $2
+          AND topic = ANY($3)
+          AND COALESCE(occurred_at, received_at) > $4
+          AND payload->>$5 = $6
+        ORDER BY COALESCE(occurred_at, received_at) DESC, received_at DESC
+        LIMIT 1
+    """
+    return query, [merchant_id, customer_id, topics, since, where[0], where[1]]
+
+
 def event_topics_query(merchant_id: str, event_ids: List[str]) -> Tuple[str, List[Any]]:
     """The topic behind each of a few letter ids — what a run's trail
     names when it says which letter moved a square (T26 keeps the pointer,
