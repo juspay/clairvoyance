@@ -2,17 +2,19 @@
 System Health Check Router
 
 Endpoints for monitoring system health including Redis connectivity.
+Responses carry the error type only; the error text goes to the logs.
 """
 
 import time
 from typing import Awaitable, cast
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from google import genai
 from openai import AsyncAzureOpenAI
 
+from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.core.config.static import (
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT,
@@ -21,7 +23,9 @@ from app.core.config.static import (
     GEMINI_API_KEY,
 )
 from app.core.logger import logger
+from app.core.security.authorization import require_admin
 from app.database import db_connection
+from app.schemas import UserInfo
 from app.services.redis.client import get_redis_service
 
 router = APIRouter()
@@ -59,7 +63,10 @@ async def redis_health_check():
             }
         except Exception as e:
             health_status["status"] = "unhealthy"
-            health_status["checks"]["ping"] = {"status": "failed", "error": str(e)}
+            health_status["checks"]["ping"] = {
+                "status": "failed",
+                "error_type": type(e).__name__,
+            }
             raise
 
         # Check 2: SET
@@ -72,7 +79,10 @@ async def redis_health_check():
             }
         except Exception as e:
             health_status["status"] = "unhealthy"
-            health_status["checks"]["set"] = {"status": "failed", "error": str(e)}
+            health_status["checks"]["set"] = {
+                "status": "failed",
+                "error_type": type(e).__name__,
+            }
             raise
 
         # Check 3: GET
@@ -98,7 +108,10 @@ async def redis_health_check():
                 }
         except Exception as e:
             health_status["status"] = "unhealthy"
-            health_status["checks"]["get"] = {"status": "failed", "error": str(e)}
+            health_status["checks"]["get"] = {
+                "status": "failed",
+                "error_type": type(e).__name__,
+            }
             raise
 
         # Check 4: DELETE
@@ -111,8 +124,12 @@ async def redis_health_check():
                 "keys_deleted": deleted_count,
             }
         except Exception as e:
+            logger.error(f"Redis health check DELETE failed: {e}")
             health_status["status"] = "unhealthy"
-            health_status["checks"]["delete"] = {"status": "failed", "error": str(e)}
+            health_status["checks"]["delete"] = {
+                "status": "failed",
+                "error_type": type(e).__name__,
+            }
 
         # Check 5: Cluster Info
         if hasattr(client, "get_nodes"):
@@ -135,7 +152,11 @@ async def redis_health_check():
                     ],
                 }
             except Exception as e:
-                health_status["cluster_info"] = {"mode": "cluster", "error": str(e)}
+                logger.error(f"Redis health check cluster info failed: {e}")
+                health_status["cluster_info"] = {
+                    "mode": "cluster",
+                    "error_type": type(e).__name__,
+                }
         else:
             health_status["cluster_info"] = {"mode": "single-node"}
 
@@ -145,7 +166,7 @@ async def redis_health_check():
     except Exception as e:
         logger.error(f"Redis health check failed: {e}")
         health_status["status"] = "unhealthy"
-        health_status["error"] = str(e)
+        health_status["error_type"] = type(e).__name__
         return JSONResponse(status_code=503, content=health_status)
 
 
@@ -187,16 +208,22 @@ async def database_health_check():
             content={
                 "status": "unhealthy",
                 "database": "disconnected",
-                "message": f"Database connection failed: {str(e)}",
+                "message": "Database connection failed",
+                "error_type": type(e).__name__,
             },
         )
 
 
 @router.get("/health/gemini")
-async def gemini_health_check():
+async def gemini_health_check(
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
     """
+    Admin only: each request makes a live call to Gemini.
+
     Gemini API health check - tests API key validity and connectivity.
     """
+    require_admin(current_user)
     health_status = {
         "status": "healthy",
         "timestamp": time.time(),
@@ -250,7 +277,6 @@ async def gemini_health_check():
             health_status["status"] = "unhealthy"
             health_status["checks"]["api_call"] = {
                 "status": "failed",
-                "error": str(e),
                 "error_type": type(e).__name__,
             }
             raise
@@ -261,15 +287,20 @@ async def gemini_health_check():
     except Exception as e:
         logger.error(f"Gemini health check failed: {e}")
         health_status["status"] = "unhealthy"
-        health_status["error"] = str(e)
+        health_status["error_type"] = type(e).__name__
         return JSONResponse(status_code=503, content=health_status)
 
 
 @router.get("/health/daily")
-async def daily_health_check():
+async def daily_health_check(
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
     """
+    Admin only: each request makes a live call to Daily.
+
     Daily API health check - tests API key validity and connectivity.
     """
+    require_admin(current_user)
     health_status = {
         "status": "healthy",
         "timestamp": time.time(),
@@ -316,7 +347,6 @@ async def daily_health_check():
             health_status["status"] = "unhealthy"
             health_status["checks"]["api_call"] = {
                 "status": "failed",
-                "error": str(e),
                 "error_type": type(e).__name__,
             }
             raise
@@ -327,15 +357,20 @@ async def daily_health_check():
     except Exception as e:
         logger.error(f"Daily health check failed: {e}")
         health_status["status"] = "unhealthy"
-        health_status["error"] = str(e)
+        health_status["error_type"] = type(e).__name__
         return JSONResponse(status_code=503, content=health_status)
 
 
 @router.get("/health/azure-openai")
-async def azure_openai_health_check():
+async def azure_openai_health_check(
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
     """
+    Admin only: each request makes a live call to Azure OpenAI.
+
     Azure OpenAI health check - tests API key validity and connectivity.
     """
+    require_admin(current_user)
     health_status = {
         "status": "healthy",
         "timestamp": time.time(),
@@ -390,7 +425,6 @@ async def azure_openai_health_check():
             health_status["status"] = "unhealthy"
             health_status["checks"]["api_call"] = {
                 "status": "failed",
-                "error": str(e),
                 "error_type": type(e).__name__,
             }
             raise
@@ -401,7 +435,7 @@ async def azure_openai_health_check():
     except Exception as e:
         logger.error(f"Azure OpenAI health check failed: {e}")
         health_status["status"] = "unhealthy"
-        health_status["error"] = str(e)
+        health_status["error_type"] = type(e).__name__
         return JSONResponse(status_code=503, content=health_status)
 
 

@@ -297,7 +297,7 @@ async def get_call_recording(
         logger.error(f"Error fetching call recording: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error while fetching recording: {str(e)}",
+            detail="Internal server error while fetching recording",
         ) from e
 
 

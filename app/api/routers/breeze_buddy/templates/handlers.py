@@ -261,7 +261,7 @@ async def create_template_handler(
         logger.error(f"Error creating template: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating template: {str(e)}",
+            detail="Error creating template",
         )
 
 
@@ -339,7 +339,7 @@ async def list_templates_handler(
         logger.error(f"Error listing templates: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error listing templates: {str(e)}",
+            detail="Error listing templates",
         )
 
 
@@ -392,7 +392,7 @@ async def get_template_by_id_handler(template_id: str, current_user: UserInfo):
         logger.error(f"Error getting template by ID: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting template: {str(e)}",
+            detail="Error getting template",
         )
 
 
@@ -667,7 +667,7 @@ async def replace_template_handler(
         logger.error(f"Error updating template: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating template: {str(e)}",
+            detail="Error updating template",
         )
 
 
@@ -759,5 +759,5 @@ async def delete_template_handler(
         logger.error(f"Error deleting template: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting template: {str(e)}",
+            detail="Error deleting template",
         )

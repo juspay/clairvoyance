@@ -150,7 +150,7 @@ async def get_analytics(
         logger.error(f"Error processing analytics request: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing analytics request: {str(e)}",
+            detail="Error processing analytics request",
         )
 
 
