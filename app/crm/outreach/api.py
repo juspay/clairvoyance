@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
+from app.core.logger import logger
 from app.crm.auth import merchant_scope
 from app.crm.outreach import analytics, plans, runs, versions
 from app.crm.outreach.schemas import (
@@ -70,6 +71,17 @@ async def create_workflow_route(
     try:
         return await plans.create_workflow(
             merchant_id, body.name, body.definition, current_user.email
+        )
+    except plans.WorkflowNameTaken:
+        # Fields, not interpolation: the name is caller-supplied, and a
+        # newline in it would forge a log line.
+        logger.bind(merchant_id=merchant_id, workflow_name=body.name).warning(
+            "create workflow refused: a non-archived workflow of this name exists"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A workflow named {body.name!r} already exists for merchant "
+            f"{merchant_id!r} — archive it or choose another name",
         )
     except plans.WorkflowValidationError as e:
         raise HTTPException(
