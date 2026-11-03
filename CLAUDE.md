@@ -83,7 +83,8 @@ app/
 │   ├── preview/uap/            # PREVIEW (logic not final): UPI payment agents in crm_customer.attributes.agents
 │   ├── platform/                   # platform_identity · suppression contracts
 │   ├── record/                     # crm_event_raw · record_event() (the spine)
-│   └── shared/                     # db.py (atomically/crm_connection), normalize.py
+│   └── shared/                     # db.py (atomically/crm_connection), normalize.py,
+│                                   #   routes/ (route classes any api.py can use)
 ├── ai/voice/
 │   ├── agents/breeze_buddy/        # Telephony + chat + widget agent
 │   │   └── crm_mirror.py           # Buddy→spine taps (ADR 0017), hook-registered

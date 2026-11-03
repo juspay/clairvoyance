@@ -29,12 +29,10 @@ translates this module's exceptions into status codes, so a new route
 cannot map the same family to a different code than its neighbour.
 """
 
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
-from fastapi.responses import Response
-from fastapi.routing import APIRoute
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import ValidationError
 
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
@@ -68,6 +66,7 @@ from app.crm.connectivity.templates.lifecycle import (
     TemplateInUseError,
     TemplateNotFoundError,
 )
+from app.crm.shared.routes.classes import TranslatingRoute
 from app.schemas import UserInfo, UserRole
 
 
@@ -97,25 +96,15 @@ def translate(error: Exception) -> Optional[HTTPException]:
     return None
 
 
-class TranslatingRoute(APIRoute):
-    """The one place this module's exceptions become status codes."""
+class ConnectorsRoute(TranslatingRoute):
+    """The connectors router's route class: the one place this module's
+    exceptions become status codes."""
 
-    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
-        handler = super().get_route_handler()
-
-        async def _translated(request: Request) -> Response:
-            try:
-                return await handler(request)
-            except Exception as error:  # noqa: BLE001 — re-raised unless ours
-                translated = translate(error)
-                if translated is None:
-                    raise
-                raise translated from error
-
-        return _translated
+    def translate(self, error: Exception) -> Optional[HTTPException]:
+        return translate(error)  # the module's table above
 
 
-router = APIRouter(route_class=TranslatingRoute)
+router = APIRouter(route_class=ConnectorsRoute)
 
 _NOT_FOUND = "Connection not found"
 

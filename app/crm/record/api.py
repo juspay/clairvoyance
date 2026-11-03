@@ -21,12 +21,10 @@ resolved per letter from the receiving endpoint by the bay.
 
 import json
 from datetime import datetime
-from typing import Any, Callable, Coroutine, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
-from fastapi.routing import APIRoute
-from starlette.requests import ClientDisconnect
 
 from app.core.config.static import CRM_INGEST_MAX_BODY_BYTES
 from app.core.logger import logger
@@ -44,6 +42,8 @@ from app.crm.record.schemas import (
     SchemaRegistration,
 )
 from app.crm.record.timeline import get_customer_journey
+from app.crm.shared.routes.classes import BoundedBodyRoute
+from app.crm.shared.routes.utils import read_bounded
 from app.schemas import UserInfo
 
 # A letter is stored verbatim and forever, so "store first" must not mean
@@ -54,63 +54,16 @@ from app.schemas import UserInfo
 MAX_LETTER_BYTES = CRM_INGEST_MAX_BODY_BYTES
 
 
-async def read_bounded(request: Request) -> Optional[bytes]:
-    """The request body, or None once it passes MAX_LETTER_BYTES.
+class IngestRoute(BoundedBodyRoute):
+    """The ingest router's route class: no letter past MAX_LETTER_BYTES is
+    read, on any route added beside these."""
 
-    A declared Content-Length over the cap is refused before a byte is read;
-    otherwise the read itself stops at the cap, so a chunked or understated
-    body cannot buffer more than the cap allows. A client that hangs up
-    mid-body gets FastAPI's own answer to a body it could not read, a 400,
-    rather than a 500 and an ERROR traceback for a caller who simply left."""
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > MAX_LETTER_BYTES:
-        return None
-    body = bytearray()
-    try:
-        async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > MAX_LETTER_BYTES:
-                return None
-    except ClientDisconnect:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="There was an error parsing the body",
-        )
-    return bytes(body)
-
-
-class BoundedBodyRoute(APIRoute):
-    """Every route on the ingest router reads its body through read_bounded
-    before FastAPI's own handler runs.
-
-    A size check declared as a dependency comes too late: FastAPI reads and
-    parses a body parameter whole before any dependency runs, auth included,
-    so an unauthenticated caller could make it buffer any size. The cap sits
-    on the route class, ahead of that read, and FastAPI then parses the bytes
-    already read: its validation, its 422s and its OpenAPI stay its own. Set
-    on the router, so the next route added beside these gets the cap without
-    declaring anything."""
-
-    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
-        handler = super().get_route_handler()
-
-        async def bounded_handler(request: Request) -> Response:
-            body = await read_bounded(request)
-            if body is None:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=f"Request body exceeds {MAX_LETTER_BYTES} bytes",
-                )
-            # Starlette's request.body() answers from _body once it is set, so
-            # FastAPI's read inside the handler gets these bytes, nothing more.
-            request._body = body
-            return await handler(request)
-
-        return bounded_handler
+    def max_body_bytes(self) -> int:
+        return MAX_LETTER_BYTES
 
 
 journey_router = APIRouter()
-ingest_router = APIRouter(route_class=BoundedBodyRoute)
+ingest_router = APIRouter(route_class=IngestRoute)
 webhook_router = APIRouter()
 catalog_router = APIRouter()
 
@@ -201,7 +154,7 @@ async def push_event_route(
 #
 # One cap, one door: a letter is stored verbatim and forever whichever
 # entrance it came through, so the bays share the envelope door's constant
-# and its read_bounded. They call it themselves rather than take the route
+# and read_bounded. They call it themselves rather than take the route
 # class: an unknown bay is refused before a single body byte is read.
 
 
@@ -243,7 +196,7 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         # refused before a single body byte is read.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
-    body = await read_bounded(request)
+    body = await read_bounded(request, MAX_LETTER_BYTES)
     if body is None:
         return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
