@@ -44,7 +44,7 @@ def test_every_connectors_route_declares_the_tenancy_door() -> None:
 
 def test_every_connectors_route_uses_the_translating_route_class() -> None:
     routes = [r for r in connectivity_api.router.routes if isinstance(r, APIRoute)]
-    assert all(isinstance(r, connectivity_api.TranslatingRoute) for r in routes)
+    assert all(isinstance(r, connectivity_api.ConnectorsRoute) for r in routes)
 
 
 @pytest.mark.parametrize(

@@ -579,4 +579,4 @@ def test_every_ingest_route_reads_through_the_cap() -> None:
     ]
     assert {r.path for r in routes} == {"/events", "/schemas"}
     assert {r.path for r in mounted} == {"/ingest/events", "/ingest/schemas"}
-    assert all(isinstance(r, record_api.BoundedBodyRoute) for r in routes + mounted)
+    assert all(isinstance(r, record_api.IngestRoute) for r in routes + mounted)
