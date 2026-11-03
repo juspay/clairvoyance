@@ -109,6 +109,7 @@ async def get_configuration_options_handler():
     llm_providers = [
         {"value": p.value, "label": p.value.replace("_", " ").title()}
         for p in LLMProvider
+        if p is not LLMProvider.AZURE
     ]
     llm_sdks = [
         {"value": s.value, "label": s.value.replace("_", " ").title()} for s in LLMSdk
