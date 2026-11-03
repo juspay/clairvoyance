@@ -5,8 +5,10 @@ This module provides business logic for wallet operations, using queries
 from queries.breeze_buddy.wallets and decoders from decoder.breeze_buddy.wallets.
 """
 
+from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Callable, Optional
 
 import asyncpg
 
@@ -23,6 +25,8 @@ from app.database.queries.breeze_buddy.wallets import (
     delete_wallet_query,
     get_wallet_for_update_query,
     get_wallet_query,
+    set_plan_usage_query,
+    set_wallet_plan_query,
     update_wallet_reseller_id_query,
 )
 from app.schemas.breeze_buddy.wallets import WalletResponse, WalletTransactionResponse
@@ -167,25 +171,33 @@ async def apply_recharge(
         raise
 
 
+@dataclass(frozen=True)
+class DeductionPlan:
+    """What a deduction writes, decided on the locked wallet: the balance
+    move (<= 0) and, for a plan wallet, the month's new used count."""
+
+    balance_delta: Decimal
+    plan_used_credits: Optional[Decimal] = None
+    last_reset_date: Optional[date] = None
+
+
 async def apply_deduction(
     merchant_id: str,
-    credits_delta: Decimal,
     gateway: str,
     gateway_ref_id: str,
+    decide: Callable[[WalletResponse], DeductionPlan],
 ) -> WalletTransactionResponse:
-    """Deduct credits from a merchant's wallet and append a ledger row.
+    """Deduct from a merchant's wallet and append a ledger row.
 
-    ``credits_delta`` must already be negative (the caller decides the
-    sign/amount via services.breeze_buddy.wallet.deduction.BILLING_RULES) -- this
-    accessor has no knowledge of billing rules. gateway is the event_type
-    (e.g. "chat_turn") and gateway_ref_id is the caller-supplied idempotency
-    key (e.g. the chat_message.id of the triggering user turn) -- the
-    existing UNIQUE(gateway, gateway_ref_id) constraint on wallet_transactions
-    gives duplicate-deduction protection for free, the same mechanism that
-    protects recharges against webhook retries.
+    The wallet row is locked first and ``decide`` gets it, so the split
+    (plan credits first, then the prepaid balance -- see
+    services.breeze_buddy.wallet) is computed on the row as it is now, not
+    on a stale read: concurrent turns queue on the lock. This accessor has
+    no knowledge of billing rules.
 
-    Uses the same single atomic UPDATE...RETURNING + INSERT CTE statement as
-    apply_recharge, for the same narrow-transaction/low-contention reasons.
+    The ledger row records the balance move (0 when the plan or a trial
+    covered it); it is written every time, so the existing
+    UNIQUE(gateway, gateway_ref_id) still rejects a duplicate deduction.
 
     No balance floor is enforced here -- zero/negative balance blocking is
     explicitly out of scope for this phase
@@ -199,28 +211,42 @@ async def apply_deduction(
             duplicate deduction attempt).
     """
     try:
-        query, values = apply_wallet_delta_query(
-            merchant_id=merchant_id,
-            type_="deduction",
-            credits_delta=credits_delta,
-            amount=None,
-            currency=None,
-            gateway=gateway,
-            gateway_ref_id=gateway_ref_id,
-            made_by=None,
-        )
         async with db_connection() as conn:
             async with conn.transaction():
-                rows = await conn.fetch(query, *values)
+                lock_query, lock_values = get_wallet_for_update_query(merchant_id)
+                locked = await conn.fetch(lock_query, *lock_values)
+                if not locked:
+                    raise ValueError(f"No wallet found for merchant '{merchant_id}'")
+                plan = decide(decode_wallet(locked[0]))
 
-            if not rows:
-                raise ValueError(f"No wallet found for merchant '{merchant_id}'")
+                if plan.plan_used_credits is not None:
+                    usage_query, usage_values = set_plan_usage_query(
+                        merchant_id, plan.plan_used_credits, plan.last_reset_date
+                    )
+                    await conn.execute(usage_query, *usage_values)
+
+                query, values = apply_wallet_delta_query(
+                    merchant_id=merchant_id,
+                    type_="deduction",
+                    credits_delta=plan.balance_delta,
+                    amount=None,
+                    currency=None,
+                    gateway=gateway,
+                    gateway_ref_id=gateway_ref_id,
+                    made_by=None,
+                )
+                rows = await conn.fetch(query, *values)
 
             txn_row = rows[0]
             logger.info(
                 f"Deducted wallet for merchant {merchant_id}: "
-                f"{credits_delta} credits "
-                f"(balance now {txn_row['credit_balance_after']})"
+                f"{txn_row['credits_delta']} credits "
+                f"(balance now {txn_row['credit_balance_after']}"
+                + (
+                    f", plan used {plan.plan_used_credits})"
+                    if plan.plan_used_credits is not None
+                    else ")"
+                )
             )
             return decode_wallet_transaction(txn_row)
         raise ValueError("Failed to acquire database connection")
@@ -228,4 +254,41 @@ async def apply_deduction(
         raise
     except Exception as e:
         logger.error(f"Error deducting wallet for merchant {merchant_id}: {e}")
+        raise
+
+
+async def set_wallet_plan(
+    merchant_id: str,
+    monthly_credit_limit: Decimal,
+    subscription_status: str,
+    trial_ends_at: Optional[datetime],
+    made_by: Optional[str] = None,
+) -> WalletResponse:
+    """Record a wallet's plan (limit, status, trial end). No credits move.
+
+    Raises:
+        ValueError: if no wallet exists for merchant_id or a database
+            connection could not be acquired.
+        Exception: on other database errors.
+    """
+    try:
+        query, values = set_wallet_plan_query(
+            merchant_id, monthly_credit_limit, subscription_status, trial_ends_at
+        )
+        async with db_connection() as conn:
+            rows = await conn.fetch(query, *values)
+            if not rows:
+                raise ValueError(f"No wallet found for merchant '{merchant_id}'")
+            wallet = decode_wallet(rows[0])
+            logger.info(
+                f"Wallet plan set for merchant {merchant_id} by {made_by}: "
+                f"limit {wallet.monthly_credit_limit} {wallet.subscription_status} "
+                f"trial_ends_at={wallet.trial_ends_at}"
+            )
+            return wallet
+        raise ValueError("Failed to acquire database connection")
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting wallet plan for merchant {merchant_id}: {e}")
         raise

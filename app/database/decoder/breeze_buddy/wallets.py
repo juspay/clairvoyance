@@ -19,6 +19,11 @@ def decode_wallet(row) -> WalletResponse:
         reseller_id=row.get("reseller_id"),
         balance_credits=row["balance_credits"],
         conversion_rate=row["conversion_rate"],
+        monthly_credit_limit=row.get("monthly_credit_limit") or 0,
+        plan_used_credits=row.get("plan_used_credits") or 0,
+        subscription_status=row.get("subscription_status") or "NONE",
+        last_reset_date=row.get("last_reset_date"),
+        trial_ends_at=row.get("trial_ends_at"),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
     )
