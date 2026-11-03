@@ -23,9 +23,7 @@ async def get_feature_flags_handler() -> FeatureFlagResponse:
         return FeatureFlagResponse(flags=flags, total_count=len(flags))
     except Exception as e:
         logger.error(f"Failed to fetch feature flags: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to fetch feature flags: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail="Failed to fetch feature flags")
 
 
 async def update_feature_flags_handler(
@@ -54,9 +52,7 @@ async def update_feature_flags_handler(
         )
     except Exception as e:
         logger.error(f"Failed to update feature flags: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to update feature flags: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail="Failed to update feature flags")
 
 
 async def delete_feature_flag_handler(
@@ -89,6 +85,4 @@ async def delete_feature_flag_handler(
         raise
     except Exception as e:
         logger.error(f"Failed to delete feature flag: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete feature flag: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail="Failed to delete feature flag")

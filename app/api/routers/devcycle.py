@@ -106,5 +106,6 @@ async def devcycle_webhook(
     except Exception as e:
         logger.error(f"Failed to process DevCycle webhook: {e}")
         return JSONResponse(
-            status_code=500, content={"status": "error", "message": str(e)}
+            status_code=500,
+            content={"status": "error", "message": "Failed to process webhook"},
         )

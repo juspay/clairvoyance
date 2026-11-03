@@ -114,7 +114,7 @@ async def get_lead_handler(lead_id: str, current_user: UserInfo) -> Dict:
         logger.error(f"Error getting lead {lead_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}",
+            detail="Unexpected error",
         )
 
 
@@ -177,7 +177,7 @@ async def get_leads_by_request_id_handler(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error: {str(e)}",
+            detail="Unexpected error",
         )
 
 
@@ -476,7 +476,7 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
         logger.error(f"Error processing lead push request: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error processing lead push request: {str(e)}",
+            detail="Error processing lead push request",
         )
 
 
@@ -723,7 +723,7 @@ async def delete_lead_handler(
                     {
                         "id": lead_id,
                         "status": "error",
-                        "message": f"Unexpected error: {str(e)}",
+                        "message": "Unexpected error",
                     }
                 )
 
@@ -733,7 +733,7 @@ async def delete_lead_handler(
         logger.error(f"Error deleting leads: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error while deleting leads: {str(e)}",
+            detail="Unexpected error while deleting leads",
         )
 
 
@@ -837,7 +837,7 @@ async def translate_lead_transcript_handler(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error during translation: {str(e)}",
+            detail="Unexpected error during translation",
         )
 
 
