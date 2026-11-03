@@ -9,10 +9,12 @@ from app.core.logger import logger
 from app.database.accessor.breeze_buddy import merchants as merchant_accessors
 from app.schemas import UserInfo, UserRole
 from app.schemas.breeze_buddy.wallets import (
+    WalletPlanRequest,
     WalletRechargeRequest,
+    WalletResponse,
     WalletTransactionResponse,
 )
-from app.services.breeze_buddy.wallet import recharge
+from app.services.breeze_buddy.wallet import plan as wallet_plan, recharge
 from app.services.breeze_buddy.wallet.exceptions import (
     InvalidRechargeAmountError,
     UnsupportedCurrencyError,
@@ -68,3 +70,38 @@ async def recharge_wallet_handler(
     except Exception as e:
         logger.error(f"Error recharging wallet for merchant {merchant_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to recharge wallet")
+
+
+async def set_wallet_plan_handler(
+    merchant_id: str,
+    plan_data: WalletPlanRequest,
+    current_user: UserInfo,
+) -> WalletResponse:
+    """Put a merchant on a plan or change it (admin-only).
+
+    See services.breeze_buddy.wallet.plan for the rules.
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only admins can set a merchant's plan"
+        )
+
+    merchant = await merchant_accessors.get_merchant_by_merchant_identifier(merchant_id)
+    if not merchant:
+        raise HTTPException(
+            status_code=404, detail=f"Merchant '{merchant_id}' not found"
+        )
+
+    try:
+        return await wallet_plan.set_plan(
+            merchant_id=merchant_id,
+            monthly_credit_limit=plan_data.monthly_credit_limit,
+            subscription_status=plan_data.subscription_status,
+            trial_ends_at=plan_data.trial_ends_at,
+            made_by=current_user.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error setting wallet plan for merchant {merchant_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set wallet plan")

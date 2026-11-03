@@ -22,6 +22,7 @@ def create_wallet_query(
             created_at, updated_at
         ) VALUES ($1, $2, 0, 1.0, $3, $3)
         RETURNING merchant_id, reseller_id, balance_credits, conversion_rate,
+                  monthly_credit_limit, subscription_status, last_reset_date, trial_ends_at,
                   created_at, updated_at
     """
     now = datetime.now(timezone.utc)
@@ -32,6 +33,7 @@ def get_wallet_query(merchant_id: str) -> Tuple[str, List[Any]]:
     """Generate query to fetch a wallet row (no locking)."""
     query = f"""
         SELECT merchant_id, reseller_id, balance_credits, conversion_rate,
+               monthly_credit_limit, subscription_status, last_reset_date, trial_ends_at,
                created_at, updated_at
         FROM {WALLETS_TABLE}
         WHERE merchant_id = $1
@@ -44,6 +46,7 @@ def get_wallet_for_update_query(merchant_id: str) -> Tuple[str, List[Any]]:
     the enclosing transaction (SELECT ... FOR UPDATE)."""
     query = f"""
         SELECT merchant_id, reseller_id, balance_credits, conversion_rate,
+               monthly_credit_limit, subscription_status, last_reset_date, trial_ends_at,
                created_at, updated_at
         FROM {WALLETS_TABLE}
         WHERE merchant_id = $1
@@ -62,6 +65,7 @@ def update_wallet_reseller_id_query(
         SET reseller_id = $1, updated_at = $2
         WHERE merchant_id = $3
         RETURNING merchant_id, reseller_id, balance_credits, conversion_rate,
+                  monthly_credit_limit, subscription_status, last_reset_date, trial_ends_at,
                   created_at, updated_at
     """
     now = datetime.now(timezone.utc)
@@ -77,6 +81,7 @@ def update_wallet_balance_query(
         SET balance_credits = $1, updated_at = $2
         WHERE merchant_id = $3
         RETURNING merchant_id, reseller_id, balance_credits, conversion_rate,
+                  monthly_credit_limit, subscription_status, last_reset_date, trial_ends_at,
                   created_at, updated_at
     """
     now = datetime.now(timezone.utc)
@@ -108,6 +113,7 @@ def apply_wallet_delta_query(
     gateway: Optional[str] = None,
     gateway_ref_id: Optional[str] = None,
     made_by: Optional[str] = None,
+    free_during_trial: bool = False,
 ) -> Tuple[str, List[Any]]:
     """Generate a single atomic statement that updates a wallet's cached
     balance AND appends the corresponding ledger row, in one round trip.
@@ -122,20 +128,30 @@ def apply_wallet_delta_query(
     ``credits_delta`` may be positive (recharge/addition) or negative
     (deduction) -- the caller decides the sign; this function is agnostic
     to direction.
+
+    ``free_during_trial`` applies 0 instead while the wallet's trial is on,
+    decided on the locked row (voice's call counter is frozen during a trial
+    the same way). The ledger row is still written, with the 0 applied, so
+    the ref_id stays used and the usage stays visible.
     """
+    applied = (
+        "CASE WHEN trial_ends_at > $9 THEN 0 ELSE $1::numeric END"
+        if free_during_trial
+        else "$1::numeric"
+    )
     query = f"""
         WITH locked AS (
             UPDATE {WALLETS_TABLE}
-            SET balance_credits = balance_credits + $1,
+            SET balance_credits = balance_credits + {applied},
                 updated_at = $9
             WHERE merchant_id = $2
-            RETURNING balance_credits AS new_balance
+            RETURNING balance_credits AS new_balance, {applied} AS applied
         )
         INSERT INTO {WALLET_TRANSACTIONS_TABLE} (
             merchant_id, type, credits_delta, credit_balance_after,
             amount, currency, gateway, gateway_ref_id, made_by, created_at
         )
-        SELECT $2, $3, $1, locked.new_balance, $4, $5, $6, $7, $8, $9
+        SELECT $2, $3, locked.applied, locked.new_balance, $4, $5, $6, $7, $8, $9
         FROM locked
         RETURNING id, merchant_id, type, credits_delta, credit_balance_after,
                   amount, currency, gateway, gateway_ref_id, made_by, created_at
@@ -189,3 +205,33 @@ def insert_wallet_transaction_query(
         now,
     ]
     return query, values
+
+
+def set_wallet_plan_query(
+    merchant_id: str,
+    monthly_credit_limit: Any,
+    subscription_status: str,
+    last_reset_date: Any,
+    trial_ends_at: Any,
+) -> Tuple[str, List[Any]]:
+    """Generate query to record a wallet's plan, status and the month its
+    balance belongs to. The balance itself moves through
+    apply_wallet_delta_query so every change has a ledger row."""
+    query = f"""
+        UPDATE {WALLETS_TABLE}
+        SET monthly_credit_limit = $1, subscription_status = $2, last_reset_date = $3,
+            trial_ends_at = $4, updated_at = $5
+        WHERE merchant_id = $6
+        RETURNING merchant_id, reseller_id, balance_credits, conversion_rate,
+                  monthly_credit_limit, subscription_status, last_reset_date, trial_ends_at,
+                  created_at, updated_at
+    """
+    now = datetime.now(timezone.utc)
+    return query, [
+        monthly_credit_limit,
+        subscription_status,
+        last_reset_date,
+        trial_ends_at,
+        now,
+        merchant_id,
+    ]

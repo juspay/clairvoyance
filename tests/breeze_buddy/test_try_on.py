@@ -66,7 +66,12 @@ class TestPricing:
         from app.services.breeze_buddy.wallet import deduction
 
         async def get_wallet(_merchant_id):
-            return SimpleNamespace(balance_credits=Decimal(balance))
+            return SimpleNamespace(
+                balance_credits=Decimal(balance),
+                subscription_status="NONE",
+                last_reset_date=None,
+                trial_ends_at=None,
+            )
 
         monkeypatch.setattr(deduction, "get_wallet", get_wallet)
         return await deduction.has_sufficient_credits("m1", *args, **kwargs)
