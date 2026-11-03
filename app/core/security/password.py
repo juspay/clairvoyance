@@ -36,11 +36,10 @@ class PasswordHasher:
         if not password or not isinstance(password, str):
             raise ValueError("Password must be a non-empty string")
 
-        if len(password) > 72:
-            # bcrypt has a 72-byte password limit
-            logger.warning(
-                "Password exceeds 72 characters, will be truncated by bcrypt"
-            )
+        if len(password.encode("utf-8")) > 72:
+            # bcrypt silently truncates beyond 72 bytes — reject rather than
+            # hash a truncated password (PT-24).
+            raise ValueError("Password exceeds bcrypt's 72-byte limit")
 
         try:
             # Generate salt and hash password
@@ -189,3 +188,15 @@ async def hash_password_async(password: str) -> str:
 async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash, off the event loop. See module note above."""
     return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+
+
+# A throwaway bcrypt hash. Auth handlers run verify_password against this on the
+# no-such-user branch so an unknown username costs the same bcrypt time as a real
+# wrong-password check, closing the username-enumeration timing oracle (PT-16).
+#
+# A literal rather than hash_password(secrets.token_urlsafe(32)), which would run
+# a full cost-12 bcrypt (~240ms) at import time on every worker cold start.
+# Verifying against it costs the same as a real hash — cost is encoded in the
+# `$2b$12$` prefix. Generated from a random token that was discarded, so no
+# plaintext can match it.
+DUMMY_PASSWORD_HASH = "$2b$12$.TwTi1MaeS6pyuwvuDBNhehyd1cXh6HKhQqst/Zq9.KobZiF/v0YS"

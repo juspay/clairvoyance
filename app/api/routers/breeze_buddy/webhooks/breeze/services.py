@@ -87,7 +87,7 @@ async def handle_breeze(
     # rejected even though it still matches the presented value (this is how it
     # is "revoked": let it expire or re-register the merchant to mint a fresh
     # one).
-    rbac_token_manager.verify_rbac_token(stored_token)
+    await rbac_token_manager.verify_rbac_token(stored_token)
 
     try:
         order = json.loads(raw_body) if raw_body else {}

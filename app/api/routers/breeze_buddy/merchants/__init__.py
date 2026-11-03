@@ -6,8 +6,9 @@ Admin-only endpoints for managing and viewing merchants.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
+from app.api.routers.breeze_buddy.widget_common import client_ip
 from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.merchants import (
@@ -36,6 +37,7 @@ router = APIRouter()
 @router.post("/merchant", response_model=MerchantResponse)
 async def create_merchant(
     merchant_data: MerchantCreate,
+    http_request: Request,
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -56,7 +58,9 @@ async def create_merchant(
         409: If merchant_id already exists
         500: If there's an error creating the merchant
     """
-    return await create_merchant_handler(merchant_data, current_user)
+    return await create_merchant_handler(
+        merchant_data, current_user, ip=client_ip(http_request)
+    )
 
 
 @router.get("/merchants", response_model=MerchantListResponse)
