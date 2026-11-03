@@ -85,6 +85,7 @@ PR has not merged yet.
 | 17 | `stages` ladder sugar + loan funnel migration to a board | feat + docs | 14, 15, 16 |
 | 18 | Outcome feedback into runs (G2, G3) — **call half landed (#1076)**; the message half (receipts, STOP) waits | feat | PRs #1040/#1052 merged; 15 |
 | 19 | Permission-gate wiring (G1) — **deferred (2026-09-03): revisit after #1021 merges** | feat | PR #1021 merged |
+| 21 | Goal conditions (`goal.where`), Shopify order tags as a list | feat | 06, 15, 18 |
 | 99 | Backlog (G4, G5, G6, G10, G11, remaining nits) | — | — |
 
 Phases 00–09 need no canon change. Phase 10 is the canon decision; 11–17

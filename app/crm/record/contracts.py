@@ -24,6 +24,7 @@ from app.crm.record.catalog import (
 from app.crm.record.events import (
     customer_has_event,
     event_topics,
+    latest_customer_event,
     letters_by_external_ids,
 )
 from app.crm.record.extractors import CALL_REPORT_SOURCES
@@ -38,6 +39,7 @@ __all__ = [
     "record_event",
     "get_customer_journey",
     "customer_has_event",
+    "latest_customer_event",
     # A run's trail keeps letter ids (T26); this names their topics.
     "event_topics",
     # A producer reading back the letters it filed, by the external ids it

@@ -28,6 +28,20 @@ async def customer_has_event(
     )
 
 
+async def latest_customer_event(
+    merchant_id: str,
+    customer_id: str,
+    topics: List[str],
+    since: datetime,
+    where: Tuple[str, str],
+) -> Optional[RawEvent]:
+    """The newest of the letters customer_has_event would find, so a goal
+    tier with conditions is judged at fire time on the order's state now."""
+    return await accessor.latest_customer_event(
+        merchant_id, customer_id, topics, since, where
+    )
+
+
 async def event_topics(merchant_id: str, event_ids: List[str]) -> Dict[str, str]:
     """{letter id: topic} for a few ids a run's trail points at — so the
     console can say WHICH event moved a square without outreach reading

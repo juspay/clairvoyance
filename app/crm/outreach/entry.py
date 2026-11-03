@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 from app.core.config.dynamic import CRM_CONTEXT_VALUE_MAX_CHARS
 from app.core.logger import logger
+from app.crm.outreach.conditions import conditions_match
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
     workflow as workflow_accessor,
@@ -58,10 +59,8 @@ from app.crm.record.contracts import (
     canonical_path,
     derive_for,
     field_value,
-    list_values,
 )
 from app.crm.shared.normalize import normalize_phone
-from app.crm.shared.predicate import matches
 
 # Fallback only: where a phone hides in a payload when no extractor
 # handles were passed in (the voice mirrors, which send the flat shape).
@@ -209,6 +208,8 @@ async def _end_on_goal(
             if str(run.context.get(tier.key.run, "")) != str(value):
                 continue  # about another run of hers
             key = (tier.key.run, str(value))
+        if not conditions_match(tier.where, event):
+            continue
         if await enrollment_accessor.cancel_run(
             run.merchant_id,
             str(run.id),
@@ -478,32 +479,11 @@ def _goal_patch(event: RawEvent) -> dict:
 
 
 def _where_matches(door: WorkflowEntry, event: RawEvent) -> bool:
-    """One door's typed where-grammar against the payload
-    (shared/predicate.py); fields resolve through record's catalog paths —
-    dot-walks and the code layer's derived fields. No table read: the
-    validator guaranteed op-type fit at publish.
-
-    A path that crosses an array (payload.products.sub_category) reads as
-    the RAW list of what the elements hold — the engine's own list walk, no
-    item_where, no rendering — so `includes "Mobile"` asks whether any
-    product is a mobile, with the value written in the plan (design/
-    event-catalog.md §The `list` ruling). An empty array reads as absent
-    (`or None`): `exists` then does not hold on an empty basket and
-    `not_exists` does — the same normalisation _element_holds applies. A
-    path that crosses no array keeps its dot-walk, and a bare value where
-    an array was expected reaches the evaluator as a scalar, which
-    `includes` counts as a list of one."""
-    derive = derive_for(event.source, event.topic)
-
-    def lookup(path: str) -> Any:
-        values = list_values(event.payload, path)
-        if values is not None:
-            if not values or all(v is None for v in values):
-                return None
-            return values
-        return field_value(event.payload, path, derive)
-
-    return matches(door.where, lookup)
+    """One door's typed where-grammar against the payload — the same
+    evaluator a goal tier and the walker's goal re-check use
+    (conditions.py). No table read: the validator guaranteed op-type fit
+    at publish."""
+    return conditions_match(door.where, event)
 
 
 def _context_from_payload(payload: dict, max_chars: int) -> dict:
