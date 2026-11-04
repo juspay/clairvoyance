@@ -4,6 +4,7 @@ Business logic handlers for knowledge base operations.
 
 import asyncio
 import io
+import re
 import time
 from typing import Optional, Union
 from urllib.parse import quote
@@ -55,6 +56,20 @@ from .rbac import (
 )
 
 ALLOWED_UPLOAD_EXTENSIONS = {"pdf", "docx", "xlsx", "csv", "txt", "md"}
+# The upload's filename is client-written, so the storage key carries only a
+# cleaned copy of it; the original stays the document's display name.
+_UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+_MAX_KEY_NAME_CHARS = 100
+
+
+def _storage_name(filename: str, extension: str) -> str:
+    """``filename`` as the last part of a storage key: no folder parts, only
+    ``A-Z a-z 0-9 . _ -``, at most ``_MAX_KEY_NAME_CHARS`` before the
+    (already allow-listed) extension."""
+    base = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    stem = base[: -(len(extension) + 1)] if extension else base
+    stem = _UNSAFE_KEY_CHARS.sub("_", stem).strip("._") or "upload"
+    return f"{stem[:_MAX_KEY_NAME_CHARS]}.{extension}"
 
 
 def _require_uuid(value: str, label: str) -> None:
@@ -311,7 +326,7 @@ async def upload_document_handler(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty"
         )
 
-    gcs_path = f"kb/{kb_id}/{uuid4()}/{filename}"
+    gcs_path = f"kb/{kb_id}/{uuid4()}/{_storage_name(filename, extension)}"
 
     def _upload() -> bool:
         # Sync GCS client — runs via asyncio.to_thread so the upload doesn't
