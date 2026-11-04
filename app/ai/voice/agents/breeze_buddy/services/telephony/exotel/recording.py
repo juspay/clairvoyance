@@ -13,9 +13,14 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.recording_download impo
 from app.core.config.static import EXOTEL_API_KEY, EXOTEL_API_TOKEN
 
 # Hosts the Exotel API credentials may be sent to (global + India regional).
-# Exotel also returns credential-less presigned object-store URLs, which the
-# shared helper fetches without keys.
+# Exotel also returns credential-less presigned object-store URLs, so its
+# recording host is not pinned: any public URL is fetched, without keys.
 _RECORDING_HOSTS = ["exotel.com", "exotel.in"]
+
+
+def is_recording_url(recording_url: str) -> bool:
+    """Any URL: Exotel's recording host is not pinned (see above)."""
+    return True
 
 
 async def download_call_recording(
@@ -32,4 +37,5 @@ async def download_call_recording(
         provider="Exotel",
         recording_hosts=_RECORDING_HOSTS,
         make_auth=_auth,
+        any_public_host=True,
     )

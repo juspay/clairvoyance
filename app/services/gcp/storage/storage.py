@@ -10,6 +10,9 @@ from app.core.logger import logger
 
 from .client import get_gcs_bucket
 
+# Public URL of the atoms-sdk bucket: every upload is returned under it.
+GCS_PUBLIC_BASE_URL = "https://sdk.beta.breezesdk.store"
+
 
 class GCSStorage:
     """
@@ -153,7 +156,7 @@ def upload_file_to_gcs(
 
         if success:
             if GCS_BUCKET == "atoms-sdk":
-                gcs_url = f"https://sdk.beta.breezesdk.store/{destination_path}"
+                gcs_url = f"{GCS_PUBLIC_BASE_URL}/{destination_path}"
                 return gcs_url
         return None
 

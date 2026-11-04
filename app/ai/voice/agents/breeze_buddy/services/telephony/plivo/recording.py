@@ -15,13 +15,19 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.account import (
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.recording_download import (
     download_recording_via_ssrf,
+    is_on_recording_hosts,
 )
 from app.core.config.static import APP_BASE_URL, PLIVO_RECORDING_TIME_LIMIT
 from app.database.accessor import get_lead_by_call_id
 
 # Keys go only to Plivo's recording hosts (media.plivo.com and its regions,
-# e.g. aps1.media.plivo.com) over https; any other URL is fetched without them.
+# e.g. aps1.media.plivo.com) over https; any other URL but our copy is refused.
 _RECORDING_HOSTS = ["media.plivo.com"]
+
+
+def is_recording_url(recording_url: str) -> bool:
+    """True if ``recording_url`` may be stored and fetched as a Plivo recording."""
+    return is_on_recording_hosts(recording_url, _RECORDING_HOSTS)
 
 
 def _recording_callback_url(call_uuid: str) -> str:
