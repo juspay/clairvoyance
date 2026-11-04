@@ -322,6 +322,11 @@ async def get_chat_based_analytics(
                 "total_messages": total_messages,
                 "user_messages": row.get("user_messages") or 0,
                 "assistant_messages": row.get("assistant_messages") or 0,
+                # customer feedback (migration 086): 👍/👎 on bot replies and
+                # end-of-chat card answers.
+                "thumbs_up": row.get("thumbs_up") or 0,
+                "thumbs_down": row.get("thumbs_down") or 0,
+                "chat_feedback_count": row.get("chat_feedback_count") or 0,
                 "avg_messages_per_conversation": (
                     round(total_messages / total_conversations, 2)
                     if total_conversations
