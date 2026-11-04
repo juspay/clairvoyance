@@ -2,7 +2,6 @@
 Handler functions for the public Breeze Buddy demo endpoint.
 """
 
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -12,6 +11,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.ai.voice.agents.breeze_buddy.services.daily.daily import start_daily_session
+from app.api.routers.breeze_buddy.widget_common import client_ip
 from app.core.logger import logger
 from app.database.accessor import create_lead_call_tracker, handle_lead_abort
 from app.database.accessor.breeze_buddy.lead_call_tracker import (
@@ -19,8 +19,7 @@ from app.database.accessor.breeze_buddy.lead_call_tracker import (
 )
 from app.database.accessor.breeze_buddy.template import get_template_in_scope
 from app.schemas import ExecutionMode, LeadCallStatus
-from app.services.redis import is_redis_configured
-from app.services.redis.client import get_redis_service
+from app.services.redis.rate_limit import check_rate_limit
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -107,61 +106,36 @@ class DemoConnectResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-async def _rate_limit(ip: str) -> None:
+async def _rate_limit(request: Request) -> None:
     """
-    Simple per-IP rate limit using Redis if configured.
-    Limits: 10/hour and 50/day (best-effort).
-    Raises HTTPException on limit exceed.
+    Per-IP limit on demo calls: DEMO_RATE_LIMIT_HOURLY an hour and
+    DEMO_RATE_LIMIT_DAILY a day. Fails closed: each demo call starts a paid
+    voice session, so with Redis down or unset none is started.
+    Raises HTTPException 429 when over a limit.
     """
-    if not is_redis_configured():
-        return
-
-    try:
-        redis = await get_redis_service()
-        hour_key = f"demo:ip:{ip}:h:{int(time.time() // 3600)}"
-        day_key = f"demo:ip:{ip}:d:{int(time.time() // 86400)}"
-
-        # Hour bucket
-        hour_count = await redis.incr(hour_key)
-        if hour_count == 1:
-            await redis.expire(hour_key, 3600)
-
-        # Day bucket
-        day_count = await redis.incr(day_key)
-        if day_count == 1:
-            await redis.expire(day_key, 86400)
-
-        if hour_count >= DEMO_RATE_LIMIT_HOURLY or day_count >= DEMO_RATE_LIMIT_DAILY:
+    ip = client_ip(request)
+    for bucket, limit, window_seconds in (
+        ("connect_hour", DEMO_RATE_LIMIT_HOURLY, 3600),
+        ("connect_day", DEMO_RATE_LIMIT_DAILY, 86400),
+    ):
+        decision = await check_rate_limit(
+            bucket=bucket,
+            identifier=ip,
+            limit=limit,
+            window_seconds=window_seconds,
+            prefix="demo",
+            fail_closed=True,
+        )
+        if not decision.allowed:
             logger.warning(
-                f"[demo] rate limit exceeded for ip={ip} (hour={hour_count}, day={day_count})"
+                f"[demo] rate limit exceeded for ip={ip} "
+                f"({bucket}: {decision.count}/{limit})"
             )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Rate limit exceeded for demo. Please try again later.",
+                headers={"Retry-After": str(decision.retry_after_seconds)},
             )
-    except HTTPException:
-        raise
-    except Exception as e:
-        # Fail open on Redis errors but log
-        logger.error(f"[demo] rate limit check failed: {e}", exc_info=True)
-
-
-def _get_client_ip(request: Request) -> str:
-    """
-    Best-effort client IP extraction honoring common proxy headers.
-    """
-    x_forwarded_for = request.headers.get("X-Forwarded-For")
-    if x_forwarded_for:
-        # Use the last IP in the chain (closest to us / trusted proxy)
-        parts = [p.strip() for p in x_forwarded_for.split(",") if p.strip()]
-        if parts:
-            return parts[-1]
-    x_real_ip = request.headers.get("X-Real-IP")
-    if x_real_ip:
-        return x_real_ip.strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
 
 
 def _build_payload(body: DemoConnectRequest) -> Dict[str, Any]:
@@ -194,8 +168,7 @@ async def breeze_buddy_demo_connect_handler(
     request: Request, body: DemoConnectRequest
 ) -> Dict[str, Any]:
     """Create demo lead and start Daily session."""
-    client_ip = _get_client_ip(request)
-    await _rate_limit(client_ip)
+    await _rate_limit(request)
 
     # Ensure template exists for this merchant/shop before proceeding
     # Fixed internal demo templates: exact-scope lookup (no fallback);

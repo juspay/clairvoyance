@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import sys
 from typing import Optional
 
@@ -62,6 +63,12 @@ def json_sink(message):
     print(json.dumps(log_entry))
 
 
+# DevCycle can authenticate its webhook only with ?secret= in the URL (it signs
+# nothing and sends no custom headers), so an access-log line never carries the
+# value of a `secret` query parameter.
+_SECRET_QUERY_PARAM = re.compile(r"([?&]secret=)[^&\s\"]*", re.IGNORECASE)
+
+
 class InterceptHandler(logging.Handler):
     """
     Intercept standard logging messages toward Loguru sinks.
@@ -85,12 +92,16 @@ class InterceptHandler(logging.Handler):
             frame = next_frame
             depth += 1
 
+        message = record.getMessage()
+        if record.name == "uvicorn.access":
+            message = _SECRET_QUERY_PARAM.sub(r"\1[redacted]", message)
+
         # Bind log context to forwarded logs
         # This ensures pipecat/library logs also get the log context
         log_context = get_log_context()
         logger.opt(depth=depth, exception=record.exc_info).bind(
             _log_context=log_context
-        ).log(level, record.getMessage())
+        ).log(level, message)
 
 
 def _setup_logger_sinks(
