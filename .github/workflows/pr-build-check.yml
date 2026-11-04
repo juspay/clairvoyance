@@ -5,7 +5,9 @@ on:
     branches:
       - main
       - release
+      - crm
       - assist
+      - voice
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
@@ -122,12 +124,14 @@ jobs:
           uv run python scripts/check_crm_boundaries.py
         continue-on-error: false
 
-      # Step 12: CRM law tests — pure (no DB): policy tables, liveness,
-      # normalization, mirror dedupe, both CI guards' own rules
-      - name: Run crm tests
+      # Step 12: the whole test suite. It needs no .env, Postgres or Redis
+      # (tests that want a real service skip without one), so every test
+      # runs here, not only tests/crm: the CRM laws, the CI guards' own
+      # rules, and the telephony / security tests that used to run nowhere.
+      - name: Run tests
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          uv run pytest tests/crm -q
+          uv run pytest tests -q
         continue-on-error: false
 
       # Step 13: Check commit count (must be exactly 1)
