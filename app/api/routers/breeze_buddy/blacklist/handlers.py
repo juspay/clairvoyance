@@ -15,6 +15,9 @@ from app.database.accessor import (
     mask_phone,
     remove_blacklisted_number,
 )
+from app.database.accessor.breeze_buddy.merchants import (
+    get_merchant_by_merchant_identifier,
+)
 from app.schemas import BlacklistedNumber, CreateBlacklistNumberRequest, UserInfo
 
 
@@ -28,10 +31,29 @@ async def add_blacklist_handler(
     logger.info(f"Admin {current_user.username} adding {masked} to blacklist")
 
     try:
+        if request.merchant_id:
+            # Calls carry the merchant's own reseller: an entry naming another
+            # one would never match, and the number would stay unblocked.
+            merchant = await get_merchant_by_merchant_identifier(request.merchant_id)
+            if merchant is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown merchant_id: {request.merchant_id}",
+                )
+            if merchant.reseller_id != request.reseller_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"merchant_id {request.merchant_id} does not belong to "
+                        f"reseller_id {request.reseller_id}"
+                    ),
+                )
+
         result = await add_blacklisted_number(
             id=str(uuid4()),
             phone_number=request.phone_number,
             reseller_id=request.reseller_id,
+            merchant_id=request.merchant_id,
             reason=request.reason,
             created_by=current_user.username,
         )
@@ -97,7 +119,10 @@ async def check_blacklist_handler(phone_number: str, current_user: UserInfo) -> 
 
 
 async def remove_blacklist_handler(
-    phone_number: str, reseller_id: Optional[str], current_user: UserInfo
+    phone_number: str,
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
+    current_user: UserInfo,
 ) -> Dict:
     """
     Remove a phone number from the blacklist.
@@ -109,13 +134,14 @@ async def remove_blacklist_handler(
     )
 
     try:
-        result = await remove_blacklisted_number(phone_number, reseller_id)
+        result = await remove_blacklisted_number(phone_number, reseller_id, merchant_id)
 
         if result:
             return {
                 "status": "removed",
                 "phone_number": phone_number,
                 "reseller_id": reseller_id,
+                "merchant_id": merchant_id,
                 "message": "Number removed from blacklist",
             }
 

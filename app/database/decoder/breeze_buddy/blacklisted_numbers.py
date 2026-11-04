@@ -20,6 +20,7 @@ def decode_blacklisted_number(row: asyncpg.Record) -> Optional[BlacklistedNumber
         id=row["id"],
         phone_number=row["phone_number"],
         reseller_id=row.get("reseller_id"),
+        merchant_id=row.get("merchant_id"),
         reason=row.get("reason"),
         created_by=row.get("created_by"),
         created_at=row["created_at"],

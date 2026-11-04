@@ -127,7 +127,10 @@ async def check_inbound_policy(
 
     # 3. Blacklist
     if config.enforce_blacklist:
-        if await is_number_blacklisted(caller_number, reseller_id):
+        if (
+            await is_number_blacklisted(caller_number, reseller_id, config.merchant_id)
+            is not False
+        ):
             logger.info(
                 f"[INBOUND_POLICY] Caller blacklisted for {reseller_id}/{config.template}"
             )

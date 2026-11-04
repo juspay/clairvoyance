@@ -36,6 +36,7 @@ def insert_blacklisted_number_query(
     id: str,
     phone_number: str,
     reseller_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
     reason: Optional[str] = None,
     created_by: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
@@ -44,14 +45,15 @@ def insert_blacklisted_number_query(
     """
     text = f"""
         INSERT INTO "{BLACKLISTED_NUMBERS_TABLE}"
-        ("id", "phone_number", "reseller_id", "reason", "created_by", "created_at", "updated_at")
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ("id", "phone_number", "reseller_id", "merchant_id", "reason", "created_by", "created_at", "updated_at")
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *;
     """
     values = [
         id,
         normalize_phone_number(phone_number),
         reseller_id,
+        merchant_id,
         reason,
         created_by,
         datetime.now(),
@@ -63,58 +65,42 @@ def insert_blacklisted_number_query(
 def is_number_blacklisted_query(
     phone_number: str,
     reseller_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to check if a phone number is blacklisted.
-    Checks both global blacklist (reseller_id IS NULL) and per-merchant blacklist.
+    Generate query for the first entry that blocks this caller: a global
+    entry, one for the caller's reseller, or one for the caller's merchant.
+    An empty column covers everyone. A row back means blocked; no row means
+    not blocked.
     """
-    normalized = normalize_phone_number(phone_number)
-
-    if reseller_id:
-        text = f"""
-            SELECT EXISTS(
-                SELECT 1 FROM "{BLACKLISTED_NUMBERS_TABLE}"
-                WHERE "phone_number" = $1
-                AND ("reseller_id" = $2 OR "reseller_id" IS NULL)
-            ) AS is_blacklisted;
-        """
-        values: List[Any] = [normalized, reseller_id]
-    else:
-        text = f"""
-            SELECT EXISTS(
-                SELECT 1 FROM "{BLACKLISTED_NUMBERS_TABLE}"
-                WHERE "phone_number" = $1
-            ) AS is_blacklisted;
-        """
-        values = [normalized]
-
+    text = f"""
+        SELECT "reseller_id", "merchant_id"
+        FROM "{BLACKLISTED_NUMBERS_TABLE}"
+        WHERE "phone_number" = $1
+        AND ("reseller_id" IS NULL OR "reseller_id" = $2)
+        AND ("merchant_id" IS NULL OR "merchant_id" = $3)
+        LIMIT 1;
+    """
+    values = [normalize_phone_number(phone_number), reseller_id, merchant_id]
     return text, values
 
 
 def delete_blacklisted_number_query(
     phone_number: str,
     reseller_id: Optional[str] = None,
+    merchant_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to delete a blacklisted number.
+    Generate query to delete the blacklisted number at exactly this scope.
     """
-    normalized = normalize_phone_number(phone_number)
-
-    if reseller_id:
-        text = f"""
-            DELETE FROM "{BLACKLISTED_NUMBERS_TABLE}"
-            WHERE "phone_number" = $1 AND "reseller_id" = $2
-            RETURNING *;
-        """
-        values: List[Any] = [normalized, reseller_id]
-    else:
-        text = f"""
-            DELETE FROM "{BLACKLISTED_NUMBERS_TABLE}"
-            WHERE "phone_number" = $1 AND "reseller_id" IS NULL
-            RETURNING *;
-        """
-        values = [normalized]
-
+    text = f"""
+        DELETE FROM "{BLACKLISTED_NUMBERS_TABLE}"
+        WHERE "phone_number" = $1
+        AND "reseller_id" IS NOT DISTINCT FROM $2
+        AND "merchant_id" IS NOT DISTINCT FROM $3
+        RETURNING *;
+    """
+    values = [normalize_phone_number(phone_number), reseller_id, merchant_id]
     return text, values
 
 

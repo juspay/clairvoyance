@@ -1131,3 +1131,25 @@ async def test_default_accessor_still_swallows_db_errors(monkeypatch):
     monkeypatch.setattr(tn_mod, "run_parameterized_query", _boom)
     assert await tn_mod.increment_telephony_number_channels("num-x") is None
     assert await calls_mod._acquire_number(_plivo_number()) is (w.NumberAcquire.ERROR)
+
+
+async def test_failed_blacklist_check_defers_lead(harness, fake_redis, monkeypatch):
+    """Blacklist check failed (None) → lead deferred, not finished, no call."""
+    lead = make_lead("lead-bl-err")
+    harness.add_lead(lead)
+
+    async def _check_failed(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(w, "is_number_blacklisted", _check_failed)
+
+    await init_channel_semaphore(harness.number.id, 1)
+    await push_ready(fake_redis, lead.id)
+
+    worker = w.Worker(worker_uuid="w-bl-err")
+    await worker._iteration(session=None)
+
+    assert harness.call_recorder.calls == []
+    assert harness.completions == []
+    assert harness.deferred == [("lead-bl-err", 60)]
+    assert lead.status == LeadCallStatus.BACKLOG

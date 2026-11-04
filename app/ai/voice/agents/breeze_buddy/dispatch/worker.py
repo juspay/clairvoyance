@@ -439,9 +439,14 @@ class Worker:
                 return
 
             customer_phone = (locked.payload or {}).get("customer_mobile_number")
-            if customer_phone and await is_number_blacklisted(
-                customer_phone, locked.reseller_id
-            ):
+            blacklisted = customer_phone and await is_number_blacklisted(
+                customer_phone, locked.reseller_id, locked.merchant_id
+            )
+            if blacklisted is None:
+                # The check failed: retry the lead, never finish it as BLACKLISTED.
+                lock_released = await self._defer_and_release(locked.id, 60)
+                return
+            if blacklisted:
                 await update_lead_call_completion_details(
                     id=locked.id,
                     status=LeadCallStatus.FINISHED,
