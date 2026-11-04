@@ -111,6 +111,8 @@ async def _enforce_ip_limit(*, request: Request, bucket: str, limit: int) -> Non
         limit=limit,
         window_seconds=_RATE_WINDOW_SECONDS,
         prefix="demo",
+        # Every demo turn is a paid LLM call: no Redis, no demo.
+        fail_closed=True,
     )
     if decision.allowed:
         return
