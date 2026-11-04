@@ -1,10 +1,10 @@
-"""Request/response schemas for the wallet recharge endpoint."""
+"""Request/response schemas for the wallet endpoints."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 
 class WalletRechargeRequest(BaseModel):
@@ -27,6 +27,10 @@ class WalletResponse(BaseModel):
     reseller_id: Optional[str] = None
     balance_credits: Decimal
     conversion_rate: Decimal
+    monthly_credit_limit: Decimal = Decimal(0)
+    subscription_status: str = "NONE"
+    last_reset_date: Optional[date] = None
+    trial_ends_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -45,3 +49,25 @@ class WalletTransactionResponse(BaseModel):
     gateway_ref_id: Optional[str] = None
     made_by: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+class WalletPlanRequest(BaseModel):
+    """Set a merchant's plan: its monthly credits and billing status."""
+
+    monthly_credit_limit: Decimal = Field(
+        ...,
+        ge=Decimal(0),
+        le=Decimal(1_000_000_000),
+        description="Credits per calendar month (the plan's limit).",
+    )
+    subscription_status: Literal["ACTIVE", "FROZEN"] = Field(
+        ...,
+        description="ACTIVE: use credits normally. FROZEN: block (billing on hold).",
+    )
+    trial_ends_at: Optional[AwareDatetime] = Field(
+        None,
+        description=(
+            "Unlimited before this instant, even when FROZEN (voice's trial). "
+            "Must include a timezone. Omit or null for no trial."
+        ),
+    )

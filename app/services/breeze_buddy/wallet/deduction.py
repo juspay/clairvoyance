@@ -13,6 +13,7 @@ from typing import Callable, Dict, Optional
 
 from app.database.accessor.breeze_buddy.wallets import apply_deduction, get_wallet
 from app.schemas.breeze_buddy.wallets import WalletTransactionResponse
+from app.services.breeze_buddy.wallet import plan
 from app.services.breeze_buddy.wallet.exceptions import (
     UnknownEventTypeError,
     WalletNotFoundError,
@@ -73,11 +74,21 @@ async def has_sufficient_credits(
     wallet = await get_wallet(merchant_id)
     if wallet is None:
         raise WalletNotFoundError(merchant_id)
-    if event_type is None:
-        return wallet.balance_credits > 0
-    rule = BILLING_RULES.get(event_type)
+    rule = None
+    if event_type is not None:
+        rule = BILLING_RULES.get(event_type)
+        if rule is None:
+            raise UnknownEventTypeError(event_type)
+    # Plan wallets (services.breeze_buddy.wallet.plan): a trial is unlimited
+    # and FROZEN blocks, whatever the balance; the first check of a new
+    # month brings the balance back to the plan's credits.
+    gate = plan.plan_gate(wallet)
+    if gate is not None:
+        return gate
+    if plan.needs_reset(wallet, plan.current_period()):
+        wallet = await plan.reset_month(merchant_id)
     if rule is None:
-        raise UnknownEventTypeError(event_type)
+        return wallet.balance_credits > 0
     return wallet.balance_credits >= rule(**event_kwargs) + floor
 
 
@@ -95,6 +106,9 @@ async def deduct(
     constraint on wallet_transactions to give duplicate-deduction protection
     for free (same mechanism that protects recharges against webhook
     retries).
+
+    During a plan trial the ledger row records 0 and the balance is left
+    as is, like voice's frozen call counter.
 
     Raises:
         UnknownEventTypeError: if event_type has no BILLING_RULES entry.
