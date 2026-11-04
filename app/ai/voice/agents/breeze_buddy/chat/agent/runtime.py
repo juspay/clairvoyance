@@ -144,8 +144,8 @@ class _PreparedTools:
 class _KbMessage:
     """This turn's ephemeral knowledge base message + where it seeds.
 
-    ``prefix`` = right after task messages (full injection, stable across
-    turns → prompt-cache friendly). ``tail`` = just before the user turn
+    ``prefix`` = right after task messages (full injection; its data markers
+    carry a new random tag each turn). ``tail`` = just before the user turn
     (per-turn retrieved chunks). Never persisted to chat_message.
     """
 
