@@ -69,9 +69,8 @@ async def check_rate_limit(
             Use this for production traffic where unbounded fallthrough
             would be costly — widget endpoints in particular accept
             anonymous traffic and back LLM-cost-amplification risk on a
-            Redis blip. Default ``False`` preserves the legacy fail-open
-            posture for demo endpoints where availability beats abuse
-            protection.
+            Redis blip. Default ``False`` keeps the legacy fail-open
+            posture.
 
     Returns ``allowed=True`` (and increments) when count <= limit, else
     ``allowed=False``.
