@@ -49,15 +49,19 @@ from app.ai.voice.agents.breeze_buddy.services.call_limiter import (
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.exotel.recording import (
     download_call_recording as download_call_recording_exotel,
+    is_recording_url as is_recording_url_exotel,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
     download_call_recording as download_call_recording_plivo,
+    is_recording_url as is_recording_url_plivo,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.twilio.recording import (
     download_call_recording as download_call_recording_twilio,
+    is_recording_url as is_recording_url_twilio,
 )
 from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.recording import (
     download_call_recording as download_call_recording_vobiz,
+    is_recording_url as is_recording_url_vobiz,
     recording_file_format as vobiz_recording_file_format,
 )
 from app.ai.voice.agents.breeze_buddy.template.types import (
@@ -70,6 +74,7 @@ from app.core.config.static import (
     UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD,
 )
 from app.core.logger import logger
+from app.core.security.ssrf import redact_url
 from app.core.transport.http_client import create_aiohttp_session
 from app.database.accessor import (
     acquire_lock_on_lead_by_id,
@@ -104,6 +109,15 @@ from app.schemas import (
 )
 from app.services.gcp.storage.storage import upload_file_to_gcs
 from app.services.redis.client import get_redis_service
+
+# Where each provider's recording URL may point. The URL arrives on an
+# unsigned callback, so one off these hosts is never stored or fetched.
+_IS_RECORDING_URL = {
+    "twilio": is_recording_url_twilio,
+    "exotel": is_recording_url_exotel,
+    "plivo": is_recording_url_plivo,
+    "vobiz": is_recording_url_vobiz,
+}
 
 
 async def _get_lead_config(lead: LeadCallTracker) -> Optional[CallExecutionConfig]:
@@ -1112,6 +1126,9 @@ async def update_call_recording(
     """
     Processes the call recording based on UPLOAD_BREEZE_BUDDY_CALL_RECORDINGS_TO_CLOUD flag.
 
+    A URL off the provider's recording hosts is refused first: nothing is
+    stored or downloaded.
+
     If flag is enabled:
         - Downloads the call recording from the provider
         - Uploads it to GCS
@@ -1128,8 +1145,16 @@ async def update_call_recording(
     logger.info(
         f"Processing call recording for call_id: {call_id} from provider: {provider}"
     )
-    lead = await get_lead_by_call_id(call_id)
     provider = provider.lower()
+    is_recording_url = _IS_RECORDING_URL.get(provider)
+    if is_recording_url is None or not is_recording_url(provider_recording_url):
+        logger.warning(
+            f"Refusing {provider} recording URL off its hosts for call_id "
+            f"{call_id}: {redact_url(provider_recording_url)}"
+        )
+        return
+
+    lead = await get_lead_by_call_id(call_id)
     if not lead:
         logger.error(f"Could not find lead for call_id: {call_id}")
         return
