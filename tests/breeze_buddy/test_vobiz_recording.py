@@ -5,14 +5,18 @@ A Vobiz call is recorded by a ``<Record/>`` placed before the ``<Stream>`` in
 the answer XML. Vobiz's defaults would hurt every call (a beep before the
 greeting, a 60 s length cap and a 60 s silence cut-off), so the element must
 override them exactly. The RecordStop callback carries an unauthenticated URL,
-so the Vobiz X-Auth credentials may only ever go to a Vobiz host over https
-(or to the configured API host), and never follow a redirect to another
-origin. Vobiz can serve WAV bytes under an .mp3 URL, so the GCS object is named
-from the bytes. And the console plays a VOBIZ recording back through the same
+so the download goes through the shared SSRF-safe path: internal addresses are
+refused, a URL off the Vobiz hosts (and our own uploaded copy) is refused, a
+body over the size cap is dropped, and the Vobiz X-Auth credentials go only to
+a Vobiz host (or the configured API host) over https, never following a
+redirect to another origin.
+Vobiz can serve WAV bytes under an .mp3 URL, so the GCS object is named from the
+bytes. And the console plays a VOBIZ recording back through the same
 authenticated download.
 
 Nothing here reaches Vobiz, GCS, Postgres or Redis: HTTP downloads run against
-local aiohttp servers on 127.0.0.1, everything else is monkeypatched.
+local aiohttp servers on 127.0.0.1 (the SSRF guard's loopback block is lifted
+for them, except in the test of that block), everything else is monkeypatched.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from starlette.requests import Request
 # keeps this line above the next one on its own.
 from app.ai.voice.agents.breeze_buddy import dispatch as _dispatch  # noqa: F401
 from app.ai.voice.agents.breeze_buddy.managers import calls as calls_mod
+from app.ai.voice.agents.breeze_buddy.services.telephony import recording_download
 from app.ai.voice.agents.breeze_buddy.services.telephony.plivo import (
     recording as plivo_rec,
 )
@@ -45,6 +50,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz import (
 from app.api.routers.breeze_buddy.leads import handlers as leads_mod
 from app.api.routers.breeze_buddy.telephony.answer import handlers as ans_mod
 from app.api.routers.breeze_buddy.telephony.callbacks import handlers as cb_mod
+from app.core.security import ssrf
 from app.schemas import CallProvider, ExecutionMode, LeadCallStatus
 from app.schemas.breeze_buddy.auth import UserInfo, UserRole
 from app.schemas.breeze_buddy.core import (
@@ -60,7 +66,8 @@ CREDS = {"X-Auth-ID": AUTH_ID, "X-Auth-Token": AUTH_TOKEN}
 LIMIT = 7200
 CALLBACK_PATH = "/agent/voice/breeze-buddy/vobiz/callback/details"
 # The configured API base (VOBIZ_API_BASE_URL) is pinned to this stand-in, so
-# the local servers below are "the Vobiz API host" and nothing else is.
+# the local servers below are "the Vobiz API host" and nothing else is. Keys
+# never go to it in cleartext, so over http it is fetched without them.
 API_HOST = "127.0.0.1"
 # Another origin: reaches the same loopback, but by a different host name.
 OTHER_HOST = "localhost"
@@ -79,8 +86,9 @@ def vobiz_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rec, "VOBIZ_AUTH_TOKEN", AUTH_TOKEN)
     monkeypatch.setattr(rec, "VOBIZ_RECORDING_TIME_LIMIT", LIMIT)
     monkeypatch.setattr(rec, "_VOBIZ_API_HOST", API_HOST)
-    monkeypatch.setattr(rec, "_VOBIZ_API_SCHEME", "http")
-    monkeypatch.setattr(rec, "get_proxy_config", lambda: None)
+    monkeypatch.setattr(recording_download, "get_proxy_config", lambda: None)
+    # The local servers are on loopback, which the SSRF guard refuses.
+    monkeypatch.setattr(ssrf, "_ALLOW_PRIVATE_EGRESS", True)
     monkeypatch.setattr(rec, "APP_BASE_URL", APP_BASE)
     monkeypatch.setattr(plivo_rec, "APP_BASE_URL", APP_BASE)
     monkeypatch.setattr(plivo_rec, "PLIVO_RECORDING_TIME_LIMIT", 14400)
@@ -317,6 +325,35 @@ async def test_plivo_answer_xml_is_byte_identical_to_release(
 # ── who gets the credentials ─────────────────────────────────────────────
 
 
+@pytest.fixture
+def sent(monkeypatch: pytest.MonkeyPatch) -> List[tuple[Dict[str, str], Any]]:
+    """ssrf_safe_request, faked: each download's (headers, basic auth), answered 200.
+
+    The real redirect/egress behaviour is covered in
+    tests/test_ssrf_credential_scope.py and by the local-server tests below;
+    here only the credential decision is asserted.
+    """
+    seen: List[tuple[Dict[str, str], Any]] = []
+
+    class Body:
+        async def iter_chunked(self, _n: int) -> AsyncIterator[bytes]:
+            yield ID3
+
+    class Response:
+        status = 200
+        content = Body()
+
+    @asynccontextmanager
+    async def fake_ssrf_safe_request(
+        _session: Any, _method: str, _url: str, *, auth: Any = None, **kw: Any
+    ) -> AsyncIterator[Response]:
+        seen.append((dict(kw.get("headers") or {}), auth))
+        yield Response()
+
+    monkeypatch.setattr(recording_download, "ssrf_safe_request", fake_ssrf_safe_request)
+    return seen
+
+
 @pytest.mark.parametrize(
     "url,expected",
     [
@@ -328,28 +365,45 @@ async def test_plivo_answer_xml_is_byte_identical_to_release(
         ("http://api.vobiz.ai/api/v1/r1.mp3", {}),
         ("http://media.vobiz.ai/r1.mp3", {}),
         ("ftp://media.vobiz.ai/r1.mp3", {}),
-        # look-alikes and other origins
-        ("https://evil.com/r1.mp3", {}),
-        ("https://vobiz.ai.evil.com/r1.mp3", {}),
-        ("https://evilvobiz.ai/r1.mp3", {}),
-        ("https://media.vobiz.ai@evil.com/r1.mp3", {}),
-        ("https://evil.com/?next=https://media.vobiz.ai/r1.mp3", {}),
-        ("https://storage.googleapis.com/bucket/r1.mp3", {}),
-        # the configured API base, on its own host and scheme only
-        (f"http://{API_HOST}:8791/media/r1.mp3", CREDS),
-        (f"https://{API_HOST}:8791/media/r1.mp3", {}),
-        (f"http://{OTHER_HOST}:8791/media/r1.mp3", {}),
-        ("https:///r1.mp3", {}),
-        ("not a url", {}),
-        ("", {}),
+        # the configured API base: its own host, over https only
+        (f"https://{API_HOST}:8791/media/r1.mp3", CREDS),
+        (f"http://{API_HOST}:8791/media/r1.mp3", {}),
+        # our uploaded copy, which GET recording re-fetches: never signed
+        ("https://sdk.beta.breezesdk.store/breeze-buddy/recordings/r1.mp3", {}),
     ],
 )
-def test_auth_headers_go_only_to_vobiz_over_https_or_the_api_host(url, expected):
+async def test_keys_go_only_to_vobiz_or_the_api_host_over_https(sent, url, expected):
     """RecordUrl arrives on an unauthenticated callback, so whoever can POST it
     chooses where we send the X-Auth headers
     (https://www.vobiz.ai/docs/api-reference/authentication). Only *.vobiz.ai
-    over https, or the configured VOBIZ_API_BASE_URL host on its own scheme."""
-    assert rec._vobiz_auth_headers(url) == expected
+    or the configured VOBIZ_API_BASE_URL host, over https; never as basic auth."""
+    await rec.download_call_recording(url, "CA-1")
+
+    assert sent == [(expected, None)]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # look-alikes and other origins
+        "https://evil.com/r1.mp3",
+        "https://vobiz.ai.evil.com/r1.mp3",
+        "https://evilvobiz.ai/r1.mp3",
+        "https://media.vobiz.ai@evil.com/r1.mp3",
+        "https://evil.com/?next=https://media.vobiz.ai/r1.mp3",
+        "https://storage.googleapis.com/bucket/r1.mp3",
+        "https://sdk.beta.breezesdk.store.evil.com/r1.mp3",
+        f"https://{OTHER_HOST}:8791/media/r1.mp3",
+        "https:///r1.mp3",
+        "not a url",
+        "",
+    ],
+)
+async def test_a_url_off_the_vobiz_hosts_is_never_requested(sent, url):
+    """Fetched without keys, another host's file would still be stored as the
+    call's recording, so it is refused before any request."""
+    assert await rec.download_call_recording(url, "CA-1") is None
+    assert sent == []
 
 
 # ── the bytes decide the format ──────────────────────────────────────────
@@ -378,7 +432,8 @@ def test_recording_format_comes_from_the_bytes(audio, expected):
 # ── the download ─────────────────────────────────────────────────────────
 
 
-async def test_download_returns_the_bytes_and_sends_credentials_to_the_vobiz_host():
+async def test_download_returns_the_bytes_and_sends_no_keys_over_http():
+    """Even the configured API host gets no keys in cleartext."""
     seen = Seen()
     async with serve({"/rec.mp3": seen.file(WAV)}) as port:
         audio = await rec.download_call_recording(
@@ -386,25 +441,60 @@ async def test_download_returns_the_bytes_and_sends_credentials_to_the_vobiz_hos
         )
 
     assert audio is not None and audio.getvalue() == WAV
-    assert seen.hits == [("/rec.mp3", CREDS)]
+    assert seen.hits == [("/rec.mp3", {})]
 
 
-async def test_download_from_another_host_sends_no_credentials():
+async def test_a_download_from_another_host_is_refused_before_any_request():
     seen = Seen()
     async with serve({"/rec.mp3": seen.file(ID3)}) as port:
         audio = await rec.download_call_recording(
             f"http://{OTHER_HOST}:{port}/rec.mp3", "CA-1"
         )
 
-    assert audio is not None and audio.getvalue() == ID3
-    assert seen.hits == [("/rec.mp3", {})]
+    assert audio is None
+    assert seen.hits == []
+
+
+@pytest.mark.parametrize("extra, kept", [(0, True), (1, False)])
+async def test_a_body_over_the_size_cap_is_dropped(monkeypatch, extra, kept):
+    """A body is read up to the cap; one byte more and the download is None,
+    so an endless or huge body cannot fill the pod's memory."""
+    cap = 3000
+    monkeypatch.setattr(recording_download, "_MAX_RECORDING_BYTES", cap)
+    monkeypatch.setattr(recording_download, "_READ_CHUNK_BYTES", 1024)
+    body = WAV + b"\x00" * (cap - len(WAV) + extra)
+    seen = Seen()
+    async with serve({"/rec.mp3": seen.file(body)}) as port:
+        audio = await rec.download_call_recording(
+            f"http://{API_HOST}:{port}/rec.mp3", "CA-1"
+        )
+
+    if kept:
+        assert audio is not None and audio.getvalue() == body
+    else:
+        assert audio is None
+    assert len(seen.hits) == 1
+
+
+@pytest.mark.parametrize("host", [API_HOST, OTHER_HOST])
+async def test_an_internal_address_is_refused_before_any_request(monkeypatch, host):
+    """With the SSRF guard on, as in production, a RecordUrl on loopback (or
+    any private / metadata address) is never fetched, keys or not."""
+    monkeypatch.setattr(ssrf, "_ALLOW_PRIVATE_EGRESS", False)
+    seen = Seen()
+    async with serve({"/rec.mp3": seen.file(WAV)}) as port:
+        audio = await rec.download_call_recording(
+            f"http://{host}:{port}/rec.mp3", "CA-1"
+        )
+
+    assert audio is None
+    assert seen.hits == []
 
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
-async def test_a_cross_origin_redirect_hop_carries_no_credentials(status):
-    """Redirects are followed by hand so each hop gets its own header decision:
-    the Vobiz hop is authenticated, the other origin is not, and the file
-    still arrives from the second hop."""
+async def test_a_cross_origin_redirect_is_followed(status):
+    """The file still arrives from the second origin. Keys leaving with the
+    first hop is ssrf_safe_request's job (tests/test_ssrf_credential_scope.py)."""
     vobiz, other = Seen(), Seen()
     async with serve({"/file.mp3": other.file(WAV)}) as other_port:
         target = f"http://{OTHER_HOST}:{other_port}/file.mp3"
@@ -414,12 +504,12 @@ async def test_a_cross_origin_redirect_hop_carries_no_credentials(status):
             )
 
     assert audio is not None and audio.getvalue() == WAV
-    assert vobiz.hits == [("/rec.mp3", CREDS)]
+    assert vobiz.hits == [("/rec.mp3", {})]
     assert other.hits == [("/file.mp3", {})]
 
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
-async def test_a_same_host_relative_redirect_keeps_the_credentials(status):
+async def test_a_same_host_relative_redirect_is_followed(status):
     seen = Seen()
     routes = {"/rec.mp3": seen.redirect(status, "/real/rec.mp3")}
     routes["/real/rec.mp3"] = seen.file(ID3)
@@ -429,39 +519,45 @@ async def test_a_same_host_relative_redirect_keeps_the_credentials(status):
         )
 
     assert audio is not None and audio.getvalue() == ID3
-    assert seen.hits == [("/rec.mp3", CREDS), ("/real/rec.mp3", CREDS)]
+    assert seen.hits == [("/rec.mp3", {}), ("/real/rec.mp3", {})]
+
+
+MAX_REDIRECTS = recording_download._MAX_RECORDING_REDIRECTS
 
 
 def _chain(seen: Seen) -> Dict[str, Handler]:
     """/hop/<n> redirects to /hop/<n-1>; /hop/0 is the file."""
-    routes = {f"/hop/{n}": seen.redirect(302, f"/hop/{n - 1}") for n in range(1, 8)}
+    routes = {
+        f"/hop/{n}": seen.redirect(302, f"/hop/{n - 1}")
+        for n in range(1, MAX_REDIRECTS + 3)
+    }
     routes["/hop/0"] = seen.file(WAV)
     return routes
 
 
-async def test_five_redirects_are_followed():
+async def test_redirects_up_to_the_limit_are_followed():
     seen = Seen()
     async with serve(_chain(seen)) as port:
         audio = await rec.download_call_recording(
-            f"http://{API_HOST}:{port}/hop/5", "CA-1"
+            f"http://{API_HOST}:{port}/hop/{MAX_REDIRECTS}", "CA-1"
         )
 
     assert audio is not None and audio.getvalue() == WAV
-    assert len(seen.hits) == 6
+    assert len(seen.hits) == MAX_REDIRECTS + 1
 
 
-async def test_a_sixth_redirect_gives_up_with_none():
+async def test_one_redirect_past_the_limit_gives_up_with_none():
     seen = Seen()
     async with serve(_chain(seen)) as port:
         audio = await rec.download_call_recording(
-            f"http://{API_HOST}:{port}/hop/6", "CA-1"
+            f"http://{API_HOST}:{port}/hop/{MAX_REDIRECTS + 1}", "CA-1"
         )
 
     assert audio is None
-    assert len(seen.hits) == 6
+    assert len(seen.hits) == MAX_REDIRECTS + 1
 
 
-async def test_a_redirect_loop_stops_after_five_hops_with_none():
+async def test_a_redirect_loop_stops_at_the_limit_with_none():
     seen = Seen()
     async with serve({"/loop": seen.redirect(302, "/loop")}) as port:
         audio = await rec.download_call_recording(
@@ -469,7 +565,7 @@ async def test_a_redirect_loop_stops_after_five_hops_with_none():
         )
 
     assert audio is None
-    assert len(seen.hits) == 6
+    assert len(seen.hits) == MAX_REDIRECTS + 1
 
 
 @pytest.mark.parametrize("status", [201, 204, 302, 401, 403, 404, 500, 503])
@@ -510,7 +606,7 @@ def slow(seen: Seen, seconds: float, then: Handler) -> Handler:
 async def test_a_silent_vobiz_host_gives_up_at_the_deadline(monkeypatch):
     """Console playback awaits this download: a host that never answers must
     not hold the request for aiohttp's 300 s default."""
-    monkeypatch.setattr(rec, "_DOWNLOAD_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(recording_download, "_DOWNLOAD_TIMEOUT_SECONDS", 0.2)
     seen = Seen()
     async with serve({"/rec.mp3": slow(seen, 1.0, Seen().file(WAV))}) as port:
         started = time.monotonic()
@@ -527,7 +623,7 @@ async def test_a_silent_vobiz_host_gives_up_at_the_deadline(monkeypatch):
 async def test_the_deadline_covers_every_redirect_hop_together(monkeypatch):
     """Three hops of 0.25 s each fit a per-request 0.4 s timeout one by one,
     but not one 0.4 s deadline for the whole download."""
-    monkeypatch.setattr(rec, "_DOWNLOAD_TIMEOUT_SECONDS", 0.4)
+    monkeypatch.setattr(recording_download, "_DOWNLOAD_TIMEOUT_SECONDS", 0.4)
     seen, inner = Seen(), Seen()
     routes = {
         "/hop/2": slow(seen, 0.25, inner.redirect(302, "/hop/1")),
@@ -726,42 +822,40 @@ async def test_gcs_object_is_named_from_the_bytes(
 
 
 async def test_console_plays_a_vobiz_recording_through_the_authenticated_download(
-    monkeypatch,
+    monkeypatch, sent
 ):
     """The console's recording endpoint must fetch a VOBIZ lead's file with the
     Vobiz X-Auth headers (not Plivo's basic auth, not a 400)."""
-    seen = Seen()
-    async with serve({"/media/rec.mp3": seen.file(ID3)}) as port:
-        lead = LeadCallTracker(
-            id="lead-1",
-            reseller_id="res-1",
-            merchant_id="merchant-1",
-            template="t",
-            status=LeadCallStatus.FINISHED,
-            call_id="CA-vz-1",
-            execution_mode=ExecutionMode.TELEPHONY,
-            telephony_number_id="num-1",
-            recording_url=f"http://{API_HOST}:{port}/media/rec.mp3",
-        )
-        number = TelephonyNumber(
-            id="num-1",
-            number="+918000000001",
-            provider=CallProvider.VOBIZ,
-            status=TelephonyNumberStatus.AVAILABLE,
-        )
+    lead = LeadCallTracker(
+        id="lead-1",
+        reseller_id="res-1",
+        merchant_id="merchant-1",
+        template="t",
+        status=LeadCallStatus.FINISHED,
+        call_id="CA-vz-1",
+        execution_mode=ExecutionMode.TELEPHONY,
+        telephony_number_id="num-1",
+        recording_url="https://media.vobiz.ai/media/rec.mp3",
+    )
+    number = TelephonyNumber(
+        id="num-1",
+        number="+918000000001",
+        provider=CallProvider.VOBIZ,
+        status=TelephonyNumberStatus.AVAILABLE,
+    )
 
-        async def fake_lead(call_sid: str) -> LeadCallTracker:
-            return lead
+    async def fake_lead(call_sid: str) -> LeadCallTracker:
+        return lead
 
-        async def fake_number(number_id: str) -> TelephonyNumber:
-            return number
+    async def fake_number(number_id: str) -> TelephonyNumber:
+        return number
 
-        monkeypatch.setattr(leads_mod, "get_lead_by_call_id", fake_lead)
-        monkeypatch.setattr(leads_mod, "get_telephony_number_by_id", fake_number)
-        user = UserInfo(id="u-1", username="admin@example.com", role=UserRole.ADMIN)
+    monkeypatch.setattr(leads_mod, "get_lead_by_call_id", fake_lead)
+    monkeypatch.setattr(leads_mod, "get_telephony_number_by_id", fake_number)
+    user = UserInfo(id="u-1", username="admin@example.com", role=UserRole.ADMIN)
 
-        result = await leads_mod.get_call_recording_handler("CA-vz-1", user)
+    result = await leads_mod.get_call_recording_handler("CA-vz-1", user)
 
     assert result.is_daily is False
     assert result.audio_file.read() == ID3
-    assert seen.hits == [("/media/rec.mp3", CREDS)]
+    assert sent == [(CREDS, None)]
