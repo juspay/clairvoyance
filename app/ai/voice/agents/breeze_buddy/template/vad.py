@@ -12,6 +12,7 @@ For the full mute_stt/unmute_stt routing (VAD → TranscriptionGate fallback),
 see handlers/internal/stt.py.
 """
 
+import asyncio
 from typing import Optional
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -114,8 +115,9 @@ async def create_vad_analyzer(
 ) -> tuple[Optional[SileroVADAnalyzer], Optional[VADParams]]:
     """Create VAD analyzer with appropriate parameters.
 
-    VAD is gated behind BREEZE_BUDDY_ENABLE_VAD (default False).
-    When disabled, returns (None, None) and all VAD-related functionality is skipped.
+    VAD is gated behind BREEZE_BUDDY_ENABLE_VAD (default False), overridable
+    per template via `configurations.vad_config.enabled`. When disabled,
+    returns (None, None) and all VAD-related functionality is skipped.
 
     Both Daily and telephony modes honor template-level `vad_config` with per-field
     fallback to mode-specific Redis defaults (`BB_DAILY_VAD_*` / `BB_TELEPHONY_VAD_*`).
@@ -129,8 +131,28 @@ async def create_vad_analyzer(
         The default_vad_params is returned so node-level VAD overrides can reset
         back to the call-level default (see `reset_vad_to_default` below).
     """
-    if not await BREEZE_BUDDY_ENABLE_VAD():
-        logger.info("VAD disabled (BREEZE_BUDDY_ENABLE_VAD=false)")
+    template_vad = (
+        template.configurations.vad_config
+        if template and template.configurations
+        else None
+    )
+    template_enabled = template_vad.enabled if template_vad else None
+
+    if template_enabled is not None:
+        logger.info(
+            "Using template-specific VAD enabled override: {}", template_enabled
+        )
+        effective_enabled = template_enabled
+    else:
+        effective_enabled = await BREEZE_BUDDY_ENABLE_VAD()
+
+    if not effective_enabled:
+        reason = (
+            "template override"
+            if template_enabled is not None
+            else "BREEZE_BUDDY_ENABLE_VAD=false"
+        )
+        logger.info(f"VAD disabled ({reason})")
         return None, None
 
     if is_daily_mode:
@@ -239,12 +261,19 @@ def _apply_vad_config_to_analyzer(vad_analyzer, vad_config, call_sid: str):
     )
 
 
-def mute_vad(context: TemplateContext):
+def mute_vad(context: TemplateContext, duration: Optional[float] = None):
     """Mute STT by setting VAD confidence to 1.0 (impossible to trigger).
 
-    Stores previous params so they can be restored on unmute.
-    Only call this when context.vad_analyzer is available.
+    Stores previous params so they can be restored on unmute. Only call this
+    when context.vad_analyzer is available.
+
+    Args:
+        duration: If given, auto-unmutes after this many seconds. Any
+            previously pending auto-unmute is cancelled first; an explicit
+            unmute_vad() call also cancels it, so an explicit unmute always
+            takes precedence over a scheduled one.
     """
+    _cancel_vad_timed_unmute(context)
     context.bot._pre_mute_vad_params = {
         "confidence": context.vad_analyzer.params.confidence,
         "start_secs": context.vad_analyzer.params.start_secs,
@@ -260,9 +289,37 @@ def mute_vad(context: TemplateContext):
             min_volume=context.vad_analyzer.params.min_volume,
         )
     )
+    if duration is not None:
+        context.bot._vad_timed_unmute_task = asyncio.create_task(
+            _auto_unmute_vad(context, duration)
+        )
     logger.info(
         f"STT muted via VAD for call {context.call_sid} "
-        f"(confidence: {old_confidence} -> 1.0, stored pre-mute params)"
+        f"(confidence: {old_confidence} -> 1.0, stored pre-mute params"
+        + (f", duration={duration}s)" if duration is not None else ")")
+    )
+
+
+def _cancel_vad_timed_unmute(context: TemplateContext):
+    """Cancel any pending VAD timed-unmute task, if one is scheduled."""
+    bot = context.bot
+    task = getattr(bot, "_vad_timed_unmute_task", None)
+    if task and not task.done():
+        task.cancel()
+        logger.debug(f"Cancelled pending VAD timed-unmute for call {context.call_sid}")
+    bot._vad_timed_unmute_task = None
+
+
+async def _auto_unmute_vad(context: TemplateContext, duration: float):
+    """Sleep for *duration* seconds then release the VAD mute."""
+    try:
+        await asyncio.sleep(duration)
+    except asyncio.CancelledError:
+        return
+    context.bot._vad_timed_unmute_task = None
+    unmute_vad(context)
+    logger.info(
+        f"STT auto-unmuted via VAD for call {context.call_sid} after {duration}s"
     )
 
 
@@ -273,7 +330,11 @@ def unmute_vad(context: TemplateContext):
     at agent startup (template layered over Redis). Only call this when
     context.vad_analyzer is available — which also guarantees
     bot.default_vad_params is set (see create_vad_analyzer).
+
+    Cancels any pending timed-unmute task first, so an explicit unmute
+    always takes precedence over a scheduled auto-unmute.
     """
+    _cancel_vad_timed_unmute(context)
     old_confidence = context.vad_analyzer.params.confidence
     bot = context.bot
 
