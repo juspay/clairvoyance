@@ -19,6 +19,7 @@ from app.database.accessor.breeze_buddy.wallets import (
     update_wallet_reseller_id_on_conn,
 )
 from app.database.decoder.breeze_buddy.merchants import (
+    decode_analytics_config_row,
     decode_call_limits,
     decode_call_limits_row,
     decode_merchant,
@@ -29,17 +30,21 @@ from app.database.queries.breeze_buddy.merchants import (
     create_merchant_query,
     delete_merchant_query,
     get_all_merchants_query,
+    get_merchant_analytics_config_query,
     get_merchant_by_merchant_identifier_query,
     get_merchant_call_limits_query,
     get_merchant_s2s_token_query,
     get_merchants_by_ids_query,
     get_merchants_by_reseller_query,
     get_merchants_with_call_limits_query,
+    set_merchant_analytics_field_config_query,
     set_merchant_call_limits_query,
     set_merchant_s2s_token_query,
     update_merchant_query,
 )
 from app.schemas.breeze_buddy.merchants import (
+    AnalyticsConfigResponse,
+    AnalyticsFieldConfig,
     CallLimit,
     CallLimitsResponse,
     MerchantResponse,
@@ -523,3 +528,44 @@ async def get_merchants_with_call_limits() -> (
         if decoded:
             rules[merchant_id] = decoded
     return rules, unreadable
+
+
+async def get_merchant_analytics_config(
+    merchant_id: str,
+) -> Optional[AnalyticsConfigResponse]:
+    """A merchant's analytics configs, or None if no such merchant. Raises on
+    a DB error or an unreadable stored value."""
+    query, values = get_merchant_analytics_config_query(merchant_id)
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        return decode_analytics_config_row(row) if row else None
+    except Exception as e:
+        logger.error(
+            f"Error reading analytics field config for merchant {merchant_id}: {e}"
+        )
+        raise
+
+
+async def set_merchant_analytics_field_config(
+    merchant_id: str, config: Optional[AnalyticsFieldConfig]
+) -> Optional[AnalyticsConfigResponse]:
+    """Replace the field config (None or empty clears); None if no such merchant."""
+    config_json = (
+        json.dumps(config.model_dump(mode="json"))
+        if config and not config.is_empty()
+        else None
+    )
+    query, values = set_merchant_analytics_field_config_query(merchant_id, config_json)
+    try:
+        result = await run_parameterized_query(query, values)
+        row = result[0] if result else None
+        if not row:
+            return None
+        logger.info(f"Updated analytics field config for merchant {merchant_id}")
+        return decode_analytics_config_row(row)
+    except Exception as e:
+        logger.error(
+            f"Error updating analytics field config for merchant {merchant_id}: {e}"
+        )
+        raise

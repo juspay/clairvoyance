@@ -1,9 +1,19 @@
 """Response schemas for merchant endpoints."""
 
+import re
 from datetime import datetime
-from typing import List, Optional
+from enum import Enum
+from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 
 class MerchantCreate(BaseModel):
@@ -146,3 +156,150 @@ class CallLimitsResponse(BaseModel):
 
     merchant_id: str
     call_limits: Optional[List[CallLimit]] = None
+
+
+# --------------------------------------------------------------------------
+# Analytics field config — which key in the merchant's JSON fills which
+# analytics column. Written by the merchant, read by the ClickHouse views via
+# the PeerDB mirror of merchants. The future page config (charts, queries,
+# tabs) is a separate column, analytics_page_config: read by the console, not
+# mirrored.
+# --------------------------------------------------------------------------
+
+# shared slots: one meaning for every merchant, so reports can sum across them
+ANALYTICS_SHARED_SLOTS: Dict[str, str] = {
+    "amount": "number",
+    "category": "text",
+    "reason": "text",
+    "product_name": "text",
+    "language": "text",
+    "region": "text",
+    "order_id": "text",
+}
+ANALYTICS_CUSTOM_TEXT_SLOTS = 10
+ANALYTICS_CUSTOM_NUMBER_SLOTS = 5
+# slot -> column type; the slot decides, a rule carries no type
+ANALYTICS_SLOT_KINDS: Dict[str, str] = {
+    **ANALYTICS_SHARED_SLOTS,
+    **{f"custom_text_{i}": "text" for i in range(1, ANALYTICS_CUSTOM_TEXT_SLOTS + 1)},
+    **{
+        f"custom_num_{i}": "number" for i in range(1, ANALYTICS_CUSTOM_NUMBER_SLOTS + 1)
+    },
+}
+ANALYTICS_FIELD_SCOPE_ALL = "*"
+# reloaded into a ClickHouse dictionary every minute: keep it small
+ANALYTICS_FIELD_CONFIG_MAX_RULES = 200
+# payload.<key>[.<key>] (what the merchant sent) or learned.<key> (meta_data.outcome)
+_ANALYTICS_PATH_PATTERN = re.compile(r"^(payload|learned)(\.[A-Za-z0-9_-]+)+$")
+# a template id (calls), a topic such as order.created (events), or *
+_ANALYTICS_SCOPE_PATTERN = re.compile(r"^(\*|[A-Za-z0-9_.:-]{1,128})$")
+
+
+class AnalyticsFieldRule(BaseModel):
+    """Where one slot is read from, and what dashboards call it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(
+        ...,
+        max_length=200,
+        description="payload.<key> or learned.<key>; dots walk into nested objects",
+    )
+    label: str = Field(
+        ...,
+        min_length=1,
+        max_length=80,
+        description="Shown by dashboards for this slot",
+    )
+
+    @field_validator("path")
+    @classmethod
+    def _path_shape(cls, value: str) -> str:
+        if not _ANALYTICS_PATH_PATTERN.fullmatch(value):
+            raise ValueError(
+                "path must be payload.<key> or learned.<key>, keys of letters, "
+                "digits, _ and -"
+            )
+        return value
+
+
+class AnalyticsTable(str, Enum):
+    """Analytics tables a merchant can map keys into; one view each."""
+
+    CALLS = "calls"  # analytics.calls, from lead_call_tracker; scope = template id
+    EVENTS = "events"  # analytics.events, from crm_event_raw; scope = topic
+
+
+AnalyticsFieldScopes = Dict[str, Dict[str, AnalyticsFieldRule]]
+
+
+class AnalyticsFieldConfig(RootModel[Dict[AnalyticsTable, AnalyticsFieldScopes]]):
+    """``{table: {scope: {slot: rule}}}``. Scope: a template id (calls), a
+    topic (events) or ``*``; the views try the row's scope, then ``*``."""
+
+    @field_validator("root")
+    @classmethod
+    def _known_scopes_and_slots(
+        cls, value: Dict[AnalyticsTable, AnalyticsFieldScopes]
+    ) -> Dict[AnalyticsTable, AnalyticsFieldScopes]:
+        for scopes in value.values():
+            for scope, slots in scopes.items():
+                if not _ANALYTICS_SCOPE_PATTERN.fullmatch(scope):
+                    raise ValueError(
+                        f"scope {scope!r} must be a template id, a topic or *"
+                    )
+                for slot in slots:
+                    if slot not in ANALYTICS_SLOT_KINDS:
+                        raise ValueError(
+                            f"unknown slot {slot!r}; use a shared key "
+                            f"({', '.join(ANALYTICS_SHARED_SLOTS)}), custom_text_1.."
+                            f"{ANALYTICS_CUSTOM_TEXT_SLOTS} or custom_num_1.."
+                            f"{ANALYTICS_CUSTOM_NUMBER_SLOTS}"
+                        )
+        return value
+
+    @model_validator(mode="after")
+    def _bounded(self) -> "AnalyticsFieldConfig":
+        if self.rule_count() > ANALYTICS_FIELD_CONFIG_MAX_RULES:
+            raise ValueError(
+                f"at most {ANALYTICS_FIELD_CONFIG_MAX_RULES} rules per merchant"
+            )
+        return self
+
+    def rule_count(self) -> int:
+        return sum(
+            len(slots) for scopes in self.root.values() for slots in scopes.values()
+        )
+
+    def is_empty(self) -> bool:
+        return self.rule_count() == 0
+
+
+class AnalyticsConfigUpdate(BaseModel):
+    """``PUT /merchant/{merchant_id}/analytics-config`` body. A key sent is
+    replaced whole (``null`` or empty clears it, stored as NULL); a key left
+    out is untouched; at least one key. ``analytics_page_config`` joins later."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    analytics_field_config: Optional[AnalyticsFieldConfig] = Field(
+        default=None, description="The merchant's mapping; null or empty for none"
+    )
+
+    @field_validator("analytics_field_config")
+    @classmethod
+    def _empty_is_none(cls, value: Optional[AnalyticsFieldConfig]):
+        return None if value is None or value.is_empty() else value
+
+    @model_validator(mode="after")
+    def _something_to_set(self) -> "AnalyticsConfigUpdate":
+        if not self.model_fields_set:
+            raise ValueError("send at least one config key: analytics_field_config")
+        return self
+
+
+class AnalyticsConfigResponse(BaseModel):
+    """The merchant's analytics configs (``null`` = none)."""
+
+    merchant_id: str
+    analytics_field_config: Optional[AnalyticsFieldConfig] = None
