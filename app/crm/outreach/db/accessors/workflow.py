@@ -17,6 +17,8 @@ from app.crm.outreach.db.queries.workflow import (
     get_workflow_query,
     insert_workflow_query,
     list_workflows_query,
+    live_definition_query,
+    live_plan_versions_query,
     live_plans_naming_template_query,
     live_workflows_query,
     publish_workflow_query,
@@ -29,6 +31,7 @@ from app.crm.outreach.schemas import (
     WorkflowSummary,
 )
 from app.crm.shared.db import crm_connection
+from app.crm.shared.decode import jsonb_value as _jsonb
 
 
 async def insert_workflow(
@@ -115,6 +118,31 @@ async def live_workflows(merchant_id: str) -> List[Workflow]:
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_workflow(row) for row in rows]
+
+
+async def live_plan_versions(merchant_id: str) -> List[WorkflowSummary]:
+    """Entry's routing read: this merchant's live plans as (id, version,
+    status, ...) — the summary shape, which is exactly what enrol needs to
+    name and pin a run. No documents cross the wire."""
+    query, values = live_plan_versions_query(merchant_id)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [decode_workflow_summary(row) for row in rows]
+
+
+async def live_definition(
+    merchant_id: str, workflow_id: str, version: int
+) -> Optional[Dict[str, Any]]:
+    """One live plan's document at a named version, playbook stripped.
+    None when that version is no longer the live one — a publish landed
+    between routing and here, and the caller skips the plan for this
+    event rather than judging it by a document it was not routed to."""
+    query, values = live_definition_query(merchant_id, workflow_id, version)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    if row is None:
+        return None
+    return _jsonb(row["definition"])
 
 
 async def live_plans_naming_template(merchant_id: str, channel: str, name: str) -> int:

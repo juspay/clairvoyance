@@ -161,6 +161,52 @@ def live_workflows_query(merchant_id: str) -> Tuple[str, List[Any]]:
     return query, [merchant_id]
 
 
+def live_plan_versions_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """Entry's ROUTING read: which plans are live, and at what version —
+    no documents. Entry asks one question per attributed event ("does any
+    live door name this topic?"), and for most events the answer is no, so
+    the document only has to exist once a door matches.
+
+    Deliberately NOT cached: status moves under an operator (publish,
+    pause, archive) and a new merchant's first plan must admit on its very
+    next event, so freshness here is worth more than the row it costs.
+    The document behind each (id, version) IS cached — see
+    definitions.live_definition — because a version is immutable (064).
+    """
+    query = f"""
+        SELECT {_WORKFLOW_SUMMARY_COLUMNS}
+        FROM {WORKFLOW_TABLE}
+        WHERE merchant_id = $1 AND status = 'live'
+    """
+    return query, [merchant_id]
+
+
+def live_definition_query(
+    merchant_id: str, workflow_id: str, version: int
+) -> Tuple[str, List[Any]]:
+    """One live plan's document AT A NAMED VERSION, minus its playbook —
+    the cache-miss read behind live_definition.
+
+    ``version`` is in the WHERE, not just the key: a publish between the
+    routing read and this one bumps the row, and matching on the version
+    we were asked for means the cache can never hold a document under a
+    version that is not its own. No row is then the honest answer, and the
+    caller skips this plan for this one event (the next event routes to
+    the new version).
+
+    Playbook stripped for the same reason live_plan_versions exists: the
+    words a call says are read from the run's PINNED version at execute
+    time (nodes/blocks.py, off definitions.py's own cache), never here.
+    """
+    query = f"""
+        SELECT version, definition - 'playbook' AS definition
+        FROM {WORKFLOW_TABLE}
+        WHERE merchant_id = $1 AND id = $2 AND version = $3
+          AND status = 'live'
+    """
+    return query, [merchant_id, workflow_id, version]
+
+
 def live_plans_naming_template_query(
     merchant_id: str, channel: str, name: str
 ) -> Tuple[str, List[Any]]:

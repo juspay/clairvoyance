@@ -157,6 +157,20 @@ class _Spine:
     async def live_workflows(self, merchant_id: str) -> List[Workflow]:
         return list(self.flows)
 
+    async def live_plan_versions(self, merchant_id: str) -> List[Workflow]:
+        """Routing: the same plans, named but not opened."""
+        return list(self.flows)
+
+    async def live_definition(
+        self, merchant_id: str, workflow_id: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        """The document behind one (plan, version) — None when that
+        version is no longer the live one, as the real read answers."""
+        for flow in self.flows:
+            if str(flow.id) == workflow_id and flow.version == version:
+                return flow.definition
+        return None
+
     async def open_runs_for_customer(
         self, merchant_id: str, customer_id: str
     ) -> List[EnrollmentRun]:
@@ -216,9 +230,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, spine: _Spine) -> None:
     """Seed the spine on the per-table accessor each read lives in — the
     workflow read, the run reads, and the pinned-definition read (which
     definitions.py owns, on the version table)."""
-    definitions._definitions.clear()
+    definitions.reset_caches()
     for module, name in (
         (entry.workflow_accessor, "live_workflows"),
+        (entry.workflow_accessor, "live_plan_versions"),
+        (definitions.workflow_accessor, "live_definition"),
         (entry.enrollment_accessor, "open_runs_for_customer"),
         (definitions.version_accessor, "get_definition"),
         (entry.enrollment_accessor, "cancel_run"),

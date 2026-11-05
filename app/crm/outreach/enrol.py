@@ -18,11 +18,11 @@ from app.crm.outreach.db.accessors import (
 from app.crm.outreach.nodes import is_wait
 from app.crm.outreach.schemas import (
     EnrollmentRun,
-    Workflow,
     WorkflowDefinition,
     WorkflowEntry,
     WorkflowEntryAt,
     WorkflowNode,
+    WorkflowSummary,
 )
 from app.crm.outreach.window import alarm
 
@@ -97,7 +97,8 @@ def _first_wake(start: WorkflowNode, now: datetime, max_age_days: float) -> date
 async def enrol(
     *,
     merchant_id: str,
-    workflow: Workflow,
+    workflow: WorkflowSummary,
+    definition: WorkflowDefinition,
     customer_id: str,
     context: Dict[str, Any],
     enrollment_key: Optional[str] = None,
@@ -108,8 +109,15 @@ async def enrol(
     door). Returns the run, or None when a guard (or the open-run unique)
     said no — a refusal is a normal outcome, never an error. context
     carries pointers + the small facts the sends need ({source_event_id,
-    phone, ...}), never payloads."""
-    if workflow.status != "live" or not workflow.definition:
+    phone, ...}), never payloads.
+
+    ``definition`` is passed in, not read off ``workflow``: the caller has
+    already validated it to find the door that admitted this customer, so
+    re-deriving it here was a second full parse of the same document — and
+    a ``workflow`` shape that carries no document would have made this
+    function refuse every enrolment while logging "not_live" about a plan
+    that is live."""
+    if workflow.status != "live":
         _log_skipped(
             merchant_id,
             str(workflow.id),
@@ -117,7 +125,6 @@ async def enrol(
             workflow_status=workflow.status,
         )
         return None
-    definition = WorkflowDefinition.model_validate(workflow.definition)
     try:
         run = await atomically(
             _enrol_in_txn,
@@ -161,7 +168,7 @@ async def enrol(
 async def _enrol_in_txn(
     txn: DbTxn,
     merchant_id: str,
-    workflow: Workflow,
+    workflow: WorkflowSummary,
     definition: WorkflowDefinition,
     door: WorkflowEntryAt,
     customer_id: str,
