@@ -83,6 +83,7 @@ def build_azure_llm(config: AzureConfig, *, pooled: bool = False) -> AzureLLMSer
         )  # e.g. "required" for say-tool templates
 
     settings_kwargs: dict[str, Any] = {
+        "model": config.model,
         "temperature": config.temperature,
         "extra": extra,
     }
@@ -93,7 +94,6 @@ def build_azure_llm(config: AzureConfig, *, pooled: bool = False) -> AzureLLMSer
     return cls(
         api_key=config.api_key,
         endpoint=config.endpoint,
-        model=config.model,
         service_tier="auto",
         settings=AzureLLMSettings(**settings_kwargs),
         function_call_timeout_secs=config.function_call_timeout_secs,

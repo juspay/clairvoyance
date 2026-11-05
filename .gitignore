@@ -58,3 +58,5 @@ CLAUDE.local.md
 
 # Local scratch / test fixtures
 temp/
+template_simulation/simulation_run/
+template_simulation/templates/
