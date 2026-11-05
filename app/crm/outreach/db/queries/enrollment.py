@@ -5,7 +5,7 @@ parameterized.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.crm.outreach.db.queries.step import flush_arm
 from app.crm.outreach.db.queries.tables import (
@@ -354,19 +354,65 @@ def record_run_error_query(
 
 
 def open_runs_for_customer_query(
-    merchant_id: str, customer_id: str
+    merchant_id: str,
+    customer_id: str,
+    keys: Sequence[Tuple[str, str]] = (),
+    run_ids: Sequence[str] = (),
 ) -> Tuple[str, List[Any]]:
     """The consumer's per-run read (rollout phase 13): this customer's
     open runs across every plan, so goals and listening are judged
     against each run's PINNED version. The customer index carries it; a
-    customer with nothing open costs one empty indexed read."""
+    customer with nothing open costs one empty indexed read.
+
+    ``keys`` adds the open runs of a keyed plan by (workflow_id,
+    enrollment_key) — the letter's value for the key the plan declared.
+    A merchant's own customer id can arrive with a second phone, which
+    resolves to a second customer; by customer alone that letter would
+    never reach the run its key names (Flipkart, 13 Oct 2026). The open
+    partial unique carries this half.
+
+    ``run_ids`` adds the runs the letter names by id — our own call
+    report's enrollment_id, the run whose send a reply answers — exact
+    whichever phone was dialled. A primary-key read.
+
+    A run found more than one way is read once; every half is still only
+    a CANDIDATE — each run's goal key and square match decide whether the
+    letter is about it. A letter that names neither (most) reads by
+    customer alone — the release statement, unchanged."""
+    if not keys and not run_ids:
+        query = f"""
+            SELECT {_RUN_COLUMNS}
+            FROM {ENROLLMENT_TABLE}
+            WHERE merchant_id = $1 AND customer_id = $2 AND status <> 'exited'
+            ORDER BY entered_at, id
+        """
+        return query, [merchant_id, customer_id]
     query = f"""
         SELECT {_RUN_COLUMNS}
         FROM {ENROLLMENT_TABLE}
-        WHERE merchant_id = $1 AND customer_id = $2 AND status <> 'exited'
+        WHERE id IN (
+            SELECT id FROM {ENROLLMENT_TABLE}
+            WHERE merchant_id = $1 AND customer_id = $2 AND status <> 'exited'
+            UNION
+            SELECT e.id
+            FROM {ENROLLMENT_TABLE} e
+            JOIN unnest($3::uuid[], $4::text[]) AS k(workflow_id, enrollment_key)
+              ON e.workflow_id = k.workflow_id
+             AND e.enrollment_key = k.enrollment_key
+            WHERE e.merchant_id = $1 AND e.status <> 'exited'
+            UNION
+            SELECT id FROM {ENROLLMENT_TABLE}
+            WHERE merchant_id = $1 AND id = ANY($5::uuid[]) AND status <> 'exited'
+        )
         ORDER BY entered_at, id
     """
-    return query, [merchant_id, customer_id]
+    return query, [
+        merchant_id,
+        customer_id,
+        [workflow_id for workflow_id, _ in keys],
+        [key for _, key in keys],
+        list(run_ids),
+    ]
 
 
 def resume_run_by_id_query(

@@ -13,7 +13,7 @@ time (phase 06), the goal stash (phase 09)."""
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
 
 import pytest
@@ -153,13 +153,21 @@ class _Spine:
         self.facts: List[Tuple[str, str, Any]] = []
         self.refreshes: List[Tuple[str, str, Dict[str, Any]]] = []
         self.exited: set = set()
+        self.run_keys: List[List[Tuple[str, str]]] = []
+        self.run_ids: List[List[str]] = []
 
     async def live_workflows(self, merchant_id: str) -> List[Workflow]:
         return list(self.flows)
 
     async def open_runs_for_customer(
-        self, merchant_id: str, customer_id: str
+        self,
+        merchant_id: str,
+        customer_id: str,
+        keys: Sequence[Tuple[str, str]] = (),
+        run_ids: Sequence[str] = (),
     ) -> List[EnrollmentRun]:
+        self.run_keys.append(list(keys))
+        self.run_ids.append(list(run_ids))
         return list(self.runs)
 
     async def get_definition(
@@ -1263,3 +1271,81 @@ def test_a_scalar_door_field_is_read_from_the_payload_as_before(
     where = [{"field": "payload.order.sub_category", "op": "is", "value": "Mobile"}]
     assert _doors_opened(monkeypatch, {"order": {}}, where) == 0
     assert _doors_opened(monkeypatch, {"order": {"sub_category": "Mobile"}}, where) == 1
+
+
+# --- a merchant's customer id on a second phone (Flipkart, 13 Oct 2026) ---
+
+_KEYED_PLAN = {
+    "entry": {"topic": "INITIATED", "key": "customer_id", "reenter": True},
+    "nodes": [{"id": "listen", "type": "wait", "minutes": 60}],
+    "edges": [],
+    "goals": [
+        {
+            "topics": ["ORDER_SUCCEEDED"],
+            "key": {"event": "customer_id", "run": "customer_id"},
+            "exit_reason": "goal_met",
+        }
+    ],
+}
+
+
+def test_a_keyed_plans_runs_are_read_by_the_letters_key_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The letter resolved to another customer (a second phone): the read
+    still names the run by the plan's key, and that run's goal ends it."""
+    flow = _flow(_KEYED_PLAN)
+    run = _run(flow, 1, "listen", {"customer_id": "fk-9"}, key="fk-9")
+    spine = _Spine([flow], [run], {(flow.id, 1): _KEYED_PLAN})
+    _install(monkeypatch, spine)
+
+    _consume(_event("ORDER_SUCCEEDED", {"customer_id": "fk-9"}, source="flipkart"))
+
+    assert spine.run_keys == [[(str(flow.id), "fk-9")]]
+    assert [(c[0], c[1]) for c in spine.cancels] == [(str(run.id), "goal_met")]
+
+
+def test_a_letter_without_the_key_reads_by_customer_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = _flow(_KEYED_PLAN)
+    spine = _Spine([flow], [], {(flow.id, 1): _KEYED_PLAN})
+    _install(monkeypatch, spine)
+
+    _consume(_event("ORDER_SUCCEEDED", {"phone": "+919876543210"}, source="flipkart"))
+
+    assert spine.run_keys == [[]]
+
+
+def test_our_call_report_names_its_run_by_enrollment_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call that dialled a changed number resolves to another customer;
+    the report still names the run that placed it."""
+    flow = _flow(_KEYED_PLAN)
+    run_id = str(uuid4())
+    spine = _Spine([flow], [], {(flow.id, 1): _KEYED_PLAN})
+    _install(monkeypatch, spine)
+
+    _consume(_event("call.completed", {"enrollment_id": run_id}, source="telephony"))
+
+    assert spine.run_ids == [[run_id]]
+
+
+@pytest.mark.parametrize(
+    "source, enrollment_id",
+    [
+        ("flipkart", "a6957934-4289-4f4c-b35e-3236de0027dd"),
+        ("telephony", None),  # a lead no run placed
+    ],
+)
+def test_only_our_own_report_with_an_id_names_a_run(
+    monkeypatch: pytest.MonkeyPatch, source: str, enrollment_id: Optional[str]
+) -> None:
+    flow = _flow(_KEYED_PLAN)
+    spine = _Spine([flow], [], {(flow.id, 1): _KEYED_PLAN})
+    _install(monkeypatch, spine)
+
+    _consume(_event("call.completed", {"enrollment_id": enrollment_id}, source=source))
+
+    assert spine.run_ids == [[]]

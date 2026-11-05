@@ -23,9 +23,11 @@ our own sends, and there it needs no declaration at all.
 What it narrows, and what it cannot: a customer with three open orders taps
 CONFIRM on one of them, and the other two runs must not hear it — her single
 tap once resolved all three and cancelled a confirmed order (10 Sep 2026,
-docs/crm/reply-run-matching.md). Attribution only ever NARROWS, so a letter
-it cannot address behaves exactly as it did before this existed. That is why
-no published plan has to change and no open run has to be re-pinned.
+docs/crm/reply-run-matching.md). Attribution narrows her other runs out, and
+it also FINDS the run it names: entry.py reads that run by id beside her own,
+so a run whose number resolved to another customer still hears its answer. A
+letter it cannot address behaves exactly as it did before this existed. That
+is why no published plan has to change and no open run has to be re-pinned.
 
 A source opts in by declaring a ``replied_to`` field — the id of the message
 this one answers, in whatever the provider calls it (Meta's context.id). A
