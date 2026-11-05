@@ -85,22 +85,16 @@ async def _deduct_completed_chat_turn(
         )
     except asyncio.CancelledError:
         logger.warning(
-            "deferred chat deduction cancelled for merchant_id=%s "
-            "session_id=%s idx=%s",
-            merchant_id,
-            session_id,
-            message_idx,
+            f"deferred chat deduction cancelled for merchant_id={merchant_id} "
+            f"session_id={session_id} idx={message_idx}"
         )
         raise
     except Exception:
         # The customer already has their answer. Billing failures must not
         # delay or surface as a failed chat turn.
-        logger.error(
-            "deferred chat deduction failed for merchant_id=%s " "session_id=%s idx=%s",
-            merchant_id,
-            session_id,
-            message_idx,
-            exc_info=True,
+        logger.opt(exception=True).error(
+            f"deferred chat deduction failed for merchant_id={merchant_id} "
+            f"session_id={session_id} idx={message_idx}"
         )
 
 
@@ -450,18 +444,14 @@ class ChatAgent(
             return await has_sufficient_credits(self.merchant_id)
         except WalletNotFoundError:
             logger.warning(
-                "no wallet found for merchant_id=%s session_id=%s; blocking the turn",
-                self.merchant_id,
-                self.session_id,
+                f"no wallet found for merchant_id={self.merchant_id} "
+                f"session_id={self.session_id}; blocking the turn"
             )
             return False
         except Exception:
-            logger.warning(
-                "has_sufficient_credits failed for merchant_id=%s "
-                "session_id=%s; failing open and allowing the turn",
-                self.merchant_id,
-                self.session_id,
-                exc_info=True,
+            logger.opt(exception=True).warning(
+                f"has_sufficient_credits failed for merchant_id={self.merchant_id} "
+                f"session_id={self.session_id}; failing open and allowing the turn"
             )
             return True
 
@@ -509,6 +499,18 @@ class ChatAgent(
             # the user's message is persisted (so a blocked turn still
             # leaves a record) and before any LLM call.
             if not await self._check_sufficient_credits():
+                # Shoppers only see a neutral message, so this line is the
+                # signal the OpenObserve alert groups by merchant_id.
+                logger.bind(
+                    alert="credits_exhausted",
+                    surface="chat",
+                    merchant_id=self.merchant_id,
+                    template_id=self.template.id,
+                    session_id=self.session_id,
+                ).warning(
+                    f"[CREDITS_EXHAUSTED] chat turn blocked for merchant "
+                    f"{self.merchant_id}"
+                )
                 yield SSEEvent(
                     event="error",
                     data={
