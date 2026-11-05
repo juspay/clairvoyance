@@ -10,7 +10,7 @@ Handlers:
 """
 
 import json
-from typing import Optional
+from typing import Any, Mapping, Optional, Tuple
 
 from fastapi import BackgroundTasks, HTTPException, Request, Response
 from starlette.datastructures import FormData
@@ -56,6 +56,27 @@ _VOBIZ_UNANSWERED_HANGUP_CODES = {
     "3010": "busy",
     "3020": "busy",
 }
+
+
+def _direction_and_answered(form: Mapping[str, Any]) -> Tuple[Optional[str], bool]:
+    """Normalise the status form's ``Direction`` and whether the call was answered.
+
+    Direction spellings differ per provider — Plivo/Vobiz ``inbound`` /
+    ``outbound``, Twilio ``inbound`` / ``outbound-api`` / ``outbound-dial``,
+    Exotel ``incoming`` / ``outbound-dial`` — so only the prefix is read.
+    Anything else is ``None``, which the unanswered handler treats as
+    "unknown: keep alerting". ``answered`` is a non-empty ``AnswerTime``
+    (Plivo/Vobiz); providers without the field report False, which is
+    accurate for every status that reaches the unanswered handler.
+    """
+    raw = str(form.get("Direction") or "").strip().lower()
+    direction: Optional[str] = None
+    if raw.startswith("in"):
+        direction = "inbound"
+    elif raw.startswith("out"):
+        direction = "outbound"
+    answered = bool(str(form.get("AnswerTime") or "").strip())
+    return direction, answered
 
 
 def _vobiz_call_status(form: FormData) -> Optional[str]:
@@ -433,7 +454,10 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
                         f"call {call_sid}: {pub_error}"
                     )
 
-                await handle_unanswered_calls(call_sid)
+                direction, answered = _direction_and_answered(form)
+                await handle_unanswered_calls(
+                    call_sid, direction=direction, answered=answered
+                )
 
     return Response(status_code=200)
 
