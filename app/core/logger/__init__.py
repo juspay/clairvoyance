@@ -9,8 +9,28 @@ from loguru import logger
 logger.remove()
 
 # Use environment variables directly to avoid circular import
-from app.core.config.static import ENVIRONMENT, PROD_LOG_LEVEL
+from app.core.config.static import (
+    ENVIRONMENT,
+    LOG_MAX_MESSAGE_BYTES,
+    PROD_LOG_LEVEL,
+)
 from app.core.logger.context import get_log_context
+
+#: Visible in a raw tail, before anyone looks at the is_truncated field.
+TRUNCATION_MARKER = "…[TRUNCATED]"
+
+
+def truncate_message(message: str, limit: int = LOG_MAX_MESSAGE_BYTES):
+    """PURE: ``(text, original_bytes_or_None)``.
+
+    BYTES, not characters — the collector counts bytes and one emoji is
+    four. The cut rewinds to a UTF-8 boundary: half a character is invalid
+    UTF-8, which makes the whole JSON line unparseable downstream.
+    """
+    raw = message.encode("utf-8")
+    if len(raw) <= limit:
+        return message, None
+    return raw[:limit].decode("utf-8", errors="ignore") + TRUNCATION_MARKER, len(raw)
 
 
 # Patcher to inject log context into extra BEFORE enqueueing
@@ -18,9 +38,19 @@ from app.core.logger.context import get_log_context
 # where contextvars are not propagated. The patcher runs in the calling thread.
 # Defined at module level so it can be reused in configure_session_logger()
 def log_context_patcher(record):
-    """Inject log context into record['extra'] for both dev and prod formatting."""
+    """Inject log context into record['extra'], and cap the message.
+
+    Capped HERE so every sink sees the same text — a sink-local cap would
+    leave the dev console printing what the JSON sink just shrank.
+    """
     ctx = get_log_context()
     record["extra"]["_log_context"] = ctx
+
+    message, original_bytes = truncate_message(record["message"])
+    if original_bytes is not None:
+        record["message"] = message
+        record["extra"]["is_truncated"] = True
+        record["extra"]["original_bytes"] = original_bytes
 
 
 def json_sink(message):
@@ -59,7 +89,10 @@ def json_sink(message):
     for key, value in extra.items():
         log_entry[key] = value
 
-    print(json.dumps(log_entry))
+    # ensure_ascii=False: the default writes a 3-byte Kannada char as the 6
+    # bytes of \u0cXX and an emoji as 12 — so a message capped at 24 KB could
+    # still ship 70 KB and be discarded. Same data, half the bytes.
+    print(json.dumps(log_entry, ensure_ascii=False))
 
 
 class InterceptHandler(logging.Handler):
