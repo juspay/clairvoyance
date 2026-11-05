@@ -17,7 +17,7 @@ Getting the second and third mixed up either re-dials a customer who was just
 rung or silently drops a lead. The dial also carries the account's
 X-Auth-Token, so it never follows a redirect and the base URL must be https
 (http only for a localhost stand-in). Nothing here reaches Vobiz, Postgres or
-Redis: ``requests.post`` and the channel accessors are patched where the code
+Redis: the dial session's ``post`` and the channel accessors are patched where the code
 looks them up.
 """
 
@@ -78,7 +78,7 @@ def make_response(status: int, body: bytes) -> requests.Response:
 
 
 class PostSpy:
-    """Stands in for requests.post: records every call, answers or raises."""
+    """Stands in for the dial session's post: records every call, answers or raises."""
 
     def __init__(
         self,
@@ -102,7 +102,7 @@ class PostSpy:
 @pytest.fixture
 def vobiz_api(monkeypatch):
     """Freeze the static config the provider imported by name, turn the egress
-    proxy off, and hand back an installer for the fake ``requests.post``."""
+    proxy off, and hand back an installer for the fake dial ``post``."""
     monkeypatch.setattr(vz, "APP_BASE_URL", APP)
     monkeypatch.setattr(vz, "VOBIZ_API_BASE_URL", API_BASE)
     monkeypatch.setattr(vz, "VOBIZ_AUTH_ID", AUTH_ID)
@@ -111,7 +111,7 @@ def vobiz_api(monkeypatch):
 
     def _install(**kwargs: Any) -> PostSpy:
         spy = PostSpy(**kwargs)
-        monkeypatch.setattr(vz.requests, "post", spy)
+        monkeypatch.setattr(vz, "_session", lambda: SimpleNamespace(post=spy))
         return spy
 
     return _install
@@ -199,7 +199,7 @@ async def test_make_call_sends_the_documented_request(vobiz_api):
     url, kwargs = spy.calls[0]
     assert url == f"{API_BASE}/Account/{AUTH_ID}/Call/"
     assert kwargs["headers"] == {"X-Auth-ID": AUTH_ID, "X-Auth-Token": AUTH_TOKEN}
-    assert kwargs["timeout"] == 30, "a black-holed Vobiz must not hang the worker"
+    assert kwargs["timeout"] == (5, 30), "a black-holed Vobiz must not hang the worker"
     assert kwargs["proxies"] is None
     assert kwargs["allow_redirects"] is False
     assert "data" not in kwargs, "Vobiz takes a JSON body, not a form"

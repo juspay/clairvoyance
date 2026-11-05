@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 
 import requests
 from fastapi import WebSocket
+from requests.adapters import HTTPAdapter
 
 from app.ai.voice.agents.breeze_buddy.agent import telephony_bot
 from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
@@ -20,6 +21,7 @@ from app.ai.voice.agents.breeze_buddy.services.telephony.base_provider import (
 )
 from app.core.config.static import (
     APP_BASE_URL,
+    BLOCKING_THREAD_POOL_SIZE,
     OUTBOUND_RING_TIMEOUT_SECONDS,
     VOBIZ_API_BASE_URL,
     VOBIZ_AUTH_ID,
@@ -32,6 +34,20 @@ from app.schemas import CallProvider, TelephonyConfig
 # make_call runs in a worker thread (make_call_async); a black-holed
 # connection must not hang pod shutdown (same reasoning as ExotelProvider).
 _REQUEST_TIMEOUT_SECONDS = 30
+
+# One keep-alive pool of connections to Vobiz per process, sized for the dial threads.
+# The account rides each request's X-Auth-* headers and every dial gets its own
+# session (so no cookie carries over), so any account can use it. Connect is capped
+# apart, so a stalled TCP/TLS setup frees the thread in seconds.
+_VOBIZ_POOL = HTTPAdapter(pool_maxsize=BLOCKING_THREAD_POOL_SIZE)
+_VOBIZ_TIMEOUT = (5, _REQUEST_TIMEOUT_SECONDS)
+
+
+def _session() -> requests.Session:
+    """A per-dial session over the shared connection pool."""
+    session = requests.Session()
+    session.mount("https://", _VOBIZ_POOL)
+    return session
 
 
 class VobizProvider(VoiceCallProvider):
@@ -96,12 +112,12 @@ class VobizProvider(VoiceCallProvider):
         proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
 
         try:
-            resp = requests.post(
+            resp = _session().post(
                 url,
                 json=payload,
                 headers=headers,
                 proxies=proxies,
-                timeout=_REQUEST_TIMEOUT_SECONDS,
+                timeout=_VOBIZ_TIMEOUT,
                 # A followed redirect would carry X-Auth-* to wherever it
                 # points (requests strips only Authorization on a host change).
                 allow_redirects=False,
