@@ -38,6 +38,7 @@ from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.schemas import UserInfo
 from app.schemas.breeze_buddy.chat import (
     ApproveToolRequest,
+    ChatSession,
     ChatSessionStatus,
     ChatTranscriptResponse,
     CreateChatSessionRequest,
@@ -46,6 +47,10 @@ from app.schemas.breeze_buddy.chat import (
     GetChatSessionResponse,
     ListChatSessionsResponse,
     SendChatMessageRequest,
+)
+from app.services.breeze_buddy.copilot.scope import (
+    CopilotScopeError,
+    validate_persisted_copilot_scope_access,
 )
 
 from .demo import router as demo_router
@@ -64,6 +69,31 @@ from .handlers import (
 from .rbac import validate_chat_create_access, validate_chat_session_access
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+def _hidden_scope_error(error: CopilotScopeError) -> HTTPException:
+    if error.status_code == status.HTTP_404_NOT_FOUND:
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat session not found",
+        )
+    return HTTPException(
+        status_code=error.status_code,
+        detail={"code": error.code, "message": error.message},
+    )
+
+
+async def _validate_chat_and_copilot_session_access(
+    current_user: UserInfo,
+    session: ChatSession,
+    *,
+    operation: str,
+) -> None:
+    validate_chat_session_access(current_user, session, operation=operation)
+    try:
+        await validate_persisted_copilot_scope_access(session.metadata, current_user)
+    except CopilotScopeError as error:
+        raise _hidden_scope_error(error) from error
 
 
 @router.post(
@@ -184,7 +214,11 @@ async def get_session(
       (returns 404 to avoid leaking existence)
     """
     session = await load_chat_session_or_404(session_id)
-    validate_chat_session_access(current_user, session, operation="get_session")
+    await _validate_chat_and_copilot_session_access(
+        current_user,
+        session,
+        operation="get_session",
+    )
     return await get_chat_session_handler(session)
 
 
@@ -216,8 +250,12 @@ async def send_message(
     # (the demo router passes ``access_check=None`` — the demo token is
     # already bound to a specific session_id and there's nothing further
     # to authorise).
-    def _check(session) -> None:
-        validate_chat_session_access(current_user, session, operation="send_message")
+    async def _check(session) -> None:
+        await _validate_chat_and_copilot_session_access(
+            current_user,
+            session,
+            operation="send_message",
+        )
 
     return await send_chat_message_handler(session_id, req, access_check=_check)
 
@@ -247,8 +285,12 @@ async def approve_tool(
         ``lock_contended``) on conflicts.
     """
 
-    def _check(session) -> None:
-        validate_chat_session_access(current_user, session, operation="approve_tool")
+    async def _check(session) -> None:
+        await _validate_chat_and_copilot_session_access(
+            current_user,
+            session,
+            operation="approve_tool",
+        )
 
     return await approve_chat_tool_handler(session_id, req, access_check=_check)
 
@@ -281,7 +323,11 @@ async def cancel_turn(
     we're cancelling.
     """
     session = await load_chat_session_or_404(session_id)
-    validate_chat_session_access(current_user, session, operation="cancel_turn")
+    await _validate_chat_and_copilot_session_access(
+        current_user,
+        session,
+        operation="cancel_turn",
+    )
     await cancel_chat_turn_handler(session_id)
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
@@ -302,7 +348,11 @@ async def end_session(
     - Reseller / Merchant: Must own the session (404 otherwise)
     """
     session = await load_chat_session_or_404(session_id)
-    validate_chat_session_access(current_user, session, operation="end_session")
+    await _validate_chat_and_copilot_session_access(
+        current_user,
+        session,
+        operation="end_session",
+    )
     return await end_chat_session_handler(session_id, session)
 
 
@@ -322,7 +372,11 @@ async def get_transcript(
     - Reseller / Merchant: Must own the session (404 otherwise)
     """
     session = await load_chat_session_or_404(session_id)
-    validate_chat_session_access(current_user, session, operation="get_transcript")
+    await _validate_chat_and_copilot_session_access(
+        current_user,
+        session,
+        operation="get_transcript",
+    )
     return await get_chat_transcript_handler(session)
 
 
