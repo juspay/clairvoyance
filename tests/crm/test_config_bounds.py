@@ -6,6 +6,10 @@ comment is read by whoever changes the dial it sits above — which is never
 the person who changes the other one.
 """
 
+import importlib
+import os
+from unittest import mock
+
 from app.core.config import static
 
 
@@ -31,3 +35,11 @@ def test_a_send_cannot_outlive_the_claim_that_marks_it_stale() -> None:
     assert static.CRM_MESSAGE_SEND_TIMEOUT_SECONDS < (
         static.CRM_DISPATCH_STALE_MINUTES * 60
     )
+
+
+def test_the_shared_llm_call_store_ships_off() -> None:
+    """The shared llm_call store is off until the env switches it on."""
+    without = {k: v for k, v in os.environ.items() if k != "LLM_CALL_L2_ENABLED"}
+    with mock.patch.dict(os.environ, without, clear=True):
+        assert importlib.reload(static).LLM_CALL_L2_ENABLED is False
+    importlib.reload(static)

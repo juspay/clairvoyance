@@ -13,6 +13,7 @@ from app.crm.identity.contracts import customer_facts
 from app.crm.outreach import playbook, predicates
 from app.crm.outreach.nodes.context import run_facts
 from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
+from app.utils.transformation.utils import memo_merchant
 
 
 async def blocks_for(
@@ -46,11 +47,13 @@ async def blocks_for(
     customer = None
     if playbook.needs_customer(definition, wanted):
         customer = await customer_facts(run.merchant_id, str(run.customer_id))
-    return await playbook.resolve(
-        definition,
-        wanted,
-        facts,
-        stage_facts,
-        customer,
-        predicates.RunLens(run.context, definition.exits),
-    )
+    # llm_call's memo is keyed per merchant.
+    with memo_merchant(run.merchant_id):
+        return await playbook.resolve(
+            definition,
+            wanted,
+            facts,
+            stage_facts,
+            customer,
+            predicates.RunLens(run.context, definition.exits),
+        )
