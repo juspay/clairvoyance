@@ -17,7 +17,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     AIC_MODEL_PATH_S_16KHZ=/app/models/voice/aic/quail_s_16khz.aicmodel \
     UV_CACHE_DIR=/app/.uv-cache
 
-# Install system dependencies required for audio processing and compilation + curl for GCP CLI
+# Install system dependencies required for audio processing and compilation
 RUN apt-get update && apt-get install -y \
     build-essential \
     ffmpeg \
@@ -50,25 +50,12 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --compile-bytecode && \
     uv pip show pipecat-ai
 
-# Download AIC assets from GCP Storage using authenticated context
-ARG AIC_BUCKET_PATH=gs://breeze-clairvoyance-models/aic
-
-# Install Google Cloud CLI and download AIC files (only for GCP deployments)
-# Use BuildKit secret mount to avoid leaking token in image layers
-RUN --mount=type=secret,id=gcp_token \
-    if [ -f /run/secrets/gcp_token ]; then \
-        echo "=== Installing Google Cloud CLI for model assets ===" && \
-        curl -sSL https://sdk.cloud.google.com | bash && \
-        export PATH=$PATH:/root/google-cloud-sdk/bin && \
-        echo "=== Downloading AIC assets ===" && \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_8khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_8khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_l_16khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_l_16khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_vf_2_1_l_16khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_vf_2_1_l_16khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_s_8khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_s_8khz.aicmodel"; \
-        gcloud storage cp --access-token-file=/run/secrets/gcp_token ${AIC_BUCKET_PATH}/quail_s_16khz.aicmodel /app/models/voice/aic/ || echo "Warning: Failed to download quail_s_16khz.aicmodel"; \
-    else \
-        echo "Warning: GCP token secret not provided, skipping AIC installation (AWS deployment)"; \
-    fi
+# AIC (ai-coustics) Quail models, from ai-coustics' public CDN (artifacts.ai-coustics.io).
+# The installed SDK picks the model-file version compatible with itself and verifies
+# the checksum; files are saved under the fixed names in AIC_*_PATH above.
+# No cloud credentials needed. The build fails if any model can't be downloaded.
+RUN /app/.venv/bin/python -c "import shutil, aic_sdk; [shutil.move(aic_sdk.Model.download(m, '/tmp/aic'), '/app/models/voice/aic/' + n) for m, n in [('quail-l-8khz', 'quail_l_8khz.aicmodel'), ('quail-l-16khz', 'quail_l_16khz.aicmodel'), ('quail-vf-2.1-l-16khz', 'quail_vf_2_1_l_16khz.aicmodel'), ('quail-s-8khz', 'quail_s_8khz.aicmodel'), ('quail-s-16khz', 'quail_s_16khz.aicmodel')]]" && \
+    ls -l /app/models/voice/aic && rm -rf /tmp/aic
 
 # Create NLTK data directory and download required data
 RUN mkdir -p /usr/local/nltk_data && \
