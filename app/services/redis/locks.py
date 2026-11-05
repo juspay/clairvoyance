@@ -132,25 +132,27 @@ class RedisLock:
             or another caller acquired after a stale TTL). Either way
             the caller's handle is cleared.
         """
-        if self._token is None:
+        # Snapshot and clear the handle BEFORE the first await. Two
+        # overlapping release() calls on one instance (e.g. a shielded
+        # background release racing a ``finally`` release) must not both
+        # pass this guard: the second would otherwise run the script and
+        # then format ``None[:8]`` once the first has cleared the token.
+        token = self._token
+        if token is None:
             return False
+        self._token = None
 
         redis = await self._get_redis()
-        result = await redis.run_script(
-            _RELEASE_LUA, keys=[self.key], args=[self._token]
-        )
+        result = await redis.run_script(_RELEASE_LUA, keys=[self.key], args=[token])
         released = bool(result)
         if not released:
             logger.warning(
-                f"RedisLock key='{self.key}' token={self._token[:8]}... "
+                f"RedisLock key='{self.key}' token={token[:8]}... "
                 "was already lost before release (TTL elapsed or stolen)"
             )
         else:
-            logger.debug(
-                f"Released RedisLock key='{self.key}' token={self._token[:8]}..."
-            )
+            logger.debug(f"Released RedisLock key='{self.key}' token={token[:8]}...")
 
-        self._token = None
         return released
 
     async def __aenter__(self) -> "RedisLock":
