@@ -3,6 +3,7 @@ from urllib.parse import urlencode
 
 import plivo
 from fastapi import WebSocket
+from requests.adapters import HTTPAdapter
 from starlette.responses import HTMLResponse
 
 from app.ai.voice.agents.breeze_buddy.accounts import (
@@ -26,12 +27,27 @@ from app.ai.voice.agents.breeze_buddy.utils.hold_transfer import (
 )
 from app.core.config.static import (
     APP_BASE_URL,
+    BLOCKING_THREAD_POOL_SIZE,
     OUTBOUND_RING_TIMEOUT_SECONDS,
     PLIVO_REST_TIMEOUT_SECONDS,
 )
 from app.core.logger import logger
 from app.database.accessor import get_lead_by_call_id
 from app.schemas import CallProvider, TelephonyConfig
+
+# One keep-alive pool of connections to Plivo per process, sized for the dial threads.
+# Every account's client shares it: the account rides each request, while a client and
+# its SDK state (base_uri, voice_retry_count) stay per call. Connect is capped apart,
+# so a stalled TCP/TLS setup frees the thread in seconds and logs apart from a slow reply.
+_PLIVO_POOL = HTTPAdapter(pool_maxsize=BLOCKING_THREAD_POOL_SIZE)
+_PLIVO_TIMEOUT = (5, PLIVO_REST_TIMEOUT_SECONDS)
+
+
+def _pooled(client: plivo.RestClient) -> plivo.RestClient:
+    """Send a per-call client's requests over the shared connection pool."""
+    client.session.mount("https://", _PLIVO_POOL)
+    client.multipart_session.mount("https://", _PLIVO_POOL)
+    return client
 
 
 class PlivoProvider(VoiceCallProvider):
@@ -49,10 +65,10 @@ class PlivoProvider(VoiceCallProvider):
         environment's."""
         self.account = account
         self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN = plivo_keys(account)
-        self.client = plivo.RestClient(
-            self.PLIVO_AUTH_ID,
-            self.PLIVO_AUTH_TOKEN,
-            timeout=PLIVO_REST_TIMEOUT_SECONDS,
+        self.client = _pooled(
+            plivo.RestClient(
+                self.PLIVO_AUTH_ID, self.PLIVO_AUTH_TOKEN, timeout=_PLIVO_TIMEOUT
+            )
         )
         self.conference_service = PlivoConferenceService(self.client)
 
@@ -251,8 +267,10 @@ async def handle_mpc_transfer_webhook(params: dict) -> None:
                 {"status": "unavailable", "reason": "account_unresolved"},
             )
             return
-        client = plivo.RestClient(
-            account.auth_id, account.auth_token, timeout=PLIVO_REST_TIMEOUT_SECONDS
+        client = _pooled(
+            plivo.RestClient(
+                account.auth_id, account.auth_token, timeout=_PLIVO_TIMEOUT
+            )
         )
         conference_service = PlivoConferenceService(client)
         result = await conference_service.move_customer_to_mpc(
