@@ -285,6 +285,23 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 "template instead.",
             )
 
+        # is_active=false is the merchant's off switch: an inactive template
+        # takes no leads.
+        if not getattr(template, "is_active", True) and not is_non_customer_lead(
+            req.execution_mode or ExecutionMode.TELEPHONY,
+            {"playground": req.is_playground},
+        ):
+            logger.warning(
+                "Rejected lead push at inactive template %s (reseller %s)",
+                req.template_id,
+                req.reseller_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Template {req.template_id} is inactive — activate it "
+                "to receive leads.",
+            )
+
         customer_mobile = req.payload.get("customer_mobile_number")
         if customer_mobile is not None and not is_dialable(customer_mobile):
             logger.warning(

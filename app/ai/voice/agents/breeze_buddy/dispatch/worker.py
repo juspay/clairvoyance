@@ -59,6 +59,7 @@ from app.ai.voice.agents.breeze_buddy.managers.calls import (
     _release_number,
     _run_pre_checks_for_lead,
     finish_lead_call_limit_reached,
+    finish_lead_template_inactive,
 )
 from app.ai.voice.agents.breeze_buddy.managers.pre_checks import PreCheckDecision
 from app.ai.voice.agents.breeze_buddy.managers.utils import (
@@ -474,6 +475,18 @@ class Worker:
                     "without a template."
                 )
 
+            # An inactive template places no calls. Intake already refuses new
+            # leads for it; this also stops the ones queued before it was
+            # switched off, and their retries.
+            if (
+                template is not None
+                and not getattr(template, "is_active", True)
+                and not is_non_customer_lead(locked.execution_mode, locked.metaData)
+            ):
+                await finish_lead_template_inactive(locked, session)
+                lock_released = await self._release(locked.id)
+                return
+
             pre_check_decision, pre_check_defer = await _run_pre_checks_for_lead(
                 config, locked, template, session
             )
@@ -497,8 +510,8 @@ class Worker:
             # record the attempt here, because we may still bail downstream
             # (channel-token exhaustion, provider error) without ever dialing.
             # The matching record_outbound_call_attempt() runs only after
-            # provider.make_call succeeds. Inactive templates skip the
-            # rate limit entirely (per release fix 2cd510d).
+            # provider.make_call succeeds. Inactive templates that get this
+            # far skip the rate limit (per release fix 2cd510d).
             rate_limited_phone = (
                 locked.execution_mode == ExecutionMode.TELEPHONY
                 and customer_phone
