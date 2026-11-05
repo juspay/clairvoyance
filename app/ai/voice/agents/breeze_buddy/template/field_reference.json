@@ -114,7 +114,7 @@
       "example": "eb0df4e9-a438-4ce4-a828-addf9db5ce3a"
     },
     "is_active": {
-      "description": "When false, the template is soft-disabled: dispatch will not enqueue new leads for it. Set to false (not delete) when retiring a template.",
+      "description": "When false, the template is soft-disabled: new leads are rejected and queued ones are not dialled. Set to false (not delete) when retiring a template.",
       "example": true
     },
     "supported_channels": {

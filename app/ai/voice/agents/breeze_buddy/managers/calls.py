@@ -369,6 +369,63 @@ async def finish_lead_call_limit_reached(
     return True
 
 
+TEMPLATE_INACTIVE_OUTCOME = "TEMPLATE_INACTIVE"
+
+
+async def finish_lead_template_inactive(lead: LeadCallTracker, session) -> bool:
+    """End a lead whose template is inactive (``is_active=false``).
+
+    Terminal, the shape of PRECHECK_FAILED and CALL_LIMIT_REACHED: FINISHED
+    with the outcome, and the reporting webhook fired so the caller's
+    workflow closes instead of waiting on a call that will never be placed.
+
+    Returns False — and reports nothing — when the terminal write did not
+    land: the lead is still BACKLOG, the next dispatch refuses it again and
+    retries the write, so a webhook sent now would be sent twice.
+    """
+    # Seed from what is already on the row: update_lead_call_completion_details
+    # REPLACES meta_data (see _run_pre_checks_for_lead).
+    meta_data: dict[str, Any] = {
+        **(lead.metaData or {}),
+        "reason": "Template is inactive",
+    }
+    finished = await update_lead_call_completion_details(
+        id=lead.id,
+        status=LeadCallStatus.FINISHED,
+        outcome=TEMPLATE_INACTIVE_OUTCOME,
+        meta_data=meta_data,
+        call_end_time=datetime.now(timezone.utc),
+    )
+    if finished is None:
+        logger.error(
+            f"Lead {lead.id}: {TEMPLATE_INACTIVE_OUTCOME} write did not land; not "
+            "reporting it — the next dispatch refuses the lead again"
+        )
+        return False
+    logger.info(
+        f"Lead {lead.id} finished {TEMPLATE_INACTIVE_OUTCOME}: template "
+        f"{lead.template_id} is inactive"
+    )
+
+    reporting_webhook_url = (
+        lead.payload.get("reporting_webhook_url") if lead.payload else None
+    )
+    if reporting_webhook_url:
+        webhook_data = {
+            "outcome": TEMPLATE_INACTIVE_OUTCOME,
+            "attemptCount": lead.attempt_count + 1,
+            "failureReason": "Template is inactive",
+            "orderId": lead.request_id,
+        }
+        try:
+            await send_webhook_with_retry(session, reporting_webhook_url, webhook_data)
+        except Exception as e:
+            logger.error(
+                f"Error sending template-inactive webhook for lead {lead.id}: {e}"
+            )
+    return True
+
+
 async def _get_available_number(
     config: CallExecutionConfig,
     template: Optional[TemplateModel],
