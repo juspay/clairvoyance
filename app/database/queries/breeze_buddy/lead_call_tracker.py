@@ -3,10 +3,11 @@ Database query functions for the application.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
+from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
@@ -218,6 +219,226 @@ def update_lead_call_details_query(
         id,
         LeadCallStatus.BACKLOG.value,
     ]
+    return text, values
+
+
+def hold_unknown_dial_query(
+    lead_id: str,
+    dialled_at: datetime,
+    telephony_number_id: str,
+    marker: Dict[str, Any],
+) -> Tuple[str, List[Any]]:
+    """
+    Hold a lead after a dial whose reply never arrived: PROCESSING with no
+    call_id, under ``call_initiated_time = dialled_at``, with ``marker`` merged
+    into meta_data — in one statement, so a held lead always carries its
+    marker. Same BACKLOG guard as ``update_lead_call_details_query``.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "status" = $1,
+            "call_id" = NULL,
+            "call_initiated_time" = $2,
+            "telephony_number_id" = $3,
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $4::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $5 AND "status" = $6
+        RETURNING *;
+    """
+    values = [
+        LeadCallStatus.PROCESSING.value,
+        dialled_at,
+        telephony_number_id,
+        json.dumps(marker),
+        lead_id,
+        LeadCallStatus.BACKLOG.value,
+    ]
+    return text, values
+
+
+def claim_unknown_dial_query(
+    lead_id: str, dialled_at: datetime, call_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Attach a provider call id to the lead held after a dial with no reply.
+
+    Matches only the dial still waiting for one — PROCESSING, no call_id, and
+    dialled at exactly ``dialled_at`` — so a late webhook from an older dial of
+    the same lead can never attach to a newer one. Zero rows for every other
+    webhook.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+          AND "status" = $3
+          AND "call_id" IS NULL
+          AND "call_initiated_time" = $4
+        RETURNING "id";
+    """
+    values = [call_id, lead_id, LeadCallStatus.PROCESSING.value, dialled_at]
+    return text, values
+
+
+def requeue_unknown_dial_query(
+    lead_id: str, dialled_at: datetime, marker_key: str
+) -> Tuple[str, List[Any]]:
+    """
+    Put a held lead that no webhook ever claimed back to be dialled now: the
+    provider never placed that call. Same match as the claim, so exactly one
+    of the two wins. Unlocks in the same statement (the caller must not unlock
+    again — a worker may own the row by then) and drops the hold marker.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "status" = $1,
+            "is_locked" = FALSE,
+            "next_attempt_at" = NOW(),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb - $2::text,
+            "updated_at" = NOW()
+        WHERE "id" = $3
+          AND "status" = $4
+          AND "call_id" IS NULL
+          AND "call_initiated_time" = $5
+        RETURNING "id";
+    """
+    values = [
+        LeadCallStatus.BACKLOG.value,
+        marker_key,
+        lead_id,
+        LeadCallStatus.PROCESSING.value,
+        dialled_at,
+    ]
+    return text, values
+
+
+def stamp_dialled_call_query(
+    lead_id: str, dialled_at: datetime, call_id: str, marker_key: str
+) -> Tuple[str, List[Any]]:
+    """
+    Stamp the provider's call id on a lead whose dial row was written before the
+    request (PROCESSING, ``call_initiated_time = dialled_at``) and drop the
+    in-flight marker. Also matches when a webhook already claimed the same
+    call id first. Zero rows when the row moved on (the call already ended and
+    finished it, or the merchant finished the lead mid-dial).
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_id" = $1,
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb - $2::text,
+            "updated_at" = NOW()
+        WHERE "id" = $3
+          AND "status" = $4
+          AND "call_initiated_time" = $5
+          AND ("call_id" IS NULL OR "call_id" = $1)
+        RETURNING *;
+    """
+    values = [
+        call_id,
+        marker_key,
+        lead_id,
+        LeadCallStatus.PROCESSING.value,
+        dialled_at,
+    ]
+    return text, values
+
+
+def revert_dial_to_backlog_query(
+    lead_id: str, dialled_at: datetime, defer_seconds: int, marker_key: str
+) -> Tuple[str, List[Any]]:
+    """
+    Undo a dial row written before the request when the provider said the call
+    was NOT placed: back to BACKLOG, due in ``defer_seconds``, unlocked, marker
+    dropped. Only while no webhook claimed it (a claimed row has a live call).
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "status" = $1,
+            "is_locked" = FALSE,
+            "next_attempt_at" = NOW() + make_interval(secs => $2),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb - $3::text,
+            "updated_at" = NOW()
+        WHERE "id" = $4
+          AND "status" = $5
+          AND "call_id" IS NULL
+          AND "call_initiated_time" = $6
+        RETURNING "id";
+    """
+    values = [
+        LeadCallStatus.BACKLOG.value,
+        float(defer_seconds),
+        marker_key,
+        lead_id,
+        LeadCallStatus.PROCESSING.value,
+        dialled_at,
+    ]
+    return text, values
+
+
+def attach_placed_call_to_lead_query(
+    id: str,
+    call_id: str,
+    call_initiated_time: datetime,
+    telephony_number_id: str,
+) -> Tuple[str, List[Any]]:
+    """
+    Stamp a PLACED call on a lead the merchant FINISHED (aborted) mid-dial.
+
+    Used when the dispatcher's BACKLOG -> PROCESSING CAS lost after the
+    provider already accepted the dial. The call is live and holds a channel;
+    its webhooks look the lead up by ``call_id`` and return the line via
+    ``telephony_number_id``. Status and outcome are untouched; a marker is
+    MERGED into ``meta_data`` (never replacing it) so the completion and
+    answer paths know not to treat this as a normal call.
+
+    Guards: only a FINISHED lead (a lost CAS can also be a DB error that left
+    the row BACKLOG, and a BACKLOG row carrying a call id would be re-dialled
+    and lose this call's line) and only a lead with no call yet (a different
+    live call's id is never overwritten).
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_id" = $1, "call_initiated_time" = $2, "telephony_number_id" = $3,
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $5::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $4 AND "call_id" IS NULL AND "status" = 'FINISHED'
+        RETURNING *;
+    """
+    marker = {
+        CALL_ATTACHED_AFTER_FINISH: {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "call_id": call_id,
+        }
+    }
+    values = [call_id, call_initiated_time, telephony_number_id, id, json.dumps(marker)]
+    return text, values
+
+
+def claim_attached_call_release_query(id: str) -> Tuple[str, List[Any]]:
+    """
+    Claim the one line release owed by a call stamped on a lead the merchant
+    finished mid-dial (``attach_placed_call_to_lead_query``).
+
+    Stamps ``released_at`` inside the marker, only while the marker is there
+    and not yet released, so of every end-of-call path for that call
+    (completion, unanswered, the ``completed`` reconcile) and their duplicate
+    webhooks exactly one gets the row back and returns the line. The marker
+    itself stays: the answer path keeps hanging up and the completion path
+    keeps leaving the merchant's outcome alone (dropping it would let a late
+    duplicate treat the row as a normal call and overwrite that outcome).
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "meta_data" = jsonb_set(
+                "meta_data", ARRAY[$2::text, 'released_at'], to_jsonb(NOW())
+            ),
+            "updated_at" = NOW()
+        WHERE "id" = $1
+          AND "meta_data" ? $2::text
+          AND NOT (("meta_data" -> $2::text) ? 'released_at')
+        RETURNING "id";
+    """
+    values = [id, CALL_ATTACHED_AFTER_FINISH]
     return text, values
 
 
