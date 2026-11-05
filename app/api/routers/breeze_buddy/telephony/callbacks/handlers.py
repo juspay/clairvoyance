@@ -18,6 +18,7 @@ from starlette.responses import HTMLResponse
 from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import (
+    claim_unknown_dial_from_webhook,
     handle_unanswered_calls,
     reconcile_completed_call,
     update_call_recording,
@@ -368,6 +369,11 @@ async def handle_callback_status(request: Request, provider: str) -> Response:
             f"Status callback: {call_status} for call {call_sid} from {provider}",
             extra={"call_sid": call_sid, "status": call_status, "provider": provider},
         )
+
+        # A dial whose reply timed out is held with no call_id; link this
+        # call to it first, so every lookup below finds the lead.
+        if provider.lower() == "plivo":
+            await claim_unknown_dial_from_webhook(str(call_sid), request.query_params)
 
         # Backup release: notify Smart Router when call ends.
         # Idempotent — safe even if WebSocket already released the pod.

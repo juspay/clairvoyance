@@ -15,6 +15,7 @@ from app.database.queries.breeze_buddy.lead_call_tracker import (
 from app.database.queries.breeze_buddy.telephony_number import (
     TELEPHONY_NUMBER_TABLE,
 )
+from app.schemas.breeze_buddy.core import CALL_ATTACHED_AFTER_FINISH
 
 
 def get_unscheduled_backlog_leads_query(
@@ -39,7 +40,9 @@ def get_unscheduled_backlog_leads_query(
     return text, [str(lookahead_seconds), limit]
 
 
-def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
+def count_processing_by_telephony_number_query(
+    attached_window_minutes: int = 240,
+) -> Tuple[str, List[Any]]:
     """
     For ``reconcile_channel_tokens``: how many calls are HOLDING A CHANNEL on
     each telephony number right now? The reconciler compares this against
@@ -65,26 +68,47 @@ def count_processing_by_telephony_number_query() -> Tuple[str, List[Any]]:
     by ``_acquire_number`` and defer. Correct, but a hot loop precisely when
     the number was busiest. With inbound counted, the tokens are never minted
     and workers park on BLPOP instead.
+
+    - FINISHED with ``CALL_ATTACHED_AFTER_FINISH`` not yet released: a call
+      placed for a lead the merchant aborted mid-dial keeps its channel until
+      the call ends (``calls._release_attached_call_once``). Left out, the
+      reconciler mints a token for it that the DB gate refuses, a refused-dial
+      loop on that number. Bounded by ``attached_window_minutes`` of dial age
+      (the indexed ``call_initiated_time``): no call outlives it, and the scan
+      stays on recent rows instead of every FINISHED lead.
     """
     text = f"""
-        SELECT l."telephony_number_id", COUNT(*) AS in_flight
-        FROM "{LEAD_CALL_TRACKER_TABLE}" l
-        JOIN "{TELEPHONY_NUMBER_TABLE}" n ON n."id" = l."telephony_number_id"
-        WHERE l."status" = 'PROCESSING'
-          AND l."telephony_number_id" IS NOT NULL
-          AND (
-               (
-                    l."call_direction" = 'OUTBOUND'
-                AND l."execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
-               )
-            OR (
-                    l."call_direction" = 'INBOUND'
-                AND n."provider" IN ('PLIVO', 'VOBIZ')
-               )
-          )
-        GROUP BY l."telephony_number_id";
+        SELECT held."telephony_number_id", COUNT(*) AS in_flight
+        FROM (
+            SELECT l."telephony_number_id"
+            FROM "{LEAD_CALL_TRACKER_TABLE}" l
+            JOIN "{TELEPHONY_NUMBER_TABLE}" n ON n."id" = l."telephony_number_id"
+            WHERE l."status" = 'PROCESSING'
+              AND l."telephony_number_id" IS NOT NULL
+              AND (
+                   (
+                        l."call_direction" = 'OUTBOUND'
+                    AND l."execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+                   )
+                OR (
+                        l."call_direction" = 'INBOUND'
+                    AND n."provider" IN ('PLIVO', 'VOBIZ')
+                   )
+              )
+            UNION ALL
+            SELECT l."telephony_number_id"
+            FROM "{LEAD_CALL_TRACKER_TABLE}" l
+            WHERE l."status" = 'FINISHED'
+              AND l."call_initiated_time" > NOW() - make_interval(mins => $1)
+              AND l."telephony_number_id" IS NOT NULL
+              AND l."call_direction" = 'OUTBOUND'
+              AND l."execution_mode" IN ('TELEPHONY', 'TELEPHONY_TEST')
+              AND l."meta_data" ? $2::text
+              AND NOT ((l."meta_data" -> $2::text) ? 'released_at')
+        ) held
+        GROUP BY held."telephony_number_id";
     """
-    return text, []
+    return text, [attached_window_minutes, CALL_ATTACHED_AFTER_FINISH]
 
 
 def clean_stale_bb_locks_query(threshold_minutes: int) -> Tuple[str, List[Any]]:
