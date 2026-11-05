@@ -1531,6 +1531,13 @@ async def try_on_widget_handler(
     # can never take the conversation offline. A floor of 0 is parity with
     # chat: try-on stops exactly when chat would.
     if not enough:
+        logger.bind(
+            alert="credits_exhausted",
+            surface="try_on",
+            merchant_id=cfg.merchant_id,
+            template_id=cfg.template_id,
+            session_id=session_id,
+        ).warning(f"[CREDITS_EXHAUSTED] try-on blocked for merchant {cfg.merchant_id}")
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail="This store is out of try-on credits for now.",
