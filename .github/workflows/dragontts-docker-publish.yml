@@ -1,0 +1,62 @@
+name: Build & Push DragonTTS Image to Artifact Registry
+
+# Pushes the DragonTTS image (the self-contained app under dragontts/, with
+# its own Dockerfile/pyproject/uv.lock) to its own Artifact Registry repo.
+# Independent of the clairvoyance image workflows: it only runs when DragonTTS
+# files change on `release`. Build + push only — the GKE rollout is done
+# manually with kubectl. Reuses clairvoyance's WIF identity (same repo/project).
+#
+# Prerequisite (GCP side, not CI): the github-deployer@breeze-automatic-prod SA
+# must have Artifact Registry Writer on the `dragontts` repo in
+# breeze-automatic-prod (it already has it on `clairvoyance`).
+
+on:
+  push:
+    branches:
+      - release
+    paths:
+      - dragontts/**
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: dragontts-docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: projects/840384202515/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deployer@breeze-automatic-prod.iam.gserviceaccount.com
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA:0:8}" >> $GITHUB_ENV
+
+      - name: Build and Push DragonTTS Image to Artifact Registry
+        uses: docker/build-push-action@v5
+        with:
+          context: dragontts
+          push: true
+          platforms: linux/amd64
+          tags: |
+            asia-south1-docker.pkg.dev/breeze-automatic-prod/dragontts/dragontts:${{ env.SHORT_SHA }}
+            asia-south1-docker.pkg.dev/breeze-automatic-prod/dragontts/dragontts:latest
+          provenance: false
+          sbom: false

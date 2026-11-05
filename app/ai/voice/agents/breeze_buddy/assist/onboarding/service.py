@@ -1,0 +1,1022 @@
+"""Simple, idempotent Buddy Assist onboarding orchestration."""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import re
+import secrets
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, AsyncIterator, Dict, List, Literal, Mapping, Optional, cast
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from pydantic import ValidationError
+
+from app.ai.voice.agents.breeze_buddy.accounts import Accounts
+from app.ai.voice.agents.breeze_buddy.assist.engine.identity import (
+    normalize_merchant_domain,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.research.exceptions import (
+    WebsiteScrapingConfigurationError,
+    WebsiteScrapingUpstreamError,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.research.website import (
+    scrape_website,
+)
+from app.ai.voice.agents.breeze_buddy.assist.engine.skeleton import (
+    BRAND_MARKER,
+    SHOP_DOMAIN_PLACEHOLDER,
+    fill_placeholders,
+    platform_sections,
+    resolve_platform_sections,
+)
+from app.ai.voice.agents.breeze_buddy.assist.platforms import registry
+from app.ai.voice.agents.breeze_buddy.assist.platforms.base import PlatformAdapter
+from app.ai.voice.agents.breeze_buddy.assist.verticals import registry as verticals
+from app.ai.voice.agents.breeze_buddy.assist.verticals.base import Vertical
+from app.ai.voice.agents.breeze_buddy.assist.verticals.fields import (
+    AssistFields,
+    apply_edits,
+    clean_value,
+    fields_from_notes,
+)
+from app.ai.voice.agents.breeze_buddy.chat.sse import SSEEvent
+from app.ai.voice.agents.breeze_buddy.template.cache import invalidate_template
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    TemplateModel,
+)
+from app.core.logger import logger
+from app.database.accessor.breeze_buddy.merchants import (
+    create_merchant,
+    get_merchant_by_merchant_identifier,
+)
+from app.database.accessor.breeze_buddy.template import (
+    create_template,
+    delete_template_if_not_referenced,
+    get_template_by_id,
+    get_template_in_scope,
+    replace_template,
+    update_template_flow_and_configurations,
+)
+from app.database.accessor.breeze_buddy.widget_config import (
+    create_widget_config,
+    get_widget_config_by_reseller_merchant,
+    update_widget_config,
+)
+from app.schemas.breeze_buddy.assist.onboarding import (
+    AssistOnboardingCompletion,
+    AssistOnboardingError,
+    AssistOnboardingStreamRequest,
+    AssistOnboardRequest,
+    AssistOnboardResponse,
+    OnboardingPlatform,
+    OnboardingVertical,
+)
+from app.schemas.breeze_buddy.assist.onboarding.template import (
+    AssistTemplateRequest,
+    AssistTemplateResponse,
+)
+from app.schemas.breeze_buddy.widget_config import WidgetConfigResponse
+
+BRAND_IDENTITY_MARKER = BRAND_MARKER
+# The skeleton every live Assist template runs on (plan §3.1); drift from it
+# is logged, not fatal — see ``blueprint_shape_warnings``.
+EXPECTED_BLUEPRINT_MODEL = "gemini-3.6-flash"
+
+_PUBLIC_KEY_NBYTES = 32
+_SCRAPE_TIMEOUT_SECONDS = 18
+
+
+@dataclass
+class OnboardingFailure(Exception):
+    step: str
+    code: str
+    message: str
+    retryable: bool = False
+
+
+def _progress(
+    step: str, status: Literal["running", "done"], **details: Any
+) -> SSEEvent:
+    data: Dict[str, Any] = {"step": step, "status": status}
+    data.update(details)
+    return SSEEvent(event="progress", data=data)
+
+
+def _template_name(merchant_name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", merchant_name.lower()).strip("-")
+    return f"{slug or 'store'}-assist"
+
+
+def _site_host(website_url: str) -> str:
+    return (urlsplit(website_url).hostname or "").lower()
+
+
+def _configuration_dict(template: TemplateModel) -> Dict[str, Any]:
+    if template.configurations is None:
+        return {}
+    return template.configurations.model_dump(
+        mode="json",
+        exclude_none=True,
+        context={"reveal_secrets": True},
+    )
+
+
+def _validate_default_template(
+    template: TemplateModel, adapter: PlatformAdapter, vertical: Vertical
+) -> None:
+    prompt = template.flow.get("system_prompt")
+    if not isinstance(prompt, str):
+        raise OnboardingFailure(
+            "loading_default_template",
+            "DEFAULT_TEMPLATE_INVALID",
+            "Default Assist template has no system prompt.",
+        )
+    if prompt.count(vertical.skeleton.brand_marker) != 1:
+        raise OnboardingFailure(
+            "loading_default_template",
+            "DEFAULT_TEMPLATE_INVALID",
+            "Default Assist template has an invalid brand marker.",
+        )
+    try:
+        platform_sections(prompt, registry.legacy_section_markers())
+    except ValueError as exc:
+        raise OnboardingFailure(
+            "loading_default_template",
+            "DEFAULT_TEMPLATE_INVALID",
+            f"Default Assist template has an invalid platform section ({exc}).",
+        ) from exc
+    problems = adapter.validate_blueprint(prompt, _configuration_dict(template))
+    if problems:
+        raise OnboardingFailure(
+            "loading_default_template",
+            "DEFAULT_TEMPLATE_INVALID",
+            f"Default Assist template is not usable for {adapter.id}: {problems[0]}.",
+        )
+    for warning in blueprint_shape_warnings(template):
+        logger.warning(f"Assist blueprint {template.id} shape drift: {warning}")
+
+
+def blueprint_shape_warnings(template: TemplateModel) -> List[str]:
+    """Drift from the fleet skeleton that is tolerated (logged), not fatal.
+
+    Failing here would take every new install down the moment this code
+    ships ahead of the data row; the checks become errors once both
+    resellers carry the v2 blueprint (plan §3.1).
+    """
+    warnings: List[str] = []
+    flow = template.flow or {}
+    if flow.get("mode") != "direct":
+        warnings.append(f"flow.mode is {flow.get('mode')!r}, expected 'direct'")
+    functions = flow.get("functions") or []
+    if functions:
+        warnings.append(
+            f"flow.functions has {len(functions)} entries, expected none "
+            "(features are toggles, never blueprint content)"
+        )
+    channels = [str(channel).lower() for channel in (template.supported_channels or [])]
+    if channels != ["chat"]:
+        warnings.append(f"supported_channels is {channels}, expected ['chat']")
+    model = (_configuration_dict(template).get("llm_configurations") or {}).get("model")
+    if model != EXPECTED_BLUEPRINT_MODEL:
+        warnings.append(
+            f"llm model is {model!r}, expected {EXPECTED_BLUEPRINT_MODEL!r}"
+        )
+    return warnings
+
+
+def build_merchant_template(
+    *,
+    default_template: TemplateModel,
+    body: AssistOnboardingStreamRequest,
+    website_context: str,
+    template_id: str,
+    existing_template: Optional[TemplateModel],
+    adapter: PlatformAdapter,
+    vertical: Vertical,
+    fields: Optional[AssistFields] = None,
+) -> TemplateModel:
+    """Build a merchant template from the DB blueprint without mutating it.
+
+    Platform-blind: the adapter decides which prompt sections, MCP servers,
+    config entries and payload keys survive; everything another platform
+    owns is dropped. With ``fields`` the brand block is written from the
+    vertical's form instead of ``website_context``; the Build page reads them
+    back out of the prompt.
+    """
+    flow = copy.deepcopy(default_template.flow)
+    prompt = flow.get("system_prompt")
+    _validate_default_template(default_template, adapter, vertical)
+    assert isinstance(prompt, str)
+
+    if fields is not None:
+        brand_block = vertical.brand_block_from_fields(fields)
+    else:
+        brand_block = vertical.brand_block(
+            body.merchant_name,
+            body.bot_brand_name or body.merchant_name,
+            website_context,
+        )
+    prompt = prompt.replace(vertical.skeleton.brand_marker, brand_block, 1)
+    prompt = resolve_platform_sections(
+        prompt, {adapter.id}, registry.legacy_section_markers()
+    )
+    flow["system_prompt"] = prompt
+
+    configurations = _configuration_dict(default_template)
+    mcp = copy.deepcopy(configurations.get("mcp") or {})
+    foreign_servers = registry.foreign_mcp_server_names(adapter)
+    servers = [
+        server
+        for server in list(mcp.get("servers") or [])
+        if server.get("name") not in foreign_servers
+    ]
+    if servers:
+        mcp["servers"] = servers
+        configurations["mcp"] = mcp
+    else:
+        configurations.pop("mcp", None)
+    for key in registry.foreign_tool_config_keys(adapter):
+        configurations.pop(key, None)
+    if fields is not None:
+        _merge_config(configurations, vertical.update_chat_settings(fields))
+
+    expected_payload_schema = copy.deepcopy(
+        default_template.expected_payload_schema or {}
+    )
+    expected_payload_schema.update(
+        vertical.payload_schema(_site_host(body.website_url))
+    )
+    for key in registry.foreign_payload_keys(adapter):
+        expected_payload_schema.pop(key, None)
+
+    persisted_secrets = (
+        copy.deepcopy(
+            existing_template.secrets if existing_template else default_template.secrets
+        )
+        or {}
+    )
+    persisted_secrets.update(vertical.secrets(_site_host(body.website_url)))
+
+    placeholders = {SHOP_DOMAIN_PLACEHOLDER: _site_host(body.website_url)}
+    flow["system_prompt"] = fill_placeholders(flow["system_prompt"], placeholders)
+    configurations = fill_placeholders(configurations, placeholders)
+
+    candidate = TemplateModel(
+        id=template_id,
+        reseller_id=body.reseller_id,
+        merchant_id=body.merchant_id,
+        name=_template_name(body.merchant_name),
+        flow=flow,
+        expected_payload_schema=expected_payload_schema,
+        expected_callback_response_schema=copy.deepcopy(
+            default_template.expected_callback_response_schema
+        ),
+        configurations=configurations or None,
+        secrets=persisted_secrets,
+        telephony_number_id=(
+            existing_template.telephony_number_id if existing_template else None
+        ),
+        is_active=body.is_active,
+        supported_channels=list(default_template.supported_channels),
+        created_at=(existing_template.created_at if existing_template else None),
+        updated_at=(existing_template.updated_at if existing_template else None),
+    )
+    return candidate
+
+
+def _merge_config(
+    configurations: Dict[str, Any], values: Mapping[str, Any], *, nested: bool = False
+) -> None:
+    """``values`` onto the blueprint's config.
+
+    A top-level value replaces the blueprint's (the merchant's greeting wins).
+    A map merges into the blueprint's, and a list inside one joins it, so the
+    blueprint's trusted links are kept alongside the merchant's.
+    """
+    for key, value in values.items():
+        existing = configurations.get(key)
+        if isinstance(value, Mapping) and isinstance(existing, dict):
+            _merge_config(existing, value, nested=True)
+        elif nested and isinstance(value, list) and isinstance(existing, list):
+            existing.extend(item for item in value if item not in existing)
+        else:
+            configurations[key] = copy.deepcopy(value)
+
+
+def _persistable_config(template: TemplateModel) -> Optional[Dict[str, Any]]:
+    return _configuration_dict(template) or None
+
+
+async def _create_template(template: TemplateModel) -> TemplateModel:
+    created = await create_template(
+        template_id=template.id,
+        reseller_id=template.reseller_id,
+        merchant_id=template.merchant_id,
+        name=template.name,
+        flow=template.flow,
+        expected_payload_schema=template.expected_payload_schema,
+        expected_callback_response_schema=template.expected_callback_response_schema,
+        configurations=_persistable_config(template),
+        secrets=template.secrets,
+        telephony_number_id=template.telephony_number_id,
+        is_active=template.is_active,
+        supported_channels=list(template.supported_channels),
+        now=datetime.now(timezone.utc),
+    )
+    if created is None:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PERSISTENCE_FAILED",
+            "Could not create the Assist template.",
+            True,
+        )
+    return created
+
+
+async def _update_template(template: TemplateModel) -> TemplateModel:
+    # The save-time provider-account check the templates API makes, so a
+    # block naming a row that cannot serve is refused here too, never first
+    # discovered on the widget's first turn.
+    problems = await Accounts(template.reseller_id, template.merchant_id).problems(
+        template.configurations
+    )
+    if problems:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PROVIDER_ACCOUNT_REFUSED",
+            "; ".join(problems),
+            False,
+        )
+    updated = await replace_template(
+        template_id=template.id,
+        reseller_id=template.reseller_id,
+        merchant_id=template.merchant_id,
+        name=template.name,
+        flow=template.flow,
+        expected_payload_schema=template.expected_payload_schema,
+        expected_callback_response_schema=template.expected_callback_response_schema,
+        configurations=_persistable_config(template),
+        secrets=template.secrets,
+        telephony_number_id=template.telephony_number_id,
+        is_active=template.is_active,
+        supported_channels=list(template.supported_channels),
+        now=datetime.now(timezone.utc),
+    )
+    if updated is None:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PERSISTENCE_FAILED",
+            "Could not update the Assist template.",
+            True,
+        )
+    return updated
+
+
+async def _create_widget(
+    body: AssistOnboardingStreamRequest,
+    template_id: str,
+    appearance: Optional[Dict[str, Any]] = None,
+) -> WidgetConfigResponse:
+    created = await create_widget_config(
+        reseller_id=body.reseller_id,
+        merchant_id=body.merchant_id,
+        public_widget_key=secrets.token_urlsafe(_PUBLIC_KEY_NBYTES),
+        template_id=template_id,
+        allowed_origins=body.allowed_origins,
+        max_sessions_per_ip_hour=60,
+        max_messages_per_ip_hour=600,
+        max_concurrent_per_ip=4,
+        max_voice_sessions_per_ip_hour=10,
+        active=body.is_active,
+        appearance=appearance,
+    )
+    if created is None:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PERSISTENCE_FAILED",
+            "Could not create the widget configuration.",
+            True,
+        )
+    return created
+
+
+async def _update_widget(
+    widget: WidgetConfigResponse,
+    body: AssistOnboardingStreamRequest,
+    template_id: str,
+    appearance: Optional[Dict[str, Any]] = None,
+) -> WidgetConfigResponse:
+    # Merge, never rewrite: a re-onboard must keep every origin the widget
+    # already serves (the merchant's www / custom domains added later).
+    origins = list(dict.fromkeys([*widget.allowed_origins, *body.allowed_origins]))
+    updated = await update_widget_config(
+        widget.id,
+        template_id=template_id,
+        allowed_origins=origins,
+        active=body.is_active,
+        appearance=appearance,
+    )
+    if updated is None:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PERSISTENCE_FAILED",
+            "Could not update the widget configuration.",
+            True,
+        )
+    return updated
+
+
+def _widget_payload(widget: WidgetConfigResponse) -> Dict[str, Any]:
+    return {
+        "id": widget.id,
+        "reseller_id": widget.reseller_id,
+        "merchant_id": widget.merchant_id,
+        "public_widget_key": widget.public_widget_key,
+        "template_id": widget.template_id,
+        "allowed_origins": widget.allowed_origins,
+        "max_sessions_per_ip_hour": widget.max_sessions_per_ip_hour,
+        "max_messages_per_ip_hour": widget.max_messages_per_ip_hour,
+        "max_concurrent_per_ip": widget.max_concurrent_per_ip,
+        "max_voice_sessions_per_ip_hour": widget.max_voice_sessions_per_ip_hour,
+        "active": widget.active,
+        "appearance": widget.appearance,
+    }
+
+
+async def _ensure_assist_merchant(
+    reseller_id: str, merchant_id: str, merchant_domain: str, merchant_name: str
+) -> bool:
+    """Create the Assist merchant row if missing. Returns True when created.
+
+    Races with a concurrent install are settled by the PK: on a create
+    failure we re-check existence and treat "someone else won" as success.
+    """
+    existing = await get_merchant_by_merchant_identifier(merchant_id)
+    if existing is not None:
+        return False
+    try:
+        created = await create_merchant(
+            merchant_id=merchant_id,
+            reseller_id=reseller_id,
+            name=merchant_name,
+            description=f"Buddy Assist merchant - {merchant_domain}",
+            is_active=True,
+        )
+        if created is not None:
+            return True
+    except Exception:
+        pass
+    if await get_merchant_by_merchant_identifier(merchant_id) is not None:
+        return False
+    raise OnboardingFailure(
+        "ensuring_merchant",
+        "ONBOARDING_PERSISTENCE_FAILED",
+        "Could not create the Assist merchant.",
+        True,
+    )
+
+
+async def onboard_assist_bare(body: AssistOnboardRequest) -> AssistOnboardResponse:
+    """Bare-metal install-time onboarding: merchant + blueprint template +
+    widget config, idempotently — and NO website scraping.
+
+    Same state machine as ``stream_assist_onboarding`` (widget row is the
+    source of truth; created / updated / recovered; template rollback on
+    widget-create failure) minus the personalization step: the brand
+    marker resolves to a placeholder that points the model at live tool
+    results, and the merchant personalizes later from the Buddy dashboard.
+    Raises ``OnboardingFailure``; the route maps it to HTTP.
+    """
+    adapter = registry.for_host_app(body.host_app)
+    vertical = verticals.for_request(adapter.vertical)
+    merchant_domain = normalize_merchant_domain(body.merchant_domain)
+    reseller_id, merchant_id = adapter.tenant(body.host_app, merchant_domain)
+    merchant_name = body.merchant_name or adapter.store_name(merchant_domain)
+    origins = [f"https://{merchant_domain}"] + [
+        origin
+        for origin in body.allowed_origins
+        if origin != f"https://{merchant_domain}"
+    ]
+    appearance = (
+        body.appearance.model_dump(exclude_none=True)
+        if body.appearance is not None
+        else None
+    )
+
+    internal = AssistOnboardingStreamRequest(
+        reseller_id=reseller_id,
+        merchant_id=merchant_id,
+        merchant_name=merchant_name,
+        website_url=f"https://{merchant_domain}",
+        platform=cast(OnboardingPlatform, adapter.request_platform),
+        vertical=cast(OnboardingVertical, vertical.request_vertical),
+        allowed_origins=origins,
+        bot_brand_name=body.bot_brand_name,
+        is_active=body.is_active,
+    )
+
+    merchant_created = await _ensure_assist_merchant(
+        reseller_id, merchant_id, merchant_domain, merchant_name
+    )
+
+    widget = await get_widget_config_by_reseller_merchant(
+        internal.reseller_id, internal.merchant_id
+    )
+    template_name = _template_name(internal.merchant_name)
+    existing_template: Optional[TemplateModel] = None
+    operation: Literal["created", "updated", "recovered"]
+
+    if widget is not None:
+        operation = "updated"
+        existing_template = await get_template_by_id(widget.template_id)
+        if existing_template is None:
+            raise OnboardingFailure(
+                "checking_widget",
+                "ONBOARDING_STATE_INVALID",
+                "The widget references a missing template.",
+            )
+        if (
+            existing_template.reseller_id != internal.reseller_id
+            or existing_template.merchant_id != internal.merchant_id
+        ):
+            raise OnboardingFailure(
+                "checking_widget",
+                "ONBOARDING_STATE_INVALID",
+                "The widget references a template outside its tenant scope.",
+            )
+    else:
+        existing_template = await get_template_in_scope(
+            internal.reseller_id, internal.merchant_id, template_name
+        )
+        operation = "recovered" if existing_template else "created"
+
+    # An existing template is NEVER rebuilt here: it may carry dashboard
+    # customization or a personalized prompt, and a reinstall must not wipe
+    # that back to bare-metal. The blueprint is consulted only when a
+    # template has to be created — so already-provisioned tenants keep
+    # working even before the blueprint row exists for this reseller.
+    created_template_id: Optional[str] = None
+    if existing_template is None:
+        default_template = await get_template_in_scope(
+            internal.reseller_id, None, vertical.blueprint_name
+        )
+        if default_template is None:
+            raise OnboardingFailure(
+                "loading_default_template",
+                "DEFAULT_TEMPLATE_NOT_FOUND",
+                "The default Assist template is not configured for this reseller.",
+            )
+        _validate_default_template(default_template, adapter, vertical)
+
+        candidate = build_merchant_template(
+            default_template=default_template,
+            body=internal,
+            website_context=vertical.unpersonalized_context(),
+            template_id=str(uuid4()),
+            existing_template=None,
+            adapter=adapter,
+            vertical=vertical,
+        )
+        persisted_template = await _create_template(candidate)
+        created_template_id = persisted_template.id
+    else:
+        persisted_template = existing_template
+
+    if widget is None:
+        try:
+            persisted_widget = await _create_widget(
+                internal, persisted_template.id, appearance=appearance
+            )
+        except Exception:
+            if created_template_id:
+                try:
+                    await delete_template_if_not_referenced(created_template_id)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Assist onboarding cleanup failed for template "
+                        f"{created_template_id}: {cleanup_error}"
+                    )
+            raise
+    else:
+        persisted_widget = await _update_widget(
+            widget, internal, persisted_template.id, appearance=appearance
+        )
+
+    if created_template_id:
+        try:
+            await invalidate_template(persisted_template.id)
+        except Exception as cache_error:
+            logger.warning(
+                f"Assist template cache invalidation failed for "
+                f"{persisted_template.id}: {cache_error}"
+            )
+
+    return AssistOnboardResponse(
+        operation=operation,
+        merchant_created=merchant_created,
+        template_id=persisted_template.id,
+        template_name=persisted_template.name,
+        widget_config=_widget_payload(persisted_widget),
+    )
+
+
+class AssistantExistsError(Exception):
+    """The merchant already has an assistant; creating must not touch it."""
+
+
+class FindingsNotBuildableError(Exception):
+    """The findings cannot be built into a template (the merchant's input,
+    not a server fault)."""
+
+
+async def create_assist_template(body: AssistTemplateRequest) -> AssistTemplateResponse:
+    """Create a merchant's assistant from its research findings, switched off.
+
+    The findings are sorted into the vertical's fields and the brand block is
+    written from them; the Build page reads the fields back out of the prompt
+    (``read_brand_facts``), so nothing is stored beside it. Template and
+    widget both start inactive, so shoppers see nothing until the merchant
+    turns it on. A merchant that already has
+    an assistant gets ``AssistantExistsError`` and nothing is written:
+    running setup again is a separate, careful path.
+    """
+    request = body.as_onboarding_request()
+    adapter = registry.for_request(request.platform)
+    vertical = verticals.for_request(adapter.vertical)
+    template_name = _template_name(request.merchant_name)
+
+    if await _has_assistant(request, template_name):
+        raise AssistantExistsError(request.merchant_id)
+
+    default_template = await get_template_in_scope(
+        request.reseller_id, None, vertical.blueprint_name
+    )
+    if default_template is None:
+        raise OnboardingFailure(
+            "loading_default_template",
+            "DEFAULT_TEMPLATE_NOT_FOUND",
+            "The default Assist template is not configured for this reseller.",
+        )
+
+    await _ensure_assist_merchant(
+        request.reseller_id,
+        request.merchant_id,
+        _site_host(request.website_url),
+        request.merchant_name,
+    )
+    fields = fields_from_notes(
+        ((note.field, note.value) for note in body.notes), vertical.fields
+    )
+    # The names are the merchant's own, typed at create: the store is what it
+    # is called, the assistant "<store> Assist". Both editable on Build.
+    fields["brand_line"] = [clean_value(request.merchant_name)]
+    fields["assistant_name"] = [clean_value(f"{request.merchant_name} Assist")]
+    try:
+        candidate = build_merchant_template(
+            default_template=default_template,
+            body=request,
+            website_context="",
+            template_id=str(uuid4()),
+            existing_template=None,
+            adapter=adapter,
+            vertical=vertical,
+            fields=fields,
+        )
+    except ValueError as exc:
+        raise FindingsNotBuildableError(str(exc)) from exc
+    try:
+        template = await _create_template(candidate)
+    except OnboardingFailure:
+        # A second click that lost the race to the first: already created.
+        if await _has_assistant(request, template_name):
+            raise AssistantExistsError(request.merchant_id)
+        raise
+    appearance = (
+        body.appearance.model_dump(exclude_none=True) if body.appearance else None
+    )
+    try:
+        await _create_widget(request, template.id, appearance=appearance)
+    except Exception as exc:
+        # Returns None (never raises) when the delete fails.
+        if await delete_template_if_not_referenced(template.id) is None:
+            logger.warning(f"Assist create cleanup failed for template {template.id}")
+        if await _has_assistant(request, template_name, own_template=template.id):
+            raise AssistantExistsError(request.merchant_id) from exc
+        raise
+    logger.info(
+        f"Assist assistant created, switched off, for reseller={request.reseller_id} "
+        f"merchant={request.merchant_id} with {len(fields)} fields"
+    )
+    return AssistTemplateResponse(template_id=template.id)
+
+
+async def _has_assistant(
+    request: AssistOnboardingStreamRequest,
+    template_name: str,
+    *,
+    own_template: Optional[str] = None,
+) -> bool:
+    """Whether the merchant already has an assistant: a widget, or a template
+    under its name other than ``own_template`` (the one being created)."""
+    widget = await get_widget_config_by_reseller_merchant(
+        request.reseller_id, request.merchant_id
+    )
+    if widget is not None:
+        return True
+    template = await get_template_in_scope(
+        request.reseller_id, request.merchant_id, template_name
+    )
+    return template is not None and template.id != own_template
+
+
+def read_fields(template: TemplateModel) -> Optional[AssistFields]:
+    """The form's values, read out of the assistant itself: the facts from
+    its prompt, the greeting, quick replies and tiles from its settings.
+    None when its prompt has no brand block."""
+    vertical = verticals.DEFAULT
+    facts = vertical.read_brand_facts((template.flow or {}).get("system_prompt") or "")
+    if facts is None:
+        return None
+    return {**vertical.read_chat_settings(_configuration_dict(template)), **facts}
+
+
+async def save_fields(
+    template: TemplateModel, edits: Mapping[str, List[str]]
+) -> TemplateModel:
+    """Apply a merchant's edits: the edited facts into the prompt's brand
+    block, the edited greeting, quick replies and tiles into the settings.
+    Everything else is kept as it is. ``ValueError`` for an edit to a field
+    the form does not have, or a prompt with no brand block.
+    """
+    vertical = verticals.DEFAULT
+    fields = apply_edits(read_fields(template) or {}, edits, vertical.fields)
+    prompt = vertical.update_brand_facts(
+        template.flow["system_prompt"], fields, edits.keys()
+    )
+    configurations = _configuration_dict(template)
+    edited = {key: fields.get(key, []) for key in edits}
+    _merge_config(configurations, vertical.update_chat_settings(edited, configurations))
+    edited_template = template.model_copy(
+        update={
+            "flow": {**copy.deepcopy(template.flow), "system_prompt": prompt},
+            "configurations": ConfigurationModel.model_validate(configurations),
+        }
+    )
+    # Only the prompt and settings are written: an is_active, name or secret
+    # changed since this template was read (Go live, a rename) stays. The
+    # form never touches a provider-account block, so there is none to check.
+    saved = await update_template_flow_and_configurations(
+        template.id,
+        edited_template.flow,
+        _persistable_config(edited_template),
+        datetime.now(timezone.utc),
+    )
+    if saved is None:
+        raise OnboardingFailure(
+            "saving_configuration",
+            "ONBOARDING_PERSISTENCE_FAILED",
+            "Could not update the Assist template.",
+            True,
+        )
+    try:
+        await invalidate_template(saved.id)
+    except Exception as cache_error:
+        logger.warning(
+            f"Assist template cache invalidation failed for {saved.id}: {cache_error}"
+        )
+    return saved
+
+
+async def stream_assist_onboarding(
+    body: AssistOnboardingStreamRequest,
+) -> AsyncIterator[SSEEvent]:
+    """Run onboarding and emit structured progress until complete or error."""
+    adapter = registry.for_request(body.platform)
+    vertical = verticals.for_request(body.vertical or adapter.vertical)
+    created_template_id: Optional[str] = None
+    step = "checking_widget"
+    try:
+        yield _progress(step, "running")
+        widget = await get_widget_config_by_reseller_merchant(
+            body.reseller_id, body.merchant_id
+        )
+        template_name = _template_name(body.merchant_name)
+        existing_template: Optional[TemplateModel] = None
+        operation: Literal["created", "updated", "recovered"]
+
+        if widget is not None:
+            operation = "updated"
+            existing_template = await get_template_by_id(widget.template_id)
+            if existing_template is None:
+                raise OnboardingFailure(
+                    step,
+                    "ONBOARDING_STATE_INVALID",
+                    "The widget references a missing template.",
+                )
+            if (
+                existing_template.reseller_id != body.reseller_id
+                or existing_template.merchant_id != body.merchant_id
+            ):
+                raise OnboardingFailure(
+                    step,
+                    "ONBOARDING_STATE_INVALID",
+                    "The widget references a template outside its tenant scope.",
+                )
+        else:
+            # Recovers the low-traffic crash case where template creation
+            # committed but the pod died before widget creation.
+            existing_template = await get_template_in_scope(
+                body.reseller_id, body.merchant_id, template_name
+            )
+            operation = "recovered" if existing_template else "created"
+        yield _progress(step, "done", operation=operation)
+
+        step = "loading_default_template"
+        yield _progress(step, "running")
+        default_template = await get_template_in_scope(
+            body.reseller_id, None, vertical.blueprint_name
+        )
+        if default_template is None:
+            raise OnboardingFailure(
+                step,
+                "DEFAULT_TEMPLATE_NOT_FOUND",
+                "The default Assist template is not configured for this reseller.",
+            )
+        _validate_default_template(default_template, adapter, vertical)
+        yield _progress(step, "done", platform=adapter.id, vertical=vertical.id)
+
+        step = "scraping_website"
+        yield _progress(step, "running", provider=body.provider)
+        website_context = vertical.unpersonalized_context()
+        personalization: Dict[str, Any] = {
+            "provider": body.provider,
+            "status": "skipped_scrape_failed",
+            "source": "none",
+        }
+        try:
+            result = await scrape_website(
+                provider=body.provider,
+                provider_config={
+                    "prompt": vertical.research_prompt(),
+                    "temperature": 0.1,
+                    "max_output_tokens": 4096,
+                    "use_url_context": True,
+                    "use_google_search": True,
+                },
+                url=body.website_url,
+                timeout_seconds=_SCRAPE_TIMEOUT_SECONDS,
+            )
+        except (WebsiteScrapingUpstreamError, asyncio.TimeoutError):
+            # Policy is to fail without writing rather than publish a generic
+            # assistant silently. ``allow_unpersonalized`` is the caller saying
+            # a human saw that failure and chose to continue — a deliberate
+            # exception, never a silent fallback.
+            if not body.allow_unpersonalized:
+                raise
+            logger.warning(
+                "Assist onboarding site read failed; continuing unpersonalized "
+                f"by request for reseller={body.reseller_id} merchant={body.merchant_id}"
+            )
+            yield _progress(step, "done", provider=body.provider, personalized=False)
+        else:
+            website_context = result.text
+            personalization = {
+                "provider": result.provider,
+                "status": result.status,
+                "source": "website",
+            }
+            yield _progress(step, "done", provider=result.provider, personalized=True)
+
+        step = "building_template"
+        yield _progress(step, "running")
+        template_id = (
+            existing_template.id if existing_template is not None else str(uuid4())
+        )
+        candidate = build_merchant_template(
+            default_template=default_template,
+            body=body,
+            website_context=website_context,
+            template_id=template_id,
+            existing_template=existing_template,
+            adapter=adapter,
+            vertical=vertical,
+        )
+        yield _progress(step, "done", platform=adapter.id, vertical=vertical.id)
+
+        step = "saving_configuration"
+        yield _progress(step, "running")
+        if existing_template is None:
+            persisted_template = await _create_template(candidate)
+            created_template_id = persisted_template.id
+        else:
+            persisted_template = await _update_template(candidate)
+
+        if widget is None:
+            try:
+                persisted_widget = await _create_widget(body, persisted_template.id)
+            except Exception:
+                if created_template_id:
+                    try:
+                        await delete_template_if_not_referenced(created_template_id)
+                    except Exception as cleanup_error:
+                        logger.warning(
+                            f"Assist onboarding cleanup failed for template "
+                            f"{created_template_id}: {cleanup_error}"
+                        )
+                raise
+        else:
+            persisted_widget = await _update_widget(widget, body, persisted_template.id)
+
+        try:
+            await invalidate_template(persisted_template.id)
+        except Exception as cache_error:
+            logger.warning(
+                f"Assist template cache invalidation failed for "
+                f"{persisted_template.id}: {cache_error}"
+            )
+        yield _progress(step, "done")
+
+        completion = AssistOnboardingCompletion(
+            operation=operation,
+            template_id=persisted_template.id,
+            template_name=persisted_template.name,
+            widget_config=_widget_payload(persisted_widget),
+            personalization=personalization,
+        )
+        yield SSEEvent(
+            event="complete",
+            data=completion.model_dump(mode="json"),
+        )
+    except asyncio.CancelledError:
+        logger.info(
+            f"Assist onboarding stream disconnected for reseller={body.reseller_id} "
+            f"merchant={body.merchant_id} at step={step}"
+        )
+        raise
+    except OnboardingFailure as exc:
+        logger.warning(
+            f"Assist onboarding failed for reseller={body.reseller_id} "
+            f"merchant={body.merchant_id}: code={exc.code} step={exc.step}"
+        )
+        error = AssistOnboardingError(
+            step=exc.step,
+            code=exc.code,
+            message=exc.message,
+            retryable=exc.retryable,
+        )
+        yield SSEEvent(event="error", data=error.model_dump(mode="json"))
+    except WebsiteScrapingConfigurationError:
+        logger.exception("Assist onboarding scraper is not configured")
+        error = AssistOnboardingError(
+            step=step,
+            code="SCRAPING_NOT_CONFIGURED",
+            message="Website personalization is not configured.",
+        )
+        yield SSEEvent(event="error", data=error.model_dump(mode="json"))
+    except (WebsiteScrapingUpstreamError, asyncio.TimeoutError):
+        logger.exception("Assist onboarding scraper failed")
+        error = AssistOnboardingError(
+            step=step,
+            code="SCRAPING_UPSTREAM_FAILED",
+            message="Website personalization could not be completed.",
+            retryable=True,
+        )
+        yield SSEEvent(event="error", data=error.model_dump(mode="json"))
+    except (ValueError, ValidationError):
+        logger.exception("Assist onboarding generated invalid configuration")
+        error = AssistOnboardingError(
+            step=step,
+            code="GENERATED_TEMPLATE_INVALID",
+            message="The Assist template could not be generated.",
+        )
+        yield SSEEvent(event="error", data=error.model_dump(mode="json"))
+    except Exception:
+        logger.exception("Assist onboarding failed unexpectedly")
+        error = AssistOnboardingError(
+            step=step,
+            code="ONBOARDING_FAILED",
+            message="Assist onboarding failed. Please try again.",
+            retryable=True,
+        )
+        yield SSEEvent(event="error", data=error.model_dump(mode="json"))
+
+
+__all__ = [
+    "AssistantExistsError",
+    "FindingsNotBuildableError",
+    "BRAND_IDENTITY_MARKER",
+    "EXPECTED_BLUEPRINT_MODEL",
+    "OnboardingFailure",
+    "SHOP_DOMAIN_PLACEHOLDER",
+    "blueprint_shape_warnings",
+    "read_fields",
+    "build_merchant_template",
+    "create_assist_template",
+    "onboard_assist_bare",
+    "save_fields",
+    "stream_assist_onboarding",
+]

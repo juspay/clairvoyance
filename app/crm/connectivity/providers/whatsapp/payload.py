@@ -1,0 +1,173 @@
+"""Manifest row -> Cloud API request body. Assembly and normalisation only:
+nothing here reads the database, decides a retry, or talks to Meta.
+"""
+
+import re
+from typing import Any, Dict, List, Optional, Union
+
+# The wire key the flow_token rides under. Meta echoes it back inside the
+# customer's submission, where record's extractor strips it by the SAME
+# spelling (record/extractors/whatsapp/flow.py) — spelled twice because
+# rule 12 forbids the import; a test pins the two equal.
+FLOW_TOKEN_KEY = "flow_token"
+
+_NON_DIGITS = re.compile(r"\D")
+
+
+def to_meta_recipient(address: str) -> Optional[str]:
+    """E.164 in, Meta's digits-only form out.
+
+    Stripping happens HERE and the stripped form is never persisted: one
+    representation in the database, whatever each provider prefers at its
+    own edge.
+    """
+    digits = _NON_DIGITS.sub("", address or "")
+    # Deliberate parity with shared/normalize.py's ^\+[1-9][0-9]{6,14}$ (and
+    # the platform_identity CHECK), so a number this system was willing to
+    # store is never rejected here as an "invalid address". 15 is E.164's
+    # ceiling; 7 is the real short end (Saint Helena, +290 plus 4 digits);
+    # no country code starts with 0.
+    if not 7 <= len(digits) <= 15 or digits.startswith("0"):
+        return None
+    return digits
+
+
+# The value types str() renders faithfully. bool is refused below despite
+# being an int subclass: str(True) is 'True', which no customer message
+# means to say.
+_TEXTABLE_TYPES = (str, int, float)
+
+
+def build_parameters(variables: Dict[str, Any]) -> Union[List[Dict[str, Any]], str]:
+    """Manifest variables -> Meta template body parameters, or the defect.
+
+    Meta accepts two forms and the producer chooses by how it writes the keys:
+
+      {"1": "Priya", "2": "ORD-42"}         -> positional, in numeric order
+      {"customer_name": "Priya", ...}       -> named (parameter_name)
+
+    A str return means the dict cannot be sent and says why — the caller
+    logs it and refuses terminally with REASON_BAD_VARIABLES. Two defects
+    earn that:
+
+      · A value that is not text or a number. str() rendered a JSON null as
+        the literal word 'None' inside a customer's message — corruption
+        that LOOKS delivered. The defect names the key and type, never the
+        value, which may be personal data.
+      · Positional and named keys mixed. Meta takes one style per request,
+        so no rendering is correct; guessing one only buys a round trip to
+        the refusal this string already states.
+
+    ASCII digits decide positional vs named, not str.isdigit(), which also
+    accepts digit-CATEGORY characters like '²' that int() then refuses —
+    turning a bad key into a mid-send exception instead of an outcome.
+    """
+    if not variables:
+        return []
+    items = [(str(key), value) for key, value in variables.items()]
+    for key, value in items:
+        if isinstance(value, bool) or not isinstance(value, _TEXTABLE_TYPES):
+            return f"variable '{key}' is {type(value).__name__}, not text"
+    positional = [key for key, _ in items if key.isascii() and key.isdigit()]
+    if len(positional) == len(items):
+        numbers = sorted(int(key) for key in positional)
+        if numbers != list(range(1, len(numbers) + 1)):
+            return (
+                f"positional variables must be numbered 1 to {len(numbers)} "
+                f"with no gaps, got {sorted(positional, key=int)}"
+            )
+        # Sorting as strings would put "10" before "2" and silently swap two
+        # values in a customer's message.
+        ordered = sorted(items, key=lambda item: int(item[0]))
+        return [{"type": "text", "text": str(value)} for _, value in ordered]
+    if positional:
+        return "mixes positional and named template variables"
+    return [
+        {"type": "text", "parameter_name": key, "text": str(value)}
+        for key, value in items
+    ]
+
+
+def flow_button_indexes(components: List[Dict[str, Any]]) -> List[int]:
+    """Where a template's FLOW buttons sit among its buttons, in order.
+
+    Meta names a button component by POSITION and refuses the ENTIRE send
+    (131009) when a flow button arrives unnamed. The walk lives HERE
+    because BUTTONS/FLOW are Meta's vocabulary: the row rides to the route
+    whole, and each provider face reads its own words out of it.
+
+    EVERY position (a second left unnamed loses the whole message), from
+    the FIRST BUTTONS component only (a second would restart at 0 and name
+    the wrong button). Total: a malformed component answers [], never a
+    raise.
+    """
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        if str(component.get("type", "")).upper() != "BUTTONS":
+            continue
+        buttons = component.get("buttons")
+        if not isinstance(buttons, list):
+            continue
+        return [
+            index
+            for index, button in enumerate(buttons)
+            if isinstance(button, dict)
+            and str(button.get("type", "")).upper() == "FLOW"
+        ]
+    return []
+
+
+def build_send_body(
+    template_name: str,
+    language: str,
+    recipient: str,
+    parameters: List[Dict[str, Any]],
+    flow_button_indexes: Optional[List[int]] = None,
+    flow_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The Cloud API send body. Assembly only — ``parameters`` arrive already
+    built and judged sendable by the adapter.
+
+    ``language`` comes from the template registry (T23), which is the one
+    place that knows which locale a merchant's template was approved in.
+
+    A FLOW button must be named by a button component or Meta refuses the
+    whole send (131009) and nothing reaches the customer.
+    ``flow_button_indexes`` holds every such position; empty — every template
+    but the flow ones — leaves the body as it has always been.
+
+    ``flow_token`` comes back verbatim on the customer's submission, so the
+    caller passes the id of the message that opened the form and the answer
+    names its own question. One token for every button: it identifies the
+    SEND, not which button she pressed. It is the component's only optional
+    part, so a caller without one sends no parameters rather than a
+    placeholder — Meta then records its own word, 'unused', which the read
+    side discards.
+    """
+    components: List[Dict[str, Any]] = []
+    if parameters:
+        components.append({"type": "body", "parameters": parameters})
+    for index in flow_button_indexes or []:
+        button: Dict[str, Any] = {
+            "type": "button",
+            "sub_type": "flow",
+            # A string, like every other button component's index.
+            "index": str(index),
+        }
+        if flow_token:
+            button["parameters"] = [
+                {"type": "action", "action": {FLOW_TOKEN_KEY: flow_token}}
+            ]
+        components.append(button)
+    return {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language},
+            "components": components,
+        },
+    }

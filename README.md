@@ -46,7 +46,8 @@ The project is organized into a main FastAPI application (`app/`) with a clear s
 │   └── services/
 │       └── langfuse/           # Integration with Langfuse for tracing
 ├── Dockerfile                  # Docker configuration for containerization
-├── requirements.txt            # Python dependencies
+├── pyproject.toml              # Python dependencies and project metadata
+├── uv.lock                     # Dependency lockfile for reproducible builds
 └── run.py                      # Script to run the server
 ```
 
@@ -54,44 +55,114 @@ The project is organized into a main FastAPI application (`app/`) with a clear s
 
 ### Prerequisites
 
-*   Python 3.10+
+*   Python 3.11+
+*   [uv](https://docs.astral.sh/uv/) package manager
 *   Database (e.g., PostgreSQL)
 *   Access to required third-party APIs (e.g., Azure OpenAI, Daily.co, Twilio/Exotel) with valid keys.
 
-### Installation Steps
+### Quick Start
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd clairvoyance
+
+# Run the automated setup script (recommended)
+./scripts/setup.sh
+```
+
+The `setup.sh` script will:
+- Check Python version (3.11+ required)
+- Install `uv` package manager if not already installed
+- Set up git hooks for code formatting
+- Create a virtual environment (`.venv`)
+- Install all project dependencies
+- Verify the installation
+
+### Manual Installation Steps
+
+If you prefer to install manually or need more control:
 
 1.  **Clone the repository.**
-2.  **Create and activate a virtual environment:**
+
+2.  **Install uv package manager:**
     ```bash
-    python -m venv venv
-    source venv/bin/activate
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Restart your shell or run: source $HOME/.cargo/env
     ```
+
 3.  **Install dependencies:**
     ```bash
-    pip install -r requirements.txt
+    uv sync  # Creates .venv and installs all dependencies
     ```
-4.  **Run the setup script:**
-    This script will handle any additional setup required for the project.
+
+4.  **Set up git hooks (optional but recommended):**
     ```bash
-    ./scripts/setup.sh
+    git config core.hooksPath .githooks
     ```
+
 5.  **Set up Environment Variables:**
     Create a `.env` file in the project root by copying `.env.example` and filling in the required values for the database, API keys, and other configurations.
+
 6.  **Initialize the Database:**
     Run the script to create the necessary tables in your database.
     ```bash
-    python -m scripts.create_tables create
+    uv run python -m scripts.create_tables create
     ```
 
 ## 5. Running the Server
 
 Execute the `run.py` script to start the FastAPI server:
 ```bash
-python run.py
+uv run python run.py
 ```
 The server will start on `http://0.0.0.0:8000` by default.
 
-## 6. How It Works
+## 6. Development Workflow
+
+### Common Commands
+
+```bash
+# Install/update dependencies
+uv sync
+
+# Install with dev dependencies (formatters, linters)
+uv sync --extra dev
+
+# Run the application
+uv run python run.py
+
+# Run database migrations
+uv run python -m scripts.create_tables create
+
+# Add a new package
+uv add <package-name>
+
+# Add a dev dependency
+uv add --dev <package-name>
+
+# Update dependencies
+uv lock --upgrade
+uv sync
+```
+
+### Code Formatting
+
+The project uses automatic code formatting via pre-commit hooks:
+
+- **black** - Code formatting
+- **isort** - Import sorting
+- **autoflake** - Remove unused imports
+
+These run automatically on `git commit`. To run manually:
+
+```bash
+uv run black .
+uv run isort .
+uv run autoflake --in-place --remove-all-unused-imports -r app/
+```
+
+## 7. How It Works
 
 1.  The FastAPI server starts and initializes the API routers.
 2.  When a request is made to an agent-specific endpoint (e.g., `/breeze-buddy/make-call`), the corresponding router handles it.

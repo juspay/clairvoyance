@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT_FILE_PATH\" | grep -q '\\.py$'; then uv run black --quiet \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null; uv run isort --quiet --profile black \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null; fi"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(uv run black:*)",
+      "Bash(uv run isort:*)",
+      "Bash(uv run autoflake:*)",
+      "Bash(uv run pyrefly check:*)",
+      "Bash(uv run python run.py:*)",
+      "Bash(uv sync:*)",
+      "Bash(python -c:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git branch:*)",
+      "Bash(gh api:*)",
+      "Skill(review-pr)",
+      "WebFetch(domain:docs.pipecat.ai)",
+      "WebFetch(domain:reference-server.pipecat.ai)",
+      "WebFetch(domain:deepgram.com)",
+      "WebFetch(domain:developers.deepgram.com)",
+      "WebFetch(domain:www.daily.co)",
+      "WebFetch(domain:code.claude.com)"
+    ],
+    "deny": []
+  }
+}

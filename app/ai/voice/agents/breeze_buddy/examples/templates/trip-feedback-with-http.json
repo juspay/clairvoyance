@@ -1,0 +1,449 @@
+{
+  "merchant": "breeze",
+  "template_name": "fresh-bus-with-https",
+  "identifier": "rnr",
+  "is_active": false,
+  "description": "Complete feedback collection workflow demonstrating HTTP hooks and global functions. Features: 1) Global HTTP function (refund_trip_amount) - LLM calls this, waits for response, 2) HTTP hook (send_http_request) - fire-and-forget API call, 3) Built-in hooks (update_outcome_in_database), 4) Field resolution patterns (static from payload/secrets, llm from function args)",
+  "expected_payload_schema": {
+    "trip_date": {
+      "type": "string",
+      "example": "2024-05-01"
+    },
+    "booking_id": {
+      "type": "string",
+      "example": "ABC123"
+    },
+    "customer_name": {
+      "type": "string",
+      "example": "John Doe"
+    },
+    "destination_to": {
+      "type": "string",
+      "example": "MG Road, Bangalore"
+    },
+    "customer_gender": {
+      "type": "string",
+      "example": "male"
+    },
+    "destination_from": {
+      "type": "string",
+      "example": "Whitefield, Bangalore"
+    },
+    "customer_mobile_number": {
+      "type": "string",
+      "example": "9876543210"
+    }
+  },
+  "configurations": {
+    "stt_language": "en",
+    "tts_configuration": {
+      "provider": "elevenlabs"
+    },
+    "background_sound_volume": 2.0,
+    "enable_background_sound": false,
+    "payload_based_language_selection": false
+  },
+  "expected_callback_response_schema": {
+    "feedback": {
+      "type": "string"
+    }
+  },
+  "secrets": {
+    "api_base_url": "https://webhook.site/efb71df1-97f5-4b24-9158-620d1450496d",
+    "api_s2s_token": "api_secret"
+  },
+  "flow": {
+    "initial_node": "initial",
+    "end_conversation_callbacks": ["service_callback"],
+
+    "global_functions": [
+      {
+        "name": "refund_trip_amount",
+        "type": "http",
+        "description": "Call this function when user asks for refund if user tries escalating and giving negative review",
+        "properties": {
+          "refund_reason": {
+            "type": "string",
+            "description": "Ask the refund reason from the customer"
+          }
+        },
+        "required": ["refund_reason"],
+        "expected_fields": {
+          "booking_id": {
+            "source": "static",
+            "value": "{booking_id}"
+          },
+          "api_base_url": {
+            "source": "static",
+            "value": "{api_base_url}"
+          },
+          "api_s2s_token": {
+            "source": "static",
+            "value": "{api_s2s_token}"
+          },
+          "customer_name": {
+            "source": "static",
+            "value": "{customer_name}"
+          },
+          "refund_reason": {
+            "source": "llm"
+          }
+        },
+        "http_request": {
+          "url": "{api_base_url}/refund",
+          "method": "POST",
+          "headers": {
+            "X-Agent": "BB_BZ"
+          },
+          "auth": {
+            "type": "bearer",
+            "token": "{api_s2s_token}"
+          },
+          "body": {
+            "trip_id": "{booking_id}",
+            "currency": "USD",
+            "refund_type": "FULL",
+            "requested_at": "2026-01-20T10:15:30Z",
+            "requested_by": "USER",
+            "customer_name": "{customer_name}",
+            "refund_reason": "{refund_reason}",
+            "payment_method": "CARD",
+            "metadata": {
+              "platform": "MOBILE_APP",
+              "app_version": "5.2.1"
+            }
+          },
+          "timeout": 10,
+          "max_retries": 3
+        }
+      }
+    ],
+
+    "nodes": [
+      {
+        "node_name": "initial",
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are Rhea from stalebus, calling customers to collect trip feedback. Sound polite, natural, and human. Keep replies under 30 words. Do not repeat the introduction. If the customer mentions any issues with the trip, use the report_issue function to log it. If the customer asks about their booking, refund, or any information that can be checked using a function, use the appropriate function to check and inform them. After using any function, especially global functions, always continue the main conversation from where it left off. If the data returned from the function is relevant to the current step or topic, incorporate that information into your next response or question. Do not end the conversation after a function call—guide the user back to the main flow."
+          }
+        ],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "We have already introduced ourself as Rhea calling from stalebus to gather feedback for the trip from {destination_from} to {destination_to} on {trip_date}. Wait for user response."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [],
+        "functions": [
+          {
+            "function_name": "positive_feedback_received",
+            "description": "Call this when the user feedback is clearly positive or appreciative.",
+            "properties": {
+              "feedback": {
+                "type": "string",
+                "description": "The positive feedback provided by customer"
+              }
+            },
+            "required": ["feedback"],
+            "transition_to": "ask_rating_positive_feedback_node",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "FEEDBACK_GATHERED"
+                  },
+                  "feedback": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "function_name": "negative_or_neutral_feedback_received",
+            "description": "Call this when the user feedback is neutral, mixed, or negative.",
+            "properties": {
+              "feedback": {
+                "type": "string",
+                "description": "The negative or neutral feedback provided by customer"
+              },
+              "issue_category": {
+                "type": "string",
+                "enum": ["service", "timing", "cleanliness", "staff", "safety", "other"],
+                "description": "Category of the issue if mentioned"
+              }
+            },
+            "required": ["feedback"],
+            "transition_to": "handle_negative_feedback_node",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "FEEDBACK_GATHERED"
+                  },
+                  "feedback": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "function_name": "user_busy",
+            "description": "Call this when the user is busy or asks to talk later.",
+            "properties": {},
+            "required": [],
+            "transition_to": "user_busy_and_end_node",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "BUSY"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "function_name": "feedback_denied",
+            "description": "Call this when the user refuses to give feedback.",
+            "properties": {},
+            "required": [],
+            "transition_to": "feedback_denied_and_end_node",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "FEEDBACK_DENIED"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "node_name": "handle_negative_feedback_node",
+        "role_messages": [],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Acknowledge the customer's concern empathetically. Ask if they would like us to escalate this to our customer care team for follow-up. If they mention a specific issue, use the report_issue function to log it."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [],
+        "functions": [
+          {
+            "function_name": "escalation_requested",
+            "description": "Customer wants their issue escalated to customer care",
+            "properties": {
+              "issue_summary": {
+                "type": "string",
+                "description": "Brief summary of the issue for escalation"
+              }
+            },
+            "required": ["issue_summary"],
+            "transition_to": "thank_user_and_end_node",
+            "hooks": []
+          },
+          {
+            "function_name": "no_escalation_needed",
+            "description": "Customer does not want escalation",
+            "properties": {},
+            "required": [],
+            "transition_to": "thank_user_and_end_node",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "ask_rating_positive_feedback_node",
+        "role_messages": [],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the user warmly for the positive feedback. Then ask if they could give a 5-star rating for stalebus on the redBus app."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [],
+        "functions": [
+          {
+            "function_name": "rating_given",
+            "description": "Call this when the user agrees to give the rating.",
+            "properties": {
+              "rating_value": {
+                "type": "integer",
+                "description": "The rating value if mentioned (1-5)"
+              }
+            },
+            "required": [],
+            "transition_to": "thank_user_and_end_node",
+            "hooks": [
+              {
+                "name": "send_http_request",
+                "http_request": {
+                  "url": "{api_base_url}/ratings",
+                  "method": "POST",
+                  "auth": {
+                    "type": "bearer",
+                    "token": "{api_s2s_token}"
+                  },
+                  "body": {
+                    "rating": "{rating_value}",
+                    "customer_name": "{customer_name}"
+                  },
+                  "timeout": 10,
+                  "max_retries": 3
+                },
+                "expected_fields": {
+                  "api_base_url": {
+                    "source": "static",
+                    "value": "{api_base_url}"
+                  },
+                  "api_s2s_token": {
+                    "source": "static",
+                    "value": "{api_s2s_token}"
+                  },
+                  "customer_name": {
+                    "source": "static",
+                    "value": "{customer_name}"
+                  },
+                  "rating_value": {
+                    "source": "llm"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "function_name": "user_not_sure_on_how_to_give_rating",
+            "description": "Call this when the user does not know how to give the rating.",
+            "properties": {},
+            "required": [],
+            "transition_to": "guide_user_to_give_rating_node",
+            "hooks": []
+          },
+          {
+            "function_name": "rating_declined",
+            "description": "Call this when the user declines to give the rating.",
+            "properties": {},
+            "required": [],
+            "transition_to": "thank_user_and_end_node",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "guide_user_to_give_rating_node",
+        "role_messages": [],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Explain calmly: open the redBus app, go to My Bookings, select the trip, and tap 5 stars. Offer to stay on the call if needed."
+          }
+        ],
+        "pre_actions": [],
+        "post_actions": [],
+        "functions": [
+          {
+            "function_name": "rating_confirmed_after_guidance",
+            "description": "Call this when the user agrees to give the rating now or later.",
+            "properties": {},
+            "required": [],
+            "transition_to": "thank_user_and_end_node",
+            "hooks": []
+          },
+          {
+            "function_name": "user_still_not_sure_on_how_to_give_rating",
+            "description": "Call this when the user is still unsure.",
+            "properties": {},
+            "required": [],
+            "transition_to": "guide_user_to_give_rating_node",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "thank_user_and_end_node",
+        "role_messages": [],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thanks a lot for your time and valuable feedback. Have a great day and happy travels with stalebus!"
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "feedback_denied_and_end_node",
+        "role_messages": [],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "No problem at all. Thanks for your time. Have a nice day!"
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "user_busy_and_end_node",
+        "role_messages": [],
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "No worries. I'll reach out at a better time. Thanks and have a good day!"
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

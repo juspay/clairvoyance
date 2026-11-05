@@ -1,0 +1,193 @@
+"""assert_facts() — which of the conflicting claims we believe (A7).
+
+BUSINESS LOGIC ONLY — DB mechanics live in accessor.py. Every profile
+claim (name, locale, timezone) is appended into the customer's
+``attributes`` assertion history with its evidence class and confidence;
+the winner per attribute materializes into the plain column the UI reads.
+The trust ladder is fixed:
+
+    declared > observed > imported > inferred
+
+An inferred claim NEVER materializes and its confidence is capped at 0.5
+(canon T05) — a guess may steer, never decide. History is master data:
+never evicted, never trimmed, and appended to only on drift (_is_drift).
+"""
+
+import json
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from app.core.logger import logger
+from app.core.logger.context import update_log_context
+from app.crm.identity.db import DbTxn, accessor, atomically
+from app.crm.identity.schemas import CustomerFacts
+
+EVIDENCE_RANK = {"declared": 3, "observed": 2, "imported": 1, "inferred": 0}
+
+# Default confidence per evidence class; explicit confidence may lower
+# but inferred can never exceed the canon's 0.5 cap.
+DEFAULT_CONFIDENCE = {
+    "declared": 1.0,
+    "observed": 0.9,
+    "imported": 0.7,
+    "inferred": 0.4,
+}
+INFERRED_CONFIDENCE_CAP = 0.5
+
+# attribute name in facts{} -> materialized column on crm_customer
+MATERIALIZED_COLUMNS = {
+    "name": "display_name",
+    "locale": "primary_locale",
+    "timezone": "timezone",
+}
+
+# Attribute names a reader outside identity may never see the value of:
+# the handle columns' names (a producer could assert them as facts) and
+# the handle-history bucket ADR 0021's trigger fills.
+HANDLE_LIKE_ATTRIBUTES = frozenset(
+    {
+        "phone",
+        "email",
+        "igsid",
+        "shopify_customer_id",
+        "external_ref",
+        "_handle_history",
+    }
+)
+
+
+def claim_confidence(evidence: str, confidence: Optional[float]) -> float:
+    """Resolve a claim's confidence: default by class, explicit allowed,
+    inferred hard-capped at 0.5 (the canon CHECK, enforced here until the
+    jsonb CHECK lands with the assertion-shape freeze)."""
+    value = DEFAULT_CONFIDENCE[evidence] if confidence is None else confidence
+    if evidence == "inferred":
+        value = min(value, INFERRED_CONFIDENCE_CAP)
+    return max(0.0, min(1.0, value))
+
+
+def _winner(claims: list) -> Dict[str, Any]:
+    """Highest evidence wins; ties break to the newest claim."""
+    return max(claims, key=lambda c: (EVIDENCE_RANK.get(c["e"], -1), c["at"]))
+
+
+def _is_drift(claims: list, value: Any, evidence: str, source: str) -> bool:
+    """The history records evidence, not traffic: a claim identical to the
+    latest one (same value, class and producer) carries nothing new. Any
+    difference is real drift and is always appended."""
+    if not claims:
+        return True
+    latest = claims[-1]
+    return (
+        latest.get("v") != value
+        or latest.get("e") != evidence
+        or latest.get("src") != source
+    )
+
+
+async def assert_facts(
+    merchant_id: str,
+    customer_id: str,
+    facts: Dict[str, Any],
+    evidence: str,
+    source: str,
+    confidence: Optional[float] = None,
+) -> bool:
+    """Append claims into the assertion history and materialize winners.
+    Returns False when the customer row does not exist (nothing was
+    asserted); True otherwise, including the no-op of an empty facts dict."""
+    if evidence not in EVIDENCE_RANK:
+        raise ValueError(f"unknown evidence class: {evidence}")
+    facts = {k: v for k, v in (facts or {}).items() if v is not None and v != ""}
+    if not facts:
+        return True
+
+    now = datetime.now(timezone.utc).isoformat()
+    k = claim_confidence(evidence, confidence)
+    return await atomically(
+        _assert_facts_in_txn, merchant_id, customer_id, facts, evidence, source, now, k
+    )
+
+
+async def _assert_facts_in_txn(
+    txn: DbTxn,
+    merchant_id: str,
+    customer_id: str,
+    facts: Dict[str, Any],
+    evidence: str,
+    source: str,
+    now: str,
+    k: float,
+) -> bool:
+    """ATOMIC: history append + winner materialization — the materialized
+    columns must never drift from the assertion history (canon T05).
+    Returns False (no-op, not raised) when the customer row is missing."""
+    row = await accessor.fetch_attributes_for_update(txn, merchant_id, customer_id)
+    if row is None:
+        update_log_context(customer_id=customer_id, merchant_id=merchant_id)
+        logger.error("assert_facts: customer not found for merchant")
+        return False
+    attributes = row["attributes"]
+    if isinstance(attributes, str):
+        attributes = json.loads(attributes)
+
+    materialized: Dict[str, Any] = {}
+    for attribute, value in facts.items():
+        claims = attributes.setdefault(attribute, [])
+        if not _is_drift(claims, value, evidence, source):
+            continue
+        claims.append({"v": value, "e": evidence, "k": k, "src": source, "at": now})
+        winner = _winner(claims)
+        column = MATERIALIZED_COLUMNS.get(attribute)
+        if column and winner["e"] != "inferred":
+            materialized[column] = winner["v"]
+
+    await accessor.update_attributes(
+        txn, merchant_id, customer_id, json.dumps(attributes), materialized
+    )
+    return True
+
+
+def winning_attributes(attributes: Dict[str, Any]) -> Dict[str, Any]:
+    """PURE: each asserted attribute's winning value by the ladder — the
+    same rule that materialises columns — minus what a reader may not
+    have: an inferred-only winner (a guess may steer, never decide) and
+    the handle-like names. Total over a malformed history: a bucket that
+    is not a list of claims simply reads as absent."""
+    winners: Dict[str, Any] = {}
+    for name, claims in attributes.items():
+        if name in HANDLE_LIKE_ATTRIBUTES or name.startswith("_"):
+            continue
+        usable = (
+            [c for c in claims if isinstance(c, dict) and "at" in c and "e" in c]
+            if isinstance(claims, list)
+            else []
+        )
+        if not usable:
+            continue
+        winner = _winner(usable)
+        if winner.get("e") == "inferred":
+            continue
+        winners[name] = winner.get("v")
+    return winners
+
+
+async def customer_facts(merchant_id: str, customer_id: str) -> Optional[CustomerFacts]:
+    """The predicate-safe view of one customer (enh A/01), for outreach's
+    condition node: the whitelisted columns, has_phone/has_email derived,
+    and the attribute winners. None when the row is missing — the caller
+    treats that as "no rule about the customer holds", never an error."""
+    row = await accessor.get_customer(merchant_id, customer_id)
+    if row is None:
+        return None
+    history = row.attributes
+    if isinstance(history, str):
+        history = json.loads(history)
+    return CustomerFacts(
+        display_name=row.display_name,
+        primary_locale=row.primary_locale,
+        timezone=row.timezone,
+        has_phone=bool(row.phone),
+        has_email=bool(row.email),
+        attributes=winning_attributes(history if isinstance(history, dict) else {}),
+    )

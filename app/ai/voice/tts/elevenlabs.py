@@ -1,0 +1,143 @@
+"""ElevenLabs TTS helpers and builder."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional, Sequence
+
+import httpx
+from pipecat.services.elevenlabs.tts import (
+    ElevenLabsTTSService,
+    language_to_elevenlabs_language,
+)
+from pipecat.services.tts_service import TextAggregationMode
+from pipecat.transcriptions.language import Language
+
+from app.core.config.static import (
+    ELEVENLABS_BB_VOICE_ID,
+    ELEVENLABS_MODEL_ID,
+)
+from app.core.logger import logger
+
+__all__ = ["ElevenLabsConfig", "build_elevenlabs_tts", "_generate_elevenlabs_audio"]
+
+
+@dataclass
+class ElevenLabsConfig:
+    """Configuration for ElevenLabs TTS."""
+
+    api_key: str
+    url: str
+    voice_id: str
+    model: str
+    speed: float = 1.0
+    stability: Optional[float] = None
+    similarity_boost: Optional[float] = None
+    language: Language = Language.EN_IN
+    text_filters: Optional[Sequence] = None
+    aggregate_sentences: bool = True
+    enable_ssml_parsing: bool = False
+
+
+def build_elevenlabs_tts(config: ElevenLabsConfig):
+    """Create an ElevenLabs TTS service."""
+
+    text_filters = list(config.text_filters) if config.text_filters else None
+
+    return ElevenLabsTTSService(
+        api_key=config.api_key,
+        voice_id=config.voice_id,
+        model=config.model,
+        url=config.url,
+        enable_ssml_parsing=config.enable_ssml_parsing,
+        settings=ElevenLabsTTSService.Settings(
+            speed=config.speed,
+            stability=config.stability,
+            similarity_boost=config.similarity_boost,
+            language=config.language,
+        ),
+        text_filters=text_filters,
+        text_aggregation_mode=(
+            TextAggregationMode.SENTENCE
+            if config.aggregate_sentences
+            else TextAggregationMode.TOKEN
+        ),
+    )
+
+
+async def _generate_elevenlabs_audio(
+    text: str,
+    voice_id: str | None = None,
+    model_id: str | None = None,
+    speed: float | None = None,
+    stability: float | None = None,
+    similarity_boost: float | None = None,
+    language: Language | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> bytes:
+    """Synthesize audio using ElevenLabs TTS API. ``api_key`` / ``base_url``:
+    the account the caller resolved (accounts.Accounts).
+
+    Args:
+        text: The text to synthesize
+        voice_id: Optional voice ID override. Falls back to ELEVENLABS_BB_VOICE_ID if None.
+        model_id: Optional model ID override. Falls back to ELEVENLABS_MODEL_ID if None.
+                             If False, uses default global API endpoint and key.
+                             Defaults to True.
+        speed: Optional playback speed, so a pre-synthesized greeting matches the
+               speed the live pipeline uses.
+        stability: Optional voice stability (0.0-1.0). Omitted when None.
+        similarity_boost: Optional similarity boost (0.0-1.0). Omitted when None.
+        language: Optional language, so the greeting matches the live pipeline.
+
+    Returns:
+        Audio bytes in ulaw_8000 format
+    """
+    # The caller resolved the account (a row's key or the env's, on the
+    # deployment's host) and dials it as https:// on this REST path.
+    if not api_key or not base_url:
+        raise ValueError("an api_key and base_url are required for ElevenLabs TTS")
+
+    # Use provided values or fall back to defaults
+    final_voice_id = voice_id if voice_id else ELEVENLABS_BB_VOICE_ID
+    final_model_id = model_id if model_id else ELEVENLABS_MODEL_ID
+
+    url = f"{base_url}/v1/text-to-speech/{final_voice_id}?output_format=ulaw_8000"
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "audio/basic",
+    }
+
+    voice_settings: dict[str, float] = {}
+    for key, value in (
+        ("speed", speed),
+        ("stability", stability),
+        ("similarity_boost", similarity_boost),
+    ):
+        if value is not None:
+            voice_settings[key] = value
+
+    payload: dict = {
+        "text": text,
+        "model_id": final_model_id,
+    }
+    if voice_settings:
+        payload["voice_settings"] = voice_settings
+
+    language_code = language_to_elevenlabs_language(language) if language else None
+    if language_code:
+        payload["language_code"] = language_code
+
+    logger.info(
+        f"Synthesizing greeting with ElevenLabs (ulaw_8000): {text[:50]}... "
+        f"[voice_id={final_voice_id}, model_id={final_model_id}, "
+        f"base_url={base_url}, voice_settings={voice_settings}, "
+        f"language_code={language_code}]"
+    )
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        return response.content

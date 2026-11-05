@@ -6,18 +6,19 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.schemas import LeadCallOutcome, LeadCallStatus, RequestedBy, Workflow
+from app.schemas import CallDirection, ExecutionMode, LeadCallStatus
 
 # Table names
 LEAD_CALL_TRACKER_TABLE = "lead_call_tracker"
-OUTBOUND_NUMBER_TABLE = "outbound_number"
+TELEPHONY_NUMBER_TABLE = "telephony_numbers"
 
 
 # Lead call tracker queries
 def insert_lead_call_tracker_query(
     id: str,
-    merchant_id: RequestedBy,
-    workflow: Workflow,
+    reseller_id: str,
+    template: str,
+    merchant_id: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     meta_data: Optional[Dict[str, Any]],
@@ -25,16 +26,39 @@ def insert_lead_call_tracker_query(
     attempt_count: int = 0,
     call_initiated_time: Optional[datetime] = None,
     cost: Optional[float] = None,
+    request_id: Optional[str] = None,
+    template_id: Optional[str] = None,
+    execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
+    status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
+    call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
+    telephony_number_id: Optional[str] = None,  # For inbound calls
+    call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
+    outcome: Optional[
+        str
+    ] = None,  # For blocked calls where outcome is known at insert time
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to insert lead call tracker record.
+
+    Args:
+        reseller_id: Reseller ID (also used as merchant_id for backward compatibility)
+        template_id: UUID of the template (preferred, for referential integrity)
+        template: Name of the template (kept for backward compatibility)
+        execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
+        call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
+        telephony_number_id: Telephony number ID (optional, used for inbound calls)
+        call_direction: Direction of call (INBOUND or OUTBOUND)
+        outcome: Call outcome (optional, used for blocked calls e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
     """
     text = f"""
         INSERT INTO "{LEAD_CALL_TRACKER_TABLE}"
         (
             "id",
+            "reseller_id",
+            "template",
+            "template_id",
             "merchant_id",
-            "workflow",
+            "request_id",
             "next_attempt_at",
             "payload",
             "meta_data",
@@ -43,24 +67,37 @@ def insert_lead_call_tracker_query(
             "call_end_time",
             "attempt_count",
             "cost",
+            "execution_mode",
+            "call_id",
+            "telephony_number_id",
+            "call_direction",
+            "outcome",
             "created_at",
             "updated_at"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *;
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING *;
     """
 
     values = [
         id,
-        merchant_id.value,
-        workflow.value,
+        reseller_id,
+        template,
+        template_id,
+        merchant_id,
+        request_id,
         next_attempt_at,
         json.dumps(payload) if payload else None,
         json.dumps(meta_data) if meta_data else None,
-        LeadCallStatus.BACKLOG.value,
+        status.value,  # Use parameter (defaults to BACKLOG for backward compatibility)
         call_initiated_time,
         call_end_time,
         attempt_count,
         cost,
+        execution_mode.value,
+        call_id,
+        telephony_number_id,
+        call_direction.value,
+        outcome,
         datetime.now(),
         datetime.now(),
     ]
@@ -68,18 +105,89 @@ def insert_lead_call_tracker_query(
     return text, values
 
 
-def get_leads_based_on_status_and_next_attempt_query(
-    status: LeadCallStatus, time: datetime
+def acquire_lock_on_lead_by_id_query(
+    lead_id: str,
+    expected_status: Optional[LeadCallStatus] = None,
+    force: bool = False,
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to select leads based on status and next attempt time.
+    Generate query to atomically acquire lock on a lead by ID.
+
+    If expected_status is provided, only acquires the lock when the lead's current
+    status matches — combining lock + status verification in a single atomic query.
+    Returns the lead if successfully locked, empty result if already locked or
+    status mismatched.
+
+    When the BACKLOG variant is used (dispatcher path), this also stamps
+    ``dispatched_at = COALESCE(dispatched_at, NOW())`` — the first BACKLOG
+    lock wins; subsequent locks (e.g. by ``reconcile_stuck_processing_leads``
+    on a PROCESSING row) preserve the original timestamp. See
+    docs/BACKLOG_DISPATCHER_REDESIGN.md.
+
+    ``force=True`` skips the ``is_locked = FALSE`` guard, allowing the
+    reconciler to reclaim a lock left dangling by a crashed pod. Only safe
+    because the BackgroundTaskScheduler's distributed lock ensures a single
+    reconciler runs at a time and only calls this after a 10-minute timeout.
+    """
+    set_clause = '"is_locked" = TRUE, "updated_at" = NOW()'
+    if expected_status == LeadCallStatus.BACKLOG:
+        set_clause += ', "dispatched_at" = COALESCE("dispatched_at", NOW())'
+
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET {set_clause}
+        WHERE "id" = $1
+    """
+    if not force:
+        text += '        AND "is_locked" = FALSE\n'
+    values: List[Any] = [lead_id]
+    if expected_status is not None:
+        text += f'        AND "status" = ${len(values) + 1}\n'
+        values.append(expected_status.value)
+    text += "        RETURNING *;\n    "
+    return text, values
+
+
+def release_lock_on_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to release lock on a lead by ID.
     """
     text = f"""
-        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
-        WHERE "status" = $1
-        AND "next_attempt_at" <= $2;
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "is_locked" = FALSE, "updated_at" = NOW()
+        WHERE "id" = $1
+        RETURNING *;
     """
-    values = [status.value, time]
+    values = [lead_id]
+    return text, values
+
+
+def defer_lead_next_attempt_and_release_lock_query(
+    lead_id: str, defer_seconds: int
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to release the lock on a lead and push next_attempt_at
+    forward by at least defer_seconds. Used when a dispatch worker cannot
+    place the call right now (rate-limited, outside calling hours, channel
+    saturated, etc.) so the next promoter tick doesn't immediately re-pick
+    the same lead.
+
+    GREATEST() preserves any further-in-the-future schedule already on the
+    row, and COALESCE() guards against NULL next_attempt_at so the deferral
+    always takes effect.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "is_locked" = FALSE,
+            "next_attempt_at" = GREATEST(
+                COALESCE("next_attempt_at", NOW()),
+                NOW() + make_interval(secs => $2::int)
+            ),
+            "updated_at" = NOW()
+        WHERE "id" = $1
+        RETURNING *;
+    """
+    values: List[Any] = [lead_id, defer_seconds]
     return text, values
 
 
@@ -88,18 +196,28 @@ def update_lead_call_details_query(
     status: LeadCallStatus,
     call_id: str,
     call_initiated_time: datetime,
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to update lead call details.
+    Only updates if lead is still in BACKLOG status to prevent concurrent
+    process_backlog_leads invocations from overwriting an active call's details.
+    Returns zero rows if the lead was already moved to PROCESSING/FINISHED by another invocation.
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET "status" = $1, "call_id" = $2, "updated_at" = NOW(), "call_initiated_time" = $3, "outbound_number_id" = $4
-        WHERE "id" = $5
+        SET "status" = $1, "call_id" = $2, "updated_at" = NOW(), "call_initiated_time" = $3, "telephony_number_id" = $4
+        WHERE "id" = $5 AND "status" = $6
         RETURNING *;
     """
-    values = [status.value, call_id, call_initiated_time, outbound_number_id, id]
+    values = [
+        status.value,
+        call_id,
+        call_initiated_time,
+        telephony_number_id,
+        id,
+        LeadCallStatus.BACKLOG.value,
+    ]
     return text, values
 
 
@@ -108,10 +226,288 @@ def get_lead_by_call_id_query(call_id: str) -> Tuple[str, List[Any]]:
     Generate query to get lead by call ID.
     """
     text = f"""
-        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+        SELECT *
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
         WHERE "call_id" = $1;
     """
     values = [call_id]
+    return text, values
+
+
+def get_leads_by_request_id_query(request_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get all leads by request_id.
+    """
+    text = f"""
+        SELECT *
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "request_id" = $1
+        ORDER BY "created_at" DESC;
+    """
+    values = [request_id]
+    return text, values
+
+
+_PRODUCTION = "\"execution_mode\" IN ('TELEPHONY', 'HOLD_TRANSFER')"
+
+# An answered call: placed, finished, and the line was picked up. BUSY counts
+# — in Buddy it is the no-input timeout, a call the customer answered and
+# said nothing on, not the carrier's busy tone (ruled 24 Sep 2026). NO_ANSWER
+# is every carrier failure; the last two are the dialler's own refusals. The
+# one definition, spelled once — the report, the calls summary and "reached"
+# all read it.
+_ANSWERED = (
+    '"call_initiated_time" IS NOT NULL AND "status" = \'FINISHED\' '
+    "AND COALESCE(\"outcome\", '') NOT IN "
+    "('NO_ANSWER', 'NUMBER_UNAVAILABLE', 'FAILED')"
+)
+
+# A run's retry lead, as the lead store itself knows it: the dispatcher mints a
+# NO_ANSWER re-dial with NO enrollment_id, attempt_count one higher than its
+# parent, the parent's request_id, and the parent's payload. So a retry is an
+# unstamped row with attempt_count > 0 whose request_id one of the run's own
+# stamped leads carries, created while the run was open. Nothing about how a
+# workflow derives request_id is decided here — the stamped lead already did.
+#
+# ``{parent_request_id}`` must be a plain column or scalar, never a
+# correlated subquery: written as ``request_id IN (SELECT ... WHERE
+# s2.run_id = s.run_id)`` the planner cannot probe idx_lead_call_tracker
+# _request_id per run and instead pairs every run with every lead of the
+# window and filters — quadratic in runs (25 runs: 11 s on prod, 21 Sep
+# 2026; 3,000 runs locally: 546k rows thrown away). An equality is one
+# index probe per run.
+_RETRY_OF_RUN = (
+    '{l}"enrollment_id" IS NULL AND {l}"attempt_count" > 0 '
+    'AND {l}"request_id" = {parent_request_id} '
+    'AND {l}"created_at" >= {entered} AND {l}"created_at" <= COALESCE({exited}, now())'
+)
+
+
+def get_leads_by_enrollment_id_query(
+    merchant_id: str,
+    enrollment_id: str,
+    entered_at: datetime,
+    exited_at: Optional[datetime],
+) -> Tuple[str, List[Any]]:
+    """Every lead one workflow run placed (the call step stamps its run's
+    id) plus its retry leads, in the order they were queued. The partial
+    enrollment index (059) carries the first half, the request_id index
+    (004) the second; merchant_id keeps a foreign id from reading."""
+    # One run: its stamped request_ids are a tiny uncorrelated set, joined
+    # as a plain equality so the request_id index serves the retry half.
+    retry = _RETRY_OF_RUN.format(
+        l="l.", parent_request_id="p.request_id", entered="$3", exited="$4::timestamptz"
+    )
+    text = f"""
+        SELECT l.*
+        FROM "{LEAD_CALL_TRACKER_TABLE}" l
+        WHERE l."merchant_id" = $2 AND l."enrollment_id" = $1
+        UNION
+        SELECT l.*
+        FROM (SELECT DISTINCT "request_id" FROM "{LEAD_CALL_TRACKER_TABLE}"
+              WHERE "merchant_id" = $2 AND "enrollment_id" = $1) p
+        JOIN "{LEAD_CALL_TRACKER_TABLE}" l
+          ON l."merchant_id" = $2 AND {retry}
+        ORDER BY "next_attempt_at" NULLS LAST, "id";
+    """
+    return text, [enrollment_id, merchant_id, entered_at, exited_at]
+
+
+def _run_leads_cte() -> str:
+    """The ONE lead set every per-run read folds: for each run in the three
+    parallel arrays ($2 ids, $3 entered_at, $4 exited_at), its stamped
+    leads UNION ALL its retry leads (_RETRY_OF_RUN), production modes only,
+    merchant-scoped on both halves. ``mine`` carries run_id beside every
+    lead column, so the reads below group by it. Two joins, each on its own
+    index (059 for the stamp, 004 for request_id).
+
+    The retry join is an EQUALITY on the stamped lead's request_id, carried
+    through ``s`` (one row per run × request_id): the earlier correlated
+    ``IN (SELECT ... WHERE s2.run_id = s.run_id)`` was quadratic in runs
+    and is what held prod's CPU on 21 Sep 2026.
+
+    Both joins are LATERAL probes fenced with OFFSET 0, so each stays one
+    index lookup per row (059 per run, 004 per run × request_id). As plain
+    joins, the prepared statement (array params, rows overestimated ~5x)
+    planned a hash join over EVERY linked lead of the merchant (875k rows,
+    8.2 s for 15k runs) and, for the retries, a parallel seq scan of the
+    whole table (4 GB read for 0 rows at 21k runs). Same rows either way."""
+    retry = _RETRY_OF_RUN.format(
+        l="l.",
+        parent_request_id="s.request_id",
+        entered="s.entered_at",
+        exited="s.exited_at",
+    )
+    return f"""
+        WITH runs AS (
+            SELECT * FROM unnest($2::uuid[], $3::timestamptz[], $4::timestamptz[])
+                     AS r(id, entered_at, exited_at)
+        ), stamped AS (
+            SELECT r.id AS run_id, r.entered_at, r.exited_at, l.*
+            FROM runs r
+            CROSS JOIN LATERAL (
+                SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}" l
+                WHERE l."enrollment_id" = r.id
+                  AND l."merchant_id" = $1 AND l.{_PRODUCTION}
+                OFFSET 0
+            ) l
+        ), retries AS (
+            SELECT s.run_id, s.entered_at, s.exited_at, l.*
+            FROM (SELECT DISTINCT run_id, entered_at, exited_at, "request_id"
+                  FROM stamped) s
+            CROSS JOIN LATERAL (
+                SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}" l
+                WHERE l."merchant_id" = $1 AND l.{_PRODUCTION}
+                  AND {retry}
+                OFFSET 0
+            ) l
+        ), mine AS (
+            SELECT * FROM stamped
+            UNION ALL
+            SELECT * FROM retries
+        )
+    """
+
+
+def get_call_stats_by_runs_query(
+    merchant_id: str,
+    enrollment_ids: List[str],
+    entered_ats: List[datetime],
+    exited_ats: List[Optional[datetime]],
+) -> Tuple[str, List[Any]]:
+    """Calls placed by a set of workflow runs (their stamped leads AND their
+    retries — the same ``mine`` set the report folds), one row per
+    (template, outcome, spoke): how many, how many runs they touch, talk
+    time and attempts, cost. A lead counts as placed once the dialler
+    initiated it. ``spoke`` is _ANSWERED judged per row and emitted as a
+    column, so Python never re-decides who spoke; NULL outcome is its own
+    row.
+
+    Grouped by TEMPLATE as well as outcome because a plan may fire more
+    than one agent — a call square's own template, and (PR #1156) an arm's
+    — and "which agent got which outcome" is the question a merchant asks
+    of a multi-template plan. The caller folds the templates together for
+    the plan-wide totals, so one read answers both."""
+    text = f"""
+        {_run_leads_cte()}
+        SELECT COALESCE("template", '') AS template,
+               COALESCE("outcome", 'N/A') AS outcome,
+               ({_ANSWERED}) AS spoke,
+               count(*)::int AS calls,
+               count(DISTINCT run_id)::int AS runs,
+               sum(EXTRACT(EPOCH FROM ("call_end_time" - "call_initiated_time")))
+                   FILTER (WHERE "call_end_time" > "call_initiated_time") AS talk_seconds,
+               count(*) FILTER (WHERE "call_end_time" > "call_initiated_time")::int AS timed_calls,
+               sum("attempt_count")::int AS attempts,
+               sum("cost") AS cost
+        FROM mine
+        WHERE "call_initiated_time" IS NOT NULL
+        GROUP BY 1, 2, 3;
+    """
+    return text, [merchant_id, enrollment_ids, entered_ats, exited_ats]
+
+
+def get_call_facts_by_runs_query(
+    merchant_id: str,
+    enrollment_ids: List[str],
+    entered_ats: List[datetime],
+    exited_ats: List[Optional[datetime]],
+) -> Tuple[str, List[Any]]:
+    """Per run AND template: how many leads it minted, how many were
+    placed, answered, NO_ANSWER, BUSY, still in flight — and WHEN its first
+    answered call began. The report judges "before or after we spoke" from
+    that moment against the run's own exited_at, so it needs the time, not
+    a flag. Grouped by template too, so one read scopes the whole call
+    table to one agent (a plan may ring more than one). Over the same
+    ``mine`` set as get_call_stats_by_runs_query — stamped leads and
+    retries alike.
+
+    ``placed_finished`` and ``outcomes`` are the leads of that (run,
+    template) that were DIALLED (call_initiated_time set) and have
+    FINISHED, the latter as {outcome: count} — the calls a customer
+    actually got, which is what the per-customer cap counts. A lead that
+    ended without ringing (ABORTED from the plan's daily ceiling,
+    CALL_LIMIT_REACHED, PRECHECK_FAILED, BLACKLISTED, ...) is in neither,
+    by the dial fact rather than a list of outcome names; one still on the
+    line is in neither yet. The calls-per-customer chart counts these.
+
+    ``last_answered_at`` / ``last_answered_event`` are the run's LAST
+    answered call before its exited_at (or so far, while open) and the
+    stage that call was placed for: ``current_stage`` when the call square
+    carries a stage label (the walker stamps it into the payload), else the
+    ``event_name`` fact. Both were written into the payload when the call
+    square QUEUED the lead, and a retry carries its parent's — so the word
+    may trail where the customer stood by the time they answered. The
+    report reads "for which event did we call, and then they converted"
+    off it. Per (run, template) like the rest; the caller takes the latest
+    across templates. NULL when the payload carries neither.
+
+    The event is picked in its own CTE (``last_ev``, DISTINCT ON the group,
+    newest call first) rather than an ordered ``array_agg`` in ``facts``:
+    an ordered aggregate turns the whole facts read into a sort, and
+    ``payload`` is a jsonb column that can run to kilobytes on a call-square
+    lead — sorting it for every lead is what the plain ``max(...) FILTER``
+    beside it avoids. ``facts`` stays a hash aggregate that never touches
+    ``payload``; ``last_ev`` unpacks it once per answered lead."""
+    last = f'{_ANSWERED} AND "call_initiated_time" < COALESCE(exited_at, now())'
+    text = f"""
+        {_run_leads_cte()},
+        by_outcome AS (
+            SELECT run_id,
+                   COALESCE("template", '') AS template,
+                   COALESCE("outcome", 'N/A') AS outcome,
+                   count(*)::int AS n
+            FROM mine
+            WHERE "status" = 'FINISHED' AND "call_initiated_time" IS NOT NULL
+            GROUP BY 1, 2, 3
+        ), outcomes AS (
+            SELECT run_id, template, jsonb_object_agg(outcome, n) AS outcomes
+            FROM by_outcome
+            GROUP BY 1, 2
+        ), facts AS (
+            SELECT run_id,
+                   COALESCE("template", '') AS template,
+                   count(*)::int AS leads,
+                   count(*) FILTER (WHERE "status" = 'FINISHED' AND "call_initiated_time" IS NOT NULL)::int AS placed_finished,
+                   count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL)::int AS placed,
+                   count(*) FILTER (WHERE {_ANSWERED})::int AS answered,
+                   count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'NO_ANSWER')::int AS no_answer,
+                   count(*) FILTER (WHERE "status" = 'FINISHED' AND "outcome" = 'BUSY')::int AS busy,
+                   count(*) FILTER (WHERE "call_initiated_time" IS NOT NULL AND "status" <> 'FINISHED')::int AS in_progress,
+                   min("call_initiated_time") FILTER (WHERE {_ANSWERED}) AS first_answered_at,
+                   max("call_initiated_time") FILTER (WHERE {last}) AS last_answered_at
+            FROM mine
+            GROUP BY 1, 2
+        ), last_ev AS (
+            SELECT DISTINCT ON (run_id, COALESCE("template", ''))
+                   run_id,
+                   COALESCE("template", '') AS template,
+                   COALESCE("payload" ->> 'current_stage', "payload" ->> 'event_name') AS last_answered_event
+            FROM mine
+            WHERE {last}
+            ORDER BY run_id, COALESCE("template", ''), "call_initiated_time" DESC, "id"
+        )
+        SELECT f.run_id AS enrollment_id, f.template, f.leads, f.placed_finished,
+               f.placed, f.answered, f.no_answer, f.busy, f.in_progress,
+               f.first_answered_at, f.last_answered_at, e.last_answered_event,
+               COALESCE(o.outcomes, '{{}}'::jsonb) AS outcomes
+        FROM facts f
+        LEFT JOIN outcomes o ON o.run_id = f.run_id AND o.template = f.template
+        LEFT JOIN last_ev e ON e.run_id = f.run_id AND e.template = f.template;
+    """
+    return text, [merchant_id, enrollment_ids, entered_ats, exited_ats]
+
+
+def get_lead_by_id_query(lead_id: str) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get lead by ID.
+    """
+    text = f"""
+        SELECT *
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "id" = $1;
+    """
+    values = [lead_id]
     return text, values
 
 
@@ -131,23 +527,153 @@ def update_lead_call_recording_url_query(
     return text, values
 
 
-def update_lead_call_completion_details_query(
-    id: str,
-    status: LeadCallStatus,
-    outcome: LeadCallOutcome,
-    meta_data: Dict[str, Any],
-    call_end_time: datetime,
+def update_lead_call_initiated_time_query(
+    call_id: str, call_initiated_time: datetime
 ) -> Tuple[str, List[Any]]:
     """
-    Generate query to update lead call completion details.
+    Generate query to update lead call initiated time by call_id.
     """
     text = f"""
         UPDATE "{LEAD_CALL_TRACKER_TABLE}"
-        SET "status" = $1, "outcome" = $2, "meta_data" = $3, "call_end_time" = $4, "updated_at" = NOW()
-        WHERE "id" = $5
+        SET "call_initiated_time" = $1, "updated_at" = NOW()
+        WHERE "call_id" = $2
         RETURNING *;
     """
-    values = [status.value, outcome.value, json.dumps(meta_data), call_end_time, id]
+    values = [call_initiated_time, call_id]
+    return text, values
+
+
+def update_lead_call_initiated_time_by_id_query(
+    lead_id: str, call_initiated_time: datetime
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead call initiated time by lead id.
+    Used for Daily mode where there's no telephony call_id.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_initiated_time" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [call_initiated_time, lead_id]
+    return text, values
+
+
+def update_lead_call_id_by_id_query(
+    lead_id: str, call_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead call_id by lead id.
+    Used for Daily mode to store the Daily room name as call_id
+    so that recording webhooks can look up the lead by room name.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "call_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [call_id, lead_id]
+    return text, values
+
+
+def update_lead_enrollment_id_query(
+    lead_id: str, enrollment_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Stamp the CRM workflow run (ADR 0010) onto the lead it caused — once;
+    a lead is never re-attributed to another run.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "enrollment_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2 AND "enrollment_id" IS NULL
+        RETURNING *;
+    """
+    return text, [enrollment_id, lead_id]
+
+
+def update_lead_customer_id_query(
+    lead_id: str, customer_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to stamp the CRM customer_id onto a lead row (ADR 0017).
+    Stamped at write by resolve(), never joined at read — the timeline rule.
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET "customer_id" = $1, "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [customer_id, lead_id]
+    return text, values
+
+
+def update_lead_call_completion_details_query(
+    id: str,
+    status: Optional[LeadCallStatus] = None,
+    outcome: Optional[str] = None,
+    meta_data: Optional[Dict[str, Any]] = None,
+    call_end_time: Optional[datetime] = None,
+    expected_status: Optional[LeadCallStatus] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to update lead call completion details.
+    Only updates fields that are not None.
+
+    ``expected_status`` turns the UPDATE into an atomic CLAIM: the row is only
+    written when it still holds that status, so a returned row means THIS
+    caller performed the transition and everyone else gets nothing. Without it
+    the WHERE clause is the id alone, and a returned row only means the row
+    exists — which is useless for deciding who owes a side effect.
+
+    That distinction is load-bearing wherever a lead transition also releases a
+    resource: an inbound Plivo lead holds a telephony channel while it is
+    PROCESSING, and two callbacks that both merely "updated the row" would both
+    refund it, under-counting the number and over-admitting past
+    maximum_channels.
+    """
+    set_clauses: List[str] = []
+    values: List[Any] = []
+
+    if status is not None:
+        values.append(status.value)
+        set_clauses.append(f'"status" = ${len(values)}')
+
+    if outcome is not None:
+        values.append(outcome)
+        set_clauses.append(f'"outcome" = ${len(values)}')
+
+    if meta_data is not None:
+        values.append(json.dumps(meta_data))
+        set_clauses.append(f'"meta_data" = ${len(values)}')
+
+    if call_end_time is not None:
+        values.append(call_end_time)
+        set_clauses.append(f'"call_end_time" = ${len(values)}')
+
+    # Always update updated_at
+    set_clauses.append('"updated_at" = NOW()')
+
+    # Add id for WHERE clause
+    values.append(id)
+    where_parts = [f'"id" = ${len(values)}']
+
+    if expected_status is not None:
+        values.append(expected_status.value)
+        where_parts.append(f'"status" = ${len(values)}')
+
+    where_clause = " AND ".join(where_parts)
+
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET {", ".join(set_clauses)}
+        WHERE {where_clause}
+        RETURNING *;
+    """
+
     return text, values
 
 
@@ -155,7 +681,8 @@ def get_all_lead_call_trackers_query(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> Tuple[str, List[Any]]:
@@ -169,7 +696,7 @@ def get_all_lead_call_trackers_query(
         FROM
             "{LEAD_CALL_TRACKER_TABLE}" lct
         LEFT JOIN
-            "{OUTBOUND_NUMBER_TABLE}" ou ON lct.outbound_number_id = ou.id
+            "{TELEPHONY_NUMBER_TABLE}" ou ON lct.telephony_number_id = ou.id
     """
     values: List[Any] = []
     conditions = []
@@ -186,9 +713,13 @@ def get_all_lead_call_trackers_query(
         values.append(outcome)
         conditions.append(f"outcome = ${len(values)}")
 
-    if order_id:
-        values.append(f"%{order_id}%")
-        conditions.append(f"payload->>'order_id' LIKE ${len(values)}")
+    if request_id:
+        values.append(f"%{request_id}%")
+        conditions.append(f"lct.request_id LIKE ${len(values)}")
+
+    if shop_name:
+        values.append(f"%{shop_name}%")
+        conditions.append(f"payload->>'shop_name' LIKE ${len(values)}")
 
     if conditions:
         text += " WHERE " + " AND ".join(conditions)
@@ -207,11 +738,33 @@ def get_all_lead_call_trackers_query(
     return text, values
 
 
+def get_leads_by_status_and_time_before_query(
+    status: LeadCallStatus, time: datetime, include_locked: bool = False
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to select leads based on their status and a time before which
+    they were initiated. By default excludes locked rows (safe for BACKLOG/RETRY).
+    Pass include_locked=True for the PROCESSING reconciler path where leads are
+    always locked by design.
+    """
+    text = f"""
+        SELECT * FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE "status" = $1
+        AND "call_initiated_time" < $2
+    """
+    if not include_locked:
+        text += '        AND "is_locked" = FALSE\n'
+    text += ";"
+    values = [status.value, time]
+    return text, values
+
+
 def get_lead_call_trackers_count_query(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """
     Generate query to count all lead call trackers within a date range with optional filters.
@@ -234,12 +787,346 @@ def get_lead_call_trackers_count_query(
         values.append(outcome)
         conditions.append(f"outcome = ${len(values)}")
 
-    if order_id:
-        values.append(f"%{order_id}%")
-        conditions.append(f"payload->>'order_id' LIKE ${len(values)}")
+    if request_id:
+        values.append(f"%{request_id}%")
+        conditions.append(f"request_id LIKE ${len(values)}")
+
+    if shop_name:
+        values.append(f"%{shop_name}%")
+        conditions.append(f"payload->>'shop_name' LIKE ${len(values)}")
 
     if conditions:
         text += " WHERE " + " AND ".join(conditions)
 
     text += ";"
+    return text, values
+
+
+def get_lead_based_analytics_query(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to get per-lead call data.
+    Returns one row per request_id with call counts. Aggregation done in Python.
+    """
+    values: List[Any] = []
+    conditions = []
+
+    if start_date:
+        values.append(start_date)
+        conditions.append(f'"call_initiated_time" >= ${len(values)}')
+
+    if end_date:
+        values.append(end_date)
+        conditions.append(f'"call_initiated_time" < ${len(values)}')
+
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+    text = f"""
+        SELECT
+            request_id AS order_id,
+            COUNT(*) AS total_calls,
+            COUNT(*) FILTER (WHERE status = 'FINISHED') AS finished_calls,
+            COUNT(*) FILTER (WHERE outcome = 'CONFIRM') AS confirmed_calls,
+            COUNT(*) FILTER (WHERE outcome = 'CANCEL') AS cancelled_calls,
+            COUNT(*) FILTER (WHERE outcome = 'ABORT') AS aborted_calls,
+            COUNT(*) FILTER (WHERE outcome = 'ADDRESS_UPDATED') AS address_update_calls,
+            COUNT(*) FILTER (WHERE outcome = 'BUSY') AS busy_calls,
+            COUNT(*) FILTER (WHERE outcome = 'NO_ANSWER') AS no_answer_calls
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        {where_clause}
+        GROUP BY request_id;
+    """
+    return text, values
+
+
+def update_langfuse_scores_query(
+    call_id: str, langfuse_scores: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """
+    Update the langfuse_scores column for a specific call_id.
+
+    Args:
+        call_id: The call identifier (call_sid)
+        langfuse_scores: JSON object containing Langfuse evaluation scores
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET langfuse_scores = $1::jsonb, updated_at = NOW()
+        WHERE call_id = $2
+        RETURNING *;
+    """
+    values = [json.dumps(langfuse_scores), call_id]
+    return text, values
+
+
+def abort_lead_by_id_query(
+    lead_id: str, cancellation_reason: str
+) -> Tuple[str, List[Any]]:
+    """
+    Generate query to abort a lead by lead ID.
+    Sets status to FINISHED and outcome to ABORT.
+
+    Args:
+        lead_id: Lead UUID
+        cancellation_reason: Optional reason for cancellation
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET 
+            "status" = $1, 
+            "outcome" = $2, 
+            "updated_at" = NOW(),
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $3::jsonb
+        WHERE 
+            "id" = $4
+            AND "status" IN ($5, $6)
+            AND ("outcome" IS NULL OR "outcome" = '')
+        RETURNING *;
+    """
+
+    metadata = {
+        "aborted_at": datetime.now().isoformat(),
+        "outcome": {"abort_reason": cancellation_reason},
+    }
+
+    values = [
+        LeadCallStatus.FINISHED.value,
+        "ABORT",  # Outcome string literal
+        json.dumps(metadata),
+        lead_id,
+        LeadCallStatus.BACKLOG.value,
+        LeadCallStatus.RETRY.value,
+    ]
+    return text, values
+
+
+def update_lead_payload_query(
+    lead_id: str, payload_updates: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """
+    Update specific fields in the payload JSON column for a lead.
+
+    Uses jsonb merge (||) to update only the specified fields without
+    overwriting existing payload data.
+
+    Args:
+        lead_id: Lead UUID
+        payload_updates: Dictionary of fields to merge into the existing payload
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "payload" = COALESCE("payload", '{{}}')::jsonb || $1::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [json.dumps(payload_updates), lead_id]
+    return text, values
+
+
+def update_lead_request_id_query(
+    lead_id: str, request_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Update the request_id column for a specific lead.
+
+    Args:
+        lead_id: Lead UUID
+        request_id: The value to set as request_id (e.g. linked outbound lead UUID)
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "request_id" = $1,
+            "updated_at" = NOW()
+        WHERE "id" = $2;
+    """
+    values = [request_id, lead_id]
+    return text, values
+
+
+def update_lead_template_query(
+    lead_id: str, template: str, template_id: str
+) -> Tuple[str, List[Any]]:
+    """
+    Update the template name and template_id for a lead.
+
+    Used when an IVR selection results in a different template than the
+    one the lead was initially created with in the answer handler.
+
+    Args:
+        lead_id: Lead UUID
+        template: New template name
+        template_id: New template UUID
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "template" = $1,
+            "template_id" = $2,
+            "updated_at" = NOW()
+        WHERE "id" = $3
+        RETURNING *;
+    """
+    values = [template, template_id, lead_id]
+    return text, values
+
+
+def append_metadata_field_query(
+    lead_id: str, field_updates: Dict[str, Any]
+) -> Tuple[str, List[Any]]:
+    """
+    Append/merge specific fields into the meta_data JSONB column for a lead.
+
+    Uses jsonb merge (||) to update only the specified fields without
+    overwriting existing meta_data.
+
+    Args:
+        lead_id: Lead UUID
+        field_updates: Dictionary of fields to merge into existing meta_data
+
+    Returns:
+        Tuple of (query_text, values)
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "meta_data" = COALESCE("meta_data", '{{}}')::jsonb || $1::jsonb,
+            "updated_at" = NOW()
+        WHERE "id" = $2
+        RETURNING *;
+    """
+    values = [json.dumps(field_updates), lead_id]
+    return text, values
+
+
+def reset_widget_voice_lead_query(
+    lead_id: str,
+    payload: Dict[str, Any],
+    meta_data_seed: Dict[str, Any],
+    execution_mode: str,
+) -> Tuple[str, List[Any]]:
+    """Reset a widget voice lead so the next /voice/connect can reuse it.
+
+    Used only by the unified widget router (CHAT_MODE.md §14): one
+    chat_session has ONE voice lead (set in chat_session.voice_lead_id)
+    that persists for the conversation's lifetime; each /voice/connect
+    after the first reuses this lead instead of creating a new row.
+
+    Behaviour:
+      - status flipped back to BACKLOG so the bot can run again
+      - attempt_count incremented (analytics treats this attempt as
+        the Nth voice attachment in the conversation)
+      - payload REPLACED with the latest template_vars (chat may have
+        accumulated new state since the prior voice attachment)
+      - meta_data is *merged* with the new seed so widget-mode markers
+        (is_widget, widget_config_id, widget_session_id) overwrite their
+        prior values, but unrelated fields the bot wrote during the prior
+        attempt (e.g., evaluator scores) are preserved
+      - execution_mode RE-ASSERTED (e.g. DAILY_STREAM) so a lead created
+        before the stream pivot is upgraded on reuse instead of silently
+        running the old agent-mode pipeline
+      - call_id, call_initiated_time, call_end_time, outcome, cost,
+        recording_url are CLEARED so they don't leak from the prior
+        attempt's call into this one
+    """
+    text = f"""
+        UPDATE "{LEAD_CALL_TRACKER_TABLE}"
+        SET
+            "status"               = $2,
+            "attempt_count"        = COALESCE("attempt_count", 0) + 1,
+            "payload"              = $3::jsonb,
+            "meta_data"            = COALESCE("meta_data", '{{}}')::jsonb || $4::jsonb,
+            "execution_mode"       = $5,
+            "call_id"              = NULL,
+            "call_initiated_time"  = NULL,
+            "call_end_time"        = NULL,
+            "outcome"              = NULL,
+            "cost"                 = NULL,
+            "recording_url"        = NULL,
+            "updated_at"           = NOW()
+        WHERE "id" = $1
+        RETURNING *;
+    """
+    values: List[Any] = [
+        lead_id,
+        LeadCallStatus.BACKLOG.value,
+        json.dumps(payload),
+        json.dumps(meta_data_seed),
+        execution_mode,
+    ]
+    return text, values
+
+
+def count_recent_contacted_leads_query(
+    customer_mobile_number: str,
+    reseller_id: str,
+    window_start: datetime,
+    merchant_id: Optional[str] = None,
+    exclude_request_id: Optional[str] = None,
+    exclude_lead_id: Optional[str] = None,
+) -> Tuple[str, List[Any]]:
+    """Count leads for this phone number that were contacted recently OR are
+    being contacted right now.
+
+    Backs the ``recent_contact_cooldown`` pre-check function.
+
+    Omit ``merchant_id`` for the ``"*"`` scope — count contacts across every
+    merchant under the reseller rather than just the lead's own.
+
+    Both sides of the phone comparison are normalized to their last 10 digits
+    (``RIGHT(regexp_replace(..., '\\D', '', 'g'), 10)``) rather than compared
+    for exact equality — stored numbers carry inconsistent ``+``/country-code
+    formatting (see the console-search fix in ``analytics.py`` for the same
+    issue), so a raw-string match would silently miss a recent contact and
+    let the duplicate call through. Same technique as
+    ``blacklisted_numbers.normalize_phone_number`` (last-10-digit compare):
+    cheaper than a full digit-strip comparison and, unlike it, also collapses
+    ``+91``/``91``/no-prefix variants of the same Indian number onto one
+    another. Migration 054's partial index expressions must mirror this exact
+    expression or Postgres won't use them.
+    """
+    values: List[Any] = [reseller_id, window_start, customer_mobile_number]
+    conditions = [
+        '"reseller_id" = $1',
+        '(("call_initiated_time" IS NOT NULL AND "call_initiated_time" >= $2)'
+        " OR "
+        '(("is_locked" = TRUE OR "status" = '
+        f"'{LeadCallStatus.PROCESSING.value}') AND \"updated_at\" >= $2))",
+        "RIGHT(regexp_replace(\"payload\"->>'customer_mobile_number', '\\D', '', 'g'), 10) "
+        "= RIGHT(regexp_replace($3, '\\D', '', 'g'), 10)",
+    ]
+
+    if merchant_id:
+        values.append(merchant_id)
+        conditions.append(f'"merchant_id" = ${len(values)}')
+
+    if exclude_request_id:
+        values.append(exclude_request_id)
+        conditions.append(f'("request_id" IS DISTINCT FROM ${len(values)})')
+
+    if exclude_lead_id:
+        values.append(exclude_lead_id)
+        conditions.append(f'("id" IS DISTINCT FROM ${len(values)})')
+
+    text = f"""
+        SELECT COUNT(*) AS count
+        FROM "{LEAD_CALL_TRACKER_TABLE}"
+        WHERE {" AND ".join(conditions)};
+    """
     return text, values

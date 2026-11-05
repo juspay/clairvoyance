@@ -1,0 +1,255 @@
+{
+  "_comment": "The lending journey with a PLAYBOOK (corpus modules/05-outreach.md §The playbook, canon T19 col 6): the agent template keeps {hook_line}, {walk} and {lender_notes} as holes, and the plan chooses what fills them from the event. Every sentence lives in lines ONCE — reword step_open_app and every walk that names it changes. A block names lines and never holds text; the first row whose when holds wins and the LAST row has no when, which is what keeps the agent from speaking a literal {hook_line} on a live call. The call square LISTS what it takes, so a block nobody asks for is never evaluated, never in a payload, never in a log. Because the playbook is part of the document it is pinned into the version row at publish: a journey that started on script v1 keeps saying v1, and a wording fix reaches open runs only with on_publish migrate — the property a live vendor registration cannot have (the 17 Sep ruling). walk renders many lines, so publish refuses it mapped to a WhatsApp blank while a call takes it happily.",
+  "entry": {
+    "topic": "LINE_INITIATED",
+    "key": "customer_id",
+    "reenter": true,
+    "cooldown_hours": 0
+  },
+  "nodes": [
+    {
+      "id": "is-credit-line",
+      "type": "condition",
+      "rules": [
+        {
+          "on": "yes",
+          "if": [
+            {
+              "field": "context.products",
+              "op": "not_exists"
+            },
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quiet-30m",
+      "type": "wait",
+      "topics": [
+        "LINE_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_REQUIRED",
+        "LINE_ACCOUNT_AGGREGATOR_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_COMPLETED",
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic",
+      "minutes": 30,
+      "window": {
+        "opens": "07:00",
+        "closes": "23:00",
+        "timezone": "Asia/Kolkata"
+      }
+    },
+    {
+      "id": "nudge-call",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER",
+      "blocks": [
+        "hook_line",
+        "walk",
+        "lender_notes"
+      ]
+    },
+    {
+      "id": "listen",
+      "type": "wait",
+      "topics": [
+        "LINE_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_REQUIRED",
+        "LINE_ACCOUNT_AGGREGATOR_INITIATED",
+        "LINE_ACCOUNT_AGGREGATOR_COMPLETED",
+        "LINE_OFFERED",
+        "LINE_OFFER_SELECTED",
+        "LINE_KYC_COMPLETED",
+        "LINE_LENDER_ATTEMPT_FAILED"
+      ],
+      "key": "$topic"
+    }
+  ],
+  "edges": [
+    [
+      "is-credit-line",
+      "quiet-30m",
+      "yes"
+    ],
+    [
+      "is-credit-line",
+      "listen",
+      "else"
+    ],
+    [
+      "quiet-30m",
+      "nudge-call",
+      "timeout"
+    ],
+    [
+      "nudge-call",
+      "listen"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_INITIATED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_REQUIRED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_INITIATED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_COMPLETED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "quiet-30m",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_INITIATED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_REQUIRED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_INITIATED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_ACCOUNT_AGGREGATOR_COMPLETED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFERED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_OFFER_SELECTED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_KYC_COMPLETED"
+    ],
+    [
+      "listen",
+      "is-credit-line",
+      "LINE_LENDER_ATTEMPT_FAILED"
+    ]
+  ],
+  "goals": [
+    {
+      "topics": [
+        "LINE_ACTIVE",
+        "LINE_HARD_OFFER_REJECTED",
+        "LINE_KYC_REJECTED"
+      ],
+      "exit_reason": "goal_met"
+    }
+  ],
+  "exits": {
+    "max_age_days": 30
+  },
+  "purpose_key": "utility.loan.checkout_nudge",
+  "playbook": {
+    "lines": {
+      "hook_offered": "Namaste, aapne apne Flipkart EMI checkout ke liye {sub_category} category me order shuru kiya tha. Aapka offer ready hai, bas kuch steps baaki hain.",
+      "hook_default": "Namaste, aapne Flipkart EMI par checkout shuru kiya tha. Kya main aapko guide kar doon?",
+      "step_open_app": "Sabse pehle Flipkart app kholiye. Bataiye jab khul jaaye.",
+      "step_cart_order": "Ab cart me jaiye, aapka {sub_category} wahin hoga. Place order par tap kijiye.",
+      "step_emi_select": "Payment page par EMI section me Flipkart EMI select kijiye.",
+      "step_verify_bank": "Bank account details verify karne hain, do options hain: UPI ya account details.",
+      "fibe_notes": "DigiLocker missing then Sign Up takes two minutes; PIN forgotten then PIN-less authentication.",
+      "generic_notes": "Koi dikkat ho to Flipkart app ke Help section me jaiye."
+    },
+    "blocks": {
+      "hook_line": [
+        {
+          "when": [
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ],
+          "say": "hook_offered"
+        },
+        {
+          "say": "hook_default"
+        }
+      ],
+      "walk": [
+        {
+          "when": [
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ],
+          "say": [
+            "step_open_app",
+            "step_cart_order",
+            "step_emi_select",
+            "step_verify_bank"
+          ]
+        },
+        {
+          "say": [
+            "step_open_app",
+            "step_cart_order"
+          ]
+        }
+      ],
+      "lender_notes": [
+        {
+          "when": [
+            {
+              "field": "context.offers",
+              "op": "exists"
+            }
+          ],
+          "say": "fibe_notes"
+        },
+        {
+          "say": "generic_notes"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "messaging_product": "whatsapp",
+  "metadata": {
+    "display_phone_number": "918067451234",
+    "phone_number_id": "812345678901234"
+  },
+  "contacts": [
+    {
+      "profile": { "name": "Rohan Mehta" },
+      "wa_id": "918887776665"
+    }
+  ],
+  "messages": [
+    {
+      "from": "918887776665",
+      "id": "wamid.HBgMOTE4ODg3Nzc2NjY1FQIAEhggQTIzNEI1NkM3RDg5",
+      "timestamp": "1788177650",
+      "type": "button",
+      "context": {
+        "from": "918067451234",
+        "id": "wamid.HBgMOTE4ODg3Nzc2NjY1FQIAERgSMEYwRkI3NkYyQzE1NUFCRDMx"
+      },
+      "button": { "payload": "CONFIRM_ORDER", "text": "Confirm order" }
+    }
+  ]
+}

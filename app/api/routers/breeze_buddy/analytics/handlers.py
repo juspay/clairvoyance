@@ -1,0 +1,1317 @@
+"""
+Analytics service layer — all business logic for analytics endpoints.
+Database access is delegated to the accessor layer.
+"""
+
+import csv
+import io
+import json
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+from uuid import UUID
+
+from fastapi import HTTPException, status
+from starlette.responses import StreamingResponse
+
+from app.api.routers.breeze_buddy.numbers.rbac import (
+    may_view_as,
+    number_in_rbac_scope,
+    rbac_number_scopes,
+)
+from app.database.accessor.breeze_buddy.analytics.analytics import (
+    get_analytics_count_from_db,
+    get_attempts_to_connect_from_db,
+    get_call_detail_records,
+    get_call_details_from_db,
+    get_call_details_grouped_count_from_db,
+    get_call_details_grouped_from_db,
+    get_calls_by_hour_from_db,
+    get_distinct_merchant_ids_from_db,
+    get_distinct_outcomes_from_db,
+    get_distinct_resellers_from_db,
+    get_lead_based_analytics_from_db,
+    get_lead_based_trends_from_db,
+    get_lead_status_counts_from_db,
+    get_outcome_counts_from_db,
+    get_summary_analytics_from_db,
+    get_telephony_numbers_analytics_from_db,
+    get_trends_analytics_from_db,
+)
+from app.database.accessor.breeze_buddy.analytics.evaluation_result import (
+    get_topic_conversations,
+    get_topic_dashboard,
+    get_topic_segment_counts,
+)
+from app.database.accessor.breeze_buddy.chat_analytics import (
+    get_chat_summary_from_db,
+    get_chat_trends_from_db,
+    get_chats_by_hour_from_db,
+)
+from app.database.accessor.breeze_buddy.telephony_number import (
+    get_template_pinned_number_ids,
+)
+from app.schemas import CallDetailGroupedResult, CallDetailResult, UserInfo
+from app.utils.common import parse_json
+
+
+def parse_outcome_breakdown(outcome_breakdown: Any) -> Dict[str, int]:
+    """
+    Parse outcome_breakdown from database which can be:
+    - A dict (already deserialized JSONB)
+    - A JSON string (needs parsing)
+    - None or empty
+
+    Returns:
+        Dict with outcome counts, or empty dict if invalid/empty
+    """
+    if not outcome_breakdown:
+        return {}
+
+    if isinstance(outcome_breakdown, dict):
+        return outcome_breakdown
+
+    if isinstance(outcome_breakdown, str):
+        try:
+            parsed = json.loads(outcome_breakdown)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return {}
+
+
+def _format_time_bucket(
+    data_point: Dict[str, Any], time_bucket, time_granularity: str
+) -> None:
+    """Apply day/week/month formatting to a time-series data point (mutates in place)."""
+    if time_granularity == "day":
+        data_point["date"] = time_bucket.date().isoformat()
+    elif time_granularity == "week":
+        week_start = time_bucket.date()
+        week_end = week_start + timedelta(days=6)
+        iso_cal = week_start.isocalendar()
+        data_point["week"] = f"{iso_cal[0]}-W{iso_cal[1]:02d}"
+        data_point["week_start"] = week_start.isoformat()
+        data_point["week_end"] = week_end.isoformat()
+    elif time_granularity == "month":
+        data_point["month"] = time_bucket.strftime("%Y-%m")
+        data_point["month_name"] = time_bucket.strftime("%B %Y")
+
+
+def _format_topic_summary_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "template_id": str(row["template_id"]),
+            "template_name": row["template_name"],
+            "topic_type": row["topic_type"],
+            "label": row["label"],
+            "rank": int(row["rank"]),
+            "is_other": bool(row["is_other"]),
+            "underlying_topic_types": list(row["underlying_topic_types"] or []),
+            "underlying_topic_count": int(row["underlying_topic_count"] or 0),
+            "conversation_count": int(row["conversation_count"] or 0),
+            "conversation_share": float(row["conversation_share"] or 0),
+            "conversation_total": int(row["conversation_total"]),
+        }
+        for row in rows
+    ]
+
+
+def _format_topic_trend_rows(
+    rows: List[Dict[str, Any]], granularity: str
+) -> List[Dict[str, Any]]:
+    results = []
+    for row in rows:
+        point = {
+            "template_id": str(row["template_id"]),
+            "template_name": row["template_name"],
+            "topic_type": row["topic_type"],
+            "label": row["label"],
+            "conversation_count": int(row["conversation_count"] or 0),
+        }
+        _format_time_bucket(point, row["time_bucket"], granularity)
+        results.append(point)
+    return results
+
+
+def _decode_topic_cursor(
+    cursor: Optional[str],
+) -> tuple[Optional[datetime], Optional[UUID]]:
+    if not cursor:
+        return None, None
+    try:
+        timestamp, analysis_id = cursor.split("|", 1)
+        started_at = datetime.fromisoformat(timestamp)
+        if started_at.tzinfo is None:
+            raise ValueError
+        return started_at, UUID(analysis_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid topic conversation cursor") from exc
+
+
+def _validate_topic_filters(
+    filters: Dict[str, Any], *, drilldown: bool = False
+) -> None:
+    template = filters.get("template")
+    template_id = filters.get("template_id")
+    if template and template_id and template != template_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "template and template_id must match",
+        )
+    if template and not template_id:
+        filters["template_id"] = template
+
+    required = ["date_from", "date_to"]
+    if drilldown:
+        required += ["template_id", "topic_type"]
+    missing = [key for key in required if not filters.get(key)]
+    if missing:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Missing {', '.join(missing)}"
+        )
+    if filters["date_to"] < filters["date_from"]:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "date_to must not precede date_from"
+        )
+    if filters.get("template_id"):
+        try:
+            UUID(str(filters["template_id"]))
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "template_id must be a UUID"
+            ) from exc
+    if (
+        drilldown
+        and filters["topic_type"] == "__other__"
+        and not filters.get("topic_types")
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "topic_types are required for Other"
+        )
+
+
+async def get_call_based_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """
+    Get call-based analytics with outcome breakdowns.
+    Supports both aggregate (no time_granularity) and time-series (with time_granularity).
+    """
+    time_granularity = options.get("time_granularity")
+
+    if time_granularity:
+        trend_data_from_db = await get_trends_analytics_from_db(
+            filters, time_granularity
+        )
+
+        results = []
+        for row in trend_data_from_db:
+            total_calls = row["total_calls"] or 0
+            completed_calls = row["completed_calls"] or 0
+            failed_calls = total_calls - completed_calls
+            success_rate = (
+                (completed_calls / total_calls * 100) if total_calls > 0 else 0.0
+            )
+
+            data_point = {
+                "total_calls": total_calls,
+                "completed_calls": completed_calls,
+                "failed_calls": failed_calls,
+                "success_rate": round(success_rate, 2),
+                "average_duration": (
+                    round(float(row["average_duration"]), 2)
+                    if row["average_duration"]
+                    else None
+                ),
+                "outcome_breakdown": parse_outcome_breakdown(
+                    row.get("outcome_breakdown")
+                ),
+            }
+
+            _format_time_bucket(data_point, row["time_bucket"], time_granularity)
+            results.append(data_point)
+
+        return {
+            "type": "call-based",
+            "filters_applied": filters,
+            "time_granularity": time_granularity,
+            "results": results,
+        }
+    else:
+        group_by = options.get("group_by")
+        summary = await get_summary_analytics_from_db(filters, group_by)
+
+        if isinstance(summary, list):
+            results = summary
+        else:
+            results = [summary]
+
+        return {
+            "type": "call-based",
+            "filters_applied": filters,
+            "time_granularity": None,
+            "results": results,
+        }
+
+
+async def get_chat_based_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Chat (text-mode) aggregate analytics for the Analytics → Chats view.
+
+    Aggregate (no ``time_granularity``): total conversations + messages, status
+    breakdown, agent count, and avg messages/conversation. With
+    ``group_by='template'`` returns one row per agent. With ``time_granularity``
+    returns the "chats started" time-series.
+    """
+    time_granularity = options.get("time_granularity")
+
+    if time_granularity:
+        trend_rows = await get_chat_trends_from_db(filters, time_granularity)
+        results = []
+        for row in trend_rows:
+            data_point: Dict[str, Any] = {
+                "conversations_started": row["conversations_started"] or 0,
+                "ended_conversations": row["ended_conversations"] or 0,
+                "total_messages": row.get("total_messages") or 0,
+                "user_messages": row.get("user_messages") or 0,
+                "assistant_messages": row.get("assistant_messages") or 0,
+            }
+            _format_time_bucket(data_point, row["time_bucket"], time_granularity)
+            results.append(data_point)
+        return {
+            "type": "chat-based",
+            "filters_applied": filters,
+            "time_granularity": time_granularity,
+            "results": results,
+        }
+
+    group_by = options.get("group_by")
+    rows = await get_chat_summary_from_db(filters, group_by)
+
+    if group_by == "template":
+        results = [
+            {
+                "template_id": row.get("template_id"),
+                "total_conversations": row["total_conversations"] or 0,
+                "active_conversations": row["active_conversations"] or 0,
+                "idle_conversations": row["idle_conversations"] or 0,
+                "ended_conversations": row["ended_conversations"] or 0,
+                "total_messages": row["total_messages"] or 0,
+            }
+            for row in rows
+        ]
+    else:
+        row = rows[0] if rows else {}
+        total_conversations = row.get("total_conversations") or 0
+        total_messages = row.get("total_messages") or 0
+        avg_session_seconds = row.get("avg_session_seconds")
+        median_reply_ms = row.get("median_reply_ms")
+        results = [
+            {
+                "total_conversations": total_conversations,
+                "active_conversations": row.get("active_conversations") or 0,
+                "idle_conversations": row.get("idle_conversations") or 0,
+                "ended_conversations": row.get("ended_conversations") or 0,
+                "user_ended_conversations": row.get("user_ended_conversations") or 0,
+                "idle_timeout_conversations": row.get("idle_timeout_conversations")
+                or 0,
+                "total_agents": row.get("total_agents") or 0,
+                "total_messages": total_messages,
+                "user_messages": row.get("user_messages") or 0,
+                "assistant_messages": row.get("assistant_messages") or 0,
+                "avg_messages_per_conversation": (
+                    round(total_messages / total_conversations, 2)
+                    if total_conversations
+                    else 0.0
+                ),
+                # session span = first-to-last activity; NULL (→ None) when
+                # no sessions matched, so the UI can show an em dash
+                "avg_session_seconds": (
+                    round(float(avg_session_seconds), 1)
+                    if avg_session_seconds is not None
+                    else None
+                ),
+                # median time-to-first-token across assistant turns
+                "median_reply_ms": (
+                    round(float(median_reply_ms), 1)
+                    if median_reply_ms is not None
+                    else None
+                ),
+            }
+        ]
+
+    return {
+        "type": "chat-based",
+        "filters_applied": filters,
+        "time_granularity": None,
+        "results": results,
+    }
+
+
+async def get_chats_by_hour_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Distribution of conversations started by hour-of-day (0-23, IST)."""
+    hours = await get_chats_by_hour_from_db(filters)
+    return {
+        "type": "chats-by-hour",
+        "filters_applied": filters,
+        "results": hours,
+    }
+
+
+async def get_topic_dashboard_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    _validate_topic_filters(filters)
+    # limit is how many topics stay apart before the rest fold into Other. Past
+    # 25, which includes the unset page-size default of 50, it is the old 10.
+    limit = options.get("limit", 50)
+    top_topics = limit if limit <= 25 else 10
+    rows = await get_topic_dashboard(filters, top_topics)
+    segment_counts = (
+        await get_topic_segment_counts(filters) if filters.get("template_id") else {}
+    )
+
+    return {
+        "type": "topic-dashboard",
+        "filters_applied": filters,
+        "time_granularity": "day",
+        "summary": _format_topic_summary_rows(
+            [
+                row
+                for row in rows
+                if row["result_type"] == "summary" and row["period"] == "current"
+            ]
+        ),
+        "previous_summary": _format_topic_summary_rows(
+            [
+                row
+                for row in rows
+                if row["result_type"] == "summary" and row["period"] == "previous"
+            ]
+        ),
+        "trends": _format_topic_trend_rows(
+            [row for row in rows if row["result_type"] == "trend"], "day"
+        ),
+        "all_topics": [
+            {
+                "template_id": row["template_id"],
+                "template_name": row["template_name"],
+                "topic_type": row["topic_type"],
+                "label": row["label"],
+                "rank": row["rank"],
+                "conversation_count": row["conversation_count"],
+            }
+            for row in rows
+            if row["result_type"] == "topic"
+        ],
+        "segment_counts": segment_counts,
+    }
+
+
+async def get_topic_conversations_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    _validate_topic_filters(filters, drilldown=True)
+
+    limit = max(1, min(options.get("limit", 50), 100))
+    try:
+        cursor_started_at, cursor_id = _decode_topic_cursor(options.get("cursor"))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid topic conversation cursor",
+        )
+    rows = await get_topic_conversations(filters, limit, cursor_started_at, cursor_id)
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    results = []
+    for row in page_rows:
+        source_id = row["source_id"]
+        results.append(
+            {
+                "analysis_id": str(row["id"]),
+                "source_id": source_id,
+                "reseller_id": row["reseller_id"],
+                "merchant_id": row.get("merchant_id"),
+                "template_id": (
+                    str(row["template_id"]) if row.get("template_id") else None
+                ),
+                "started_at": row["started_at"],
+                "topics": row.get("topics") or [],
+            }
+        )
+    next_cursor = (
+        f"{page_rows[-1]['started_at'].isoformat()}|{page_rows[-1]['id']}"
+        if has_more and page_rows
+        else None
+    )
+    return {
+        "type": "topic-conversations",
+        "filters_applied": filters,
+        "results": results,
+        "pagination": {
+            "limit": limit,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        },
+    }
+
+
+async def get_call_details_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Get paginated call details with database-level filtering and pagination."""
+    page = options.get("page", 1)
+    limit = options.get("limit", 50)
+    sort_by = options.get("sort_by", "call_initiated_time")
+    sort_order = options.get("sort_order", "desc")
+
+    offset = (page - 1) * limit
+
+    total = await get_analytics_count_from_db(filters, filter_execution_mode=False)
+
+    trackers = await get_call_details_from_db(
+        filters=filters,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+    total_pages = (total + limit - 1) // limit if limit > 0 else 0
+
+    results = []
+    for tracker in trackers:
+        results.append(_build_call_detail_result(tracker))
+
+    return {
+        "type": "call-details",
+        "filters_applied": filters,
+        "results": [r.model_dump() for r in results],
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages,
+        },
+    }
+
+
+def _build_call_detail_result(tracker: Dict[str, Any]) -> CallDetailResult:
+    """Build a CallDetailResult from a raw tracker dict."""
+    duration = None
+    if tracker.get("call_initiated_time") and tracker.get("call_end_time"):
+        duration = int(
+            (tracker["call_end_time"] - tracker["call_initiated_time"]).total_seconds()
+        )
+
+    payload = parse_json(tracker, "payload")
+    metadata = parse_json(tracker, "meta_data")
+
+    transcript = None
+    if metadata:
+        transcription_data = metadata.get("transcription")
+        if transcription_data:
+            if isinstance(transcription_data, dict):
+                transcript = (
+                    transcription_data.get("transcript")
+                    or transcription_data.get("text")
+                    or transcription_data.get("content")
+                )
+            elif isinstance(transcription_data, str):
+                transcript = transcription_data
+
+    return CallDetailResult(
+        call_id=tracker.get("call_id") or tracker["id"],
+        lead_id=tracker["id"],
+        order_id=tracker.get("request_id"),
+        template=tracker["template"],
+        reseller_id=tracker["reseller_id"],
+        merchant_id=tracker.get("merchant_id"),
+        shop_name=payload.get("shop_name") if payload else None,
+        customer_name=payload.get("customer_name") if payload else None,
+        customer_phone=payload.get("phone") if payload else None,
+        customer_mobile_number=(
+            payload.get("customer_mobile_number") if payload else None
+        ),
+        status=tracker.get("status", "UNKNOWN"),
+        outcome=tracker.get("outcome") if tracker.get("outcome") else "N/A",
+        duration=duration,
+        recording_url=tracker.get("recording_url"),
+        transcript=transcript,
+        calling_provider=tracker.get("calling_provider"),
+        # Attempts MADE, not the stored 0-based retry counter: the column
+        # counts scheduled retries, so a first-attempt connect stores 0.
+        # +1 only when a call was actually initiated (ABORTed-without-dial
+        # leads honestly show 0).
+        attempt_count=(tracker.get("attempt_count") or 0)
+        + (1 if tracker.get("call_initiated_time") else 0),
+        cost=tracker.get("cost"),
+        payload=payload,
+        call_initiated_time=tracker.get("call_initiated_time"),
+        created_at=tracker.get("call_initiated_time")
+        or tracker.get("created_at")
+        or datetime.now(),
+        updated_at=tracker.get("updated_at"),
+        execution_mode=tracker.get("execution_mode"),
+        call_direction=tracker.get("call_direction"),
+    )
+
+
+async def get_call_details_grouped_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Get paginated call details grouped by request_id (order_id)."""
+    page = options.get("page", 1)
+    limit = options.get("limit", 50)
+    sort_by = options.get("sort_by", "call_initiated_time")
+    sort_order = options.get("sort_order", "desc")
+
+    offset = (page - 1) * limit
+
+    total = await get_call_details_grouped_count_from_db(filters)
+    total_pages = (total + limit - 1) // limit if limit > 0 else 0
+
+    trackers = await get_call_details_grouped_from_db(
+        filters=filters,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+    grouped: Dict[str, CallDetailGroupedResult] = {}
+    for tracker in trackers:
+        request_id = tracker.get("request_id")
+        if not request_id:
+            continue
+
+        if request_id not in grouped:
+            grouped[request_id] = CallDetailGroupedResult(
+                request_id=request_id,
+                lead_ids=[],
+                leads=[],
+            )
+
+        grouped[request_id].lead_ids.append(tracker["id"])
+        grouped[request_id].leads.append(_build_call_detail_result(tracker))
+
+    return {
+        "type": "call-details-grouped",
+        "filters_applied": filters,
+        "results": [g.model_dump() for g in grouped.values()],
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages,
+        },
+    }
+
+
+async def get_lead_based_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """
+    Get lead-based analytics (counts by unique lead).
+    Supports both aggregate (no time_granularity) and time-series (with time_granularity).
+    """
+    time_granularity = options.get("time_granularity")
+
+    if time_granularity:
+        trend_data_from_db = await get_lead_based_trends_from_db(
+            filters, time_granularity
+        )
+
+        results = []
+        for row in trend_data_from_db:
+            total_leads = row["total_leads"] or 0
+            total_calls = int(row["total_calls"] or 0)
+            finished_calls = int(row["finished_calls"] or 0)
+            outcome_breakdown = parse_outcome_breakdown(row.get("outcome_breakdown"))
+
+            no_answer_count = 0
+            for outcome, count in outcome_breakdown.items():
+                outcome_lower = str(outcome).lower()
+                if (
+                    "no_answer" in outcome_lower
+                    or "no answer" in outcome_lower
+                    or outcome_lower == "noanswer"
+                ):
+                    no_answer_count += count
+
+            picked_calls = total_leads - no_answer_count
+
+            data_point = {
+                "total_leads": total_leads,
+                "total_calls": total_calls,
+                "finished_calls": finished_calls,
+                "picked_calls": picked_calls,
+                "outcome_counts": outcome_breakdown,
+            }
+
+            _format_time_bucket(data_point, row["time_bucket"], time_granularity)
+            results.append(data_point)
+
+        return {
+            "type": "lead-based",
+            "filters_applied": filters,
+            "time_granularity": time_granularity,
+            "results": results,
+        }
+    else:
+        group_by = options.get("group_by")
+        lead_data = await get_lead_based_analytics_from_db(filters, group_by)
+
+        if group_by:
+            results = []
+            for row in lead_data:
+                results.append(
+                    {
+                        group_by: row[group_by],
+                        "shop_name": row.get("shop_name"),
+                        "outbound_leads": row.get("outbound_leads", 0),
+                        "inbound_leads": row.get("inbound_leads", 0),
+                        "total_leads": row["total_leads"] or 0,
+                        "picked_calls": row["picked_calls"] or 0,
+                        "outcome_counts": parse_outcome_breakdown(
+                            row.get("outcome_counts")
+                        ),
+                    }
+                )
+
+            return {
+                "type": "lead-based",
+                "filters_applied": filters,
+                "time_granularity": None,
+                "results": results,
+            }
+        else:
+            lead_based = {
+                "outbound_leads": lead_data.get("outbound_leads", 0),
+                "inbound_leads": lead_data.get("inbound_leads", 0),
+                "total_leads": lead_data.get("total_leads", 0),
+                "picked_calls": lead_data.get("picked_calls", 0),
+                "connected_leads": lead_data.get("connected_leads", 0),
+                "outcome_counts": parse_outcome_breakdown(
+                    lead_data.get("outcome_counts")
+                ),
+            }
+
+            return {
+                "type": "lead-based",
+                "filters_applied": filters,
+                "time_granularity": None,
+                "results": [lead_based],
+            }
+
+
+async def get_telephony_numbers_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """
+    Get analytics grouped by telephony number.
+
+    The DB query joins every telephony_numbers row that has ever taken a call,
+    so the hierarchical lead filters alone don't scope the numbers themselves.
+    Non-admin results are cut down to the same visibility set as GET /numbers
+    (owned by the caller's merchants/umbrellas, or template-pinned) so phone
+    numbers never leak across tenants.
+
+    A single merchant_id/reseller_id in the request filters (the console's
+    workspace switcher rides every analytics call) additionally narrows the
+    rows to that workspace's view — owned + template-pinned — so an admin
+    with a workspace selected sees exactly what that workspace's users see.
+    Narrowing runs AFTER the caller's own scope filter, so it never widens.
+    """
+    outbound_data = await get_telephony_numbers_analytics_from_db(filters)
+
+    if current_user.role != "admin":
+        m_ids, r_ids = rbac_number_scopes(current_user)
+        pinned = set(await get_template_pinned_number_ids(list(m_ids), list(r_ids)))
+        outbound_data = [
+            record
+            for record in outbound_data
+            if number_in_rbac_scope(
+                record["id"],
+                record.get("merchant_id"),
+                record.get("reseller_id"),
+                m_ids,
+                r_ids,
+                pinned,
+            )
+        ]
+
+    def _single(value: Any) -> Optional[str]:
+        """A concrete workspace pick: one string (or 1-element list)."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str):
+            return value[0]
+        return None
+
+    # Same narrowing rule as GET /numbers, through the same shared predicate
+    # (number_in_rbac_scope) and the same explicit gate (may_view_as) — the
+    # gate is defense in depth: apply_hierarchical_filters already 403s
+    # non-admins requesting foreign scopes, and the narrowing runs after the
+    # caller's own scope filter, so it can only shrink either way.
+    ws_merchant = _single(filters.get("merchant_id"))
+    ws_reseller = None if ws_merchant else _single(filters.get("reseller_id"))
+    if ws_merchant and may_view_as(current_user, workspace_merchant_id=ws_merchant):
+        ws_pins = set(await get_template_pinned_number_ids([ws_merchant], []))
+        outbound_data = [
+            r
+            for r in outbound_data
+            if number_in_rbac_scope(
+                r["id"],
+                r.get("merchant_id"),
+                r.get("reseller_id"),
+                {ws_merchant},
+                set(),
+                ws_pins,
+            )
+        ]
+    elif ws_reseller and may_view_as(current_user, workspace_reseller_id=ws_reseller):
+        ws_pins = set(await get_template_pinned_number_ids([], [ws_reseller]))
+        outbound_data = [
+            r
+            for r in outbound_data
+            if number_in_rbac_scope(
+                r["id"],
+                r.get("merchant_id"),
+                r.get("reseller_id"),
+                set(),
+                {ws_reseller},
+                ws_pins,
+            )
+        ]
+
+    outbound_analytics = []
+    for record in outbound_data:
+        outbound_analytics.append(
+            {
+                "id": record["id"],
+                "number": record["number"],
+                "provider": record["provider"],
+                "status": record["status"],
+                "channels": record.get("channels"),
+                "maximum_channels": record.get("maximum_channels"),
+                "reseller_id": record.get("reseller_id"),
+                "merchant_id": record.get("merchant_id"),
+                "total_calls": record["total_calls"],
+                "calls_picked": record["calls_picked"],
+                "calls_no_answer": record["calls_no_answer"],
+            }
+        )
+
+    return {
+        "type": "telephony-numbers",
+        "filters_applied": filters,
+        "results": outbound_analytics,
+    }
+
+
+async def get_conversion_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """
+    Get conversion funnel analytics.
+    Analyzes the conversion funnel from call initiation to completion.
+    """
+    summary = await get_summary_analytics_from_db(filters)
+
+    total_initiated = summary.get("total_calls", 0)
+    completed_calls = summary.get("completed_calls", 0)
+
+    outcome_breakdown = parse_outcome_breakdown(summary.get("outcome_breakdown"))
+
+    calls_no_answer = 0
+    for outcome, count in outcome_breakdown.items():
+        outcome_lower = str(outcome).lower()
+        if (
+            "no_answer" in outcome_lower
+            or "no answer" in outcome_lower
+            or outcome_lower == "noanswer"
+        ):
+            calls_no_answer += count
+
+    total_connected = completed_calls + calls_no_answer
+    total_completed = completed_calls
+
+    funnel_stages = [
+        {"stage": "initiated", "count": total_initiated, "percentage": 100.0},
+        {
+            "stage": "connected",
+            "count": total_connected,
+            "percentage": (
+                (total_connected / total_initiated * 100)
+                if total_initiated > 0
+                else 0.0
+            ),
+        },
+        {
+            "stage": "completed",
+            "count": total_completed,
+            "percentage": (
+                (total_completed / total_initiated * 100)
+                if total_initiated > 0
+                else 0.0
+            ),
+        },
+    ]
+
+    for outcome, count in outcome_breakdown.items():
+        if count > 0:
+            funnel_stages.append(
+                {
+                    "stage": outcome.lower().replace(" ", "_"),
+                    "count": count,
+                    "percentage": (
+                        (count / total_initiated * 100) if total_initiated > 0 else 0.0
+                    ),
+                }
+            )
+
+    conversion_rate = (
+        (total_completed / total_initiated * 100) if total_initiated > 0 else 0.0
+    )
+
+    drop_off_points = []
+
+    initiated_to_connected_dropoff = total_initiated - total_connected
+    if initiated_to_connected_dropoff > 0:
+        drop_off_points.append(
+            {
+                "stage": "initiated_to_connected",
+                "drop_off": initiated_to_connected_dropoff,
+                "drop_off_rate": (
+                    (initiated_to_connected_dropoff / total_initiated * 100)
+                    if total_initiated > 0
+                    else 0.0
+                ),
+            }
+        )
+
+    connected_to_completed_dropoff = total_connected - total_completed
+    if connected_to_completed_dropoff > 0:
+        drop_off_points.append(
+            {
+                "stage": "connected_to_completed",
+                "drop_off": connected_to_completed_dropoff,
+                "drop_off_rate": (
+                    (connected_to_completed_dropoff / total_connected * 100)
+                    if total_connected > 0
+                    else 0.0
+                ),
+            }
+        )
+
+    conversion_data = {
+        "total_initiated": total_initiated,
+        "total_connected": total_connected,
+        "total_completed": total_completed,
+        "funnel_stages": funnel_stages,
+        "conversion_rate": round(conversion_rate, 2),
+        "drop_off_points": drop_off_points,
+    }
+
+    return {
+        "type": "conversion",
+        "filters_applied": filters,
+        "results": conversion_data,
+    }
+
+
+async def get_performance_analytics(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """
+    Get performance metrics analytics.
+    Provides performance metrics including success rates, average duration,
+    cost efficiency, and outcome distribution.
+    """
+    summary = await get_summary_analytics_from_db(filters)
+
+    total_calls = summary.get("total_calls", 0)
+    failed_calls = summary.get("failed_calls", 0)
+
+    outcome_breakdown = parse_outcome_breakdown(summary.get("outcome_breakdown"))
+
+    calls_no_answer = 0
+    calls_busy = 0
+    for outcome, count in outcome_breakdown.items():
+        outcome_lower = str(outcome).lower()
+        if (
+            "no_answer" in outcome_lower
+            or "no answer" in outcome_lower
+            or outcome_lower == "noanswer"
+        ):
+            calls_no_answer += count
+        elif "busy" in outcome_lower:
+            calls_busy += count
+
+    # Picked = calls a human answered. BUSY counts as picked (customer
+    # answered and cut the call); only NO-ANSWER comes out.
+    calls_picked = total_calls - calls_no_answer
+
+    success_rate = summary.get("success_rate", 0.0)
+
+    # (The previous formula added no_answer back into the numerator, so
+    # answer_rate was always exactly 100%.)
+    answer_rate = (calls_picked / total_calls * 100) if total_calls > 0 else 0.0
+
+    failure_rate = (failed_calls / total_calls * 100) if total_calls > 0 else 0.0
+
+    avg_duration = summary.get("average_duration")
+
+    total_cost = summary.get("total_cost", 0)
+
+    cost_per_success = (
+        (total_cost / calls_picked) if calls_picked > 0 and total_cost > 0 else 0.0
+    )
+
+    outcome_distribution = {}
+    for outcome, count in outcome_breakdown.items():
+        outcome_distribution[outcome] = {
+            "count": count,
+            "percentage": (count / total_calls * 100) if total_calls > 0 else 0.0,
+        }
+
+    performance_data = {
+        "total_calls": total_calls,
+        "success_rate": round(success_rate, 2),
+        "answer_rate": round(answer_rate, 2),
+        "failure_rate": round(failure_rate, 2),
+        "average_duration": round(avg_duration, 2) if avg_duration else None,
+        "total_cost": round(total_cost, 2) if total_cost else None,
+        "cost_per_success": round(cost_per_success, 2) if cost_per_success else None,
+        "call_breakdown": {
+            "picked": calls_picked,
+            "no_answer": calls_no_answer,
+            "busy": calls_busy,
+            "failed": failed_calls,
+        },
+        "outcome_distribution": outcome_distribution,
+    }
+
+    return {
+        "type": "performance",
+        "filters_applied": filters,
+        "results": performance_data,
+    }
+
+
+async def get_lead_status_counts(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> Dict[str, Any]:
+    """Get lead status counts with pagination and search."""
+    page = options.get("page", 1)
+    limit = options.get("limit", 10)
+
+    page = max(1, page)
+    limit = max(1, min(limit, 100))
+
+    search_reseller_id = filters.get("reseller_id")
+    search_merchant_identifier = filters.get("merchant_id")
+
+    db_filters = {
+        k: v for k, v in filters.items() if k not in ["reseller_id", "merchant_id"]
+    }
+
+    if current_user.role != "admin":
+        db_filters["reseller_id"] = (
+            current_user.reseller_ids[0] if current_user.reseller_ids else None
+        )
+
+    result = await get_lead_status_counts_from_db(
+        filters=db_filters,
+        page=page,
+        limit=limit,
+        search_reseller_id=search_reseller_id,
+        search_merchant_identifier=search_merchant_identifier,
+    )
+
+    formatted_results = []
+    for row in result["results"]:
+        formatted_results.append(
+            {
+                "reseller_id": row.get("reseller_id"),
+                "merchant_id": (
+                    row.get("merchant_id") if row.get("merchant_id") else None
+                ),
+                "backlog_count": row.get("backlog_count", 0) or 0,
+                "processing_count": row.get("processing_count", 0) or 0,
+                "finished_count": row.get("finished_count", 0) or 0,
+                "total_count": row.get("total_count", 0) or 0,
+            }
+        )
+
+    return {
+        "type": "lead-status-counts",
+        "filters_applied": filters,
+        "pagination": result["pagination"],
+        "results": formatted_results,
+    }
+
+
+# Static list of supported columns for CSV export
+EXPORT_COLUMNS = [
+    "Lead ID",
+    "Call ID",
+    "Template",
+    "Name",
+    "Mobile Number",
+    "Start Time",
+    "End Time",
+    "Duration",
+    "Outcome",
+    "Metadata Outcome",
+    "Call Ended By",
+    "Recording URL",
+    "Attempt Count",
+    "Record",
+]
+
+
+async def download_call_details(
+    filters: Dict[str, Any], options: Dict[str, Any], current_user: UserInfo
+) -> StreamingResponse:
+    """
+    Generate a CSV file download of all call details matching the filters.
+    Streams CSV rows in batches to avoid loading everything into memory.
+
+    Supports dynamic column selection via options["custom_columns"].
+    custom_columns should contain clean display names (e.g. "Call Id").
+    If not provided, all available columns are exported.
+    """
+    sort_by = options.get("sort_by", "call_initiated_time")
+    sort_order = options.get("sort_order", "desc")
+    custom_columns: Optional[List[str]] = options.get("custom_columns")
+
+    # Resolve which columns to include, sorting by our natural EXPORT_COLUMNS order
+    if custom_columns and len(custom_columns) > 0:
+        # Include custom_columns only if they are in our static list, but maintain EXPORT_COLUMNS order
+        selected_columns = [c for c in EXPORT_COLUMNS if c in custom_columns]
+        if not selected_columns:
+            selected_columns = list(EXPORT_COLUMNS)
+    else:
+        selected_columns = list(EXPORT_COLUMNS)
+
+    BATCH_SIZE = 1000
+    MAX_CSV_ROWS = 100_000
+
+    async def generate_csv():
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write header row with selected display names
+        writer.writerow(selected_columns)
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+
+        offset = 0
+        total_rows_written = 0
+        while True:
+            remaining = MAX_CSV_ROWS - total_rows_written
+            if remaining <= 0:
+                break
+
+            batch_limit = min(BATCH_SIZE, remaining)
+            trackers = await get_call_detail_records(
+                filters=filters,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                limit=batch_limit,
+                offset=offset,
+            )
+
+            if not trackers:
+                break
+
+            for tracker in trackers:
+                payload = parse_json(tracker, "payload") or {}
+                start = tracker.get("call_initiated_time")
+                end = tracker.get("call_end_time")
+
+                # Pre-calculate all possible fields for this row
+                row_data = {
+                    "Lead ID": tracker.get("id", ""),
+                    "Call ID": tracker.get("call_id", ""),
+                    "Template": tracker.get("template", ""),
+                    "Name": payload.get("customer_name", ""),
+                    "Mobile Number": payload.get("customer_mobile_number")
+                    or payload.get("phone", ""),
+                    "Start Time": (
+                        start.strftime("%Y-%m-%d %H:%M:%S")
+                        if hasattr(start, "strftime")
+                        else ""
+                    ),
+                    "End Time": (
+                        end.strftime("%Y-%m-%d %H:%M:%S")
+                        if hasattr(end, "strftime")
+                        else ""
+                    ),
+                    "Duration": (
+                        int((end - start).total_seconds())
+                        if start
+                        and end
+                        and hasattr(start, "strftime")
+                        and hasattr(end, "strftime")
+                        else ""
+                    ),
+                    "Outcome": tracker.get("outcome", ""),
+                    "Metadata Outcome": tracker.get("meta_data_outcome", ""),
+                    "Call Ended By": tracker.get("meta_data_call_ended_by", ""),
+                    "Recording URL": tracker.get("recording_url", ""),
+                    "Attempt Count": tracker.get("attempt_count", ""),
+                    "Record": (
+                        f"https://buddy.breezelabs.app/calls/records/{tracker.get('id')}"
+                        if tracker.get("id")
+                        else ""
+                    ),
+                }
+
+                # Select only the columns requested by the user, in consistent order
+                row = [row_data.get(col, "") for col in selected_columns]
+                writer.writerow(row)
+
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+            total_rows_written += len(trackers)
+
+            if len(trackers) < batch_limit:
+                break
+
+            offset += len(trackers)
+
+    filename = f"call_details_{datetime.now().strftime('%Y-%m-%d')}.csv"
+
+    return StreamingResponse(
+        generate_csv(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+async def get_distinct_outcomes(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Get distinct outcome values."""
+    outcomes = await get_distinct_outcomes_from_db(filters)
+
+    return {
+        "type": "distinct-outcomes",
+        "filters_applied": filters,
+        "results": {
+            "outcomes": outcomes,
+        },
+    }
+
+
+async def get_attempts_to_connect_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Distribution of the attempt number on which leads were first connected."""
+    buckets = await get_attempts_to_connect_from_db(filters)
+    return {
+        "type": "attempts-to-connect",
+        "filters_applied": filters,
+        "results": buckets,
+    }
+
+
+async def get_calls_by_hour_analytics(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Distribution of calls by hour-of-day (0-23)."""
+    hours = await get_calls_by_hour_from_db(filters)
+    return {
+        "type": "calls-by-hour",
+        "filters_applied": filters,
+        "results": hours,
+    }
+
+
+async def get_outcome_counts(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Get paginated outcome counts."""
+    page = max(1, min(options.get("page", 1), 1000))
+    limit = max(1, min(options.get("limit", 10), 100))
+
+    data = await get_outcome_counts_from_db(filters, page, limit)
+
+    page_total_calls = data["page_total_calls"]
+    results = []
+    for row in data["results"]:
+        call_count = row.get("call_count", 0)
+        percentage = round(
+            (call_count / page_total_calls * 100) if page_total_calls > 0 else 0.0, 2
+        )
+        results.append(
+            {
+                "outcome": row["outcome"],
+                "count": call_count,
+                "percentage": percentage,
+            }
+        )
+
+    return {
+        "type": "outcome-counts",
+        "filters_applied": filters,
+        "pagination": data["pagination"],
+        "results": results,
+        "page_total_calls": page_total_calls,
+    }
+
+
+async def get_distinct_resellers(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Get distinct reseller IDs."""
+    resellers = await get_distinct_resellers_from_db(filters)
+
+    return {
+        "type": "distinct-resellers",
+        "filters_applied": filters,
+        "results": {
+            "resellers": resellers,
+        },
+    }
+
+
+async def get_distinct_merchant_ids(
+    filters: Dict[str, Any],
+    options: Dict[str, Any],
+    current_user: UserInfo,
+) -> Dict[str, Any]:
+    """Get distinct merchant IDs."""
+    merchant_ids = await get_distinct_merchant_ids_from_db(filters)
+
+    return {
+        "type": "distinct-merchant-ids",
+        "filters_applied": filters,
+        "results": {
+            "merchant_ids": merchant_ids,
+        },
+    }

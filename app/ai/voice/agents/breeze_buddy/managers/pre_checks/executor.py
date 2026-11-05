@@ -1,0 +1,549 @@
+"""
+Pre-check executor for validating whether a call should proceed.
+
+Runs configured pre-checks (e.g., external API calls) before a call is initiated
+from the backlog. Each pre-check returns a go/no-go decision.
+
+Pre-checks are configured per merchant/template in the call_execution_config table.
+"""
+
+import asyncio
+import json
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+import aiohttp
+
+from app.ai.voice.agents.breeze_buddy.accounts import in_tenant
+from app.ai.voice.agents.breeze_buddy.handlers.transport.http_requester import (
+    HttpRequestExecutor,
+)
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    HttpMethod,
+    HttpRequestConfig,
+    TemplateModel,
+)
+from app.core.logger import logger
+from app.database.accessor.breeze_buddy.credentials import (
+    get_credential_by_id,
+)
+from app.schemas import (
+    LeadCallTracker,
+    PreCheckConfig,
+    PreCheckDefaultAction,
+    PreCheckFailureAction,
+    PreCheckType,
+)
+
+from . import functions
+from .http import (
+    _convert_auth_dict_to_config,
+    _convert_query_params_to_str_dict,
+    _extract_exports,
+    _fetch_mcp_response,
+    _value_matches,
+)
+
+# Budget for a single internal pre-check function. These run on a dispatch
+# worker, so a wedged query must not hold the worker (and the lead's DB lock)
+# open indefinitely.
+PRE_CHECK_FUNCTION_TIMEOUT_SECONDS = 10
+
+
+@dataclass
+class SinglePreCheckResult:
+    """Result of a single pre-check execution."""
+
+    name: str
+    passed: bool
+    reason: str
+    response_data: Optional[Dict[str, Any]] = None
+
+
+class PreCheckDecision(str, Enum):
+    """What the dispatcher should do with a lead after pre-checks ran."""
+
+    PROCEED = "proceed"  # dial
+    ABORT = "abort"  # already marked FINISHED/PRECHECK_FAILED, just unlock
+    DEFER = "defer"  # leave BACKLOG, push next_attempt_at
+
+
+@dataclass
+class PreCheckResult:
+    """Aggregated result of all pre-checks for a lead.
+
+    ``failure_action``/``defer_seconds``/``max_defers`` are copied off the ONE
+    pre-check that blocked. Blocking is fail-fast, so there is never more than
+    one, and the caller does not have to reconcile competing policies.
+    """
+
+    should_proceed: bool
+    results: List[SinglePreCheckResult] = field(default_factory=list)
+    exports: Dict[str, str] = field(default_factory=dict)
+    failure_action: PreCheckFailureAction = PreCheckFailureAction.ABORT
+    defer_seconds: int = 3600
+    max_defers: int = 10
+
+    def summary(self) -> str:
+        """Human-readable summary for logging."""
+        parts = []
+        for r in self.results:
+            status = "PASS" if r.passed else "FAIL"
+            parts.append(f"{r.name}: {status} ({r.reason})")
+        return "; ".join(parts)
+
+
+async def _build_resolution_context(
+    lead: LeadCallTracker,
+    template: Optional[TemplateModel],
+    credential_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build the placeholder resolution context by merging credentials, template secrets, and payload.
+
+    Resolution order (later overrides earlier):
+    1. Credentials from credentials table (by credential_id if provided)
+    2. Template secrets (API keys, tokens, base URLs)
+    3. Lead payload (customer data, order data)
+    4. Core lead fields (reseller_id, lead_id, etc.)
+    """
+    context: Dict[str, Any] = {}
+
+    # 1. Credentials from credentials table (by credential_id)
+    if credential_id:
+        try:
+            # A placeholder row only (provider IS NULL, in SQL): an LLM / STT
+            # / TTS account's key never reaches a hook's context.
+            credential = await get_credential_by_id(
+                credential_id, mask=False, placeholder_only=True
+            )
+            # Tenancy, fail closed: a pre-check may name only a row its own
+            # template's reseller / merchant may use (global rows are
+            # everyone's). Another tenant's secret never reaches the context.
+            if credential is not None and not in_tenant(
+                credential,
+                getattr(template, "reseller_id", None) or lead.reseller_id,
+                getattr(template, "merchant_id", None) or lead.merchant_id,
+            ):
+                logger.warning(
+                    f"Credential {credential_id} belongs to another tenant — ignored"
+                )
+                credential = None
+            if credential and credential.is_active and credential.value:
+                context.update(credential.value)
+                logger.info(
+                    f"Loaded credentials by ID {credential_id}: {list(credential.value.keys())}"
+                )
+            else:
+                logger.warning(
+                    f"Credential {credential_id} not found, inactive, or empty"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to load credentials for pre-check context: {e}")
+
+    # 2. Template secrets (override credentials for same keys)
+    if template and template.secrets:
+        context.update(template.secrets)
+
+    # 3. Lead payload (override both)
+    if lead.payload:
+        context.update(lead.payload)
+
+    # 4. Core lead fields available as placeholders
+    context["reseller_id"] = lead.reseller_id
+    context["lead_id"] = lead.id
+    if lead.request_id:
+        context["request_id"] = lead.request_id
+    if lead.template:
+        context["template_name"] = lead.template
+    if lead.merchant_id:
+        context["merchant_id"] = lead.merchant_id
+
+    return context
+
+
+def _apply_default(
+    pre_check: PreCheckConfig,
+    reason: str,
+    response_data: Optional[Dict[str, Any]] = None,
+) -> SinglePreCheckResult:
+    """
+    Apply the default action when a pre-check fails to get a definitive answer.
+    """
+    if pre_check.default_on_failure == PreCheckDefaultAction.PROCEED:
+        logger.info(
+            f"Pre-check '{pre_check.name}': defaulting to PROCEED (fail-open). Reason: {reason}"
+        )
+        return SinglePreCheckResult(
+            name=pre_check.name,
+            passed=True,
+            reason=f"Default: proceed (fail-open). {reason}",
+            response_data=response_data,
+        )
+    else:
+        logger.info(
+            f"Pre-check '{pre_check.name}': defaulting to SKIP (fail-closed). Reason: {reason}"
+        )
+        return SinglePreCheckResult(
+            name=pre_check.name,
+            passed=False,
+            reason=f"Default: skip (fail-closed). {reason}",
+            response_data=response_data,
+        )
+
+
+def _blocked(
+    pre_check: PreCheckConfig,
+    results: List[SinglePreCheckResult],
+) -> PreCheckResult:
+    """Build the fail-fast result, carrying the blocking check's failure policy.
+
+    Every block path funnels through here -- including the ``_apply_default``
+    fail-closed ones, so a timeout honours ``on_failure_action`` too. That is
+    deliberate: a transport failure is exactly the transient case ``defer``
+    exists for.
+    """
+    return PreCheckResult(
+        should_proceed=False,
+        results=results,
+        failure_action=pre_check.on_failure_action,
+        defer_seconds=pre_check.defer_seconds,
+        max_defers=pre_check.max_defers,
+    )
+
+
+async def _run_internal_function(
+    pre_check: PreCheckConfig,
+    lead: LeadCallTracker,
+    template: Optional[TemplateModel],
+    context: Dict[str, Any],
+    executor: HttpRequestExecutor,
+) -> SinglePreCheckResult:
+    """Call an in-repo function from ``PRE_CHECK_FUNCTIONS``.
+
+    Self-contained on the error side: an unknown key, a timeout, a raise, or a
+    non-bool return all resolve through ``_apply_default`` so the outcome stays
+    governed by ``default_on_failure`` rather than by how the function happened
+    to misbehave.
+
+    ``response_config`` and ``export_to_payload`` do not apply here -- there is
+    no response body to compare against or project out of.
+    """
+    fn_name = pre_check.function
+    fn = functions.PRE_CHECK_FUNCTIONS.get(fn_name) if fn_name else None
+    if fn is None:
+        return _apply_default(pre_check, f"Unknown pre-check function '{fn_name}'")
+
+    try:
+        # Same resolver the MCP path uses for mcp_arguments, so
+        # {customer_mobile_number} and friends work here for free.
+        resolved_args = executor._resolve_body(pre_check.function_args, context)
+        if not isinstance(resolved_args, dict):
+            return _apply_default(
+                pre_check, "function_args did not resolve to an object"
+            )
+
+        payload = lead.payload or {}
+        fn_context = functions.PreCheckFunctionContext(
+            lead=lead,
+            template=template,
+            customer_mobile_number=payload.get("customer_mobile_number"),
+            merchant_id=lead.merchant_id,
+            reseller_id=lead.reseller_id,
+            args=resolved_args,
+            payload=payload,
+        )
+
+        logger.info(
+            f"Pre-check '{pre_check.name}': calling function '{fn_name}' "
+            f"with args {sorted(resolved_args)}"
+        )
+        outcome = await asyncio.wait_for(
+            fn(fn_context), timeout=PRE_CHECK_FUNCTION_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        return _apply_default(
+            pre_check,
+            f"Function '{fn_name}' timed out after "
+            f"{PRE_CHECK_FUNCTION_TIMEOUT_SECONDS}s",
+        )
+    except Exception as e:
+        logger.opt(exception=e).error(
+            f"Pre-check '{pre_check.name}': function '{fn_name}' raised: {e}"
+        )
+        return _apply_default(pre_check, f"Function '{fn_name}' raised: {e}")
+
+    if not isinstance(outcome, bool):
+        return _apply_default(
+            pre_check,
+            f"Function '{fn_name}' returned {type(outcome).__name__}, " "expected bool",
+        )
+
+    return SinglePreCheckResult(
+        name=pre_check.name,
+        passed=outcome,
+        reason=f"{fn_name}() -> {outcome}",
+    )
+
+
+async def run_pre_checks(
+    pre_checks: List[PreCheckConfig],
+    lead: LeadCallTracker,
+    template: Optional[TemplateModel],
+    session: aiohttp.ClientSession,
+) -> PreCheckResult:
+    """
+    Run all configured pre-checks for a lead.
+
+    All enabled pre-checks must pass for the call to proceed (AND logic).
+    Stops on first failure (fail-fast).
+
+    Args:
+        pre_checks: List of pre-check configurations from call_execution_config
+        lead: The lead being processed
+        template: The template for this lead (provides secrets for placeholder resolution)
+        session: aiohttp session for making HTTP requests
+
+    Returns:
+        PreCheckResult with aggregated pass/fail and individual results
+    """
+    if not pre_checks:
+        return PreCheckResult(should_proceed=True)
+
+    results: List[SinglePreCheckResult] = []
+    exports: Dict[str, str] = {}
+    executor = HttpRequestExecutor(session)
+
+    for pre_check in pre_checks:
+        if not pre_check.enabled:
+            logger.info(f"Pre-check '{pre_check.name}': skipped (disabled)")
+            results.append(
+                SinglePreCheckResult(
+                    name=pre_check.name,
+                    passed=True,
+                    reason="Skipped (disabled)",
+                )
+            )
+            continue
+
+        if pre_check.type not in (
+            PreCheckType.EXTERNAL_API,
+            PreCheckType.INTERNAL_FUNCTION,
+        ):
+            logger.warning(
+                f"Pre-check '{pre_check.name}': unknown type '{pre_check.type}', skipping"
+            )
+            results.append(
+                SinglePreCheckResult(
+                    name=pre_check.name,
+                    passed=True,
+                    reason=f"Unknown type '{pre_check.type}', skipped",
+                )
+            )
+            continue
+
+        # Build context with credential_id from this pre-check
+        context = await _build_resolution_context(
+            lead, template, pre_check.credential_id
+        )
+
+        if pre_check.type == PreCheckType.INTERNAL_FUNCTION:
+            # Handles its own failures internally, hence no try/except here.
+            result = await _run_internal_function(
+                pre_check, lead, template, context, executor
+            )
+            results.append(result)
+            if not result.passed:
+                logger.info(
+                    f"Pre-check '{pre_check.name}' FAILED for lead {lead.id}: "
+                    f"{result.reason}"
+                )
+                return _blocked(pre_check, results)
+            continue
+
+        # Fetch via MCP or plain HTTP; both converge on ``response_data``.
+        try:
+            if pre_check.mcp is not None:
+                response_data, failure_reason = await _fetch_mcp_response(
+                    pre_check, context, executor
+                )
+                if failure_reason is not None:
+                    logger.warning(f"Pre-check '{pre_check.name}': {failure_reason}")
+                    result = _apply_default(pre_check, failure_reason)
+                    results.append(result)
+                    if not result.passed:
+                        return _blocked(pre_check, results)
+                    continue
+
+            else:
+                # Convert PreCheckHttpRequest to HttpRequestConfig
+                # This is inside try block to handle validation errors gracefully
+                http_cfg = pre_check.http_request
+                if http_cfg is None:
+                    result = _apply_default(
+                        pre_check, "neither 'http_request' nor 'mcp' is configured"
+                    )
+                    results.append(result)
+                    if not result.passed:
+                        return _blocked(pre_check, results)
+                    continue
+
+                # Convert auth dict to HttpAuthConfig (if present)
+                converted_auth = _convert_auth_dict_to_config(http_cfg.auth)
+
+                # Convert query_params to Dict[str, str]
+                converted_query_params = _convert_query_params_to_str_dict(
+                    http_cfg.query_params
+                )
+
+                http_config = HttpRequestConfig(
+                    url=http_cfg.url,
+                    method=HttpMethod(
+                        http_cfg.method.upper()
+                    ),  # Normalize to uppercase
+                    headers=http_cfg.headers or {},
+                    body=http_cfg.body,
+                    auth=converted_auth,
+                    query_params=converted_query_params,
+                    timeout=http_cfg.timeout,
+                    max_retries=http_cfg.max_retries,
+                )
+
+                logger.info(
+                    f"Pre-check '{pre_check.name}': executing {http_config.method.value} {http_cfg.url}"
+                )
+
+                response = await executor.execute(
+                    config=http_config,
+                    resolved_fields=context,
+                    fire_and_forget=False,  # We need the response
+                )
+
+                if response is None or response == (0, ""):
+                    result = _apply_default(pre_check, "HTTP request failed")
+                    results.append(result)
+                    if not result.passed:
+                        return _blocked(pre_check, results)
+                    continue
+
+                status_code, response_body = response
+
+                # Check for non-success status
+                if status_code < 200 or status_code >= 300:
+                    result = _apply_default(
+                        pre_check, f"API returned status {status_code}"
+                    )
+                    results.append(result)
+                    if not result.passed:
+                        return _blocked(pre_check, results)
+                    continue
+
+                # Parse response JSON
+                try:
+                    response_data = json.loads(response_body)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Pre-check '{pre_check.name}': response is not valid JSON"
+                    )
+                    result = _apply_default(pre_check, "Response is not valid JSON")
+                    results.append(result)
+                    if not result.passed:
+                        return _blocked(pre_check, results)
+                    continue
+
+            pre_check_exports: Dict[str, str] = {}
+            if pre_check.export_to_payload:
+                try:
+                    pre_check_exports = _extract_exports(
+                        response_data, pre_check.export_to_payload, pre_check.name
+                    )
+                    logger.info(
+                        f"Pre-check '{pre_check.name}': exported "
+                        f"{list(pre_check_exports.keys())}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Pre-check '{pre_check.name}': export failed ({e}), "
+                        "continuing without it"
+                    )
+                exports.update(pre_check_exports)
+
+            response_config = pre_check.response_config
+            if response_config is None:
+                results.append(
+                    SinglePreCheckResult(
+                        name=pre_check.name,
+                        passed=True,
+                        reason="Fetch-only (no response_config)",
+                        response_data=response_data,
+                    )
+                )
+                continue
+
+            if not isinstance(response_data, dict):
+                result = _apply_default(
+                    pre_check,
+                    f"Response is a {type(response_data).__name__}, not an object",
+                )
+                results.append(result)
+                if not result.passed:
+                    return _blocked(pre_check, results)
+                continue
+
+            check_field = response_config.response_field
+
+            if check_field not in response_data:
+                logger.warning(
+                    f"Pre-check '{pre_check.name}': field '{check_field}' not found in response"
+                )
+                result = _apply_default(
+                    pre_check,
+                    f"Field '{check_field}' not found in response",
+                    response_data,
+                )
+                results.append(result)
+                if not result.passed:
+                    return _blocked(pre_check, results)
+                continue
+
+            actual_value = response_data[check_field]
+            expected_value = response_config.response_field_value
+            match_type = response_config.match_type
+
+            # Apply the configured operator (defaults to equals) to decide whether
+            # the call should proceed. Supports equals/not_equals, list-aware
+            # contains/not_contains (e.g. tags), and numeric gt/lt.
+            should_proceed = _value_matches(actual_value, expected_value, match_type)
+            logger.info(
+                f"Pre-check '{pre_check.name}': {check_field}={actual_value}, "
+                f"match_type={match_type.value}, expected={expected_value}, "
+                f"should_proceed={should_proceed}"
+            )
+
+            result = SinglePreCheckResult(
+                name=pre_check.name,
+                passed=should_proceed,
+                reason=f"{check_field}={actual_value}",
+                response_data=response_data,
+            )
+            results.append(result)
+
+            # Fail-fast: stop on first failure
+            if not result.passed:
+                logger.info(
+                    f"Pre-check '{pre_check.name}' FAILED for lead {lead.id}: {result.reason}"
+                )
+                return _blocked(pre_check, results)
+
+        except Exception as e:
+            logger.opt(exception=e).error(
+                f"Pre-check '{pre_check.name}': execution error: {e}"
+            )
+            result = _apply_default(pre_check, f"Execution error: {e}")
+            results.append(result)
+            if not result.passed:
+                return _blocked(pre_check, results)
+
+    logger.info(f"All pre-checks passed for lead {lead.id}")
+    return PreCheckResult(should_proceed=True, results=results, exports=exports)

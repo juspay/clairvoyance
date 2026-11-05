@@ -1,0 +1,102 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "reseller_id": "<reseller-uuid>",
+  "merchant_id": "<merchant-uuid>",
+  "name": "order-confirmation-ivr",
+  "supported_channels": ["voice"],
+  "expected_payload_schema": {
+    "customer_name": { "type": "string" },
+    "shop_name": { "type": "string" }
+  },
+  "configurations": {
+    "tts_configuration": {
+      "provider": "elevenlabs",
+      "voice_id": "<voice-id>",
+      "speed": 1.0
+    }
+  },
+  "flow": {
+    "mode": "ivr",
+    "initial_node": "main",
+    "nodes": {
+      "main": {
+        "name": "main",
+        "prompt": "Hi {customer_name}, this is a call about your order from {shop_name}. Press 1 to confirm your order, press 2 to cancel it, or press 3 to change the delivery address.",
+        "timeout_secs": 8,
+        "max_retries": 3,
+        "invalid_prompt": "Sorry, that's not a valid option.",
+        "on_timeout_message": "We didn't get your response. Goodbye.",
+        "on_timeout_outcome": "NO_RESPONSE",
+        "options": [
+          {
+            "digit": "1",
+            "action": "end",
+            "label": "Confirm order",
+            "outcome": "CONFIRMED",
+            "message": "Thank you. Your order is confirmed. Goodbye."
+          },
+          {
+            "digit": "2",
+            "action": "transition",
+            "label": "Cancel order -> ask reason",
+            "target_node": "cancel_reasons",
+            "outcome": "CANCEL_STARTED"
+          },
+          {
+            "digit": "3",
+            "action": "end",
+            "label": "Address change",
+            "outcome": "ADDRESS_CHANGE_REQUESTED",
+            "message": "Sure. Our team will call you back shortly to update your delivery address. Goodbye."
+          }
+        ]
+      },
+      "cancel_reasons": {
+        "name": "cancel_reasons",
+        "prompt": "Please tell us why you'd like to cancel. Press 1 if it's too expensive, 2 if you changed your mind, 3 if you found it cheaper elsewhere, 4 if you ordered by mistake, or 5 for any other reason.",
+        "timeout_secs": 8,
+        "max_retries": 2,
+        "invalid_prompt": "Sorry, that's not a valid option.",
+        "on_timeout_message": "We'll record this as cancelled. Goodbye.",
+        "on_timeout_outcome": "CANCELLED",
+        "options": [
+          {
+            "digit": "1",
+            "action": "end",
+            "outcome": "CANCELLED",
+            "message": "Your order has been cancelled. Thank you.",
+            "metadata": { "cancellation_reason": "too_expensive" }
+          },
+          {
+            "digit": "2",
+            "action": "end",
+            "outcome": "CANCELLED",
+            "message": "Your order has been cancelled. Thank you.",
+            "metadata": { "cancellation_reason": "changed_mind" }
+          },
+          {
+            "digit": "3",
+            "action": "end",
+            "outcome": "CANCELLED",
+            "message": "Your order has been cancelled. Thank you.",
+            "metadata": { "cancellation_reason": "found_cheaper" }
+          },
+          {
+            "digit": "4",
+            "action": "end",
+            "outcome": "CANCELLED",
+            "message": "Your order has been cancelled. Thank you.",
+            "metadata": { "cancellation_reason": "ordered_by_mistake" }
+          },
+          {
+            "digit": "5",
+            "action": "end",
+            "outcome": "CANCELLED",
+            "message": "Your order has been cancelled. Thank you.",
+            "metadata": { "cancellation_reason": "other" }
+          }
+        ]
+      }
+    }
+  }
+}

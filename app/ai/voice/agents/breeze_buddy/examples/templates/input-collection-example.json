@@ -1,0 +1,71 @@
+{
+  "name": "Update Phone Number — Input Collection Example",
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "initial_greeting": "Hi {customer_name}, I understand you'd like to update your phone number."
+  },
+  "flow": {
+    "initial_node": "collect_number",
+    "nodes": [
+      {
+        "node_name": "collect_number",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "You are collecting the user's updated phone number. The user may provide digits in multiple segments with natural pauses between them — all segments are accumulated and delivered to you as a single message.\n\nWhen you receive the digits:\n- If it's a valid 10-digit Indian phone number, read it back to confirm.\n- If it's incomplete (fewer than 10 digits), ask the user to provide the remaining digits.\n- If the user asks a conversational question (e.g., 'are you listening?'), respond naturally and then encourage them to continue.\n\nDo NOT ask for the number — the user will provide it. Just listen and process."
+          }
+        ],
+        "input_collection": {
+          "enabled": true,
+          "user_speech_timeout": 3.0
+        },
+        "functions": [
+          {
+            "function_name": "confirm_number",
+            "description": "Call this when you have a complete 10-digit phone number and the user has confirmed it is correct.",
+            "properties": {
+              "phone_number": {
+                "type": "string",
+                "description": "The complete 10-digit phone number"
+              }
+            },
+            "required": ["phone_number"],
+            "transition_to": "confirmation",
+            "hooks": [
+              {
+                "name": "update_outcome_in_database",
+                "expected_fields": {
+                  "outcome": {
+                    "source": "static",
+                    "value": "NUMBER_UPDATED"
+                  },
+                  "phone_number": {
+                    "source": "llm",
+                    "value": "phone_number"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "node_name": "confirmation",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "The phone number has been updated successfully. Thank the user and ask if there's anything else you can help with."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "end_call",
+            "description": "User has no more requests, end the conversation.",
+            "properties": {}
+          }
+        ]
+      }
+    ]
+  },
+  "_comment": "This template demonstrates input collection mode for multi-segment input. The collect_number node has input_collection.enabled=true with user_speech_timeout=3.0s, meaning the system waits 3 seconds after the last speech segment before ending the user's turn. This allows users to dictate numbers naturally with pauses (e.g., '9 8 7 ... 6 5 4 ... 3 2 1 0') without the agent interrupting after each segment. The LLM receives all segments as a single accumulated message."
+}

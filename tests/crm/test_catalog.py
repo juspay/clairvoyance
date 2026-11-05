@@ -1,0 +1,1003 @@
+"""The event catalog's pin tests (design/event-catalog.md §Ownership): the
+four-part square a new source/topic must ship — spec (the engine
+decodes it) · fixtures · catalog entry (· ingress) — enforced so a
+half-added entry fails CI.
+
+Fixtures under tests/crm/fixtures/<source>/<topic>.json are recorded
+payloads (the Shopify one is document-shaped until nautilus#195's shadow
+records a real letter; the pin holds either way). They double as the
+catalog's conformance test: every declared non-derived field must resolve
+against at least one fixture, so provider drift fails HERE, not in prod.
+"""
+
+import asyncio
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, get_args
+
+import pytest
+
+from app.crm.outreach.catalog_laws import condition_against_catalog
+from app.crm.record import catalog
+from app.crm.record.extractors import engine
+from app.crm.record.schemas import (
+    CatalogField,
+    EventSchema,
+    SchemaRegistration,
+    TopicCount,
+)
+from app.crm.shared import predicate
+from app.crm.shared.predicate import Condition, matches
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _fixtures_for(source: str, topic: str) -> List[Dict[str, Any]]:
+    folder = FIXTURES / source
+    name = topic.replace("/", "_").replace(".", "_")
+    # sorted: glob order is the filesystem's (Linux CI once handed the
+    # signed-in variant first), and callers index into this list.
+    return [
+        json.loads(p.read_text())
+        for p in sorted(folder.glob("*.json"))
+        if p.stem.startswith(name)
+    ]
+
+
+# --- The square -------------------------------------------------------------
+
+
+def test_every_code_entry_has_fixtures_and_every_field_appears_in_one() -> None:
+    """Every declared path resolves against a recorded letter of its topic;
+    every FALLBACK path against a recorded letter of its source (Shopify
+    keeps a phone in four homes — each must be seen in the wild once)."""
+    by_source: Dict[str, List[Dict[str, Any]]] = {}
+    for (source, topic), entry in catalog.CATALOG.items():
+        payloads = _fixtures_for(source, topic)
+        assert payloads, f"{source}/{topic}: no fixture under tests/crm/fixtures"
+        by_source.setdefault(source, []).extend(payloads)
+        derive = catalog.derive_for(source, topic)
+        for field in entry.fields:
+            assert any(
+                engine.field_value(p, field.path, derive) is not None for p in payloads
+            ), f"{source}/{topic}: declared field {field.path} appears in no fixture"
+    for (source, topic), entry in catalog.CATALOG.items():
+        for field in entry.fields:
+            for path in field.fallbacks:
+                assert any(
+                    engine.field_value(p, path) not in (None, "")
+                    for p in by_source[source]
+                ), f"{source}: fallback {path} appears in no recorded letter"
+
+
+def test_the_engine_finds_the_person_in_every_recorded_letter() -> None:
+    """The extractor half of the square: a code entry whose spec cannot
+    attribute its own fixtures would quarantine every real letter. A
+    merchant-level entry is the ruled opposite (canon T13 col 14): its
+    letters name no person, so they decode about="merchant" with no
+    handles — processed with customer NULL, never quarantined."""
+    for (source, topic), entry in catalog.CATALOG.items():
+        spec = catalog.code_spec(source, topic)
+        assert spec is not None
+        for payload in _fixtures_for(source, topic):
+            extracted = engine.extract(payload, spec)
+            if entry.about == "merchant":
+                assert extracted.about == "merchant"
+                assert (
+                    not extracted.handles
+                ), f"{source}/{topic}: a merchant letter grew a handle"
+            else:
+                assert (
+                    extracted.handles
+                ), f"{source}/{topic}: a fixture yields no handle"
+
+
+def test_variable_names_are_unique_within_an_entry() -> None:
+    # {placeholder} is the last path segment (or the derived name): two
+    # declared variables ending in the same word would fill one slot.
+    for key, entry in catalog.CATALOG.items():
+        names = [engine.variable_name(f.path) for f in entry.fields if f.variable]
+        assert len(names) == len(set(names)), (key, names)
+
+
+def test_every_derived_field_has_its_deriver_and_vice_versa() -> None:
+    for key, entry in catalog.CATALOG.items():
+        declared = {f.path for f in entry.fields if f.derived}
+        assert declared == set(catalog.DERIVE.get(key, {})), key
+
+
+def test_ops_come_from_type_and_phone_is_never_filterable() -> None:
+    for entry in catalog.code_entries():
+        for field in entry.fields:
+            assert field.ops == catalog.OPS_BY_TYPE[field.type]
+            if field.type == "phone":
+                assert field.ops == []
+    assert set(catalog.OPS_BY_TYPE) == {
+        "text",
+        "number",
+        "choice",
+        "boolean",
+        "datetime",
+        "phone",
+        "list",
+    }
+
+
+# --- Shopify orders/create through the grammar ----------------------------
+
+
+def test_shopify_fixture_answers_the_worked_example() -> None:
+    # the recorded COD order by name — its variants (guest, signed-in)
+    # answer differently and are pinned by the coverage tests above
+    payload = json.loads((FIXTURES / "shopify" / "orders_create.json").read_text())
+    derive = catalog.derive_for("shopify", "orders/create")
+    lookup = lambda path: engine.field_value(payload, path, derive)  # noqa: E731
+    assert matches(
+        [
+            Condition(field="payload.financial_status", op="is", value="pending"),
+            Condition(field="payload.gateway", op="is", value="Cash on Delivery (COD)"),
+            Condition(field="payload.total_price", op=">", value=1000),
+            Condition(field="items_count", op="=", value=2),
+        ],
+        lookup,
+    )
+    assert lookup("first_item_name") == "Air Runner Sneakers"
+    assert lookup("customer_name") == "Priya Sharma"
+    # Shopify's top-level customer.phone is null on this recorded order —
+    # the DECLARED fallback (default_address) is where the engine finds it.
+    assert lookup("payload.customer.phone") is None
+    spec = catalog.code_spec("shopify", "orders/create")
+    assert spec is not None
+    assert engine.extract(payload, spec).handles["phone"] == "+919876543210"
+    assert lookup("payload.customer.missing") is None
+    assert lookup("payload.customer.phone.deeper") is None
+
+
+def test_canonical_path_keeps_bare_entry_keys_working() -> None:
+    assert catalog.canonical_path("order_id") == "payload.order_id"
+    assert catalog.canonical_path("payload.order_id") == "payload.order_id"
+    assert catalog.canonical_path("items_count") == "items_count"
+
+
+# --- Registration validator (T24) --------------------------------------------
+
+
+def _reg(fields: List[Dict[str, Any]]) -> SchemaRegistration:
+    return SchemaRegistration(
+        source="flipkart",
+        topic="order.created",
+        label="Order placed",
+        fields=[CatalogField.model_validate(f) for f in fields],
+    )
+
+
+def test_registration_accepts_the_nammayatri_shape() -> None:
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.ride_id",
+                    "type": "text",
+                    "label": "Ride ID",
+                    "keyable": True,
+                },
+                {
+                    "path": "payload.rider_phone",
+                    "type": "phone",
+                    "label": "Phone",
+                    "identity": "phone",
+                },
+                {
+                    "path": "payload.fare",
+                    "type": "number",
+                    "label": "Fare",
+                    "variable": True,
+                },
+                {
+                    "path": "payload.cancelled_by",
+                    "type": "choice",
+                    "label": "Cancelled by",
+                    "values": ["driver", "customer", "system"],
+                },
+            ]
+        )
+    )
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    "field, fragment",
+    [
+        ({"path": "ride_id", "type": "text", "label": "x"}, "path must be payload."),
+        (
+            {"path": "payload.a-b", "type": "text", "label": "x"},
+            "path must be payload.",
+        ),
+        (
+            {"path": "payload.x", "type": "choice", "label": "x"},
+            "choice needs its values",
+        ),
+        (
+            {"path": "payload.x", "type": "text", "label": "x", "values": ["a"]},
+            "only choice",
+        ),
+        (
+            {"path": "payload.x", "type": "boolean", "label": "x", "keyable": True},
+            "keyable needs",
+        ),
+        (
+            {"path": "payload.x", "type": "text", "label": "x", "identity": "phone"},
+            "must be type phone",
+        ),
+        (
+            {"path": "payload.x", "type": "phone", "label": "x"},
+            "identity:phone or nothing",
+        ),
+        (
+            {"path": "payload.x", "type": "text", "label": "x", "derived": True},
+            "code-layer only",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "phone",
+                "label": "x",
+                "identity": "phone",
+                "fallbacks": ["payload.y"],
+            },
+            "fallbacks are code-layer only",
+        ),
+        (
+            {"path": "payload.x", "type": "text", "label": "x", "identity": "email"},
+            "identity role must be one of phone | name",
+        ),
+        # A list is a template variable and nothing else.
+        (
+            {"path": "payload.x", "type": "list", "label": "x"},
+            "type list is a template variable or nothing",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "identity": "name",
+            },
+            "a list cannot be an identity field",
+        ),
+        # item_format is the list's own word, and every blank in it must be a
+        # key — the engine leaves an unmatched group in place, and a customer
+        # would read the literal "{na-me}".
+        (
+            {"path": "payload.x", "type": "text", "label": "x", "item_format": "{a}"},
+            "item_format belongs to type list",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "item_format": "{title} x{quantity",
+            },
+            "unmatched brace",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "item_format": "{na-me}",
+            },
+            "is not a key",
+        ),
+        (
+            {
+                "path": "payload.x",
+                "type": "list",
+                "label": "x",
+                "variable": True,
+                "item_format": "just words",
+            },
+            "names no key",
+        ),
+    ],
+)
+def test_registration_refuses_each_law_break(
+    field: Dict[str, Any], fragment: str
+) -> None:
+    problems = catalog.validate_registration(_reg([field]))
+    assert any(fragment in p for p in problems), problems
+
+
+def test_two_variable_fields_may_not_fill_one_blank() -> None:
+    """The registered layer's half of test_variable_names_are_unique_within
+    _an_entry. A blank is the path's LAST SEGMENT, so payload.items.name and
+    payload.customer.name are both {name}: spec_for_entry writes one key,
+    the later declaration wins, and the earlier field vanishes from every
+    template that named it — silently, and in an order the vendor never
+    sees. Refused where it is still a typo."""
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.items.name",
+                    "type": "text",
+                    "label": "Item",
+                    "variable": True,
+                },
+                {
+                    "path": "payload.customer.name",
+                    "type": "text",
+                    "label": "Customer",
+                    "variable": True,
+                },
+            ]
+        )
+    )
+    assert any("already filled by payload.items.name" in p for p in problems), problems
+
+    # Not a variable, not a blank: the same last segment is fine when only
+    # one of the two is templated on.
+    filter_only = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.items.name",
+                    "type": "text",
+                    "label": "Item",
+                    "variable": True,
+                },
+                {"path": "payload.customer.name", "type": "text", "label": "Customer"},
+            ]
+        )
+    )
+    assert filter_only == [], filter_only
+
+
+def test_a_deprecated_predecessor_may_share_its_successors_blank() -> None:
+    """The exemption the two laws need to coexist. dropped_paths FORCES a
+    renamed path to stay in the registration as deprecated (a field is
+    deprecated, never deleted), and decode already skips deprecated fields —
+    so refusing the old path its successor's blank would make
+    additive-or-deprecate and the collision law unsatisfiable together."""
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.buyer.name",
+                    "type": "text",
+                    "label": "Buyer (old)",
+                    "variable": True,
+                    "deprecated": True,
+                },
+                {
+                    "path": "payload.customer.name",
+                    "type": "text",
+                    "label": "Customer",
+                    "variable": True,
+                },
+            ]
+        )
+    )
+    assert problems == [], problems
+
+
+def test_a_registered_yes_no_may_not_be_a_variable() -> None:
+    """ "A yes/no is a filter, never a blank" is a law, not a house style.
+    A boolean extracts as a Python True and send_variables refuses a bool at
+    fire time, so the first run that maps it PARKS — hours later, naming a
+    variable rather than this row. The code layer keeps the rule by hand;
+    the vendor layer gets it enforced."""
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.cod",
+                    "type": "boolean",
+                    "label": "COD",
+                    "variable": True,
+                }
+            ]
+        )
+    )
+    assert any("a yes/no is a filter, never a blank" in p for p in problems), problems
+
+    # As a filter it is exactly what booleans are for.
+    assert (
+        catalog.validate_registration(
+            _reg([{"path": "payload.cod", "type": "boolean", "label": "COD"}])
+        )
+        == []
+    )
+
+
+def test_a_registration_may_not_shadow_a_code_entry() -> None:
+    """The code layer is authoritative for its events: a vendor row under
+    shopify/orders/create would be gathered by the validator, hidden by the
+    console and ignored by decode — a plan templating on it parks every
+    send. Refused at the door, like discovery writes no nudge for it."""
+    shadow = SchemaRegistration(
+        source="shopify",
+        topic="orders/create",
+        label="Orders",
+        fields=[
+            CatalogField(
+                path="payload.loyalty_tier", type="text", label="Tier", variable=True
+            )
+        ],
+    )
+    problems = catalog.validate_registration(shadow)
+    assert problems == [
+        "shopify/orders/create is declared in code — nothing to register"
+    ]
+    # the same topic word under the merchant's own source is theirs to declare
+    own = shadow.model_copy(update={"source": "flipkart"})
+    assert catalog.validate_registration(own) == []
+
+
+def test_the_catalog_is_assembled_from_the_spec_modules_only() -> None:
+    """Adding a source is one registry line in extractors/__init__.py; the
+    catalog's logic file spells no source. Every code entry belongs to a
+    listed module, and every listed module's entries are in the catalog."""
+    from app.crm.record.extractors import SPEC_MODULES
+
+    listed = {(e.source, e.topic) for module in SPEC_MODULES for e in module.ENTRIES}
+    assert set(catalog.CATALOG) == listed
+    source_words = [
+        line
+        for line in Path(catalog.__file__).read_text().splitlines()
+        if "shopify" in line.lower() and not line.lstrip().startswith("#")
+    ]
+    assert source_words == [], source_words
+
+
+def test_registration_refuses_unknown_type_at_the_shape() -> None:
+    with pytest.raises(Exception):
+        CatalogField.model_validate(
+            {"path": "payload.x", "type": "money", "label": "x"}
+        )
+
+
+def test_registration_refuses_two_fields_for_one_identity_role() -> None:
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.a",
+                    "type": "phone",
+                    "label": "a",
+                    "identity": "phone",
+                },
+                {
+                    "path": "payload.b",
+                    "type": "phone",
+                    "label": "b",
+                    "identity": "phone",
+                },
+            ]
+        )
+    )
+    assert any("already taken" in p for p in problems)
+
+
+def test_etag_changes_with_content_not_with_counts() -> None:
+    entries = catalog.code_entries()
+    a = catalog.etag_for(entries)
+    assert a == catalog.etag_for(
+        [e.model_copy(update={"seen_7d": 99}) for e in entries]
+    )
+    changed = [e.model_copy(update={"label": "renamed"}) for e in entries]
+    assert a != catalog.etag_for(changed)
+
+
+def test_type_guess_from_samples() -> None:
+    assert catalog._guess_type("number", [1, 2]) == "number"
+    assert catalog._guess_type("boolean", [True]) == "boolean"
+    assert catalog._guess_type("string", ["+919876543210", "9876543210"]) == "phone"
+    assert catalog._guess_type("string", ["2026-09-01T10:00:00Z"]) == "datetime"
+    assert catalog._guess_type("string", ["COD", "UPI"]) == "text"
+
+
+# ---------------------------------------------------------------------------
+# Review round (4 Sep 2026): op parity, additive-or-deprecate, one source per
+# topic, the stored row's keys, and the ETag before the counts query.
+# ---------------------------------------------------------------------------
+
+
+def test_every_catalog_op_is_an_op_the_evaluator_speaks() -> None:
+    """Parity is structural (OPS_BY_TYPE is spelled from predicate's
+    families); this pins it against a hand-typed word sneaking back in."""
+    spoken = set(get_args(predicate.Op))
+    for field_type, ops in catalog.OPS_BY_TYPE.items():
+        assert set(ops) <= spoken, (field_type, set(ops) - spoken)
+    assert catalog.OPS_BY_TYPE["text"] == [
+        *predicate.TEXT_OPS,
+        *predicate.PARTIAL_OPS,
+        *predicate.PRESENCE_OPS,
+    ]
+    assert catalog.OPS_BY_TYPE["number"] == [
+        *predicate.ORDER_OPS,
+        predicate.EQUALS_OP,
+        *predicate.PRESENCE_OPS,
+    ]
+
+
+def test_every_filterable_type_offers_not_exists_and_phone_still_offers_none() -> None:
+    """not_exists rides with exists on every type that can be filtered — a
+    list included, presence being all a list admits; phone stays identity only."""
+    for field_type in ("text", "choice", "number", "boolean", "datetime", "list"):
+        assert predicate.NOT_EXISTS_OP in catalog.OPS_BY_TYPE[field_type], field_type
+    assert catalog.OPS_BY_TYPE["phone"] == []
+
+
+def test_not_exists_on_a_declared_field_needs_no_value_check() -> None:
+    """Like exists: a choice field's values are not consulted, there is no value."""
+    field = catalog.with_ops(
+        CatalogField(
+            path="payload.state", type="choice", label="State", values=["A", "B"]
+        )
+    )
+    assert (
+        condition_against_catalog(
+            Condition(field="payload.state", op="not_exists"), {"payload.state": field}
+        )
+        == []
+    )
+
+
+def _row(
+    source: str,
+    topic: str,
+    fields: List[Dict[str, Any]],
+    status: str = "registered",
+    version: int = 1,
+) -> EventSchema:
+    now = datetime.now(timezone.utc)
+    return EventSchema(
+        id="row-1",
+        merchant_id="m1",
+        source=source,
+        topic=topic,
+        label=None,
+        fields=[CatalogField.model_validate(f) for f in fields],
+        status=status,
+        version=version,
+        registered_by="s2s:m1",
+        first_seen_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+class _SchemaAccessor:
+    """The accessor slots the catalog reads, as recording fakes."""
+
+    def __init__(self, rows: Optional[List[EventSchema]] = None) -> None:
+        self.rows = rows or []
+        self.registered: List[Any] = []
+        self.count_calls = 0
+
+    async def list_schemas(self, merchant_id: str) -> List[EventSchema]:
+        return list(self.rows)
+
+    async def get_schema(self, merchant_id: str, source: str, topic: str) -> Any:
+        for row in self.rows:
+            if (row.source, row.topic) == (source, topic):
+                return row
+        return None
+
+    async def register_schema(self, *args: Any) -> EventSchema:
+        self.registered.append(args)
+        return self.rows[0] if self.rows else _row(args[1], args[2], [])
+
+    async def topic_counts(self, merchant_id: str, days: int) -> List[TopicCount]:
+        self.count_calls += 1
+        return [TopicCount(source="shopify", topic="orders/create", seen=3)]
+
+
+RIDE = {"path": "payload.ride_id", "type": "text", "label": "Ride", "keyable": True}
+FARE = {"path": "payload.fare", "type": "number", "label": "Fare", "variable": True}
+
+
+def test_a_re_registration_may_deprecate_a_path_but_never_drop_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """design/event-catalog.md: fields are deprecated, never deleted — a
+    live flow may filter or template on the path a vendor just dropped."""
+    fake = _SchemaAccessor([_row("flipkart", "order.created", [RIDE, FARE])])
+    monkeypatch.setattr(catalog, "accessor", fake)
+
+    dropped = _reg([RIDE])
+    with pytest.raises(catalog.SchemaValidationError) as refused:
+        asyncio.run(catalog.register_schema("m1", dropped, "s2s:m1"))
+    assert "payload.fare: declared in v1 and missing now" in str(refused.value)
+    assert fake.registered == []
+
+    deprecated = _reg([RIDE, {**FARE, "deprecated": True}])
+    asyncio.run(catalog.register_schema("m1", deprecated, "s2s:m1"))
+    assert len(fake.registered) == 1
+
+    tip = {"path": "payload.tip", "type": "number", "label": "Tip"}
+    asyncio.run(catalog.register_schema("m1", _reg([RIDE, FARE, tip]), "s2s:m1"))
+    assert len(fake.registered) == 2, "additive lands"
+
+
+def test_the_stored_row_carries_canons_field_list_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ops are computed on read; fallbacks/derived are code-layer words —
+    none of them is written into a T24 row."""
+    fake = _SchemaAccessor()
+    monkeypatch.setattr(catalog, "accessor", fake)
+    asyncio.run(catalog.register_schema("m1", _reg([RIDE]), "s2s:m1"))
+    stored = json.loads(fake.registered[0][4])
+    assert stored == [
+        {
+            "path": "payload.ride_id",
+            "type": "text",
+            "label": "Ride",
+            "keyable": True,
+            "variable": False,
+            "values": [],
+            "identity": None,
+            "deprecated": False,
+        }
+    ]
+
+
+def test_a_topic_two_sources_declare_cannot_be_gathered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A door carries topic only (canon T19; entry.source is a ruling owed):
+    a union of two sources' fields would let a condition on a path only one
+    has silently match nothing for the other. Refuse, naming both."""
+    vendor_orders = _row("flipkart", "orders/create", [RIDE])
+    monkeypatch.setattr(catalog, "accessor", _SchemaAccessor([vendor_orders]))
+    with pytest.raises(catalog.AmbiguousTopic) as e:
+        asyncio.run(catalog.catalog_fields("m1", "orders/create"))
+    assert e.value.sources == ["shopify", "flipkart"]
+
+    # one source, either layer: the field map as before
+    monkeypatch.setattr(catalog, "accessor", _SchemaAccessor([]))
+    fields = asyncio.run(catalog.catalog_fields("m1", "orders/create"))
+    assert fields is not None and "payload.id" in fields
+    only_vendor = _row("nammayatri", "ride.completed", [RIDE])
+    monkeypatch.setattr(catalog, "accessor", _SchemaAccessor([only_vendor]))
+    fields = asyncio.run(catalog.catalog_fields("m1", "ride.completed"))
+    assert fields is not None and list(fields) == ["payload.ride_id"]
+    assert asyncio.run(catalog.catalog_fields("m1", "nobody/knows")) is None
+
+
+def test_the_etag_is_computed_before_the_counts_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 304 costs one schema read: merged_entries never runs the 7-day
+    GROUP BY, and its ETag equals the filled catalog's (seen_7d excluded)."""
+    fake = _SchemaAccessor()
+    monkeypatch.setattr(catalog, "accessor", fake)
+    entries = asyncio.run(catalog.merged_entries("m1"))
+    assert fake.count_calls == 0
+    filled = asyncio.run(catalog.with_seen_counts("m1", entries))
+    assert fake.count_calls == 1
+    assert catalog.etag_for(entries) == catalog.etag_for(filled)
+    by_key = {(e.source, e.topic): e.seen_7d for e in filled}
+    assert by_key[("shopify", "orders/create")] == 3
+
+
+def test_a_registration_may_declare_a_formatted_list() -> None:
+    """The registered layer's door to an array — a T24 row carries no
+    derive(), so the format IS how a vendor shapes a cart."""
+    assert (
+        catalog.validate_registration(
+            _reg(
+                [
+                    {
+                        "path": "payload.items",
+                        "type": "list",
+                        "label": "Items",
+                        "variable": True,
+                        "item_format": "{name} x{qty}",
+                    },
+                    {
+                        "path": "payload.tags",
+                        "type": "list",
+                        "label": "Tags",
+                        "variable": True,
+                    },
+                ]
+            )
+        )
+        == []
+    )
+
+
+def test_a_list_field_admits_one_existential_question_and_nothing_else() -> None:
+    """A door asks a list `includes` (any element equals the plan's value),
+    `exists` or `not_exists` — against the raw array (event-catalog.md
+    §The `list` ruling) — and never an op that compares a field's ONE value."""
+    assert catalog.OPS_BY_TYPE["list"] == [
+        "includes",
+        "contains",
+        "exists",
+        "not_exists",
+    ]
+    field = catalog.with_ops(
+        CatalogField(path="payload.items", type="list", label="Items", variable=True)
+    )
+    assert field.ops == ["includes", "contains", "exists", "not_exists"]
+    for op, value in (
+        ("includes", "x"),
+        ("contains", ["x"]),
+        ("exists", None),
+        ("not_exists", None),
+    ):
+        assert (
+            condition_against_catalog(
+                Condition(field="payload.items", op=op, value=value),
+                {"payload.items": field},
+            )
+            == []
+        )
+    for op, value in (("is", "x"), ("in", ["x"]), (">", 1), ("=", 1)):
+        problems = condition_against_catalog(
+            Condition(field="payload.items", op=op, value=value),
+            {"payload.items": field},
+        )
+        allowed = "allowed: includes, contains, exists, not_exists"
+        assert problems and allowed in problems[0], (
+            op,
+            problems,
+        )
+
+
+def test_includes_is_refused_on_every_type_that_is_not_a_list() -> None:
+    """`includes` asks a field's MANY values; a scalar field has one, and the
+    question for one value is `is` / `in`."""
+    for field_type in ("text", "choice", "number", "boolean", "datetime"):
+        assert predicate.INCLUDES_OP not in catalog.OPS_BY_TYPE[field_type], field_type
+        field = catalog.with_ops(
+            CatalogField(
+                path="payload.f",
+                type=field_type,
+                label="F",
+                values=["x"] if field_type == "choice" else [],
+            )
+        )
+        problems = condition_against_catalog(
+            Condition(field="payload.f", op="includes", value="x"), {"payload.f": field}
+        )
+        assert problems and "'includes' is not an op" in problems[0], (
+            field_type,
+            problems,
+        )
+    assert predicate.INCLUDES_OP not in catalog.OPS_BY_TYPE["phone"]
+
+
+def test_contains_is_offered_on_text_choice_and_list_and_nowhere_else() -> None:
+    """A partial match is a TEXT question: a number, a yes/no, a date or a
+    phone holds no text, so the validator refuses it there."""
+    op: Any = predicate.CONTAINS_OP
+    for field_type in ("text", "choice", "list"):
+        assert op in catalog.OPS_BY_TYPE[field_type], field_type
+    for field_type in ("number", "boolean", "datetime", "phone"):
+        assert op not in catalog.OPS_BY_TYPE[field_type]
+    number = catalog.with_ops(CatalogField(path="payload.n", type="number", label="N"))
+    problems = condition_against_catalog(
+        Condition(field="payload.n", op=op, value=["1"]),
+        {"payload.n": number},
+    )
+    assert problems and f"{op!r} is not an op" in problems[0]
+
+
+def test_a_partial_piece_on_a_choice_field_is_not_held_to_its_values() -> None:
+    """`in` on a choice must name its values; a piece names PART of many,
+    so "Samsung Galaxy" passes although no value is spelled that way."""
+    choice = catalog.with_ops(
+        CatalogField(
+            path="payload.model",
+            type="choice",
+            label="Model",
+            values=["Samsung Galaxy A36 5G (Dark Blue, 128 GB)"],
+        )
+    )
+    assert (
+        condition_against_catalog(
+            Condition(field="payload.model", op="contains", value=["Samsung Galaxy"]),
+            {"payload.model": choice},
+        )
+        == []
+    )
+
+
+def test_the_stored_row_keeps_item_format_only_where_it_means_something() -> None:
+    """canon's field list is extended for the new type, not for every row."""
+    plain = catalog.stored_field(CatalogField(path="payload.a", type="text", label="A"))
+    assert "item_format" not in plain
+    listed = catalog.stored_field(
+        CatalogField(
+            path="payload.b",
+            type="list",
+            label="B",
+            variable=True,
+            item_format="{n}",
+        )
+    )
+    assert listed["item_format"] == "{n}"
+
+
+# --- a partial match per product: the offer list, judged element by element ----
+
+_CART = {
+    "products": [
+        {"product_name": "vivo V20 (Sunset Melody, 128 GB)", "category": "Mobile"},
+        {
+            "product_name": "Zapcase Back Cover for Samsung Galaxy A36 5G",
+            "category": "Accessories",
+        },
+        {
+            "product_name": "Samsung Galaxy A36 5G (Dark Blue, 128 GB)",
+            "category": "Mobile",
+        },
+    ]
+}
+
+
+def test_an_element_filter_keeps_a_listed_model_anywhere_in_the_cart() -> None:
+    """item_where judges EACH product alone, before anything is joined: the
+    A36 in third place is kept, the vivo is dropped, and the back cover that
+    holds "Samsung Galaxy A36" is dropped by its own category — so the
+    variable exists only when the cart holds a listed phone, in any position."""
+    where = [
+        Condition(field="product_name", op="contains", value=["Samsung Galaxy A36"]),
+        Condition(field="category", op="in", value=["Mobile"]),
+    ]
+    kept = engine.list_values(_CART, "payload.products.product_name", where)
+    assert kept == ["Samsung Galaxy A36 5G (Dark Blue, 128 GB)"]
+    assert (
+        engine.list_values(
+            {"products": _CART["products"][:2]}, "payload.products.product_name", where
+        )
+        == []
+    )
+
+
+def test_contains_reaches_mid_name_and_the_category_keeps_out_accessories() -> None:
+    """`contains` finds an attribute anywhere ("128 GB"); the back cover also
+    holds the model, which is why it rides with a category in one filter."""
+    where = [
+        Condition(field="product_name", op="contains", value=["128 GB"]),
+        Condition(field="category", op="in", value=["Mobile"]),
+    ]
+    assert engine.list_values(_CART, "payload.products.product_name", where) == [
+        "vivo V20 (Sunset Melody, 128 GB)",
+        "Samsung Galaxy A36 5G (Dark Blue, 128 GB)",
+    ]
+    only_name = [Condition(field="product_name", op="contains", value=["Galaxy A36"])]
+    found = engine.list_values(_CART, "payload.products.product_name", only_name)
+    assert found is not None and len(found) == 2
+
+
+def test_a_partial_element_filter_registers() -> None:
+    assert not catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [
+                        {"field": "product_name", "op": "contains", "value": ["Pixel"]}
+                    ],
+                }
+            ]
+        )
+    )
+
+
+# --- item_where / item_numbered: the registration law ---------------------------
+
+
+def test_an_element_filter_belongs_to_a_list_and_speaks_its_ops() -> None:
+    """A filter on a text field has no elements to judge; an ordering op on
+    an element field has no declared type to fit — the element filter
+    speaks is · is_not · in · contains · exists · not_exists and nothing
+    else."""
+    assert catalog._ITEM_WHERE_OPS == (
+        "is",
+        "is_not",
+        "in",
+        "contains",
+        "exists",
+        "not_exists",
+    )
+    assert not catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [{"field": "offers", "op": "not_exists"}],
+                }
+            ]
+        )
+    )
+    where = [{"field": "facility_type", "op": "is", "value": "CREDIT_LINE"}]
+    problems = catalog.validate_registration(
+        _reg([{"path": "payload.a", "type": "text", "label": "A", "item_where": where}])
+    )
+    assert any("item_where belongs to type list" in p for p in problems), problems
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [{"field": "amount", "op": ">", "value": 5}],
+                }
+            ]
+        )
+    )
+    assert any("item_where op '>'" in p for p in problems), problems
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_where": [{"field": "payload.facility_type", "op": "exists"}],
+                }
+            ]
+        )
+    )
+    assert any("inside the element" in p for p in problems), problems
+
+
+def test_numbered_lines_need_a_list_with_a_format() -> None:
+    problems = catalog.validate_registration(
+        _reg(
+            [
+                {
+                    "path": "payload.xs",
+                    "type": "list",
+                    "label": "X",
+                    "variable": True,
+                    "item_numbered": True,
+                }
+            ]
+        )
+    )
+    assert any(
+        "item_numbered belongs to a type list with an item_format" in p
+        for p in problems
+    ), problems
+
+
+def test_the_stored_row_keeps_the_filter_only_where_it_means_something() -> None:
+    """Same rule as item_format: canon's field list is extended for the
+    field that carries the word, never for every row."""
+    plain = catalog.stored_field(CatalogField(path="payload.a", type="text", label="A"))
+    assert "item_where" not in plain and "item_numbered" not in plain
+    filtered = catalog.stored_field(
+        CatalogField(
+            path="payload.xs",
+            type="list",
+            label="X",
+            variable=True,
+            item_format="{n}",
+            item_numbered=True,
+            item_where=[{"field": "kind", "op": "is", "value": "k"}],
+        )
+    )
+    assert filtered["item_where"] == [{"field": "kind", "op": "is", "value": "k"}]
+    assert filtered["item_numbered"] is True

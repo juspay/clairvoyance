@@ -1,0 +1,245 @@
+"""The run context, read the same way by every word of the vocabulary.
+
+One file, because these are not "shared helpers" in the bag sense — they
+are the ONE answer to "what in a run's context is ours and what is the
+producer's". The call payload and the send variables both derive from
+``run_facts``, so they can never disagree about it; the bookkeeping keys
+are the same list ``entry.py`` filters a merge against. A second copy of
+either would let a walker key reach a customer's message.
+
+Leaf inside the package: imports the schemas and nothing else from
+outreach, so a word module may import it without a cycle. A concern that
+merely READS the context is not this file's — the call ceiling's ledger key
+is named in the bookkeeping list below (that part IS this file's question),
+while the predicate over it lives in ``outreach/ceiling.py``.
+"""
+
+from typing import Any, Dict, Optional
+
+from app.crm.outreach.schemas import SPLIT_PREFIX, WorkflowNode
+
+# The walker's own bookkeeping in a run's context — never a template
+# variable, never a lead payload key: pointers, the phone (re-added under
+# its canonical key by the call node), per-node results and answers.
+_BOOKKEEPING_KEYS = (
+    "source_event_id",
+    "entered_event_at",  # entry.py: when the founding letter happened (G7)
+    "goal",  # entry.py: the letter that ended the run, and its amount (phase 09)
+    "phone",
+    "customer_mobile_number",
+    "repeat_event_ids",  # repeat.py: which letters already patched this run
+    "repeat_items",  # repeat.py: accumulate's list — never a template variable
+    "facts",  # entry.py: each square's letter, by square (phase 16) — flattened below
+    "latest_letter",  # entry.py: which square heard the most recent letter (phase 17)
+    "cut_short_by",  # entry.py: the letter that re-armed the run (canon T26)
+    "current_node",  # run_facts: computed from the square, never a producer's
+    "current_stage",
+    "_outcome",  # OUTCOME_KEY: a square's word for the trail, popped by the walker
+    "calls_today",  # ceiling.CALLS_TODAY_KEY (pinned by test); the call ledger
+)
+# The letter that woke a run in place, left for the flush that follows
+# (canon T26): the walker reads it when it closes the square — recording it
+# as the step's cut_short_by and the next square's arrived_by = letter —
+# and clears it on the same write, the way a branching square's reply is
+# cleared. A pointer into crm_event_raw, never a photocopy.
+CUT_SHORT_BY_KEY = "cut_short_by"
+# The pointer the consumer writes with every reply (phase 17): the square
+# that heard the most recent letter, so run_facts can let that letter win
+# — on a ladder the letter that moves the run is heard on the square it
+# LEAVES, and the action then executes as its own square, so "the current
+# square's facts" would never be the latest stage's.
+LATEST_LETTER_KEY = "latest_letter"
+# How a PLAIN square was left, when it has something to say (phase 20): a
+# call square at the plan's ceiling returns it in its patch, the walker pops
+# it BEFORE the context write and records it as the step's outcome (canon
+# T26). Never persisted, never a fact — it is in the bookkeeping list so a
+# leak could not reach a template either. A branching square never uses it:
+# its answer already rides reply_<node>.
+OUTCOME_KEY = "_outcome"
+
+
+# The bookkeeping keys whose value is the ID OF WHAT THIS SQUARE HANDED
+# TO A DISPATCHER — a call's lead, a send's manifest row. Neither verb
+# contacts anyone itself; canon T26 keeps the receipt in one column.
+# `action_` is deliberately absent: an action is synchronous and returns a
+# result, not an id, and `reply_`/`split_` are answers, not rows.
+_DISPATCH_PREFIXES = ("lead_", "message_")
+# split_<node> is the arm a split square recorded (enh A/04): ours to write,
+# never a producer's — a payload key spelled `split_payment` would be counted
+# by the by_split report as an experiment, could overwrite a recorded arm,
+# and the real arm must never ride a template or a lead payload.
+# The dispatch pair is composed in, not copied: two spellings of the same
+# subset drift the day a verb is added.
+_BOOKKEEPING_PREFIXES = _DISPATCH_PREFIXES + (
+    "reply_",
+    "action_",
+    "split_",
+    # playbook_<node> records WHICH row a block chose, for the funnel. The
+    # TEXT is never recorded: it is rendered into the payload and nowhere
+    # else, so a run row stays small and a script never reaches a log.
+    "playbook_",
+)
+
+# The merchant's own id for the thing a call is about. Buddy's reporter
+# echoes lead.request_id back to the merchant as orderId on every outcome
+# webhook — nautilus matches it to the Shopify order, so it must be THEIR
+# id, not ours. On a KEYED plan that is the enrollment key itself (entry.key
+# names the order field — Shopify's `id`, a platform-wide unique); the flat
+# keys below serve unkeyed plans, and the run id is the last fallback.
+_REQUEST_ID_KEYS = ("order_id", "request_id")
+
+
+def is_bookkeeping(key: str) -> bool:
+    """PURE: whether a context key is the walker's own — never a template
+    variable, never a producer's fact. The ONE definition: run_facts drops
+    these, and entry.py refuses a producer who spells one (a payload key
+    named `repeat_items` or `source_event_id` would corrupt the accumulate
+    branch or the founding-event dedupe). Two lists would let a walker key
+    reach a customer's message the day they diverged."""
+    return key in _BOOKKEEPING_KEYS or key.startswith(_BOOKKEEPING_PREFIXES)
+
+
+def dispatch_id(patch: Dict[str, Any], node_id: str) -> Optional[str]:
+    """PURE: what this square just handed to a dispatcher, out of the
+    context patch its execute() returned — or None when it handed over
+    nothing.
+
+    Read from the PATCH, never the whole context: a revisit must report the
+    id this visit made, not the one still lying around from the last. Kept
+    here beside _BOOKKEEPING_PREFIXES because it is the same list read for a
+    different reason, and two copies would drift the day a verb is added."""
+    for prefix in _DISPATCH_PREFIXES:
+        value = patch.get(f"{prefix}{node_id}")
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def reply_key(node_id: str) -> str:
+    """Where a listening wait's answer lives in the run's context."""
+    return f"reply_{node_id}"
+
+
+def split_key(node_id: str) -> str:
+    """Where a split square's arm lives, for good (enh A/04).
+
+    Beside ``reply_key`` because they are written together and cleared
+    apart: the reply is spent when the token leaves the square, and this
+    one is not — a report groups runs by arm days later, and an
+    experiment that forgets which arm a run took is not an experiment."""
+    return f"{SPLIT_PREFIX}{node_id}"
+
+
+def playbook_key(node_id: str) -> str:
+    """Where a square records WHICH row each block chose (modules/05 §The
+    playbook).
+
+    Beside ``split_key`` because they are the same kind of fact: the arm a
+    run took, kept for the funnel. NAMES only — the rendered text rides the
+    lead payload and never the run row, which canon T20 col 12 keeps small.
+    """
+    return f"playbook_{node_id}"
+
+
+def without_reply(context: Dict[str, Any], node_id: str) -> Dict[str, Any]:
+    """PURE: the context with this square's answer cleared — written when
+    the token leaves the square (phase 15). A door may start a run on any
+    square, so a square can be revisited; a stale answer left behind
+    would resolve the revisit at once, on the old reply."""
+    return {key: value for key, value in context.items() if key != reply_key(node_id)}
+
+
+def lead_request_id(
+    context: Dict[str, Any], run_id: str, enrollment_key: Optional[str] = None
+) -> str:
+    """PURE: what this run is ABOUT, for the merchant — the enrollment key
+    when the plan is keyed (the order id the author named), else the
+    merchant's order/request id from the run's facts, else a traceable
+    wf-<run id>."""
+    if enrollment_key:
+        return str(enrollment_key)
+    for key in _REQUEST_ID_KEYS:
+        value = context.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return f"wf-{run_id}"
+
+
+def run_facts(
+    context: Dict[str, Any], node: Optional[WorkflowNode] = None
+) -> Dict[str, Any]:
+    """PURE: the run's small facts = context minus the walker's own
+    bookkeeping. The ONE filter both the call payload and the send
+    variables derive from, so they can never disagree on what is ours.
+
+    Phase 16: each square's letter lives under context.facts.<square>
+    (entry.py writes it on resume). Flattened here for templates: the
+    top-level facts first, then the LATEST letter's override them (the
+    square that heard it is context.latest_letter, phase 17 — the most
+    recent stage wins the call), then the CURRENT square's own, and every
+    square's stay reachable as facts_<square>_<key>. With the square
+    given, current_node (and current_stage when the square is labelled)
+    ride along, so one call template can say "you stopped at
+    {current_stage}"."""
+    facts = {key: value for key, value in context.items() if not is_bookkeeping(key)}
+    by_square = context.get("facts")
+    by_square = by_square if isinstance(by_square, dict) else {}
+    for square, letter in by_square.items():
+        if isinstance(letter, dict):
+            for key, value in letter.items():
+                facts[f"facts_{square}_{key}"] = value
+    latest = context.get(LATEST_LETTER_KEY)
+    if isinstance(latest, str) and isinstance(by_square.get(latest), dict):
+        facts.update(by_square[latest])
+    if node is not None:
+        current = by_square.get(node.id)
+        if isinstance(current, dict):
+            facts.update(current)
+        facts["current_node"] = node.id
+        if node.stage:
+            facts["current_stage"] = node.stage
+    # A None is a letter saying "nothing here now" (the extractor's word for
+    # a declared list it could not fill): it has done its job by shadowing
+    # an older value above, and no template or payload ever sees it.
+    return {key: value for key, value in facts.items() if value is not None}
+
+
+def send_variables(
+    mapping: Dict[str, str],
+    context: Dict[str, Any],
+    node: Optional[WorkflowNode] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """PURE: the template's fill-ins = EXACTLY the facts the send node
+    mapped, {blank: facts[fact]} over run_facts (so a blank may name a
+    stage's letter, facts_<square>_<key>, or current_node/current_stage)
+    — no map, no parameters. Bookkeeping is never mapped: the validator
+    only admits declared names on the right-hand side.
+
+    Two honest refusals, both parking the run rather than posting a
+    half-filled or misspelled message: a mapped fact absent from the run
+    (KeyError(fact)), and a mapped value a provider cannot render — a
+    bool, a None, a list (ValueError naming the fact): "True" or "None"
+    inside a customer's message is corruption that looks delivered."""
+    facts = {**run_facts(context, node), **(extra or {})}
+    variables: Dict[str, Any] = {}
+    for blank, fact in mapping.items():
+        value = facts[fact]
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ValueError(
+                f"mapped fact {fact!r} is {type(value).__name__}, not text — "
+                "a template blank needs text or a number"
+            )
+        if isinstance(value, str) and ("\n" in value or "\r" in value):
+            # A template parameter may carry no line break (Meta refuses the
+            # send). A numbered list (record's item_numbered) renders one
+            # line per element for a CALL to read aloud; mapped into a
+            # message it parks here, by name, rather than failing two
+            # modules away at the provider.
+            raise ValueError(
+                f"mapped fact {fact!r} carries a line break — a template "
+                "blank is one line; declare the list without item_numbered "
+                "for a message"
+            )
+        variables[blank] = value
+    return variables

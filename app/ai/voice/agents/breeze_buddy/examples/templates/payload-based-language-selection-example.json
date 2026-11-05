@@ -1,0 +1,121 @@
+{
+  "merchant": "breeze",
+  "template_name": "payload-based-language-selection-example",
+  "identifier": "payload-language-demo",
+  "is_active": true,
+  "description": "Demonstrates automatic language detection from payload. The system analyzes customer data (like address or name) to automatically determine the appropriate language for the conversation.",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string",
+      "example": "John Doe"
+    },
+    "order_id": {
+      "type": "string",
+      "example": "12345"
+    },
+    "customer_address": {
+      "type": "string",
+      "example": "456 Elm Street, Mumbai, Maharashtra, India, 400001"
+    },
+    "preferred_language": {
+      "type": "string",
+      "example": "Hindi"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "rhea",
+    "payload_based_language_selection": true
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer: \"Hello {{customer_name}}! I'm calling about your order #{{order_id}}. I see you're located at {{customer_address}}. Is now a good time to talk?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a friendly customer service representative. The system automatically detected the customer's preferred language from their profile data ({{preferred_language}}). Respond in the detected language if the customer uses it."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_wants_to_talk",
+            "description": "Call when user confirms it's a good time to talk",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_details",
+            "hooks": []
+          },
+          {
+            "function_name": "user_not_interested",
+            "description": "Call when user doesn't want to continue or asks to call back later",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "order_details",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order: \"Thank you, {{customer_name}}! Your order is confirmed. Have a great day!\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order and thank the customer."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "End the call politely: \"No problem at all, {{customer_name}}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Be understanding and flexible. Ask for a convenient callback time, confirm it, then politely end the call."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

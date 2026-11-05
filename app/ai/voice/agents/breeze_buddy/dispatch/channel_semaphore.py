@@ -1,0 +1,225 @@
+"""
+Channel-capacity semaphore — one Redis LIST per telephony number.
+
+Each list ``bb:channel:{telephony_number_id}`` holds M opaque tokens, where
+M = ``telephony_number.maximum_channels``. Workers ``BLPOP`` a token before
+dialing; call-end webhooks ``LPUSH`` a token back. Token identity is
+irrelevant — only the count matters.
+
+This replaces the DB-counter ``increment_telephony_number_channels`` on the
+hot path. The DB counter is retained as the eventually-consistent view used
+by ``reconcile_channel_tokens`` to detect leaks.
+
+``capacity_defer_seconds`` returns how long a lead is deferred when no token
+is available.
+"""
+
+from __future__ import annotations
+
+import random
+import secrets
+import time
+from typing import Any, Optional, cast
+
+from app.ai.voice.agents.breeze_buddy.dispatch.keys import (
+    capacity_wait_key,
+    channel_key,
+)
+from app.core.config import dynamic as dyn_cfg
+from app.core.config.static import (
+    BB_CHANNEL_BLPOP_TIMEOUT_S,
+    BB_CHANNEL_WAIT_BACKOFF_MAX_S,
+)
+from app.core.logger import logger
+from app.services.redis import get_redis_service
+
+
+def _new_token() -> str:
+    """Tokens are opaque random strings — only the count matters."""
+    return secrets.token_hex(8)
+
+
+async def init_channel_semaphore(
+    telephony_number_id: str, maximum_channels: int
+) -> bool:
+    """
+    Initialise (or reset) the channel semaphore for an telephony number.
+
+    Idempotent: ``DEL`` followed by ``RPUSH`` ensures exactly M tokens. Called
+    by the reconciler when a channel LIST is missing (cold start, Redis loss).
+    Direct invocations from ops paths should hold an external lock (e.g.,
+    ``BackgroundTaskScheduler``'s per-task SET NX) to avoid concurrent reinit
+    on the same key racing each other.
+    """
+    if maximum_channels <= 0:
+        return False
+    key = channel_key(telephony_number_id)
+    try:
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        async with client.pipeline(transaction=True) as pipe:
+            pipe.delete(key)
+            pipe.rpush(key, *[_new_token() for _ in range(maximum_channels)])
+            await pipe.execute()
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"init_channel_semaphore failed for {telephony_number_id}: {e}")
+        return False
+
+
+async def topup_channel_tokens(telephony_number_id: str, count: int) -> int:
+    """Add ``count`` tokens to an existing semaphore. No-op if count <= 0."""
+    if count <= 0:
+        return 0
+    key = channel_key(telephony_number_id)
+    try:
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        await client.rpush(key, *[_new_token() for _ in range(count)])
+        return count
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"topup_channel_tokens failed for {telephony_number_id}: {e}")
+        return 0
+
+
+async def trim_channel_tokens(telephony_number_id: str, count: int) -> int:
+    """
+    Remove up to ``count`` tokens from an existing semaphore (LPOP loop).
+    Used by the reconciler when ``LLEN`` exceeds the expected free count.
+    """
+    if count <= 0:
+        return 0
+    key = channel_key(telephony_number_id)
+    removed = 0
+    try:
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        for _ in range(count):
+            popped = await client.lpop(key)
+            if popped is None:
+                break
+            removed += 1
+        return removed
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"trim_channel_tokens failed for {telephony_number_id}: {e}")
+        return removed
+
+
+async def acquire_channel_token(
+    telephony_number_id: str, timeout_s: Optional[int] = None
+) -> Optional[str]:
+    """
+    Block-pop a token. Returns the token string on success, None on timeout.
+
+    Workers hold the token across ``provider.make_call``; on success the
+    token is held until the call-end webhook calls ``release_channel_token``.
+    On failure (exception, rate-limit, etc.) the worker must release manually.
+    """
+    key = channel_key(telephony_number_id)
+    t = BB_CHANNEL_BLPOP_TIMEOUT_S if timeout_s is None else timeout_s
+    try:
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        popped = await client.blpop(key, timeout=t)
+        if popped is None:
+            return None
+        # redis-py returns (key, value) tuple from BLPOP
+        _, token = popped
+        return token
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"acquire_channel_token failed for {telephony_number_id}: {e}")
+        return None
+
+
+async def release_channel_token(
+    telephony_number_id: str, token: Optional[str] = None
+) -> bool:
+    """
+    LPUSH a token back into the semaphore. If ``token`` is None, a fresh
+    one is generated — safe because tokens are interchangeable; the only
+    invariant is the count.
+
+    Idempotency: ``reconcile_channel_tokens`` trims any over-count caused
+    by duplicate webhook firings, so calling this from a duplicate webhook
+    is self-correcting within one reconciler tick.
+    """
+    key = channel_key(telephony_number_id)
+    try:
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        await client.lpush(key, token if token is not None else _new_token())
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"release_channel_token failed for {telephony_number_id}: {e}")
+        return False
+
+
+async def channel_tokens_available(telephony_number_id: str) -> int:
+    """LLEN — used by metrics and the reconciler."""
+    key = channel_key(telephony_number_id)
+    try:
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        return int(await client.llen(key))
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"channel_tokens_available failed for {telephony_number_id}: {e}")
+        return 0
+
+
+async def channel_exists(telephony_number_id: str) -> bool:
+    """EXISTS — distinguishes "uninitialised" from "saturated" (LLEN==0)."""
+    key = channel_key(telephony_number_id)
+    try:
+        redis = await get_redis_service()
+        return await redis.exists(key)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"channel_exists failed for {telephony_number_id}: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Capacity-wait defer
+# ---------------------------------------------------------------------------
+#
+# Distinct leads waiting on a number (per-minute HyperLogLog, this minute +
+# last) below BB_CAPACITY_WAIT_PILE_THRESHOLD -> random 1..BB_CHANNEL_WAIT_BACKOFF_MAX_S,
+# otherwise BB_CAPACITY_WAIT_PILE_DEFER_S. Distinct leads, not defers: a defer
+# count scales with the delay itself. Redis/config errors fall back to the
+# short delay.
+
+# Two minute buckets are read; a key must outlive the following one.
+_CAPACITY_WAIT_BUCKET_TTL_S = 180
+
+
+def _short_capacity_defer() -> int:
+    return random.randint(1, BB_CHANNEL_WAIT_BACKOFF_MAX_S)
+
+
+async def capacity_defer_seconds(telephony_number_id: str, lead_id: str) -> int:
+    """
+    Record that ``lead_id`` is waiting for a channel on ``telephony_number_id``
+    and return how many seconds it should be deferred.
+    """
+    try:
+        threshold = await dyn_cfg.BB_CAPACITY_WAIT_PILE_THRESHOLD()
+        long_defer = await dyn_cfg.BB_CAPACITY_WAIT_PILE_DEFER_S()
+
+        minute = int(time.time() // 60)
+        this_key = capacity_wait_key(telephony_number_id, minute)
+        last_key = capacity_wait_key(telephony_number_id, minute - 1)
+
+        redis = await get_redis_service()
+        client: Any = cast(Any, await redis.get_client())
+        await client.pfadd(this_key, lead_id)
+        await client.expire(this_key, _CAPACITY_WAIT_BUCKET_TTL_S)
+        waiting = int(await client.pfcount(this_key, last_key))
+    except Exception as e:  # noqa: BLE001 — fall back to the short defer
+        logger.warning(
+            f"capacity_defer_seconds: Redis unavailable for "
+            f"{telephony_number_id}, using short defer: {e}"
+        )
+        return _short_capacity_defer()
+
+    if waiting >= threshold:
+        return long_defer
+    return _short_capacity_defer()

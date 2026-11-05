@@ -1,0 +1,299 @@
+"""Transport configuration for voice agents.
+
+Note: VAD (Voice Activity Detection) is configured in the LLMUserAggregator
+(via UserTurnStrategies), NOT in the transport. The transport only handles
+audio I/O, sample rates, and optional audio filters/mixers.
+"""
+
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import WebSocket
+from pipecat.audio.filters.aic_filter import AICFilter
+from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
+from pipecat.runner.utils import _create_telephony_transport
+from pipecat.transports.base_transport import BaseTransport
+from pipecat.transports.daily.transport import DailyParams
+from pipecat.transports.websocket.fastapi import (
+    FastAPIWebsocketParams,
+    FastAPIWebsocketTransport,
+)
+
+from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.serializer import (
+    VobizFrameSerializer,
+)
+from app.ai.voice.agents.breeze_buddy.template.types import (
+    ConfigurationModel,
+    NoiseFilterModel,
+    NoiseFilterProvider,
+    NoiseFilterType,
+    TemplateModel,
+)
+from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
+from app.ai.voice.agents.breeze_buddy.utils.audio_mixer import (
+    create_background_sound_mixer,
+)
+from app.core.config import static
+from app.core.logger import logger
+
+# Constants
+TRANSPORT_TYPE_DAILY = "daily"
+TRANSPORT_TYPE_TELEPHONY = "telephony"
+TRANSPORT_TYPE_VOBIZ = "vobiz"
+
+
+def _aic_model_path(model: NoiseFilterModel, transport_type: str) -> Path:
+    """The artifact for a model on a transport.
+
+    The model value carries the size (noise_cancellation = quail-L,
+    noise_cancellation_s = quail-S); the transport picks the processing rate:
+    Daily (web) uses the 16kHz artifact, telephony (Twilio/Plivo/Exotel) the 8kHz
+    one. These rates describe the model, not the transport's native rate: Daily
+    may run at 24kHz elsewhere in the pipeline while still using the 16kHz model
+    here. Voice Focus ships only a 16kHz artifact; the SDK resamples 8kHz input.
+    """
+    web = transport_type == TRANSPORT_TYPE_DAILY
+    paths = {
+        NoiseFilterModel.NOISE_CANCELLATION: (
+            static.AIC_MODEL_PATH_16KHZ if web else static.AIC_MODEL_PATH
+        ),
+        NoiseFilterModel.NOISE_CANCELLATION_S: (
+            static.AIC_MODEL_PATH_S_16KHZ if web else static.AIC_MODEL_PATH_S
+        ),
+        NoiseFilterModel.VOICE_FOCUS: static.AIC_VOICE_FOCUS_MODEL_PATH,
+    }
+    return Path(paths[model])
+
+
+def _resolve_aic_model(
+    model: NoiseFilterModel, transport_type: str
+) -> tuple[NoiseFilterModel, Path]:
+    """The model to load and its artifact.
+
+    A missing quail-S file falls back to quail-L (noise_cancellation), the model
+    every template ran before quail-S existed, so a soft-failed Docker copy
+    degrades to the known model instead of dropping the filter. The returned
+    model is the one loaded, so logs never report quail-S for a quail-L file.
+    """
+    path = _aic_model_path(model, transport_type)
+    if model == NoiseFilterModel.NOISE_CANCELLATION_S and not path.is_file():
+        logger.warning(
+            "AIC quail-S model file is unavailable; using noise_cancellation "
+            "(quail-L) instead: {}",
+            path,
+        )
+        model = NoiseFilterModel.NOISE_CANCELLATION
+        path = _aic_model_path(model, transport_type)
+    return model, path
+
+
+def _create_audio_input_filter(
+    configurations: Optional[ConfigurationModel] = None,
+    transport_type: str = TRANSPORT_TYPE_DAILY,
+) -> Optional[BaseAudioFilter]:
+    """Create audio input filter based on configuration.
+
+    Currently supports:
+        - AIC filter (ai-coustics noise enhancement, preserves all speakers)
+        - AIC Voice Focus (foreground/primary-speaker isolation)
+
+    Future filters can be added here with their own enable flags.
+
+    Args:
+        configurations: The configuration model containing noise filter settings.
+        transport_type: The transport type to determine model selection.
+
+    Returns:
+        Audio filter instance if enabled and successfully created, None otherwise.
+    """
+    # Check if noise filter is configured and enabled
+    if not configurations:
+        return None
+
+    noise_filter_config = configurations.noise_filter
+    if not noise_filter_config or not noise_filter_config.enable:
+        return None
+
+    # Resolve either the new provider/model shape or the legacy type shape at
+    # runtime without rewriting the template configuration.
+    provider = noise_filter_config.provider or NoiseFilterProvider.AIC
+    model = noise_filter_config.model or (
+        NoiseFilterModel.VOICE_FOCUS
+        if noise_filter_config.type == NoiseFilterType.AIC_VOICE_FOCUS
+        else NoiseFilterModel.NOISE_CANCELLATION
+    )
+
+    if provider == NoiseFilterProvider.AIC:
+        if not static.BREEZE_BUDDY_AIC_LICENSE_KEY:
+            logger.warning("AIC filter enabled but license key not configured")
+            return None
+
+        # Docker provisions the models before startup; the application never
+        # downloads model artifacts at runtime.
+        model, model_path = _resolve_aic_model(model, transport_type)
+        if not model_path.is_file():
+            # AICFilter validates the artifact only when the transport starts.
+            # Fail open here so a soft-failed Docker copy cannot abort a call.
+            logger.warning(
+                "AIC filter model file is unavailable; proceeding without it: {}",
+                model_path,
+            )
+            return None
+
+        try:
+            if noise_filter_config.enhancement_level is None:
+                # Preserve the existing AIC behavior exactly: omitting this
+                # argument lets the selected model use its own default.
+                aic_filter = AICFilter(
+                    license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
+                    model_path=model_path,
+                )
+            else:
+                aic_filter = AICFilter(
+                    license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
+                    model_path=model_path,
+                    enhancement_level=noise_filter_config.enhancement_level,
+                )
+            logger.info(
+                "AIC filter initialized: provider={}, model={}, path={}, "
+                "enhancement_level={}",
+                provider.value,
+                model.value,
+                model_path,
+                noise_filter_config.enhancement_level,
+            )
+            return aic_filter
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize AIC filter, proceeding without it: {e}"
+            )
+
+    return None
+
+
+def get_transport_params(
+    template: Optional[TemplateModel] = None,
+    configurations: Optional[ConfigurationModel] = None,
+    daily_audio_out_10ms_chunks: int = 10,
+) -> dict:
+    """Get transport parameters dictionary for all transport types.
+
+    VAD is not configured here — it lives in the LLMUserAggregator
+    (via vad_analyzer + UserTurnStrategies) where it feeds turn detection.
+
+    Args:
+        template: Optional template model for background sound mixer configuration
+        configurations: Optional configuration model for settings (e.g., noise filter)
+        daily_audio_out_10ms_chunks: Daily output write size in 10ms chunks.
+            The live default comes from the BB_DAILY_AUDIO_OUT_10MS_CHUNKS
+            dynamic config, resolved by the async caller and passed in (this
+            function is sync); only the daily transport uses it, so telephony
+            callers leave the fallback default.
+
+    Returns:
+        Dictionary mapping transport types to parameter factory functions
+    """
+    # Create separate mixers per transport so each uses the correct sample rate.
+    # Daily runs at 24 kHz; all telephony transports run at TELEPHONY_SAMPLE_RATE (8 kHz).
+    daily_mixer = create_background_sound_mixer(template, sample_rate=24000)
+    telephony_mixer = create_background_sound_mixer(
+        template, sample_rate=TELEPHONY_SAMPLE_RATE
+    )
+
+    return {
+        "daily": lambda: DailyParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            # Output write size in 10ms chunks (pipecat default 4 = 40ms):
+            # bigger chunks give the paced audio writer more event-loop slack
+            # against stalls in the bot process, which otherwise underrun
+            # Daily's virtual mic and the browser hears crackling
+            # (pipecat#331). Rationale + trade-offs on the
+            # BB_DAILY_AUDIO_OUT_10MS_CHUNKS dynamic config.
+            audio_out_10ms_chunks=daily_audio_out_10ms_chunks,
+            audio_out_mixer=daily_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_DAILY
+            ),
+        ),
+        "twilio": lambda: FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_mixer=telephony_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
+        ),
+        "exotel": lambda: FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_mixer=telephony_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
+        ),
+        "telnyx": lambda: FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_mixer=telephony_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
+        ),
+        "plivo": lambda: FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_mixer=telephony_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
+        ),
+        "vobiz": lambda: FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_in_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_sample_rate=TELEPHONY_SAMPLE_RATE,
+            audio_out_mixer=telephony_mixer,
+            audio_in_filter=_create_audio_input_filter(
+                configurations, TRANSPORT_TYPE_TELEPHONY
+            ),
+        ),
+    }
+
+
+async def create_telephony_transport(
+    websocket: WebSocket,
+    params: Any,
+    transport_type: str,
+    call_data: dict,
+) -> BaseTransport:
+    """Build the telephony transport for an already-parsed call.
+
+    pipecat's factory knows twilio/telnyx/plivo/exotel. A Vobiz stream opens
+    with a Plivo-shaped start event, so pipecat detects it as "plivo" and
+    would hang up through api.plivo.com with PLIVO_* keys. The agent relabels
+    those calls "vobiz" from the websocket path, and they get
+    VobizFrameSerializer here instead. Used by the first build and by the
+    agent-to-agent rebuild, so both stay on the same serializer.
+    """
+    if transport_type != TRANSPORT_TYPE_VOBIZ:
+        return await _create_telephony_transport(
+            websocket, params, transport_type, call_data
+        )
+
+    params.add_wav_header = False
+    params.serializer = VobizFrameSerializer(
+        stream_id=call_data["stream_id"],
+        call_id=call_data["call_id"],
+        auth_id=static.VOBIZ_AUTH_ID,
+        auth_token=static.VOBIZ_AUTH_TOKEN,
+    )
+    return FastAPIWebsocketTransport(websocket=websocket, params=params)

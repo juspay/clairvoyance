@@ -1,0 +1,7 @@
+{
+  "event": "REJECTED",
+  "message_template_id": 1953621873,
+  "message_template_name": "diwali_blowout_sale",
+  "message_template_language": "en_US",
+  "reason": "INCORRECT_CATEGORY"
+}

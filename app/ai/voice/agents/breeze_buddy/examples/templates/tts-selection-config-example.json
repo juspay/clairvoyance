@@ -1,0 +1,125 @@
+{
+  "merchant": "breeze",
+  "template_name": "tts-selection-config-example",
+  "identifier": "tts-selection-demo",
+  "is_active": true,
+  "description": "Demonstrates LLM-based TTS provider selection. Automatically chooses between ElevenLabs and Cartesia based on customer's delivery address region.",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string",
+      "example": "John Doe"
+    },
+    "order_id": {
+      "type": "string",
+      "example": "12345"
+    },
+    "delivery_address": {
+      "type": "string",
+      "example": "456 Elm Street, Mumbai, Maharashtra, India, 400001"
+    },
+    "city": {
+      "type": "string",
+      "example": "Mumbai"
+    }
+  },
+  "configurations": {
+    "tts_voice_name": "mira",
+    "tts_selection_config": {
+      "enabled": true,
+      "prompt": "Based on the customer's delivery address, select the best TTS provider. Use 'elevenlabs' for North Indian regions and 'cartesia' for South Indian regions. Reply with only 'elevenlabs' or 'cartesia'.",
+      "providers": ["elevenlabs", "cartesia"]
+    }
+  },
+  "flow": {
+    "initial_node": "greeting",
+    "nodes": [
+      {
+        "node_name": "greeting",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the customer: \"Hello {{customer_name}}! I'm calling about your order #{{order_id}}. I see your delivery address is in {{city}}. Is now a good time to confirm the details?\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are a friendly customer service representative. The system automatically selected the best voice for the customer's region based on their address. Speak naturally in the customer's preferred language style."
+          }
+        ],
+        "pre_actions": [
+          {
+            "type": "function",
+            "handler": "mute_stt"
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "function",
+            "handler": "unmute_stt"
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "user_wants_to_talk",
+            "description": "Call when user confirms it's a good time to talk",
+            "properties": {},
+            "required": [],
+            "transition_to": "order_details",
+            "hooks": []
+          },
+          {
+            "function_name": "user_not_interested",
+            "description": "Call when user doesn't want to continue or asks to call back later",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "order_details",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order: \"Thank you, {{customer_name}}! Your order is confirmed and will be delivered to {{delivery_address}}. Have a great day!\""
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Confirm the order and thank the customer."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "End the call politely: \"No problem at all, {{customer_name}}. When would be a better time for me to call you back?\" Wait for their response, confirm the callback time, thank them, and end the call."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "Be understanding and flexible. Ask for a convenient callback time, confirm it, then politely end the call."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

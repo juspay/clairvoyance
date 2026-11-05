@@ -1,0 +1,1265 @@
+"""The entry-rules consumer — one consumer, two reads (ADR 0023 §4;
+context/reading-notes.md §15.3; rollout phase 13).
+
+Read one: HER OPEN RUNS, each judged by the version it entered under —
+a v3 run is ended by v3's goals and woken by v3's wait_event squares even
+after v5 changed them, and every goal-cancel and reply names the run it
+is about, never a sibling on another version. Read two: THE LIVE PLANS,
+latest document — a new run always starts on the newest version.
+
+Carried forward from earlier phases, now per run: B1 (phase 01 — no
+resume without an answer), goal tiers keyed-first with the entry event's
+time (phase 06), the goal stash (phase 09)."""
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID, uuid4
+
+import pytest
+
+import app.crm.outreach.definitions as definitions
+import app.crm.outreach.entry as entry
+from app.crm.outreach.entry import consume_attributed_event
+from app.crm.outreach.ladder import expand_stages
+from app.crm.outreach.nodes.wait import TIMEOUT
+from app.crm.outreach.schemas import (
+    EnrollmentRun,
+    Workflow,
+    WorkflowDefinition,
+    WorkflowNode,
+)
+from app.crm.outreach.walker import pick_next
+from app.crm.record.schemas import RawEvent
+from tests.crm.doubles import patch_accessors
+
+NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
+
+# A COD-confirmation board: the first square listens for a button reply.
+_LISTENING_PLAN = {
+    "entry": {"topic": "orders/create"},
+    "nodes": [
+        {
+            "id": "ask",
+            "type": "wait",
+            "topics": ["button.reply"],
+            "key": "button_id",
+            "minutes": 60,
+        },
+        {"id": "confirm", "type": "wait", "minutes": 1},
+        {"id": "call", "type": "call", "template_id": "tpl-1"},
+    ],
+    "edges": [["ask", "confirm", "YES"], ["ask", "call", TIMEOUT]],
+    "goal": {"topics": ["order.confirmed"]},
+}
+
+_CART_PLAN = {
+    "entry": {"topic": "checkouts/update", "reenter": True, "cooldown_hours": 0},
+    "nodes": [{"id": "wait-30m", "type": "wait", "minutes": 30}],
+    "edges": [],
+    "goals": [
+        {
+            "topics": ["orders/create"],
+            "key": {"event": "cart_token", "run": "cart_token"},
+            "exit_reason": "goal_met",
+        },
+        {"topics": ["orders/create"], "exit_reason": "converted_elsewhere"},
+    ],
+}
+
+
+def _flow(definition: Dict[str, Any] = _LISTENING_PLAN, version: int = 1) -> Workflow:
+    return Workflow(
+        id=uuid4(),
+        merchant_id="m1",
+        name="plan",
+        status="live",
+        version=version,
+        created_by=None,
+        created_at=NOW,
+        updated_at=NOW,
+        definition=definition,
+        draft=None,
+    )
+
+
+def _run(
+    flow: Workflow,
+    version: int,
+    node: str,
+    context: Optional[Dict[str, Any]] = None,
+    key: str = "c-1",
+) -> EnrollmentRun:
+    return EnrollmentRun(
+        id=uuid4(),
+        merchant_id="m1",
+        workflow_id=flow.id,
+        workflow_version=version,
+        customer_id=uuid4(),
+        status="waiting",
+        current_node=node,
+        wake_at=NOW + timedelta(minutes=30),
+        entered_at=NOW - timedelta(hours=1),
+        exited_at=None,
+        exit_reason=None,
+        context={"phone": "+919876543210", **(context or {})},
+        enrollment_key=key,
+        attempts=0,
+        last_error=None,
+    )
+
+
+def _event(
+    topic: str,
+    payload: Dict[str, Any],
+    event_id: str = "ev-1",
+    source: str = "shopify",
+) -> RawEvent:
+    return RawEvent(
+        id=event_id,
+        merchant_id="m1",
+        source=source,
+        topic=topic,
+        schema_version="1",
+        external_id=f"{topic}:{event_id}",
+        payload=payload,
+        received_at=NOW,
+        occurred_at=NOW,
+    )
+
+
+class _Spine:
+    """The accessor slice the consumer reads and writes through: the live
+    plans, her open runs and the version rows are seeded; every write is
+    recorded by the run it named. A run ends once — a second cancel of
+    the same run answers False, as the UPDATE's status guard would."""
+
+    def __init__(
+        self,
+        flows: List[Workflow],
+        runs: List[EnrollmentRun],
+        versions: Dict[Tuple[UUID, int], Dict[str, Any]],
+    ) -> None:
+        self.flows = flows
+        self.runs = runs
+        self.versions = {(str(wf), v): d for (wf, v), d in versions.items()}
+        self.definition_reads: List[Tuple[str, int]] = []
+        self.cancels: List[Tuple[str, str, Optional[Tuple[str, str]], Any]] = []
+        # Trap 3: the goal-cancel is the one run-ending writer outside the
+        # walker, so it is the one that would silently lose a final square.
+        self.cancel_steps: List[List[Dict[str, Any]]] = []
+        self.refresh_markers: List[Optional[str]] = []
+        self.resumes: List[Tuple[str, str, Dict[str, Any]]] = []
+        self.facts: List[Tuple[str, str, Any]] = []
+        self.refreshes: List[Tuple[str, str, Dict[str, Any]]] = []
+        self.exited: set = set()
+
+    async def live_workflows(self, merchant_id: str) -> List[Workflow]:
+        return list(self.flows)
+
+    async def open_runs_for_customer(
+        self, merchant_id: str, customer_id: str
+    ) -> List[EnrollmentRun]:
+        return list(self.runs)
+
+    async def get_definition(
+        self, merchant_id: str, workflow_id: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        self.definition_reads.append((workflow_id, version))
+        return self.versions.get((workflow_id, version))
+
+    async def cancel_run(
+        self,
+        merchant_id: str,
+        run_id: str,
+        exit_reason: str,
+        occurred_at: Optional[datetime] = None,
+        key: Optional[Tuple[str, str]] = None,
+        context_patch: Optional[Dict[str, Any]] = None,
+        steps: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        self.cancels.append((run_id, exit_reason, key, context_patch))
+        self.cancel_steps.append(steps or [])
+        if run_id in self.exited:
+            return False
+        self.exited.add(run_id)
+        return True
+
+    async def resume_run_by_id(
+        self,
+        merchant_id: str,
+        run_id: str,
+        node_id: str,
+        patch: Dict[str, Any],
+        facts: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        self.resumes.append((run_id, node_id, patch))
+        self.facts.append((run_id, node_id, facts))
+        return True
+
+    async def refresh_run_facts(
+        self,
+        merchant_id: str,
+        run_id: str,
+        node_id: str,
+        facts: Dict[str, Any],
+        cut_short_by: Optional[str] = None,
+    ) -> bool:
+        self.refreshes.append((run_id, node_id, facts))
+        # canon T26: the marker travels apart from the facts, because the
+        # same dict on the reply path becomes context.facts.<square>.
+        self.refresh_markers.append(cut_short_by)
+        return True
+
+
+def _install(monkeypatch: pytest.MonkeyPatch, spine: _Spine) -> None:
+    """Seed the spine on the per-table accessor each read lives in — the
+    workflow read, the run reads, and the pinned-definition read (which
+    definitions.py owns, on the version table)."""
+    definitions._definitions.clear()
+    for module, name in (
+        (entry.workflow_accessor, "live_workflows"),
+        (entry.enrollment_accessor, "open_runs_for_customer"),
+        (definitions.version_accessor, "get_definition"),
+        (entry.enrollment_accessor, "cancel_run"),
+        (entry.enrollment_accessor, "resume_run_by_id"),
+        (entry.enrollment_accessor, "refresh_run_facts"),
+    ):
+        monkeypatch.setattr(module, name, getattr(spine, name))
+
+
+def _consume(event: RawEvent) -> None:
+    asyncio.run(consume_attributed_event(event, "c-1", {}))
+
+
+# --- phase 01, B1: no resume without an answer ---
+
+
+@pytest.fixture
+def listening(monkeypatch: pytest.MonkeyPatch) -> _Spine:
+    flow = _flow()
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): _LISTENING_PLAN})
+    _install(monkeypatch, spine)
+    return spine
+
+
+def test_a_reply_carrying_the_key_wakes_the_listening_run(listening: _Spine) -> None:
+    _consume(_event("button.reply", {"button_id": "YES"}))
+    (run,) = listening.runs
+    assert listening.resumes == [
+        (
+            str(run.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
+    ]
+    assert listening.cancels == []  # a button reply is not a goal event
+
+
+def test_a_letter_that_finds_the_run_on_a_deaf_square_refreshes_its_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two events two seconds apart: the second lands while the run still
+    stands on the door's start square (a condition — it listens to
+    nothing), before the walker's first visit. No square answers, so
+    every resume matched no row and the letter was lost. Now its facts
+    refresh the run on that square and re-arm it: the visit decides on
+    the latest letter. Judged through the squares' own lens — a topic no
+    square of the plan listens for is still ignored."""
+    plan = {
+        "entry": {"topic": "loan.initiated"},
+        "nodes": [
+            {
+                "id": "gate",
+                "type": "condition",
+                "rules": [
+                    {"on": "yes", "if": [{"field": "context.offers", "op": "exists"}]}
+                ],
+            },
+            {
+                "id": "quiet",
+                "type": "wait",
+                "topics": ["loan.offered"],
+                "key": "$topic",
+                "minutes": 30,
+            },
+            {
+                "id": "listen",
+                "type": "wait",
+                "topics": ["loan.offered"],
+                "key": "$topic",
+                "minutes": 60,
+            },
+        ],
+        "edges": [
+            ["gate", "quiet", "yes"],
+            ["gate", "listen", "else"],
+            ["quiet", "gate", "loan.offered"],
+            ["listen", "gate", "loan.offered"],
+        ],
+        "goal": {"topics": ["loan.active"]},
+    }
+    flow = _flow(plan)
+    run = _run(flow, 1, "gate")
+    spine = _Spine([flow], [run], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    asyncio.run(
+        consume_attributed_event(
+            _event("loan.offered", {"loan_state": "OFFERED"}),
+            "c-1",
+            {},
+            {"offers": "1. FINNABLE offer A"},
+        )
+    )
+    # (the double answers every resume; on Postgres the current_node guard
+    # refuses them all — the refresh is what actually lands)
+    assert spine.refreshes == [
+        (
+            str(run.id),
+            "gate",
+            {"loan_state": "OFFERED", "offers": "1. FINNABLE offer A"},
+        )
+    ]
+    # The letter names itself for the flush that follows, beside the facts
+    # rather than inside them (canon T26).
+    assert spine.refresh_markers == ["ev-1"]
+    # a topic no square listens for is ignored on a deaf square as well
+    spine.refreshes.clear()
+    _consume(_event("loan.unrelated", {"loan_state": "X"}))
+    assert spine.refreshes == []
+
+
+def test_a_reply_without_the_key_never_wakes_the_run(listening: _Spine) -> None:
+    """B1: with no answer there is nothing to branch on. Resuming with
+    None made the walker take the timeout edge immediately — the listening
+    window ended early on an unrelated letter. The window continues; only
+    the alarm may time it out."""
+    _consume(_event("button.reply", {"text": "hello"}))
+    assert listening.resumes == []
+
+
+# --- the answer resolves through the catalog, derived fields included ---
+
+
+def _tap_plan(key: str) -> Dict[str, Any]:
+    return {
+        "entry": {"topic": "orders/create"},
+        "nodes": [
+            {
+                "id": "ask",
+                "type": "wait",
+                "topics": ["message.inbound"],
+                "key": key,
+                "minutes": 30,
+            }
+        ],
+        "edges": [],
+        "goal": {"topics": ["order.confirmed"]},
+    }
+
+
+# A WhatsApp button tap as the door files it: the answer lives at
+# messages[0].button.payload — nothing at the top level.
+_TAP = {
+    "messages": [
+        {"type": "button", "button": {"payload": "CONFIRM_ORDER", "text": "Confirm"}}
+    ]
+}
+
+
+def test_a_button_tap_wakes_the_square_through_the_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A button tap wakes the square through the catalog."""
+    # The square's key resolves like entry.where already does: whatsapp's
+    # reply is a DERIVED field (the answer sits inside a list the path
+    # grammar never indexes), so a top-level read finds nothing and the
+    # tap is indistinguishable from silence — the run times out CALLED.
+    plan = _tap_plan("reply")
+    flow = _flow(plan)
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    _consume(_event("message.inbound", _TAP, source="whatsapp"))
+    assert spine.resumes == [
+        (
+            str(run.id),
+            "ask",
+            {
+                "reply_ask": "CONFIRM_ORDER",
+                "latest_letter": "ask",
+                "cut_short_by": "ev-1",
+            },
+        )
+    ]
+
+
+def test_the_same_tap_without_its_key_is_still_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same tap without its key is still ignored."""
+    # B1 holds through the catalog read: a key naming nothing — derived
+    # or top-level — is no answer, and only the alarm may end the window.
+    plan = _tap_plan("nonexistent")
+    flow = _flow(plan)
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    _consume(_event("message.inbound", _TAP, source="whatsapp"))
+    assert spine.resumes == []
+
+
+# --- phase 06 + 09: goal tiers keyed-first, per run; the goal stash ---
+
+
+@pytest.fixture
+def carts(monkeypatch: pytest.MonkeyPatch) -> _Spine:
+    """Two open cart runs of hers on one keyed plan: chk-1 and chk-2."""
+    flow = _flow(_CART_PLAN)
+    runs = [
+        _run(flow, 1, "wait-30m", {"cart_token": "chk-1"}, key="chk-1"),
+        _run(flow, 1, "wait-30m", {"cart_token": "chk-2"}, key="chk-2"),
+    ]
+    spine = _Spine([flow], runs, {(flow.id, 1): _CART_PLAN})
+    _install(monkeypatch, spine)
+    return spine
+
+
+def test_an_order_carrying_the_cart_token_is_judged_keyed_first(carts: _Spine) -> None:
+    """THIS cart recovered -> goal_met on the run keyed to it, and that
+    run is ended once (the keyed tier's verdict stands; the unkeyed tier
+    never sweeps it). Any other open run of hers still ends, as
+    converted_elsewhere (never nudge someone who just bought)."""
+    _consume(_event("orders/create", {"cart_token": "chk-1"}))
+    first, second = carts.runs
+    assert [(r, reason, key) for r, reason, key, _ in carts.cancels] == [
+        (str(first.id), "goal_met", ("cart_token", "chk-1")),
+        (str(second.id), "converted_elsewhere", None),
+    ]
+
+
+def test_an_order_without_the_key_can_only_end_runs_elsewhere(carts: _Spine) -> None:
+    _consume(_event("orders/create", {"total_price": "1850.00"}))
+    assert [reason for _, reason, _, _ in carts.cancels] == ["converted_elsewhere"] * 2
+
+
+def test_the_goal_cancel_stashes_the_goal_event_with_its_amount(carts: _Spine) -> None:
+    """Phase 09: the run remembers which letter ended it — and how much it
+    was worth, when the payload says so as a number — so the summary can
+    sum recovered revenue without re-reading the spine."""
+    _consume(
+        _event(
+            "orders/create",
+            {"cart_token": "chk-1", "total_price": "1850.00"},
+            "ev-order",
+        )
+    )
+    stash = {
+        "goal": {"topic": "orders/create", "event_id": "ev-order", "amount": "1850.00"}
+    }
+    assert [patch for _, _, _, patch in carts.cancels] == [stash, stash]
+    carts.cancels.clear()
+    _consume(
+        _event(
+            "orders/create", {"cart_token": "chk-1", "total_price": "n/a"}, "ev-order"
+        )
+    )
+    assert carts.cancels[0][3] == {
+        "goal": {"topic": "orders/create", "event_id": "ev-order"}
+    }
+
+
+# --- phase 13: each open run is judged by the version it entered under ---
+
+# One keyed order plan, three versions apart: v3's goal is the payment, v5
+# moved the goal to fulfilment, renamed the listening topic AND the entry
+# topic. Order A entered under v3, order B under v5; both are open.
+_V3 = {
+    "entry": {
+        "topic": "orders/create",
+        "key": "order_id",
+        "on_repeat": "refresh_latest",
+    },
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {
+            "id": "ask",
+            "type": "wait",
+            "topics": ["button.reply"],
+            "key": "button_id",
+            "minutes": 60,
+        },
+    ],
+    "edges": [["wait-30m", "ask"]],
+    "goals": [
+        {
+            "topics": ["orders/paid"],
+            "key": {"event": "order_id", "run": "order_id"},
+            "exit_reason": "goal_met",
+        }
+    ],
+}
+_V5 = {
+    "entry": {"topic": "orders/confirmed", "key": "order_id", "on_repeat": "ignore"},
+    "nodes": [
+        {"id": "hold-30m", "type": "wait", "minutes": 30},
+        {
+            "id": "ask",
+            "type": "wait",
+            "topics": ["list.reply"],
+            "key": "button_id",
+            "minutes": 60,
+        },
+    ],
+    "edges": [["hold-30m", "ask"]],
+    "goals": [
+        {
+            "topics": ["orders/fulfilled"],
+            "key": {"event": "order_id", "run": "order_id"},
+            "exit_reason": "goal_met",
+        }
+    ],
+}
+
+
+@pytest.fixture
+def two_versions(monkeypatch: pytest.MonkeyPatch) -> _Spine:
+    flow = _flow(_V5, version=5)
+    runs = [
+        _run(flow, 3, "ask", {"order_id": "A"}, key="A"),
+        _run(flow, 5, "ask", {"order_id": "B"}, key="B"),
+    ]
+    spine = _Spine([flow], runs, {(flow.id, 3): _V3, (flow.id, 5): _V5})
+    _install(monkeypatch, spine)
+    return spine
+
+
+def test_a_goal_ends_only_the_runs_whose_own_version_names_it(
+    two_versions: _Spine,
+) -> None:
+    """orders/paid is v3's goal, not v5's: order A's run ends, order B's
+    is untouched — even though the live plan (v5) has no such goal."""
+    a, b = two_versions.runs
+    _consume(_event("orders/paid", {"order_id": "A"}))
+    assert [(r, reason) for r, reason, _, _ in two_versions.cancels] == [
+        (str(a.id), "goal_met")
+    ]
+    two_versions.cancels.clear()
+    _consume(_event("orders/fulfilled", {"order_id": "B"}))
+    assert [(r, reason) for r, reason, _, _ in two_versions.cancels] == [
+        (str(b.id), "goal_met")
+    ]
+
+
+def test_a_reply_wakes_only_the_runs_whose_own_version_listens_for_it(
+    two_versions: _Spine,
+) -> None:
+    a, b = two_versions.runs
+    _consume(_event("button.reply", {"button_id": "YES"}))
+    assert two_versions.resumes == [
+        (
+            str(a.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
+    ]
+    two_versions.resumes.clear()
+    _consume(_event("list.reply", {"button_id": "NO"}))
+    assert two_versions.resumes == [
+        (
+            str(b.id),
+            "ask",
+            {"reply_ask": "NO", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
+    ]
+
+
+def test_entries_still_match_the_latest_version(
+    two_versions: _Spine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new run always starts on the newest document: v5's entry topic
+    enrols, v3's old one no longer does."""
+    enrolled: List[Any] = []
+
+    async def enrol(**kwargs: Any) -> object:
+        enrolled.append(kwargs["workflow"].version)
+        return object()
+
+    monkeypatch.setattr(entry, "enrol", enrol)
+    _consume(_event("orders/confirmed", {"order_id": "C"}))
+    assert enrolled == [5]
+    _consume(_event("orders/create", {"order_id": "D"}))
+    assert enrolled == [5]
+
+
+def test_a_repeat_is_judged_by_the_open_runs_own_version(
+    two_versions: _Spine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refused enrol is a repeat of order A's run, which entered under
+    v3: its repeat words (refresh_latest) and its first square (wait-30m)
+    are v3's — the live v5 says ignore and renamed the square, and with
+    v5's words the patch would never find the run."""
+    repeats: List[Any] = []
+
+    async def refused(**kwargs: Any) -> None:
+        return None
+
+    async def apply_repeat(*args: Any) -> bool:
+        repeats.append(args)
+        return True
+
+    monkeypatch.setattr(entry, "enrol", refused)
+    monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
+    # v5's entry topic, but the order is A's -> the open run on v3
+    _consume(_event("orders/confirmed", {"order_id": "A"}))
+    ((_, _, key, door, _, _),) = repeats
+    assert key == "A"
+    assert door.on_repeat == "refresh_latest"
+    assert door.start == "wait-30m"
+
+
+def test_a_run_whose_version_is_missing_is_skipped_not_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No version row for a pin: that run is neither ended nor woken (the
+    walker parks it honestly at its next claim); her other runs are still
+    judged, and the row is never left pending by a raise."""
+    flow = _flow(_V5, version=5)
+    orphan = _run(flow, 2, "ask", {"order_id": "A"}, key="A")
+    fine = _run(flow, 5, "ask", {"order_id": "B"}, key="B")
+    spine = _Spine([flow], [orphan, fine], {(flow.id, 5): _V5})
+    _install(monkeypatch, spine)
+    _consume(_event("orders/fulfilled", {"order_id": "B"}))
+    assert [r for r, _, _, _ in spine.cancels] == [str(fine.id)]
+
+
+def test_each_pinned_version_is_read_once_across_her_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = _flow(_V5, version=5)
+    runs = [_run(flow, 5, "ask", {"order_id": k}, key=k) for k in ("A", "B", "C")]
+    spine = _Spine([flow], runs, {(flow.id, 5): _V5})
+    _install(monkeypatch, spine)
+    _consume(_event("list.reply", {"button_id": "YES"}))
+    assert len(spine.resumes) == 3
+    assert spine.definition_reads == [(str(flow.id), 5)]
+
+
+# --- carried: the founding stamp, and pick_next's alarm law ---
+
+
+def test_enrol_stamps_the_entry_events_time_and_repeats_never_move_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G7: the run remembers WHEN its founding letter happened (occurred_at,
+    else received_at) under a bookkeeping key, so goals compare against the
+    event's time rather than the row's insert time. A repeat (phase 00)
+    refreshes facts, never the founding time — or an order placed between
+    the founding checkout and a later cart update would stop counting."""
+    seen: Dict[str, Any] = {}
+
+    async def enrol(**kwargs: Any) -> None:
+        seen["enrol"] = dict(kwargs["context"])
+        return None
+
+    async def apply_repeat(*args: Any) -> bool:
+        seen["repeat"] = dict(args[5])
+        return True
+
+    monkeypatch.setattr(entry, "enrol", enrol)
+    monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
+    definition = WorkflowDefinition.model_validate(
+        {**_CART_PLAN, "entry": {**_CART_PLAN["entry"], "on_repeat": "refresh_latest"}}
+    )
+    happened = datetime(2026, 9, 3, 9, 30, tzinfo=timezone.utc)
+    event = RawEvent(
+        id="ev-1",
+        merchant_id="m1",
+        source="shopify",
+        topic="checkouts/update",
+        schema_version="1",
+        external_id="x",
+        payload={"cart_token": "chk-1", "entered_event_at": "forged"},
+        received_at=NOW,
+        occurred_at=happened,
+    )
+    asyncio.run(
+        entry._try_enrol(_flow(), definition, definition.entries[0], event, "c-1", {})
+    )
+    assert seen["enrol"]["entered_event_at"] == happened.isoformat()
+    assert "entered_event_at" not in seen["repeat"]
+    assert "source_event_id" not in seen["repeat"]
+    assert seen["repeat"]["cart_token"] == "chk-1"
+
+
+def test_the_alarm_path_still_times_a_listening_node_out() -> None:
+    """pick_next keeps its law: no answer in context = the alarm fired ->
+    the timeout edge. B1 is fixed at the consumer, never here."""
+    node = WorkflowNode(
+        id="ask",
+        type="wait",
+        topics=["button.reply"],
+        key="button_id",
+        minutes=60,
+    )
+    arrows: List[Tuple[str, Optional[str]]] = [("confirm", "YES"), ("call", TIMEOUT)]
+    assert pick_next(node, arrows, {}) == "call"
+    assert pick_next(node, arrows, {"reply_ask": "YES"}) == "confirm"
+
+
+# --- rollout phase 15: $topic branching, and a door per topic ---
+
+_LADDER: Dict[str, Any] = {
+    "entry": [
+        {"topic": "loan.profile_created", "start": "at-profile"},
+        {"topic": "loan.kyc_completed", "start": "at-kyc"},
+    ],
+    "key": "application_id",
+    "reenter": True,
+    "cooldown_hours": 0,
+    "nodes": [
+        {
+            "id": "at-profile",
+            "type": "wait",
+            "key": "$topic",
+            "minutes": 30,
+            "topics": ["loan.kyc_completed", "loan.bank_linked"],
+        },
+        {"id": "call-profile", "type": "call", "template_id": "tpl-p"},
+        {"id": "at-kyc", "type": "wait", "minutes": 30},
+    ],
+    "edges": [
+        ["at-profile", "at-kyc", "loan.kyc_completed"],
+        ["at-profile", "call-profile", "timeout"],
+    ],
+    "goal": {"topics": ["loan.disbursed"]},
+}
+
+
+def test_a_topic_keyed_square_wakes_with_the_topic_as_its_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """key: "$topic" — the branch is the event's TOPIC, not a payload
+    field, so a stage board can say "she went to KYC" from the letter's
+    name alone (§14.1 prerequisite 1)."""
+    flow = _flow(_LADDER, version=1)
+    run = _run(flow, 1, "at-profile", {"application_id": "L-1"}, key="L-1")
+    spine = _Spine([flow], [run], {(flow.id, 1): _LADDER})
+    _install(monkeypatch, spine)
+    # bank_linked is listened for at-profile but is not a door of this
+    # plan, so the letter wakes the run and starts nothing.
+    _consume(_event("loan.bank_linked", {"application_id": "L-1"}))
+    assert spine.resumes == [
+        (
+            str(run.id),
+            "at-profile",
+            {
+                "reply_at-profile": "loan.bank_linked",
+                "latest_letter": "at-profile",
+                "cut_short_by": "ev-1",
+            },
+        )
+    ]
+
+
+def test_each_door_starts_the_run_on_its_own_square(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A journey first seen at KYC enrols on the KYC square, not on
+    nodes[0] (§14.1 prerequisite 2)."""
+    flow = _flow(_LADDER, version=1)
+    spine = _Spine([flow], [], {(flow.id, 1): _LADDER})
+    _install(monkeypatch, spine)
+    doors: List[Tuple[str, str]] = []
+
+    async def enrol(**kwargs: Any) -> object:
+        doors.append((kwargs["door"].topic, kwargs["door"].start))
+        return object()
+
+    monkeypatch.setattr(entry, "enrol", enrol)
+    _consume(_event("loan.kyc_completed", {"application_id": "L-2"}))
+    _consume(_event("loan.profile_created", {"application_id": "L-3"}))
+    _consume(_event("loan.bank_linked", {"application_id": "L-4"}))  # no door
+    assert doors == [
+        ("loan.kyc_completed", "at-kyc"),
+        ("loan.profile_created", "at-profile"),
+    ]
+
+
+# --- rollout phase 16: the letter's facts ride with the reply; a parked run
+# hears its square ---
+
+
+def test_a_reply_carries_the_letters_scalar_facts_for_its_square(
+    listening: _Spine,
+) -> None:
+    """The scalar facts of the letter (never nested objects, never the
+    walker's bookkeeping names) are offered under the square that heard
+    it, so a later call template can say what this stage's letter said."""
+    (run,) = listening.runs
+    run.status = "parked"  # an event moves a parked run too (the statement decides)
+    _consume(
+        _event(
+            "button.reply",
+            {
+                "button_id": "YES",
+                "amount": 5,
+                "nested": {"a": 1},
+                "reply_ask": "forged",
+            },
+        )
+    )
+    assert listening.resumes == [
+        (
+            str(run.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
+    ]
+    assert listening.facts == [(str(run.id), "ask", {"button_id": "YES", "amount": 5})]
+
+
+def test_a_reply_carries_the_declared_fields_the_engine_decoded(
+    listening: _Spine,
+) -> None:
+    """The square hears what the CATALOG declared, not only what happens to
+    sit at the payload's top level.
+
+    Enrol has always been handed the engine's variables; a woken square
+    re-read the raw payload by hand, so a derived or nested field reached a
+    starting run and never a waiting one. On WhatsApp — where the person
+    and the answer both live inside lists — that left the square holding
+    `messaging_product` and nothing a plan could name."""
+    (run,) = listening.runs
+    asyncio.run(
+        consume_attributed_event(
+            _event(
+                "button.reply", {"button_id": "YES", "messaging_product": "whatsapp"}
+            ),
+            "c-1",
+            {},
+            {"reply": "form_submitted", "flow_address": "221B Baker Street"},
+        )
+    )
+    _, _, facts = listening.facts[0]
+    assert facts["flow_address"] == "221B Baker Street"
+    # The raw scalar is kept: a plan naming a field the catalog does not
+    # declare must not lose it to this change.
+    assert facts["messaging_product"] == "whatsapp"
+
+
+def test_a_declared_field_never_overwrites_the_walkers_own(
+    listening: _Spine,
+) -> None:
+    """A catalog is a merchant's vocabulary and may legitimately declare a
+    field called `phone`. Merged unfiltered, it would replace the
+    normalized number the sends dial with whatever the provider wrote —
+    the same reason the payload copy has always been filtered."""
+    (run,) = listening.runs
+    asyncio.run(
+        consume_attributed_event(
+            _event("button.reply", {"button_id": "YES"}),
+            "c-1",
+            {},
+            {"phone": "9876543210", "reply_ask": "forged", "flow_address": "221B"},
+        )
+    )
+    _, _, facts = listening.facts[0]
+    assert "phone" not in facts and "reply_ask" not in facts
+    assert facts["flow_address"] == "221B"
+
+
+def test_the_declared_half_crosses_the_same_bridge_as_the_payload(
+    listening: _Spine,
+) -> None:
+    """One bridge, not two: the declared variables cross
+    _context_from_payload exactly as enrol's do, so a dict or an over-cap
+    value is dropped at the wake as a starting run would drop it — two
+    filters would drift the first time one learned a rule."""
+    (run,) = listening.runs
+    asyncio.run(
+        consume_attributed_event(
+            _event("button.reply", {"button_id": "YES"}),
+            "c-1",
+            {},
+            {
+                "flow_address": "221B",
+                "nested": {"a": 1},
+                "essay": "x" * 1200,
+            },
+        )
+    )
+    _, _, facts = listening.facts[0]
+    assert facts["flow_address"] == "221B"
+    assert "nested" not in facts and "essay" not in facts
+
+
+# --- rollout phase 17 sweep: a letter that moves a run is its answer, never
+# also its repeat ---
+
+
+def test_a_letter_the_square_listens_for_moves_the_run_and_is_not_its_repeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A KYC letter arrives while the run stands on at-profile, which
+    listens for it: the reply moves the run (its alarm becomes now). The
+    same letter is also the KYC door's topic and enrol refuses it — a run
+    for this application is open — and with restart_on_repeat that
+    refusal would patch the run "anywhere", pushing the alarm the wake
+    just set back by the debounce: the token would sit half an hour on a
+    square it has already answered, and every stage clock of a ladder
+    would run twice. A letter the current square listens for is that
+    run's answer, not its repeat. The same stage's retry — a letter the
+    square does NOT listen for — is the repeat, as before."""
+    ladder = {**_LADDER, "restart_on_repeat": True, "debounce_minutes": 30}
+    flow = _flow(ladder, version=1)
+    run = _run(flow, 1, "at-profile", {"application_id": "L-1"}, key="L-1")
+    spine = _Spine([flow], [run], {(flow.id, 1): ladder})
+    _install(monkeypatch, spine)
+    repeats: List[Any] = []
+
+    async def refused(**kwargs: Any) -> None:
+        return None
+
+    async def apply_repeat(*args: Any) -> bool:
+        repeats.append(args)
+        return True
+
+    monkeypatch.setattr(entry, "enrol", refused)
+    monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
+    _consume(_event("loan.kyc_completed", {"application_id": "L-1"}))
+    assert spine.resumes == [
+        (
+            str(run.id),
+            "at-profile",
+            {
+                "reply_at-profile": "loan.kyc_completed",
+                "latest_letter": "at-profile",
+                "cut_short_by": "ev-1",
+            },
+        )
+    ]
+    assert repeats == []
+    # the profile stage retried: at-profile does not listen for its own
+    # topic, so this IS a repeat of the profile door
+    _consume(_event("loan.profile_created", {"application_id": "L-1"}, "ev-2"))
+    assert len(spine.resumes) == 1
+    ((_, _, key, door, event_id, _),) = repeats
+    assert (key, door.topic, event_id) == ("L-1", "loan.profile_created", "ev-2")
+
+
+# --- rollout phase 18: a listening square hears only the letter about ITS run ---
+
+_CALL_PLAN: Dict[str, Any] = {
+    "entry": {"topic": "checkout.created", "key": "order_id"},
+    "nodes": [
+        {"id": "rescue-call", "type": "call", "template_id": "t"},
+        {
+            "id": "after-call",
+            "type": "wait",
+            "topics": ["call.completed"],
+            "key": "outcome",
+            "minutes": 1440,
+            "match": {"payload": "enrollment_id", "run": "id"},
+        },
+        {"id": "wa-fallback", "type": "wait", "minutes": 5},
+        {"id": "wait-1d", "type": "wait", "minutes": 1440},
+    ],
+    "edges": [
+        ["rescue-call", "after-call"],
+        ["after-call", "wa-fallback", "NO_ANSWER"],
+        ["after-call", "wait-1d", "else"],
+    ],
+    "goal": {"topics": ["order.placed"]},
+}
+
+
+def test_a_call_outcome_wakes_only_the_run_that_placed_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two runs of one customer (two orders) both wait after their calls.
+    The outcome letter names the run that placed the call (enrollment_id,
+    phase 18's mirror); the square's `match` compares it with the run's
+    own id, so only that run hears it. A letter that names no run wakes
+    neither — a claim about nobody is not a claim about this run."""
+    flow = _flow(_CALL_PLAN, version=1)
+    a = _run(flow, 1, "after-call", {"order_id": "A"}, key="A")
+    b = _run(flow, 1, "after-call", {"order_id": "B"}, key="B")
+    spine = _Spine([flow], [a, b], {(flow.id, 1): _CALL_PLAN})
+    _install(monkeypatch, spine)
+    _consume(
+        _event("call.completed", {"enrollment_id": str(b.id), "outcome": "NO_ANSWER"})
+    )
+    assert spine.resumes == [
+        (
+            str(b.id),
+            "after-call",
+            {
+                "reply_after-call": "NO_ANSWER",
+                "latest_letter": "after-call",
+                "cut_short_by": "ev-1",
+            },
+        )
+    ]
+    _consume(_event("call.completed", {"outcome": "BUSY"}, "ev-2"))
+    _consume(
+        _event(
+            "call.completed",
+            {"enrollment_id": "someone-else", "outcome": "BUSY"},
+            "ev-3",
+        )
+    )
+    assert len(spine.resumes) == 1
+
+
+def test_match_may_name_a_context_field_of_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run side of `match` is `id` or any context field — the lead the
+    call node wrote (lead_<node>), or the message a send queued
+    (message_<node>, for the receipts of #1040), compared as text."""
+    plan = {
+        **_CALL_PLAN,
+        "nodes": [
+            _CALL_PLAN["nodes"][0],
+            {
+                **_CALL_PLAN["nodes"][1],
+                "match": {"payload": "lead_id", "run": "lead_rescue-call"},
+            },
+            *_CALL_PLAN["nodes"][2:],
+        ],
+    }
+    flow = _flow(plan, version=1)
+    a = _run(
+        flow, 1, "after-call", {"order_id": "A", "lead_rescue-call": "L-A"}, key="A"
+    )
+    b = _run(
+        flow, 1, "after-call", {"order_id": "B", "lead_rescue-call": "L-B"}, key="B"
+    )
+    spine = _Spine([flow], [a, b], {(flow.id, 1): plan})
+    _install(monkeypatch, spine)
+    _consume(_event("call.completed", {"lead_id": "L-A", "outcome": "BUSY"}))
+    assert [r[0] for r in spine.resumes] == [str(a.id)]
+
+
+def test_else_catches_any_answer_without_an_arrow_of_its_own() -> None:
+    """Buddy's outcome after a connected call is the template's own word
+    (CONFIRMED, not_found, …), unknowable to the plan: `else` keeps the
+    post-call listening day for every outcome the plan did not name. A
+    named arrow wins over it; with no timeout arrow, the alarm takes it
+    too."""
+    node = WorkflowNode(
+        id="after-call",
+        type="wait",
+        topics=["call.completed"],
+        key="outcome",
+        minutes=5,
+    )
+    arrows: List[Tuple[str, Optional[str]]] = [
+        ("wa-fallback", "NO_ANSWER"),
+        ("wait-1d", "else"),
+    ]
+    assert pick_next(node, arrows, {"reply_after-call": "NO_ANSWER"}) == "wa-fallback"
+    assert pick_next(node, arrows, {"reply_after-call": "CONFIRMED"}) == "wait-1d"
+    assert pick_next(node, arrows, {}) == "wait-1d"
+    assert pick_next(node, arrows + [("end", TIMEOUT)], {}) == "end"
+    assert pick_next(node, arrows[:1], {"reply_after-call": "CONFIRMED"}) is None
+
+
+def test_on_a_keyed_ladder_a_stage_letter_moves_only_its_own_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One customer, two loan applications, both at the profile stage. The
+    KYC letter for application B moves B's run only — A keeps its clock."""
+    board = expand_stages(
+        {
+            "key": "application_id",
+            "reenter": True,
+            "cooldown_hours": 0,
+            "goals": [{"topics": ["loan.disbursed"]}],
+            "stages": {
+                "order": ["loan.profile_created", "loan.kyc_completed"],
+                "idle_minutes": 30,
+                "on_idle": {"type": "call", "template_id": "t"},
+                "after_action_minutes": 60,
+            },
+        }
+    )
+    flow = _flow(board, version=1)
+    a = _run(flow, 1, "at-profile-created", {"application_id": "A"}, key="A")
+    b = _run(flow, 1, "at-profile-created", {"application_id": "B"}, key="B")
+    spine = _Spine([flow], [a, b], {(flow.id, 1): board})
+    _install(monkeypatch, spine)
+    repeats: List[Any] = []
+
+    async def refused(**kwargs: Any) -> None:
+        return None  # the KYC door: a run for B is open
+
+    async def apply_repeat(*args: Any) -> bool:
+        repeats.append(args)
+        return True
+
+    monkeypatch.setattr(entry, "enrol", refused)
+    monkeypatch.setattr(entry, "apply_repeat", apply_repeat)
+    _consume(_event("loan.kyc_completed", {"application_id": "B"}))
+    # one ask per listening square of B's document (at- and after-; the
+    # statement's current_node guard takes the one B stands on) — none for A
+    assert {r[0] for r in spine.resumes} == {str(b.id)}
+    assert (str(b.id), "at-profile-created") in [(r[0], r[1]) for r in spine.resumes]
+    assert repeats == []  # B's square answered it: moved, not a repeat
+
+
+# --- merchant-level letters (Extracted.about == "merchant") -------------------
+
+
+class _UntouchableAccessor:
+    """Any attribute read is a failure: the consumer must return before it
+    reaches the database for a letter that names no person."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"accessor.{name} touched for a merchant-level letter")
+
+
+def test_a_merchant_level_letter_starts_ends_and_wakes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A template review or an account notice has no person: outreach's
+    # business begins where a customer does, so the consumer returns at
+    # once — no open-run read, no entry match.
+    import app.crm.outreach.entry as entry_module
+
+    patch_accessors(monkeypatch, entry_module, _UntouchableAccessor())
+    event = RawEvent(
+        id="e-tpl",
+        merchant_id="m1",
+        source="whatsapp",
+        topic="template.status",
+        schema_version="v23.0",
+        external_id="waba:t-1:APPROVED:1",
+        payload={"event": "APPROVED"},
+        received_at=datetime.now(timezone.utc),
+    )
+    asyncio.run(entry_module.consume_attributed_event(event, None, {}))
+
+
+def test_a_stored_wait_event_square_is_still_woken_by_its_letter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One wait (17 Sep 2026): a run pinned to a version that still says
+    wait_event hears its reply exactly as before."""
+    old = {
+        **_LISTENING_PLAN,
+        "nodes": [
+            {**_LISTENING_PLAN["nodes"][0], "type": "wait_event"},
+            *_LISTENING_PLAN["nodes"][1:],
+        ],
+    }
+    flow = _flow(old)
+    run = _run(flow, 1, "ask")
+    spine = _Spine([flow], [run], {(flow.id, 1): old})
+    _install(monkeypatch, spine)
+    _consume(_event("button.reply", {"button_id": "YES"}))
+    assert spine.resumes == [
+        (
+            str(run.id),
+            "ask",
+            {"reply_ask": "YES", "latest_letter": "ask", "cut_short_by": "ev-1"},
+        )
+    ]
+
+
+# --- a door gated on a value inside an array (event-catalog.md §The `list` ruling) ---
+
+_MOBILE_DOOR_PLAN = {
+    "entry": {
+        "topic": "LINE_INITIATED",
+        "where": [
+            {
+                "field": "payload.products.sub_category",
+                "op": "includes",
+                "value": "Mobile",
+            }
+        ],
+    },
+    "nodes": [{"id": "wait-30m", "type": "wait", "minutes": 30}],
+    "edges": [],
+    "goals": [{"topics": ["LINE_ACTIVE"], "exit_reason": "goal_met"}],
+}
+
+
+def _doors_opened(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: Dict[str, Any],
+    where: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    plan = {**_MOBILE_DOOR_PLAN}
+    if where is not None:
+        plan["entry"] = {"topic": "LINE_INITIATED", "where": where}
+    flow = _flow(plan)
+    _install(monkeypatch, _Spine([flow], [], {(flow.id, 1): plan}))
+    opened: List[str] = []
+
+    async def enrol(**kwargs: Any) -> object:
+        opened.append(kwargs["door"].topic)
+        return object()
+
+    monkeypatch.setattr(entry, "enrol", enrol)
+    _consume(_event("LINE_INITIATED", payload, source="flipkart"))
+    return len(opened)
+
+
+@pytest.mark.parametrize(
+    "basket, admitted",
+    [
+        ({"products": [{"sub_category": "Mobile"}, {"sub_category": "Fridge"}]}, 1),
+        ({"products": [{"sub_category": "Fridge"}, {"sub_category": "TV"}]}, 0),
+        ({"products": {"sub_category": "Mobile"}}, 1),  # a bare object: a list of one
+        ({"products": {"sub_category": "Fridge"}}, 0),  # …judged, never routed around
+        ({"products": []}, 0),
+        ({}, 0),
+        ({"products": [{"brand": "vivo"}]}, 0),  # elements without the key
+    ],
+    ids=[
+        "array-with",
+        "array-without",
+        "object-with",
+        "object-without",
+        "empty",
+        "missing",
+        "no-key",
+    ],
+)
+def test_a_door_asks_the_array_whether_any_product_is_a_mobile(
+    monkeypatch: pytest.MonkeyPatch, basket: Dict[str, Any], admitted: int
+) -> None:
+    """`includes "Mobile"` is judged on the RAW array with the value written
+    in the plan: one mobile among many admits; none refuses; a one-product
+    basket sent as a bare object is a list of one, whichever way it falls —
+    a vendor's shape can never route around the question."""
+    assert _doors_opened(monkeypatch, basket) == admitted
+
+
+def test_exists_on_a_list_means_non_empty_and_not_exists_means_empty_or_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty array reads as absent — the engine's own rule — so `exists`
+    does not hold on an empty basket and `not_exists` does."""
+    exists = [{"field": "payload.products.sub_category", "op": "exists"}]
+    absent = [{"field": "payload.products.sub_category", "op": "not_exists"}]
+    two = {"products": [{"sub_category": "Fridge"}, {"sub_category": "TV"}]}
+    assert _doors_opened(monkeypatch, two, exists) == 1
+    assert _doors_opened(monkeypatch, {"products": []}, exists) == 0
+    assert _doors_opened(monkeypatch, {}, exists) == 0
+    assert _doors_opened(monkeypatch, {"products": []}, absent) == 1
+    assert _doors_opened(monkeypatch, {}, absent) == 1
+    assert _doors_opened(monkeypatch, two, absent) == 0
+
+
+def test_a_scalar_door_field_is_read_from_the_payload_as_before(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A path that crosses no array keeps its dot-walk."""
+    where = [{"field": "payload.order.sub_category", "op": "is", "value": "Mobile"}]
+    assert _doors_opened(monkeypatch, {"order": {}}, where) == 0
+    assert _doors_opened(monkeypatch, {"order": {"sub_category": "Mobile"}}, where) == 1

@@ -1,15 +1,11 @@
-import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.config import (
-    AUTOMATIC_CONNECT_BLOCKED_ORIGINS,
-    BREEZE_BUDDY_SESSION_SECRET_KEY,
-    ENABLE_LIGHTHOUSE_AUTH,
+from app.core.config.static import (
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
     JWT_ALGORITHM,
     JWT_SECRET_KEY,
@@ -26,10 +22,41 @@ CREDENTIALS_EXCEPTION = HTTPException(
 )
 
 
+# Algorithms PyJWT is allowed to honor. Explicit allowlist — never
+# include "none" (would accept unsigned tokens), and never trust the
+# `alg` claim in the token header itself. If the env var ``JWT_ALGORITHM``
+# is set to anything outside this set, the process refuses to start.
+_ALLOWED_JWT_ALGORITHMS = {
+    "HS256",
+    "HS384",
+    "HS512",
+    "RS256",
+    "RS384",
+    "RS512",
+    "ES256",
+}
+
+
 class JWTManager:
     """JWT token management class"""
 
     def __init__(self):
+        # Fail-fast on misconfiguration. Empty secret → PyJWT would
+        # validate against an empty key (catastrophic). Empty / "none"
+        # algorithm → PyJWT could accept unsigned tokens. Either is a
+        # production-critical foot-gun; we refuse to start instead of
+        # discovering it on the first auth request.
+        if not JWT_SECRET_KEY:
+            raise RuntimeError(
+                "JWT_SECRET_KEY env var is empty. Set it to a strong random "
+                "secret before starting the service."
+            )
+        if JWT_ALGORITHM not in _ALLOWED_JWT_ALGORITHMS:
+            raise RuntimeError(
+                f"JWT_ALGORITHM env var is {JWT_ALGORITHM!r}; must be one of "
+                f"{sorted(_ALLOWED_JWT_ALGORITHMS)}. The value 'none' is "
+                "explicitly forbidden — it would accept unsigned tokens."
+            )
         self.secret_key = JWT_SECRET_KEY
         self.algorithm = JWT_ALGORITHM
         self.access_token_expire_minutes = JWT_ACCESS_TOKEN_EXPIRE_MINUTES
@@ -50,13 +77,13 @@ class JWTManager:
         to_encode = data.copy()
 
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(timezone.utc) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(
+            expire = datetime.now(timezone.utc) + timedelta(
                 minutes=self.access_token_expire_minutes
             )
 
-        to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+        to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
 
         try:
             encoded_jwt = jwt.encode(
@@ -95,7 +122,7 @@ class JWTManager:
                 logger.warning("Token missing expiration claim")
                 raise CREDENTIALS_EXCEPTION
 
-            if datetime.utcnow() > datetime.fromtimestamp(exp):
+            if datetime.now(timezone.utc) > datetime.fromtimestamp(exp, timezone.utc):
                 logger.warning("Token has expired")
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -218,88 +245,3 @@ async def get_current_user(
         )
 
     return jwt_manager.verify_token(credentials.credentials)
-
-
-# Breeze Authentication Functions
-
-
-async def validate_automatic_request(raw_request: Request) -> Optional[Dict[str, Any]]:
-    """
-    FastAPI dependency to get user context from breezeToken in request body
-
-    Args:
-        raw_request: FastAPI Request object to read raw body
-
-    Returns:
-        Dictionary containing user context from verified breezeToken if ENABLE_LIGHTHOUSE_AUTH is True,
-        None if ENABLE_LIGHTHOUSE_AUTH is False
-
-    Raises:
-        HTTPException: If ENABLE_LIGHTHOUSE_AUTH is True and token is missing, invalid, or expired
-    """
-
-    origin = raw_request.headers.get("origin")
-    referer = raw_request.headers.get("referer")
-    if origin:
-        if any(blocked in origin for blocked in AUTOMATIC_CONNECT_BLOCKED_ORIGINS):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access from origin '{origin}' is forbidden.",
-            )
-    elif referer:
-        if any(blocked in referer for blocked in AUTOMATIC_CONNECT_BLOCKED_ORIGINS):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access from referer '{referer}' is forbidden.",
-            )
-
-    # If authentication is disabled, return None
-    if not ENABLE_LIGHTHOUSE_AUTH:
-        return None
-
-    try:
-        body = await raw_request.body()
-        data = json.loads(body)
-        breeze_token = data.get("breezeToken")
-        mode = data.get("mode")
-        if mode == "TEST":  # Skip auth for test mode
-            logger.info("Test mode detected, skipping auth validation")
-            return None
-        if not breeze_token:
-            logger.error("Missing breezeToken in request body")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="breezeToken is required in request body",
-            )
-
-        user_context = jwt_manager.verify_breeze_token(breeze_token)
-        logger.info(
-            f"Body-based breeze token verified for user: {user_context['email']}"
-        )
-        return user_context
-
-    except json.JSONDecodeError:
-        logger.error("Invalid JSON in request body")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON in request body",
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error reading request body: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Error processing request body",
-        )
-
-
-async def get_breeze_buddy_session(request: Request):
-    session_cookie = request.cookies.get("session")
-    if not session_cookie:
-        return None
-    try:
-        payload = jwt.decode(
-            session_cookie, BREEZE_BUDDY_SESSION_SECRET_KEY, algorithms=[JWT_ALGORITHM]
-        )
-        return payload
-    except jwt.PyJWTError:
-        return None
