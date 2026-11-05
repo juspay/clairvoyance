@@ -10,7 +10,13 @@ from __future__ import annotations
 from .azure import AzureConfig, build_azure_llm
 from .bedrock import BedrockConfig, build_bedrock_llm, is_openai_model
 from .claude_vertex import ClaudeVertexConfig, build_claude_vertex_llm
-from .openai import OpenAIConfig, build_openai_llm
+from .openai import (
+    OpenAIConfig,
+    OpenAITextLLMService,
+    build_openai_llm,
+    build_openai_responses_llm,
+    uses_responses_surface,
+)
 from .types import (
     LLMConfiguration,
     LLMProvider,
@@ -40,7 +46,10 @@ __all__ = [
     "build_claude_vertex_llm",
     # OpenAI
     "OpenAIConfig",
+    "OpenAITextLLMService",
     "build_openai_llm",
+    "build_openai_responses_llm",
+    "uses_responses_surface",
     # AWS Bedrock
     "BedrockConfig",
     "build_bedrock_llm",

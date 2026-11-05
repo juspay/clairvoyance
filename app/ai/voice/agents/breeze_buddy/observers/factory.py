@@ -15,6 +15,7 @@ from app.ai.voice.agents.breeze_buddy.template.types import (
     ObserverConfig,
     TemplateModel,
 )
+from app.ai.voice.llm import uses_responses_surface
 from app.ai.voice.llm.types import (
     LLMConfiguration,
     LLMProvider,
@@ -34,8 +35,10 @@ def merge_llm_config(
     Inherits provider, model, and connection details from base.
     Only temperature (0.1) and max_tokens (256) have observer-specific
     defaults — observers need low temperature for precision and fewer
-    tokens since they only make tool calls. Bedrock gets no temperature
-    default: its GPT models reject the field.
+    tokens since they only make tool calls. Bedrock — the native provider,
+    or an OpenAI endpoint on the ``/v1/responses`` surface — gets no
+    temperature default: its reasoning models reject the field (same rule
+    as ``_resolve_openai``).
 
     ``thinking`` reaches an observer only when the observer asks for it, or
     on Bedrock, where it must be sent as disabled: those GPT models reason by
@@ -70,7 +73,7 @@ def merge_llm_config(
     )
     if observer_llm.temperature is not None:
         temperature = observer_llm.temperature
-    elif provider == LLMProvider.AWS_BEDROCK:
+    elif provider == LLMProvider.AWS_BEDROCK or uses_responses_surface(endpoint):
         temperature = None
     else:
         temperature = 0.1
