@@ -215,14 +215,28 @@ async def search_catalog(base: str, args: Dict[str, Any]) -> Dict[str, Any]:
         "max_price": bounds.get("max"),
         "per_page": min(max(int(pagination.get("limit") or 10), 1), _STORE_PAGE_SIZE),
         "page": page,
+        # Search shows only what can be bought (``buyable`` reads
+        # is_in_stock, which is true for both). The store filters before it
+        # pages, so page sizes and the cursor stay right. Lookups and carts
+        # keep out-of-stock items, so they can still say "out of stock".
+        "stock_status": "instock,onbackorder",
         "_fields": _PRODUCT_FIELDS,
     }
     records, pages = await store_api.get_json(
         base, "/products", {k: v for k, v in params.items() if v not in (None, "")}
     )
     has_next = page < pages
+    # A variable product with no buyable option is sold out, even when the
+    # store marks the product itself in stock. This can make a page shorter
+    # than asked; the cursor stays right.
+    products = [
+        p
+        for p in await _ucp_products(base, records or [])
+        if "variants" not in p
+        or any(v["availability"]["available"] for v in p["variants"])
+    ]
     return {
-        "products": await _ucp_products(base, records or []),
+        "products": products,
         "pagination": {
             "has_next_page": has_next,
             "cursor": str(page + 1) if has_next else None,
