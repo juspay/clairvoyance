@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 from app.ai.voice.agents.breeze_buddy.template.ui_catalog import ActionUnion, Icon
+from app.utils.common import json_size_bytes
 
 
 class ChatSessionStatus(str, Enum):
@@ -83,6 +84,10 @@ class ToolApproval(BaseModel):
     expires_at: datetime
 
 
+# Page text is the bulk of a client tool answer; the widget trims to fit.
+CLIENT_TOOL_RESULT_MAX_BYTES = 16_384
+
+
 class ApproveToolRequest(BaseModel):
     """Body of ``POST .../session/{id}/approval`` (all three auth surfaces)."""
 
@@ -93,6 +98,24 @@ class ApproveToolRequest(BaseModel):
         max_length=500,
         description="Optional free-text reason shown to the LLM on denial.",
     )
+    client_tool_result: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "A client tool's answer, run in the browser. Becomes the call's "
+            "tool_result; ignored for server tools."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _cap_result_size(self) -> "ApproveToolRequest":
+        if (
+            self.client_tool_result is not None
+            and json_size_bytes(self.client_tool_result) > CLIENT_TOOL_RESULT_MAX_BYTES
+        ):
+            raise ValueError(
+                f"client_tool_result exceeds {CLIENT_TOOL_RESULT_MAX_BYTES} bytes"
+            )
+        return self
 
 
 class ChatSession(BaseModel):

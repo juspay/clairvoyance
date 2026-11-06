@@ -38,6 +38,9 @@ from app.ai.voice.agents.breeze_buddy.chat.sse import (
 )
 from app.ai.voice.agents.breeze_buddy.chat.steps.enforcer import PlanEnforcer
 from app.ai.voice.agents.breeze_buddy.chat.steps.plan import PlanExtractor
+from app.ai.voice.agents.breeze_buddy.chat.tools.client_tools import (
+    enabled_client_tools,
+)
 from app.ai.voice.agents.breeze_buddy.chat.ui.binding import (
     BindingStore,
 )
@@ -148,6 +151,7 @@ class ChatAgent(
         catalog_version: Optional[str] = None,
         merchant_id: Optional[str] = None,
         custom_components: Optional[Dict[str, "CustomComponentDef"]] = None,
+        client_tools: bool = True,
     ) -> None:
         self.session_id = session_id
         self.template = template
@@ -326,6 +330,11 @@ class ChatAgent(
             getattr(render_ui_cfg, "trusted_link_urls", None) or []
         )
         self._plan_enforcement = bool(getattr(configurations, "plan_enforcement", None))
+        # Browser-run tools. Voice turns pass client_tools=False: nothing on
+        # the call answers a browser tool yet.
+        self._client_tool_names: List[str] = (
+            enabled_client_tools(configurations) if client_tools else []
+        )
         self._plan_enforcer = PlanEnforcer()
         self._plan_known_tools: Set[str] = set()
         # Handler → cycle-loop hand-off (tool handlers cannot yield SSE):

@@ -68,6 +68,26 @@ if TYPE_CHECKING:
     from app.ai.voice.agents.breeze_buddy.chat.agent.core import ChatAgent
 
 
+def _prepend_to_last_user_message(
+    history: List[Dict[str, Any]], block: str
+) -> List[Dict[str, Any]]:
+    """A copy of ``history`` with ``block`` before the last plain-text user
+    message's content."""
+    history = list(history)
+    for index in reversed(range(len(history))):
+        msg = history[index]
+        # Gemini history also carries LLMSpecificMessage (thought
+        # signatures) — not a dict, never a user message.
+        if (
+            isinstance(msg, dict)
+            and msg.get("role") == "user"
+            and isinstance(msg.get("content"), str)
+        ):
+            history[index] = {**msg, "content": f"{block}\n\n{msg['content']}"}
+            break
+    return history
+
+
 class ApprovalTurnMixin:
     # Assigned here AND in core — annotated identically on both
     # classes so pyrefly sees one consistent member.
@@ -397,11 +417,12 @@ class ApprovalTurnMixin:
         tool_calls message (+ tool results), and wedging a system message
         between an assistant tool_calls and its tool responses is rejected
         by OpenAI and breaks the Anthropic adapter's role merge. The
-        ``user_block`` variant is dropped entirely — it rides user turns
-        and a resume turn has none.
+        ``user_block`` is re-attached to the last user message, as the
+        original turn sent it: the resumed answer must still know e.g. which
+        page the shopper is on.
         """
         role_messages, task_messages = self._render_node_messages(node)
-        _user_block, system_block = render_client_context(
+        user_block, system_block = render_client_context(
             self.agent_state,
             self._client_context_config,
             self._context_placement,
@@ -414,6 +435,8 @@ class ApprovalTurnMixin:
             messages.append(kb_message.message)
         if system_block:
             messages.append({"role": "system", "content": system_block})
+        if user_block:
+            history = _prepend_to_last_user_message(history, user_block)
         messages.extend(history)
         return LLMContext(
             messages=cast(List[LLMContextMessage], messages),
