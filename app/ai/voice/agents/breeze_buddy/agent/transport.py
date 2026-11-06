@@ -5,12 +5,15 @@ Note: VAD (Voice Activity Detection) is configured in the LLMUserAggregator
 audio I/O, sample rates, and optional audio filters/mixers.
 """
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import WebSocket
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
+from pipecat.frames.frames import FilterControlFrame
 from pipecat.runner.utils import _create_telephony_transport
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.daily.transport import DailyParams
@@ -33,6 +36,7 @@ from app.ai.voice.agents.breeze_buddy.template.vad import TELEPHONY_SAMPLE_RATE
 from app.ai.voice.agents.breeze_buddy.utils.audio_mixer import (
     create_background_sound_mixer,
 )
+from app.ai.voice.noise_filter.noizzen import NoizzenFilter, find_model_file
 from app.core.config import static
 from app.core.logger import logger
 
@@ -40,6 +44,49 @@ from app.core.logger import logger
 TRANSPORT_TYPE_DAILY = "daily"
 TRANSPORT_TYPE_TELEPHONY = "telephony"
 TRANSPORT_TYPE_VOBIZ = "vobiz"
+
+
+_missing_models_logged: set = set()
+
+
+def _create_noizzen_filter(
+    model: NoiseFilterModel,
+    transport_type: str,
+    enhancement_level: Optional[float],
+) -> Optional[BaseAudioFilter]:
+    """The Noizzen filter for a template model, or None when its file is missing."""
+    name = (
+        "dpdfnet_base_16k" if transport_type == TRANSPORT_TYPE_DAILY else "dpdfnet2_8k"
+    )
+    path = find_model_file(name, Path(static.BREEZE_BUDDY_NOISE_MODEL_DIR))
+    if path is None:
+        if name not in _missing_models_logged:  # once per process, not per call
+            _missing_models_logged.add(name)
+            logger.warning(
+                "Noise model {} is not provisioned in {}; proceeding without a "
+                "noise filter",
+                name,
+                static.BREEZE_BUDDY_NOISE_MODEL_DIR,
+            )
+        return None
+    try:
+        noise_filter = NoizzenFilter(
+            model=name, model_path=path, enhancement_level=enhancement_level
+        )
+    except Exception as e:
+        logger.warning(f"Failed to create noise filter, proceeding without it: {e}")
+        return None
+    logger.info(
+        "Noise filter initialized: provider=noizzen, model={} ({}), "
+        "enhancement_level={}",
+        model.value,
+        name,
+        enhancement_level,
+    )
+    return noise_filter
+
+
+# --- ai-coustics (AIC): templates with provider "aic" or a legacy `type`. ---
 
 
 def _aic_model_path(model: NoiseFilterModel, transport_type: str) -> Path:
@@ -87,88 +134,182 @@ def _resolve_aic_model(
     return model, path
 
 
+# AIC processor teardown blocks on its usage report; keep it off the event loop.
+_AIC_TEARDOWN = ThreadPoolExecutor(max_workers=4, thread_name_prefix="aic-teardown")
+_AIC_HANDLES = ("_processor", "_processor_ctx", "_vad_ctx")
+
+
+class _FailOpenAICFilter(AICFilter):
+    """AICFilter that never deafens a call or stalls the event loop.
+
+    pipecat's AICFilter lets SDK errors escape (e.g. a refused license key) and
+    base_input only catches timeouts, so the bot would stop hearing the caller.
+    Any AIC failure hands the rest of the call to `fallback` (the Noizzen filter),
+    or to passthrough, and ends the AIC session there. Native handles are freed on
+    _AIC_TEARDOWN, not the loop.
+    """
+
+    def __init__(
+        self, *, fallback: Callable[[], Optional[BaseAudioFilter]], **kwargs: Any
+    ):
+        super().__init__(**kwargs)
+        self._make_fallback = fallback
+        self._fallback: Optional[BaseAudioFilter] = None
+        self._fallback_tried = False
+        self._rate = 0
+        self._release: Optional[asyncio.Task] = None
+
+    async def _switch_to_fallback(self, reason: str) -> None:
+        if self._fallback_tried:
+            return
+        self._fallback_tried = True
+        self._aic_ready = False  # AICFilter.filter passes audio through when not ready
+        fallback = self._make_fallback()
+        if fallback is not None and self._rate:
+            await fallback.start(self._rate)
+            self._fallback = fallback
+        # In the background: the teardown can wait seconds on a usage report, and the
+        # caller's audio must not wait with it. stop() waits for it instead.
+        self._release = asyncio.ensure_future(self._release_aic())
+        logger.warning(
+            "AIC filter unavailable ({}); {} for the rest of the call",
+            reason,
+            (
+                "using the Noizzen noise filter"
+                if self._fallback
+                else "passing audio through"
+            ),
+        )
+
+    async def _release_aic(self) -> None:
+        """End the AIC session (AICFilter.stop, safe to repeat), then free the native
+        handles it let go of on _AIC_TEARDOWN. Never raises."""
+        handles = [getattr(self, name, None) for name in _AIC_HANDLES]
+        try:
+            await super().stop()
+        except Exception as e:  # the processor reset; AICFilter.stop still cleans up
+            logger.warning("AIC filter cleanup failed: {}", e)
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                _AIC_TEARDOWN, handles.clear
+            )
+        except RuntimeError:  # the pool is shut down
+            handles.clear()
+
+    async def start(self, sample_rate: int):
+        self._rate = sample_rate
+        try:
+            await super().start(sample_rate)
+        except Exception as e:  # e.g. a corrupt .aicmodel
+            await self._switch_to_fallback(f"start failed: {e}")
+            return
+        # pipecat logs why (e.g. the key was refused) and leaves _aic_ready False
+        if not getattr(self, "_aic_ready", True):
+            await self._switch_to_fallback("processor not created")
+
+    async def process_frame(self, frame: FilterControlFrame):
+        if self._fallback is not None:  # the filter in use takes the control frames
+            await self._fallback.process_frame(frame)
+        else:
+            await super().process_frame(frame)
+
+    async def filter(self, audio: bytes) -> bytes:
+        if self._fallback is not None:
+            return await self._fallback.filter(audio)
+        pending = audio
+        try:
+            # AICFilter.filter takes buffered audio out before processing it; keep
+            # the raw bytes so a failure hands them back instead of dropping them.
+            pending = bytes(getattr(self, "_audio_buffer", b"")) + audio
+            return await super().filter(audio)
+        except Exception as e:
+            buffer = getattr(self, "_audio_buffer", None)
+            if isinstance(buffer, bytearray):
+                buffer.clear()  # handed back below; never twice
+            await self._switch_to_fallback(f"failed mid-call: {e}")
+            return pending
+
+    async def stop(self):
+        try:
+            if self._release is not None:
+                await self._release
+            await self._release_aic()
+        finally:
+            if self._fallback is not None:
+                await self._fallback.stop()
+
+
+def _create_aic_filter(
+    model: NoiseFilterModel,
+    transport_type: str,
+    enhancement_level: Optional[float],
+) -> Optional[BaseAudioFilter]:
+    """The AIC filter, or the Noizzen filter whenever AIC can't run."""
+
+    # AIC's enhancement_level is on a different scale: the fallback uses Noizzen's own.
+    def noizzen() -> Optional[BaseAudioFilter]:
+        return _create_noizzen_filter(model, transport_type, None)
+
+    if not static.BREEZE_BUDDY_AIC_LICENSE_KEY:
+        logger.warning(
+            "Template asks for AIC but no license key is configured; using Noizzen"
+        )
+        return noizzen()
+    aic_model, model_path = _resolve_aic_model(model, transport_type)
+    if not model_path.is_file():
+        logger.warning(
+            "AIC filter model file is unavailable; using Noizzen: {}",
+            model_path,
+        )
+        return noizzen()
+    # No level given: let the AIC model use its own default.
+    level = (
+        {} if enhancement_level is None else {"enhancement_level": enhancement_level}
+    )
+    try:
+        aic_filter = _FailOpenAICFilter(
+            fallback=noizzen,
+            license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
+            model_path=model_path,
+            **level,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to initialize AIC filter, using Noizzen: {e}")
+        return noizzen()
+    logger.info(
+        "AIC filter initialized: provider=aic, model={}, path={}, enhancement_level={}",
+        aic_model.value,
+        model_path,
+        enhancement_level,
+    )
+    return aic_filter
+
+
 def _create_audio_input_filter(
     configurations: Optional[ConfigurationModel] = None,
     transport_type: str = TRANSPORT_TYPE_DAILY,
 ) -> Optional[BaseAudioFilter]:
-    """Create audio input filter based on configuration.
+    """The noise filter for a template's noise_filter config, or None.
 
-    Currently supports:
-        - AIC filter (ai-coustics noise enhancement, preserves all speakers)
-        - AIC Voice Focus (foreground/primary-speaker isolation)
-
-    Future filters can be added here with their own enable flags.
-
-    Args:
-        configurations: The configuration model containing noise filter settings.
-        transport_type: The transport type to determine model selection.
-
-    Returns:
-        Audio filter instance if enabled and successfully created, None otherwise.
+    The template alone decides: provider "noizzen" gets Noizzen; provider "aic"
+    and the legacy `type` get ai-coustics, and a call falls back to Noizzen when
+    ai-coustics cannot run. A missing model file means no filter, never a failed
+    call.
     """
-    # Check if noise filter is configured and enabled
     if not configurations:
         return None
-
-    noise_filter_config = configurations.noise_filter
-    if not noise_filter_config or not noise_filter_config.enable:
+    config = configurations.noise_filter
+    if not config or not config.enable:
         return None
 
-    # Resolve either the new provider/model shape or the legacy type shape at
-    # runtime without rewriting the template configuration.
-    provider = noise_filter_config.provider or NoiseFilterProvider.AIC
-    model = noise_filter_config.model or (
+    model = config.model or (
         NoiseFilterModel.VOICE_FOCUS
-        if noise_filter_config.type == NoiseFilterType.AIC_VOICE_FOCUS
+        if config.type == NoiseFilterType.AIC_VOICE_FOCUS
         else NoiseFilterModel.NOISE_CANCELLATION
     )
-
-    if provider == NoiseFilterProvider.AIC:
-        if not static.BREEZE_BUDDY_AIC_LICENSE_KEY:
-            logger.warning("AIC filter enabled but license key not configured")
-            return None
-
-        # Docker provisions the models before startup; the application never
-        # downloads model artifacts at runtime.
-        model, model_path = _resolve_aic_model(model, transport_type)
-        if not model_path.is_file():
-            # AICFilter validates the artifact only when the transport starts.
-            # Fail open here so a soft-failed Docker copy cannot abort a call.
-            logger.warning(
-                "AIC filter model file is unavailable; proceeding without it: {}",
-                model_path,
-            )
-            return None
-
-        try:
-            if noise_filter_config.enhancement_level is None:
-                # Preserve the existing AIC behavior exactly: omitting this
-                # argument lets the selected model use its own default.
-                aic_filter = AICFilter(
-                    license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
-                    model_path=model_path,
-                )
-            else:
-                aic_filter = AICFilter(
-                    license_key=static.BREEZE_BUDDY_AIC_LICENSE_KEY,
-                    model_path=model_path,
-                    enhancement_level=noise_filter_config.enhancement_level,
-                )
-            logger.info(
-                "AIC filter initialized: provider={}, model={}, path={}, "
-                "enhancement_level={}",
-                provider.value,
-                model.value,
-                model_path,
-                noise_filter_config.enhancement_level,
-            )
-            return aic_filter
-        except Exception as e:
-            logger.warning(
-                f"Failed to initialize AIC filter, proceeding without it: {e}"
-            )
-
-    return None
+    if config.provider != NoiseFilterProvider.NOIZZEN:
+        return _create_aic_filter(model, transport_type, config.enhancement_level)
+    return _create_noizzen_filter(model, transport_type, config.enhancement_level)
 
 
 def get_transport_params(
