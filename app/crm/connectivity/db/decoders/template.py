@@ -45,7 +45,7 @@ def decode_approved_template(row: Mapping[str, Any]) -> ApprovedTemplate:
     Deliberately not TemplateRead — the send path runs per message and has
     no use for the console's status/quality/audit columns. ``components``
     rides whole and UNREAD (which button is a Flow button is Meta's
-    vocabulary, walked in providers/whatsapp/payload.py): a decoder is
+    vocabulary, walked in providers/whatsapp/payload/template.py): a decoder is
     row -> model, no business decisions. Same totality filter as
     decode_template, same batch reason.
     """

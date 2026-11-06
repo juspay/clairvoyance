@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.crm.connectivity.db.decoders.message import (
+    decode_message_state,
     decode_queued_message,
     decode_send_behind,
 )
@@ -16,11 +17,21 @@ from app.crm.connectivity.db.queries.message import (
     apply_outcome_query,
     apply_receipt_query,
     claim_queued_messages_query,
+    get_message_state_by_dedupe_key_query,
     insert_message_query,
+    insert_reply_message_query,
+    mark_abandoned_replies_dead_query,
+    message_id_by_provider_query,
+    message_ticks_query,
     requeue_stale_claims_query,
     send_behind_provider_id_query,
 )
-from app.crm.connectivity.schemas.message import QueuedMessage, SendBehind
+from app.crm.connectivity.schemas.message.shared import (
+    MessageState,
+    MessageTick,
+    QueuedMessage,
+    SendBehind,
+)
 from app.crm.connectivity.vocabulary.status import MESSAGE_QUEUED
 from app.crm.shared.db import crm_connection
 
@@ -36,6 +47,7 @@ async def insert_message(
     template_id: Optional[str],
     variables: Dict[str, Any],
     dedupe_key: str,
+    binding_id: Optional[str] = None,
 ) -> Optional[str]:
     """None = the dedupe unique absorbed it (a row already names this send)."""
     query, values = insert_message_query(
@@ -49,6 +61,7 @@ async def insert_message(
         template_id,
         variables,
         dedupe_key,
+        binding_id,
     )
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
@@ -116,6 +129,51 @@ async def send_behind(
     return decode_send_behind(row) if row is not None else None
 
 
+async def insert_reply_message(
+    merchant_id: str,
+    customer_id: str,
+    channel: str,
+    sent_to_address: str,
+    source_kind: str,
+    source_id: Optional[str],
+    purpose_key: str,
+    dedupe_key: str,
+) -> Optional[str]:
+    """A free-form reply's row, already in flight. None = the dedupe unique
+    absorbed it (this reply was already written)."""
+    query, values = insert_reply_message_query(
+        merchant_id,
+        customer_id,
+        channel,
+        sent_to_address,
+        source_kind,
+        source_id,
+        purpose_key,
+        dedupe_key,
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return str(row["id"]) if row else None
+
+
+async def get_message_state_by_dedupe_key(
+    merchant_id: str, dedupe_key: str
+) -> Optional[MessageState]:
+    """The row a dedupe key already names, as it stands now."""
+    query, values = get_message_state_by_dedupe_key_query(merchant_id, dedupe_key)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_message_state(row) if row is not None else None
+
+
+async def mark_abandoned_replies_dead(stale_minutes: int) -> List[str]:
+    """Ids of reply rows closed dead because their sender never returned."""
+    query, values = mark_abandoned_replies_dead_query(stale_minutes)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [str(row["id"]) for row in rows]
+
+
 async def apply_receipt(
     merchant_id: str,
     provider_message_id: str,
@@ -137,3 +195,31 @@ async def apply_receipt(
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return row["status"] if row is not None else None
+
+
+async def message_ticks(merchant_id: str, message_ids: List[str]) -> List[MessageTick]:
+    if not message_ids:
+        return []
+    query, values = message_ticks_query(merchant_id, message_ids)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return [
+        MessageTick(
+            id=str(row["id"]),
+            status=row["status"],
+            reason=row["reason"],
+            sent_at=row["sent_at"],
+            delivered_at=row["delivered_at"],
+            read_at=row["read_at"],
+        )
+        for row in rows
+    ]
+
+
+async def message_id_by_provider(
+    merchant_id: str, provider_message_id: str
+) -> Optional[str]:
+    query, values = message_id_by_provider_query(merchant_id, provider_message_id)
+    async with crm_connection() as conn:
+        found = await conn.fetchval(query, *values)
+    return str(found) if found is not None else None

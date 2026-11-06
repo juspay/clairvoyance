@@ -6,6 +6,8 @@ Importers name the file they mean:
 
     shared/         what every message passes, however it goes out — the
                     gate before it leaves, and its receipts after
+    conversations/  the customer started it — a free-form reply inside the
+                    customer-service window, sent now, one reply per send
     outbound/       we start it — an approved template, queued and sent by
                     the dispatcher, one message per send
 

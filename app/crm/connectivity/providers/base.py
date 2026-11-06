@@ -31,16 +31,20 @@ from pydantic import BaseModel
 from app.core.logger import logger
 from app.crm.connectivity.schemas.connector import (
     ConnectorInstallation,
+    CredentialBundle,
     OnboardResult,
 )
-from app.crm.connectivity.schemas.message import (
-    CredentialBundle,
+from app.crm.connectivity.schemas.message.shared import (
     QueuedMessage,
     SendOutcome,
     SendRoute,
 )
+from app.crm.connectivity.schemas.message.whatsapp import ReplyBodyByKind
 from app.crm.connectivity.schemas.template import ProviderTemplateState, TemplateDraft
-from app.crm.connectivity.vocabulary.reasons import REASON_TRANSPORT
+from app.crm.connectivity.vocabulary.reasons import (
+    REASON_CHANNEL_CANNOT_SEND_REPLIES,
+    REASON_TRANSPORT,
+)
 from app.crm.shared.redact import mask_address
 
 # All REASON_* words live in reasons.py — one file, one name per failure
@@ -75,6 +79,22 @@ class ChannelAdapter(ABC):
         which send() catches as retryable since it cannot know whether the
         message got out.
         """
+
+    async def deliver_reply(
+        self, message: QueuedMessage, route: SendRoute, body: ReplyBodyByKind
+    ) -> SendOutcome:
+        """Hand a free-form reply to the provider — the conversation face.
+
+        ``body`` rides beside the message rather than on it: the manifest
+        row deliberately stores no words (canon T16), so the words exist
+        only in the caller's hands. Same
+        contract as ``deliver``: report what the provider did, never raise
+        for it.
+
+        The default REFUSES: a channel whose adapter has not learned to
+        carry a conversation must say so on the row, not guess a shape.
+        """
+        return SendOutcome(status="blocked", reason=REASON_CHANNEL_CANNOT_SEND_REPLIES)
 
     # ---- shared plumbing children inherit --------------------------------
 

@@ -23,20 +23,21 @@ are harmless.
 manifest when the dispatcher records the send's outcome, and a fast webhook
 can be filed and consumed before that write lands: it matches no row, and
 this consumer lets it go. It is not lost — the letter stays on the spine,
-and the dispatcher, straight after the stamp, reads the message's status
-letters back and applies them (``backfill_early_receipts``). The two sides
-cannot both miss: the stamp commits before the read-back, so a letter filed
-before it is found there, and one filed after it is consumed after the
-stamp and matches. A receipt that matches no row at all names a message this
-system did not send (the provider's own app on the same binding).
+and the side that stamps the id (the dispatcher, a reply send) reads the
+message's status letters back straight after the stamp and applies them
+(``backfill_early_receipts``). The two sides cannot both miss: the stamp
+commits before the read-back, so a letter filed before it is found there,
+and one filed after it is consumed after the stamp and matches. A receipt
+that matches no row at all names a message this system did not send (the
+provider's own app on the same binding).
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.ingress import status_letter_keys
-from app.crm.connectivity.schemas.message import ProviderReceipt
+from app.crm.connectivity.schemas.message.shared import MessageTick, ProviderReceipt
 from app.crm.connectivity.vocabulary.reasons import REASON_PROVIDER_REJECTED
 from app.crm.connectivity.vocabulary.status import (
     MESSAGE_DELIVERED,
@@ -183,3 +184,29 @@ async def backfill_early_receipts(
         logger.opt(exception=e).warning(
             f"receipts filed for {provider_message_id} not read back"
         )
+
+
+async def receipt_target(event: RawEvent) -> Optional[Tuple[str, Optional[str]]]:
+    """Which of our sends a receipt letter is about: (the provider's id, our
+    row's id — None when no row of ours carries it yet). None for a letter
+    that is not a receipt we act on. A read: the receipt itself is applied
+    by consume_status_event."""
+    if event.topic != TOPIC_STATUS:
+        return None
+    receipt = read_receipt(event)
+    if receipt is None:
+        return None
+    message_id = await message_accessor.message_id_by_provider(
+        event.merchant_id, receipt.provider_message_id
+    )
+    return receipt.provider_message_id, message_id
+
+
+async def message_ticks(
+    merchant_id: str, message_ids: List[str]
+) -> Dict[str, MessageTick]:
+    """What receipts have made of these rows, by id — the conversations
+    timeline shows its ticks from here. Rows of another merchant read as
+    absent."""
+    ticks = await message_accessor.message_ticks(merchant_id, message_ids)
+    return {tick.id: tick for tick in ticks}
