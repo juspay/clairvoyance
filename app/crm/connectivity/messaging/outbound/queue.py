@@ -1,0 +1,109 @@
+"""queue_message() — how anything outside connectivity proposes a send.
+
+Senders write a manifest row with status='queued' and NO verdict
+(design/gate-mechanics.md §1): the dispatcher claims it, runs the gate
+(B5, not built) and send(). This file decides what a proposed send must
+carry; the mechanics are in db/.
+
+Two code dictionaries live here because canon T16 dropped their CHECKs
+(the 027 scar: vocabulary in code, never in DDL) and named the first
+producer as the owner of the validating dictionary.
+"""
+
+from typing import Any, Dict, Optional
+
+from app.crm.connectivity.channels.registry import gate_handle_kind_for
+from app.crm.connectivity.db.accessors import message as message_accessor
+from app.crm.connectivity.schemas.message import SendBehind
+from app.crm.shared.normalize import normalize_email, normalize_phone
+
+# T16 col 7. What caused the send; every funnel groups on this.
+SOURCE_KINDS = ("broadcast", "workflow", "agent", "transactional")
+
+# Purpose roots the gate's caps are set per (design/gate-mechanics.md §3);
+# the full dotted list is permission's (canon T14 CK), not ours.
+PURPOSE_ROOTS = ("marketing", "utility", "transactional", "authentication")
+
+
+def normalize_address(channel: str, address: str) -> Optional[str]:
+    """PURE: the writer normalizes (E.164 / lowercased email). A format
+    mismatch on a suppressed value is how someone who said stop gets
+    contacted, so an unparseable address is refused, never stored.
+
+    Which normalizer applies is the CHANNELS registry's answer — the same
+    handle kind the gate probes — not a second list kept here. A channel the
+    registry does not know is refused outright: the gate would fail closed on
+    it at dispatch anyway, and a manifest row that can never send is not
+    worth writing.
+    """
+    kind = gate_handle_kind_for(channel)
+    if kind == "phone":
+        return normalize_phone(address)
+    if kind == "email":
+        return normalize_email(address)
+    return None
+
+
+def validate_proposal(source_kind: str, purpose_key: str) -> None:
+    """PURE: refuse a proposal the vocabulary does not know."""
+    if source_kind not in SOURCE_KINDS:
+        raise ValueError(f"unknown source_kind: {source_kind!r}")
+    root = purpose_key.split(".", 1)[0] if purpose_key else ""
+    if root not in PURPOSE_ROOTS:
+        raise ValueError(f"purpose_key must start with one of {PURPOSE_ROOTS}")
+
+
+async def queue_message(
+    *,
+    merchant_id: str,
+    customer_id: str,
+    channel: str,
+    address: str,
+    source_kind: str,
+    source_id: Optional[str],
+    purpose_key: str,
+    template_id: Optional[str],
+    variables: Dict[str, Any],
+    dedupe_key: str,
+) -> Optional[str]:
+    """Propose one send. Returns the new row's id, or None when
+    dedupe_key already names a row for this merchant — the producer's
+    retry was absorbed (T16 col 23), and it should carry on as if it
+    had queued. Raises ValueError on a proposal the vocabulary refuses."""
+    validate_proposal(source_kind, purpose_key)
+    sent_to = normalize_address(channel, address)
+    if sent_to is None:
+        raise ValueError(f"unusable {channel} address")
+    return await message_accessor.insert_message(
+        merchant_id,
+        customer_id,
+        channel,
+        sent_to,
+        source_kind,
+        source_id,
+        purpose_key,
+        template_id,
+        variables,
+        dedupe_key,
+    )
+
+
+async def send_behind(
+    merchant_id: str, provider_message_id: str
+) -> Optional[SendBehind]:
+    """Whose send a provider's id names — the reply join, read at need.
+
+    A customer's reply carries the provider's id for the message she
+    answered and nothing of ours (Meta's wamid in ``context.id``; an
+    email's Message-ID in ``In-Reply-To``). The manifest already records
+    what caused each send (T16 col 7/8) and the provider's id for it (col
+    14, a partial UNIQUE whose own canon note is "how an inbound receipt
+    finds this row"). A reply is a receipt of another kind, so the same
+    index answers "whose send is she replying to" — and the answer names
+    the producer AND, through its own dedupe_key, which of its sends.
+
+    So a producer never has to plant a correlate, keep one, or have its
+    authors declare one: the fact is already written, once, by the code
+    that sent the message. None means no message of ours carries that id.
+    """
+    return await message_accessor.send_behind(merchant_id, provider_message_id)

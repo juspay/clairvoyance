@@ -1,0 +1,46 @@
+{
+  "on_publish": "pin",
+  "key": "application_id",
+  "reenter": true,
+  "cooldown_hours": 1,
+  "on_repeat": "refresh_latest",
+  "exits": {
+    "max_age_days": 30
+  },
+  "goals": [
+    {
+      "topics": [
+        "loan.disbursed"
+      ],
+      "exit_reason": "goal_met"
+    },
+    {
+      "topics": [
+        "loan.rejected",
+        "loan.withdrawn"
+      ],
+      "exit_reason": "withdrawn"
+    }
+  ],
+  "stages": {
+    "order": [
+      "loan.profile_created",
+      "loan.kyc_completed",
+      "loan.bank_linked",
+      "loan.offer_accepted",
+      "loan.agreement_signed"
+    ],
+    "idle_minutes": 30,
+    "on_idle": {
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    },
+    "after_action_minutes": 1440,
+    "restart_on_repeat": true,
+    "overrides": {
+      "loan.offer_accepted": {
+        "idle_minutes": 120
+      }
+    }
+  }
+}

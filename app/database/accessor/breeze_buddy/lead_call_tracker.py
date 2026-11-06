@@ -3,29 +3,52 @@ Database accessor functions for the application.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import asyncpg
 
 from app.core.logger import logger
+from app.database import READER_TIMEOUT_SECS
 from app.database.decoder.breeze_buddy.lead_call_tracker import decode_lead_call_tracker
-from app.database.queries import run_parameterized_query
+from app.database.queries import run_parameterized_query, run_reader_query
 from app.database.queries.breeze_buddy.lead_call_tracker import (
+    abort_lead_by_id_query,
+    acquire_lock_on_lead_by_id_query,
+    append_metadata_field_query,
+    count_recent_contacted_leads_query,
+    defer_lead_next_attempt_and_release_lock_query,
     get_all_lead_call_trackers_query,
+    get_call_facts_by_runs_query,
+    get_call_stats_by_runs_query,
+    get_lead_based_analytics_query,
     get_lead_by_call_id_query,
+    get_lead_by_id_query,
     get_lead_call_trackers_count_query,
-    get_leads_based_on_status_and_next_attempt_query,
+    get_leads_by_enrollment_id_query,
+    get_leads_by_request_id_query,
+    get_leads_by_status_and_time_before_query,
     insert_lead_call_tracker_query,
+    release_lock_on_lead_by_id_query,
+    reset_widget_voice_lead_query,
+    update_langfuse_scores_query,
     update_lead_call_completion_details_query,
     update_lead_call_details_query,
+    update_lead_call_id_by_id_query,
+    update_lead_call_initiated_time_by_id_query,
+    update_lead_call_initiated_time_query,
     update_lead_call_recording_url_query,
+    update_lead_customer_id_query,
+    update_lead_enrollment_id_query,
+    update_lead_payload_query,
+    update_lead_request_id_query,
+    update_lead_template_query,
 )
 from app.schemas import (
-    LeadCallOutcome,
+    TEMPLATELESS_PLACEHOLDER_TEMPLATES,
+    CallDirection,
+    ExecutionMode,
     LeadCallStatus,
     LeadCallTracker,
-    RequestedBy,
-    Workflow,
 )
 
 
@@ -36,10 +59,62 @@ def get_row_count(result: Optional[List[asyncpg.Record]]) -> int:
     return len(result) if result else 0
 
 
+# --------------------------------------------------------------------------
+# CRM tap hooks (ADR 0017). The data layer imports nothing from app/ai or
+# app/crm: buddy-side code (crm_mirror) registers callables here at import
+# time, and the two lifecycle choke points below fire them. Hooks must be
+# fail-open and non-blocking; a hook exception is logged, never raised.
+# --------------------------------------------------------------------------
+
+_created_hooks: List[Any] = []
+_finished_hooks: List[Any] = []
+
+
+def register_created_hook(hook: Any) -> None:
+    """Register a callable(lead) fired after every lead INSERT."""
+    if hook not in _created_hooks:
+        _created_hooks.append(hook)
+
+
+def register_finished_hook(hook: Any) -> None:
+    """Register a callable(lead) fired on every terminal transition."""
+    if hook not in _finished_hooks:
+        _finished_hooks.append(hook)
+
+
+def _fire_hooks(hooks: List[Any], lead: LeadCallTracker, label: str) -> None:
+    for hook in hooks:
+        try:
+            hook(lead)
+        except Exception as e:  # fail-open: taps never break lead writes
+            logger.error(f"{label} hook {hook!r} failed for {lead.id}: {e}")
+
+
+def require_template_link(template: str, template_id: Optional[str]) -> None:
+    """Guard: every new lead must be id-linked to its template.
+
+    Resolution is id-only (PRs #888/#889) — a name-only lead fails loudly at
+    call time and is invisible to id-filtered analytics. The ONLY sanctioned
+    template_id-less rows are the inbound placeholders in
+    TEMPLATELESS_PLACEHOLDER_TEMPLATES (IVR digit-menu stage / unmapped
+    number), which by definition have no template yet.
+
+    Raises:
+        ValueError: template_id missing for a non-placeholder template.
+    """
+    if not template_id and template not in TEMPLATELESS_PLACEHOLDER_TEMPLATES:
+        raise ValueError(
+            f"lead for template '{template}' created without template_id — "
+            "leads must be id-linked (only the IVR-OPTIONS / unknown inbound "
+            "placeholders may omit it)"
+        )
+
+
 async def create_lead_call_tracker(
     id: str,
-    merchant_id: RequestedBy,
-    workflow: Workflow,
+    reseller_id: str,
+    template: str,
+    merchant_id: Optional[str],
     next_attempt_at: Optional[datetime],
     payload: Optional[Dict[str, Any]],
     attempt_count: int = 0,
@@ -47,17 +122,43 @@ async def create_lead_call_tracker(
     call_initiated_time: Optional[datetime] = None,
     call_end_time: Optional[datetime] = None,
     cost: Optional[float] = None,
+    request_id: Optional[str] = None,
+    template_id: Optional[str] = None,
+    execution_mode: ExecutionMode = ExecutionMode.TELEPHONY,
+    status: LeadCallStatus = LeadCallStatus.BACKLOG,  # Status with default for backward compatibility
+    call_id: Optional[str] = None,  # For inbound calls where call_sid is known upfront
+    telephony_number_id: Optional[str] = None,  # For inbound calls
+    call_direction: CallDirection = CallDirection.OUTBOUND,  # Direction of call
+    outcome: Optional[
+        str
+    ] = None,  # For blocked calls where outcome is known at insert time
 ) -> Optional[LeadCallTracker]:
     """
     Create a new lead call tracker record.
+
+    Args:
+        template_id: UUID of the template (preferred, for referential integrity)
+        template: Name of the template (kept for backward compatibility)
+        execution_mode: Execution mode (TELEPHONY, TELEPHONY_TEST, DAILY, DAILY_TEST)
+        call_id: Call SID (optional, used for inbound calls where call_sid is known upfront)
+        telephony_number_id: Telephony number ID (optional, used for inbound calls)
+        call_direction: Direction of call (INBOUND or OUTBOUND, defaults to OUTBOUND)
+        outcome: Call outcome (optional, e.g. BLOCKED_REJECT, BLOCKED_REDIRECT)
+
+    Raises:
+        ValueError: when template_id is missing for a non-placeholder
+            template (see require_template_link).
     """
-    logger.info(f"Creating lead call tracker for merchant ID: {merchant_id}")
+    logger.info(f"Creating lead call tracker for reseller ID: {reseller_id}")
+    require_template_link(template, template_id)
 
     try:
         query_text, values = insert_lead_call_tracker_query(
             id=id,
+            reseller_id=reseller_id,
+            template=template,
+            template_id=template_id,
             merchant_id=merchant_id,
-            workflow=workflow,
             next_attempt_at=next_attempt_at,
             payload=payload,
             meta_data=meta_data,
@@ -65,15 +166,38 @@ async def create_lead_call_tracker(
             call_end_time=call_end_time,
             attempt_count=attempt_count,
             cost=cost,
+            request_id=request_id,
+            execution_mode=execution_mode,
+            status=status,  # Pass status (defaults to BACKLOG for backward compatibility)
+            call_id=call_id,
+            telephony_number_id=telephony_number_id,
+            call_direction=call_direction,
+            outcome=outcome,
         )
 
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead call tracker created successfully: {decoded_result}")
+            logger.info(
+                f"Lead call tracker created successfully: id={id} "
+                f"reseller_id={reseller_id} template={template}"
+            )
+            if decoded_result is not None:
+                _fire_hooks(_created_hooks, decoded_result, "created-lead")
             return decoded_result
 
         logger.error("Failed to create lead call tracker")
+        return None
+
+    except asyncpg.UniqueViolationError:
+        # Expected, not a fault: the CRM walker mints a deterministic uuid5
+        # lead id per visit, so a lease retry re-inserts the same id. Callers
+        # already treat None as "maybe it exists" and adopt the row
+        # (crm/outreach/nodes/call.py), so this is a WARNING, never an ERROR.
+        logger.warning(
+            f"Lead call tracker {id} already exists (duplicate insert) — "
+            "returning None"
+        )
         return None
 
     except Exception as e:
@@ -81,25 +205,109 @@ async def create_lead_call_tracker(
         return None
 
 
-async def get_leads_based_on_status_and_next_attempt(
-    status: LeadCallStatus, time: datetime
-) -> List[LeadCallTracker]:
+async def acquire_lock_on_lead_by_id(
+    lead_id: str,
+    expected_status: Optional[LeadCallStatus] = None,
+    force: bool = False,
+) -> Optional[LeadCallTracker]:
     """
-    Get leads based on status and next attempt time.
+    Atomically acquire lock on a lead by ID.
+    If expected_status is provided, only acquires when the lead's status matches —
+    combining lock + status check in one DB round-trip instead of three (lock, check, release).
+    Returns the locked lead if successful, None if already locked or status mismatched.
+
+    ``force=True`` bypasses the ``is_locked = FALSE`` guard for the reconciler
+    to reclaim dangling locks left by crashed pods.
     """
-    logger.info(f"Getting leads with status {status} and next attempt at {time}")
+    logger.info(
+        f"Attempting to acquire lock on lead with ID: {lead_id}"
+        + (f" (expected_status={expected_status.value})" if expected_status else "")
+        + (" [force]" if force else "")
+    )
 
     try:
-        query_text, values = get_leads_based_on_status_and_next_attempt_query(
-            status, time
+        query_text, values = acquire_lock_on_lead_by_id_query(
+            lead_id, expected_status, force=force
         )
         result = await run_parameterized_query(query_text, values)
-        if result:
-            return [decode_lead_call_tracker(row) for row in result]
-        return []
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            if decoded_result:
+                logger.info(f"Lock acquired successfully for lead: {decoded_result.id}")
+            else:
+                logger.error("Lead decoding failed after acquiring lock")
+            return decoded_result
+
+        logger.info(f"Lead {lead_id} is already locked or does not exist")
+        return None
+
     except Exception as e:
-        logger.error(f"Error getting leads: {e}")
-        return []
+        logger.error(f"Error acquiring lock on lead: {e}")
+        return None
+
+
+async def release_lock_on_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
+    """
+    Release lock on a lead by ID. Returns the unlocked lead if successful.
+    """
+    logger.info(f"Attempting to release lock on lead with ID: {lead_id}")
+
+    try:
+        query_text, values = release_lock_on_lead_by_id_query(lead_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            if decoded_result:
+                logger.info(f"Lock released successfully for lead: {decoded_result.id}")
+            else:
+                logger.error("Lead decoding failed after releasing lock")
+            return decoded_result
+
+        logger.warning(f"Lead {lead_id} not found for lock release")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error releasing lock on lead: {e}")
+        return None
+
+
+async def defer_lead_next_attempt_and_release_lock(
+    lead_id: str, defer_seconds: int
+) -> Optional[LeadCallTracker]:
+    """
+    Release the lock on a lead and push next_attempt_at out by at least
+    defer_seconds. Used by the dispatcher worker when it can't place a
+    call right now (rate-limited, outside calling hours, no channel
+    available, etc.) — the DB write survives Redis loss; the matching
+    ZADD onto the schedule is the fast path.
+    """
+    logger.info(
+        f"Deferring next_attempt_at by {defer_seconds}s and releasing lock "
+        f"for lead {lead_id}"
+    )
+
+    try:
+        query_text, values = defer_lead_next_attempt_and_release_lock_query(
+            lead_id, defer_seconds
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            if decoded_result:
+                logger.info(
+                    f"Lead {decoded_result.id} deferred to "
+                    f"{decoded_result.next_attempt_at} and unlocked"
+                )
+            else:
+                logger.error("Lead decoding failed after defer + release")
+            return decoded_result
+
+        logger.warning(f"Lead {lead_id} not found for defer + release")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error deferring lead next_attempt_at: {e}")
+        return None
 
 
 async def update_lead_call_details(
@@ -107,24 +315,28 @@ async def update_lead_call_details(
     status: LeadCallStatus,
     call_id: str,
     call_initiated_time: datetime,
-    outbound_number_id: str,
+    telephony_number_id: str,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call details.
+    Returns None (zero rows) if the lead was already moved out of BACKLOG
+    by a concurrent invocation — this is an expected concurrency outcome.
     """
     logger.info(f"Updating lead {id} with status {status} and call ID {call_id}")
 
     try:
         query_text, values = update_lead_call_details_query(
-            id, status, call_id, call_initiated_time, outbound_number_id
+            id, status, call_id, call_initiated_time, telephony_number_id
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead updated successfully: {decoded_result}")
+            logger.info(
+                f"Lead updated successfully: id={id} status={status} call_id={call_id}"
+            )
             return decoded_result
 
-        logger.error("Failed to update lead")
+        logger.warning(f"Lead {id} not updated — status may have changed concurrently")
         return None
 
     except Exception as e:
@@ -143,7 +355,29 @@ async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead found: {decoded_result}")
+            logger.info(f"Lead found for call ID {call_id}")
+            return decoded_result
+
+        logger.warning("Lead not found")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error getting lead: {e}")
+        return None
+
+
+async def get_lead_by_id(lead_id: str) -> Optional[LeadCallTracker]:
+    """
+    Get lead by ID.
+    """
+    logger.info(f"Getting lead with ID {lead_id}")
+
+    try:
+        query_text, values = get_lead_by_id_query(lead_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead found for ID {lead_id}")
             return decoded_result
 
         logger.error("Lead not found")
@@ -152,6 +386,198 @@ async def get_lead_by_call_id(call_id: str) -> Optional[LeadCallTracker]:
     except Exception as e:
         logger.error(f"Error getting lead: {e}")
         return None
+
+
+async def get_leads_by_request_id(
+    request_id: str,
+) -> List[LeadCallTracker]:
+    """
+    Get all leads by request_id.
+    """
+    logger.info(f"Getting leads with request_id {request_id}")
+
+    query_text, values = get_leads_by_request_id_query(request_id)
+    result = await run_parameterized_query(query_text, values)
+    if result and get_row_count(result) > 0:
+        decoded_results = [decode_lead_call_tracker(row) for row in result]
+        decoded_results = [r for r in decoded_results if r is not None]
+        logger.info(f"Found {len(decoded_results)} leads for request_id {request_id}")
+        return decoded_results
+
+    logger.info(f"No leads found for request_id {request_id}")
+    return []
+
+
+async def get_leads_by_enrollment_id(
+    merchant_id: str,
+    enrollment_id: str,
+    entered_at: datetime,
+    exited_at: Optional[datetime],
+) -> List[LeadCallTracker]:
+    """Every lead one workflow run placed, oldest first — its stamped leads
+    plus the retry leads minted for them while the run was open."""
+    query_text, values = get_leads_by_enrollment_id_query(
+        merchant_id, enrollment_id, entered_at, exited_at
+    )
+    result = await run_reader_query(query_text, values, timeout=READER_TIMEOUT_SECS)
+    decoded = [decode_lead_call_tracker(row) for row in result or []]
+    return [lead for lead in decoded if lead is not None]
+
+
+async def get_call_stats_by_runs(
+    merchant_id: str,
+    runs: Sequence[Tuple[str, datetime, Optional[datetime]]],
+) -> List[Dict[str, Any]]:
+    """Calls placed by these workflow runs (stamped leads and retries):
+    one row per (template, outcome, spoke) with calls, runs, talk seconds
+    over timed calls, attempts, cost. ``runs`` is (id, entered_at,
+    exited_at) per run. Plain dicts: the data layer knows no CRM shape."""
+    if not runs:
+        return []
+    query_text, values = get_call_stats_by_runs_query(
+        merchant_id, [r[0] for r in runs], [r[1] for r in runs], [r[2] for r in runs]
+    )
+    rows = await run_reader_query(query_text, values, timeout=READER_TIMEOUT_SECS)
+    return [dict(row) for row in rows or []]
+
+
+async def get_call_facts_by_runs(
+    merchant_id: str,
+    runs: Sequence[Tuple[str, datetime, Optional[datetime]]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Per workflow run (keyed by its id): one row per template that rang
+    it — template, leads, finished, placed, answered, no_answer, busy,
+    in_progress, outcomes, first_answered_at, last_answered_at and
+    last_answered_event (the payload's event_name on the last answered call
+    before the run ended). ``runs`` is (id, entered_at, exited_at) per run: the
+    id finds the leads the run stamped, the lifetime bounds its retries. A
+    run with no lead is absent. Plain dicts: the data layer knows no CRM
+    shape."""
+    if not runs:
+        return {}
+    query_text, values = get_call_facts_by_runs_query(
+        merchant_id, [r[0] for r in runs], [r[1] for r in runs], [r[2] for r in runs]
+    )
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    rows = await run_reader_query(query_text, values, timeout=READER_TIMEOUT_SECS)
+    for row in rows or []:
+        out.setdefault(str(row["enrollment_id"]), []).append(dict(row))
+    return out
+
+
+async def update_lead_call_initiated_time(
+    call_id: str, call_initiated_time: datetime
+) -> Optional[LeadCallTracker]:
+    """
+    Update lead call initiated time by call_id (telephony mode).
+    """
+    logger.info(f"Updating lead with call ID {call_id} with call initiated time")
+
+    try:
+        query_text, values = update_lead_call_initiated_time_query(
+            call_id, call_initiated_time
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead updated successfully for call ID {call_id}")
+            return decoded_result
+
+        logger.error("Failed to update lead")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead: {e}")
+        return None
+
+
+async def update_lead_call_initiated_time_by_id(
+    lead_id: str, call_initiated_time: datetime
+) -> Optional[LeadCallTracker]:
+    """
+    Update lead call initiated time by lead id (Daily mode).
+    Used when there's no telephony call_id.
+    """
+    logger.info(f"Updating lead {lead_id} with call initiated time")
+
+    try:
+        query_text, values = update_lead_call_initiated_time_by_id_query(
+            lead_id, call_initiated_time
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead updated successfully for ID {lead_id}")
+            return decoded_result
+
+        logger.error("Failed to update lead")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead: {e}")
+        return None
+
+
+async def update_lead_call_id_by_id(
+    lead_id: str, call_id: str
+) -> Optional[LeadCallTracker]:
+    """
+    Update lead call_id by lead id (Daily mode).
+    Used to store the Daily room name as call_id so that
+    recording webhooks can look up the lead by room name.
+    """
+    logger.info(f"Updating lead {lead_id} with call_id: {call_id}")
+
+    try:
+        query_text, values = update_lead_call_id_by_id_query(lead_id, call_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(
+                f"Lead call_id updated successfully for lead_id: {lead_id}, call_id: {call_id}"
+            )
+            return decoded_result
+
+        logger.error(f"Failed to update lead call_id for lead_id: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead call_id: {e}")
+        return None
+
+
+async def stamp_lead_customer(lead_id: str, customer_id: str) -> bool:
+    """
+    Stamp the CRM customer_id onto a lead row (ADR 0017, A15).
+
+    Best-effort by design: the caller treats a False return as a logged
+    degradation, never a failure — a call must not be blocked because
+    the CRM stamp could not be written.
+    """
+    try:
+        query_text, values = update_lead_customer_id_query(lead_id, customer_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return True
+        logger.error(f"Failed to stamp customer_id on lead {lead_id}")
+        return False
+    except Exception as e:
+        logger.error(f"Error stamping customer_id on lead {lead_id}: {e}")
+        return False
+
+
+async def update_lead_enrollment_id(lead_id: str, enrollment_id: str) -> bool:
+    """
+    Stamp the workflow run onto a lead (ADR 0010). False = not stamped:
+    the lead already carries a run, or the row is missing.
+    """
+    try:
+        query_text, values = update_lead_enrollment_id_query(lead_id, enrollment_id)
+        result = await run_parameterized_query(query_text, values)
+        return bool(result and get_row_count(result) > 0)
+    except Exception as e:
+        logger.error(f"Error stamping enrollment_id on lead {lead_id}: {e}")
+        return False
 
 
 async def update_lead_call_recording_url(
@@ -169,7 +595,7 @@ async def update_lead_call_recording_url(
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
-            logger.info(f"Lead updated successfully: {decoded_result}")
+            logger.info(f"Lead recording url updated for call ID {call_id}")
             return decoded_result
 
         logger.error("Failed to update lead")
@@ -182,29 +608,49 @@ async def update_lead_call_recording_url(
 
 async def update_lead_call_completion_details(
     id: str,
-    status: LeadCallStatus,
-    outcome: LeadCallOutcome,
-    meta_data: Dict[str, Any],
-    call_end_time: datetime,
+    status: Optional[LeadCallStatus] = None,
+    outcome: Optional[str] = None,
+    meta_data: Optional[Dict[str, Any]] = None,
+    call_end_time: Optional[datetime] = None,
+    expected_status: Optional[LeadCallStatus] = None,
 ) -> Optional[LeadCallTracker]:
     """
     Update lead call completion details.
+    Only updates fields that are not None.
+
+    With ``expected_status`` the write becomes an atomic claim — None then
+    means "another caller got there first", not "the update failed". Callers
+    that release a resource on the transition must pass it; see the query's
+    docstring for why a plain id-only UPDATE cannot be used to decide that.
     """
     logger.info(f"Updating lead call completion details for ID: {id}")
 
     try:
         query_text, values = update_lead_call_completion_details_query(
-            id, status, outcome, meta_data, call_end_time
+            id, status, outcome, meta_data, call_end_time, expected_status
         )
         result = await run_parameterized_query(query_text, values)
         if result and get_row_count(result) > 0:
             decoded_result = decode_lead_call_tracker(result[0])
             logger.info(
-                f"Lead call completion details updated successfully: {decoded_result}"
+                f"Lead call completion details updated successfully: id={id} "
+                f"status={status} outcome={outcome}"
             )
+            # Mirror the ending ONLY on the transition to FINISHED —
+            # mid-call outcome writes (template hooks) pass status=None.
+            if status == LeadCallStatus.FINISHED and decoded_result is not None:
+                _fire_hooks(_finished_hooks, decoded_result, "finished-lead")
             return decoded_result
 
-        logger.error("Failed to update lead call completion details")
+        if expected_status is not None:
+            # Lost the claim: the row is no longer in expected_status because
+            # another caller already transitioned it. Not an error.
+            logger.info(
+                f"Lead {id} was not in {expected_status.value}; another caller "
+                "already claimed the transition"
+            )
+        else:
+            logger.error("Failed to update lead call completion details")
         return None
 
     except Exception as e:
@@ -212,11 +658,53 @@ async def update_lead_call_completion_details(
         return None
 
 
+async def update_lead_template(
+    lead_id: str, template: str, template_id: str
+) -> Optional[LeadCallTracker]:
+    """
+    Update the template name and template_id for a lead.
+
+    Used when an IVR selection results in a different template than the
+    one the lead was initially created with in the answer handler.
+
+    Args:
+        lead_id: Lead UUID
+        template: New template name
+        template_id: New template UUID
+
+    Returns:
+        Updated LeadCallTracker record if successful, None otherwise
+    """
+    logger.info(
+        f"Updating template for lead_id: {lead_id} to template: {template}, "
+        f"template_id: {template_id}"
+    )
+
+    try:
+        query_text, values = update_lead_template_query(lead_id, template, template_id)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(
+                f"Lead template updated successfully: lead_id={lead_id} "
+                f"template={template} template_id={template_id}"
+            )
+            return decoded_result
+
+        logger.error(f"Failed to update lead template for lead_id: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead template for lead_id {lead_id}: {e}")
+        return None
+
+
 async def get_all_lead_call_trackers(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
     page: Optional[int] = None,
     page_size: Optional[int] = None,
 ) -> List[Tuple[LeadCallTracker, Optional[str]]]:
@@ -233,15 +721,21 @@ async def get_all_lead_call_trackers(
             start_date=start_date,
             end_date=end_date,
             outcome=outcome,
-            order_id=order_id,
+            request_id=request_id,
+            shop_name=shop_name,
             limit=limit,
             offset=offset,
         )
         result = await run_parameterized_query(query_text, values)
         if result:
-            return [
+            decoded_results = [
                 (decode_lead_call_tracker(row), row["calling_provider"])
                 for row in result
+            ]
+            return [
+                (item, provider)
+                for item, provider in decoded_results
+                if item is not None
             ]
         return []
     except Exception as e:
@@ -249,11 +743,37 @@ async def get_all_lead_call_trackers(
         return []
 
 
+async def get_leads_by_status_and_time_before(
+    status: LeadCallStatus, time: datetime, include_locked: bool = False
+) -> List[LeadCallTracker]:
+    """
+    Get leads based on their status and a time before which they were initiated.
+    Pass include_locked=True to include locked rows (used by the PROCESSING reconciler).
+    """
+    logger.info(f"Getting leads with status {status} initiated before {time}")
+
+    try:
+        query_text, values = get_leads_by_status_and_time_before_query(
+            status, time, include_locked=include_locked
+        )
+        result = await run_parameterized_query(query_text, values)
+        if result:
+            decoded = [decode_lead_call_tracker(row) for row in result]
+            return [item for item in decoded if item is not None]
+        else:
+            logger.info("No leads found matching criteria")
+        return []
+    except Exception as e:
+        logger.error(f"Error getting leads: {e}")
+        return []
+
+
 async def get_lead_call_trackers_count(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     outcome: Optional[str] = None,
-    order_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    shop_name: Optional[str] = None,
 ) -> int:
     """
     Get the count of all lead call trackers with optional filters.
@@ -265,7 +785,8 @@ async def get_lead_call_trackers_count(
             start_date=start_date,
             end_date=end_date,
             outcome=outcome,
-            order_id=order_id,
+            request_id=request_id,
+            shop_name=shop_name,
         )
         result = await run_parameterized_query(query_text, values)
         if result and result[0]["count"]:
@@ -274,3 +795,224 @@ async def get_lead_call_trackers_count(
     except Exception as e:
         logger.error(f"Error getting lead call trackers count: {e}")
         return 0
+
+
+async def get_lead_based_analytics(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> List[asyncpg.Record]:
+    """
+    Get per-lead call data for analytics.
+    Returns list of records with call counts per order_id.
+    """
+    logger.info("Getting lead-based analytics data")
+
+    try:
+        query_text, values = get_lead_based_analytics_query(
+            start_date=start_date,
+            end_date=end_date,
+        )
+        result = await run_parameterized_query(query_text, values)
+        return result if result else []
+    except Exception as e:
+        logger.error(f"Error getting lead-based analytics: {e}", exc_info=True)
+        return []
+
+
+async def update_langfuse_scores(
+    call_id: str, langfuse_scores: Dict[str, Any]
+) -> Optional[LeadCallTracker]:
+    """
+    Update the langfuse_scores column for a specific call_id.
+
+    Args:
+        call_id: The call identifier (call_sid)
+        langfuse_scores: JSON object containing Langfuse evaluation scores
+
+    Returns:
+        Updated LeadCallTracker record if successful, None otherwise
+    """
+    logger.debug(f"Updating langfuse_scores for call_id: {call_id}")
+
+    try:
+        query_text, values = update_langfuse_scores_query(call_id, langfuse_scores)
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            return decoded_result
+        return None
+    except Exception as e:
+        logger.error(f"Error updating langfuse_scores for call_id {call_id}: {e}")
+        return None
+
+
+async def handle_lead_abort(
+    lead_id: str, cancellation_reason: str
+) -> Optional[LeadCallTracker]:
+    """
+    Abort a lead by lead ID.
+    Sets status to FINISHED and outcome to ABORT.
+    """
+    try:
+        query_text, values = abort_lead_by_id_query(lead_id, cancellation_reason)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            # Abort is a terminal transition that bypasses the completion
+            # accessor — mirror its ending here (outcome=ABORT on the row).
+            if decoded_result is not None:
+                _fire_hooks(_finished_hooks, decoded_result, "finished-lead")
+            return decoded_result
+
+        logger.error("Failed to abort lead")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error aborting lead {lead_id}: {e}")
+        return None
+
+
+async def update_lead_payload(
+    lead_id: str, payload_updates: Dict[str, Any]
+) -> Optional[LeadCallTracker]:
+    """
+    Update specific fields in the payload JSON column for a lead.
+    Merges the provided updates into the existing payload without
+    overwriting other fields.
+    """
+    logger.info(
+        f"Updating lead payload for ID: {lead_id}, keys: {list(payload_updates.keys())}"
+    )
+
+    try:
+        query_text, values = update_lead_payload_query(lead_id, payload_updates)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead payload updated successfully for ID: {lead_id}")
+            return decoded_result
+
+        logger.error(f"Failed to update lead payload for ID: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead payload for ID {lead_id}: {e}")
+        return None
+
+
+async def append_metadata_field(
+    lead_id: str, field_updates: Dict[str, Any]
+) -> Optional[LeadCallTracker]:
+    """
+    Append/merge specific fields into the meta_data JSONB column for a lead.
+    Merges the provided updates into the existing meta_data without
+    overwriting other fields.
+    """
+    logger.info(
+        f"Appending metadata fields for lead ID: {lead_id}, keys: {list(field_updates.keys())}"
+    )
+
+    try:
+        query_text, values = append_metadata_field_query(lead_id, field_updates)
+        result = await run_parameterized_query(query_text, values)
+
+        if result and get_row_count(result) > 0:
+            decoded_result = decode_lead_call_tracker(result[0])
+            logger.info(f"Lead metadata updated successfully for ID: {lead_id}")
+            return decoded_result
+
+        logger.error(f"Failed to update lead metadata for ID: {lead_id}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Error updating lead metadata for ID {lead_id}: {e}")
+        return None
+
+
+async def update_lead_request_id(lead_id: str, request_id: str) -> None:
+    """
+    Update the request_id column for a lead.
+
+    Used to link an inbound lead to its associated outbound (hold-transfer)
+    lead after the outbound leg is created.
+
+    Args:
+        lead_id: UUID of the lead to update (inbound lead)
+        request_id: Value to set as request_id (outbound lead UUID)
+    """
+    logger.info(f"Updating request_id for lead ID: {lead_id} → {request_id}")
+    try:
+        query_text, values = update_lead_request_id_query(lead_id, request_id)
+        await run_parameterized_query(query_text, values)
+        logger.info(f"request_id updated successfully for lead ID: {lead_id}")
+    except Exception as e:
+        logger.error(f"Error updating request_id for lead ID {lead_id}: {e}")
+
+
+async def reset_widget_voice_lead(
+    lead_id: str,
+    payload: Dict[str, Any],
+    meta_data_seed: Dict[str, Any],
+    execution_mode: ExecutionMode = ExecutionMode.DAILY_STREAM,
+) -> Optional[LeadCallTracker]:
+    """Reset a widget voice lead so the next /voice/connect can reuse it.
+
+    Used only by the unified widget router (CHAT_MODE.md §14): one
+    chat_session has ONE voice lead (set in chat_session.voice_lead_id)
+    that persists for the conversation's lifetime. Each /voice/connect
+    after the first reuses this lead — bumps attempt_count, refreshes
+    the widget seed, re-asserts ``execution_mode`` (so a pre-stream-pivot
+    lead is upgraded to DAILY_STREAM), clears per-call fields (call_id,
+    outcome, etc.) so they don't leak from the previous attempt.
+    """
+    logger.info(
+        f"Resetting widget voice lead {lead_id} for next attempt "
+        f"(seed: {sorted(meta_data_seed.keys())}, mode: {execution_mode.value})"
+    )
+    query_text, values = reset_widget_voice_lead_query(
+        lead_id, payload, meta_data_seed, execution_mode.value
+    )
+    try:
+        result = await run_parameterized_query(query_text, values)
+        if result and get_row_count(result) > 0:
+            return decode_lead_call_tracker(result[0])
+        logger.error(f"Failed to reset widget voice lead {lead_id} (no row updated)")
+        return None
+    except Exception as e:
+        logger.error(f"Error resetting widget voice lead {lead_id}: {e}")
+        raise
+
+
+async def count_recent_contacted_leads(
+    customer_mobile_number: str,
+    reseller_id: str,
+    window_start: datetime,
+    merchant_id: Optional[str] = None,
+    exclude_request_id: Optional[str] = None,
+    exclude_lead_id: Optional[str] = None,
+) -> Optional[int]:
+    """Count recent/in-flight contact rows for a phone number. See the query
+    docstring for what counts as "contact".
+
+    Returns ``None`` (not ``0``) when the query fails, so the caller can tell
+    "no recent contact" apart from "we don't know" — the pre-check treats the
+    latter as an error and lets ``default_on_failure`` decide.
+    """
+    try:
+        query_text, values = count_recent_contacted_leads_query(
+            customer_mobile_number=customer_mobile_number,
+            reseller_id=reseller_id,
+            window_start=window_start,
+            merchant_id=merchant_id,
+            exclude_request_id=exclude_request_id,
+            exclude_lead_id=exclude_lead_id,
+        )
+        result = await run_parameterized_query(query_text, values)
+        if not result:
+            return None
+        return int(result[0]["count"] or 0)
+    except Exception as e:
+        logger.error(f"Error counting recent contacted leads: {e}")
+        return None

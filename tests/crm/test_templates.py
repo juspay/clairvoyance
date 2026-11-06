@@ -1,0 +1,1168 @@
+"""The template registry's lifecycle, and the provider face under it.
+
+Every test here pins a transition, because transitions are where this
+registry has been wrong: a rejected template that could neither be
+resubmitted nor edited, a claim that was never released, a provider's
+UPPERCASE status stored beside our lowercase rules, and a delete that took
+every language variant with it.
+"""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, List, Optional
+
+import httpx
+import pytest
+from pydantic import ValidationError
+
+from app.crm.connectivity.accounts import installations as installations_module
+from app.crm.connectivity.db.accessors import template as template_accessor_module
+from app.crm.connectivity.db.queries.template import (
+    claim_for_submit_query,
+    insert_template_draft_query,
+    update_draft_components_query,
+)
+from app.crm.connectivity.providers.whatsapp.templates import (
+    WhatsappTemplateError,
+    WhatsappTemplates,
+    _from_meta,
+)
+from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
+from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.template import (
+    CreateTemplateDraftRequest,
+    EditTemplateRequest,
+    SubmitTemplateRequest,
+    TemplateDraft,
+    TemplateRead,
+)
+from app.crm.connectivity.templates import (
+    lifecycle as templates_module,
+    reads as template_reads_module,
+    retire_guard as retire_guard_module,
+)
+from app.crm.connectivity.templates.lifecycle import (
+    TemplateError,
+    TemplateInUseError,
+    TemplateNotFoundError,
+    create_draft,
+    edit,
+    retire,
+    submit,
+)
+from app.crm.connectivity.templates.reads import template_status
+from scripts.check_crm_boundaries import TABLE_OWNERS
+from tests.crm.doubles import FakeInstallationAccessor, stub_graph
+
+# --- the provider face ------------------------------------------------------
+
+
+def test_meta_shouting_becomes_the_canon_dictionary() -> None:
+    """Meta answers APPROVED; every rule in templates.py compares 'approved'.
+
+    Storing their casing verbatim once meant a registry holding 'APPROVED',
+    'PENDING', 'submitting' and 'deleted' side by side, ?status=approved
+    returning nothing for an approved template, and edits refused with "is
+    'APPROVED' — edit not supported from this status".
+    """
+    assert _from_meta("APPROVED") == "approved"
+    assert _from_meta("PENDING_DELETION") == "pending_deletion"
+    assert _from_meta(None) is None
+    assert _from_meta("  ") is None
+
+
+def _bundle() -> CredentialBundle:
+    return CredentialBundle(values={"system_user_token": "tok"})
+
+
+async def test_a_submitted_template_keeps_metas_own_verdict(monkeypatch) -> None:
+    """Their id, their category, their status — normalised, not reinterpreted.
+
+    The category especially: a provider may assign a different one from the
+    one requested, and theirs is what the merchant is billed at.
+    """
+    stub_graph(
+        monkeypatch,
+        lambda _r: httpx.Response(
+            200, json={"id": "T-1", "status": "PENDING", "category": "UTILITY"}
+        ),
+    )
+    state = await WhatsappTemplates().submit(
+        _bundle(),
+        "waba-1",
+        TemplateDraft(
+            name="order_update", language="en_US", category="MARKETING", components=[]
+        ),
+    )
+    assert state.provider_template_id == "T-1"
+    assert state.status == "pending"
+    assert state.category == "UTILITY"
+
+
+async def test_a_submission_without_an_id_is_a_failure(monkeypatch) -> None:
+    """Without the provider's id no webhook can ever be matched to this row,
+    so a 200 that omits it is not a success."""
+    stub_graph(monkeypatch, lambda _r: httpx.Response(200, json={"status": "PENDING"}))
+    with pytest.raises(Exception):
+        await WhatsappTemplates().submit(
+            _bundle(),
+            "waba-1",
+            TemplateDraft(
+                name="n", language="en_US", category="UTILITY", components=[]
+            ),
+        )
+
+
+async def test_retiring_one_language_carries_the_provider_id(monkeypatch) -> None:
+    """Meta's delete takes a NAME, and a name alone deletes every language
+    variant of it. Retiring order_update/en_US would silently delete
+    order_update/hi_IN on Meta while our hi_IN row still read 'approved' —
+    and the first send on it would fail at Meta with 132001."""
+    seen = stub_graph(
+        monkeypatch, lambda _r: httpx.Response(200, json={"success": True})
+    )
+    await WhatsappTemplates().retire(
+        _bundle(), "waba-1", "T-1", "order_update", "en_US"
+    )
+    url = str(seen[0].url)
+    assert "hsm_id=T-1" in url
+    assert "name=order_update" in url
+
+
+def test_a_status_webhook_normalises_into_the_registry() -> None:
+    face = WhatsappTemplates()
+    state = face.normalize_event(
+        "template.status",
+        {
+            "message_template_id": "T-1",
+            "message_template_name": "order_update",
+            "message_template_language": "en_US",
+            "event": "APPROVED",
+            "reason": "NONE",
+        },
+    )
+    assert state is not None
+    assert state.status == "approved"
+    # Meta sends the literal string "NONE" when there is no reason; storing
+    # it would show a merchant the word NONE as their rejection reason.
+    assert state.rejection_reason is None
+
+
+def test_a_rejection_keeps_the_providers_own_words() -> None:
+    state = WhatsappTemplates().normalize_event(
+        "template.status",
+        {
+            "message_template_id": "T-1",
+            "event": "REJECTED",
+            "reason": "INVALID_FORMAT",
+        },
+    )
+    assert state is not None and state.rejection_reason == "INVALID_FORMAT"
+
+
+def test_a_category_webhook_carries_the_new_category() -> None:
+    state = WhatsappTemplates().normalize_event(
+        "template.category",
+        {
+            "message_template_id": "T-1",
+            "previous_category": "MARKETING",
+            "new_category": "UTILITY",
+        },
+    )
+    assert state is not None and state.category == "UTILITY"
+
+
+def test_a_letter_with_nothing_to_apply_is_none() -> None:
+    assert WhatsappTemplates().normalize_event("template.status", {}) is None
+    assert WhatsappTemplates().normalize_event("something.else", {}) is None
+
+
+# --- the lifecycle ----------------------------------------------------------
+
+
+def _template(**overrides) -> TemplateRead:
+    fields = dict(
+        id="t-1",
+        merchant_id="shop",
+        channel="whatsapp",
+        provider_account_ref="waba-1",
+        name="order_update",
+        language="en_US",
+        components=[{"type": "BODY", "text": "hi"}],
+        status="draft",
+        status_updated_at=datetime.now(timezone.utc),
+        quality="UNKNOWN",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    fields.update(overrides)
+    return TemplateRead(**fields)
+
+
+class _FakeTemplateAccessor:
+    """Stands in for db/accessors/template."""
+
+    def __init__(self, template: Optional[TemplateRead] = None, claim=True):
+        """Test double."""
+        self.template = template
+        self.claim = claim
+        self.calls: List[str] = []
+        self.released = False
+
+    async def get_template(self, merchant_id, template_id):
+        """Test double: the seeded row."""
+        return self.template
+
+    async def get_template_by_natural_key(self, txn, *args):
+        """Test double: no existing row unless one was seeded."""
+        return self.template
+
+    async def insert_template_draft(
+        self,
+        txn,
+        merchant_id,
+        channel,
+        provider_account_ref,
+        name,
+        language,
+        components,
+        category=None,
+    ):
+        """Test double: record the insert and the category it keeps."""
+        self.calls.append("insert")
+        self.draft_category = category
+        return _template()
+
+    async def update_draft_components(
+        self, txn, merchant_id, template_id, components, category=None
+    ):
+        """Test double: record the draft edit and the category it keeps."""
+        self.calls.append("update_draft")
+        self.draft_category = category
+        return _template(components=components)
+
+    async def claim_for_submit(self, txn, merchant_id, template_id, category):
+        """Test double: the exclusive claim, or nothing."""
+        self.calls.append("claim")
+        self.claimed_category = category
+        return _template(status="submitting") if self.claim else None
+
+    async def release_submit_claim(self, merchant_id, template_id):
+        """Test double: record that the claim was handed back."""
+        self.released = True
+        return _template(status="draft")
+
+    async def record_submission(self, txn, *args):
+        """Test double: record the provider's verdict."""
+        self.calls.append("record_submission")
+        return _template(status="pending", provider_template_id="T-1")
+
+    async def record_in_place_edit(
+        self, conn, merchant_id, template_id, comps, status, expected_status
+    ):
+        """Test double: the conditional write — records what it was
+        authorised against as well as what it sets."""
+        self.calls.append("record_in_place_edit")
+        self.edited_from = expected_status
+        return _template(status=status, components=comps)
+
+    async def lock_template_exclusive(self, txn, merchant_id, channel, name):
+        """Test double: the template lock, taken exclusive (phase 14)."""
+        self.calls.append("lock")
+
+    async def retire_template(self, txn, merchant_id, template_id):
+        """Test double: record the retirement."""
+        self.calls.append("retire")
+        return _template(status="deleted")
+
+
+class _StubTemplates:
+    """A TemplateProvider with scripted behaviour."""
+
+    def __init__(self, edits_in_place=True, submit_error=None):
+        """Test double."""
+        self.edits_in_place = edits_in_place
+        self.submit_error = submit_error
+        self.retired: List[tuple] = []
+
+    async def submit(self, bundle, account_ref, draft):
+        """Test double: the provider's answer, or its refusal."""
+        if self.submit_error:
+            raise self.submit_error
+        from app.crm.connectivity.schemas.template import ProviderTemplateState
+
+        return ProviderTemplateState(
+            provider_template_id="T-1", status="pending", category=draft.category
+        )
+
+    async def edit(self, bundle, account_ref, provider_template_id, components):
+        """Test double: an in-place edit sends it back for review."""
+        from app.crm.connectivity.schemas.template import ProviderTemplateState
+
+        return ProviderTemplateState(
+            provider_template_id=provider_template_id, status="pending"
+        )
+
+    async def retire(self, bundle, account_ref, provider_template_id, name, language):
+        """Test double: record the withdrawal."""
+        self.retired.append((provider_template_id, name, language))
+
+
+class _Credential:
+    is_active = True
+    value = {"system_user_token": "tok"}
+
+
+def _healthy(**overrides) -> ConnectorInstallation:
+    fields = dict(
+        id="i-1",
+        merchant_id="shop",
+        connector_key="whatsapp",
+        external_account_id="waba-1",
+        credential_id="cred-1",
+        status="healthy",
+    )
+    fields.update(overrides)
+    return ConnectorInstallation(**fields)
+
+
+def _patch(monkeypatch, *, templates=None, installation=None, provider=None):
+    """Wire templates.py to doubles."""
+    accessor = templates or _FakeTemplateAccessor()
+    installations = FakeInstallationAccessor(
+        _healthy() if installation is None else installation
+    )
+    face = provider or _StubTemplates()
+
+    class _Spec:
+        key = "whatsapp"
+        channel = "whatsapp"
+
+    spec = _Spec()
+    spec.templates = face  # type: ignore[attr-defined]
+
+    async def _atomically(fn, *args):
+        """Test double: run the atom body against a None handle."""
+        return await fn(None, *args)
+
+    async def _credential(credential_id, mask=True, raise_errors=False):
+        """Test double: the vault read."""
+        return _Credential()
+
+    async def _no_open_runs(merchant_id: str, channel: str, name: str) -> tuple:
+        """Test double: the retire guard (phase 14) finds nothing naming it."""
+        return (0, 0)
+
+    monkeypatch.setattr(templates_module, "template_accessor", accessor)
+    monkeypatch.setattr(installations_module, "installation_accessor", installations)
+    monkeypatch.setattr(templates_module, "atomically", _atomically)
+    monkeypatch.setattr(installations_module, "get_credential_by_id", _credential)
+    monkeypatch.setattr(templates_module, "connector_for_channel", lambda c: spec)
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", _no_open_runs)
+    return accessor, face
+
+
+async def test_a_draft_on_an_unregistered_channel_is_refused(monkeypatch) -> None:
+    """Fail closed at create. A draft nothing can ever submit is worse than a
+    refusal — it looks like progress."""
+    _patch(monkeypatch)
+    monkeypatch.setattr(templates_module, "connector_for_channel", lambda c: None)
+    with pytest.raises(TemplateError, match="no connector"):
+        await create_draft("shop", "telegram", "acct", "n", "en_US", [])
+
+
+async def test_a_draft_on_an_unconnected_account_is_refused(monkeypatch) -> None:
+    """A provider_account_ref naming no healthy connection has no credential
+    to submit with, so it is refused here rather than at submit."""
+    _patch(monkeypatch, installation=None)
+    monkeypatch.setattr(
+        installations_module, "installation_accessor", FakeInstallationAccessor(None)
+    )
+    with pytest.raises(TemplateError, match="no connected account"):
+        await create_draft("shop", "whatsapp", "waba-9", "n", "en_US", [])
+
+
+async def test_a_draft_on_a_degraded_connection_is_refused(monkeypatch) -> None:
+    _patch(monkeypatch, installation=_healthy(status="degraded"))
+    with pytest.raises(TemplateError, match="degraded"):
+        await create_draft("shop", "whatsapp", "waba-1", "n", "en_US", [])
+
+
+async def test_recreating_a_submitted_draft_does_not_overwrite_it(
+    monkeypatch,
+) -> None:
+    """Idempotency does not extend to replacing the components a provider is
+    currently reviewing."""
+    _patch(monkeypatch, templates=_FakeTemplateAccessor(_template(status="pending")))
+    with pytest.raises(TemplateError, match="already exists"):
+        await create_draft("shop", "whatsapp", "waba-1", "order_update", "en_US", [])
+
+
+async def test_a_rejected_template_cannot_be_resubmitted(monkeypatch) -> None:
+    """The provider still holds that name, so a re-create answers "name
+    already exists" — the refusal names the way out instead."""
+    _patch(monkeypatch, templates=_FakeTemplateAccessor(_template(status="rejected")))
+    with pytest.raises(TemplateError, match="edit it"):
+        await submit("shop", "t-1", "UTILITY")
+
+
+async def test_a_rejected_template_is_corrected_by_editing_it(monkeypatch) -> None:
+    """The edit IS the resubmission: same row, back to pending."""
+    accessor, _ = _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(
+            _template(status="rejected", provider_template_id="T-1")
+        ),
+    )
+    updated = await edit("shop", "t-1", [{"type": "BODY", "text": "fixed"}])
+    assert updated.status == "pending"
+    assert "record_in_place_edit" in accessor.calls
+
+
+async def test_an_approved_template_edited_goes_back_to_pending(monkeypatch) -> None:
+    """canon T23's one explicit transition rule."""
+    accessor, _ = _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(
+            _template(status="approved", provider_template_id="T-1")
+        ),
+    )
+    updated = await edit("shop", "t-1", [{"type": "BODY", "text": "new"}])
+    assert updated.status == "pending"
+
+
+async def test_a_provider_without_in_place_edits_says_so(monkeypatch) -> None:
+    """Meta's behaviour is not universal: SMS-DLT re-registers under a new
+    id. The refusal is honest rather than repeating Meta's rule."""
+    _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(
+            _template(status="approved", provider_template_id="T-1")
+        ),
+        provider=_StubTemplates(edits_in_place=False),
+    )
+    with pytest.raises(TemplateError, match="retire"):
+        await edit("shop", "t-1", [])
+
+
+async def test_a_refused_submission_gives_the_draft_back(monkeypatch) -> None:
+    """The claim is exclusive and 'submitting' is not re-claimable, so a
+    claim left standing after a failure is permanent: that template could
+    never be submitted or edited again."""
+    accessor, _ = _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(_template(status="draft")),
+        provider=_StubTemplates(submit_error=WhatsappTemplateError("bad components")),
+    )
+    with pytest.raises(TemplateError, match="bad components"):
+        await submit("shop", "t-1", "UTILITY")
+    assert accessor.released is True
+
+
+async def test_a_concurrent_submit_loses_the_claim(monkeypatch) -> None:
+    """Two requests that both read 'draft' must not both reach the provider:
+    it refuses the second by name, but only after we have fired it."""
+    _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(_template(status="draft"), claim=False),
+    )
+    with pytest.raises(TemplateError, match="already being submitted"):
+        await submit("shop", "t-1", "UTILITY")
+
+
+async def test_a_successful_submit_records_the_providers_verdict(
+    monkeypatch,
+) -> None:
+    accessor, _ = _patch(
+        monkeypatch, templates=_FakeTemplateAccessor(_template(status="draft"))
+    )
+    updated = await submit("shop", "t-1", "UTILITY")
+    assert updated.status == "pending"
+    assert updated.provider_template_id == "T-1"
+    assert accessor.calls == ["claim", "record_submission"]
+    # the category sent to the provider is the one the claim wrote
+    assert accessor.claimed_category == "UTILITY"
+
+
+async def test_retiring_still_happens_when_the_provider_is_down(
+    monkeypatch,
+) -> None:
+    """Local retirement is what the send path reads, so it is the one that
+    has to happen — a provider outage must not leave a merchant unable to
+    stop using a template."""
+
+    class _Broken(_StubTemplates):
+        async def retire(
+            self, bundle, account_ref, provider_template_id, name, language
+        ):
+            """Test double: the provider is unreachable."""
+            raise RuntimeError("meta down")
+
+    accessor, _ = _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(
+            _template(status="approved", provider_template_id="T-1")
+        ),
+        provider=_Broken(),
+    )
+    updated = await retire("shop", "t-1")
+    assert updated.status == "deleted"
+
+
+# --- the retirement guard (rollout phase 14): a template an open workflow
+# run still names cannot be withdrawn under it ---
+
+
+def _approved() -> _FakeTemplateAccessor:
+    return _FakeTemplateAccessor(
+        _template(status="approved", provider_template_id="T-1")
+    )
+
+
+async def test_retire_is_refused_while_open_runs_name_the_template(
+    monkeypatch,
+) -> None:
+    """The guard is outreach's answer to "who would still send this?" —
+    open runs by their PINNED document, live/paused plans by their latest
+    — asked through the hook, never a cross import. A count refuses the
+    retirement before the provider or the row is touched, and says how
+    many of each."""
+    accessor, face = _patch(monkeypatch, templates=_approved())
+    asked: List[tuple] = []
+
+    async def two_runs(merchant_id: str, channel: str, name: str) -> tuple:
+        asked.append((merchant_id, channel, name))
+        return (2, 0)
+
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", two_runs)
+    with pytest.raises(TemplateInUseError, match="2 open workflow run"):
+        await retire("shop", "t-1")
+    template = accessor.template
+    assert template is not None
+    assert asked == [("shop", template.channel, template.name)]
+    assert "retire" not in accessor.calls and face.retired == []
+
+
+async def test_retire_is_refused_while_a_live_plan_names_the_template(
+    monkeypatch,
+) -> None:
+    """No run open right now, but a live plan's latest document sends it:
+    its next entrant would be pinned to a withdrawn template. Refused the
+    same way."""
+    accessor, face = _patch(monkeypatch, templates=_approved())
+
+    async def one_plan(merchant_id: str, channel: str, name: str) -> tuple:
+        return (0, 1)
+
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", one_plan)
+    with pytest.raises(TemplateInUseError, match="1 live or paused plan"):
+        await retire("shop", "t-1")
+    assert "retire" not in accessor.calls and face.retired == []
+
+
+async def test_retire_proceeds_when_no_open_run_names_the_template(
+    monkeypatch,
+) -> None:
+    accessor, face = _patch(monkeypatch, templates=_approved())
+    updated = await retire("shop", "t-1")
+    assert updated.status == "deleted" and accessor.calls == ["lock", "retire"]
+
+
+async def test_retire_withdraws_locally_with_the_check_before_the_provider(
+    monkeypatch,
+) -> None:
+    """The exclusive template lock, the check and the local withdrawal
+    share one transaction, in that order, and the provider call comes
+    after — no provider round-trip separates the check from the commit,
+    and no pinner can commit between them (the CodeRabbit finding on
+    #1071; the interleaving itself is proven on Postgres in the PR)."""
+    order: List[str] = []
+
+    class _Recording(_FakeTemplateAccessor):
+        async def lock_template_exclusive(self, txn, merchant_id, channel, name):
+            """Test double: the exclusive lock, in order."""
+            order.append("lock")
+
+        async def retire_template(self, txn, merchant_id, template_id):
+            """Test double: local withdrawal, in order."""
+            order.append("local")
+            return await super().retire_template(txn, merchant_id, template_id)
+
+    class _Face(_StubTemplates):
+        async def retire(
+            self, bundle, account_ref, provider_template_id, name, language
+        ):
+            """Test double: the provider call, in order."""
+            order.append("provider")
+            await super().retire(
+                bundle, account_ref, provider_template_id, name, language
+            )
+
+    async def checked(merchant_id: str, channel: str, name: str) -> tuple:
+        order.append("check")
+        return (0, 0)
+
+    _patch(
+        monkeypatch,
+        templates=_Recording(_template(status="approved", provider_template_id="T-1")),
+        provider=_Face(),
+    )
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", checked)
+    updated = await retire("shop", "t-1")
+    assert updated.status == "deleted"
+    assert order == ["lock", "check", "local", "provider"]
+
+
+async def test_retire_fails_closed_when_no_guard_is_registered(monkeypatch) -> None:
+    """A missing registration is a wiring bug, not permission to delete:
+    refuse, and say so in the log."""
+    accessor, face = _patch(monkeypatch, templates=_approved())
+    monkeypatch.setattr(retire_guard_module, "_retire_guard", None)
+    with pytest.raises(TemplateError, match="not wired"):
+        await retire("shop", "t-1")
+    assert "retire" not in accessor.calls and face.retired == []
+
+
+async def test_an_unknown_template_is_a_not_found(monkeypatch) -> None:
+    """Its own exception type, so routes answer 404 rather than 400."""
+    _patch(monkeypatch, templates=_FakeTemplateAccessor(None))
+    with pytest.raises(TemplateNotFoundError):
+        await submit("shop", "t-999", "UTILITY")
+    with pytest.raises(TemplateNotFoundError):
+        await edit("shop", "t-999", [])
+    with pytest.raises(TemplateNotFoundError):
+        await retire("shop", "t-999")
+
+
+# --- the table itself -------------------------------------------------------
+
+TEMPLATE_MIGRATION = Path("app/database/migrations/061_create_crm_channel_template.sql")
+
+
+def _template_ddl() -> str:
+    """The migration with comment prose stripped: a structural assertion that
+    passes on the paragraph explaining a choice proves nothing."""
+    return "\n".join(
+        line
+        for line in TEMPLATE_MIGRATION.read_text().splitlines()
+        if not line.lstrip().startswith("--")
+    )
+
+
+def test_the_table_is_owned_by_connectivity() -> None:
+    assert TABLE_OWNERS["crm_channel_template"] == "connectivity"
+
+
+def _index_columns(index_name: str) -> str:
+    """The parenthesised column list of one index, and nothing else.
+
+    Sliced rather than matched on the whole statement, because the index NAME
+    contains the word 'channel' and would satisfy an assertion meant for the
+    columns.
+    """
+    ddl = _template_ddl()
+    body = ddl[ddl.index(index_name) :]
+    return body[body.index("(") + 1 : body.index(")")]
+
+
+def test_the_natural_key_includes_the_provider_account() -> None:
+    """canon T23 seals four columns; this index carries a fifth.
+
+    A merchant may hold two accounts on one channel, and the same
+    name+language registered in both are two different templates with two
+    different provider ids. Without the account in the key the second one
+    collides with the first and simply cannot be created.
+    """
+    columns = [
+        c.strip() for c in _index_columns("crm_channel_template_natural_uq").split(",")
+    ]
+    assert columns == [
+        "merchant_id",
+        "channel",
+        "provider_account_ref",
+        "name",
+        "language",
+    ]
+    # merchant_id leads, as every unique index on a crm_ table must.
+    assert columns[0] == "merchant_id"
+
+
+def test_the_provider_id_is_unique_alone_and_partial() -> None:
+    """The same exception crm_message_provider_id_uq earns: the tenancy law
+    protects OUR identifiers, and this one is the PROVIDER's — globally
+    unique, and the only thing a webhook names."""
+    assert _index_columns("crm_channel_template_provider_id_uq").strip() == (
+        "provider_template_id"
+    )
+    ddl = _template_ddl()
+    index = ddl[ddl.index("crm_channel_template_provider_id_uq") :]
+    assert "WHERE provider_template_id IS NOT NULL" in index[: index.index(";")]
+
+
+def test_no_check_constrains_provider_vocabulary() -> None:
+    """The 027 scar: a CHECK turns "support a new status" into a migration.
+    Providers rename categories and add statuses we have not seen."""
+    ddl = _template_ddl()
+    assert "CHECK" not in ddl.upper()
+
+
+def test_the_touch_trigger_is_present() -> None:
+    assert "crm_channel_template_touch" in _template_ddl()
+
+
+def test_a_malformed_components_blob_decodes_to_empty_rather_than_raising() -> None:
+    """The totality promise has to hold at the layer that needs objects.
+
+    jsonb_list makes the COLUMN total — a scalar or an object becomes []. But
+    TemplateRead types components as objects, so a stored `[1, 2]` would sail
+    through the helper and raise in pydantic one line later, stranding every
+    row decoded beside it in the same batch. The decoder filters, so the
+    guarantee survives the layer above it.
+    """
+    from app.crm.connectivity.db.decoders.template import decode_template
+
+    row = {
+        "id": "t-1",
+        "merchant_id": "shop",
+        "channel": "whatsapp",
+        "provider_account_ref": "waba-1",
+        "name": "n",
+        "language": "en_US",
+        "provider_template_id": None,
+        "category": None,
+        "submitted_category": None,
+        "category_updated_at": None,
+        "components": '[1, 2, {"type": "BODY"}]',
+        "status": "draft",
+        "status_updated_at": datetime.now(timezone.utc),
+        "rejection_reason": None,
+        "quality": "UNKNOWN",
+        "quality_updated_at": None,
+        "last_synced_at": None,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    decoded = decode_template(row)
+    assert decoded.components == [{"type": "BODY"}], "non-objects must be dropped"
+
+
+_FLOW_BUTTONS = [
+    {"type": "BODY", "text": "Hello {{1}}"},
+    {
+        "type": "BUTTONS",
+        "buttons": [
+            {"type": "QUICK_REPLY", "text": "CONFIRM"},
+            {"type": "QUICK_REPLY", "text": "CANCEL"},
+            {"type": "FLOW", "text": "Update address", "flow_id": "218303"},
+        ],
+    },
+]
+
+
+def test_the_send_read_carries_the_row_and_decides_nothing() -> None:
+    """decode_approved_template is row -> model: the registered components
+    ride WHOLE onto the shape, totalized exactly as decode_template does
+    (a malformed column filters, never raises — this decoder runs per
+    message). Which of those buttons is a Flow button is Meta's vocabulary
+    and lives in Meta's face (providers/whatsapp/payload.py), so nothing
+    here walks them — a decoder makes no business decisions."""
+    from app.crm.connectivity.db.decoders.template import decode_approved_template
+
+    row = {
+        "id": "t-1",
+        "name": "order_confirm",
+        "language": "en_US",
+        "provider_template_id": "9527",
+        "category": "UTILITY",
+        "components": _FLOW_BUTTONS,
+    }
+    assert decode_approved_template(row).components == _FLOW_BUTTONS
+    # The column arrives as text from asyncpg on some paths and as a decoded
+    # list on others; both are the same answer, and junk is filtered.
+    assert (
+        decode_approved_template(
+            {**row, "components": json.dumps(_FLOW_BUTTONS)}
+        ).components
+        == _FLOW_BUTTONS
+    )
+    assert decode_approved_template(
+        {**row, "components": '[1, 2, {"type": "BODY"}]'}
+    ).components == [{"type": "BODY"}]
+    assert decode_approved_template({**row, "components": None}).components == []
+
+
+def test_the_send_lookup_reads_the_components_it_needs() -> None:
+    """The query and the shape are one promise: an adapter walking a column
+    the SELECT never fetched would find no flow button on any template, and
+    every flow send would be refused by Meta."""
+    from app.crm.connectivity.db.queries.template import (
+        approved_template_for_send_query,
+    )
+
+    query, _ = approved_template_for_send_query("shop", "whatsapp", "waba-1", "n")
+    assert "components" in query
+
+
+async def test_a_bug_in_the_face_does_not_reach_the_caller(monkeypatch) -> None:
+    """A declared refusal is the merchant's own template being described, so
+    it passes through. Anything else is a bug, and a bug's text is an
+    internal detail — a KeyError('provider_row_id') must not become a 400
+    whose body reads 'provider_row_id'. Same split onboarding makes with
+    ConnectorHandshakeError."""
+    accessor, _ = _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(_template(status="draft")),
+        provider=_StubTemplates(submit_error=KeyError("provider_row_id")),
+    )
+    with pytest.raises(TemplateError) as caught:
+        await submit("shop", "t-1", "UTILITY")
+    assert "provider_row_id" not in str(caught.value)
+    assert str(caught.value) == "could not complete the template operation"
+    # and the claim is still released, so the draft is retryable
+    assert accessor.released is True
+
+
+async def test_an_edit_refuses_when_the_row_moved_underneath_it(
+    monkeypatch,
+) -> None:
+    """The provider call happens outside any transaction, so a concurrent
+    retire() can land between the pre-read and the write. Without the CAS
+    this update would put fresh components and 'pending' over a row the
+    merchant just deleted — resurrecting a withdrawn template."""
+
+    accessor = _FakeTemplateAccessor(
+        _template(status="approved", provider_template_id="T-1")
+    )
+
+    async def _row_moved(*args, **kwargs):
+        """Test double: the CAS matched nothing — something else moved the
+        row while the provider call was in flight."""
+        return None
+
+    accessor.record_in_place_edit = _row_moved  # type: ignore[method-assign]
+    _patch(monkeypatch, templates=accessor)
+    with pytest.raises(TemplateError, match="changed while it was being edited"):
+        await edit("shop", "t-1", [{"type": "BODY", "text": "new"}])
+
+
+def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
+    """The guard lives in SQL, where two callers cannot interleave around it."""
+    from app.crm.connectivity.db.queries.template import record_in_place_edit_query
+
+    sql, values = record_in_place_edit_query("shop", "t-1", "[]", "pending", "approved")
+    # The status the edit was AUTHORISED against, plus the one it is moving
+    # to: the webhook consumer is a second writer on this row and can apply
+    # the provider's 'pending' before this statement runs, which on a bare
+    # equality would lose the components the provider is already reviewing.
+    # A retire is still refused — 'deleted' is neither.
+    assert "AND status IN ($4, $5)" in sql
+    assert values[-1] == "approved"
+    assert "deleted" not in values
+
+
+# --- rollout phase 08: the registry's publish-time read ----------------------
+
+from app.crm.connectivity import contracts
+from app.crm.connectivity.channels import registry
+from app.crm.connectivity.db.queries.template import templates_by_name_query
+from app.crm.connectivity.schemas.template import TemplateVerdict
+from app.crm.connectivity.templates.lifecycle import (  # noqa: F401
+    TemplateInUseError as _InUse,
+)
+
+
+def test_templates_by_name_read_is_merchant_first_and_parameterised() -> None:
+    sql, params = templates_by_name_query("m1", "whatsapp", "cart_recovery_1")
+    assert "merchant_id = $1" in sql and "channel = $2" in sql and "name = $3" in sql
+    assert "ORDER BY status_updated_at DESC" in sql
+    assert params == ["m1", "whatsapp", "cart_recovery_1"]
+    assert "cart_recovery_1" not in sql  # a value never reaches SQL as text
+
+
+def _registry_row(
+    status: str, language: str = "en", account: str = "waba-1"
+) -> TemplateRead:
+    now = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
+    return TemplateRead(
+        id=f"t-{status}-{language}-{account}",
+        merchant_id="m1",
+        channel="whatsapp",
+        provider_account_ref=account,
+        name="cart_recovery_1",
+        language=language,
+        status=status,
+        status_updated_at=now,
+        quality="UNKNOWN",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+class _ByNameAccessor:
+    def __init__(self, rows: List[TemplateRead]) -> None:
+        self.rows = rows
+
+    async def templates_by_name(
+        self, merchant_id: str, channel: str, name: str
+    ) -> List[TemplateRead]:
+        return self.rows
+
+
+class _PrimaryPipe:
+    """The route's first read: the merchant's primary pipe on the channel."""
+
+    def __init__(self, binding: Optional[ChannelBinding]) -> None:
+        self.binding = binding
+
+    async def get_binding(
+        self, merchant_id: str, channel: str, binding_id: Optional[str]
+    ) -> Optional[ChannelBinding]:
+        assert binding_id is None, "the publish check asks for the PRIMARY pipe"
+        return self.binding
+
+
+def _sends_from(account: str, monkeypatch, rows: List[TemplateRead]) -> None:
+    """Wire the publish check so the route would send from ``account``."""
+    installation = ConnectorInstallation(
+        id="inst-1",
+        merchant_id="m1",
+        connector_key="whatsapp",
+        external_account_id=account,
+        status="healthy",
+    )
+    binding = ChannelBinding(
+        id="b-1",
+        merchant_id="m1",
+        channel="whatsapp",
+        installation_id="inst-1",
+        address="15550001",
+        is_primary=True,
+        status="active",
+    )
+    monkeypatch.setattr(
+        template_reads_module, "binding_accessor", _PrimaryPipe(binding)
+    )
+    monkeypatch.setattr(
+        template_reads_module,
+        "installation_accessor",
+        FakeInstallationAccessor(installation),
+    )
+    monkeypatch.setattr(
+        template_reads_module, "template_accessor", _ByNameAccessor(rows)
+    )
+
+
+@pytest.mark.parametrize(
+    ("rows", "verdict"),
+    [
+        (
+            [],
+            TemplateVerdict(
+                publishable=False,
+                reason="is not registered on the sending whatsapp account (waba-1)",
+            ),
+        ),
+        (
+            [_registry_row("approved", "en", "waba-1")],
+            TemplateVerdict(publishable=True),
+        ),
+        (
+            [
+                _registry_row("pending", "en", "waba-1"),
+                _registry_row("deleted", "en", "waba-1"),
+            ],
+            TemplateVerdict(
+                publishable=False,
+                reason="is 'pending', not approved, on the sending whatsapp account",
+            ),
+        ),
+        (
+            [
+                _registry_row("approved", "en", "waba-1"),
+                _registry_row("approved", "hi", "waba-1"),
+            ],
+            TemplateVerdict(
+                publishable=False,
+                reason="is approved in 2 languages on the sending whatsapp account — "
+                "exactly one is required to send",
+            ),
+        ),
+        (
+            # Approved only on an account the route never uses: the #1080
+            # review's case — publish used to pass, every send then blocked.
+            [_registry_row("approved", "en", "waba-2")],
+            TemplateVerdict(
+                publishable=False,
+                reason="is not registered on the sending whatsapp account (waba-1)",
+            ),
+        ),
+        (
+            # A pending copy on a second account is not the sending
+            # account's problem: refusing here would block a board that only
+            # ever sends from waba-1.
+            [
+                _registry_row("approved", "en", "waba-1"),
+                _registry_row("pending", "en", "waba-2"),
+            ],
+            TemplateVerdict(publishable=True),
+        ),
+        (
+            # Two languages on the OTHER account do not crowd this one.
+            [
+                _registry_row("approved", "en", "waba-1"),
+                _registry_row("approved", "en", "waba-2"),
+                _registry_row("approved", "hi", "waba-2"),
+            ],
+            TemplateVerdict(publishable=True),
+        ),
+    ],
+    ids=[
+        "no-row",
+        "one-approved-on-the-sending-account",
+        "newest-status-on-the-sending-account",
+        "two-languages-on-the-sending-account",
+        "approved-only-elsewhere",
+        "pending-elsewhere-is-not-our-problem",
+        "crowded-elsewhere-is-not-our-problem",
+    ],
+)
+async def test_template_status_answers_for_the_sending_account(
+    monkeypatch, rows: List[TemplateRead], verdict: TemplateVerdict
+) -> None:
+    """The publish check is the send door's question asked early, of the
+    account the route will pick — the primary pipe's installation — so a
+    row on any other account neither helps nor hurts. Verdict-shaped:
+    outreach quotes the reason and never compares a status word."""
+    _sends_from("waba-1", monkeypatch, rows)
+    assert await template_status("m1", "whatsapp", "cart_recovery_1") == verdict
+
+
+async def test_template_status_with_no_primary_pipe_says_so(monkeypatch) -> None:
+    """No active primary pipe on the channel: nothing can send, and the
+    registry is not even consulted — the refusal names the real problem."""
+
+    class _Untouched:
+        async def templates_by_name(self, *args):
+            raise AssertionError("no pipe, no registry read")
+
+    monkeypatch.setattr(template_reads_module, "binding_accessor", _PrimaryPipe(None))
+    monkeypatch.setattr(template_reads_module, "template_accessor", _Untouched())
+    assert await template_status(
+        "m1", "whatsapp", "cart_recovery_1"
+    ) == TemplateVerdict(
+        publishable=False,
+        reason="cannot be sent: no active primary whatsapp pipe is connected",
+    )
+
+
+def test_the_publish_check_is_on_the_contract_surface() -> None:
+    assert "template_status" in contracts.__all__
+    assert "registers_templates_for" in contracts.__all__
+    assert contracts.registers_templates_for is registry.registers_templates_for
+
+
+def test_a_draft_keeps_the_category_the_merchant_picked() -> None:
+    """The editor's category rides on the draft (submitted_category, OURS),
+    so a reopened draft still says Marketing and submit sends Marketing —
+    and an edit that sends no category leaves the draft's alone."""
+    query, values = insert_template_draft_query(
+        "shop", "whatsapp", "waba-1", "sale", "en", "[]", "MARKETING"
+    )
+    assert "submitted_category" in query and values[-1] == "MARKETING"
+    query, values = update_draft_components_query("shop", "t-1", "[]", None)
+    assert "submitted_category = COALESCE($5, submitted_category)" in query
+    assert values[-1] is None
+
+
+def test_the_submit_claim_records_the_category_being_sent() -> None:
+    """Written with the claim: a submit that dies after the provider accepted
+    still says what we asked for when the webhook resumes it."""
+    query, values = claim_for_submit_query("shop", "t-1", "UTILITY")
+    assert "submitted_category = $5" in query and values[4] == "UTILITY"
+
+
+async def test_create_and_edit_keep_the_picked_category_on_the_draft(
+    monkeypatch,
+) -> None:
+    """The editor's pick reaches the row through every layer the lifecycle
+    owns: a new draft, the re-create of an existing one, and an edit."""
+    accessor, _ = _patch(monkeypatch)
+    await create_draft("shop", "whatsapp", "waba-1", "sale", "en_US", [], "MARKETING")
+    assert "insert" in accessor.calls and accessor.draft_category == "MARKETING"
+
+    accessor, _ = _patch(monkeypatch, templates=_FakeTemplateAccessor(_template()))
+    await create_draft(
+        "shop", "whatsapp", "waba-1", "order_update", "en_US", [], "UTILITY"
+    )
+    assert "update_draft" in accessor.calls and accessor.draft_category == "UTILITY"
+    await edit("shop", "t-1", [], "MARKETING")
+    assert accessor.draft_category == "MARKETING"
+
+
+class _RecordingConn:
+    """A connection that records what each statement was given, and returns
+    no row."""
+
+    def __init__(self) -> None:
+        self.values: List[tuple] = []
+
+    async def fetchrow(self, query, *values):
+        self.values.append(values)
+        return None
+
+
+async def test_the_accessor_writes_the_category_it_is_given() -> None:
+    """The layer the lifecycle tests fake: the category handed to the
+    draft's insert and edit reaches the statement."""
+    conn: Any = _RecordingConn()
+    with pytest.raises(RuntimeError):  # the insert's own "no row" refusal
+        await template_accessor_module.insert_template_draft(
+            conn, "shop", "whatsapp", "waba-1", "sale", "en", [], "MARKETING"
+        )
+    await template_accessor_module.update_draft_components(
+        conn, "shop", "t-1", [], "UTILITY"
+    )
+    assert [values[-1] for values in conn.values] == ["MARKETING", "UTILITY"]
+
+
+async def test_a_submitted_templates_category_is_refused_not_dropped(
+    monkeypatch,
+) -> None:
+    """Its category is the provider's: an edit that sends one is refused (a
+    400), before anything is written or sent."""
+    accessor, _ = _patch(
+        monkeypatch,
+        templates=_FakeTemplateAccessor(
+            _template(status="approved", provider_template_id="T-1")
+        ),
+    )
+    with pytest.raises(TemplateError, match="only a draft's category"):
+        await edit("shop", "t-1", [{"type": "BODY", "text": "new"}], "MARKETING")
+    assert accessor.calls == []
+
+
+@pytest.mark.parametrize("category", ["marketing", "UTILITY; DROP", "A" * 33, ""])
+def test_a_category_must_look_like_a_provider_category(category) -> None:
+    """On a draft and on submit alike: the submit claim writes its category
+    onto the row too, and a refused submit leaves it there."""
+    with pytest.raises(ValidationError):
+        SubmitTemplateRequest(merchant_id="shop", category=category)
+    with pytest.raises(ValidationError):
+        EditTemplateRequest(merchant_id="shop", components=[], category=category)
+    with pytest.raises(ValidationError):
+        CreateTemplateDraftRequest(
+            merchant_id="shop",
+            channel="whatsapp",
+            provider_account_ref="waba-1",
+            name="sale",
+            language="en",
+            components=[],
+            category=category,
+        )
+    assert (
+        EditTemplateRequest(merchant_id="shop", components=[], category="MARKETING")
+    ).category == "MARKETING"
+    assert SubmitTemplateRequest(merchant_id="shop", category="UTILITY").category == (
+        "UTILITY"
+    )

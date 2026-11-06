@@ -1,15 +1,93 @@
-import os
-
-import uvicorn
+# STEP 1: Load environment variables VERY FIRST - before any other imports
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
-from app.core.config import HOST, PORT, UVICORN_LOG_LEVEL, UVICORN_RELOAD
+# STEP 2: Now safe to import everything else
+import asyncio
+
+import uvicorn
+
+from app.ai.voice.agents.breeze_buddy.services.daily.zygote import start_zygote
+
+# STEP 3: Now safe to import config and logger
+from app.core.config.static import (
+    ENABLE_REDIS_DYNAMIC_CONFIG,
+    HOST,
+    PORT,
+    UVICORN_LOG_LEVEL,
+    UVICORN_RELOAD,
+)
 from app.core.logger import logger
+from app.services.live_config.store import initialize_feature_flags
+from app.services.redis import (
+    close_redis_connections,
+    get_redis_service,
+    is_redis_configured,
+)
+
+
+async def initialize_devcycle():
+    """Initialize DevCycle and populate Redis before uvicorn starts.
+
+    This ensures all worker processes and subprocesses can read flags from Redis
+    without needing to call DevCycle API themselves.
+    """
+    try:
+        if not ENABLE_REDIS_DYNAMIC_CONFIG:
+            logger.info(
+                "Parent process: ENABLE_REDIS_DYNAMIC_CONFIG is False - "
+                "skipping Redis/DevCycle init, all dynamic config will use environment variables only"
+            )
+        elif is_redis_configured():
+            # Initialize Redis connection
+            redis_service = await get_redis_service()
+            await redis_service.get_client()  # Initialize the client
+            logger.info("Parent process: Redis connection established")
+
+            # Initialize DevCycle and populate Redis
+            await initialize_feature_flags()
+            logger.info(
+                "Parent process: DevCycle feature flags initialized and stored in Redis"
+            )
+
+            # Close Redis connection (workers will create their own)
+            await close_redis_connections()
+            logger.info(
+                "Parent process: Redis connection closed (workers will create new connections)"
+            )
+        else:
+            logger.warning(
+                "Parent process: Redis not configured - DevCycle flags will use environment variables only"
+            )
+    except Exception as e:
+        logger.error(f"Parent process: Failed to initialize DevCycle: {e}")
+        logger.warning("Parent process: Continuing with environment variable fallback")
+
 
 if __name__ == "__main__":
+    # STEP 4: Initialize DevCycle in parent process before starting uvicorn
+    logger.info("Parent process: Initializing DevCycle before starting workers...")
+    asyncio.run(initialize_devcycle())
+
+    # STEP 5: Fork the Daily bot zygote here — the last point before uvicorn
+    # builds its event loop, and the only safe one to fork from.
+    if UVICORN_RELOAD:
+        # Reload re-execs the server in a subprocess, which imports zygote.py
+        # fresh and so cannot see the socket. Say so instead of forking a
+        # zygote nothing can reach.
+        logger.warning(
+            "UVICORN_RELOAD is on: Daily bot zygote disabled (the reloader's "
+            "server process cannot reach it). Unset it to use "
+            "BB_DAILY_BOT_ZYGOTE; launches fall back to spawning."
+        )
+    else:
+        try:
+            start_zygote()
+        except Exception as exc:  # noqa: BLE001 - never block server startup
+            logger.warning(f"Daily bot zygote unavailable, will spawn per call: {exc}")
+
+    # STEP 6: Start uvicorn server (will spawn worker processes)
     logger.info(f"Starting Uvicorn server on {HOST}:{PORT}")
     logger.info(f"Reload enabled: {UVICORN_RELOAD}")
     logger.info(f"Log level: {UVICORN_LOG_LEVEL}")

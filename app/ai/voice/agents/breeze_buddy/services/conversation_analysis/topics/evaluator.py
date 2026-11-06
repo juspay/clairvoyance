@@ -1,0 +1,217 @@
+import asyncio
+import json
+import time
+from typing import Any, Dict, List, Optional
+
+import anthropic
+import httpx
+import openai
+from pydantic import ValidationError
+
+from app.core.logger import logger
+from app.database.accessor.breeze_buddy.evaluation_config import add_discovered_topics
+from app.database.accessor.breeze_buddy.evaluation_result import (
+    save_evaluation_failure,
+    save_evaluation_results,
+)
+from app.schemas.breeze_buddy.evals import EvaluationType
+from app.services.model_provider import ProviderError
+
+from .extractor import (
+    TopicFirstTokenTimeout,
+    TopicModelResponseError,
+    extract_topics,
+)
+from .segments import resolve_segments, validate_segments
+
+_ANALYSIS_TIMEOUT_SECONDS = 240
+_ANALYSIS_MAX_ATTEMPTS = 2
+
+MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+MODEL_TIMEOUT = "MODEL_TIMEOUT"
+MODEL_FIRST_TOKEN_TIMEOUT = "MODEL_FIRST_TOKEN_TIMEOUT"
+MODEL_BAD_RESPONSE = "MODEL_BAD_RESPONSE"
+EVALUATION_ERROR = "EVALUATION_ERROR"
+
+
+class ModelUnavailableError(Exception):
+    def __init__(self, detail: str, retry_after: Optional[float] = None):
+        super().__init__(detail)
+        self.retry_after = retry_after
+
+
+def classify_failure(exc: Exception) -> str:
+    # Our own wait_for ceiling says this transcript was slow, not that the
+    # gateway is down: transport timeouts arrive as httpx/SDK errors below.
+    if isinstance(exc, TopicFirstTokenTimeout):
+        return MODEL_FIRST_TOKEN_TIMEOUT
+    if isinstance(exc, TimeoutError):
+        return MODEL_TIMEOUT
+    if isinstance(
+        exc,
+        (
+            ConnectionError,
+            httpx.TransportError,
+            openai.APIConnectionError,
+            anthropic.APIConnectionError,
+        ),
+    ):
+        return MODEL_UNAVAILABLE
+    if isinstance(exc, ProviderError) and exc.retryable:
+        return MODEL_UNAVAILABLE
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if isinstance(status, str) and status.isdigit():
+        status = int(status)
+    if isinstance(status, int) and (status == 429 or status >= 500):
+        return MODEL_UNAVAILABLE
+    if isinstance(
+        exc,
+        (
+            TopicModelResponseError,
+            json.JSONDecodeError,
+            ValidationError,
+        ),
+    ):
+        return MODEL_BAD_RESPONSE
+    return EVALUATION_ERROR
+
+
+async def save_topic_failure(
+    context: Dict[str, Any],
+    evaluation: Dict[str, Any],
+    error: str,
+) -> None:
+    await save_evaluation_failure(
+        str(evaluation["id"]),
+        EvaluationType.TOPIC.value,
+        context["source_id"],
+        context["reseller_id"],
+        context.get("merchant_id"),
+        str(context["template_id"]),
+        context["started_at"],
+        error,
+    )
+
+
+async def analyze_topics(
+    context: Dict[str, Any],
+    evaluation: Dict[str, Any],
+) -> bool:
+    """Extract and save the topics of one conversation.
+
+    Returns True when the model answered, whether its topics were saved or its
+    unusable answer was saved as a FAILED row: either way it is reachable.
+    Returns False for a FAILED row that proves nothing about the model (a
+    broken template config, say). Raises ModelUnavailableError
+    when the model cannot be reached, so the worker can put the job back and
+    pause.
+    """
+    source_id = context["source_id"]
+    model = evaluation.get("model")
+
+    started_at = time.monotonic()
+    topics: List[Dict[str, Any]] = []
+    for attempt in range(1, _ANALYSIS_MAX_ATTEMPTS + 1):
+        attempt_started_at = time.monotonic()
+        try:
+            topics = await asyncio.wait_for(
+                extract_topics(
+                    context["transcript"],
+                    evaluation.get("topics") or [],
+                    evaluation.get("configuration"),
+                ),
+                timeout=_ANALYSIS_TIMEOUT_SECONDS,
+            )
+            break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failure = classify_failure(exc)
+            if isinstance(exc, TimeoutError):
+                detail = str(exc) or f"timeout after {_ANALYSIS_TIMEOUT_SECONDS}s"
+            elif isinstance(exc, TopicModelResponseError):
+                detail = str(exc)
+            else:
+                detail = f"{type(exc).__name__}: {exc}"
+            logger.bind(attempt=attempt, failure_class=failure, model=model).warning(
+                f"Topic evaluation {source_id} attempt "
+                f"{attempt}/{_ANALYSIS_MAX_ATTEMPTS} failed after "
+                f"{time.monotonic() - attempt_started_at:.1f}s: "
+                f"{failure} ({detail}) model={model}"
+            )
+
+            retryable = failure != EVALUATION_ERROR
+            if retryable and attempt < _ANALYSIS_MAX_ATTEMPTS:
+                continue
+
+            if failure == MODEL_UNAVAILABLE:
+                response = getattr(exc, "response", None)
+                retry_after = str(
+                    getattr(response, "headers", {}).get("retry-after", "")
+                )
+                raise ModelUnavailableError(
+                    f"{detail}; {attempt} attempts, model={model}",
+                    float(retry_after) if retry_after.isdigit() else None,
+                ) from exc
+
+            error = f"{failure} after {attempt} attempt(s): {detail}"
+            await save_topic_failure(context, evaluation, error)
+            logger.bind(
+                outcome="failed",
+                failure_class=failure,
+                attempts=attempt,
+                duration_ms=round((time.monotonic() - started_at) * 1000),
+                model=model,
+            ).error(
+                f"Topic evaluation {source_id} {error}: FAILED row saved "
+                f"(model={model})"
+            )
+            return failure == MODEL_BAD_RESPONSE
+
+    entries = evaluation.get("topics") or []
+    two_level = bool(entries) and all("." in str(entry) for entry in entries)
+
+    configuration = evaluation.get("configuration") or {}
+    if isinstance(configuration, str):
+        configuration = json.loads(configuration)
+    segments = resolve_segments(
+        validate_segments(configuration.get("segments")),
+        context.get("payload") or {},
+    )
+    if segments:
+        for topic in topics:
+            topic["segments"] = segments
+
+    await save_evaluation_results(
+        str(evaluation["id"]),
+        EvaluationType.TOPIC.value,
+        context["source_id"],
+        context["reseller_id"],
+        context.get("merchant_id"),
+        str(context["template_id"]),
+        context["started_at"],
+        topics,
+    )
+    labels = list(
+        {
+            str(topic.get("label") or "")
+            .strip()
+            .lower(): str(topic.get("label") or "")
+            .strip()
+            for topic in topics
+            if str(topic.get("label") or "").strip()
+        }.values()
+    )
+    if labels and not two_level:
+        await add_discovered_topics(str(context["template_id"]), labels)
+    logger.bind(
+        outcome="saved",
+        attempts=attempt,
+        duration_ms=round((time.monotonic() - started_at) * 1000),
+        topic_count=len(topics),
+        model=model,
+    ).info(
+        f"Topic evaluation {source_id} completed in "
+        f"{time.monotonic() - started_at:.1f}s with {len(topics)} topics"
+    )
+    return True

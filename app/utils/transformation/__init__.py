@@ -1,0 +1,41 @@
+from .utils import (
+    date_to_speech,
+    digits_to_speech,
+    expand_shorthand,
+    extract_10_digit_mobile,
+    first_item,
+    format_array,
+    indian_number_to_speech,
+    llm_call,
+    string_to_lowercase,
+    string_to_uppercase,
+    string_trim,
+    to_number,
+    trim_words,
+)
+
+TEMPLATE_FUNCTION_REGISTRY = {}
+
+
+def register_template_function(name, func):
+    TEMPLATE_FUNCTION_REGISTRY[name] = func
+
+
+register_template_function("indian_number_to_speech", indian_number_to_speech)
+register_template_function("to_number", to_number)
+register_template_function("string_to_lowercase", string_to_lowercase)
+register_template_function("string_to_uppercase", string_to_uppercase)
+register_template_function("string_trim", string_trim)
+register_template_function("digits_to_speech", digits_to_speech)
+register_template_function("date_to_speech", date_to_speech)
+register_template_function("extract_10_digit_mobile", extract_10_digit_mobile)
+register_template_function("expand_shorthand", expand_shorthand)
+register_template_function("trim_words", trim_words)
+register_template_function("format_array", format_array)
+register_template_function("first_item", first_item)
+# ASYNC — awaited by the CRM playbook only (outreach/nodes/blocks.py).
+register_template_function("llm_call", llm_call)
+
+__all__ = [
+    "TEMPLATE_FUNCTION_REGISTRY",
+]

@@ -1,9 +1,19 @@
-import json
-from datetime import datetime
-from typing import Any, Dict, Optional
+"""
+Common utilities for validation, parsing, and helper functions.
+"""
 
-from app.core.config import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
+import json
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from app.core.config.static import AWS_BREEZE_PORTAL_URL, GCP_BREEZE_PORTAL_URL
 from app.core.logger import logger
+
+
+def utcnow() -> datetime:
+    """Tz-aware UTC now — use for any column declared ``timestamptz``."""
+    return datetime.now(timezone.utc)
 
 
 def parse_iso_datetime(iso_string: Optional[str]) -> Optional[datetime]:
@@ -75,3 +85,52 @@ def get_breeze_portal_url(reseller_id: str | None = None) -> str:
         return GCP_BREEZE_PORTAL_URL
     else:
         return AWS_BREEZE_PORTAL_URL
+
+
+def parse_json_field(value) -> List[str]:
+    """Parse JSON field from database, handling both string and list types.
+
+    Args:
+        value: The value to parse (can be str, list, or None)
+
+    Returns:
+        List of strings, empty list if parsing fails or value is None
+
+    Examples:
+        >>> parse_json_field('["a", "b", "c"]')
+        ['a', 'b', 'c']
+        >>> parse_json_field(["a", "b"])
+        ['a', 'b']
+        >>> parse_json_field(None)
+        []
+        >>> parse_json_field("invalid json")
+        []
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            logger.warning(f"Invalid JSON in database field: {value}")
+            return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
+
+
+# E.164: at most 15 digits including the country code; the shortest real
+# number is 7 (Niue, +683 plus 4 digits).
+_MIN_DIALABLE_DIGITS = 7
+_MAX_DIALABLE_DIGITS = 15
+# ASCII digits and the usual formatting only — a letter means a junk value.
+_DIALABLE_CHARS = re.compile(r"\+?[0-9 ().-]+")
+
+
+def is_dialable(raw: object) -> bool:
+    """Plivo dials E.164 numbers: 7 to 15 digits including the country code,
+    written with digits, an optional leading +, spaces, - ( ) or . only.
+    """
+    if not isinstance(raw, str) or not _DIALABLE_CHARS.fullmatch(raw.strip()):
+        return False
+    digit_count = sum(1 for c in raw if "0" <= c <= "9")
+    return _MIN_DIALABLE_DIGITS <= digit_count <= _MAX_DIALABLE_DIGITS

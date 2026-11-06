@@ -1,0 +1,82 @@
+"""Provider accounts — the account a template's LLM / STT / TTS / telephony
+runs on.
+
+A credentials-table row may hold a PROVIDER ACCOUNT: its ``provider`` names
+the service (``elevenlabs``, ``azure_openai``, ...) and its value carries what
+that service reads (a key, a key and its endpoint, a service account). A
+template block names one by ``credential_id``; ``Accounts``, built once per
+call from the call's tenant, resolves every block to a typed account that
+carries its own host — the row's when the block names one, else the
+environment's. The vocabulary lives in code, never in a CHECK.
+
+This package is the door: every other module imports from here, never from
+the files inside. ``types.py`` = the shapes; ``rows.py`` = who may use a
+row; ``blocks.py`` = the template side (which block, which kind, the walk);
+``llm.py`` / ``stt.py`` / ``tts.py`` = each service's vendor words, its
+environment accounts and the host rule a row must obey on it;
+``resolve.py`` = the resolver, dispatching by kind; ``telephony.py`` = the
+telephony side, like ``stt.py``.
+
+Phases (docs/PROVIDER_CREDENTIALS.md): (1) rows carry a provider; (2) a
+template block names an account, checked at save; (3) the LLM runs on it;
+(4) speech; (5) telephony — a template names its Plivo account.
+"""
+
+from app.ai.voice.agents.breeze_buddy.accounts.blocks import (
+    account_blocks,
+    kind_of,
+    vendor_of,
+)
+from app.ai.voice.agents.breeze_buddy.accounts.resolve import (
+    Accounts,
+    accounts_for_template,
+    env_account,
+)
+from app.ai.voice.agents.breeze_buddy.accounts.rows import in_tenant, refusal
+from app.ai.voice.agents.breeze_buddy.accounts.telephony import (
+    plivo_keys,
+    template_plivo_account,
+)
+from app.ai.voice.agents.breeze_buddy.accounts.tts import unwrap_dragontts
+from app.ai.voice.agents.breeze_buddy.accounts.types import (
+    SHAPES,
+    Account,
+    AccountRefused,
+    AccountShapeError,
+    AzureAccount,
+    BedrockAccount,
+    GcpAccount,
+    KeyAccount,
+    KeyOnlyAccount,
+    PlivoAccount,
+    VertexAccount,
+    account_from_value,
+    shape_problems,
+)
+
+__all__ = [
+    "SHAPES",
+    "Account",
+    "AccountRefused",
+    "AccountShapeError",
+    "Accounts",
+    "AzureAccount",
+    "BedrockAccount",
+    "GcpAccount",
+    "KeyAccount",
+    "KeyOnlyAccount",
+    "PlivoAccount",
+    "VertexAccount",
+    "account_blocks",
+    "account_from_value",
+    "accounts_for_template",
+    "env_account",
+    "in_tenant",
+    "kind_of",
+    "plivo_keys",
+    "refusal",
+    "shape_problems",
+    "template_plivo_account",
+    "unwrap_dragontts",
+    "vendor_of",
+]

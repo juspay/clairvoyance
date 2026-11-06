@@ -1,0 +1,49 @@
+"""What one word of the vocabulary must answer, and the failure a word
+raises when it cannot.
+
+Split from ``__init__`` so a word module can import the type it implements
+without importing the registry that lists it — the registry imports the
+words, and the reverse edge would be a cycle.
+"""
+
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+
+from app.crm.outreach.schemas import EnrollmentRun, WorkflowDefinition, WorkflowNode
+
+Validate = Callable[[WorkflowNode, WorkflowDefinition], List[str]]
+Execute = Callable[
+    [EnrollmentRun, WorkflowNode, WorkflowDefinition], Awaitable[Dict[str, Any]]
+]
+
+
+# The catch-all arrow out of a branching square (rollout phase 18): any
+# answer the square did not name — a call's outcome after it connected is
+# the buddy template's own word, unknowable to the plan — and a wait's
+# alarm when there is no timeout arrow; a condition's "no rule held". A
+# named arrow always wins over it. Shared walker vocabulary, so it lives
+# here beside NodeParked rather than inside one word's file.
+ELSE = "else"
+
+
+class NodeParked(Exception):
+    """A deterministic execution failure: parking is the honest outcome
+    (a missing template, a module not yet deployed). Transient failures
+    raise anything else and retry on the lease."""
+
+
+@dataclass(frozen=True)
+class NodeSpec:
+    """What one word of the vocabulary must answer. execute is None for a
+    wait: landing on it IS the action (the alarm), so is_wait and execute
+    are two views of one fact and the registry test pins them together."""
+
+    validate: Validate
+    execute: Optional[Execute]
+    is_wait: bool
+    # enh A/01, N1 retired: nothing outside the registry matches a type
+    # string. `branches`: the WORD's edges always carry labels and pick_next
+    # reads its answer from reply_<node> (condition, split). Whether a wait
+    # listens — and so branches — is a property of the NODE (its topics),
+    # answered by nodes.listens / nodes.branches (ruled 17 Sep 2026).
+    branches: bool = False

@@ -1,0 +1,318 @@
+"""Query-builder laws for the outreach module: $1 params only, tenancy
+predicates present, the claim's lease semantics, idempotent stamps."""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+from app.crm.outreach.db.queries.enrollment import (
+    admission_facts_query,
+    advance_run_query,
+    cancel_run_query,
+    claim_due_runs_query,
+    exit_run_query,
+    insert_enrollment_query,
+    open_runs_for_customer_query,
+    park_run_query,
+    record_run_error_query,
+    resume_run_by_id_query,
+    source_event_used_query,
+)
+from app.crm.outreach.db.queries.workflow import (
+    live_workflows_query,
+    publish_workflow_query,
+    workflow_status_query,
+)
+from app.crm.outreach.schemas import WorkflowDefinition
+from app.crm.record.db.queries import (
+    customer_has_event_query,
+    latest_customer_event_query,
+)
+
+NOW = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
+PLANS = Path(__file__).resolve().parents[2] / "docs" / "crm" / "plans"
+
+
+def test_claim_is_lease_and_attempt_in_one_statement() -> None:
+    sql, params = claim_due_runs_query(25, 300)
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "make_interval(secs => $2)" in sql
+    assert "attempts = attempts + 1" in sql
+    assert "e.status = 'waiting' AND e.wake_at <= now()" in sql
+    assert params == [25, 300]
+
+
+def test_enrollment_insert_binds_everything_positionally() -> None:
+    sql, params = insert_enrollment_query(
+        "m1", "wf-1", 3, "c-1", "wait-30m", NOW, {"phone": "+91"}, "c-1"
+    )
+    assert "$8" in sql and "$9" not in sql
+    assert params[0] == "m1"  # merchant first — tenancy reads first
+    assert json.loads(params[6]) == {"phone": "+91"}
+
+
+def test_goal_cancel_ends_every_open_run_including_parked() -> None:
+    sql, params = cancel_run_query("m1", "run-1", "goal_met")
+    assert "status <> 'exited'" in sql and "status = 'waiting'" not in sql
+    assert params[0] == "m1"
+
+
+def test_goal_cancel_and_reply_name_the_run_they_are_about() -> None:
+    """Phase 13: the tier or listening node that matched is the RUN'S
+    version's, so the write names the run — merchant first, then id — and
+    a sibling run on another version is never touched."""
+    sql, params = cancel_run_query("m1", "run-1", "goal_met")
+    assert "WHERE merchant_id = $1 AND id = $2" in sql
+    assert params[:2] == ["m1", "run-1"]
+    sql, params = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
+    assert "WHERE merchant_id = $1 AND id = $2" in sql
+    assert "status IN ('waiting', 'parked') AND current_node = $3" in sql
+    assert "RETURNING id" in sql
+    assert params[:4] == ["m1", "run-1", "ask", json.dumps({"reply_ask": "YES"})]
+
+
+def test_open_runs_for_customer_is_merchant_first_and_open_only() -> None:
+    sql, params = open_runs_for_customer_query("m1", "c-1")
+    assert "WHERE merchant_id = $1 AND customer_id = $2" in sql
+    assert "status <> 'exited'" in sql
+    assert params == ["m1", "c-1"]
+
+
+def test_goal_cancel_is_time_aware_on_the_entry_event_and_null_safe() -> None:
+    """G7 (rollout phase 06): 'after the run began' means after the ENTRY
+    EVENT happened, not after the row was inserted — a late-delivered
+    earlier-stage letter must not keep a run alive past a goal that truly
+    happened after it. entered_at stays the fallback for older rows."""
+    sql, params = cancel_run_query("m1", "run-1", "goal_met", NOW)
+    assert (
+        "COALESCE((context->>'entered_event_at')::timestamptz, entered_at) "
+        "< $4::timestamptz" in sql
+    )
+    assert "$4::timestamptz IS NULL OR" in sql
+    assert params[3] == NOW
+    _, params = cancel_run_query("m1", "run-1", "goal_met")
+    assert params[3] is None  # unstamped goal keeps today's behaviour
+
+
+def test_goal_cancel_can_be_keyed_to_the_run_it_is_about() -> None:
+    """A keyed tier ends only the run whose context field equals the
+    letter's payload field (cart_token = cart_token); the unkeyed form is
+    byte-identical to before."""
+    sql, params = cancel_run_query(
+        "m1", "run-1", "goal_met", NOW, key=("cart_token", "chk-88412")
+    )
+    assert "AND context->>$5 = $6" in sql
+    # The T26 flush payload is the last param on every run-ending writer.
+    assert params[4:] == ["cart_token", "chk-88412", "[]"]
+    sql, params = cancel_run_query("m1", "run-1", "converted_elsewhere")
+    assert "$5" in sql and len(params) == 5 and params[-1] == "[]"
+
+
+def test_goal_recheck_can_be_keyed_to_the_run_it_is_about() -> None:
+    sql, params = customer_has_event_query(
+        "m1", "c-1", ["orders/create"], NOW, where=("cart_token", "chk-88412")
+    )
+    assert "AND payload->>$5 = $6" in sql
+    assert params == ["m1", "c-1", ["orders/create"], NOW, "cart_token", "chk-88412"]
+    sql, params = customer_has_event_query("m1", "c-1", ["orders/create"], NOW)
+    assert "$5" not in sql and len(params) == 4
+
+
+def test_a_conditioned_goal_reads_one_letter_the_newest_about_this_order() -> None:
+    """Phase 21: the same rows the EXISTS asks about, newest first, ONE
+    payload out — never a scan of her letters."""
+    sql, params = latest_customer_event_query(
+        "m1", "c-1", ["orders/updated"], NOW, ("id", "5201000001")
+    )
+    assert "AND payload->>$5 = $6" in sql
+    assert "COALESCE(occurred_at, received_at) > $4" in sql
+    assert "ORDER BY COALESCE(occurred_at, received_at) DESC" in sql
+    assert "LIMIT 1" in sql
+    assert params == ["m1", "c-1", ["orders/updated"], NOW, "id", "5201000001"]
+
+
+def test_live_workflows_read_is_merchant_scoped() -> None:
+    sql, params = live_workflows_query("m1")
+    assert "merchant_id = $1 AND status = 'live'" in sql
+    assert params == ["m1"]
+
+
+def test_live_workflows_leaves_the_playbook_in_the_database() -> None:
+    """The entry read runs once per attributed event and wants the DOORS.
+    The playbook is the words a call says — read from the run's PINNED
+    version at execute time (nodes/blocks.py), never from here — and it is
+    the bulk of a document: 835KB of 849KB on the plan that prompted this.
+    Detoasting it per event to compare a topic is the read this strips."""
+    sql, params = live_workflows_query("m1")
+    assert "definition - 'playbook'" in sql
+    # draft is the SAME document with its own playbook, and it is NULL only
+    # between a publish and the next draft save — so a plan being edited would
+    # hand this read the whole document back, per attributed event, for as long
+    # as the edit is open. Entry never reads it (only plans.py does).
+    assert "NULL::jsonb AS draft" in sql
+    assert params == ["m1"]
+
+
+def test_a_plan_without_its_playbook_is_still_a_whole_document() -> None:
+    """What the strip above hands Pydantic: `playbook` is Optional with a
+    None default and no validator cross-checks it, so a document that
+    arrives without it validates and reads exactly as the stored one does
+    for every field the entry path touches."""
+    stored = json.loads((PLANS / "line-nudge-playbook.json").read_text())
+    assert stored.get("playbook"), "fixture must carry a playbook to strip"
+
+    whole = WorkflowDefinition.model_validate(stored)
+    stripped = WorkflowDefinition.model_validate(
+        {k: v for k, v in stored.items() if k != "playbook"}
+    )
+
+    assert stripped.playbook is None
+    assert [d.topic for d in stripped.entries] == [d.topic for d in whole.entries]
+    assert [n.id for n in stripped.nodes] == [n.id for n in whole.nodes]
+    assert stripped.goal_tiers() == whole.goal_tiers()
+
+
+def test_the_walkers_liveness_read_carries_no_document() -> None:
+    """The walker asks one question of crm_workflow per visit — is this plan
+    still live? — and the run's own document comes from its PINNED version
+    (definitions.py, cached). Reading `definition` to compare a status word
+    detoasts the whole plan per claimed run, which at the morning window is
+    every waiting run at once."""
+    sql, params = workflow_status_query("m1", "wf-1")
+    assert "status" in sql
+    assert "definition" not in sql and "draft" not in sql
+    assert "merchant_id = $1 AND id = $2" in sql
+    assert params == ["m1", "wf-1"]
+
+
+def test_publish_requires_a_draft_to_exist() -> None:
+    sql, _ = publish_workflow_query("m1", "wf-1")
+    assert "draft IS NOT NULL" in sql
+    assert "version = version + 1" in sql
+
+
+def test_park_only_moves_waiting_runs() -> None:
+    sql, _ = park_run_query("en-1", "boom", NOW)
+    assert "status = 'waiting'" in sql and "'parked'" in sql
+
+
+def test_exit_never_reexits() -> None:
+    sql, _ = exit_run_query("en-1", "completed", None, {}, NOW)
+    assert "status <> 'exited'" in sql
+
+
+def test_exit_without_context_keeps_the_rows_pointers() -> None:
+    sql, params = exit_run_query("en-1", "goal_met", None, None, NOW)
+    assert "context = COALESCE($4::jsonb, context)" in sql
+    assert params[3] is None  # NULL -> COALESCE keeps source_event_id
+    _, params = exit_run_query("en-1", "completed", "n1", {"reply_x": "YES"}, NOW)
+    assert json.loads(params[3]) == {"reply_x": "YES"}
+
+
+def test_walker_writes_are_conditional_on_the_leased_wake_at() -> None:
+    """P1 (rollout phase 03): the claim's wake_at is the generation token.
+    Every event-side writer (a reply, a repeat patch) moves wake_at, so a
+    walker write under a stale lease matches zero rows instead of
+    clobbering the reply — and the UPDATE's own id is how the walker
+    learns it.
+
+    The two writers that MOVE a token now end in the T26 flush's final
+    SELECT rather than a bare RETURNING, so they always return a row and
+    the CAS answer is `moved_id` being non-NULL (accessor._moved). The two
+    that do not move one are unchanged."""
+    leased = NOW
+    for sql, params, placeholder in (
+        (*advance_run_query("r-1", "wait-1d", NOW, {"k": 1}, leased), "$6"),
+        (*exit_run_query("r-1", "completed", None, None, leased), "$5"),
+        (*park_run_query("r-1", "boom", leased), "$3"),
+        (*record_run_error_query("r-1", "boom", 600, leased), "$4"),
+    ):
+        assert f"AND wake_at = {placeholder}" in sql, sql
+        assert "RETURNING id" in sql, sql
+    assert advance_run_query("r-1", "w", NOW, {}, leased)[1][5] is leased
+    assert exit_run_query("r-1", "completed", None, None, leased)[1][4] is leased
+    assert park_run_query("r-1", "boom", leased)[1][-1] is leased
+    assert record_run_error_query("r-1", "boom", 600, leased)[1][-1] is leased
+
+
+def test_event_side_writes_stay_unconditional() -> None:
+    """The reply and the goal-cancel are the event side: they always win
+    over a walker mid-visit (the walker defers on its CAS miss)."""
+    sql, _ = cancel_run_query("m1", "run-1", "goal_met")
+    assert "AND wake_at =" not in sql
+    sql, _ = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
+    assert "AND wake_at =" not in sql
+
+
+def test_admission_and_source_reads_are_merchant_first() -> None:
+    for sql, params in (
+        admission_facts_query("m1", "wf-1", "c-1"),
+        source_event_used_query("m1", "wf-1", "c-1", "e-1"),
+    ):
+        assert "merchant_id = $1" in sql
+        assert params[0] == "m1"
+
+
+def test_admission_facts_scope_to_the_key_on_keyed_plans() -> None:
+    """B2 (rollout phase 02): entry.key says runs are per <field>, so the
+    history the reenter/cooldown guards judge is that KEY's, not the
+    customer's whole history — otherwise her second order is refused as a
+    re-entry. The customer predicate stays, for tenancy paranoia."""
+    sql, params = admission_facts_query("m1", "wf-1", "c-1", enrollment_key="ORD-2")
+    assert "enrollment_key = $3" in sql and "customer_id = $4" in sql
+    assert params == ["m1", "wf-1", "ORD-2", "c-1"]
+    # the unkeyed form is untouched
+    sql, params = admission_facts_query("m1", "wf-1", "c-1")
+    assert "enrollment_key" not in sql and "customer_id = $3" in sql
+    assert params == ["m1", "wf-1", "c-1"]
+
+
+def test_claim_skips_paused_plans_and_counts_the_claim() -> None:
+    sql, values = claim_due_runs_query(50, 300)
+    assert "w.status = 'paused'" in sql and "NOT EXISTS" in sql
+    assert "attempts = attempts + 1" in sql
+    assert values == [50, 300]
+
+
+def test_transient_error_writes_the_retry_into_wake_at() -> None:
+    sql, values = record_run_error_query("r-1", "boom", 600, NOW)
+    assert "wake_at = now() + make_interval(secs => $3)" in sql
+    assert values == ["r-1", "boom", 600, NOW]
+
+
+def test_goal_recheck_survives_a_null_occurred_at() -> None:
+    sql, params = customer_has_event_query("m1", "c-1", ["order.placed"], NOW)
+    assert "COALESCE(occurred_at, received_at) > $4" in sql
+    assert params == ["m1", "c-1", ["order.placed"], NOW]
+
+
+# --- rollout phase 16: a letter carries its facts into the run, and moves a
+# parked one ---
+
+
+def test_a_reply_carries_the_letters_facts_under_its_square() -> None:
+    """Facts land under facts.<square> — namespaced, so two stages'
+    payloads never collide — beside the answer."""
+    sql, params = resume_run_by_id_query(
+        "m1", "run-1", "ask", {"reply_ask": "YES"}, {"button_id": "YES", "amount": 5}
+    )
+    assert "jsonb_build_object('facts'," in sql
+    assert (
+        "CASE WHEN jsonb_typeof(context->'facts') = 'object' "
+        "THEN context->'facts' ELSE '{}'::jsonb END" in sql
+    )
+    assert "|| jsonb_build_object($3::text, $5::jsonb)" in sql
+    assert params[4] == json.dumps({"button_id": "YES", "amount": 5})
+    _, params = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
+    assert params[4] == "{}"  # no facts offered: the square's entry stays empty
+
+
+def test_an_event_moves_a_parked_run_too() -> None:
+    """An event is evidence the customer moved; a parked run that hears it
+    is no longer stuck on the thing that parked it — it becomes waiting
+    with its failure counter forgiven, the human resume's semantics."""
+    sql, _ = resume_run_by_id_query("m1", "run-1", "ask", {"reply_ask": "YES"})
+    set_clause, where_clause = sql.split("WHERE")
+    assert "status IN ('waiting', 'parked')" in where_clause
+    assert "status = 'waiting'" in set_clause
+    assert "CASE WHEN status = 'parked' THEN 0 ELSE attempts END" in set_clause

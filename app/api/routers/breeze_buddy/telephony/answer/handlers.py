@@ -1,0 +1,1085 @@
+"""
+Call resolution and unified provider answer handler.
+
+This module provides:
+1. resolve_call_templates() - shared logic for resolving templates for both
+   inbound and outbound calls, used by both Exotel and Plivo handlers.
+2. handle_provider_answer() - unified handler for answering calls from any provider
+   (Exotel returns JSON, Plivo / Vobiz return XML).
+
+Flow:
+
+OUTBOUND (we call customer):
+1. We create lead and initiate call via provider API
+2. Customer answers -> provider calls /{provider}/answer endpoint
+3. Look up lead -> return WebSocket URL/XML with template from lead
+
+INBOUND (customer calls us):
+1. Customer calls inbound number
+2. Provider calls /{provider}/answer endpoint
+3. Look up templates by telephony number
+4. Single template: return direct WebSocket connection
+5. Multiple templates: IVR mode (agent-side for both providers)
+   - Pre-generate audio with our TTS
+   - Store IVR config in Redis
+   - Return WebSocket URL with ivr_mode=true
+   - Agent handles IVR in-band over WebSocket
+"""
+
+import asyncio
+import json
+import uuid
+from datetime import datetime, timezone
+from html import escape as html_escape
+from typing import Any, Dict, Optional
+from urllib.parse import quote
+
+from fastapi import Request, Response
+from starlette.responses import HTMLResponse
+
+# Imported for its side effect: installs the CRM lead-lifecycle taps
+# (stamp + call.inbound mirror fire from the created hook) in this process.
+from app.ai.voice.agents.breeze_buddy import crm_mirror  # noqa: F401
+from app.ai.voice.agents.breeze_buddy.dispatch.alerts import (
+    raise_inbound_capacity_rejected,
+)
+from app.ai.voice.agents.breeze_buddy.ivr.selection import (
+    IVR_CONFIG_CACHE_PREFIX,
+    IVR_CONFIG_CACHE_TTL,
+    prepare_goodbye_audio,
+    prepare_ivr_menu_audio,
+)
+from app.ai.voice.agents.breeze_buddy.managers.inbound_channel import admit_inbound_call
+from app.ai.voice.agents.breeze_buddy.services.agent_router.client import (
+    safe_allocate_pod,
+)
+from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
+    CAPACITY_REJECTED_OUTCOME,
+    check_inbound_policy,
+    log_blocked_call,
+    set_block_redirect,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.plivo.recording import (
+    plivo_record_xml,
+)
+from app.ai.voice.agents.breeze_buddy.services.telephony.vobiz.recording import (
+    vobiz_record_xml,
+)
+from app.ai.voice.agents.breeze_buddy.template.types import TTSConfig
+from app.core.concurrency import spawn_background_task
+from app.core.config.dynamic import (
+    BB_NOISE_CANCELLATION_ENABLED,
+    BB_NOISE_CANCELLATION_LEVEL,
+)
+from app.core.config.static import APP_BASE_URL
+from app.core.logger import logger
+from app.core.logger.context import set_log_context
+from app.core.logger.timing import timed_phase
+from app.database.accessor import (
+    get_call_execution_config_by_template_id,
+    get_lead_by_call_id,
+)
+from app.database.accessor.breeze_buddy.lead_call_tracker import (
+    create_lead_call_tracker,
+)
+from app.database.accessor.breeze_buddy.telephony_number import (
+    get_telephony_number_by_number,
+)
+from app.database.accessor.breeze_buddy.template import (
+    get_all_templates_by_telephony_number_id,
+    get_template_by_id,
+)
+from app.schemas import (
+    IVR_OPTIONS_TEMPLATE,
+    UNKNOWN_TEMPLATE,
+    CallDirection,
+    CallProvider,
+    InboundBlockAction,
+    LeadCallStatus,
+    TelephonyNumber,
+)
+from app.services.redis.client import get_redis_service
+
+_GATED_INBOUND_PROVIDERS = {"plivo": CallProvider.PLIVO, "vobiz": CallProvider.VOBIZ}
+
+
+async def resolve_call_templates(
+    call_sid: str, from_number: str, to_number: str
+) -> Dict[str, Any]:
+    """
+    Shared call resolution logic used by both Exotel and Plivo handlers.
+
+    1. Check if lead exists for call_sid (outbound detection)
+    2. If outbound: look up template from lead
+    3. If inbound: look up telephony_number by to_number, get all templates
+    4. Build template_list with IVR descriptions
+    5. Resolve IVR config (voice, greeting, goodbye) from template configurations
+
+    Args:
+        call_sid: Unique call identifier (Exotel CallSid / Plivo CallUUID)
+        from_number: Caller's phone number
+        to_number: The number that was called
+
+    Returns:
+        Dict with keys depending on call direction:
+
+        Outbound:
+            is_outbound: True
+            template_id: str               (template UUID, or lead UUID for playground)
+            reseller_id: str
+
+        Inbound:
+            is_outbound: False
+            templates: List[TemplateModel]
+            template_list: List[dict]       ([{id, name}])
+            ivr_voice_config: Optional[dict] (IVR voice configuration; when no
+                IVR/main tts_configuration is set, falls back to BB_TTS_SERVICE(),
+                which defaults to "elevenlabs")
+            ivr_greeting: Optional[str]
+            ivr_goodbye: Optional[str]
+            reseller_id: str
+
+        Error:
+            error: str
+            error_status: int              (HTTP status code)
+    """
+    # Check if lead exists (outbound call)
+    #
+    # Existence alone, with no status check — so a rejected call's own
+    # terminal row counts too, and a provider retrying that answer would take
+    # the outbound branch and connect without passing the capacity gate.
+    # Unlikely (the rejection returns 200 fast), and what a re-answered
+    # terminal call should mean is a policy question, not a gate one.
+    with timed_phase("lookup_lead"):
+        lead = await get_lead_by_call_id(call_sid)
+    if lead:
+        # Outbound call - look up template using template_id from lead (preferred) or fall back to name
+        logger.info(f"[Answer] Outbound call detected, lead: {lead.id}")
+
+        # id-only resolution: the lead stores the template_id it resolved
+        # to at push time; name fallback was removed.
+        template = (
+            await get_template_by_id(lead.template_id) if lead.template_id else None
+        )
+        if not template:
+            logger.error(f"[Answer] Template not found for lead: {lead.id}")
+            return {"error": "Template not found", "error_status": 404}
+
+        return {
+            "is_outbound": True,
+            "template_id": str(template.id),
+            "reseller_id": lead.reseller_id,
+            "merchant_id": lead.merchant_id,
+        }
+
+    # Inbound call - look up templates by telephony number
+    logger.info("[Answer] Inbound call detected, looking up templates")
+
+    if not to_number:
+        logger.error("[Answer] No 'To' number in inbound call request")
+        return {"error": "Missing To number", "error_status": 400}
+
+    # Look up telephony number by phone number
+    with timed_phase("lookup_telephony_number"):
+        telephony_number = await get_telephony_number_by_number(to_number)
+    if not telephony_number:
+        logger.error(f"[Answer] No telephony number found for: {to_number}")
+        return {"error": "Number not configured", "error_status": 404}
+
+    # Get all templates for this telephony number
+    with timed_phase("fetch_templates"):
+        templates = await get_all_templates_by_telephony_number_id(telephony_number.id)
+
+    if not templates:
+        logger.error(
+            f"[Answer] No templates found for telephony_number_id: {telephony_number.id}"
+        )
+        return {"error": "No templates available", "error_status": 404}
+
+    # Build template list for IVR (only id and name needed)
+    template_list = [
+        {
+            "id": str(t.id),
+            "name": t.name,
+        }
+        for t in templates
+    ]
+
+    # Resolve IVR config from templates — first non-None ivr_configuration wins for each field
+    first_template = templates[0]
+    ivr_greeting: Optional[str] = None
+    ivr_goodbye: Optional[str] = None
+    ivr_voice_config_dict: Optional[Dict[str, Any]] = None
+
+    for template in templates:
+        cfg = template.configurations
+        if not cfg:
+            continue
+        ivr = cfg.ivr_configuration
+        if ivr:
+            ivr_greeting = ivr_greeting or ivr.greeting
+            ivr_goodbye = ivr_goodbye or ivr.goodbye
+            # The shared menu is synthesized before a template is chosen, so
+            # it has no tenant: it plays on the environment's keys, and a
+            # row named by one template's voice stays out of the dump
+            # (docs/PROVIDER_CREDENTIALS.md, "not covered").
+            if not ivr_voice_config_dict and ivr.tts_configuration:
+                ivr_voice_config_dict = ivr.tts_configuration.model_dump(
+                    exclude_none=True, exclude={"credential_id"}
+                )
+        # Backward compat: flat fields (already migrated into ivr_configuration by validator,
+        # but check directly in case raw DB data hasn't been re-saved)
+        ivr_greeting = ivr_greeting or cfg.ivr_greeting
+        ivr_goodbye = ivr_goodbye or cfg.ivr_goodbye
+        if ivr_greeting and ivr_goodbye:
+            break
+
+    # Fall back to main tts_configuration for IVR voice if no ivr-specific one
+    if not ivr_voice_config_dict and first_template.configurations:
+        vc = first_template.configurations.tts_configuration
+        if vc:
+            ivr_voice_config_dict = vc.model_dump(
+                exclude_none=True, exclude={"credential_id"}
+            )
+
+    # Warn if IVR mode but no greeting configured
+    if len(templates) > 1 and ivr_greeting is None:
+        logger.warning(
+            f"[Answer] IVR mode with {len(templates)} templates but no ivr greeting configured "
+            f"for telephony_number: {to_number}"
+        )
+
+    return {
+        "is_outbound": False,
+        "templates": templates,
+        "template_list": template_list,
+        "ivr_voice_config": ivr_voice_config_dict,
+        "ivr_greeting": ivr_greeting,
+        "ivr_goodbye": ivr_goodbye,
+        "reseller_id": first_template.reseller_id if first_template else None,
+        # Returned so the gate and the release key off the same row, and
+        # therefore the same provider, without a second lookup.
+        "telephony_number": telephony_number,
+    }
+
+
+# ---------------------------------------------------------------------------
+# WebSocket URL builder
+# ---------------------------------------------------------------------------
+
+
+def _build_websocket_url(
+    provider: str,
+    template_id: str,
+    from_number: str,
+    to_number: str = "",
+    ivr_mode: bool = False,
+    pod_ws_url: str = "",
+) -> str:
+    """
+    Build WebSocket URL with query params for any provider.
+
+    When pod_ws_url is provided (from Smart Router allocation), it is used as
+    the base instead of APP_BASE_URL. This routes the WebSocket connection to
+    the specific pod allocated for this call (1-pod-1-call isolation).
+    When pod_ws_url is empty, falls back to the standard shared URL.
+    """
+    if pod_ws_url:
+        # Smart Router returned a pod-specific WebSocket URL.
+        # Append query params so the pod's handler knows the template/caller.
+        url = (
+            f"{pod_ws_url}"
+            f"?template_id={quote(template_id, safe='')}"
+            f"&from_number={quote(from_number, safe='')}"
+        )
+    else:
+        ws_base = APP_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+
+        # Use callback/ws/v2 path for both providers - this matches the WebSocket endpoint
+        # registered at /agent/voice/breeze-buddy/{provider}/callback/ws/v2 which handles
+        # the bidirectional audio stream for voice conversations.
+        url = (
+            f"{ws_base}/agent/voice/breeze-buddy/{provider}/callback/ws/v2"
+            f"?template_id={quote(template_id, safe='')}"
+            f"&from_number={quote(from_number, safe='')}"
+        )
+
+    if to_number:
+        url += f"&to_number={quote(to_number, safe='')}"
+
+    if ivr_mode:
+        url += "&ivr_mode=true"
+
+    return url
+
+
+# ---------------------------------------------------------------------------
+# Stream XML helper (Plivo, Vobiz)
+# ---------------------------------------------------------------------------
+
+
+async def _build_stream_xml(ws_url: str, call_id: str, provider: str) -> str:
+    """Build Plivo-dialect XML (Plivo, Vobiz): session recording, then the
+    WebSocket stream.
+
+    Vobiz takes the same <Stream> minus noise cancellation (not supported
+    there). Its stream URL is emitted without surrounding whitespace, since
+    Vobiz reads the element text as the URL.
+
+    Vobiz gets its own ``<Record>`` (``vobiz_record_xml``: Vobiz-specific
+    defaults).
+    """
+    # Escape special XML characters in URL (primarily & -> &amp;)
+    # Using html_escape with quote=False to avoid escaping quotes in the URL
+    ws_url_escaped = html_escape(ws_url, quote=False)
+
+    if provider == "vobiz":
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f"<Response>{vobiz_record_xml(call_id)}"
+            '<Stream bidirectional="true" keepCallAlive="true" '
+            f'contentType="audio/x-mulaw;rate=8000">{ws_url_escaped}</Stream>'
+            "</Response>"
+        )
+
+    noise_cancellation_enabled = await BB_NOISE_CANCELLATION_ENABLED()
+    noise_cancellation_level = await BB_NOISE_CANCELLATION_LEVEL()
+    noise_cancellation_attr = (
+        f'noiseCancellation="{str(noise_cancellation_enabled).lower()}" '
+        f'noiseCancellationLevel="{noise_cancellation_level}"'
+        if noise_cancellation_enabled
+        else ""
+    )
+
+    if noise_cancellation_attr:
+        logger.info(
+            f"[Plivo] Noise Cancellation Attributes: "
+            f'noiseCancellation="{str(noise_cancellation_enabled).lower()}" '
+            f'noiseCancellationLevel="{noise_cancellation_level}"'
+        )
+
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    {plivo_record_xml(call_id)}
+    <Stream {noise_cancellation_attr} bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
+        {ws_url_escaped}
+    </Stream>
+</Response>"""
+
+
+# ---------------------------------------------------------------------------
+# Unified answer handler helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_call_params(params: dict, provider: str) -> tuple[str | None, str, str]:
+    """Extract normalised (call_id, from_number, to_number) from request params."""
+    if provider == "exotel":
+        call_id = str(params.get("CallSid", "")) or None
+        from_number = str(params.get("From") or params.get("CallFrom", "unknown"))
+        to_number = str(
+            params.get("To") or params.get("CallTo") or params.get("DialWhomNumber", "")
+        )
+    else:
+        # Plivo (and future providers)
+        call_id = str(params.get("CallUUID", "")) or None
+        from_number = str(params.get("From", "unknown"))
+        to_number = str(params.get("To", ""))
+
+    return call_id, from_number, to_number
+
+
+def _error_response(provider: str, message: str, status_code: int) -> Response:
+    """Return an error response in the provider's expected format."""
+    if provider == "exotel":
+        return Response(
+            content=json.dumps({"error": message}),
+            media_type="application/json",
+            status_code=status_code,
+        )
+    # Plivo / Vobiz expect XML - escape message for XML safety
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(message)}</Speak>
+    <Hangup/>
+</Response>"""
+    return HTMLResponse(content=xml, media_type="application/xml")
+
+
+def _build_json_response(ws_url: str) -> Response:
+    """Build Exotel JSON response."""
+    return Response(
+        content=json.dumps({"url": ws_url}),
+        media_type="application/json",
+    )
+
+
+async def _build_xml_response(ws_url: str, call_id: str, provider: str) -> HTMLResponse:
+    """Build Plivo-dialect XML response (Plivo, Vobiz)."""
+    xml = await _build_stream_xml(ws_url, call_id, provider)
+    return HTMLResponse(content=xml, media_type="application/xml")
+
+
+def _build_block_response(
+    provider: str,
+    message: str | None,
+    action: InboundBlockAction | None,
+    redirect_number: str | None,
+    caller_id: str | None = None,
+) -> Response:
+    """Build a blocking response for Plivo/Vobiz/Twilio: reject with TTS or redirect.
+
+    Note: Exotel is handled upstream via Redis + WS disconnect flow and should
+    never reach this function.
+
+    The reject branch answers the call and then hangs up, which is billable.
+    The cheaper ``<PreAnswer><Speak/></PreAnswer><Hangup reason="busy"/>`` is
+    not billed, but the call is never answered, so the message rides as early
+    media — which plenty of carriers strip. Delivering the message is the whole
+    point of this response, so we pay for the answered leg.
+
+    ``caller_id`` is presented on a Vobiz redirect's B-leg (the called number);
+    Plivo's redirect XML ignores it.
+    """
+    tts_message = (
+        message
+        or "Sorry, we are unable to take your call right now. Please try again later."
+    )
+
+    if provider in ("plivo", "vobiz"):
+        if action == InboundBlockAction.REDIRECT and redirect_number:
+            if provider == "vobiz" and caller_id:
+                # Vobiz takes the B-leg caller ID from the A-leg (the caller's own
+                # number) unless set; India rejects a non-Vobiz one (hangup 3030).
+                xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(tts_message)}</Speak>
+    <Dial callerId="{html_escape(caller_id)}">
+        <Number>{html_escape(redirect_number)}</Number>
+    </Dial>
+</Response>"""
+            else:
+                xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(tts_message)}</Speak>
+    <Dial>
+        <Number>{html_escape(redirect_number)}</Number>
+    </Dial>
+</Response>"""
+        else:
+            xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Speak>{html_escape(tts_message)}</Speak>
+    <Hangup/>
+</Response>"""
+        return HTMLResponse(content=xml, media_type="application/xml")
+
+    # TODO: Twilio block response not yet implemented
+    logger.warning(
+        f"[BlockResponse] Unsupported provider '{provider}', returning generic error"
+    )
+    return Response(
+        content=json.dumps({"message": tts_message, "blocked": True}),
+        media_type="application/json",
+    )
+
+
+_INBOUND_CAPACITY_MESSAGE = (
+    "Sorry, all our agents are currently busy. Please try again later."
+)
+
+
+async def _create_inbound_lead_in_answer_handler(
+    call_id: str,
+    from_number: str,
+    templates: list,
+) -> bool:
+    """Create an inbound lead in the answer handler before returning XML.
+
+    This ensures the lead exists in the database even if the caller hangs
+    up before the WebSocket connects, preventing orphan-call webhooks for
+    normal immediate-hangup behaviour.
+
+    Uses the first resolved template; IVR selection may update the template
+    later in the WebSocket handler if the user chooses a different one.
+
+    Errors are swallowed — the answer response must not be blocked by a
+    DB write failure. The boolean is reported, not raised, purely so the
+    Plivo / Vobiz capacity gate can hand its channel back: without a PROCESSING row
+    there is nothing for the call-end callbacks or
+    ``reconcile_stuck_processing_leads`` to decrement, so a silently failed
+    insert would strand that channel forever. Callers that did not take a
+    channel can ignore the result, exactly as before.
+    """
+    if not templates:
+        return False
+
+    first_template = templates[0]
+    is_ivr_mode = len(templates) > 1
+
+    if is_ivr_mode:
+        lead_template_name = IVR_OPTIONS_TEMPLATE
+        lead_template_id = None
+    else:
+        lead_template_name = first_template.name
+        lead_template_id = str(first_template.id)
+
+    lead_id = str(uuid.uuid4())
+    try:
+        created_lead = await create_lead_call_tracker(
+            id=lead_id,
+            reseller_id=first_template.reseller_id,
+            template=lead_template_name,
+            template_id=lead_template_id,
+            merchant_id=first_template.merchant_id,
+            next_attempt_at=None,
+            payload={"customer_mobile_number": from_number},
+            call_initiated_time=datetime.now(timezone.utc),
+            status=LeadCallStatus.PROCESSING,
+            call_id=call_id,
+            telephony_number_id=(
+                str(first_template.telephony_number_id)
+                if first_template.telephony_number_id
+                else None
+            ),
+            call_direction=CallDirection.INBOUND,
+        )
+        if created_lead is None:
+            # The accessor logs and returns None rather than raising.
+            logger.error(
+                f"[Answer] Inbound lead insert returned no row for call_id "
+                f"{call_id} — skipping CRM mirror (no lead to reference)"
+            )
+            return False
+        logger.info(f"[Answer] Created inbound lead {lead_id} for call_id {call_id}")
+
+        # CRM stamp + call.inbound mirror both fire from the created-lead
+        # tap (crm_mirror), sequenced stamp-then-mirror in one background
+        # task so the event is born with its customer_id — a mirror
+        # spawned here would race the stamp and record NULL. The answer
+        # response still never waits on CRM work.
+        return True
+    except Exception as e:
+        logger.error(
+            f"[Answer] Failed to create inbound lead for call_id {call_id}: {e}"
+        )
+        return False
+
+
+async def _build_provider_response(
+    provider: str,
+    result: dict,
+    call_id: str,
+    from_number: str,
+    to_number: str,
+) -> Response:
+    """Build provider-specific response for a resolved call."""
+    tag = f"Answer:{provider}"
+
+    # Helper to build response based on provider
+    async def make_response(ws_url: str) -> Response:
+        if provider == "exotel":
+            return _build_json_response(ws_url)
+        return await _build_xml_response(ws_url, call_id, provider)
+
+    # ── Pod allocation (1-pod-1-call isolation) ──────────────────────────
+    # Attempt to allocate a dedicated pod via Smart Router. This runs for
+    # both inbound and outbound calls at answer-time (customer picked up).
+    # If allocation succeeds, the returned ws_url routes the WebSocket
+    # connection directly to that pod. If it fails (disabled, no capacity,
+    # Smart Router down), pod_ws_url stays empty and we fall back to the
+    # standard shared URL via _build_websocket_url().
+    pod_ws_url = ""
+    # merchant_id: outbound leads carry it on the lead row; inbound derives
+    # from the resolved template. direction lets router configs scope pools
+    # to a call direction (e.g. outbound-only exclusive pools).
+    alloc_merchant_id = result.get("merchant_id")
+    if not alloc_merchant_id:
+        resolved_templates = result.get("templates") or []
+        if resolved_templates:
+            alloc_merchant_id = resolved_templates[0].merchant_id
+    alloc_direction = "outbound" if result.get("is_outbound") else "inbound"
+    allocation = await safe_allocate_pod(
+        call_sid=call_id,
+        provider=provider,
+        reseller_id=result.get("reseller_id"),
+        template="ws",
+        merchant_id=alloc_merchant_id,
+        direction=alloc_direction,
+    )
+    if allocation:
+        pod_ws_url = allocation.ws_url
+        logger.info(f"[{tag}] Pod allocated: {allocation.pod_name} for call {call_id}")
+
+    # Outbound call - direct connection
+    if result.get("is_outbound"):
+        ws_url = _build_websocket_url(
+            provider,
+            result["template_id"],
+            from_number,
+            to_number,
+            pod_ws_url=pod_ws_url,
+        )
+        logger.info(f"[{tag}] Outbound call - ws_url: {ws_url}")
+        return await make_response(ws_url)
+
+    template_list = result["template_list"]
+    templates = result["templates"]
+
+    # Single template - direct connection
+    if len(templates) == 1:
+        ws_url = _build_websocket_url(
+            provider,
+            template_list[0]["id"],
+            from_number,
+            to_number,
+            pod_ws_url=pod_ws_url,
+        )
+        logger.info(f"[{tag}] Single template ({templates[0].name})")
+        return await make_response(ws_url)
+
+    # Multiple templates - IVR mode
+    ivr_voice_config_dict = result.get("ivr_voice_config")
+    ivr_greeting = result["ivr_greeting"]
+    ivr_goodbye = result.get("ivr_goodbye")
+
+    # Convert dict to TTSConfig for IVR helpers (they access .provider.value etc.)
+    ivr_voice = (
+        TTSConfig.model_validate(ivr_voice_config_dict)
+        if ivr_voice_config_dict
+        else None
+    )
+
+    logger.info(
+        f"[{tag}] IVR mode - {len(templates)} templates, "
+        f"voice_provider={ivr_voice.provider.value if ivr_voice else 'default'}"
+    )
+
+    # Pre-generate IVR audio (checks cache first)
+    await prepare_ivr_menu_audio(provider, ivr_greeting, ivr_voice)
+    await prepare_goodbye_audio(provider, ivr_goodbye, ivr_voice)
+
+    # Store IVR config in Redis
+    ivr_configuration = {
+        "options": template_list,
+        "tts_configuration": ivr_voice_config_dict,
+        "ivr_greeting": ivr_greeting,
+        "ivr_goodbye": ivr_goodbye,
+    }
+    redis = await get_redis_service()
+    await redis.setex(
+        f"{IVR_CONFIG_CACHE_PREFIX}{call_id}",
+        json.dumps(ivr_configuration),
+        IVR_CONFIG_CACHE_TTL,
+    )
+
+    ws_url = _build_websocket_url(
+        provider,
+        template_list[0]["id"],
+        from_number,
+        to_number,
+        ivr_mode=True,
+        pod_ws_url=pod_ws_url,
+    )
+    return await make_response(ws_url)
+
+
+# ---------------------------------------------------------------------------
+# Main handler
+# ---------------------------------------------------------------------------
+
+
+async def handle_provider_answer(request: Request, provider: str) -> Response:
+    """
+    Unified answer handler for all telephony providers (Exotel, Plivo, Vobiz).
+
+    Thin timing wrapper: ``answer_total`` is the number the telephony provider
+    actually experiences, i.e. how long it waited for our XML/JSON. Plivo's
+    answer-URL timeout is what turns a slow answer into a retry, and a retry
+    into a duplicate lead — so this is the headline metric.
+
+    Returns:
+        - Exotel: JSON ``{"url": "wss://..."}``
+        - Plivo / Vobiz: XML ``<Stream>``
+    """
+    with timed_phase("answer_total", provider=provider):
+        return await _handle_provider_answer(request, provider)
+
+
+async def _refuse_inbound_call(
+    provider: str,
+    call_id: str,
+    from_number: str,
+    to_number: str,
+    templates: list,
+    block_message: Optional[str],
+    block_action: Optional[InboundBlockAction],
+    block_redirect: Optional[str],
+    reseller_id: Optional[str],
+    merchant_id: Optional[str],
+    tag: str,
+) -> Response:
+    """Turn a refused inbound call into a provider response.
+
+    One place for every refusal — policy blocks and capacity rejections alike
+    — so the three providers are handled identically whatever the reason.
+    """
+    is_redirect = block_action == InboundBlockAction.REDIRECT and block_redirect
+
+    if provider == "exotel":
+        # Exotel only accepts {"url": "wss://..."} at answer-time. For both
+        # REDIRECT and REJECT: accept the call, store block info in Redis. The
+        # WS agent plays the message then closes. For REDIRECT, Exotel applet →
+        # /dial-up → redirect. For REJECT, /dial-up returns 404 → call ends.
+        await set_block_redirect(
+            call_sid=call_id,
+            redirect_number=block_redirect or "",
+            message=block_message,
+            reseller_id=reseller_id,
+            merchant_id=merchant_id,
+        )
+        ws_url = _build_websocket_url(
+            provider,
+            str(templates[0].id) if templates else "block",
+            from_number,
+            to_number,
+        )
+        action_label = (
+            f"redirect to {block_redirect}"
+            if is_redirect
+            else "reject (play message then hang up)"
+        )
+        logger.info(
+            f"[{tag}] Exotel block: accepting call {call_id}, "
+            f"{action_label} via WS disconnect"
+        )
+        return _build_json_response(ws_url)
+
+    elif provider in ("plivo", "vobiz"):
+        # Plivo / Vobiz handle both REDIRECT (Dial XML) and REJECT (Hangup XML)
+        return _build_block_response(
+            provider,
+            block_message,
+            block_action,
+            block_redirect,
+            caller_id=to_number,
+        )
+    else:
+        # TODO: Twilio block handling not yet implemented
+        return _build_block_response(
+            provider,
+            block_message,
+            block_action,
+            block_redirect,
+        )
+
+
+def _gated_inbound_number(provider: str, result: dict) -> Optional[TelephonyNumber]:
+    """The number whose channel this inbound call consumes, or None.
+
+    Only Plivo and Vobiz inbound are gated, so this is also the answer to
+    "do we owe a channel back". Both the gate and the failed-insert path key
+    off it, so the rule lives in one place.
+    """
+    number = result.get("telephony_number")
+    if number is None or _GATED_INBOUND_PROVIDERS.get(provider) != number.provider:
+        return None
+    return number
+
+
+async def _gate_inbound_channel(
+    provider: str,
+    call_id: str,
+    from_number: str,
+    to_number: str,
+    result: dict,
+    tag: str,
+) -> Optional[Response]:
+    """Take a channel for an inbound Plivo / Vobiz call.
+
+    Returns the response to send the caller when there is no free channel, or
+    None when the call may proceed — either because it was admitted or because
+    this number is not gated.
+
+    Runs after policy, so a blacklisted or out-of-hours caller never consumes a
+    channel and capacity rejections stay separable from policy blocks in
+    analytics. Runs before the lead insert, so a rejected call leaves exactly
+    one terminal row rather than a PROCESSING row to close.
+    """
+    telephony_number = _gated_inbound_number(provider, result)
+    if telephony_number is None:
+        return None
+
+    with timed_phase("acquire_inbound_channel"):
+        admitted = await admit_inbound_call(str(telephony_number.id))
+
+    if admitted:
+        return None
+
+    logger.info(
+        f"[{tag}] No free channel on {telephony_number.number} "
+        f"for call {call_id}; rejecting as busy"
+    )
+
+    # Owner fields come off the same post-policy template list the lead would
+    # have been created from, so the rejected row lands in the same analytics
+    # scope as a served call.
+    allowed = result.get("templates") or []
+    first = allowed[0] if allowed else None
+
+    spawn_background_task(
+        log_blocked_call(
+            call_id=call_id,
+            from_number=from_number,
+            to_number=to_number,
+            provider=provider,
+            reseller_id=first.reseller_id if first else "",
+            merchant_id=first.merchant_id if first else None,
+            template_name=first.name if first else UNKNOWN_TEMPLATE,
+            template_id=str(first.id) if first else None,
+            telephony_number_id=str(telephony_number.id),
+            block_action=None,
+            block_reason="channel_capacity_exhausted",
+            block_message=_INBOUND_CAPACITY_MESSAGE,
+            outcome=CAPACITY_REJECTED_OUTCOME,
+        ),
+        name=f"log-capacity-rejection:{call_id}",
+    )
+    spawn_background_task(
+        raise_inbound_capacity_rejected(
+            telephony_number_id=str(telephony_number.id),
+            number=telephony_number.number,
+            reseller_id=first.reseller_id if first else None,
+            merchant_id=first.merchant_id if first else None,
+            maximum_channels=telephony_number.maximum_channels,
+        ),
+        name=f"alert-capacity-rejection:{call_id}",
+    )
+
+    return await _refuse_inbound_call(
+        provider=provider,
+        call_id=call_id,
+        from_number=from_number,
+        to_number=to_number,
+        templates=allowed,
+        block_message=_INBOUND_CAPACITY_MESSAGE,
+        block_action=InboundBlockAction.REJECT,
+        block_redirect=None,
+        reseller_id=first.reseller_id if first else None,
+        merchant_id=first.merchant_id if first else None,
+        tag=tag,
+    )
+
+
+async def _handle_provider_answer(request: Request, provider: str) -> Response:
+    """
+    Unified answer handler for all telephony providers (Exotel, Plivo, Vobiz).
+
+    Returns:
+        - Exotel: JSON ``{"url": "wss://..."}``
+        - Plivo / Vobiz: XML ``<Stream>``
+    """
+    tag = f"Answer:{provider}"
+
+    # Extract call params
+    if request.method == "GET":
+        params = dict(request.query_params)
+    else:
+        params = dict(await request.form())
+
+    call_id, from_number, to_number = _extract_call_params(params, provider)
+
+    # Stamp the call identity into the contextvar log scope. Everything
+    # downstream of this line — resolve_call_templates, the policy loop,
+    # create_inbound_lead, and every [PHASE] line — inherits call_id
+    # automatically, because contextvars propagate across await.
+    #
+    # Both call_id and call_sid are stamped with the same value: the voice
+    # agent (agent/__init__.py) stamps call_sid=, not call_id=, so without
+    # both keys a dashboard filter on one field misses everything logged
+    # under the other. call_id is kept because other things on this branch
+    # reference it.
+    set_log_context(
+        call_id=str(call_id or ""),
+        call_sid=str(call_id or ""),
+        provider=provider,
+        flow="answer",
+    )
+
+    logger.info(f"[{tag}] call_id={call_id}, from={from_number}, to={to_number}")
+
+    if not call_id:
+        logger.error(f"[{tag}] Missing call ID")
+        return _error_response(provider, "Missing call identifier", 400)
+
+    # Resolve templates
+    with timed_phase("resolve_call_templates"):
+        result = await resolve_call_templates(call_id, from_number, to_number)
+
+    if "error" in result:
+        logger.error(f"[{tag}] {result['error']}")
+        error_msg = (
+            result["error"]
+            if provider == "exotel"
+            else "Sorry, this number is not configured to receive calls. Goodbye."
+        )
+        return _error_response(provider, error_msg, result.get("error_status", 500))
+
+    # ── Inbound policy enforcement ────────────────────────────────────────
+    if not result.get("is_outbound"):
+        templates = result.get("templates", [])
+        is_ivr_mode = len(templates) > 1
+        reseller_id = result.get("reseller_id")
+
+        if reseller_id:
+            merchant_id = templates[0].merchant_id if templates else None
+            allowed_templates = []
+            last_block_result = None
+
+            with timed_phase("policy_loop", templates=len(templates)):
+                for t in templates:
+                    with timed_phase("policy_template", template=t.name):
+                        # Config is owned by the template (1:1 by template_id) —
+                        # no name-based matching.
+                        config = (
+                            await get_call_execution_config_by_template_id(str(t.id))
+                            if t.id
+                            else None
+                        )
+                        if not config:
+                            # No config for this template — allow by default
+                            allowed_templates.append(t)
+                            continue
+
+                        policy = await check_inbound_policy(
+                            config,
+                            from_number,
+                            skip_rate_limit=is_ivr_mode,
+                        )
+                        if policy.allowed:
+                            allowed_templates.append(t)
+                        else:
+                            last_block_result = policy
+                            logger.info(
+                                f"[{tag}] Template {t.name} blocked: {policy.reason}"
+                            )
+
+            if not allowed_templates:
+                # All templates blocked
+                logger.info(f"[{tag}] All templates blocked for call {call_id}")
+
+                block_action = last_block_result.action if last_block_result else None
+                block_redirect = (
+                    last_block_result.redirect_number if last_block_result else None
+                )
+                block_message = last_block_result.message if last_block_result else None
+
+                # Fire-and-forget: log blocked call to lead_call_tracker
+                asyncio.create_task(
+                    log_blocked_call(
+                        call_id=call_id,
+                        from_number=from_number,
+                        to_number=to_number,
+                        provider=provider,
+                        reseller_id=reseller_id,
+                        merchant_id=merchant_id,
+                        template_name=(
+                            templates[0].name if templates else UNKNOWN_TEMPLATE
+                        ),
+                        template_id=str(templates[0].id) if templates else None,
+                        telephony_number_id=(
+                            str(templates[0].telephony_number_id)
+                            if templates and templates[0].telephony_number_id
+                            else None
+                        ),
+                        block_action=block_action,
+                        block_reason=(
+                            last_block_result.reason if last_block_result else None
+                        ),
+                        block_message=block_message,
+                        redirect_number=block_redirect,
+                    )
+                )
+
+                return await _refuse_inbound_call(
+                    provider=provider,
+                    call_id=call_id,
+                    from_number=from_number,
+                    to_number=to_number,
+                    templates=templates,
+                    block_message=block_message,
+                    block_action=block_action,
+                    block_redirect=block_redirect,
+                    reseller_id=reseller_id,
+                    merchant_id=merchant_id,
+                    tag=tag,
+                )
+
+            # Update result with filtered templates
+            if len(allowed_templates) != len(templates):
+                result["templates"] = allowed_templates
+                result["template_list"] = [
+                    {"id": str(t.id), "name": t.name} for t in allowed_templates
+                ]
+
+        # IVR (the keypad menu) is not built for Vobiz yet: a Vobiz number must
+        # route to exactly one inbound template. Refuse loudly rather than
+        # play a menu the stream cannot drive.
+        if provider == "vobiz" and len(result.get("templates", [])) > 1:
+            logger.error(
+                f"[{tag}] Vobiz number {to_number} resolves to "
+                f"{len(result['templates'])} inbound templates; IVR is not "
+                f"supported on Vobiz yet. Refusing call {call_id}."
+            )
+            return _error_response(
+                provider,
+                "Sorry, this number is not configured to receive calls. Goodbye.",
+                409,
+            )
+
+        refusal = await _gate_inbound_channel(
+            provider, call_id, from_number, to_number, result, tag
+        )
+        if refusal is not None:
+            return refusal
+
+        # Create inbound lead early so it exists even if caller hangs up before
+        # the WebSocket connects. This prevents orphan-call webhooks for normal
+        # immediate-hangup behaviour.
+        #
+        # The lead is created PROCESSING, which is what the release side keys
+        # on: whichever callback moves it off PROCESSING returns the channel.
+        with timed_phase("create_inbound_lead"):
+            lead_created = await _create_inbound_lead_in_answer_handler(
+                call_id=call_id,
+                from_number=from_number,
+                templates=result.get("templates", []),
+            )
+
+        # Deliberately NOT refunding. This request does not end the call: it
+        # falls through to the provider response, the caller connects, and the
+        # websocket creates its own PROCESSING lead on this number
+        # (agent/inbound.py::create_lead_from_template_id) which releases the
+        # channel at call end. Refunding here would make that a second release
+        # for one acquire — an under-count, which over-admits.
+        #
+        # The exception is a caller who hangs up before the stream opens:
+        # that channel is a KNOWN, PERMANENT leak. Nothing repairs it (no row
+        # to sweep, nothing recomputes the column, update_telephony_number()
+        # cannot set it), so it needs a manual UPDATE. Refunding to cover it
+        # would cost a channel on every ordinary failed insert instead.
+        gated = _gated_inbound_number(provider, result)
+        if gated is not None and not lead_created:
+            logger.error(
+                f"[{tag}] Inbound lead insert failed for call {call_id} after "
+                f"taking a channel on {gated.id}. Not refunding: the "
+                "websocket creates its own PROCESSING lead which will own and "
+                "release it. If the caller hangs up before the stream opens, "
+                "this channel is leaked permanently and needs a manual "
+                "UPDATE on telephony_numbers.channels."
+            )
+
+    with timed_phase("build_response"):
+        return await _build_provider_response(
+            provider, result, call_id, from_number, to_number
+        )

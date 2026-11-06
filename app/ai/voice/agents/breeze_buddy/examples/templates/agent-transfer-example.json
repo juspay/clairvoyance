@@ -1,0 +1,98 @@
+{
+  "merchant": "breeze",
+  "template_name": "agent-transfer-example",
+  "identifier": "agent-transfer-demo",
+  "is_active": false,
+  "description": "Demonstrates agent-to-agent transfer via the 'connect_to_agent' builtin global function. A front-line triage agent detects the caller's intent and hands the LIVE call off to a specialist agent template mid-conversation; the engine tears down the current pipeline and cold-builds a fresh one (its own STT/LLM/TTS/flow) from the target template over the SAME phone connection, so the call never drops. Config lives entirely on the function entry: 'agent_transfer.targets' maps an LLM-chosen alias -> target template id, 'max_transfers' bounds the chain per call (A->B->A guard), and 'context_mode' controls what the next agent inherits (summary = a handoff note with the LLM's handoff_summary, full = the whole transcript, fresh = nothing). The alias values in properties.target.enum MUST match the keys in agent_transfer.targets. Voice only; one-way per hop. Replace the <...-template-uuid> placeholders with the real specialist template ids (those specialists are ordinary voice templates reached only by id — they are NOT assigned to this number).",
+  "expected_payload_schema": {
+    "customer_name": {
+      "type": "string",
+      "example": "John Doe"
+    },
+    "shop_name": {
+      "type": "string",
+      "example": "Breeze"
+    }
+  },
+  "configurations": {
+    "stt_language": "en",
+    "tts_configuration": {
+      "provider": "elevenlabs"
+    }
+  },
+  "flow": {
+    "initial_node": "triage",
+    "global_functions": [
+      {
+        "type": "builtin",
+        "name": "route_to_specialist",
+        "handler": "connect_to_agent",
+        "description": "Hand the call off to the specialist agent that best matches the caller's intent. Use 'billing' for payments, invoices, refunds, or subscription dues. Use 'technical' for app problems, login issues, or bugs. Use 'cancellation' when the caller wants to cancel or is considering leaving. Always pass a one-line handoff_summary describing the caller's issue and the conversation so far.",
+        "pre_tts_message": "Sure, let me connect you to the right team. One moment.",
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": ["billing", "technical", "cancellation"],
+            "description": "Which specialist agent to route the caller to."
+          },
+          "handoff_summary": {
+            "type": "string",
+            "description": "One-line summary of the caller's issue and the conversation so far, for the specialist to pick up from."
+          }
+        },
+        "required": ["target", "handoff_summary"],
+        "agent_transfer": {
+          "targets": {
+            "billing": "<billing-template-uuid>",
+            "technical": "<technical-template-uuid>",
+            "cancellation": "<cancellation-template-uuid>"
+          },
+          "max_transfers": 5,
+          "context_mode": "summary"
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "node_name": "triage",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Greet the caller and find out what they need:\n\"Hi {customer_name}, thanks for calling {shop_name} support. How can I help you today?\"\n\nAs soon as you understand their intent, call route_to_specialist with the matching target and a one-line handoff_summary. If it is unclear, ask ONE clarifying question first."
+          }
+        ],
+        "role_messages": [
+          {
+            "role": "system",
+            "content": "You are the front-line support agent for {shop_name}. Your ONLY job is to identify the caller's intent and route them to the right specialist — do NOT try to resolve the issue yourself.\n\n=== GLOBAL FUNCTION ===\n- route_to_specialist: call this the moment you know which team can help. 'billing' = payments/invoices/refunds/subscription dues; 'technical' = app problems/login/bugs; 'cancellation' = wants to cancel or is unhappy and considering leaving. Always include a concise handoff_summary so the specialist can pick up without re-asking.\n\nYou are a text-to-speech voice agent: reply in plain, unformatted text. Keep turns short and warm. If the caller does not need a specialist (e.g. wrong number or just says goodbye), call end_call."
+          }
+        ],
+        "functions": [
+          {
+            "function_name": "end_call",
+            "description": "Call this if the caller does not need a specialist or wants to end the call.",
+            "properties": {},
+            "required": [],
+            "transition_to": "end_call",
+            "hooks": []
+          }
+        ]
+      },
+      {
+        "node_name": "end_call",
+        "task_messages": [
+          {
+            "role": "system",
+            "content": "Thank the caller and say a warm goodbye."
+          }
+        ],
+        "post_actions": [
+          {
+            "type": "end_conversation"
+          }
+        ],
+        "functions": []
+      }
+    ]
+  }
+}

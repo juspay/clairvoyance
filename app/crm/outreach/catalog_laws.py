@@ -1,0 +1,342 @@
+"""The catalog laws of a plan (design/event-catalog.md §Ownership; canon
+T24): conditions, entry.key and a send node's template variables come
+ONLY from declared fields, an op only from the field's type, a deprecated
+field is a warning. One pure concern, kept apart from the plan lifecycle
+(plans.py: gather -> validate -> apply) so each file stays one thing.
+
+gather_catalogs is the cold read; everything else is pure and takes what
+it gathered as an argument.
+"""
+
+from typing import Any, Dict, List, Optional
+
+from app.core.logger import logger
+from app.crm.outreach.ladder import expand_stages
+from app.crm.outreach.nodes import NODE_TYPES, listens
+from app.crm.outreach.nodes.action import placeholder_names
+from app.crm.outreach.playbook import block_names, line_holes
+from app.crm.outreach.schemas import RETIRED_WAIT_EVENT, WorkflowDefinition
+from app.crm.record.contracts import (
+    AmbiguousTopic,
+    CatalogField,
+    canonical_path,
+    catalog_fields,
+    variable_name,
+)
+from app.crm.shared.predicate import PARTIAL_OPS, PRESENCE_OPS, Condition, as_number
+
+# The catalog handed to validate_definition: topic -> (path -> field, both
+# layers), with None for a topic no layer knows — every door's topic and
+# every listened topic. None altogether = the caller gathered nothing
+# (unit callers): shape laws only.
+Catalogs = Optional[Dict[str, Optional[Dict[str, CatalogField]]]]
+
+
+class WorkflowValidationError(Exception):
+    def __init__(self, problems: List[str]):
+        self.problems = problems
+        super().__init__("; ".join(problems))
+
+
+def entry_against_catalog(
+    definition: WorkflowDefinition, catalogs: Catalogs
+) -> List[str]:
+    """The catalog laws (event-catalog.md §Ownership): conditions,
+    entry.key and the send nodes' template variables come ONLY from
+    declared fields; an op only from the field's type; a deprecated field
+    is a warning, not a refusal. One pass per door (phase 15): each door's
+    topic is the catalog its words are checked against — a send node's
+    mapped facts must be declared on EVERY door's topic, since a run may
+    enter through any of them."""
+    if catalogs is None:
+        return []  # nothing gathered (pure-unit callers): shape laws only
+    problems: List[str] = []
+    mapped = [
+        (node.id, blank, fact)
+        for node in definition.nodes
+        if node.type == "send"
+        for blank, fact in node.variables.items()
+    ]
+    # An action square's args ask the run for facts by the same names a send
+    # node's variables do — `{id}` on an args value and `{id}` on the right of
+    # a variables map are the same lookup against the same run_facts. So they
+    # answer to the same allow-list: without this, `{order_id}` on a door
+    # whose topic declares only `id` publishes cleanly and parks on the first
+    # run, which is the failure the send-side check exists to prevent.
+    asked = [
+        (node.id, name)
+        for node in definition.nodes
+        if node.type == "action"
+        for name in placeholder_names(node.args)
+    ]
+    # A playbook line's {hole} is the same lookup against the same run_facts
+    # as an args placeholder, so it answers to the same allow-list. Without
+    # this, a line naming {order_id} on a door whose topic declares only `id`
+    # publishes cleanly and parks on the first call — with the agent already
+    # dialled, which is later than an args hole fails.
+    asked += [("playbook", name) for name in line_holes(definition)]
+    listened = listened_facts(definition, catalogs)
+    open_squares = unenumerable_squares(definition, catalogs)
+    blocks = block_names(definition)
+    for entry in definition.entries:
+        topic = entry.topic
+        fields = catalogs.get(topic)
+        if fields is None:
+            if entry.where or entry.key or mapped or asked:
+                problems.append(
+                    f"topic {topic!r} is not in the catalog — register its "
+                    "schema (or declare it in code) before filtering, keying "
+                    "or templating on it"
+                )
+            continue
+        declared = {variable_name(f.path) for f in fields.values() if f.variable}
+        allowed = declared | _WALKER_FACTS | listened
+        # A block is merged into the facts LAST (nodes/blocks.py), so a block
+        # named like a fact silently wins over the letter's own value, and one
+        # named like a walker key slips past the run_facts filter that exists
+        # to stop it. Refused here, where the door's declared names are in
+        # hand — a name collision is a wrong sentence on a live call.
+        for name in sorted(blocks & allowed):
+            problems.append(
+                f"playbook block {name!r} shadows a fact of topic {topic!r} — "
+                "a block is merged over the run's facts, so the letter's own "
+                "value would be lost; rename the block"
+            )
+        for node_id, blank, fact in mapped:
+            if fact not in allowed and not _from_open_square(fact, open_squares):
+                problems.append(
+                    f"send node {node_id}: variable {blank!r} <- {fact!r} is not "
+                    f"a declared variable field (topic {topic!r}; declared: "
+                    f"{', '.join(sorted(declared)) or 'none'})"
+                )
+        for node_id, name in asked:
+            if name not in allowed and not _from_open_square(name, open_squares):
+                where = (
+                    "playbook: a line asks"
+                    if node_id == "playbook"
+                    else f"action node {node_id}: args ask"
+                )
+                problems.append(
+                    f"{where} for {{{name}}}, which is not a declared variable "
+                    f"field (topic {topic!r}; declared: "
+                    f"{', '.join(sorted(declared)) or 'none'})"
+                )
+        for condition in entry.where:
+            problems.extend(
+                f"{p} (topic {topic!r})"
+                for p in condition_against_catalog(condition, fields)
+            )
+        if entry.key:
+            key_path = canonical_path(entry.key)
+            field = fields.get(key_path)
+            if field is None:
+                problems.append(
+                    f"entry.key {entry.key!r} is not a declared field (topic {topic!r})"
+                )
+            elif not field.keyable:
+                problems.append(
+                    f"entry.key {entry.key!r} is not keyable (topic {topic!r})"
+                )
+    return problems
+
+
+def goals_against_catalog(
+    definition: WorkflowDefinition, catalogs: Catalogs
+) -> List[str]:
+    """The ownership laws, applied to a GOAL tier's conditions (phase 21).
+
+    A tier WITHOUT a `where` is unchanged — it may name any topic, declared
+    or not. Only one that asks a question about a payload has to prove the
+    payload is one we can read. A tier names several topics only if its
+    `where` holds on every one of them: each condition is checked against
+    each topic's fields.
+
+    The key laws need no catalog, so they run before the early return.
+    """
+    problems: List[str] = []
+    for index, tier in enumerate(definition.goals):
+        if tier.key and "." in tier.key.event:
+            # Both judges read the key at the top level only: entry.py as
+            # payload.get(key), the walker in SQL as payload->>$5. A nested
+            # path matches nothing at either.
+            problems.append(
+                f"goal tier {index}: key.event {tier.key.event!r} must be a "
+                "top-level payload field (it is compared in SQL at fire time)"
+            )
+        if tier.where and tier.key is None:
+            # The walker judges a `where` on the NEWEST letter of the tier's
+            # topics; without a key that letter may be about another order.
+            problems.append(
+                f"goal tier {index}: a tier with `where` needs a `key` — "
+                "without one, any of the customer's orders could answer it"
+            )
+    if catalogs is None:
+        return problems  # nothing gathered (pure-unit callers): shape laws only
+    for index, tier in enumerate(definition.goals):
+        if not tier.where:
+            continue
+        for topic in tier.topics:
+            fields = catalogs.get(topic)
+            if fields is None:
+                problems.append(
+                    f"goal tier {index}: topic {topic!r} is not in the catalog "
+                    "— register its schema (or declare it in code) before "
+                    "filtering on it"
+                )
+                continue
+            for condition in tier.where:
+                problems.extend(
+                    f"goal tier {index}: {p} (topic {topic!r})"
+                    for p in condition_against_catalog(condition, fields)
+                )
+                field = fields.get(condition.field)
+                if (
+                    field is not None
+                    and field.type == "list"
+                    and condition.op == "includes"
+                    and not (
+                        isinstance(condition.value, str) and condition.value.strip()
+                    )
+                ):
+                    # A list holds trimmed, non-blank text (order_tags), and
+                    # 1 never equals "1": this tier would never fire, and we
+                    # would keep calling.
+                    problems.append(
+                        f"goal tier {index}: {condition.field!r} includes needs "
+                        f"a non-blank text value, not {condition.value!r} "
+                        f"(topic {topic!r})"
+                    )
+    return problems
+
+
+# Facts the walker computes for a template at the square (nodes.run_facts,
+# phase 16) — never a producer's, so no catalog declares them.
+_WALKER_FACTS = frozenset({"current_node", "current_stage"})
+
+
+def listened_facts(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
+    """PURE: every facts_<square>_<key> a send may name — a listening wait's
+    letter (phase 16: kept under context.facts.<square>) exposes
+    the variable fields declared for ANY topic that square listens on."""
+    names: set = set()
+    if catalogs is None:
+        return names
+    for node in definition.nodes:
+        if not listens(node):
+            continue
+        for topic in node.topics:
+            for field in (catalogs.get(topic) or {}).values():
+                if field.variable:
+                    names.add(f"facts_{node.id}_{variable_name(field.path)}")
+    return names
+
+
+def unenumerable_squares(definition: WorkflowDefinition, catalogs: Catalogs) -> set:
+    """PURE: the listening waits whose letters nobody can enumerate.
+
+    A call's answers are declared by the TEMPLATE, so no catalog lists them.
+    Per SQUARE: every other name in the document stays checked.
+    """
+    open_squares: set = set()
+    if catalogs is None:
+        return open_squares
+    for node in definition.nodes:
+        if not listens(node):
+            continue
+        if any(catalogs.get(topic) is None for topic in node.topics):
+            open_squares.add(node.id)
+    return open_squares
+
+
+def _from_open_square(name: str, open_squares: set) -> bool:
+    """PURE: is `name` a `facts_<square>_<key>` of an unenumerable square?
+
+    Matched on the square's own id, since both an id and a key may contain
+    "_". Only that prefix is exempt.
+    """
+    return any(name.startswith(f"facts_{square}_") for square in open_squares)
+
+
+def condition_against_catalog(
+    condition: Condition, fields: Dict[str, CatalogField]
+) -> List[str]:
+    field = fields.get(condition.field)
+    if field is None:
+        return [f"where: {condition.field!r} is not a declared field"]
+    if condition.op not in field.ops:
+        return [
+            f"where: {condition.op!r} is not an op for {condition.field!r} "
+            f"({field.type}; allowed: {', '.join(field.ops) or 'none'})"
+        ]
+    if field.deprecated:
+        logger.warning(f"where: {condition.field!r} is deprecated in the catalog")
+    values = condition.value if condition.op == "in" else [condition.value]
+    if condition.op in PRESENCE_OPS or condition.op in PARTIAL_OPS:
+        # A partial piece is text the author writes, never one of a choice's
+        # values: "Samsung Galaxy" is not a value, it is part of many.
+        return []
+    if field.type == "choice" and field.values:
+        bad = [v for v in values if str(v) not in field.values]
+        if bad:
+            return [f"where: {condition.field!r} has no value {bad[0]!r}"]
+    if field.type == "number" and any(as_number(v) is None for v in values):
+        return [f"where: {condition.field!r} is a number"]
+    if field.type == "boolean" and any(not isinstance(v, bool) for v in values):
+        return [f"where: {condition.field!r} is a yes/no"]
+    return []
+
+
+async def gather_catalogs(merchant_id: str, raw: Dict[str, Any]) -> Catalogs:
+    """topic -> merged field map (None = unknown topic) for every door's
+    topic and every listened topic — the cold read the pure validator
+    receives as an argument. Read off the EXPANDED document (phase 17): a
+    ladder has no doors or squares until expand_stages mints them; a
+    ladder that will not expand gathers nothing and the validator says why.
+
+    A topic TWO sources declare for the merchant has no honest field map
+    while a door names topic alone (canon T19; `entry.source` is a ruling
+    owed): the gather refuses with a WorkflowValidationError naming both
+    sources rather than hand the validator a silent union."""
+    if isinstance(raw, dict) and raw.get("stages") is not None:
+        try:
+            raw = expand_stages(raw)
+        except Exception:  # LadderProblem / pydantic — validate_definition reports it
+            return {}
+    entry = raw.get("entry") if isinstance(raw, dict) else None
+    doors = entry if isinstance(entry, list) else [entry]
+    topics = {
+        str(door["topic"])
+        for door in doors
+        if isinstance(door, dict) and door.get("topic")
+    }
+    # …and every topic a listening square hears: its letter's facts
+    # (phase 16) are what a send may name as facts_<square>_<key>. The
+    # registry says which words listen (N1 retired) — a raw dict here,
+    # before the schema has judged it, so an unknown word simply doesn't.
+    for node in raw.get("nodes") or [] if isinstance(raw, dict) else []:
+        if not isinstance(node, dict):
+            continue
+        word = str(node.get("type"))
+        spec = NODE_TYPES.get("wait" if word == RETIRED_WAIT_EVENT else word)
+        if spec is not None and spec.is_wait:
+            topics.update(str(t) for t in node.get("topics") or [] if t)
+    if isinstance(raw, dict):
+        # Only a tier with a `where` reads a field map; a plain tier may name
+        # any topic, so gathering it could only refuse it (AmbiguousTopic).
+        for tier in raw.get("goals") or []:
+            if isinstance(tier, dict) and tier.get("where"):
+                topics.update(str(t) for t in tier.get("topics") or [] if t)
+    catalogs: Dict[str, Optional[Dict[str, CatalogField]]] = {}
+    problems: List[str] = []
+    for topic in sorted(topics):
+        try:
+            catalogs[topic] = await catalog_fields(merchant_id, topic)
+        except AmbiguousTopic as e:
+            problems.append(
+                f"topic {topic!r} is declared by more than one source "
+                f"({', '.join(e.sources)}) — a door names the topic alone, so "
+                "the plan cannot say which letter it means"
+            )
+    if problems:
+        raise WorkflowValidationError(problems)
+    return catalogs

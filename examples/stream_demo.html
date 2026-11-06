@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Breeze Buddy - DAILY_STREAM Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+    h1 { font-size: 1.5rem; margin-bottom: 8px; color: #38bdf8; }
+    p.subtitle { color: #94a3b8; font-size: 0.85rem; margin-bottom: 24px; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1100px; }
+    @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+    .card h2 { font-size: 1rem; color: #38bdf8; margin-bottom: 12px; }
+
+    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; margin-top: 10px; }
+    input, textarea { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 0.85rem; font-family: inherit; }
+    textarea { resize: vertical; min-height: 60px; }
+
+    .btn { padding: 8px 18px; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: opacity 0.15s; }
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-blue { background: #2563eb; color: white; }
+    .btn-green { background: #16a34a; color: white; }
+    .btn-red { background: #dc2626; color: white; }
+    .btn-row { display: flex; gap: 8px; margin-top: 14px; }
+
+    .status { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 0.85rem; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot-gray { background: #475569; }
+    .dot-green { background: #22c55e; animation: pulse 1.5s infinite; }
+    .dot-yellow { background: #eab308; animation: pulse 1s infinite; }
+    .dot-red { background: #ef4444; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    #log { max-height: 360px; overflow-y: auto; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; line-height: 1.5; padding: 12px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; }
+    .log-event { color: #38bdf8; }
+    .log-user { color: #a78bfa; }
+    .log-bot { color: #34d399; }
+    .log-error { color: #f87171; }
+    .log-info { color: #94a3b8; }
+
+    #transcription-live { min-height: 48px; padding: 12px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; font-size: 0.85rem; margin-bottom: 12px; }
+    .interim { color: #64748b; font-style: italic; }
+    .final { color: #e2e8f0; }
+  </style>
+</head>
+<body>
+  <h1>Breeze Buddy - DAILY_STREAM Demo</h1>
+  <p class="subtitle">STT/TTS-only Daily session via PipecatClient + DailyTransport (same as aarokya).</p>
+
+  <div class="grid">
+    <!-- Left: Config & Controls -->
+    <div>
+      <div class="card">
+        <h2>1. Configuration</h2>
+        <label>API Base URL</label>
+        <input id="apiUrl" value="http://localhost:8000/agent/voice/breeze-buddy" />
+
+        <label>Auth Token (JWT)</label>
+        <input id="authToken" type="password" value="" placeholder="Paste your JWT here" />
+
+        <label>Reseller ID</label>
+        <input id="resellerId" value="BB_SHOPIFY" />
+
+        <label>Template</label>
+        <input id="template" value="order-confirmation" />
+
+        <label>Lead Payload (JSON)</label>
+        <textarea id="payload">{
+  "customer_name": "Demo User",
+  "customer_mobile_number": "+919876543210",
+  "shop_name": "Demo Shop",
+  "customer_address": "123 Main Street, Bangalore",
+  "total_price": 1500,
+  "items": [
+    {"product_name": "Widget", "quantity": 2},
+    {"product_name": "Gadget", "quantity": 1}
+  ]
+}</textarea>
+      </div>
+
+      <div class="card" style="margin-top: 16px;">
+        <h2>2. Session</h2>
+        <div class="btn-row">
+          <button class="btn btn-blue" id="btnStart" onclick="startSession()">Create Lead & Connect</button>
+          <button class="btn btn-red" id="btnStop" onclick="stopSession()" disabled>Disconnect</button>
+        </div>
+        <div class="status" id="statusBar">
+          <div class="dot dot-gray" id="statusDot"></div>
+          <span id="statusText">Not connected</span>
+        </div>
+        <div id="sessionInfo" style="margin-top: 10px; font-size: 0.75rem; color: #64748b;"></div>
+      </div>
+
+      <div class="card" style="margin-top: 16px;">
+        <h2>3. Send TTS</h2>
+        <input id="ttsInput" placeholder="Type text for TTS..." onkeydown="if(event.key==='Enter') sendTTS()" />
+        <div class="btn-row">
+          <button class="btn btn-green" id="btnTTS" onclick="sendTTS()" disabled>Speak</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Events & Transcription -->
+    <div>
+      <div class="card">
+        <h2>Live Transcription</h2>
+        <div id="transcription-live">
+          <span class="interim">Waiting for audio...</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 0.8rem;">
+          <div class="status">
+            <div class="dot dot-gray" id="userSpeakingDot"></div>
+            <span>User speaking</span>
+          </div>
+          <div class="status">
+            <div class="dot dot-gray" id="botSpeakingDot"></div>
+            <span>Bot speaking</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 16px;">
+        <h2>Event Log</h2>
+        <div id="log"></div>
+      </div>
+    </div>
+  </div>
+
+<!-- PipecatClient + DailyTransport via esm.sh (same SDK as aarokya) -->
+<script type="module">
+import { PipecatClient } from 'https://esm.sh/@pipecat-ai/client-js@1.7.0';
+import { DailyTransport } from 'https://esm.sh/@pipecat-ai/daily-transport@1.6.1';
+
+let client = null;
+let audioElement = null;
+let leadId = null;
+
+// --- UI helpers ---
+
+function setStatus(state, text) {
+  document.getElementById('statusDot').className = 'dot dot-' + state;
+  document.getElementById('statusText').textContent = text;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function log(msg, cls = 'log-info') {
+  const el = document.getElementById('log');
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML += `<div class="${cls}"><span style="color:#475569">[${ts}]</span> ${escapeHtml(String(msg))}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function authHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + document.getElementById('authToken').value.trim(),
+  };
+}
+
+// --- Transcription handling ---
+
+function handleTranscription(data) {
+  if (!data) return;
+  const el = document.getElementById('transcription-live');
+  const text = (typeof data === 'string') ? data : (data.text || '');
+  const isFinal = (typeof data === 'string') ? true : (data.final !== false);
+
+  if (isFinal && text) {
+    el.innerHTML += `<div class="final">${escapeHtml(text)}</div>`;
+    log('Transcription: "' + text + '"', 'log-user');
+  } else if (text) {
+    let interim = el.querySelector('.interim-current');
+    if (!interim) {
+      interim = document.createElement('div');
+      interim.className = 'interim interim-current';
+      el.appendChild(interim);
+    }
+    interim.textContent = text + '...';
+  }
+
+  if (isFinal) {
+    const interim = el.querySelector('.interim-current');
+    if (interim) interim.remove();
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+// --- Session lifecycle (mirrors aarokya/voice.ts) ---
+
+async function startSession() {
+  const apiUrl = document.getElementById('apiUrl').value.trim();
+  const resellerId = document.getElementById('resellerId').value.trim();
+  const template = document.getElementById('template').value.trim();
+  let payload;
+  try {
+    payload = JSON.parse(document.getElementById('payload').value);
+  } catch (e) {
+    log('Invalid payload JSON: ' + e.message, 'log-error');
+    return;
+  }
+  if (!resellerId || !template) {
+    log('Reseller ID and Template are required', 'log-error');
+    return;
+  }
+
+  document.getElementById('btnStart').disabled = true;
+  setStatus('yellow', 'Creating lead...');
+
+  // Step 1: Push lead with DAILY_STREAM
+  try {
+    log('Pushing lead with execution_mode=DAILY_STREAM...');
+    const leadRes = await fetch(apiUrl + '/leads', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        request_id: 'stream-demo-' + Date.now(),
+        reseller_id: resellerId,
+        template: template,
+        payload: payload,
+        execution_mode: 'DAILY_STREAM',
+      }),
+    });
+    if (!leadRes.ok) throw new Error(`${leadRes.status}: ${await leadRes.text()}`);
+    const leadData = await leadRes.json();
+    leadId = leadData.lead_call_tracker_id;
+    log('Lead created: ' + leadId, 'log-event');
+  } catch (e) {
+    log('Failed to create lead: ' + e.message, 'log-error');
+    setStatus('red', 'Failed');
+    document.getElementById('btnStart').disabled = false;
+    return;
+  }
+
+  // Step 2: Connect (creates Daily room + starts bot)
+  setStatus('yellow', 'Connecting to Daily room...');
+  let conn;
+  try {
+    const connRes = await fetch(apiUrl + '/connect', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ lead_id: leadId }),
+    });
+    if (!connRes.ok) throw new Error(`${connRes.status}: ${await connRes.text()}`);
+    conn = await connRes.json();
+    log('Room: ' + conn.room_url, 'log-event');
+    document.getElementById('sessionInfo').textContent =
+      `Lead: ${leadId}\nRoom: ${conn.room_url}\nSession: ${conn.session_id}`;
+  } catch (e) {
+    log('Failed to connect: ' + e.message, 'log-error');
+    setStatus('red', 'Failed');
+    document.getElementById('btnStart').disabled = false;
+    return;
+  }
+
+  // Step 3: Create PipecatClient with DailyTransport (same as aarokya/voice.ts)
+  setStatus('yellow', 'Joining room...');
+  try {
+    client = new PipecatClient({
+      transport: new DailyTransport({
+        inputSettings: {
+          audio: {
+            processor: { type: 'noise-cancellation' },
+            settings: {
+              echoCancellation: { ideal: true },
+              noiseSuppression: { ideal: true },
+              autoGainControl: { ideal: true },
+            },
+          },
+        },
+      }),
+      enableMic: true,
+      enableCam: false,
+      callbacks: {
+        // ===== Transport / Track =====
+        onTrackStarted: (track, participant) => {
+          console.log('[onTrackStarted]', track.kind, participant?.local ? 'local' : 'remote');
+          if (track.kind === 'audio' && participant && !participant.local) {
+            if (!audioElement) {
+              audioElement = document.createElement('audio');
+              audioElement.autoplay = true;
+              audioElement.setAttribute('playsinline', '');
+              document.body.appendChild(audioElement);
+            }
+            if (audioElement.srcObject) {
+              const existing = audioElement.srcObject.getAudioTracks()[0];
+              if (existing?.id === track.id) return;
+            }
+            audioElement.srcObject = new MediaStream([track]);
+            log('Bot audio track attached', 'log-event');
+          }
+        },
+        onTrackStopped: (track, participant) => {
+          console.log('[onTrackStopped]', track.kind, participant?.local ? 'local' : 'remote');
+          if (track.kind === 'audio' && participant && !participant.local) {
+            if (audioElement) audioElement.srcObject = null;
+          }
+        },
+        onScreenTrackStarted: (track, participant) => {
+          console.log('[onScreenTrackStarted]', track, participant);
+        },
+        onScreenTrackStopped: (track, participant) => {
+          console.log('[onScreenTrackStopped]', track, participant);
+        },
+        onScreenShareError: (error) => {
+          console.log('[onScreenShareError]', error);
+        },
+
+        // ===== Connection lifecycle =====
+        onConnected: () => {
+          console.log('[onConnected]');
+          setStatus('green', 'Connected');
+          log('Connected via PipecatClient + DailyTransport', 'log-event');
+          document.getElementById('btnStop').disabled = false;
+          document.getElementById('btnTTS').disabled = false;
+        },
+        onDisconnected: () => {
+          console.log('[onDisconnected]');
+          setStatus('gray', 'Disconnected');
+          log('Disconnected', 'log-info');
+          cleanup();
+        },
+        onTransportStateChanged: (state) => {
+          console.log('[onTransportStateChanged]', state);
+          log('Transport state: ' + state, 'log-info');
+        },
+        onError: (error) => {
+          console.error('[onError]', error);
+          log('Error: ' + (error?.message || JSON.stringify(error)), 'log-error');
+        },
+        onMessageError: (error) => {
+          console.error('[onMessageError]', error);
+          log('Message error: ' + JSON.stringify(error?.data || error).substring(0, 150), 'log-error');
+        },
+
+        // ===== Participant =====
+        onParticipantJoined: (p) => {
+          console.log('[onParticipantJoined]', p);
+          log('Participant joined: ' + (p?.id || 'unknown'), 'log-event');
+        },
+        onParticipantLeft: (p) => {
+          console.log('[onParticipantLeft]', p);
+          log('Participant left: ' + (p?.id || 'unknown'), 'log-info');
+        },
+
+        // ===== Bot lifecycle =====
+        onBotStarted: (data) => {
+          console.log('[onBotStarted]', data);
+          log('Bot started', 'log-event');
+        },
+        onBotConnected: (data) => {
+          console.log('[onBotConnected]', data);
+          log('Bot connected', 'log-event');
+        },
+        onBotReady: (data) => {
+          console.log('[onBotReady]', data);
+          log('Bot ready (version: ' + (data?.version || '?') + ')', 'log-event');
+        },
+        onBotDisconnected: (data) => {
+          console.log('[onBotDisconnected]', data);
+          log('Bot disconnected', 'log-info');
+        },
+
+        // ===== User speech =====
+        onUserStartedSpeaking: () => {
+          console.log('[onUserStartedSpeaking]');
+          document.getElementById('userSpeakingDot').className = 'dot dot-green';
+          log('User started speaking', 'log-user');
+        },
+        onUserStoppedSpeaking: () => {
+          console.log('[onUserStoppedSpeaking]');
+          document.getElementById('userSpeakingDot').className = 'dot dot-gray';
+          log('User stopped speaking', 'log-user');
+        },
+        onUserTranscript: (data) => {
+          console.log('[onUserTranscript]', data);
+          handleTranscription(data);
+        },
+        onUserMuteStarted: () => {
+          console.log('[onUserMuteStarted]');
+          log('User muted', 'log-user');
+        },
+        onUserMuteStopped: () => {
+          console.log('[onUserMuteStopped]');
+          log('User unmuted', 'log-user');
+        },
+
+        // ===== Bot speech =====
+        onBotStartedSpeaking: () => {
+          console.log('[onBotStartedSpeaking]');
+          document.getElementById('botSpeakingDot').className = 'dot dot-green';
+          log('Bot started speaking', 'log-bot');
+        },
+        onBotStoppedSpeaking: () => {
+          console.log('[onBotStoppedSpeaking]');
+          document.getElementById('botSpeakingDot').className = 'dot dot-gray';
+          log('Bot stopped speaking', 'log-bot');
+        },
+
+        // ===== Bot LLM (not used in stream mode, but wired for completeness) =====
+        onBotLlmStarted: () => {
+          console.log('[onBotLlmStarted]');
+          log('Bot LLM started', 'log-bot');
+        },
+        onBotLlmText: (data) => {
+          console.log('[onBotLlmText]', data);
+        },
+        onBotLlmStopped: () => {
+          console.log('[onBotLlmStopped]');
+          log('Bot LLM stopped', 'log-bot');
+        },
+        onBotLlmSearchResponse: (data) => {
+          console.log('[onBotLlmSearchResponse]', data);
+        },
+
+        // ===== Bot TTS =====
+        onBotTtsStarted: () => {
+          console.log('[onBotTtsStarted]');
+          log('Bot TTS synthesis started', 'log-bot');
+        },
+        onBotTtsText: (data) => {
+          console.log('[onBotTtsText]', data);
+          const text = (typeof data === 'object') ? data?.text : data;
+          if (text) log('TTS text: ' + text, 'log-bot');
+        },
+        onBotTtsStopped: () => {
+          console.log('[onBotTtsStopped]');
+          log('Bot TTS synthesis stopped', 'log-bot');
+        },
+        onBotOutput: (data) => {
+          console.log('[onBotOutput]', data);
+        },
+        onBotTranscript: (data) => {
+          console.log('[onBotTranscript]', data);
+        },
+
+        // ===== Function calls =====
+        onLLMFunctionCallStarted: (data) => {
+          console.log('[onLLMFunctionCallStarted]', data);
+          log('Function call started: ' + (data?.function_name || ''), 'log-info');
+        },
+        onLLMFunctionCallInProgress: (data) => {
+          console.log('[onLLMFunctionCallInProgress]', data);
+          log('Function call in progress: ' + (data?.function_name || ''), 'log-info');
+        },
+        onLLMFunctionCallStopped: (data) => {
+          console.log('[onLLMFunctionCallStopped]', data);
+          log('Function call stopped: ' + (data?.function_name || ''), 'log-info');
+        },
+
+        // ===== Audio levels =====
+        onLocalAudioLevel: (level) => {
+          // fires frequently — console only, no UI log
+          // console.log('[onLocalAudioLevel]', level);
+        },
+        onRemoteAudioLevel: (level, participant) => {
+          // fires frequently — console only, no UI log
+          // console.log('[onRemoteAudioLevel]', level, participant);
+        },
+
+        // ===== Metrics =====
+        onMetrics: (data) => {
+          console.log('[onMetrics]', data);
+        },
+
+        // ===== Device changes =====
+        onAvailableCamsUpdated: (cams) => {
+          console.log('[onAvailableCamsUpdated]', cams);
+        },
+        onAvailableMicsUpdated: (mics) => {
+          console.log('[onAvailableMicsUpdated]', mics);
+        },
+        onAvailableSpeakersUpdated: (speakers) => {
+          console.log('[onAvailableSpeakersUpdated]', speakers);
+        },
+        onCamUpdated: (cam) => {
+          console.log('[onCamUpdated]', cam);
+        },
+        onMicUpdated: (mic) => {
+          console.log('[onMicUpdated]', mic);
+        },
+        onSpeakerUpdated: (speaker) => {
+          console.log('[onSpeakerUpdated]', speaker);
+        },
+        onDeviceError: (error) => {
+          console.error('[onDeviceError]', error);
+          log('Device error: ' + (error?.message || JSON.stringify(error)), 'log-error');
+        },
+
+        // ===== Server messages =====
+        onServerMessage: (message) => {
+          console.log('[onServerMessage]', message);
+          const msg = (typeof message === 'object') ? message : {};
+          if (msg.type === 'conversation-start') {
+            log('Conversation started', 'log-event');
+          } else if (msg.type === 'conversation-end') {
+            log('Conversation ended: ' + (msg.payload?.reason || ''), 'log-event');
+          } else if (msg.type) {
+            log(`[server] ${msg.type}: ${JSON.stringify(msg.data || msg.payload || '').substring(0, 120)}`, 'log-info');
+          }
+        },
+      },
+    });
+
+    await client.connect({
+      url: conn.room_url,
+      token: conn.token,
+    });
+  } catch (e) {
+    log('Failed to join: ' + (e.message || e), 'log-error');
+    setStatus('red', 'Join failed');
+    document.getElementById('btnStart').disabled = false;
+  }
+}
+
+function sendTTS() {
+  const input = document.getElementById('ttsInput');
+  const text = input.value.trim();
+  if (!text || !client) return;
+
+  client.sendClientMessage('tts-speak', { text: text });
+  log('Sent TTS: "' + text + '"', 'log-bot');
+  input.value = '';
+}
+
+async function stopSession() {
+  if (client) {
+    try { await client.disconnect(); } catch {}
+    client = null;
+  }
+  if (audioElement) {
+    if (audioElement.srcObject) {
+      audioElement.srcObject.getTracks().forEach(t => t.stop());
+    }
+    audioElement.srcObject = null;
+    audioElement = null;
+  }
+  cleanup();
+}
+
+function cleanup() {
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  document.getElementById('btnTTS').disabled = true;
+  document.getElementById('userSpeakingDot').className = 'dot dot-gray';
+  document.getElementById('botSpeakingDot').className = 'dot dot-gray';
+}
+
+// Expose to onclick handlers
+window.startSession = startSession;
+window.stopSession = stopSession;
+window.sendTTS = sendTTS;
+</script>
+</body>
+</html>

@@ -1,0 +1,529 @@
+{
+    "merchant": "acme",
+    "template_name": "acme-order-confirmation",
+    "identifier": "acme",
+    "is_active": true,
+    "description": "Order confirmation workflow with template-level and node-level VAD configuration",
+    "expected_payload_schema": {
+        "customer_name": {
+            "type": "string",
+            "example": "John Doe"
+        },
+        "shop_name": {
+            "type": "string",
+            "example": "Breeze Store"
+        },
+        "total_price": {
+            "type": "number",
+            "example": 250.75
+        },
+        "customer_address": {
+            "type": "string",
+            "example": "456 Elm Street, Mumbai, Maharashtra, India, 400001"
+        },
+        "customer_mobile_number": {
+            "type": "string",
+            "example": "9123456780"
+        },
+        "items": {
+            "type": "string",
+            "example": "1x Samsung Galaxy S21, 2x Apple AirPods Pro"
+        }
+    },
+    "configurations": {
+        "tts_configuration": {
+            "provider": "elevenlabs"
+        },
+        "vad_config": {
+            "confidence": 0.5,
+            "start_secs": 0.1,
+            "stop_secs": 0.3,
+            "min_volume": 0.5
+        }
+    },
+    "expected_callback_response_schema": {
+        "cancellation_reason": {
+            "type": "string",
+            "optional": true
+        },
+        "updated_address": {
+            "type": "string",
+            "optional": true
+        }
+    },
+    "flow": {
+        "initial_node": "initial",
+        "end_conversation_callbacks": [
+            "service_callback"
+        ],
+        "nodes": [
+            {
+                "node_name": "initial",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "Start the call by introducing yourself and stating the purpose of the call:\n\"Hi {customer_name} Sir/Madam, Namaste. This is Rhea from {shop_name}. I'm calling to confirm the order you placed with us. Is it a good time to talk, Sir/Madam?\""
+                    }
+                ],
+                "role_messages": [
+                    {
+                        "role": "system",
+                        "content": "You are Rhea, a friendly customer care representative from {shop_name}. Your goal is to confirm a Cash on Delivery (COD) order with the customer.\n\nIMPORTANT: You are a text-to-speech voice agent. Generate all responses as plain, unformatted text.\n\nNever reveal or suggest that you are a bot or automated system.\n\nBefore starting the conversation, identify whether the customer name \"{customer_name}\" is typically male or female in India. Based on this:\n- If the name is clearly male, address the customer as \"Sir\".\n- If clearly female, address them as \"Madam\".\n- If unsure, use their name instead of Sir/Madam.\n\nIMPORTANT: - If the user speaks in another language (like Hindi), reply in that same language.\n\nYour main job is to verify the following order details:\n- Items: {items}\n- Total Price: {total_price}\n- Delivery Address: {customer_address}\n\nTone and Language\n- Speak in a warm, casual, and natural tone.\n\nAction Handling\n- Always use the provided functions to perform any actions related to the order.\n\nYour only role is to confirm or cancel this specific order."
+                    }
+                ],
+                "pre_actions": [],
+                "post_actions": [],
+                "functions": [
+                    {
+                        "function_name": "user_available",
+                        "description": "Call this function when the user confirms that they are available to talk with clear affirmative responses",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "verify_order_detail_node",
+                        "hooks": []
+                    },
+                    {
+                        "function_name": "user_busy",
+                        "description": "Call this function when the user says they are busy or it's not a good time to talk",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "user_busy_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "busy"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "cancel_order",
+                        "description": "Call this function if the customer explicitly asks to cancel the order. If the user gives a reason for cancellation, pass it.",
+                        "properties": {
+                            "cancellation_reason": {
+                                "type": "string",
+                                "description": "The reason for cancelling the order."
+                            }
+                        },
+                        "required": [
+                            "cancellation_reason"
+                        ],
+                        "transition_to": "order_cancellation_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "cancelled"
+                                    },
+                                    "cancellation_reason": {
+                                        "source": "llm"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "handle_unrelated_question",
+                        "description": "Call this function if the user asks a question about anything other than confirming or cancelling the order",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "handle_unrelated_question_node",
+                        "hooks": []
+                    }
+                ]
+            },
+            {
+                "node_name": "verify_order_detail_node",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "Now verify the order details with the customer. The order contains {items}. The total price is {total_price} rupees. The delivery address is {customer_address}. Ask for confirmation of the order."
+                    }
+                ],
+                "pre_actions": [
+                    {
+                        "type": "function",
+                        "handler": "play_audio_sound",
+                        "args": {
+                            "audio": "cough"
+                        }
+                    }
+                ],
+                "post_actions": [],
+                "functions": [
+                    {
+                        "function_name": "confirm_order",
+                        "description": "Call this function if the customer agrees/confirms the order details (items, price, and address) and asks no other questions",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "order_confirmation_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "confirmed"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "confirm_order_with_question",
+                        "description": "Call this function if the customer agrees/confirms the order but also asks an unrelated question",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "order_confirmation_with_question_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "confirmed"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "cancel_order",
+                        "description": "Call this function if the customer explicitly asks to cancel the order",
+                        "properties": {
+                            "cancellation_reason": {
+                                "type": "string",
+                                "description": "The reason for cancelling the order."
+                            }
+                        },
+                        "required": [
+                            "cancellation_reason"
+                        ],
+                        "transition_to": "order_cancellation_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "cancelled"
+                                    },
+                                    "cancellation_reason": {
+                                        "source": "llm"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "handle_unrelated_question",
+                        "description": "Call this function if the user asks a question about anything other than confirming or cancelling the order",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "handle_unrelated_question_node",
+                        "hooks": []
+                    },
+                    {
+                        "function_name": "address_incorrect",
+                        "description": "User says the address or phone number is wrong or wants to update it",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "update_address_node",
+                        "hooks": []
+                    }
+                ]
+            },
+            {
+                "node_name": "update_address_node",
+                "vad_config": {
+                    "stop_secs": 2,
+                    "min_volume": 0.7
+                },
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "Say user as \"Sure, I can help you with that. Can you please provide me with the updated address details?\"  Also update the address provided by the user and keep remaining details same. Dont ask for complete address again."
+                    }
+                ],
+                "pre_actions": [
+                    {
+                        "type": "function",
+                        "handler": "play_audio_sound",
+                        "args": {
+                            "audio": "cough"
+                        }
+                    }
+                ],
+                "post_actions": [],
+                "functions": [
+                    {
+                        "function_name": "update_address",
+                        "description": "Update the address and after that confirm the order with the updated address",
+                        "properties": {
+                            "updated_address": {
+                                "type": "string",
+                                "description": "Updated address as per the user's input"
+                            }
+                        },
+                        "required": [
+                            "updated_address"
+                        ],
+                        "transition_to": "confirm_address_update_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "ADDRESS_UPDATED"
+                                    },
+                                    "updated_address": {
+                                        "source": "llm"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "node_name": "confirm_address_update_node",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "Got it. Your address has been updated. Is there anything else you would like to update, or should I go ahead and confirm the order?"
+                    }
+                ],
+                "pre_actions": [],
+                "post_actions": [],
+                "functions": [
+                    {
+                        "function_name": "confirm_order",
+                        "description": "Customer confirms the order after address update",
+                        "properties": {
+                            "updated_address": {
+                                "type": "string",
+                                "description": "Updated address"
+                            }
+                        },
+                        "required": [
+                            "updated_address"
+                        ],
+                        "transition_to": "order_confirmation_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "ADDRESS_UPDATED"
+                                    },
+                                    "updated_address": {
+                                        "source": "llm"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "address_incorrect",
+                        "description": "User wants to update more address fields",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "update_address_node",
+                        "hooks": []
+                    },
+                    {
+                        "function_name": "cancel_order",
+                        "description": "Call this function if the customer explicitly asks to cancel the order",
+                        "properties": {
+                            "cancellation_reason": {
+                                "type": "string",
+                                "description": "The reason for cancelling the order."
+                            }
+                        },
+                        "required": [
+                            "cancellation_reason"
+                        ],
+                        "transition_to": "order_cancellation_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "cancelled"
+                                    },
+                                    "cancellation_reason": {
+                                        "source": "llm"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "node_name": "handle_unrelated_question_node",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "I'm not able to help you with that right now, but you can find all the latest details on the {shop_name} website. Regarding your order, would you like to confirm it?"
+                    }
+                ],
+                "pre_actions": [],
+                "post_actions": [],
+                "functions": [
+                    {
+                        "function_name": "confirm_order",
+                        "description": "Call this function if the customer agrees/confirms the order details",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "order_confirmation_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "confirmed"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "cancel_order",
+                        "description": "Call this function if the customer explicitly asks to cancel the order",
+                        "properties": {
+                            "cancellation_reason": {
+                                "type": "string",
+                                "description": "The reason for cancelling the order."
+                            }
+                        },
+                        "required": [
+                            "cancellation_reason"
+                        ],
+                        "transition_to": "order_cancellation_and_end_node",
+                        "hooks": [
+                            {
+                                "name": "update_outcome_in_database",
+                                "expected_fields": {
+                                    "outcome": {
+                                        "source": "static",
+                                        "value": "cancelled"
+                                    },
+                                    "cancellation_reason": {
+                                        "source": "llm"
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "function_name": "address_incorrect",
+                        "description": "User wants to update address",
+                        "properties": {},
+                        "required": [],
+                        "transition_to": "update_address_node",
+                        "hooks": []
+                    }
+                ]
+            },
+            {
+                "node_name": "order_confirmation_and_end_node",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "Thank you for confirming your order. Your order will be delivered soon. Have a good day."
+                    }
+                ],
+                "pre_actions": [
+                    {
+                        "type": "function",
+                        "handler": "mute_stt"
+                    }
+                ],
+                "post_actions": [
+                    {
+                        "type": "function",
+                        "handler": "end_conversation"
+                    }
+                ],
+                "functions": []
+            },
+            {
+                "node_name": "order_confirmation_with_question_and_end_node",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "Thank you for confirming the order. I am here just to confirm your order, for any questions related to the order please refer to the website for more details. Have a good day."
+                    }
+                ],
+                "pre_actions": [
+                    {
+                        "type": "function",
+                        "handler": "mute_stt"
+                    }
+                ],
+                "post_actions": [
+                    {
+                        "type": "function",
+                        "handler": "end_conversation"
+                    }
+                ],
+                "functions": []
+            },
+            {
+                "node_name": "order_cancellation_and_end_node",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "I understand you don't want to proceed with this order. I am cancelling your order. Thank you for your time."
+                    }
+                ],
+                "pre_actions": [
+                    {
+                        "type": "function",
+                        "handler": "mute_stt"
+                    }
+                ],
+                "post_actions": [
+                    {
+                        "type": "function",
+                        "handler": "end_conversation"
+                    }
+                ],
+                "functions": []
+            },
+            {
+                "node_name": "user_busy_and_end_node",
+                "task_messages": [
+                    {
+                        "role": "system",
+                        "content": "I understand. I will call you back later. Thank you for your time."
+                    }
+                ],
+                "pre_actions": [
+                    {
+                        "type": "function",
+                        "handler": "mute_stt"
+                    }
+                ],
+                "post_actions": [
+                    {
+                        "type": "function",
+                        "handler": "end_conversation"
+                    }
+                ],
+                "functions": []
+            }
+        ]
+    }
+}
