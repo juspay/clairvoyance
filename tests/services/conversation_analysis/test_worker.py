@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 import time
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -62,7 +61,9 @@ from app.services.model_provider import (
     GenerationSettings,
     Message,
     ProviderError,
+    ReplyError,
     Usage,
+    VertexProvider,
 )
 
 TEMPLATE_ID = "00000000-0000-0000-0000-000000000001"
@@ -82,19 +83,26 @@ def _context(
     }
 
 
+def _capture_fill(monkeypatch: pytest.MonkeyPatch) -> list:
+    calls: list = []
+
+    async def fill(provider: Any, request: Any, form: Any) -> Any:
+        calls.append((provider, request))
+        return form.model_validate({"customer_needs": [], "topics": []})
+
+    monkeypatch.setattr(extractor, "fill", fill)
+    return calls
+
+
 async def test_prompt_replacement_preserves_json_braces(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    llm = SimpleNamespace(
-        run_inference=AsyncMock(return_value='{"customer_needs": [], "topics": []}')
-    )
-    build_llm = AsyncMock(return_value=llm)
+    calls = _capture_fill(monkeypatch)
     monkeypatch.setattr(
         extractor,
         "get_config",
         AsyncMock(return_value="https://grid.example/v1/chat/completions"),
     )
-    monkeypatch.setattr(extractor, "resolve_openai", build_llm)
     monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "topics-key")
     configuration = {
         "model": "minimaxai/minimax-m2",
@@ -107,16 +115,14 @@ async def test_prompt_replacement_preserves_json_braces(
 
     await extractor.extract_topics(transcript, ["Delivery Delay"], configuration)
 
-    prompt = llm.run_inference.await_args.kwargs["system_instruction"]
-    assert 'Return {"topics": []}' in prompt
-    assert "Limit 2" in prompt
-    assert '"type": "delivery_delay"' in prompt
-    llm_call = build_llm.await_args
-    assert llm_call is not None
-    llm_config, account = llm_call.args
-    assert llm_config.model == "minimaxai/minimax-m2"
-    assert account.endpoint == "https://grid.example/v1"
-    assert account.api_key == "topics-key"
+    provider, request = calls[-1]
+    assert 'Return {"topics": []}' in request.system_prompt
+    assert "Limit 2" in request.system_prompt
+    assert '"type": "delivery_delay"' in request.system_prompt
+    assert request.model == "minimaxai/minimax-m2"
+    assert provider.name == "openai"
+    assert provider._config.base_url == "https://grid.example/v1/chat/completions"
+    assert provider._config.api_key == "topics-key"
 
     monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "")
     with pytest.raises(ValueError, match="GRID_TOPICS_API_KEY"):
@@ -126,11 +132,8 @@ async def test_prompt_replacement_preserves_json_braces(
 async def test_agent_prompt_is_sent_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    llm = SimpleNamespace(
-        run_inference=AsyncMock(return_value='{"customer_needs": [], "topics": []}')
-    )
+    calls = _capture_fill(monkeypatch)
     monkeypatch.setattr(extractor, "get_config", AsyncMock(return_value="https://g"))
-    monkeypatch.setattr(extractor, "resolve_openai", AsyncMock(return_value=llm))
     monkeypatch.setattr(static, "GRID_TOPICS_API_KEY", "topics-key")
     transcript = [
         {"role": "system", "content": "You are Priya calling from SBI."},
@@ -148,8 +151,45 @@ async def test_agent_prompt_is_sent_only_when_enabled(
                 "settings": {"max_topics": 3, "include_agent_prompt": include},
             },
         )
-        prompt = llm.run_inference.await_args.kwargs["system_instruction"]
-        assert prompt.count("calling from SBI") == expected_count
+        _, request = calls[-1]
+        assert request.system_prompt.count("calling from SBI") == expected_count
+
+
+async def test_vertex_topics_go_through_fill(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _capture_fill(monkeypatch)
+    account = SimpleNamespace(credentials_json="{}", project_id="project-1")
+    resolver = SimpleNamespace(get=AsyncMock(return_value=account))
+    monkeypatch.setattr(extractor, "Accounts", lambda: resolver)
+    clients: list = []
+
+    def vertex_client(**settings: Any) -> object:
+        clients.append(settings)
+        return "vertex-client"
+
+    monkeypatch.setattr(extractor, "get_genai_vertex_client", vertex_client)
+
+    await extractor.extract_topics(
+        [{"role": "user", "content": "My order is late"}],
+        ["Delivery.Late"],
+        {
+            "provider": "google_vertex",
+            "model": "gemini-3.5-flash",
+            "region": "asia-south1",
+            "system_prompt": "Classify.",
+        },
+    )
+
+    ((provider, request),) = calls
+    assert isinstance(provider, VertexProvider)
+    assert provider._client == "vertex-client"
+    assert request.model == "gemini-3.5-flash"
+    assert clients == [
+        {
+            "credentials_json": "{}",
+            "project_id": "project-1",
+            "location": "asia-south1",
+        }
+    ]
 
 
 async def test_openrouter_topics_go_through_the_model_provider(
@@ -163,6 +203,7 @@ async def test_openrouter_topics_go_through_the_model_provider(
         return_value=GenerateResponse(
             content=answer,
             model="openai/gpt-4o-mini",
+            structured=json.loads(answer),
             finish_reason="stop",
             usage=Usage(input_tokens=120, output_tokens=40),
         )
@@ -188,38 +229,80 @@ async def test_openrouter_topics_go_through_the_model_provider(
     assert request.input == [Message(role="user", content="[0] user: My order is late")]
     assert request.system_prompt.startswith("Classify topics.")
     assert '"type": "delivery_delay"' in request.system_prompt
+    assert request.system_prompt.endswith("Reply with one JSON object only.")
     assert request.settings == GenerationSettings(temperature=0.2, max_tokens=2000)
-    assert request.schema is None
+    assert request.schema is not None
+    assert list(request.schema["properties"]) == ["customer_needs", "topics"]
 
-    for reply, finish_reason, reason in (
-        (
-            answer[:-3],
-            "length",
-            "openai/gpt-4o-mini hit the 2000-token output limit mid-answer. "
-            "Fix: raise settings.max_output_tokens (now 2000).",
-        ),
-        (
-            "",
-            "length",
-            "openai/gpt-4o-mini spent all 2000 output tokens thinking and wrote "
-            "no answer. Fix: raise settings.max_output_tokens (now 2000).",
-        ),
-        ("", "stop", "Expecting value"),
-    ):
-        generate.return_value = GenerateResponse(
-            content=reply, model="openai/gpt-4o-mini", finish_reason=finish_reason
+    generate.return_value = GenerateResponse(
+        content="not json", model="openai/gpt-4o-mini", finish_reason="stop"
+    )
+    generate.reset_mock()
+    with pytest.raises(ReplyError) as bad:
+        await extractor.extract_topics(
+            [{"role": "user", "content": "My order is late"}],
+            ["Delivery Delay"],
+            configuration,
         )
-        with pytest.raises(ValueError, match=re.escape(reason)) as bad:
-            await extractor.extract_topics(
-                [{"role": "user", "content": "My order is late"}],
-                ["Delivery Delay"],
-                configuration,
-            )
-        assert evaluator.classify_failure(bad.value) == evaluator.MODEL_BAD_RESPONSE
+    assert generate.await_count == 2
+    assert evaluator.classify_failure(bad.value) == evaluator.MODEL_BAD_RESPONSE
+
+    generate.side_effect = ReplyError(
+        "openrouter", "reply truncated at max_tokens=2000, cut mid-answer"
+    )
+    with pytest.raises(ReplyError) as cut:
+        await extractor.extract_topics(
+            [{"role": "user", "content": "My order is late"}],
+            ["Delivery Delay"],
+            configuration,
+        )
+    assert evaluator.classify_failure(cut.value) == evaluator.MODEL_BAD_RESPONSE
     with pytest.raises(ValueError, match="stream needs the openai provider"):
         extractor.resolve_topic_evaluation_configuration(
             {**configuration, "settings": {"stream": True}}
         )
+
+
+async def test_a_two_level_list_only_accepts_its_own_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reply(label: str) -> GenerateResponse:
+        content = json.dumps(
+            {
+                "customer_needs": [],
+                "topics": [
+                    {
+                        "type": "delivery_late",
+                        "label": label,
+                        "phrase": "order is late",
+                        "evidence_turns": [0],
+                    }
+                ],
+            }
+        )
+        return GenerateResponse(
+            content=content, model="qwen/qwen3.7-flash", structured=json.loads(content)
+        )
+
+    generate = AsyncMock(side_effect=[reply("Late order"), reply("Delivery.Late")])
+    monkeypatch.setattr(extractor.OPENROUTER, "generate", generate)
+
+    topics = await extractor.extract_topics(
+        [{"role": "user", "content": "My order is late"}],
+        ["Delivery.Late", "Delivery.Lost"],
+        {
+            "provider": "openrouter",
+            "model": "qwen/qwen3.7-flash",
+            "system_prompt": "Classify.",
+        },
+    )
+
+    assert [topic["label"] for topic in topics] == ["Delivery.Late"]
+    first, retry = [call.args[0] for call in generate.await_args_list]
+    label = first.schema["properties"]["topics"]["items"]["properties"]["label"]
+    assert label["enum"] == ["Delivery.Late", "Delivery.Lost"]
+    assert "'Late order' is not in the known list" in retry.input[-1].content
+    assert "Return only valid JSON" in first.system_prompt
 
 
 def test_a_setting_of_the_wrong_type_is_refused() -> None:

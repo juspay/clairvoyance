@@ -978,7 +978,7 @@ def test_prompt_reads_its_options_leniently():
         assert request.schema == schema
         # the default: a judge must be repeatable
         assert request.settings == GenerationSettings(temperature=0)
-        assert request.extra is None
+        assert request.extra == {"provider": {"require_parameters": True}}
 
 
 def test_prompt_briefs_its_chat_model():
@@ -1011,7 +1011,10 @@ def test_prompt_briefs_its_chat_model():
     assert request.system_prompt == "Be strict."
     # the common knobs are typed; the rest passes through to the vendor
     assert request.settings == GenerationSettings(temperature=0.5, max_tokens=9)
-    assert request.extra == {"provider": {"order": ["openai"]}, "seed": 7}
+    assert request.extra == {
+        "provider": {"order": ["openai"], "require_parameters": True},
+        "seed": 7,
+    }
 
 
 def test_an_answer_that_is_not_an_object_costs_that_one_result():
@@ -1065,6 +1068,7 @@ def test_structured_output_decides_how_the_contract_travels():
     assert request.system_prompt is not None
     assert request.system_prompt.startswith("Hi.\n\n")
     assert request.system_prompt.endswith(contract)
+    assert request.extra is None
 
 
 async def test_prompt_without_structured_output_reads_the_reply_text(monkeypatch):

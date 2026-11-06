@@ -40,6 +40,7 @@ from app.services.model_provider.models import (
     JsonSchema,
     ProviderConfig,
     ProviderError,
+    ReplyError,
     Usage,
 )
 
@@ -64,9 +65,8 @@ class _WireResponseFormat(TypedDict):
 
 
 class OpenRouterProvider:
-    name = "openrouter"
-
     _BACKOFF_BASE_SECONDS: ClassVar[float] = 2.0
+    _CONNECT_TIMEOUT_SECONDS: ClassVar[float] = 5.0
     # the JSON Schema keywords every strict structured-outputs endpoint accepts
     _STRICT_KEYWORDS: ClassVar[FrozenSet[str]] = frozenset(
         {"type", "properties", "required", "enum", "description", "items"}
@@ -74,7 +74,8 @@ class OpenRouterProvider:
     # the structured-outputs schema name (^[a-zA-Z0-9_-]+$)
     _SCHEMA_NAME: ClassVar[str] = "response"
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(self, config: ProviderConfig, name: str = "openrouter") -> None:
+        self.name = name
         self._config = config
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
@@ -84,7 +85,10 @@ class OpenRouterProvider:
             async with self._client_lock:
                 if self._client is None or self._client.is_closed:
                     self._client = httpx.AsyncClient(
-                        timeout=httpx.Timeout(self._config.timeout_seconds),
+                        timeout=httpx.Timeout(
+                            self._config.timeout_seconds,
+                            connect=self._CONNECT_TIMEOUT_SECONDS,
+                        ),
                         limits=httpx.Limits(
                             max_connections=50, max_keepalive_connections=5
                         ),
@@ -159,11 +163,6 @@ class OpenRouterProvider:
                 },
             }
             body["response_format"] = response_format
-            preferences = body.get("provider")
-            body["provider"] = {
-                **(preferences if isinstance(preferences, Mapping) else {}),
-                "require_parameters": True,
-            }
         return body
 
     # --- response: PURE ---------------------------------------------------------
@@ -226,16 +225,24 @@ class OpenRouterProvider:
         if content is None and finish_reason == "length":
             content = ""
         if not isinstance(content, str):
-            raise self._error(f"no content in reply: {str(first)[:300]}")
+            raise ReplyError(self.name, f"no content in reply: {str(first)[:300]}")
 
         structured: Optional[object] = None
         if request.schema is not None:
             if finish_reason == "length":
-                raise self._error("reply truncated (finish_reason=length)")
+                what = (
+                    "cut mid-answer"
+                    if content.strip()
+                    else "no answer, every output token went to thinking"
+                )
+                raise ReplyError(
+                    self.name,
+                    f"reply truncated at max_tokens={request.settings.max_tokens}, {what}",
+                )
             try:
                 structured = json.loads(self._unfenced(content))
-            except json.JSONDecodeError as exc:
-                raise self._error(f"reply is not JSON: {content[:300]}") from exc
+            except json.JSONDecodeError:
+                structured = None
 
         usage = parsed.get("usage")
         return GenerateResponse(

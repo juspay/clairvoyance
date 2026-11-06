@@ -17,6 +17,7 @@ from app.core.config.static import (
 )
 from app.core.logger import logger
 from app.services.model_provider.base import ModelProvider
+from app.services.model_provider.fill import fill
 from app.services.model_provider.models import (
     GenerateRequest,
     GenerateResponse,
@@ -26,10 +27,12 @@ from app.services.model_provider.models import (
     Message,
     ProviderConfig,
     ProviderError,
+    ReplyError,
     Usage,
 )
 from app.services.model_provider.openrouter import OpenRouterProvider
 from app.services.model_provider.typesafe import TypeSafeProvider
+from app.services.model_provider.vertex import VertexProvider
 
 OPENROUTER = OpenRouterProvider(
     ProviderConfig(
@@ -82,9 +85,12 @@ __all__ = [
     "PROVIDERS",
     "ProviderConfig",
     "ProviderError",
+    "ReplyError",
     "TYPESAFE",
     "TypeSafeProvider",
     "Usage",
+    "VertexProvider",
     "close_all",
+    "fill",
     "get_provider",
 ]

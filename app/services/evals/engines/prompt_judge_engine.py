@@ -454,6 +454,12 @@ class PromptJudgeEngine(EvalEngine):
             contract = json.dumps(schema, ensure_ascii=False)
             system_prompt = f"{system_prompt}\n\n{_SCHEMA_RULE}\n{contract}"
         settings, extra = _settings(configuration.get("settings"))
+        if structured:
+            routing = extra.get("provider")
+            extra["provider"] = {
+                **(routing if isinstance(routing, Mapping) else {}),
+                "require_parameters": True,
+            }
         return GenerateRequest(
             model=str(configuration["model"]),
             input=[

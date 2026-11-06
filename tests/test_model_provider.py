@@ -1,10 +1,13 @@
 """The generic model provider layer (app/services/model_provider)."""
 
 import json
-from typing import Any, Callable, Dict, List
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Literal, cast
 
 import httpx
 import pytest
+from google.genai import errors, types
+from pydantic import BaseModel
 
 from app.services.model_provider import (
     PROVIDERS,
@@ -14,9 +17,12 @@ from app.services.model_provider import (
     OpenRouterProvider,
     ProviderConfig,
     ProviderError,
+    ReplyError,
     TypeSafeProvider,
     Usage,
+    VertexProvider,
     close_all,
+    fill,
     get_provider,
 )
 
@@ -102,7 +108,7 @@ def test_body_schema_becomes_strict_response_format() -> None:
             },
         },
     }
-    assert body["provider"] == {"order": ["openai"], "require_parameters": True}
+    assert body["provider"] == {"order": ["openai"]}
 
 
 def test_extra_never_overrides_the_request() -> None:
@@ -125,6 +131,165 @@ async def test_openrouter_rejects_mapping_input() -> None:
         await provider.generate(_request(input={"state": {}}))
     assert not caught.value.retryable
     assert calls == []
+
+
+class _Topic(BaseModel):
+    label: Literal["alpha", "beta"]
+    turns: List[int]
+
+
+class _Answer(BaseModel):
+    topics: List[_Topic]
+
+
+async def test_fill_returns_the_form() -> None:
+    seen: List[Dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200, json=_reply('{"topics": [{"label": "alpha", "turns": [3]}]}')
+        )
+
+    answer = await fill(_provider(handler), _request(system_prompt="label it"), _Answer)
+    assert answer == _Answer(topics=[_Topic(label="alpha", turns=[3])])
+    (body,) = seen
+    assert body["messages"][0] == {
+        "role": "system",
+        "content": "label it\n\nReply with one JSON object only.",
+    }
+    schema = body["response_format"]["json_schema"]["schema"]
+    topic = schema["properties"]["topics"]["items"]
+    assert topic["properties"]["label"]["enum"] == ["alpha", "beta"]
+    assert "provider" not in body
+
+
+async def test_fill_asks_once_more_with_the_problem() -> None:
+    wrong = '{"topics": [{"label": "gamma", "turns": [3]}]}'
+    replies = iter(
+        [wrong, '```json\n{"topics": [{"label": "beta", "turns": [3]}]}\n```']
+    )
+    seen: List[Dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=_reply(next(replies)))
+
+    answer = await fill(_provider(handler), _request(), _Answer)
+    assert answer.topics[0].label == "beta"
+    assert len(seen) == 2
+    assistant, correction = seen[1]["messages"][-2:]
+    assert assistant == {"role": "assistant", "content": wrong}
+    assert "topics.0.label" in correction["content"]
+    assert "'alpha' or 'beta'" in correction["content"]
+
+
+async def test_fill_asks_again_after_an_empty_reply() -> None:
+    replies = iter(["", '{"topics": [{"label": "alpha", "turns": [3]}]}'])
+    seen: List[Dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=_reply(next(replies)))
+
+    answer = await fill(_provider(handler), _request(), _Answer)
+    assert answer.topics[0].label == "alpha"
+    assert seen[1]["messages"][-2] == {"role": "assistant", "content": "(empty reply)"}
+
+
+async def test_fill_raises_when_the_second_reply_is_still_wrong() -> None:
+    calls: List[int] = []
+    provider = _provider(
+        lambda r: calls.append(1) or httpx.Response(200, json=_reply("not json"))
+    )
+    with pytest.raises(ReplyError, match="does not fit _Answer after asking again"):
+        await fill(provider, _request(), _Answer)
+    assert calls == [1, 1]
+
+
+class _GeminiModels:
+    def __init__(self, replies: List[Any]) -> None:
+        self.replies = replies
+        self.calls: List[Dict[str, Any]] = []
+
+    async def generate_content(self, **call: Any) -> Any:
+        self.calls.append(call)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def _vertex(replies: List[Any]) -> Any:
+    models = _GeminiModels(replies)
+    client = SimpleNamespace(aio=SimpleNamespace(models=models))
+    return VertexProvider(cast(Any, client)), models
+
+
+def _gemini_reply(
+    text: str, finish: types.FinishReason = types.FinishReason.STOP
+) -> types.GenerateContentResponse:
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(role="model", parts=[types.Part(text=text)]),
+                finish_reason=finish,
+            )
+        ],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=10, candidates_token_count=4, thoughts_token_count=6
+        ),
+    )
+
+
+async def test_vertex_sends_the_form_schema_and_fill_reads_it() -> None:
+    provider, models = _vertex(
+        [
+            _gemini_reply('{"topics": [{"label": "gamma", "turns": [3]}]}'),
+            _gemini_reply('{"topics": [{"label": "alpha", "turns": [3]}]}'),
+        ]
+    )
+
+    answer = await fill(provider, _request(system_prompt="label it"), _Answer)
+
+    assert answer.topics[0].label == "alpha"
+    config = models.calls[0]["config"]
+    assert config.response_mime_type == "application/json"
+    topic = config.response_json_schema["properties"]["topics"]["items"]
+    assert topic["properties"]["label"]["enum"] == ["alpha", "beta"]
+    assert config.system_instruction == "label it\n\nReply with one JSON object only."
+    assert [content.role for content in models.calls[1]["contents"]] == [
+        "user",
+        "model",
+        "user",
+    ]
+
+
+async def test_vertex_reports_usage_truncation_and_errors() -> None:
+    provider, _ = _vertex([_gemini_reply("plain text")])
+    response = await provider.generate(_request())
+    assert (response.content, response.structured) == ("plain text", None)
+    assert response.usage == Usage(input_tokens=10, output_tokens=10)
+
+    provider, _ = _vertex([_gemini_reply('{"to', types.FinishReason.MAX_TOKENS)])
+    with pytest.raises(ReplyError, match="truncated"):
+        await provider.generate(_request(schema=_SCHEMA))
+
+    provider, _ = _vertex([errors.ServerError(503, {"error": {"message": "busy"}})])
+    with pytest.raises(ProviderError) as caught:
+        await provider.generate(_request())
+    assert caught.value.status == 503 and caught.value.retryable
+
+
+async def test_a_dead_host_fails_fast_however_long_the_reply_may_take() -> None:
+    provider = OpenRouterProvider(
+        ProviderConfig(
+            api_key="key", base_url="https://or.test/chat", timeout_seconds=240
+        )
+    )
+    client = await provider._get_client()
+    assert (client.timeout.connect, client.timeout.read) == (5.0, 240)
+    await provider.close()
 
 
 # --- generate -----------------------------------------------------------------
@@ -155,10 +320,10 @@ async def test_generate_structured_strips_fences() -> None:
     assert response.structured == {"score": 7}
 
 
-async def test_structured_reply_not_json_raises() -> None:
+async def test_structured_reply_not_json_is_left_unparsed() -> None:
     provider = _provider(lambda r: httpx.Response(200, json=_reply("seven")))
-    with pytest.raises(ProviderError, match="not JSON"):
-        await provider.generate(_request(schema=_SCHEMA))
+    response = await provider.generate(_request(schema=_SCHEMA))
+    assert (response.content, response.structured) == ("seven", None)
 
 
 async def test_structured_truncated_raises() -> None:
