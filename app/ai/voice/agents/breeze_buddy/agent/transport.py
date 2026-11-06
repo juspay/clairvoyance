@@ -5,9 +5,11 @@ Note: VAD (Voice Activity Detection) is configured in the LLMUserAggregator
 audio I/O, sample rates, and optional audio filters/mixers.
 """
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
+from aic_sdk import Model as AICModel
 from fastapi import WebSocket
 from pipecat.audio.filters.aic_filter import AICFilter
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
@@ -87,6 +89,15 @@ def _resolve_aic_model(
     return model, path
 
 
+@lru_cache(maxsize=None)
+def _aic_model_error(path: Path) -> Optional[str]:
+    try:
+        AICModel.from_file(path)
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
 def _create_audio_input_filter(
     configurations: Optional[ConfigurationModel] = None,
     transport_type: str = TRANSPORT_TYPE_DAILY,
@@ -137,6 +148,15 @@ def _create_audio_input_filter(
             logger.warning(
                 "AIC filter model file is unavailable; proceeding without it: {}",
                 model_path,
+            )
+            return None
+
+        model_error = _aic_model_error(model_path)
+        if model_error:
+            logger.warning(
+                "AIC filter model file does not load; proceeding without it: {} ({})",
+                model_path,
+                model_error,
             )
             return None
 
