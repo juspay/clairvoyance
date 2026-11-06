@@ -28,7 +28,7 @@ import pytest
 import app.crm.outreach.definitions as definitions
 import app.crm.outreach.entry as entry
 import app.crm.outreach.reply_attribution as attribution
-from app.crm.connectivity.schemas.message import SendBehind
+from app.crm.connectivity.schemas.message.shared import SendBehind
 from app.crm.outreach.entry import consume_attributed_event
 from app.crm.outreach.schemas import EnrollmentRun, Workflow
 from app.crm.record.schemas import RawEvent

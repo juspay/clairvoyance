@@ -34,7 +34,7 @@ What is here, and why each thing is on the surface:
   registry decides what that payload means.
 - the ``*_template`` family — the T23 registry that ``send.py`` resolves
   against before any provider call.
-- ``template_status`` / ``registers_templates_for`` — what outreach's
+- ``template_status`` / ``get_registers_templates`` — what outreach's
   publish asks so a send node naming an unknown or unapproved template
   is refused at publish, not blocked at dispatch hours later (phase 08).
 - ``register_retire_guard`` — the slot worker_main fills with outreach's
@@ -65,6 +65,15 @@ What is here, and why each thing is on the surface:
   state, and there is deliberately no timer beside it: the periodic sync
   was removed before it ever ran.
 
+- ``send_reply`` and ``TextBody`` — a free-form reply inside the
+  customer-service window, sent NOW (the conversations module and Buddy's
+  turns are its callers). Same manifest, same gate, same send door as a
+  template.
+- ``get_conversation_channel_limits`` — the channel's limits, so a caller
+  shapes a reply to fit instead of having it refused;
+  ``get_supported_channels_for_conversations`` is every channel that
+  carries a conversation at all, so a caller iterates them instead of
+  naming one.
 - ``consume_status_event`` — the receipts consumer (worker_main registers
   it): message.status letters move the manifest along sent -> delivered ->
   read, or to failed with the provider's code.
@@ -92,19 +101,25 @@ from app.crm.connectivity.actions.perform import (
     perform_action,
     validate_action_args,
 )
-from app.crm.connectivity.channels.registry import registers_templates_for
 from app.crm.connectivity.channels.settings import (
     conversation_settings,
     get_current_buddy_binding,
     list_channel_settings,
     update_channel_settings,
 )
+from app.crm.connectivity.channels.utils import (
+    get_conversation_channel_limits,
+    get_registers_templates,
+    get_supported_channels_for_conversations,
+)
 from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.messaging.conversations.reply import send_reply
 from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
 from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
 from app.crm.connectivity.messaging.shared.receipts import consume_status_event
 from app.crm.connectivity.schemas.conversation import ConversationSettings
+from app.crm.connectivity.schemas.message.whatsapp import TextBody
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -148,7 +163,7 @@ __all__ = [
     "list_templates",
     # the publish-time check (outreach asks)
     "template_status",
-    "registers_templates_for",
+    "get_registers_templates",
     # the retire guard slot (worker_main fills)
     "register_retire_guard",
     # the template webhook consumer (worker_main registers)
@@ -161,6 +176,11 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    # free-form replies inside the customer-service window
+    "send_reply",
+    "TextBody",
+    "get_conversation_channel_limits",
+    "get_supported_channels_for_conversations",
     # the receipts consumer (worker_main registers)
     "consume_status_event",
     # the merchant's bindings: the template binding, Buddy's binding, settings

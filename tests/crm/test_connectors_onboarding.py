@@ -964,7 +964,7 @@ def _patch_resubscribe(
     async def _bundle_for(installation):
         """Test double: the vault read."""
         if bundle == "default":
-            from app.crm.connectivity.schemas.message import CredentialBundle
+            from app.crm.connectivity.schemas.connector import CredentialBundle
 
             return CredentialBundle(values={"system_user_token": "tok"})
         if isinstance(bundle, Exception):
@@ -1135,7 +1135,7 @@ async def test_the_whatsapp_face_translates_graph_errors(monkeypatch) -> None:
     """The whatsapp face translates graph errors."""
     from app.crm.connectivity.providers.meta.graph import GraphError
     from app.crm.connectivity.providers.whatsapp import onboard as onboard_module
-    from app.crm.connectivity.schemas.message import CredentialBundle
+    from app.crm.connectivity.schemas.connector import CredentialBundle
 
     async def _graph_refuses(waba_id, token):
         """Test double: Meta refused at the wire."""
@@ -1155,7 +1155,7 @@ async def test_the_whatsapp_face_refuses_a_bundle_without_a_token(
 ) -> None:
     """The whatsapp face refuses a bundle without a token."""
     from app.crm.connectivity.providers.whatsapp import onboard as onboard_module
-    from app.crm.connectivity.schemas.message import CredentialBundle
+    from app.crm.connectivity.schemas.connector import CredentialBundle
 
     calls: List[tuple] = []
 
