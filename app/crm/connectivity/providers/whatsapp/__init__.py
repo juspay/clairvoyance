@@ -4,7 +4,8 @@ One package, its faces:
 
     adapter.py    the send door's child of ChannelAdapter
     classify.py   Meta's error codes, split by "could this succeed later?"
-    payload.py    E.164 -> Meta's digits, variables -> template parameters
+    payload/      request bodies: shared.py (E.164 -> Meta's digits),
+                  template.py (variables -> parameters), reply.py
     onboard.py    Embedded Signup: code -> token -> number -> subscription
     templates.py  the WABA template registry face
 

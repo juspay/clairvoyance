@@ -484,7 +484,7 @@ def _registry(
         return _verdict(status)
 
     monkeypatch.setattr(plans, "template_status", template_status)
-    monkeypatch.setattr(plans, "registers_templates_for", lambda channel: registers)
+    monkeypatch.setattr(plans, "get_registers_templates", lambda channel: registers)
     return asked
 
 
@@ -576,7 +576,7 @@ async def test_publish_holds_the_templates_it_sends_before_asking_the_registry(
         return TemplateVerdict(publishable=True)
 
     monkeypatch.setattr(plans, "template_status", template_status)
-    monkeypatch.setattr(plans, "registers_templates_for", lambda channel: True)
+    monkeypatch.setattr(plans, "get_registers_templates", lambda channel: True)
     await _publish(accessor)
     expected = WorkflowDefinition.model_validate(_SEND_PLAN).send_templates()
     assert expected and accessor.locked == [expected]

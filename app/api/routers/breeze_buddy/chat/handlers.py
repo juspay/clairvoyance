@@ -14,6 +14,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from app.ai.voice.agents.breeze_buddy.chat.agent.runtime import CONVERSATION_CHANNELS
 from app.ai.voice.agents.breeze_buddy.chat.approvals import (
     WIRE_STATUS_BY_DB_STATUS,
     claim_tool_approval,
@@ -443,6 +444,17 @@ async def apply_piggyback_context(
     return context.placement
 
 
+def _refuse_inbox_session(session: ChatSession, session_id: str) -> None:
+    """An inbox session is driven only by Buddy's inbox answer, which sends
+    each reply to the customer's channel: a turn from a chat route would land
+    in her history unseen and bill a credit — 409, nothing runs."""
+    if getattr(session, "channel", None) in CONVERSATION_CHANNELS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Chat session '{session_id}' answers an inbox conversation",
+        )
+
+
 async def send_chat_message_handler(
     session_id: str,
     req: SendChatMessageRequest,
@@ -513,6 +525,7 @@ async def send_chat_message_handler(
                 status_code=status.HTTP_410_GONE,
                 detail=f"Chat session '{session_id}' has ended",
             )
+        _refuse_inbox_session(fresh, session_id)
 
         template = await get_template_by_id_cached(fresh.template_id)
         if template is None:
@@ -718,6 +731,7 @@ async def send_chat_intent_handler(
                 status_code=status.HTTP_410_GONE,
                 detail=f"Chat session '{session_id}' has ended",
             )
+        _refuse_inbox_session(fresh, session_id)
 
         template = await get_template_by_id_cached(fresh.template_id)
         if template is None:
@@ -957,6 +971,7 @@ async def approve_chat_tool_handler(
                 status_code=status.HTTP_410_GONE,
                 detail=f"Chat session '{session_id}' has ended",
             )
+        _refuse_inbox_session(fresh, session_id)
 
         template = await get_template_by_id_cached(fresh.template_id)
         if template is None:
