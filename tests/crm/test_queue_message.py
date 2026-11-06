@@ -71,7 +71,9 @@ def test_insert_is_a_queued_row_absorbed_by_the_dedupe_unique() -> None:
     )
     assert "ON CONFLICT (merchant_id, dedupe_key) DO NOTHING" in sql
     assert "status" not in sql  # the column default: queued, no verdict
-    assert values[-1] == "run-1:ask" and values[8] == '{"name": "Priya"}'
+    assert values[9] == "run-1:ask" and values[8] == '{"name": "Priya"}'
+    # No binding named: the dispatcher sends from the primary.
+    assert values[10] is None and "binding_id" in sql
 
 
 def test_queue_message_returns_id_then_none_on_retry(
@@ -88,6 +90,21 @@ def test_queue_message_returns_id_then_none_on_retry(
     second = asyncio.run(queue.queue_message(**_proposal()))
     assert (first, second) == ("msg-1", None)
     assert seen == ["+919845012345", "+919845012345"]
+
+
+def test_a_template_send_cannot_claim_the_service_purpose() -> None:
+    """'service' is Meta's category for a free-form reply inside the window
+    (D8). A template is billed and policed under its approved category, so a
+    template proposal naming 'service' is refused while the author can still
+    fix it."""
+    with pytest.raises(ValueError, match="service"):
+        queue.validate_proposal("workflow", "service.conversation")
+
+
+def test_a_teammate_is_a_known_producer() -> None:
+    """A teammate replying from the inbox writes rows as 'human' (ADR 0014's
+    CHECK extension, kept here now the CHECK is gone)."""
+    queue.validate_proposal("human", "utility.order.update")
 
 
 def test_unusable_address_is_refused_before_any_write(
@@ -136,3 +153,77 @@ def test_an_unregistered_channel_is_refused_before_any_write(
     assert queue.normalize_address("carrier_pigeon", "+919876543210") is None
     with pytest.raises(ValueError):
         asyncio.run(queue.queue_message(**_proposal(channel="carrier_pigeon")))
+
+
+# --- the template hook: a new template may join her thread -------------------
+
+
+def _hook_recorder(monkeypatch: pytest.MonkeyPatch) -> List[tuple]:
+    calls: List[tuple] = []
+
+    async def hook(*args: Any) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(queue, "call_template_hook", hook)
+    return calls
+
+
+def test_a_new_template_on_a_conversation_channel_calls_the_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _hook_recorder(monkeypatch)
+    rows = iter(["msg-1", None])
+
+    async def fake_insert(*args: Any) -> Optional[str]:
+        return next(rows)
+
+    monkeypatch.setattr(queue.message_accessor, "insert_message", fake_insert)
+    asyncio.run(queue.queue_message(**_proposal()))
+    asyncio.run(queue.queue_message(**_proposal()))  # absorbed: no second call
+    assert len(calls) == 1
+    merchant_id, channel, customer_id, message_id, template_id, source_kind, _ = calls[
+        0
+    ]
+    assert (merchant_id, channel, message_id) == ("m1", "whatsapp", "msg-1")
+    assert (customer_id, source_kind) == ("c1", "workflow")
+    assert template_id == "cod_confirm"
+
+
+def test_a_channel_without_conversations_calls_no_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.crm.connectivity.channels import registry
+
+    monkeypatch.setitem(
+        registry.CHANNELS,
+        "mail",
+        registry.Channel(gate_handle_kind="email", registers_templates=False),
+    )
+    calls = _hook_recorder(monkeypatch)
+
+    async def fake_insert(*args: Any) -> Optional[str]:
+        return "msg-9"
+
+    monkeypatch.setattr(queue.message_accessor, "insert_message", fake_insert)
+    asyncio.run(
+        queue.queue_message(**_proposal(channel="mail", address="priya@shop.in"))
+    )
+    assert calls == []
+
+
+def test_a_hook_that_raises_never_costs_the_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hook only shows a send on a thread: its failure is logged, and the
+    queued row's id still comes back."""
+    from app.crm.connectivity.messaging.outbound import template_hook
+
+    async def broken(*args: Any) -> None:
+        raise RuntimeError("conversations is down")
+
+    async def fake_insert(*args: Any) -> Optional[str]:
+        return "msg-1"
+
+    monkeypatch.setattr(template_hook, "_template_hook", broken)
+    monkeypatch.setattr(queue.message_accessor, "insert_message", fake_insert)
+    assert asyncio.run(queue.queue_message(**_proposal())) == "msg-1"

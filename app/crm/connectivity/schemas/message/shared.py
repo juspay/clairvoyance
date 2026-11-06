@@ -1,12 +1,17 @@
-"""Outbound-message shapes: one claimed attempt, the grant that authorises
-it, everything the sender needs resolved, and what came back."""
+"""Outbound-message shapes every channel shares: one claimed attempt, the
+grant that authorises it, everything the sender needs resolved, what came
+back, and what a delivery receipt says about it."""
 
 from datetime import datetime
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
+from app.crm.connectivity.schemas.connector import (
+    ChannelBinding,
+    ConnectorInstallation,
+    CredentialBundle,
+)
 from app.crm.connectivity.schemas.template import ApprovedTemplate
 
 
@@ -91,24 +96,6 @@ class SendToken(BaseModel):
     decision_id: Optional[int] = None
 
 
-class CredentialBundle(BaseModel):
-    """One installation's whole key bundle, decrypted.
-
-    A bag, not a schema: what keys a connector needs is the adapter's
-    business. ``repr=False`` means an accidental f-string prints
-    CredentialBundle(), not a live token — the cheapest guard against
-    leaking a secret into a log aggregator.
-    """
-
-    values: Dict[str, Any] = Field(default_factory=dict, repr=False)
-
-    def secret(self, key: str) -> Optional[str]:
-        """The named secret, or None. Callers fail closed on None; a bundle
-        missing the key it needs is a broken connection, not a retry."""
-        value = self.values.get(key)
-        return value if isinstance(value, str) and value else None
-
-
 class SendRoute(BaseModel):
     """Everything a sender needs, resolved in one call — so no adapter ever
     asks the database anything, which is what keeps them testable without
@@ -118,14 +105,15 @@ class SendRoute(BaseModel):
     binding: ChannelBinding
     bundle: CredentialBundle
     # The approved registry row (T23) this send renders — or None on a
-    # channel that does not pre-register templates (channels/registry.py decides
-    # which do). Channel-neutral on purpose: the WhatsApp adapter reads its
+    # channel that does not pre-register templates (channels/registry.py
+    # decides which do), and for a free-form reply, which names no template.
+    # Channel-neutral on purpose: the WhatsApp adapter reads its
     # language, an SMS-DLT adapter will read its provider_template_id, an
     # email adapter reads nothing. The route carries the ROW and each adapter
     # takes the field it needs; a field named for one provider's need would
-    # be the first thing the second adapter has to work around. For a channel
-    # that registers, resolve_send_route refuses before the adapter rather
-    # than passing None.
+    # be the first thing the second adapter has to work around. For a
+    # template send on a channel that registers, resolve_send_route refuses
+    # before the adapter rather than passing None.
     #
     # A real import, not a forward reference: ApprovedTemplate lived further
     # down the same file before the split, so it needed quoting and a
@@ -151,3 +139,48 @@ class ProviderReceipt(BaseModel):
     #: What the provider billed the message as (Meta's pricing.category),
     #: when it says.
     pricing_category: Optional[str] = None
+
+
+class ReplySendResult(BaseModel):
+    """What one reply send came to.
+
+    ``status`` is the manifest row's word: accepted (the provider took it),
+    failed (the provider refused, or no answer came: the gate's probe timed
+    out, or the send errored or timed out — ``retryable`` says whether the
+    same words could plausibly go through later), or blocked (WE refused:
+    the gate, no route, a body that does not fit the channel). A reply send
+    is never queued and never retried by the dispatcher — its words
+    are not on the row — so a retry is the caller's, under a NEW dedupe key.
+
+    ``duplicate`` means the dedupe key already named a row: nothing was sent
+    this time, and the fields describe that earlier row as it stands.
+    """
+
+    message_id: str
+    status: str
+    reason: Optional[str] = None
+    provider_message_id: Optional[str] = None
+    retryable: bool = False
+    duplicate: bool = False
+
+
+class MessageState(BaseModel):
+    """One manifest row's current word — what a repeated reply send (same
+    dedupe key) reports instead of sending again."""
+
+    id: str
+    status: str
+    reason: Optional[str] = None
+    provider_message_id: Optional[str] = None
+
+
+class MessageTick(BaseModel):
+    """What became of one manifest row, as a timeline shows it: its status
+    word, the reason when it failed, and when each tick landed."""
+
+    id: str
+    status: str
+    reason: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    read_at: Optional[datetime] = None
