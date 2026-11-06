@@ -48,6 +48,9 @@ from app.ai.voice.agents.breeze_buddy.handlers.internal.warm_transfer import (
     connect_to_live_agent,
 )
 from app.ai.voice.agents.breeze_buddy.template.context import TemplateContext
+from app.ai.voice.agents.breeze_buddy.template.global_function import (
+    PRE_TTS_WAIT_SECS,
+)
 from app.ai.voice.agents.breeze_buddy.template.types import GlobalBuiltinFunction
 from app.core.logger import logger
 
@@ -124,7 +127,7 @@ async def _speak_and_wait(context: TemplateContext, message: str) -> None:
             f"[builtin_dispatcher] Speaking pre_tts_message: '{message[:50]}...'"
         )
         await task.queue_frame(TTSSpeakFrame(text=message))
-        timeout_seconds = 15
+        timeout_seconds = PRE_TTS_WAIT_SECS
         try:
             await asyncio.wait_for(bot_stopped_event.wait(), timeout=timeout_seconds)
             logger.info("[builtin_dispatcher] pre_tts_message finished speaking")

@@ -55,8 +55,12 @@ _APPROVAL_BUDGET_MARGIN_SECS = 15.0
 # kill the transfer mid-ring. Harmless for the legacy immediate path.
 _TRANSFER_FUNCTION_TIMEOUT_SECS = 45.0
 
+PRE_TTS_WAIT_SECS = 15
 
-def _flows_async_kwargs(func: BaseGlobalFunction) -> Dict[str, Any]:
+
+def _flows_async_kwargs(
+    func: BaseGlobalFunction, bot_instance: Any = None
+) -> Dict[str, Any]:
     """Per-function pipecat-flows 1.0 kwargs, opt-in via template config.
 
     `cancel_on_interruption=False` makes the call async — the LLM continues
@@ -87,6 +91,15 @@ def _flows_async_kwargs(func: BaseGlobalFunction) -> Dict[str, Any]:
         # default (esp. MPC dial-first). Force a safe ceiling unless the
         # template set an explicit override above.
         extra["timeout_secs"] = _TRANSFER_FUNCTION_TIMEOUT_SECS
+    elif isinstance(func, GlobalBuiltinFunction) and func.pre_tts_message:
+        llm_config = getattr(
+            getattr(bot_instance, "configurations", None), "llm_configurations", None
+        )
+        extra["timeout_secs"] = PRE_TTS_WAIT_SECS + (
+            llm_config.function_call_timeout_secs
+            if llm_config and llm_config.function_call_timeout_secs
+            else 10.0
+        )
     if func.approval is not None:
         exec_budget = (
             func.timeout_secs
@@ -362,7 +375,7 @@ class HttpGlobalFunctionAdapter:
             handler=_make_global_wrapper(func, wrapped_handler, bot_instance),
             properties=func.properties,
             required=func.required,
-            **_flows_async_kwargs(func),
+            **_flows_async_kwargs(func, bot_instance),
         )
 
 
@@ -436,7 +449,7 @@ class BuiltinGlobalFunctionAdapter:
             handler=_make_global_wrapper(func, wrapped_handler, bot_instance),
             properties=func.properties,
             required=func.required,
-            **_flows_async_kwargs(func),
+            **_flows_async_kwargs(func, bot_instance),
         )
 
 
@@ -537,7 +550,7 @@ class CustomPythonGlobalFunctionAdapter:
             handler=_make_global_wrapper(func, wrapped_handler, bot_instance),
             properties=func.properties,
             required=func.required,
-            **_flows_async_kwargs(func),
+            **_flows_async_kwargs(func, bot_instance),
         )
 
 
