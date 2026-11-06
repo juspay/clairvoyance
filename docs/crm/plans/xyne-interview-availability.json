@@ -1,0 +1,39 @@
+{
+  "on_publish": "migrate",
+  "entry": {
+    "topic": "interview.requested"
+  },
+  "goals": [
+    {
+      "topics": [
+        "interview.scheduled"
+      ]
+    }
+  ],
+  "exits": {
+    "max_age_days": 3
+  },
+  "nodes": [
+    {
+      "id": "await-availability",
+      "type": "wait",
+      "topics": [
+        "flow_action"
+      ],
+      "key": "reply",
+      "minutes": 2880
+    },
+    {
+      "id": "confirm-slots",
+      "type": "call",
+      "template_id": "TEMPLATE_ID_PLACEHOLDER"
+    }
+  ],
+  "edges": [
+    [
+      "await-availability",
+      "confirm-slots",
+      "form_submitted"
+    ]
+  ]
+}

@@ -14,7 +14,8 @@ is needed.
 
 from typing import Any, Dict, List, Optional
 
-from app.crm.record.extractors.whatsapp.flow import FORM_SUBMITTED, raw_submission
+from app.crm.record.extractors.forms import FORM_SUBMITTED
+from app.crm.record.extractors.whatsapp.flow import raw_submission
 from app.crm.record.extractors.whatsapp.shared import _f, _item
 from app.crm.record.schemas import CatalogField
 
