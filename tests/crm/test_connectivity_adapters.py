@@ -21,9 +21,12 @@ from app.crm.connectivity.db.queries.binding import (
 from app.crm.connectivity.providers import ADAPTERS, adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
 from app.crm.connectivity.providers.whatsapp.adapter import MetaWhatsAppAdapter
-from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
-from app.crm.connectivity.schemas.message import (
+from app.crm.connectivity.schemas.connector import (
+    ChannelBinding,
+    ConnectorInstallation,
     CredentialBundle,
+)
+from app.crm.connectivity.schemas.message.shared import (
     QueuedMessage,
     SendOutcome,
     SendRoute,
@@ -930,10 +933,29 @@ def test_whether_a_channel_registers_templates_is_the_registrys_answer() -> None
     """WhatsApp does; an unregistered channel answers True so the door fails
     CLOSED on it — the same posture the gate takes on a channel CHANNELS
     cannot describe."""
-    from app.crm.connectivity.channels.registry import registers_templates_for
+    from app.crm.connectivity.channels.utils import get_registers_templates
 
-    assert registers_templates_for("whatsapp") is True
-    assert registers_templates_for("carrier_pigeon") is True
+    assert get_registers_templates("whatsapp") is True
+    assert get_registers_templates("carrier_pigeon") is True
+
+
+def test_the_channels_with_conversations_are_the_ones_with_limits() -> None:
+    """Generic code iterates these instead of naming a channel: a channel
+    joins the inbox, the closing sweep and Buddy by declaring its conversation
+    limits."""
+    from app.crm.connectivity.channels.registry import CHANNELS
+    from app.crm.connectivity.channels.utils import (
+        get_conversation_channel_limits,
+        get_supported_channels_for_conversations,
+    )
+
+    channels = get_supported_channels_for_conversations()
+    assert channels and set(channels) == {
+        name
+        for name, entry in CHANNELS.items()
+        if entry.conversation_limits is not None
+    }
+    assert all(get_conversation_channel_limits(name) is not None for name in channels)
 
 
 async def test_a_channel_that_does_not_register_templates_skips_the_registry(
@@ -954,7 +976,7 @@ async def test_a_channel_that_does_not_register_templates_skips_the_registry(
         monkeypatch, _NeverAsked(binding=_binding(), installation=_installation())
     )
     _patch_credential(monkeypatch, _credential())
-    monkeypatch.setattr(send_module, "registers_templates_for", lambda channel: False)
+    monkeypatch.setattr(send_module, "get_registers_templates", lambda channel: False)
     message = _message(template_id=None)
     outcome = await send(_token(message), message)
     assert outcome.status == "accepted"

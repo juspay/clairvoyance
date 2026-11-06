@@ -1,12 +1,17 @@
-"""Outbound-message shapes: one claimed attempt, the grant that authorises
-it, everything the sender needs resolved, and what came back."""
+"""Outbound-message shapes every channel shares: one claimed attempt, the
+grant that authorises it, everything the sender needs resolved, what came
+back, and what a delivery receipt says about it."""
 
 from datetime import datetime
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
+from app.crm.connectivity.schemas.connector import (
+    ChannelBinding,
+    ConnectorInstallation,
+    CredentialBundle,
+)
 from app.crm.connectivity.schemas.template import ApprovedTemplate
 
 
@@ -89,24 +94,6 @@ class SendToken(BaseModel):
     # Points at the permission decision that authorised the send; stamped onto
     # the manifest row once the diary exists.
     decision_id: Optional[int] = None
-
-
-class CredentialBundle(BaseModel):
-    """One installation's whole key bundle, decrypted.
-
-    A bag, not a schema: what keys a connector needs is the adapter's
-    business. ``repr=False`` means an accidental f-string prints
-    CredentialBundle(), not a live token — the cheapest guard against
-    leaking a secret into a log aggregator.
-    """
-
-    values: Dict[str, Any] = Field(default_factory=dict, repr=False)
-
-    def secret(self, key: str) -> Optional[str]:
-        """The named secret, or None. Callers fail closed on None; a bundle
-        missing the key it needs is a broken connection, not a retry."""
-        value = self.values.get(key)
-        return value if isinstance(value, str) and value else None
 
 
 class SendRoute(BaseModel):

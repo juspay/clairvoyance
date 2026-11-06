@@ -37,14 +37,14 @@ from typing import Optional, Union
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
 from app.crm.connectivity.accounts import installations
-from app.crm.connectivity.channels.registry import registers_templates_for
+from app.crm.connectivity.channels.utils import get_registers_templates
 from app.crm.connectivity.db.accessors import (
     binding as binding_accessor,
     installation as installation_accessor,
 )
 from app.crm.connectivity.providers import adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
-from app.crm.connectivity.schemas.message import (
+from app.crm.connectivity.schemas.message.shared import (
     QueuedMessage,
     SendOutcome,
     SendRoute,
@@ -139,7 +139,7 @@ async def resolve_send_route(
     # send names no registry row and must not be refused for lacking one.
     # The registry states the fact; the word for "no" is this door's.
     template = None
-    if registers_templates_for(channel):
+    if get_registers_templates(channel):
         if not template_name:
             # The adapter refuses this too, but refusing here keeps the
             # reason on the near side of the wire for every such channel.

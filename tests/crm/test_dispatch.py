@@ -8,7 +8,8 @@ from typing import List
 
 from app.core.config.static import _positive_float, _positive_int
 from app.core.logger.context import get_log_context
-from app.crm.connectivity.channels.registry import CHANNELS, gate_handle_kind_for
+from app.crm.connectivity.channels.registry import CHANNELS
+from app.crm.connectivity.channels.utils import get_gate_handle_kind
 from app.crm.connectivity.db.queries.message import (
     CLAIMED_COLUMNS,
     apply_outcome_query,
@@ -30,7 +31,7 @@ from app.crm.connectivity.messaging.outbound.dispatch import (
 )
 from app.crm.connectivity.messaging.shared import gate
 from app.crm.connectivity.providers import ADAPTERS
-from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
+from app.crm.connectivity.schemas.message.shared import QueuedMessage, SendOutcome
 from app.crm.connectivity.vocabulary.reasons import (
     PROVIDER_CODE_REASONS,
     REASON_BAD_VARIABLES,
@@ -341,7 +342,7 @@ def test_every_adapter_channel_is_registered_in_channels() -> None:
     assert set(ADAPTERS) <= set(CHANNELS)
     # Every entry carries a probe-able handle kind, not just a key.
     for channel in ADAPTERS:
-        assert gate_handle_kind_for(channel)
+        assert get_gate_handle_kind(channel)
 
 
 async def test_a_reclaimed_row_discards_the_late_outcome(monkeypatch) -> None:

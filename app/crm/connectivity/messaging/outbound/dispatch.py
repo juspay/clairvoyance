@@ -27,7 +27,7 @@ from app.core.logger.context import set_log_context
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.messaging.shared.gate import gate, mint_send_token
 from app.crm.connectivity.messaging.shared.receipts import backfill_early_receipts
-from app.crm.connectivity.schemas.message import QueuedMessage, SendOutcome
+from app.crm.connectivity.schemas.message.shared import QueuedMessage, SendOutcome
 from app.crm.connectivity.send import send
 from app.crm.connectivity.vocabulary.reasons import (
     REASON_ATTEMPTS_EXHAUSTED,

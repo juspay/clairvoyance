@@ -90,6 +90,21 @@ def test_queue_message_returns_id_then_none_on_retry(
     assert seen == ["+919845012345", "+919845012345"]
 
 
+def test_a_template_send_cannot_claim_the_service_purpose() -> None:
+    """'service' is Meta's category for a free-form reply inside the window
+    (D8). A template is billed and policed under its approved category, so a
+    template proposal naming 'service' is refused while the author can still
+    fix it."""
+    with pytest.raises(ValueError, match="service"):
+        queue.validate_proposal("workflow", "service.conversation")
+
+
+def test_a_teammate_is_a_known_producer() -> None:
+    """A teammate replying from the inbox writes rows as 'human' (ADR 0014's
+    CHECK extension, kept here now the CHECK is gone)."""
+    queue.validate_proposal("human", "utility.order.update")
+
+
 def test_unusable_address_is_refused_before_any_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

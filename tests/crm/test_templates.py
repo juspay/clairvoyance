@@ -28,8 +28,11 @@ from app.crm.connectivity.providers.whatsapp.templates import (
     WhatsappTemplates,
     _from_meta,
 )
-from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
-from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.connectivity.schemas.connector import (
+    ChannelBinding,
+    ConnectorInstallation,
+    CredentialBundle,
+)
 from app.crm.connectivity.schemas.template import (
     CreateTemplateDraftRequest,
     EditTemplateRequest,
@@ -864,7 +867,7 @@ def test_the_in_place_edit_is_conditional_on_the_status_it_read() -> None:
 # --- rollout phase 08: the registry's publish-time read ----------------------
 
 from app.crm.connectivity import contracts
-from app.crm.connectivity.channels import registry
+from app.crm.connectivity.channels.utils import get_registers_templates
 from app.crm.connectivity.db.queries.template import templates_by_name_query
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.connectivity.templates.lifecycle import (  # noqa: F401
@@ -1058,8 +1061,8 @@ async def test_template_status_with_no_primary_pipe_says_so(monkeypatch) -> None
 
 def test_the_publish_check_is_on_the_contract_surface() -> None:
     assert "template_status" in contracts.__all__
-    assert "registers_templates_for" in contracts.__all__
-    assert contracts.registers_templates_for is registry.registers_templates_for
+    assert "get_registers_templates" in contracts.__all__
+    assert contracts.get_registers_templates is get_registers_templates
 
 
 def test_a_draft_keeps_the_category_the_merchant_picked() -> None:
