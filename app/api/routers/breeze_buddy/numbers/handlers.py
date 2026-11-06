@@ -243,6 +243,11 @@ async def get_number_handler(number_id: str, current_user: UserInfo) -> Telephon
                 detail=f"Telephony number {number_id} not found",
             )
 
+        # Ownership/visibility is enforced by the sole caller via
+        # filter_numbers_by_rbac — the single number-visibility rule, which 404s
+        # out-of-scope ids (PT-13 IDOR) without leaking existence and, unlike a
+        # bare ownership gate, still surfaces numbers a caller's template pins.
+        # This handler is a pure fetch, consistent with list_numbers_handler.
         return number
 
     except HTTPException:
