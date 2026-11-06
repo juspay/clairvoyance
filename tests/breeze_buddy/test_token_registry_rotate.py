@@ -2,8 +2,8 @@
 
 What is proven here:
 - every token's subject is checked: an inactive user or merchant is a 401
-  (login and long-lived tokens alike); a subject that doesn't exist is let
-  through and logged (observe until 4/4); an unreadable subject is a 503;
+  (login and long-lived tokens alike); a subject that doesn't exist is a 401
+  too (enforced, 4/4); an unreadable subject is a 503;
   a pod reads a subject once per window and ``forget_subject`` drops it;
 - the login cut-off: a short-lived token issued before the user's
   ``tokens_valid_after`` is a 401 (the same second included); one issued
@@ -178,15 +178,15 @@ def subjects(monkeypatch) -> _Subjects:
         rbac_token, "get_merchant_by_merchant_identifier", fake.merchant
     )
 
-    async def live(**kwargs):
-        """find_or_register_seen_token: a live row."""
-        return _entry(token_hash=kwargs["token_hash"])
+    async def live(token_hash):
+        """get_token_by_hash: a live row."""
+        return _entry(token_hash=token_hash)
 
     async def seen(token_id, seen_from, route):
         """mark_token_seen."""
         return _NOW
 
-    monkeypatch.setattr(rbac_token, "find_or_register_seen_token", live)
+    monkeypatch.setattr(rbac_token, "get_token_by_hash", live)
     monkeypatch.setattr(rbac_token, "mark_token_seen", seen)
     return fake
 
@@ -237,11 +237,15 @@ async def test_an_inactive_merchant_s_tokens_are_refused(subjects, lifetime) -> 
     assert subjects.reads == ["merchant:shop-1"]
 
 
-async def test_a_subject_that_does_not_exist_is_let_through(subjects) -> None:
-    """Deleted user: logged and allowed until enforcement (4/4)."""
-    subjects.users["gone"] = None
-    user = await rbac_token_manager.authenticate(_long_token(user_id="gone"))
-    assert user.id == "gone"
+@pytest.mark.parametrize(
+    "token_of", [_login_token, _long_token], ids=["login", "admin"]
+)
+async def test_a_subject_that_does_not_exist_is_refused(subjects, token_of) -> None:
+    """Deleted user: its tokens are refused (enforced, 4/4)."""
+    subjects.users["user-1"] = None
+    with pytest.raises(HTTPException) as caught:
+        await rbac_token_manager.authenticate(token_of())
+    assert caught.value.status_code == 401
 
 
 async def test_an_unreadable_subject_is_503(subjects) -> None:
