@@ -18,6 +18,12 @@ from app.crm.connectivity.contracts import (
     consume_template_event,
     dispatch_send,
     register_retire_guard,
+    register_template_hook,
+)
+from app.crm.conversations.contracts import (
+    add_template_to_thread,
+    consume_buddy_bot_moved,
+    consume_conversation_event,
 )
 from app.crm.outreach.contracts import (
     claim_due_runs,
@@ -45,12 +51,22 @@ register_consumer(consume_template_event)
 # consumer returns from; it moves the manifest along sent -> delivered ->
 # read, or to failed with the provider's code.
 register_consumer(consume_status_event)
+# The fourth and fifth: conversations' projector (a customer's message on
+# Buddy's binding becomes a thread)
+# and its "Buddy moved" consumer (the old binding's threads resolve).
+register_consumer(consume_conversation_event)
+register_consumer(consume_buddy_bot_moved)
 # The same inversion for connectivity's template retire guard (phase 14):
 # connectivity may not import outreach, so this root hands outreach's
 # "who would still send this template" into connectivity's slot.
 # app/main.py imports this module, so the API pod (where the retire route
 # lives) is wired too.
 register_retire_guard(template_references)
+# And for conversations' template hook: connectivity may not import
+# conversations, so this root hands it "put a queued template on her
+# thread" (a merchant whose one number is both the template binding and
+# Buddy's). Wired on the API pod too, through app/main.py's import.
+register_template_hook(add_template_to_thread)
 
 ROLES: Dict[str, Callable[[asyncio.Event], Coroutine[Any, Any, None]]] = {
     "event-worker": lambda stop_event: run_drain_loop(

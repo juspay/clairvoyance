@@ -1,5 +1,5 @@
-"""Connector-account shapes: the door, the pipes under it, and what a
-provider's handshake produced."""
+"""Connector-account shapes: the door, its decrypted keys, the pipes under
+it, and what a provider's handshake produced."""
 
 from datetime import datetime
 from typing import Any, Dict, Literal, Optional
@@ -38,6 +38,24 @@ class ChannelBinding(BaseModel):
     capabilities: Dict[str, Any] = {}
     is_primary: bool = False
     status: str
+
+
+class CredentialBundle(BaseModel):
+    """One installation's whole key bundle, decrypted.
+
+    A bag, not a schema: what keys a connector needs is the adapter's
+    business. ``repr=False`` means an accidental f-string prints
+    CredentialBundle(), not a live token — the cheapest guard against
+    leaking a secret into a log aggregator.
+    """
+
+    values: Dict[str, Any] = Field(default_factory=dict, repr=False)
+
+    def secret(self, key: str) -> Optional[str]:
+        """The named secret, or None. Callers fail closed on None; a bundle
+        missing the key it needs is a broken connection, not a retry."""
+        value = self.values.get(key)
+        return value if isinstance(value, str) and value else None
 
 
 # ---------------------------------------------------------------------------

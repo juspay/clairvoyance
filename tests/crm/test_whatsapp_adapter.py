@@ -19,18 +19,18 @@ from app.crm.connectivity.providers.whatsapp.classify import (
     RETRYABLE_CODES,
     TERMINAL_CODES,
 )
-from app.crm.connectivity.providers.whatsapp.payload import (
+from app.crm.connectivity.providers.whatsapp.payload.shared import to_meta_recipient
+from app.crm.connectivity.providers.whatsapp.payload.template import (
     build_parameters,
     build_send_body,
     flow_button_indexes,
-    to_meta_recipient,
 )
-from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
-from app.crm.connectivity.schemas.message import (
+from app.crm.connectivity.schemas.connector import (
+    ChannelBinding,
+    ConnectorInstallation,
     CredentialBundle,
-    QueuedMessage,
-    SendRoute,
 )
+from app.crm.connectivity.schemas.message.shared import QueuedMessage, SendRoute
 from app.crm.connectivity.schemas.template import ApprovedTemplate
 from tests.crm.doubles import stub_http
 
@@ -345,7 +345,7 @@ def test_the_key_the_adapter_stamps_is_the_key_the_extractor_strips() -> None:
     either way); only a test may hold both. A drift means the stamped key
     comes back unrecognised and our uuid sits beside her address in a
     merchant's order note."""
-    from app.crm.connectivity.providers.whatsapp import payload as sender
+    from app.crm.connectivity.providers.whatsapp.payload import template as sender
     from app.crm.record.extractors.whatsapp import flow as reader
 
     assert sender.FLOW_TOKEN_KEY == reader.FLOW_TOKEN_KEY

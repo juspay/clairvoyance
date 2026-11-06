@@ -48,10 +48,12 @@ under `db/accessors/` or `db/decoders/` still may not carry SQL. Outreach
 took the shape 3 Sep 2026 (three tables: workflow · enrollment · version).
 
 **`schemas.py` becomes `schemas/` the same way** — one file per table family
-(connectivity: `connector.py` · `message.py` · `template.py`), plus a port
+(connectivity: `connector.py` · `message/` · `template.py`), plus a port
 file where a seam needs a neutral shape (`ingress.py`) and `tenancy.py` for
-the `TenantScoped` request base. `__init__` exports nothing; import the
-family you mean.
+the `TenantScoped` request base. A family that outgrows one file becomes a
+folder: connectivity's `message/` holds `shared.py` (what every channel
+uses) and `whatsapp.py` (WhatsApp's reply bodies). Every `__init__` exports
+nothing; import the file you mean.
 
 **A REGISTRY file becomes a package the same way, one word per file.** When
 a `<concern>.py` that dispatches on a vocabulary crosses ~500 lines, the

@@ -140,7 +140,7 @@ def approved_template_for_send_query(
     (canon T23 col 11). A send must name where its FLOW buttons sit or Meta
     refuses it (131009), and which button is a Flow button is Meta's
     vocabulary: the provider face reads it off the row
-    (providers/whatsapp/payload.py), never this layer.
+    (providers/whatsapp/payload/template.py), never this layer.
     """
     query = f"""
         SELECT id, name, language, provider_template_id, category, components

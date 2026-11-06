@@ -9,7 +9,7 @@ gather -> decide (PURE, returns the problems) -> apply.
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
-from app.crm.connectivity.contracts import registers_templates_for, template_status
+from app.crm.connectivity.contracts import get_registers_templates, template_status
 from app.crm.outreach import playbook
 from app.crm.outreach.catalog_laws import (
     Catalogs,
@@ -524,7 +524,7 @@ async def _template_problems(
     for node in definition.nodes:
         if node.type != "send" or not node.channel or not node.template:
             continue  # the validator already demands both on a send node
-        if not registers_templates_for(node.channel):
+        if not get_registers_templates(node.channel):
             continue  # a channel with no registry (email) has nothing to ask
         verdict = await template_status(merchant_id, node.channel, node.template)
         if not verdict.publishable:
