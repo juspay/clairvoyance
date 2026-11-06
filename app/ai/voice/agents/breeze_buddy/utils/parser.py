@@ -1,6 +1,7 @@
 import datetime
 import inspect
 import operator
+import types
 from typing import Any, Callable, Dict, Optional
 
 from RestrictedPython import (
@@ -32,6 +33,20 @@ from app.core.logger import logger
 # not a hard security boundary: this whole feature is gated OFF by default via
 # ENABLE_CUSTOM_PYTHON_FUNCTIONS (enforced at flow-build time), and true
 # out-of-process isolation is the tracked defense-in-depth follow-up.
+
+# The datetime MODULE holds module references of its own; handlers only ever
+# need its value types, so they get those under the same names.
+_SAFE_DATETIME = types.SimpleNamespace(
+    date=datetime.date,
+    datetime=datetime.datetime,
+    time=datetime.time,
+    timedelta=datetime.timedelta,
+    timezone=datetime.timezone,
+    tzinfo=datetime.tzinfo,
+    MINYEAR=datetime.MINYEAR,
+    MAXYEAR=datetime.MAXYEAR,
+    UTC=datetime.timezone.utc,
+)
 
 # Value allow-list layered on top of RestrictedPython's own safe_builtins. These
 # are safe builtins the legacy sandbox exposed and existing handlers may rely on.
@@ -78,8 +93,23 @@ _EXTRA_SAFE_BUILTINS: Dict[str, Any] = {
     "tuple": tuple,
     "type": type,
     "zip": zip,
-    "datetime": datetime,
+    "datetime": _SAFE_DATETIME,
 }
+
+
+def _no_module(value: Any) -> Any:
+    """Backstop: a module object in sandboxed hands is a door out of it."""
+    if isinstance(value, types.ModuleType):
+        raise AttributeError("module objects are not available in custom functions")
+    return value
+
+
+def _guarded_getattr(obj: Any, name: str, default: Any = None) -> Any:
+    return _no_module(safer_getattr(obj, name, default))
+
+
+def _guarded_getitem(obj: Any, index: Any) -> Any:
+    return _no_module(default_guarded_getitem(obj, index))
 
 
 class CompilationError(Exception):
@@ -135,8 +165,8 @@ def _build_restricted_namespace() -> Dict[str, Any]:
     builtins_ns = dict(safe_builtins)
     builtins_ns.update(_EXTRA_SAFE_BUILTINS)
     namespace["__builtins__"] = builtins_ns
-    namespace["_getattr_"] = safer_getattr
-    namespace["_getitem_"] = default_guarded_getitem
+    namespace["_getattr_"] = _guarded_getattr
+    namespace["_getitem_"] = _guarded_getitem
     namespace["_getiter_"] = default_guarded_getiter
     namespace["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
     namespace["_write_"] = full_write_guard
