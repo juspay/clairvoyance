@@ -31,7 +31,7 @@ def _topic_counts(
     counts: Dict[tuple[str, str], Dict[str, Any]] = {}
     for row in topic_rows:
         started_at = row["started_at"]
-        if started_at.date() < current_start:
+        if started_at.date() < current_start or row["raw_topic_type"] == "other":
             continue
         key = (str(row["template_id"]), str(row["raw_topic_type"]))
         label = str(row.get("raw_label") or row["raw_topic_type"])

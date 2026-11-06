@@ -38,8 +38,9 @@ class TopicFirstTokenTimeout(TimeoutError):
 
 
 _PROMPT_ONLY_RESPONSE_INSTRUCTION = """Return only valid JSON with exactly this shape:
-{"customer_needs":[{"summary":"short customer need","evidence_turns":[1]}],"topics":[{"type":"short_snake_case_key","label":"short label","phrase":"exact customer words","evidence_turns":[1]}]}
-Every listed field is required. Use empty arrays when there are no meaningful customer needs or topics. Do not wrap the JSON in markdown."""
+{"customer_needs":[{"summary":"short customer need","evidence_turns":[1]}],"topics":[{"type":"short_snake_case_key","label":"short label","phrase":"exact customer words","evidence_turns":[1],"new_label":""}]}
+Every listed field is required. Use empty arrays when there are no meaningful customer needs or topics. Do not wrap the JSON in markdown.
+When the accepted topics are written "Topic.Subtopic" and the customer raises a real point that no listed label covers, use that topic's "Topic.Other" label, or "Other" when no topic fits, and write 2 to 5 plain words that name the point in "new_label". Otherwise leave "new_label" empty."""
 
 
 def resolve_topic_evaluation_configuration(
@@ -156,8 +157,9 @@ async def _request_llm(
     prompt: str,
     transcript: str,
     runtime: Mapping[str, Any],
+    response_format: str = _PROMPT_ONLY_RESPONSE_INSTRUCTION,
 ) -> Dict[str, Any]:
-    instruction = prompt + "\n\n" + _PROMPT_ONLY_RESPONSE_INSTRUCTION
+    instruction = prompt + "\n\n" + response_format
     if runtime["provider"] == OPENROUTER.name:
         started_at = time.monotonic()
         response = await OPENROUTER.generate(
@@ -332,12 +334,19 @@ def normalize_topics(
     for topic in parsed.topics:
         topic_type = normalize_topic_type(topic.type)
         label = normalize_topic_label(topic.label)
+        new_label = (topic.new_label or "").strip()[:120]
         if topic_type in catalog_by_type:
             label = catalog_by_type[topic_type]
         elif label in catalog_by_label:
             topic_type, label = catalog_by_label[label]
+        elif two_level:
+            new_label = new_label or topic.label.strip()[:120]
+            parent_other = normalize_topic_label(label.partition(".")[0] + ".other")
+            topic_type, label = catalog_by_label.get(parent_other, ("other", "Other"))
         else:
             topic_type = normalize_topic_type(label)
+        if not two_level or label.rpartition(".")[2] != "Other":
+            new_label = ""
 
         if not topic_type or not label or topic_type in seen:
             continue
@@ -353,6 +362,7 @@ def normalize_topics(
                 "label": label,
                 "phrase": topic.phrase.strip()[:500],
                 "evidence_turns": sorted(set(topic.evidence_turns)),
+                **({"new_label": new_label} if new_label else {}),
             }
         )
         if max_topics is not None and len(normalized) >= max_topics:

@@ -135,7 +135,6 @@ class AnalyticsFilters(BaseModel):
     )
     topic_types: Optional[List[str]] = Field(
         None,
-        max_length=200,
         description="Exact underlying stable keys when opening the virtual Other topic group",
     )
     segments: Optional[

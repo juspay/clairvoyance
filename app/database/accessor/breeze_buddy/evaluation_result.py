@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from app.database.queries import run_parameterized_query
 from app.database.queries.breeze_buddy.evaluation_result import (
+    get_topic_day_query,
     save_evaluation_failure_query,
     save_evaluation_results_query,
 )
@@ -53,3 +54,10 @@ async def save_evaluation_failure(
         error_message,
     )
     await run_parameterized_query(query, values)
+
+
+async def get_topic_day(
+    template_id: str, start: datetime, end: datetime
+) -> List[Dict[str, Any]]:
+    query, values = get_topic_day_query(template_id, start, end)
+    return [dict(row) for row in await run_parameterized_query(query, values)]
