@@ -585,6 +585,7 @@ class BlacklistedNumber(BaseModel):
     id: str
     phone_number: str
     reseller_id: Optional[str] = None
+    merchant_id: Optional[str] = None
     reason: Optional[str] = None
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -595,5 +596,12 @@ class CreateBlacklistNumberRequest(BaseModel):
     """Request to add a phone number to the blacklist"""
 
     phone_number: str = Field(min_length=4, max_length=20)
-    reseller_id: Optional[str] = None
+    reseller_id: Optional[str] = Field(default=None, min_length=1)
+    merchant_id: Optional[str] = Field(default=None, min_length=1)
     reason: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "CreateBlacklistNumberRequest":
+        if self.merchant_id and not self.reseller_id:
+            raise ValueError("merchant_id requires reseller_id")
+        return self

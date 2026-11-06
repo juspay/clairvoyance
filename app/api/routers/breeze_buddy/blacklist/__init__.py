@@ -39,6 +39,7 @@ async def add_to_blacklist(
     Add a phone number to the blacklist.
 
     When reseller_id is provided, the number is blocked for that reseller only.
+    When merchant_id is also provided, it is blocked for that merchant only.
     When reseller_id is omitted, the number is blocked globally for all resellers.
 
     Permissions:
@@ -90,6 +91,9 @@ async def remove_from_blacklist(
     reseller_id: Optional[str] = Query(
         None, description="Reseller ID (omit to remove global blacklist entry)"
     ),
+    merchant_id: Optional[str] = Query(
+        None, description="Merchant ID (omit to remove reseller-level entry)"
+    ),
     current_user: UserInfo = Depends(get_current_user_with_rbac),
 ):
     """
@@ -98,10 +102,13 @@ async def remove_from_blacklist(
     Query Parameters:
     - reseller_id: If provided, removes only the reseller-specific entry.
                    If omitted, removes the global entry.
+    - merchant_id: If provided with reseller_id, removes that merchant's entry.
 
     Permissions:
     - Admin only
     """
     reseller = reseller_id
     require_admin_access(current_user, "remove numbers from blacklist")
-    return await remove_blacklist_handler(phone_number, reseller, current_user)
+    return await remove_blacklist_handler(
+        phone_number, reseller, merchant_id, current_user
+    )

@@ -626,7 +626,9 @@ class DispatchHarness:
         # Returning None is fine — the worker skips greeting prep gracefully.
         return None
 
-    async def is_number_blacklisted(self, phone: str, reseller_id: str) -> bool:
+    async def is_number_blacklisted(
+        self, phone: str, reseller_id: str, merchant_id: Optional[str] = None
+    ) -> bool:
         return self.is_blacklisted
 
     # ---- managers.calls helpers -------------------------------------------

@@ -297,8 +297,12 @@ async def push_lead_handler(req: PushLeadRequest, current_user: UserInfo) -> Dic
                 detail="customer_mobile_number is not a valid phone number",
             )
 
-        if customer_mobile and await is_number_blacklisted(
-            customer_mobile, req.reseller_id
+        if (
+            customer_mobile
+            and await is_number_blacklisted(
+                customer_mobile, req.reseller_id, req.merchant_id
+            )
+            is not False
         ):
             logger.warning(
                 f"Blacklisted number {customer_mobile} rejected for reseller {req.reseller_id}"
