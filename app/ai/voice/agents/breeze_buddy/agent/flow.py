@@ -61,6 +61,23 @@ async def load_template_config(
     return template, template.configurations, template_vars
 
 
+async def resolve_template_config(
+    lead: LeadCallTracker,
+    body: Dict[str, Any],
+) -> tuple[TemplateModel, Optional[ConfigurationModel], Dict[str, str]]:
+    """Template config handed over in the Daily launch payload, else from the DB.
+
+    start_daily_session(preload_template=True) puts the result of
+    load_template_config in the payload so a fresh bot process skips those
+    reads before joining; without it, load from the database as before.
+    """
+    preloaded = body.get("preloaded_template")
+    if preloaded:
+        template = TemplateModel.model_validate(preloaded)
+        return template, template.configurations, body["preloaded_template_vars"]
+    return await load_template_config(lead)
+
+
 def setup_flow_manager(
     task: Any,
     llm: AzureLLMService,
