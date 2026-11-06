@@ -1,0 +1,24 @@
+[project]
+name = "phonon"
+version = "0.1.0"
+description = "Self-hosted streaming STT server (Nemotron) for Clairvoyance"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "loguru>=0.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pyrefly",
+]
+# Later PRs add: pydantic-settings (model process), fastapi/uvicorn/websockets/
+# orjson (front-end), and a `gpu` extra with torch and NeMo (real engine). Only
+# stt/model/ may ever import torch.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.pyrefly]
+project-includes = ["stt", "tests"]
