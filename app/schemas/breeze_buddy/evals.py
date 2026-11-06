@@ -8,6 +8,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+#: An eval's name, the evaluation_config_name_format_check pattern: what its
+#: results are stored under (evaluation_result.result), so it never changes.
+EVAL_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+
 
 class EvaluationType(str, Enum):
     TOPIC = "TOPIC"

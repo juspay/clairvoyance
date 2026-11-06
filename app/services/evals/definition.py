@@ -14,7 +14,8 @@ Code knows no question by name: whatever should be judged — the call's
 outcome, loops, anything — is a question in the agent's configuration,
 and its answer is stored as such. The validator checks only the
 engine-agnostic envelope — a known engine, a provider that engine
-supports, a model, and no key that neither the engine nor the provider
+supports, a model, optionally the names of the config keys holding that
+provider's URL and key, and no key that neither the engine nor the provider
 owns — and hands the rest to the engine class, whose primitives they are:
 the structured engine's score/choice/noul rules are its own, not the
 type's. Keys beyond the envelope are the engine's (``questions``; the
@@ -30,8 +31,12 @@ from app.services.evals.engines import ENGINES
 
 # the envelope every row shares; the engine adds its own keys
 # (``configuration_keys``: structured -> questions) and decodes the whole
-# row into its own configuration type
-_ENVELOPE_KEYS = frozenset({"engine", "provider", "model"})
+# row into its own configuration type. api_url_name / api_key_name name the
+# config keys (Redis, then environment) holding the provider's URL and key,
+# read at run time (model_provider.resolve_provider)
+_ENVELOPE_KEYS = frozenset(
+    {"engine", "provider", "model", "api_url_name", "api_key_name"}
+)
 
 
 def validate_evals_configuration(configuration: object) -> BaseModel:
@@ -69,5 +74,12 @@ def validate_evals_configuration(configuration: object) -> BaseModel:
     model = config.get("model")
     if not isinstance(model, str) or not model.strip():
         raise ValueError("model must be a non-empty string")
+    for name in ("api_url_name", "api_key_name"):
+        value = config.get(name)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{name} must be a non-empty string when given")
+    # a URL without its own key would send the provider's key to another host
+    if config.get("api_url_name") and not config.get("api_key_name"):
+        raise ValueError("api_key_name is required when api_url_name is given")
 
     return engine_class.validate_configuration(config)

@@ -870,6 +870,11 @@ TYPESAFE_API_URL = os.environ.get(
 )
 TYPESAFE_TIMEOUT_SECONDS = _positive_float("TYPESAFE_TIMEOUT_SECONDS", 30.0)
 
+# Grid (Juspay) System One endpoint for evals that name it through
+# api_url_name / api_key_name; resolved by those names at call time.
+GRID_JIT_URL = os.environ.get("GRID_JIT_URL", "")
+GRID_JIT_API_KEY = os.environ.get("GRID_JIT_API_KEY", "")
+
 # OpenRouter (model provider, app/services/model_provider/openrouter.py): one
 # key and one chat-completions URL front every model it routes; ``model`` is
 # the OpenRouter model id. Empty key = every call on it fails with a logged

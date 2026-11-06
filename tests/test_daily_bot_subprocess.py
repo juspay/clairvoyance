@@ -12,6 +12,10 @@ rolls back the recording sentinel when the launch fails.
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any, List, Tuple
 
 import pytest
@@ -24,6 +28,7 @@ from app.ai.voice.agents.breeze_buddy.services.daily import (
 from app.ai.voice.agents.breeze_buddy.services.daily.launch_payload import (
     BotLaunchPayload,
 )
+from app.core.concurrency import spawn_background_task
 
 
 async def _flag_on() -> bool:
@@ -244,6 +249,99 @@ async def test_amain_sizes_child_pool_and_closes(
         }
     ]
     assert closed == ["db", "redis"]
+
+
+async def test_amain_lets_the_calls_background_work_finish_before_closing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: List[str] = []
+
+    async def call_completed() -> None:
+        # call.completed, its outcome check and the post-call job: spawned by
+        # the finished-lead hook when the call's end is written
+        await asyncio.sleep(0.05)
+        order.append("call.completed")
+
+    async def fake_daily_bot(*args: Any) -> None:
+        spawn_background_task(call_completed(), name="crm-call-completed-lead-1")
+
+    async def fake_close(name: str) -> None:
+        order.append(name)
+
+    async def fake_init_db_pool(**kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(bot_runner, "init_db_pool", fake_init_db_pool)
+    monkeypatch.setattr(bot_runner, "daily_bot", fake_daily_bot)
+    monkeypatch.setattr(bot_runner, "close_db_pool", lambda: fake_close("db"))
+    monkeypatch.setattr(
+        bot_runner, "close_redis_connections", lambda: fake_close("redis")
+    )
+    monkeypatch.setattr(bot_runner, "create_aiohttp_session", lambda: "fake-session")
+
+    await bot_runner._amain(_RUNNER_ARGS)
+
+    assert order == ["call.completed", "db", "redis"]
+
+
+async def test_amain_waits_for_background_work_started_while_it_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: List[str] = []
+
+    async def failed_row() -> None:
+        await asyncio.sleep(0.05)
+        order.append("failed row")
+
+    async def call_completed() -> None:
+        # the outcome check ran past its time: its FAILED row is saved in a
+        # task of its own, spawned after the teardown started waiting
+        await asyncio.sleep(0.01)
+        spawn_background_task(failed_row(), name="outcome-eval-failure-lead-1")
+        order.append("call.completed")
+
+    async def fake_daily_bot(*args: Any) -> None:
+        spawn_background_task(call_completed(), name="crm-call-completed-lead-1")
+
+    async def fake_close(name: str) -> None:
+        order.append(name)
+
+    async def fake_init_db_pool(**kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(bot_runner, "init_db_pool", fake_init_db_pool)
+    monkeypatch.setattr(bot_runner, "daily_bot", fake_daily_bot)
+    monkeypatch.setattr(bot_runner, "close_db_pool", lambda: fake_close("db"))
+    monkeypatch.setattr(
+        bot_runner, "close_redis_connections", lambda: fake_close("redis")
+    )
+    monkeypatch.setattr(bot_runner, "create_aiohttp_session", lambda: "fake-session")
+
+    await bot_runner._amain(_RUNNER_ARGS)
+
+    assert order == ["call.completed", "failed row", "db", "redis"]
+
+
+def test_the_bot_process_installs_the_finished_lead_tap() -> None:
+    # A web call's FINISHED write happens in the bot process: without
+    # crm_mirror's taps there, it sends no call.completed and queues no
+    # post-call job. A fresh interpreter, as this test process has crm_mirror
+    # loaded by other tests already.
+    code = (
+        "import app.ai.voice.agents.breeze_buddy.services.daily.bot_runner\n"
+        "from app.database.accessor.breeze_buddy import lead_call_tracker\n"
+        "print([hook.__name__ for hook in lead_call_tracker._finished_hooks])"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+        env=dict(os.environ),
+        timeout=120,
+    )
+
+    assert "_finished_lead_tap" in done.stdout, done.stderr
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ def decode_lead_call_tracker(row: asyncpg.Record) -> Optional[LeadCallTracker]:
         recording_url=row["recording_url"],
         status=LeadCallStatus(row["status"]),
         outcome=row["outcome"],
+        agent_outcome=row.get("agent_outcome"),
         call_id=row["call_id"],
         call_initiated_time=row["call_initiated_time"],
         call_end_time=row["call_end_time"],

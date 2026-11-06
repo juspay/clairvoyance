@@ -18,6 +18,7 @@ from app.services.model_provider import (
     Usage,
     close_all,
     get_provider,
+    resolve_provider,
 )
 
 _SCHEMA = {
@@ -336,6 +337,92 @@ async def test_close_all_closes_pools() -> None:
     await close_all()
     assert openrouter._client is None
     assert typesafe._client is None
+
+
+# --- named endpoint -------------------------------------------------------------
+
+
+def _config_keys(monkeypatch: pytest.MonkeyPatch, values: Dict[str, str]) -> None:
+    async def get_config(key: str, default: Any, return_type: type = str) -> Any:
+        return values.get(key, default)
+
+    monkeypatch.setattr("app.services.model_provider.get_config", get_config)
+    monkeypatch.setattr("app.services.model_provider._NAMED", {})
+
+
+async def test_no_names_is_the_registered_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config_keys(monkeypatch, {})
+    typesafe = get_provider("typesafe")
+    assert await resolve_provider({"provider": "typesafe"}) is typesafe
+
+
+async def test_named_url_and_key_point_the_same_provider_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config_keys(
+        monkeypatch, {"GRID_URL": "https://grid.test/v1/systemone", "GRID_KEY": "k"}
+    )
+    typesafe = get_provider("typesafe")
+    grid = {
+        "provider": "typesafe",
+        "api_url_name": "GRID_URL",
+        "api_key_name": "GRID_KEY",
+    }
+    named = await resolve_provider(grid)
+    assert isinstance(named, TypeSafeProvider) and named is not typesafe
+    assert named.config.base_url == "https://grid.test/v1/systemone"
+    assert named.config.api_key == "k"
+    assert named.config.timeout_seconds == typesafe.config.timeout_seconds
+    # one per endpoint, so its pooled client is reused
+    assert await resolve_provider(grid) is named
+
+
+async def test_a_named_key_alone_keeps_the_providers_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config_keys(monkeypatch, {"OTHER_KEY": "other"})
+    typesafe = get_provider("typesafe")
+    named = await resolve_provider(
+        {"provider": "typesafe", "api_key_name": "OTHER_KEY"}
+    )
+    assert named.config.base_url == typesafe.config.base_url
+    assert named.config.api_key == "other"
+
+
+async def test_a_named_url_without_a_key_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # it would send the provider's own key to another host
+    _config_keys(monkeypatch, {"GRID_URL": "https://grid.test"})
+    with pytest.raises(ProviderError, match="api_key_name is required"):
+        await resolve_provider({"provider": "typesafe", "api_url_name": "GRID_URL"})
+
+
+@pytest.mark.parametrize(
+    "url_name, key_name, missing",
+    [(None, "NO_SUCH_KEY", "API key"), ("NO_SUCH_URL", "GRID_KEY", "API URL")],
+)
+async def test_a_name_with_no_value_is_refused(
+    monkeypatch: pytest.MonkeyPatch, url_name: Any, key_name: str, missing: str
+) -> None:
+    _config_keys(monkeypatch, {"GRID_KEY": "k"})
+    with pytest.raises(ProviderError, match=f"{missing} not found"):
+        await resolve_provider(
+            {"provider": "typesafe", "api_url_name": url_name, "api_key_name": key_name}
+        )
+
+
+async def test_close_all_closes_named_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _config_keys(monkeypatch, {"GRID_KEY": "k"})
+    named = await resolve_provider({"provider": "typesafe", "api_key_name": "GRID_KEY"})
+    assert isinstance(named, TypeSafeProvider)
+    named._client = httpx.AsyncClient()
+    await close_all()
+    assert named._client is None
 
 
 # --- typesafe -----------------------------------------------------------------

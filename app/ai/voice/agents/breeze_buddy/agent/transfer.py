@@ -93,7 +93,7 @@ async def apply_transfer(bot: "Agent", transfer: PendingAgentTransfer) -> None:
             template_id=str(transfer.template.id),
         )
         # The in-memory lead names the template its row now names: the end
-        # of the call reads it (evaluations, the post-call outcome check).
+        # of the call reads it (evaluations, the end-of-call outcome check).
         # Only these fields — the rest of bot.lead (metaData) is newer here.
         if persisted is not None:
             bot.lead.template = persisted.template

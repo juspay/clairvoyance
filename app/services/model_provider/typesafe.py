@@ -40,6 +40,13 @@ class TypeSafeProvider:
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
 
+    @property
+    def config(self) -> ProviderConfig:
+        return self._config
+
+    def with_config(self, config: ProviderConfig) -> "TypeSafeProvider":
+        return TypeSafeProvider(config)
+
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             async with self._client_lock:
