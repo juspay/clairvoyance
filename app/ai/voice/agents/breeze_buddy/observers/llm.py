@@ -103,6 +103,7 @@ async def _call_anthropic(
     invocation_params = adapter.get_llm_invocation_params(
         context,
         system_instruction=system_prompt,
+        enable_prompt_caching=False,
     )
 
     params: dict[str, Any] = {
