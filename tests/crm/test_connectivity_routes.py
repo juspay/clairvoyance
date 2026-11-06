@@ -44,7 +44,7 @@ def test_every_connectors_route_declares_the_tenancy_door() -> None:
 
 def test_every_connectors_route_uses_the_translating_route_class() -> None:
     routes = [r for r in connectivity_api.router.routes if isinstance(r, APIRoute)]
-    assert all(isinstance(r, connectivity_api.TranslatingRoute) for r in routes)
+    assert all(isinstance(r, connectivity_api.ConnectorsRoute) for r in routes)
 
 
 @pytest.mark.parametrize(
@@ -100,6 +100,65 @@ def test_the_door_reads_the_merchant_from_a_post_body(monkeypatch) -> None:
         },
     )
     assert response.status_code == 400 and seen["merchant"] == "shop"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "contract", "body"),
+    [
+        (
+            "patch",
+            "/connectors/templates/t-1",
+            "edit_template",
+            {"merchant_id": "someone-else", "components": [], "category": None},
+        ),
+        (
+            "post",
+            "/connectors/installations/i-1/disconnect",
+            "disconnect",
+            {"merchant_id": "someone-else"},
+        ),
+        (
+            "post",
+            "/connectors/installations/i-1/disconnect",
+            "disconnect",
+            {"merchant_id": None},
+        ),
+    ],
+)
+def test_a_query_and_a_body_naming_two_merchants_is_a_400(
+    monkeypatch, method, path, contract, body
+) -> None:
+    """The query names the merchant the caller is cleared for; a body naming
+    another one is refused before the handler, whether or not the route's
+    model has a merchant_id to read."""
+
+    async def never(*args):
+        raise AssertionError("two merchants in one request reached a handler")
+
+    monkeypatch.setattr(connectivity_api.contracts, contract, never)
+    response = getattr(_client(monkeypatch), method)(
+        path, params={"merchant_id": "shop"}, json=body
+    )
+    assert response.status_code == 400
+    assert "differ" in response.text
+
+
+def test_a_query_and_a_body_naming_one_merchant_passes(monkeypatch) -> None:
+    """Saying the same merchant twice is not a contradiction: the console's
+    disconnect and resubscribe calls send both from one variable."""
+    seen = {}
+
+    async def fake_disconnect(merchant_id, installation_id):
+        seen["merchant"] = merchant_id
+
+    monkeypatch.setattr(connectivity_api.contracts, "disconnect", fake_disconnect)
+    response = _client(monkeypatch).post(
+        "/connectors/installations/i-1/disconnect",
+        params={"merchant_id": "shop"},
+        json={"merchant_id": "shop"},
+    )
+    assert response.status_code == 404  # the double found nothing to disconnect
+    assert seen["merchant"] == "shop"
 
 
 def test_the_template_routes_pass_the_picked_category_on(monkeypatch) -> None:

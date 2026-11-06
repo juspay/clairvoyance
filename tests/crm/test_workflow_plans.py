@@ -2,11 +2,13 @@
 validator must block, each as a red test."""
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import uuid4
 
 import pytest
 
+import app.crm.outreach.nodes.call as call_node
 import app.crm.outreach.plans as plans
 from app.crm.connectivity.schemas.template import TemplateVerdict
 from app.crm.outreach.db import DbTxn
@@ -14,7 +16,7 @@ from app.crm.outreach.plans import validate_definition
 from app.crm.outreach.schemas import Workflow, WorkflowDefinition
 from app.crm.record.catalog import code_entries
 from app.crm.record.schemas import CatalogField
-from tests.crm.doubles import patch_accessors
+from tests.crm.doubles import patch_accessors, stub_merchant_reseller
 
 NOW = datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -488,8 +490,8 @@ def _registry(
     return asked
 
 
-async def _publish(accessor: _PublishAccessor) -> Workflow:
-    return await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
+async def _publish(accessor: _PublishAccessor, merchant_id: str = "m1") -> Workflow:
+    return await plans._publish_in_txn(cast(DbTxn, object()), merchant_id, "wf-1", None)
 
 
 @pytest.mark.asyncio
@@ -581,6 +583,209 @@ async def test_publish_holds_the_templates_it_sends_before_asking_the_registry(
     expected = WorkflowDefinition.model_validate(_SEND_PLAN).send_templates()
     assert expected and accessor.locked == [expected]
     assert accessor.order == ["lock", "ask", "publish"]
+
+
+_CALL_PLAN: Dict[str, Any] = {
+    "entry": {"topic": "orders/create", "key": "id"},
+    "nodes": [
+        {"id": "wait-30m", "type": "wait", "minutes": 30},
+        {"id": "confirm-call", "type": "call", "template_id": "tpl-cod"},
+    ],
+    "edges": [["wait-30m", "confirm-call"]],
+    "goal": {"topics": ["orders/cancelled"]},
+    "purpose_key": "utility.order.confirmation",
+}
+
+
+def _dialler(
+    monkeypatch: pytest.MonkeyPatch,
+    template: Optional[Any],
+    config: Optional[Any] = None,
+    reseller_id: Optional[str] = "r1",
+) -> List[str]:
+    """The three reads a call square makes, as publish now makes them: the
+    template, the merchant's reseller (None = no such merchant), the
+    dialler config."""
+    asked: List[str] = []
+
+    async def get_template_by_id(template_id: str) -> Optional[Any]:
+        asked.append(template_id)
+        return template
+
+    async def get_config(template_id: str) -> Optional[Any]:
+        return config
+
+    monkeypatch.setattr(call_node, "get_template_by_id", get_template_by_id)
+    monkeypatch.setattr(
+        call_node, "get_call_execution_config_by_template_id", get_config
+    )
+    stub_merchant_reseller(monkeypatch, reseller_id)
+    return asked
+
+
+def _template(
+    merchant_id: Optional[str] = "m1",
+    reseller_id: str = "r1",
+    supported_channels: Optional[List[str]] = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id="tpl-cod",
+        name="cod-confirm",
+        merchant_id=merchant_id,
+        reseller_id=reseller_id,
+        supported_channels=supported_channels or ["voice"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_call_node_whose_template_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong template_id used to pass publish and park every run on its
+    first call. Publish asks what the square would ask."""
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    asked = _dialler(monkeypatch, template=None)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "call node confirm-call: template tpl-cod not found or could not be read"
+    ]
+    assert asked == ["tpl-cod"]
+    assert accessor.published is False
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_call_node_on_another_merchants_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(monkeypatch, template=_template("m2"), config=object())
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "call node confirm-call: template belongs to another merchant"
+    ]
+    assert accessor.published is False
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_shared_template_of_another_reseller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lead is minted with the template's reseller, and dispatch judges
+    blacklist, pause and rate limit under it: another reseller's shared
+    template would dial a number this merchant's reseller has blacklisted.
+    The push door refuses it (leads/handlers.py); so does publish."""
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(
+        monkeypatch,
+        template=_template(merchant_id=None, reseller_id="other-reseller"),
+        config=object(),
+    )
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "call node confirm-call: template belongs to another reseller"
+    ]
+    assert accessor.published is False
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_call_for_a_merchant_with_no_reseller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No merchant row means no reseller to match: fail closed."""
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(monkeypatch, template=_template(), config=object(), reseller_id=None)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "call node confirm-call: template belongs to another reseller"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channels", [["chat"], ["chat", "voice"]])
+async def test_publish_refuses_a_chat_template_on_a_call_node(
+    monkeypatch: pytest.MonkeyPatch, channels: List[str]
+) -> None:
+    """'chat' membership, not 'voice' absence: chat+voice is a widget agent
+    with in-widget voice, never a telephony one (the push door's rule)."""
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(
+        monkeypatch, template=_template(supported_channels=channels), config=object()
+    )
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "call node confirm-call: template cod-confirm is a chat agent — a call "
+        "needs a voice template"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_publish_refuses_a_call_node_whose_template_has_no_dialler_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(monkeypatch, template=_template(), config=None)
+    with pytest.raises(plans.WorkflowValidationError) as refused:
+        await _publish(accessor)
+    assert refused.value.problems == [
+        "call node confirm-call: no call_execution_config for template "
+        "cod-confirm, or it could not be read"
+    ]
+    assert accessor.published is False
+
+
+@pytest.mark.asyncio
+async def test_publish_proceeds_when_the_call_template_can_dial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shared template (no merchant) dials for every merchant of ITS
+    reseller, as the square allows."""
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(monkeypatch, template=_template(merchant_id=None), config=object())
+    published = await _publish(accessor)
+    assert accessor.published is True and published.status == "live"
+
+
+@pytest.mark.asyncio
+async def test_publish_asks_as_the_publishing_merchant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The merchant judged is the one publishing — m2's own template
+    publishes for m2, and m2's reseller is the one looked up."""
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(monkeypatch, template=_template("m2"), config=object())
+    merchants = stub_merchant_reseller(monkeypatch, "r1")
+    await _publish(accessor, merchant_id="m2")
+    assert accessor.published is True
+    assert merchants == ["m2"]
+
+
+@pytest.mark.asyncio
+async def test_check_draft_lists_the_call_problems_publish_would_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /validate is the console's "N to fix": a call square that
+    would be refused at publish is in its list."""
+    accessor = _PublishAccessor(_CALL_PLAN)
+    patch_accessors(monkeypatch, plans, accessor)
+    _dialler(monkeypatch, template=None)
+    checked = await plans._check_draft_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
+    assert checked == (
+        True,
+        ["call node confirm-call: template tpl-cod not found or could not be read"],
+    )
 
 
 # --- rollout phase 15: entry as a list of doors, and $topic on wait_event ---

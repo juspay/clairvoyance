@@ -93,11 +93,17 @@ scar — `dispatch.py` held the manifest's for three days.
 
 **The tenancy door is ONE dependency**: `merchant_scope(operation, component)`
 in `app/crm/auth.py` finds the merchant (query on a GET, the `TenantScoped`
-body on a POST/PATCH), runs the check, sets the log context and hands the
-merchant to the handler. Every merchant-facing route DECLARES it; a test walks
-the router and fails on one that does not (`test_connectivity_routes.py`).
-Status codes come from ONE route class (`TranslatingRoute`) that maps the
-module's exception families — a route never writes `try/except HTTPException`.
+body on a POST/PATCH), refuses a query and a body that name two merchants,
+runs the check, sets the log context and hands the merchant to the handler.
+Every merchant-facing route DECLARES it; a test walks the router and fails on
+one that does not (`test_connectivity_routes.py`).
+Status codes come from ONE route class that maps the module's exception
+families — a route never writes `try/except HTTPException`. The bases live in
+`shared/routes/`, for any `api.py`: subclass `TranslatingRoute` with the
+module's `translate` (connectivity's `ConnectorsRoute`), and `BoundedBodyRoute`
+with its body cap where a router must read no more than the cap before
+parsing or auth (record's `IngestRoute`). A subclass that forgets its policy
+fails at import.
 
 **Slots are filled at the composition root** (corpus modules/00 §11): when A
 needs B's answer but B already imports A's contracts, A owns `register_*` with

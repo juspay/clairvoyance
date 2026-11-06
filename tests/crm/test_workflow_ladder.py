@@ -411,6 +411,11 @@ async def test_publish_takes_the_stored_ladder_and_refuses_a_drifted_board(
     stored = expand_stages(_ladder())
     accessor = _PublishAccessor(stored)
     patch_accessors(monkeypatch, plans, accessor)
+
+    async def dials(merchant_id: str, node: Any) -> Tuple[Any, Any]:
+        return object(), object()
+
+    monkeypatch.setattr(plans, "call_template", dials)
     published = await plans._publish_in_txn(cast(DbTxn, object()), "m1", "wf-1", None)
     assert published.definition == stored
     assert accessor.versions == [(1, stored)]

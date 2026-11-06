@@ -11,6 +11,10 @@ from __future__ import annotations
 import json
 from typing import List
 
+import pytest
+
+import app.core.security.ssrf as ssrf
+
 # isort: off
 # template.types must load before the transport modules (reversing the
 # order trips a circular import — see test_response_transform.py).
@@ -46,13 +50,24 @@ class _Response:
     async def __aexit__(self, *exc) -> bool:
         return False
 
+    def release(self) -> None:
+        pass
+
 
 class _Session:
     def __init__(self, chunks: List[bytes]) -> None:
         self.response = _Response(chunks)
 
-    def request(self, **kwargs) -> _Response:
+    async def request(self, method, url, **kwargs) -> _Response:
         return self.response
+
+
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    async def resolve(hostname, port):
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(ssrf, "_resolve_host", resolve)
 
 
 _CFG = HttpRequestConfig(

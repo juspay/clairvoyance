@@ -25,12 +25,14 @@ from app.crm.outreach.ceiling import (
 from app.crm.outreach.db import UniqueViolation
 from app.crm.outreach.nodes.call import ABORTED_OUTCOME, MAX_CALLS_OUTCOME, execute
 from app.crm.outreach.nodes.context import OUTCOME_KEY, is_bookkeeping, run_facts
+from app.crm.outreach.nodes.spec import NodeParked
 from app.crm.outreach.schemas import (
     EnrollmentRun,
     WorkflowDefinition,
     WorkflowNode,
 )
 from app.schemas.breeze_buddy.core import LeadCallStatus
+from tests.crm.doubles import stub_merchant_reseller
 
 _NODE = WorkflowNode(id="nudge-call", type="call", template_id="tpl-1")
 _DEFINITION = WorkflowDefinition(
@@ -90,7 +92,13 @@ def _install(
         return type(
             "T",
             (),
-            {"id": "tpl-1", "name": "nudge", "reseller_id": "r1", "merchant_id": None},
+            {
+                "id": "tpl-1",
+                "name": "nudge",
+                "reseller_id": "r1",
+                "merchant_id": None,
+                "supported_channels": ["voice"],
+            },
         )()
 
     async def fake_config(_id: str) -> Any:
@@ -102,6 +110,7 @@ def _install(
     monkeypatch.setattr(call_node, "create_lead_call_tracker", fake_create)
     monkeypatch.setattr(call_node, "get_lead_by_id", fake_get_lead)
     monkeypatch.setattr(call_node, "get_template_by_id", fake_template)
+    stub_merchant_reseller(monkeypatch, "r1")
     monkeypatch.setattr(
         call_node, "get_call_execution_config_by_template_id", fake_config
     )
@@ -110,6 +119,40 @@ def _install(
 
 def _expected(run_id: str, node_id: str, visit: int) -> str:
     return str(uuid5(NAMESPACE_URL, f"crm-workflow-lead:{run_id}:{node_id}:{visit}"))
+
+
+async def test_the_square_judges_the_template_against_the_runs_merchant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run's merchant is the one asked: m1's own template dials for a
+    run of m1 (and m1's reseller is looked up); m2's never does, and
+    nothing is minted."""
+    inserted: List[str] = []
+    _install(monkeypatch, inserted)
+    merchants = stub_merchant_reseller(monkeypatch, "r1")
+    owner = {"merchant_id": "m1"}
+
+    async def owned_template(_id: str) -> Any:
+        return type(
+            "T",
+            (),
+            {
+                "id": "tpl-1",
+                "name": "nudge",
+                "reseller_id": "r1",
+                "merchant_id": owner["merchant_id"],
+                "supported_channels": ["voice"],
+            },
+        )()
+
+    monkeypatch.setattr(call_node, "get_template_by_id", owned_template)
+    await execute(_run(), _NODE, _DEFINITION)
+    assert len(inserted) == 1 and merchants == ["m1"]
+
+    owner["merchant_id"] = "m2"
+    with pytest.raises(NodeParked, match="template belongs to another merchant"):
+        await execute(_run(), _NODE, _DEFINITION)
+    assert len(inserted) == 1
 
 
 async def test_a_second_visit_to_the_same_square_gets_its_own_lead(

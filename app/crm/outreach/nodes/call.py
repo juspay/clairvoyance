@@ -8,7 +8,7 @@ mints its own lead.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.logger import logger
@@ -35,7 +35,12 @@ from app.database.accessor import (
     get_template_by_id,
     update_lead_enrollment_id,
 )
-from app.schemas.breeze_buddy.core import ExecutionMode, LeadCallStatus
+from app.database.accessor.breeze_buddy.merchants import get_merchants_by_ids
+from app.schemas.breeze_buddy.core import (
+    CallExecutionConfig,
+    ExecutionMode,
+    LeadCallStatus,
+)
 
 # The ledger and the predicate live in outreach/ceiling.py, not here: a plan
 # routes on the same question through `run.max_calls_reached`, so one
@@ -54,6 +59,47 @@ def validate(node: WorkflowNode, definition: WorkflowDefinition) -> List[str]:
     if not node.template_id:
         return [f"call node {node.id} needs a template_id"]
     return []
+
+
+async def call_template(
+    merchant_id: str, node: WorkflowNode
+) -> Tuple[Any, CallExecutionConfig]:
+    """The template and dialler config a call square dials with, or
+    NodeParked naming why it cannot. Publish asks the same question
+    (plans._template_problems), so a plan cannot go live with a call
+    square every run would park on.
+
+    The push door's checks (leads/handlers.py), because the lead is minted
+    with the template's reseller and dispatch judges blacklist, pause and
+    rate limit under it: the template must be the merchant's reseller's, and
+    not a chat agent. The legacy reads fold a failed query into None, so
+    "missing" and "could not be read" are one answer, and say so."""
+    template = await get_template_by_id(str(node.template_id))
+    if template is None:
+        raise NodeParked(
+            f"call node {node.id}: template {node.template_id} not found or "
+            "could not be read"
+        )
+    if template.merchant_id is not None and template.merchant_id != merchant_id:
+        raise NodeParked(f"call node {node.id}: template belongs to another merchant")
+    merchants, _ = await get_merchants_by_ids([merchant_id])
+    if not merchants or merchants[0].reseller_id != template.reseller_id:
+        # An unknown merchant has no reseller to match: fail closed.
+        raise NodeParked(f"call node {node.id}: template belongs to another reseller")
+    if "chat" in (template.supported_channels or []):
+        # 'chat' membership, not 'voice' absence: chat+voice is a widget
+        # agent with in-widget voice, never a telephony one.
+        raise NodeParked(
+            f"call node {node.id}: template {template.name} is a chat agent "
+            "— a call needs a voice template"
+        )
+    config = await get_call_execution_config_by_template_id(str(template.id))
+    if config is None:
+        raise NodeParked(
+            f"call node {node.id}: no call_execution_config for template "
+            f"{template.name}, or it could not be read"
+        )
+    return template, config
 
 
 def _visits_key(node_id: str) -> str:
@@ -115,17 +161,7 @@ async def execute(
     if not phone:
         raise NodeParked(f"call node {node.id}: no phone in run context")
 
-    template = await get_template_by_id(str(node.template_id))
-    if template is None:
-        raise NodeParked(f"call node {node.id}: template {node.template_id} not found")
-    if template.merchant_id is not None and template.merchant_id != run.merchant_id:
-        raise NodeParked(f"call node {node.id}: template belongs to another merchant")
-    config = await get_call_execution_config_by_template_id(str(template.id))
-    if config is None:
-        raise NodeParked(
-            f"call node {node.id}: no call_execution_config for template "
-            f"{template.name}"
-        )
+    template, config = await call_template(run.merchant_id, node)
 
     # Deterministic per (run, node, VISIT). The counter lives in the run's
     # context, so a retry of one visit re-derives its own id and a revisit

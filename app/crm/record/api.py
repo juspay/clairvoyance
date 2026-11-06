@@ -26,6 +26,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from app.core.config.static import CRM_INGEST_MAX_BODY_BYTES
 from app.core.logger import logger
 from app.core.logger.context import set_log_context
 from app.crm.auth import crm_admin_user, verify_s2s_caller
@@ -41,10 +42,28 @@ from app.crm.record.schemas import (
     SchemaRegistration,
 )
 from app.crm.record.timeline import get_customer_journey
+from app.crm.shared.routes.classes import BoundedBodyRoute
+from app.crm.shared.routes.utils import read_bounded
 from app.schemas import UserInfo
 
+# A letter is stored verbatim and forever, so "store first" must not mean
+# "store anything of any size". Nothing in front of this app caps a request
+# body today (no ingress rule, no uvicorn flag), so the door does it, on the
+# bytes READ: a declared Content-Length is only a fast first answer, and a
+# chunked body has none to check. CRM_INGEST_MAX_BODY_BYTES, default 1 MB.
+MAX_LETTER_BYTES = CRM_INGEST_MAX_BODY_BYTES
+
+
+class IngestRoute(BoundedBodyRoute):
+    """The ingest router's route class: no letter past MAX_LETTER_BYTES is
+    read, on any route added beside these."""
+
+    def max_body_bytes(self) -> int:
+        return MAX_LETTER_BYTES
+
+
 journey_router = APIRouter()
-ingest_router = APIRouter()
+ingest_router = APIRouter(route_class=IngestRoute)
 webhook_router = APIRouter()
 catalog_router = APIRouter()
 
@@ -66,24 +85,6 @@ async def get_customer_journey_route(
     return await get_customer_journey(
         merchant_id, customer_id, limit, before_started_at, before_id
     )
-
-
-# A letter is stored verbatim and forever, so "store first" must not mean
-# "store anything of any size". Nothing in front of this app caps a request
-# body today (no ingress rule, no uvicorn flag), so the door does it.
-MAX_LETTER_BYTES = 1 * 1024 * 1024
-
-
-async def within_size_limit(request: Request) -> None:
-    """413 before the row exists. Declared beside the auth dependency for
-    the same reason: a door's limits belong on the door, not in a handler
-    that the next route beside it might forget to copy."""
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > MAX_LETTER_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Event exceeds {MAX_LETTER_BYTES} bytes",
-        )
 
 
 async def verified_caller(event: EventIn, request: Request) -> str:
@@ -120,7 +121,6 @@ async def verified_merchant_caller(
 async def push_event_route(
     event: EventIn,
     _caller: str = Depends(verified_caller),
-    _size: None = Depends(within_size_limit),
 ) -> EventReceipt:
     set_log_context(component="crm.ingest.push", merchant_id=event.merchant_id)
     try:
@@ -153,10 +153,9 @@ async def push_event_route(
 # --- the provider bays (design/ingest-doors) ----------------------------------
 #
 # One cap, one door: a letter is stored verbatim and forever whichever
-# entrance it came through, so the bays share the envelope door's constant.
-# Here the read ITSELF is bounded (streamed) rather than a declared
-# Content-Length — a chunked body has no header to check, and these are the
-# routes that buffer bytes from callers they have not authenticated yet.
+# entrance it came through, so the bays share the envelope door's constant
+# and read_bounded. They call it themselves rather than take the route
+# class: an unknown bay is refused before a single body byte is read.
 
 
 @webhook_router.get("/{provider}", response_class=PlainTextResponse)
@@ -197,18 +196,16 @@ async def provider_webhook_route(provider: str, request: Request) -> Response:
         # refused before a single body byte is read.
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
-    body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_LETTER_BYTES:
-            return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    body = await read_bounded(request, MAX_LETTER_BYTES)
+    if body is None:
+        return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
-    if not spec.verify(bytes(body), request.headers):
+    if not spec.verify(body, request.headers):
         # No detail: a caller who cannot sign has not earned an explanation.
         return Response(status_code=status.HTTP_403_FORBIDDEN)
 
     try:
-        parsed = json.loads(bytes(body).decode("utf-8"))
+        parsed = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
         parsed = None
     if not isinstance(parsed, dict):

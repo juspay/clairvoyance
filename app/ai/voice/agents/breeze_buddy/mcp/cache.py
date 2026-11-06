@@ -23,6 +23,7 @@ from typing import Any, Dict, List, TypedDict
 from mcp.client.session_group import StreamableHttpParameters
 from pipecat.services.mcp_service import MCPClient
 
+from app.ai.voice.agents.breeze_buddy.mcp.egress import _check_mcp_egress
 from app.ai.voice.agents.breeze_buddy.template.types import McpServerConfig
 from app.core.logger import logger
 from app.services.redis.client import get_redis_service, is_redis_configured
@@ -79,6 +80,7 @@ async def _live_discovery(
     server_params: StreamableHttpParameters, timeout: int
 ) -> List[ToolMeta]:
     """Open a fresh MCPClient, fetch tools schema, return JSON-friendly metadata."""
+    await _check_mcp_egress(server_params.url)
     async with MCPClient(server_params=server_params) as client:
         tools_schema = await asyncio.wait_for(
             client.get_tools_schema(),

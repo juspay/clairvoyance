@@ -25,8 +25,10 @@ Design notes:
 import asyncio
 import ipaddress
 import socket
+import ssl
+import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, List, Optional, Sequence
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
@@ -36,8 +38,12 @@ from app.core.config.static import SSRF_ALLOW_PRIVATE_EGRESS
 from app.core.logger import logger
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-# 301/302/303 rewrite to a bodyless GET; only 307/308 preserve method and body.
-_REWRITE_TO_GET = frozenset({301, 302, 303})
+# Connect cap for every address but the last, so a dead one fails over quickly.
+_ADDRESS_CONNECT_CAP = 1.0
+# Checked answers are reused this long, like aiohttp's own DNS cache.
+_DNS_TTL = 10.0
+_DNS_CACHE: Dict[Tuple[str, int], Tuple[float, List[str]]] = {}
+_TLS_CONTEXTS: Dict[str, ssl.SSLContext] = {}
 _BODY_KWARGS = frozenset({"json", "data", "content"})
 # Carried credentials that are not headers: aiohttp merges `params` into the
 # target's query string and sends `cookies` whatever the host.
@@ -54,6 +60,10 @@ _ALLOW_PRIVATE_EGRESS = SSRF_ALLOW_PRIVATE_EGRESS
 
 class SSRFError(ValueError):
     """Raised when a URL fails SSRF egress validation."""
+
+
+class RedirectLimitError(SSRFError):
+    """The redirect chain ran past ``max_redirects``: a fault, not a refusal."""
 
 
 class EgressResolutionError(SSRFError):
@@ -124,14 +134,32 @@ def ip_block_reason(ip_str: str) -> Optional[str]:
     return None
 
 
+def _remember(cache: dict, key: Any, value: Any, limit: int) -> None:
+    """Bounded insert: drop the oldest entry once ``limit`` is reached."""
+    if key not in cache and len(cache) >= limit:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
+
+
 async def _resolve_host(hostname: str, port: int) -> List[str]:
     """Resolve a hostname to all its IP addresses (off the event loop)."""
+    key = (hostname.lower(), port)
+    hit = _DNS_CACHE.get(key)
+    if hit and hit[0] > time.monotonic():
+        return list(hit[1])
 
     def _lookup() -> List[str]:
-        infos = socket.getaddrinfo(hostname, port or None, proto=socket.IPPROTO_TCP)
+        infos = socket.getaddrinfo(
+            hostname,
+            port or None,
+            proto=socket.IPPROTO_TCP,
+            flags=socket.AI_ADDRCONFIG,  # no AAAA queries on an IPv4-only pod
+        )
         return [str(info[4][0]) for info in infos]
 
-    return await asyncio.to_thread(_lookup)
+    ips = await asyncio.to_thread(_lookup)
+    _remember(_DNS_CACHE, key, (time.monotonic() + _DNS_TTL, ips), 256)
+    return list(ips)
 
 
 async def validate_egress_url(url: str, *, allow_http: bool = False) -> List[str]:
@@ -304,22 +332,38 @@ def _total_timeout_seconds(candidate: Any) -> Optional[float]:
 
 
 def _with_total(
-    base: Optional[aiohttp.ClientTimeout], total: float
+    base: Optional[aiohttp.ClientTimeout],
+    total: Optional[float],
+    sock_connect_cap: Optional[float] = None,
 ) -> aiohttp.ClientTimeout:
     """Copy ``base`` with a new ``total``, keeping every other field.
+
+    ``sock_connect_cap`` lowers ``sock_connect`` to at most that many seconds.
 
     ClientTimeout is a dataclass in some aiohttp versions and attrs in others,
     so neither ``dataclasses.replace`` nor ``attr.evolve`` is portable; copying
     the fields the installed version actually declares is.
     """
-    if base is None:
-        return aiohttp.ClientTimeout(total=total)
     carried = {
         name: getattr(base, name)
         for name in ("connect", "sock_read", "sock_connect", "ceil_threshold")
-        if hasattr(base, name)
+        if base is not None and hasattr(base, name)
     }
+    if sock_connect_cap is not None:
+        current = carried.get("sock_connect")
+        carried["sock_connect"] = min(current or sock_connect_cap, sock_connect_cap)
     return aiohttp.ClientTimeout(total=total, **carried)
+
+
+async def _tls_context(tls_name: str) -> ssl.SSLContext:
+    """One context per TLS name: aiohttp reuses connections by IP and context, so
+    two names on one IP would otherwise share a connection opened for the first."""
+    context = _TLS_CONTEXTS.get(tls_name)
+    if context is None:
+        # Loading the CA bundle blocks for a few ms; about 1 MB each, so capped.
+        context = await asyncio.to_thread(ssl.create_default_context)
+        _remember(_TLS_CONTEXTS, tls_name, context, 16)
+    return context
 
 
 def _pinned_targets(url: str, ips: List[str]) -> List[tuple]:
@@ -332,7 +376,8 @@ def _pinned_targets(url: str, ips: List[str]) -> List[tuple]:
     so routing and certificate verification are unchanged.
 
     Every checked address is offered, not just the first, so a host with both an
-    A and an AAAA record keeps its failover.
+    A and an AAAA record keeps its failover. ``ssrf_safe_request`` caps the
+    connect time of each address but the last, so a silent one is skipped fast.
     """
     parts = URL(url)
     host = parts.raw_host
@@ -395,11 +440,37 @@ async def ssrf_safe_request(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + total_budget if total_budget is not None else None
 
+    # Only `total` shrinks along the chain; connect/sock_read/... stay the
+    # caller's. aiohttp does not merge a request timeout with the session's, so
+    # the session's fields are carried over explicitly.
+    base_timeout = (
+        caller_timeout
+        if isinstance(caller_timeout, aiohttp.ClientTimeout)
+        else getattr(session, "timeout", None)
+    )
+    if not isinstance(base_timeout, aiohttp.ClientTimeout):
+        base_timeout = None
+
+    def time_left(hop: int) -> Optional[float]:
+        if deadline is None:
+            return None
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            # Same exception a request would raise: retryable, unlike SSRFError.
+            raise asyncio.TimeoutError(
+                f"Redirect chain exceeded the {total_budget:g}s budget "
+                f"after {hop} hop(s) fetching {redact_url(url)}"
+            )
+        return remaining
+
     current = url
     cur_method = method
     credentials_dropped = False
     for hop in range(max_redirects + 1):
-        validated = await validate_egress_url(current, allow_http=allow_http)
+        # The lookup spends the same budget: a stalled resolver is a timeout.
+        validated = await asyncio.wait_for(
+            validate_egress_url(current, allow_http=allow_http), time_left(hop)
+        )
 
         send_auth = auth
         drop_credentials = False
@@ -436,40 +507,26 @@ async def ssrf_safe_request(
                 if k not in _BODY_KWARGS and k not in _CREDENTIAL_KWARGS
             }
 
-        if deadline is not None:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                # Same exception a request would raise: retryable, unlike SSRFError.
-                raise asyncio.TimeoutError(
-                    f"Redirect chain exceeded the {total_budget:g}s budget "
-                    f"after {hop} hop(s) fetching {redact_url(url)}"
-                )
-            # Only `total` shrinks per hop; connect/sock_read/... are the caller's.
-            # aiohttp does not merge a request timeout with the session's, so
-            # falling back to None here silently dropped the session's connect,
-            # sock_read and sock_connect.
-            base = (
-                caller_timeout
-                if isinstance(caller_timeout, aiohttp.ClientTimeout)
-                else getattr(session, "timeout", None)
-            )
-            if not isinstance(base, aiohttp.ClientTimeout):
-                base = None
-            send_kwargs = dict(send_kwargs)
-            send_kwargs["timeout"] = _with_total(base, remaining)
-
         # Connect to an address that was actually checked, not to the name.
         response = None
         last_error: Optional[BaseException] = None
-        for target, host_header, tls_name in _pinned_targets(current, validated):
-            attempt_kwargs = send_kwargs
+        targets = _pinned_targets(current, validated)
+        for index, (target, host_header, tls_name) in enumerate(targets):
+            attempt_kwargs = dict(send_kwargs)
+            remaining = time_left(hop)
+            cap = None if index == len(targets) - 1 else _ADDRESS_CONNECT_CAP
+            if remaining is not None or cap is not None:
+                if remaining is None:  # no deadline: keep the caller's total
+                    remaining = getattr(base_timeout, "total", None)
+                attempt_kwargs["timeout"] = _with_total(base_timeout, remaining, cap)
             if host_header is not None:
-                attempt_kwargs = dict(send_kwargs)
                 headers = dict(attempt_kwargs.get("headers") or {})
                 headers.setdefault("Host", host_header)
                 attempt_kwargs["headers"] = headers
                 if URL(current).scheme == "https":
                     attempt_kwargs.setdefault("server_hostname", tls_name)
+                    if "ssl" not in attempt_kwargs:
+                        attempt_kwargs["ssl"] = await _tls_context(tls_name)
             try:
                 response = await session.request(
                     cur_method,
@@ -479,7 +536,10 @@ async def ssrf_safe_request(
                     **attempt_kwargs,
                 )
                 break
-            except aiohttp.ClientConnectorError as exc:
+            except (
+                aiohttp.ClientConnectorError,
+                aiohttp.ConnectionTimeoutError,
+            ) as exc:
                 # This address is unreachable; the others were validated too.
                 last_error = exc
         if response is None:
@@ -488,7 +548,7 @@ async def ssrf_safe_request(
         if response.status in _REDIRECT_STATUSES and location:
             if hop >= max_redirects:
                 response.release()
-                raise SSRFError(
+                raise RedirectLimitError(
                     f"Too many redirects while fetching {redact_url(url)!r} "
                     f"(limit {max_redirects})"
                 )
@@ -503,11 +563,12 @@ async def ssrf_safe_request(
             # The Location carries its own query; re-sending `params` appended
             # the caller's to it (?token=S&token=S on a same-origin hop).
             kwargs = {k: v for k, v in kwargs.items() if k != "params"}
-            if response.status in _REWRITE_TO_GET and cur_method.upper() not in (
-                "GET",
-                "HEAD",
+            # aiohttp's rule: 303 becomes GET (not HEAD), 301/302 only for POST.
+            # Any other method keeps itself and its body, as before this guard.
+            method = cur_method.upper()
+            if (response.status == 303 and method not in ("GET", "HEAD")) or (
+                response.status in (301, 302) and method == "POST"
             ):
-                # Repeating the original method/payload would re-POST off-host.
                 cur_method = "GET"
                 kwargs = {k: v for k, v in kwargs.items() if k not in _BODY_KWARGS}
             continue
@@ -518,4 +579,4 @@ async def ssrf_safe_request(
             response.release()
         return
 
-    raise SSRFError(f"Too many redirects while fetching {url!r}")
+    raise RedirectLimitError(f"Too many redirects while fetching {url!r}")
