@@ -34,9 +34,12 @@ What is here, and why each thing is on the surface:
   registry decides what that payload means.
 - the ``*_template`` family — the T23 registry that ``send.py`` resolves
   against before any provider call.
-- ``template_status`` / ``registers_templates_for`` — what outreach's
+- ``template_status`` / ``get_registers_templates`` — what outreach's
   publish asks so a send node naming an unknown or unapproved template
   is refused at publish, not blocked at dispatch hours later (phase 08).
+- ``register_template_hook`` — the slot worker_main fills with
+  conversations' add_template_to_thread: a queued template on a channel with
+  conversations may join the customer's thread.
 - ``register_retire_guard`` — the slot worker_main fills with outreach's
   count of open runs naming a template, so retire can refuse to pull a
   template from under a run in flight without this module importing
@@ -65,14 +68,29 @@ What is here, and why each thing is on the surface:
   state, and there is deliberately no timer beside it: the periodic sync
   was removed before it ever ran.
 
+- ``send_reply`` and ``TextBody`` — a free-form reply inside the
+  customer-service window, sent NOW (the conversations module and Buddy's
+  turns are its callers). Same manifest, same gate, same send door as a
+  template.
+- ``get_conversation_channel_limits`` — the channel's limits, so a caller
+  shapes a reply to fit instead of having it refused;
+  ``get_supported_channels_for_conversations`` is every channel that
+  carries a conversation at all, so a caller iterates them instead of
+  naming one.
 - ``consume_status_event`` — the receipts consumer (worker_main registers
   it): message.status letters move the manifest along sent -> delivered ->
-  read, or to failed with the provider's code.
+  read, or to failed with the provider's code. ``receipt_target`` names the
+  send a receipt letter is about (conversations wakes the thread showing
+  it); ``message_ticks`` reads what they wrote, for a timeline.
+- ``TOPIC_BUDDY_BOT_MOVED`` — the letter this module files when Buddy moves
+  to another binding; conversations resolves the old binding's threads.
 - ``get_current_buddy_binding`` / ``conversation_settings`` /
   ``list_channel_settings`` / ``update_channel_settings`` — the merchant's
   bindings: the one templates go out from, and the one Buddy answers on with
   Buddy's settings (R1, D13–D15, D24–D28); read total and fail-closed (no
   agent, handoff off).
+  ``CLOSING_LEAD_MINUTES_RANGE`` / ``CLAIM_SLA_MINUTES_RANGE`` bound the
+  two timings, so a sweep narrows by the same bounds the settings allow.
 
 ``send()`` stays OFF this surface so that nothing outside the module can
 reach a provider without passing the checks in front of it. So does the
@@ -92,19 +110,38 @@ from app.crm.connectivity.actions.perform import (
     perform_action,
     validate_action_args,
 )
-from app.crm.connectivity.channels.registry import registers_templates_for
 from app.crm.connectivity.channels.settings import (
     conversation_settings,
     get_current_buddy_binding,
     list_channel_settings,
     update_channel_settings,
 )
+from app.crm.connectivity.channels.utils import (
+    get_conversation_channel_limits,
+    get_registers_templates,
+    get_supported_channels_for_conversations,
+)
 from app.crm.connectivity.connectors import ActionError
 from app.crm.connectivity.ingress import META_INGRESS
+from app.crm.connectivity.messaging.conversations.reply import send_reply
 from app.crm.connectivity.messaging.outbound.dispatch import claim_sends, dispatch_send
-from app.crm.connectivity.messaging.outbound.queue import queue_message, send_behind
-from app.crm.connectivity.messaging.shared.receipts import consume_status_event
-from app.crm.connectivity.schemas.conversation import ConversationSettings
+from app.crm.connectivity.messaging.outbound.queue import (
+    normalize_address,
+    queue_message,
+    send_behind,
+)
+from app.crm.connectivity.messaging.outbound.template_hook import register_template_hook
+from app.crm.connectivity.messaging.shared.receipts import (
+    consume_status_event,
+    message_ticks,
+    receipt_target,
+)
+from app.crm.connectivity.schemas.conversation import (
+    CLAIM_SLA_MINUTES_RANGE,
+    CLOSING_LEAD_MINUTES_RANGE,
+    ConversationSettings,
+)
+from app.crm.connectivity.schemas.message.whatsapp import TextBody
 from app.crm.connectivity.templates.events import consume_template_event
 from app.crm.connectivity.templates.lifecycle import (
     create_draft as create_template_draft,
@@ -119,6 +156,11 @@ from app.crm.connectivity.templates.reads import (
 )
 from app.crm.connectivity.templates.retire_guard import register_retire_guard
 from app.crm.connectivity.vocabulary.reasons import reason_label
+from app.crm.connectivity.vocabulary.topics import (
+    TOPIC_BUDDY_BOT_MOVED,
+    TOPIC_INBOUND,
+    TOPIC_STATUS,
+)
 
 __all__ = [
     # the dispatcher role
@@ -148,9 +190,11 @@ __all__ = [
     "list_templates",
     # the publish-time check (outreach asks)
     "template_status",
-    "registers_templates_for",
+    "get_registers_templates",
     # the retire guard slot (worker_main fills)
     "register_retire_guard",
+    # the slot worker_main fills with conversations' template-on-thread
+    "register_template_hook",
     # the template webhook consumer (worker_main registers)
     "consume_template_event",
     # webhook subscription recovery
@@ -161,12 +205,28 @@ __all__ = [
     "reason_label",
     # the inbound bay, for app/crm/api.py's one registration line
     "META_INGRESS",
+    # free-form replies inside the customer-service window
+    "send_reply",
+    "TextBody",
+    "get_conversation_channel_limits",
+    "get_supported_channels_for_conversations",
+    "normalize_address",
     # the receipts consumer (worker_main registers)
     "consume_status_event",
+    # the conversations module's letters: a customer wrote, a send moved
+    # (a receipt), Buddy moved
+    "TOPIC_INBOUND",
+    "TOPIC_STATUS",
+    "TOPIC_BUDDY_BOT_MOVED",
+    "receipt_target",
+    # what became of our sends, for a timeline's ticks
+    "message_ticks",
     # the merchant's bindings: the template binding, Buddy's binding, settings
     "get_current_buddy_binding",
     "conversation_settings",
     "list_channel_settings",
     "update_channel_settings",
     "ConversationSettings",
+    "CLOSING_LEAD_MINUTES_RANGE",
+    "CLAIM_SLA_MINUTES_RANGE",
 ]
