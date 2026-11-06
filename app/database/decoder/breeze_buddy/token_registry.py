@@ -1,4 +1,4 @@
-"""Row → Pydantic decoder for token_registry (migrations 086, 087)."""
+"""Row → Pydantic decoder for token_registry (migrations 086–088)."""
 
 from app.schemas.breeze_buddy.token_registry import TokenRegistryEntry
 
@@ -25,4 +25,5 @@ def decode_token_registry_entry(row) -> TokenRegistryEntry:
         last_seen_at=row["last_seen_at"],
         last_seen_from=row["last_seen_from"],
         last_route=row["last_route"],
+        replaced_by=str(row["replaced_by"]) if row["replaced_by"] else None,
     )

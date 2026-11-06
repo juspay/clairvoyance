@@ -8,6 +8,7 @@ Endpoints:
 - POST   /auth/s2s/token     - Generate long-lived S2S token (admin only)
 - GET    /auth/tokens        - List registered long-lived tokens (admin only)
 - POST   /auth/tokens/{id}/revoke - Revoke a registered token (admin only)
+- POST   /auth/tokens/{id}/rotate - Issue a successor for a registered token (admin only)
 - GET    /auth/me            - Get current user info from token
 - POST   /auth/logout        - Logout (client-side token removal)
 - GET    /logout             - Legacy logout endpoint (deprecated)
@@ -34,6 +35,8 @@ from app.schemas import (
 from app.schemas.breeze_buddy.token_registry import (
     RevokeTokenRequest,
     RevokeTokenResponse,
+    RotateTokenRequest,
+    RotateTokenResponse,
     TokenKind,
     TokenListResponse,
 )
@@ -46,6 +49,7 @@ from .handlers import (
     login_handler,
     logout_handler,
     revoke_token_handler,
+    rotate_token_handler,
 )
 
 router = APIRouter()
@@ -169,6 +173,31 @@ async def revoke_token(
     pushes stop with it. 404 unknown id, 409 already revoked.
     """
     return await revoke_token_handler(str(token_id), body, current_user)
+
+
+@router.post("/auth/tokens/{token_id}/rotate", response_model=RotateTokenResponse)
+async def rotate_token(
+    token_id: UUID,
+    body: RotateTokenRequest,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Issue a successor for one registered token; the new token is returned
+    once.
+
+    Admin only. The successor has the same subject, role, scopes and
+    lifetime. The old token keeps working for ``grace_hours`` (admin tokens;
+    default 24, at most 168), then is refused.
+
+    A **merchant token switches at once**: ``merchants.s2s_token`` (its
+    webhook secret) is replaced in the same statement, so the merchant's
+    WooCommerce/Breeze webhook secret must be updated right after. Agree
+    the timing with the merchant first.
+
+    404 unknown id; 409 already revoked or rotating (or the admin token's
+    user is gone); 422 a grace period for a merchant token.
+    """
+    return await rotate_token_handler(str(token_id), body, current_user)
 
 
 @router.post("/auth/launch-token", response_model=LaunchTokenResponse)

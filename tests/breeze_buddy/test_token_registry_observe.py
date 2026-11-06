@@ -50,10 +50,12 @@ from app.database.queries.breeze_buddy.token_registry import (
     revoke_token_query,
 )
 from app.schemas import UserInfo, UserRole
+from app.schemas.breeze_buddy.merchants import MerchantResponse
 from app.schemas.breeze_buddy.token_registry import (
     RevokeTokenRequest,
     TokenRegistryEntry,
 )
+from app.schemas.breeze_buddy.users import UserTokenState
 
 _NOW = datetime.now(timezone.utc)
 
@@ -125,10 +127,12 @@ class _Registry:
 
 @pytest.fixture(autouse=True)
 def _empty_cache():
-    """Each test starts with no cached registry reads."""
+    """Each test starts with no cached registry or subject reads."""
     rbac_token._registry_cache.clear()
+    rbac_token._subject_cache.clear()
     yield
     rbac_token._registry_cache.clear()
+    rbac_token._subject_cache.clear()
 
 
 @pytest.fixture
@@ -137,6 +141,19 @@ def registry(monkeypatch) -> _Registry:
     fake = _Registry()
     monkeypatch.setattr(rbac_token, "find_or_register_seen_token", fake.find)
     monkeypatch.setattr(rbac_token, "mark_token_seen", fake.mark_seen)
+
+    async def active_user(user_id):
+        """Every token's user is active, with no login cut-off (3/4)."""
+        return UserTokenState(is_active=True)
+
+    async def active_merchant(merchant_id):
+        """Every token's merchant is active (3/4)."""
+        return MerchantResponse(merchant_id=merchant_id, is_active=True)
+
+    monkeypatch.setattr(rbac_token, "get_user_token_state", active_user)
+    monkeypatch.setattr(
+        rbac_token, "get_merchant_by_merchant_identifier", active_merchant
+    )
     return fake
 
 

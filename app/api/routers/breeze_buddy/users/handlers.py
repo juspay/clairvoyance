@@ -14,7 +14,9 @@ from typing import List, Optional
 import asyncpg
 from fastapi import HTTPException
 
+from app.api.security.breeze_buddy.rbac_token import rbac_token_manager
 from app.core.logger import logger
+from app.core.security.authorization import require_admin
 from app.core.security.scope import (
     resolve_merchant_ids,
     resolve_reseller_ids,
@@ -35,6 +37,7 @@ from app.schemas import UserInfo, UserRole
 from app.schemas.breeze_buddy.resellers import UserAccessResponse
 from app.schemas.breeze_buddy.users import (
     DeleteUserResponse,
+    RevokeSessionsResponse,
     UserCreate,
     UserListResponse,
     UserResponse,
@@ -547,6 +550,11 @@ async def update_user_handler(
         if not updated_user:
             raise HTTPException(status_code=404, detail="User not found")
 
+        if user_data.is_active is not None:
+            # (De)activation takes effect from the next request on this pod;
+            # other pods within their 30 s read of the user.
+            rbac_token_manager.forget_subject(user_id)
+
         return updated_user
 
     except ValueError as e:
@@ -816,3 +824,21 @@ async def revoke_user_umbrella_handler(
     except Exception as e:
         logger.error(f"Error revoking umbrella {reseller_id} from {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def revoke_user_sessions_handler(
+    user_id: str, current_user: UserInfo
+) -> RevokeSessionsResponse:
+    """Admin only: cut off every login token the user holds now.
+
+    Short-lived tokens (login, launch, signup) issued before now are refused
+    from the next request on this pod, and within 30 s on every other pod.
+    The user's long-lived (admin) tokens are untouched — revoke or rotate
+    those one by one (``/auth/tokens``).
+    """
+    require_admin(current_user)
+    stamped = await user_accessors.revoke_user_sessions(user_id)
+    if stamped is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    rbac_token_manager.forget_subject(user_id)
+    return RevokeSessionsResponse(user_id=user_id, tokens_valid_after=stamped)

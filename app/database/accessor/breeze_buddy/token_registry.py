@@ -1,4 +1,4 @@
-"""Async accessor functions for token_registry (migrations 086, 087).
+"""Async accessor functions for token_registry (migrations 086–088).
 
 Thin wrappers around ``run_parameterized_query`` + the decoder. Errors are
 logged and re-raised: a mint whose row was not written must not hand out
@@ -21,6 +21,7 @@ from app.database.queries.breeze_buddy.token_registry import (
     mark_token_seen_query,
     register_token_query,
     revoke_token_query,
+    rotate_token_query,
 )
 from app.schemas.breeze_buddy.token_registry import (
     TokenKind,
@@ -205,4 +206,48 @@ async def revoke_token(
         return decode_token_registry_entry(row), int(row["merchant_tokens_cleared"])
     except Exception as e:
         logger.error(f"Error revoking token {token_id}: {e}")
+        raise
+
+
+async def rotate_token(
+    *,
+    old_id: str,
+    new_id: str,
+    new_token_hash: str,
+    new_token: str,
+    rotated_by: str,
+    grace_hours: int,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> Optional[Tuple[TokenRegistryEntry, TokenRegistryEntry, int]]:
+    """Rotate a live token: (old row as rotated, new row, merchant tokens
+    swapped), or None when the old id is unknown or already revoked or
+    rotating — then nothing was written."""
+    query, values = rotate_token_query(
+        old_id=old_id,
+        new_id=new_id,
+        new_token_hash=new_token_hash,
+        new_token=new_token,
+        rotated_by=rotated_by,
+        grace_hours=grace_hours,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+    try:
+        result = await run_parameterized_query(query, values)
+        if not result:
+            return None
+        rows = {row["side"]: row for row in result}
+        swapped = int(rows["old"]["merchant_tokens_swapped"])
+        logger.warning(
+            f"Rotated token {old_id} -> {new_id} by {rotated_by} "
+            f"(grace: {grace_hours} h, merchant tokens swapped: {swapped})"
+        )
+        return (
+            decode_token_registry_entry(rows["old"]),
+            decode_token_registry_entry(rows["new"]),
+            swapped,
+        )
+    except Exception as e:
+        logger.error(f"Error rotating token {old_id}: {e}")
         raise
