@@ -84,6 +84,14 @@ from app.ai.voice.agents.breeze_buddy.processors import (
 from app.ai.voice.agents.breeze_buddy.processors.voice_ui_stream import (
     coerce_ui_action_text,
 )
+from app.ai.voice.agents.breeze_buddy.recorder.config import (
+    finish_meeting_recording_on_teardown,
+    meeting_recording_enabled,
+    prepare_configurations_for_meeting_recording,
+)
+from app.ai.voice.agents.breeze_buddy.recorder.wiring import (
+    build_meeting_recording,
+)
 from app.ai.voice.agents.breeze_buddy.services.inbound_policy import (
     get_block_redirect,
 )
@@ -227,6 +235,9 @@ class Agent:
 
         # RTVI processor for daily mode real-time events
         self._rtvi_processor: Any = None
+        # Meeting recording (template meeting_recording block): the live
+        # session once started.
+        self._meeting_session: Any = None
 
         # Stream mode transcript collector (replaces LLMContext for transcription)
         self._transcript_collector: Optional[TranscriptCollectorProcessor] = None
@@ -440,6 +451,7 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            prepare_configurations_for_meeting_recording(self.configurations)
         except ValueError as e:
             logger.error(f"Failed to load template config for Daily mode: {e}")
             raise
@@ -663,6 +675,7 @@ class Agent:
                 self.configurations,
                 self.template_vars,
             ) = await load_template_config(self.lead)
+            prepare_configurations_for_meeting_recording(self.configurations)
         except ValueError as e:
             error_msg = f"Template loading failed: {str(e)}"
             logger.error(error_msg)
@@ -1391,6 +1404,11 @@ class Agent:
             elif self.is_daily_mode and self._daily_client is not None:
                 await force_teardown_daily_client(self._daily_client)
         finally:
+            # A recording nobody stopped must still deliver its transcript,
+            # whether the call ended normally or the pipeline crashed; the
+            # helper never raises. Before clear_log_context so its logs keep
+            # the call's context.
+            await finish_meeting_recording_on_teardown(self)
             clear_log_context()
 
     async def _run_generation(self) -> None:
@@ -1469,6 +1487,11 @@ class Agent:
                 )
                 logger.info("KB full_injection enabled for this call")
 
+        # Meeting recording (template meeting_recording block): the session
+        # and its two attachments exist from call start; the LLM's function
+        # flips it on. Nothing is added to the processor chain.
+        meeting = await build_meeting_recording(self) if not is_stream else None
+        self._meeting_session = meeting.session if meeting else None
         (
             pipeline,
             context,
@@ -1489,7 +1512,10 @@ class Agent:
             ),
             mode="stream" if is_stream else "agent",
             kb_processor=self._kb_processor,
+            extra_mute_strategies=[meeting.mute_strategy] if meeting else None,
         )
+        if meeting is not None:
+            meeting.session.idle_handler = user_idle_callback_handler
         self._context_aggregator = context_aggregator
 
         # Stream mode deliberately leaves self.context=None so end_conversation
@@ -1514,6 +1540,8 @@ class Agent:
             self.conversation_id,
             is_daily_mode=self.is_daily_mode,
             metrics_collector=self.metrics_collector,
+            cancel_on_idle_timeout=not meeting_recording_enabled(self.configurations),
+            extra_observers=[meeting.observer] if meeting else None,
         )
 
         if self.is_daily_mode and hasattr(self.task, "rtvi") and self.task.rtvi:

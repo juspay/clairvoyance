@@ -81,6 +81,13 @@ class SonioxSTTConfig(BaseModel):
         None,
         description="Enable automatic language identification. Defaults to None.",
     )
+    enable_speaker_diarization: Optional[bool] = Field(
+        None,
+        description=(
+            "Label tokens with a speaker id (Speaker 1, 2, …). Forced on when "
+            "meeting_recording is enabled; otherwise defaults to the provider's off."
+        ),
+    )
     vad_force_turn_endpoint: Optional[bool] = Field(
         None,
         description="Force turn endpoints from VAD speech-end instead of Soniox "
@@ -2850,6 +2857,14 @@ class ConfigurationModel(BaseModel):
         None,
         description="Wake phrase config — bot only responds after hearing a trigger phrase",
     )
+    meeting_recording: Optional["MeetingRecordingConfig"] = Field(
+        None,
+        description=(
+            "Buddy on the desk: let the user say 'start recording the meeting'; "
+            "the bot confirms, goes silent, stores every sentence as a transcript "
+            "line until the stop phrase, then delivers via on_stop_hooks."
+        ),
+    )
     mcp: Optional[McpConfig] = Field(
         None,
         description="MCP tool server configuration for dynamic tool discovery",
@@ -3181,6 +3196,97 @@ class FlowFunction(BaseModel):
     required: List[str] = []
     transition_to: Optional[str] = None
     hooks: List[HookConfig] = []
+
+
+class MeetingRecordingConfig(BaseModel):
+    """Meeting recording for a desk assistant (Buddy on the desk).
+
+    When enabled the LLM is offered one builtin, ``start_function_name``
+    (default ``start_meeting_recording``). Calling it starts an in-memory
+    ``MeetingSession`` and the bot goes silent: a user-mute strategy keeps
+    speech away from the LLM while an observer collects every finished
+    sentence, with its speaker, as a transcript line, until a stop phrase is
+    heard as a whole sentence (or a silence / duration cap, or call end). On
+    stop the bot speaks ``stop_confirmation``, emits ``recording_ended`` plus
+    the lines to the client, and runs ``on_stop_hooks`` (``send_http_request``
+    with the transcript) to deliver it. Nothing is written to the database.
+
+    Example::
+
+        {"enabled": true,
+         "stop_phrase": "hey buddy stop recording the meeting",
+         "on_stop_hooks": [{"name": "send_http_request",
+                            "http_request": {"url": "https://xyne/.../transcripts",
+                                             "method": "POST"}}]}
+    """
+
+    enabled: bool = False
+    stop_phrase: Optional[str] = Field(
+        None,
+        min_length=3,
+        description=(
+            "One whole-sentence stop command (added to stop_phrases). When "
+            "neither is set, the dynamic MEETING_STOP_PHRASE list applies."
+        ),
+    )
+    stop_phrases: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Whole-sentence stop commands; any of them ends the recording. "
+            "Replaces the dynamic default list when non-empty."
+        ),
+    )
+    start_function_name: str = Field(
+        "start_meeting_recording",
+        pattern=r"^[a-z][a-z0-9_]{2,63}$",
+        description="Name of the builtin offered to the LLM to start a recording.",
+    )
+    start_description: Optional[str] = Field(
+        None,
+        description=(
+            "Tool description for the LLM; defaults to a narrow 'only when the "
+            "user clearly asks to start recording the meeting' wording."
+        ),
+    )
+    start_confirmation: str = Field(
+        "Starting the recording of your meeting.",
+        min_length=3,
+        description="What the bot says once, right before going silent.",
+    )
+    start_instruction: str = Field(
+        "Say exactly: '{start_confirmation}' Then say nothing more until the "
+        "recording has ended.",
+        min_length=3,
+        description=(
+            "What the LLM is told when the start function returns; "
+            "{start_confirmation} is replaced with start_confirmation."
+        ),
+    )
+    stop_confirmation: str = Field(
+        "Recorded your meeting for {duration}. What's next for us to proceed?",
+        min_length=3,
+        description=(
+            "What the bot says when the recording ends; {duration} is replaced "
+            "with e.g. '41 minutes'."
+        ),
+    )
+    on_stop_hooks: List[HookConfig] = Field(
+        default_factory=list,
+        description=(
+            "Hooks run with the finished transcript (meeting_id, lead_id, "
+            "merchant_id, reseller_id, duration_s, segments, transcript_text). "
+            "A send_http_request hook without a body gets the standard JSON."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_hooks_are_http(self):
+        for hook in self.on_stop_hooks:
+            if hook.name == "send_http_request" and hook.http_request is None:
+                raise ValueError(
+                    "meeting_recording.on_stop_hooks: send_http_request needs http_request"
+                )
+        return self
 
 
 class GlobalFunctionType(str, Enum):
