@@ -19,8 +19,7 @@ Adding a connector
 3. its name added to the documented ``flavor.<protocol>.connectors`` values
    (``FlavorProtocolConfig`` in ``template/types.py``);
 4. for onboarding to recognise its stores, a ``PlatformAdapter`` and a
-   ``registry.py`` entry. WooCommerce has none yet, so onboarding treats its
-   stores as generic.
+   ``registry.py`` entry.
 
 A platform with no tool endpoint of its own is served by clairvoyance's MCP
 endpoint, at ``/mcp/<platform>/<store host>``: add its tool module to

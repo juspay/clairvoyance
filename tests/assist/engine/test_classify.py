@@ -90,9 +90,10 @@ def test_a_site_on_no_platform_falls_back_to_generic() -> None:
     assert result.matched == []
 
 
-def test_a_platform_we_have_no_adapter_for_is_generic_not_a_wrong_guess() -> None:
-    # A WordPress site is a real platform with no adapter yet. The honest
-    # answer is the generic path, never the nearest adapter we happen to own.
+def test_a_wordpress_site_that_is_no_store_is_generic_not_a_wrong_guess() -> None:
+    # woocommerce.com's own site runs WordPress but prints none of a store's
+    # WooCommerce scripts. The honest answer is the generic path, never the
+    # nearest adapter we happen to own.
     profile = _profile(
         "woocommerce_home.html",
         url="https://woocommerce.com/",
@@ -102,6 +103,7 @@ def test_a_platform_we_have_no_adapter_for_is_generic_not_a_wrong_guess() -> Non
 
     assert result.adapter_id == "generic"
     assert result.scores["shopify"] < registry.CLASSIFY_THRESHOLD
+    assert result.scores["woocommerce"] < registry.CLASSIFY_THRESHOLD
     assert result.identity.canonical_host == "woocommerce.com"
 
 

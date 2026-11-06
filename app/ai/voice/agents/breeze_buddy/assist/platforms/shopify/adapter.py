@@ -58,11 +58,13 @@ OPERATING_SECTION = "shopify_operating_section"
 # ``{{#platform_section:shopify}}…{{/platform_section}}``.
 LEGACY_SECTION_START = "{{#shopify_operating_section}}"
 LEGACY_SECTION_END = "{{/shopify_operating_section}}"
-# Cart state plumbing that only means something next to the UCP tools.
+# Cart state plumbing that only means something next to the UCP tools;
+# ``ui_intents`` sends the checkout button to the cart page the cart cookie fills.
 TOOL_CONFIG_KEYS: Tuple[str, ...] = (
     "state_reducers",
     "tool_arg_injection",
     "client_context",
+    "ui_intents",
 )
 # Payload keys the storefront session may carry beyond the generic ``shop_url``.
 PAYLOAD_KEYS: Tuple[str, ...] = ("shopify_customer_token",)
