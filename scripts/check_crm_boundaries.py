@@ -70,6 +70,7 @@ TABLE_OWNERS = {
     "crm_workflow_version": "outreach",
     "crm_workflow_step": "outreach",
     "crm_segment": "outreach",
+    "crm_segment_member": "outreach",
     "crm_connector_installation": "connectivity",
     "crm_channel_binding": "connectivity",
     "crm_channel_template": "connectivity",
