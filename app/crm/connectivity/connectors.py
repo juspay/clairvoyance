@@ -46,6 +46,7 @@ from app.crm.connectivity.providers.xyne.onboard import (
     OnboardXyneRequest,
     XyneOnboarder,
 )
+from app.crm.connectivity.providers.xyne.templates import XyneTemplates
 from app.crm.connectivity.schemas.connector import SignupConfig
 
 #: Re-exported so onboarding.py can name the error every onboarder raises,
@@ -163,14 +164,15 @@ CONNECTORS: Dict[str, ConnectorSpec] = {
         actions=SHOPIFY_ACTIONS,
     ),
     # One account per Xyne app (external_account_id = the app id, read from
-    # the API token). A door with no pipe like Shopify; exclusive, because
-    # the app's callbacks name only the app.
+    # the API token), and the app is its own pipe (Xyne 4/5): its binding's
+    # address is the app id. Exclusive, because the app's callbacks name
+    # only the app. Its forms register with us alone — Xyne keeps none.
     "xyne": ConnectorSpec(
         key="xyne",
         source="xyne",
-        channel=None,
+        channel="xyne",
         onboarder=XyneOnboarder(),
-        templates=None,
+        templates=XyneTemplates(),
         request_model=OnboardXyneRequest,
         exclusive_account=True,
     ),

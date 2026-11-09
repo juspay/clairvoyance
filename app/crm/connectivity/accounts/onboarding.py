@@ -136,7 +136,7 @@ async def _refuse_before_spending(
                 "this connection is disabled — an administrator must re-enable "
                 "it before it can be reconnected"
             )
-    if spec.channel and address:
+    if spec.channel and address and not spec.exclusive_account:
         binding = await binding_accessor.peek_binding_by_address(
             merchant_id, spec.channel, address
         )
@@ -391,7 +391,17 @@ async def _onboard_in_txn(
     existing = await binding_accessor.get_binding_by_address(
         txn, merchant_id, spec.channel, address
     )
-    if existing is not None and existing.status == BINDING_RETIRED:
+    if spec.exclusive_account:
+        # An exclusive account's pipe is the account itself (a Xyne app): it
+        # cannot be recycled to a stranger — the provider just vouched for
+        # the token, and the lock above proved no other merchant holds it.
+        # So the account may change hands and come back: another merchant's
+        # paused leftover is retired, and this merchant's own retired pipe
+        # (retired when the app went to someone else) is revived below.
+        await binding_accessor.retire_others_paused_bindings(
+            txn, merchant_id, spec.channel, address
+        )
+    elif existing is not None and existing.status == BINDING_RETIRED:
         # canon T12: a retired pipe SURRENDERED its address, and the provider
         # may have recycled it to somebody else. Resurrecting it would point
         # this merchant's sends at a stranger's endpoint.

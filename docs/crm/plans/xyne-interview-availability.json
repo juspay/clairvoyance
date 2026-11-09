@@ -1,5 +1,6 @@
 {
   "on_publish": "migrate",
+  "purpose_key": "utility.interview.availability",
   "entry": {
     "topic": "interview.requested"
   },
@@ -14,6 +15,16 @@
     "max_age_days": 3
   },
   "nodes": [
+    {
+      "id": "ask-availability",
+      "type": "send",
+      "channel": "xyne",
+      "template": "interview_slots",
+      "variables": {
+        "candidate_name": "candidate_name",
+        "slots": "slots"
+      }
+    },
     {
       "id": "await-availability",
       "type": "wait",
@@ -30,6 +41,10 @@
     }
   ],
   "edges": [
+    [
+      "ask-availability",
+      "await-availability"
+    ],
     [
       "await-availability",
       "confirm-slots",

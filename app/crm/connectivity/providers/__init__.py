@@ -16,14 +16,16 @@ from typing import Dict, Optional
 
 from app.crm.connectivity.providers.base import ChannelAdapter
 from app.crm.connectivity.providers.whatsapp.adapter import MetaWhatsAppAdapter
+from app.crm.connectivity.providers.xyne.adapter import XyneAdapter
 
 # Instantiated once: adapters are stateless request builders.
 #
-# One entry on purpose — no stand-in adapter. A local run points
+# Real adapters only — no stand-in. A local run points
 # META_WHATSAPP_GRAPH_BASE_URL at a stub and exercises the REAL adapter,
 # testing the request we actually send rather than one that resembles it.
 ADAPTERS: Dict[str, ChannelAdapter] = {
     MetaWhatsAppAdapter.channel: MetaWhatsAppAdapter(),
+    XyneAdapter.channel: XyneAdapter(),
     # "sms": SmsAdapter(),
     # "email": EmailAdapter(),
     # "instagram": InstagramAdapter(),
@@ -40,7 +42,7 @@ def adapter_for(channel: str) -> Optional[ChannelAdapter]:
     return ADAPTERS.get(channel)
 
 
-# MetaWhatsAppAdapter is imported above to BUILD the registry, not to be
+# The adapters are imported above to BUILD the registry, not to be
 # re-exported from it: a package root that hands out its members by name is
 # the re-export-hub scar this file's own docstring cites. Anything that
 # legitimately needs the class imports it by full path.

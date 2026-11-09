@@ -23,11 +23,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.logger import logger
 from app.crm.platform.db import DbTxn, accessor, atomically
+from app.crm.shared.handles import ROW_KIND_NAMES, normalize_row_handle
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
 # Identity-handle name -> platform kind. Handles with no platform kind
 # (igsid, shopify ids) are per-merchant facts and never enter the book.
 HANDLE_KINDS = {"phone": "phone", "email": "email"}
+
+# What the gate may ask about and a STOP may be recorded on: the registry's
+# kinds plus every address a channel sends to. A Xyne user id is one (Xyne
+# 4/5) — a person can say STOP there, so the book holds a suppression row for
+# it (migration 087). It is NOT registered on sight like a phone: resolve()
+# keeps calling ensure_identities with HANDLE_KINDS, so the book only grows
+# by the Xyne ids someone actually suppressed.
+SUPPRESSIBLE_KINDS = {**HANDLE_KINDS, "xyne_user_id": "xyne_user_id"}
 
 
 def _normalize_pair(kind: str, value: str) -> Optional[str]:
@@ -35,17 +44,21 @@ def _normalize_pair(kind: str, value: str) -> Optional[str]:
         return normalize_phone(value)
     if kind == "email":
         return normalize_email(value)
+    if kind in ROW_KIND_NAMES:
+        return normalize_row_handle(kind, value)
     return (value or "").strip() or None
 
 
-def _platform_pairs(handles: Dict[str, str]) -> List[Tuple[str, str]]:
+def _platform_pairs(
+    handles: Dict[str, str], kinds: Dict[str, str] = HANDLE_KINDS
+) -> List[Tuple[str, str]]:
     pairs: List[Tuple[str, str]] = []
     for name, value in handles.items():
-        if name not in HANDLE_KINDS or not value:
+        if name not in kinds or not value:
             continue
-        normalized = _normalize_pair(HANDLE_KINDS[name], value)
+        normalized = _normalize_pair(kinds[name], value)
         if normalized:
-            pairs.append((HANDLE_KINDS[name], normalized))
+            pairs.append((kinds[name], normalized))
     return pairs
 
 
@@ -75,8 +88,20 @@ async def ensure_identities(handles: Dict[str, str]) -> None:
 
 async def is_suppressed(handles: Dict[str, str]) -> bool:
     """True if ANY handle carries a live suppression. FAIL CLOSED:
-    a DB error returns True (blocked) — a missing answer means NO send."""
-    pairs = _platform_pairs(handles)
+    a DB error returns True (blocked) — a missing answer means NO send.
+
+    So is a handle the book cannot check: a kind it does not hold, or a
+    value that will not normalize. Skipping it would answer "not
+    suppressed" for a question nobody asked, and the gate would send to an
+    address no STOP could ever have reached (ADR 0018: unknown -> NO)."""
+    for name, value in handles.items():
+        kind = SUPPRESSIBLE_KINDS.get(name)
+        if kind is None or _normalize_pair(kind, value or "") is None:
+            logger.error(
+                f"suppression probe cannot check a '{name}' handle, failing CLOSED"
+            )
+            return True
+    pairs = _platform_pairs(handles, SUPPRESSIBLE_KINDS)
     if not pairs:
         return False
     try:

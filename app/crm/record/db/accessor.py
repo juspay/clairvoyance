@@ -22,6 +22,7 @@ from app.crm.record.db.queries import (
     event_topics_query,
     events_by_external_ids_query,
     get_customer_journey_query,
+    get_event_query,
     get_schema_query,
     insert_detected_schema_query,
     insert_event_query,
@@ -180,6 +181,13 @@ async def events_by_external_ids(
     async with crm_connection() as conn:
         rows = await conn.fetch(query, *values)
     return [decode_raw_event(row) for row in rows]
+
+
+async def get_event(merchant_id: str, event_id: str) -> Optional[RawEvent]:
+    query, values = get_event_query(merchant_id, event_id)
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_raw_event(row) if row is not None else None
 
 
 async def list_schemas(merchant_id: str) -> List[EventSchema]:

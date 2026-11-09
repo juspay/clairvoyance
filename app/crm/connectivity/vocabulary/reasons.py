@@ -61,6 +61,15 @@ REASON_PROVIDER_REJECTED = "provider_rejected"
 REASON_SUPPRESSED = "suppressed"
 REASON_GATE_UNAVAILABLE = "gate_unavailable"
 
+# --- Xyne's refusals (providers/xyne/adapter.py) ---
+# Xyne answers in HTTP statuses and English, not in numbered codes, so the
+# words are ours — one per thing the merchant has to fix.
+REASON_XYNE_FORM_REFUSED = "xyne_form_refused"  # 400: the form or its data
+REASON_XYNE_TOKEN_REFUSED = "xyne_token_refused"  # 401: token revoked or rotated
+REASON_XYNE_MISSING_PERMISSION = "xyne_missing_permission"  # 403: no chat:write
+REASON_XYNE_FORBIDDEN = "xyne_forbidden"  # 403: any other refusal
+REASON_XYNE_RECIPIENT_UNKNOWN = "xyne_recipient_unknown"  # 404: not in the workspace
+
 
 # --- what a provider's error code MEANS, for the reader ----------------------
 #
@@ -164,6 +173,13 @@ _MERCHANT_REASONS = frozenset(
         "132007",  # template_policy_violation
         "132015",  # template_paused
         "132016",  # template_disabled
+        # Xyne's: the app's token or scopes, the form, or a user id their
+        # data carried that the app's workspace does not have.
+        REASON_XYNE_FORM_REFUSED,
+        REASON_XYNE_TOKEN_REFUSED,
+        REASON_XYNE_MISSING_PERMISSION,
+        REASON_XYNE_FORBIDDEN,
+        REASON_XYNE_RECIPIENT_UNKNOWN,
         # Mapping faults — the case a "credential" word would have missed:
         # nothing is wrong with their token, they wired a field wrongly.
         "132000",  # template_variable_count_mismatch

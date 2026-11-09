@@ -12,9 +12,15 @@ merchant connecting the same app id is refused rather than taking over its
 webhooks.
 
 What the vault holds (``credentials``, one custom row per app):
-``api_token``, ``webhook_secret``, ``base_url``. The base URL is not a secret,
-but it is only ever read next to the token, so it lives in the same bundle
-rather than in a column of its own.
+``api_token``, ``webhook_secret``, ``base_url`` and, when given,
+``preview_user_id``. The base URL and the preview user are not secrets, but
+they are only ever read next to the token, so they live in the same bundle
+rather than in columns of their own.
+
+The app is also a send PIPE (Xyne 4/5): its binding's address is the app id
+itself — the pipe a form leaves on. ``preview_user_id`` is the Xyne user a
+form's preview is sent to when the merchant submits it (templates.py): Xyne
+judges the form by being sent it, so someone has to receive the preview.
 
 After onboarding, the merchant points the app's webhook in Xyne at
 ``/ingest/webhooks/xyne/<appId>``: the app id in the path is how the inbound
@@ -35,11 +41,13 @@ from app.crm.connectivity.providers.base import ConnectorHandshakeError
 from app.crm.connectivity.providers.xyne import client
 from app.crm.connectivity.schemas.connector import OnboardResult
 from app.crm.connectivity.schemas.message import CredentialBundle
+from app.crm.shared.handles import normalize_xyne_user_id
 
 #: The bundle's keys — the one spelling every face reads back.
 API_TOKEN = "api_token"
 WEBHOOK_SECRET = "webhook_secret"
 BASE_URL = "base_url"
+PREVIEW_USER_ID = "preview_user_id"
 
 #: An app id rides in a URL path (/ingest/webhooks/xyne/<appId>) and in the
 #: credential's name, so it is held to a plain token shape.
@@ -110,20 +118,36 @@ class OnboardXyneRequest(BaseModel):
     display_label: Optional[str] = Field(
         None, description="What the merchant calls this app in the console"
     )
+    preview_user_id: Optional[str] = Field(
+        None,
+        description="The Xyne user id a form's preview is sent to when it is "
+        "submitted — required before any form can be used",
+    )
 
     @field_validator("base_url")
     @classmethod
     def _xyne_base_url(cls, value: str) -> str:
         return client.normalize_base_url(value)
 
+    @field_validator("preview_user_id")
+    @classmethod
+    def _xyne_user_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = normalize_xyne_user_id(value)
+        if normalized is None:
+            raise ValueError("preview_user_id is not a Xyne user id")
+        return normalized
+
 
 class XyneOnboarder:
     """Prove the token, then report the app as a door."""
 
     def identify(self, request: Any) -> Tuple[Optional[str], Optional[str]]:
-        """PURE: the app id the token claims, known before the handshake; no
-        address — a Xyne app is a door with no pipe."""
-        return token_app_id(request.api_token), None
+        """PURE: the app id the token claims, known before the handshake —
+        both the account and the address of its pipe."""
+        app_id = token_app_id(request.api_token)
+        return app_id, app_id
 
     async def gather(self, request: Any) -> OnboardResult:
         """Whose app is this token, and does Xyne accept it at this base URL?
@@ -147,15 +171,18 @@ class XyneOnboarder:
             raise ConnectorHandshakeError(
                 "Xyne could not be reached to check the API token — try again"
             ) from e
+        bundle = {
+            API_TOKEN: request.api_token,
+            WEBHOOK_SECRET: request.webhook_secret,
+            BASE_URL: request.base_url,
+        }
+        if request.preview_user_id:
+            bundle[PREVIEW_USER_ID] = request.preview_user_id
         return OnboardResult(
             external_account_id=app_id,
-            address=None,
+            address=app_id,
             display_label=request.display_label or f"Xyne app {app_id}",
-            bundle={
-                API_TOKEN: request.api_token,
-                WEBHOOK_SECRET: request.webhook_secret,
-                BASE_URL: request.base_url,
-            },
+            bundle=bundle,
             token_expires_at=None,
             health_level="healthy",
         )
@@ -177,6 +204,7 @@ __all__ = [
     "API_TOKEN",
     "BASE_URL",
     "OnboardXyneRequest",
+    "PREVIEW_USER_ID",
     "WEBHOOK_SECRET",
     "XyneOnboarder",
     "token_app_id",

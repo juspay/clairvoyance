@@ -37,6 +37,9 @@ What is here, and why each thing is on the surface:
 - ``template_status`` / ``registers_templates_for`` — what outreach's
   publish asks so a send node naming an unknown or unapproved template
   is refused at publish, not blocked at dispatch hours later (phase 08).
+- ``gate_handle_kind_for`` / ``takes_structured_variables`` — what a send
+  node asks of the channel it names: which of the customer's ids it is
+  addressed to, and whether a list may ride as a variable (Xyne 4/5).
 - ``register_retire_guard`` — the slot worker_main fills with outreach's
   count of open runs naming a template, so retire can refuse to pull a
   template from under a run in flight without this module importing
@@ -92,7 +95,11 @@ from app.crm.connectivity.actions.perform import (
     perform_action,
     validate_action_args,
 )
-from app.crm.connectivity.channels.registry import registers_templates_for
+from app.crm.connectivity.channels.registry import (
+    gate_handle_kind_for,
+    registers_templates_for,
+    takes_structured_variables,
+)
 from app.crm.connectivity.channels.settings import (
     conversation_settings,
     get_current_buddy_binding,
@@ -149,6 +156,9 @@ __all__ = [
     # the publish-time check (outreach asks)
     "template_status",
     "registers_templates_for",
+    # what a send node needs to address and fill a send on a channel
+    "gate_handle_kind_for",
+    "takes_structured_variables",
     # the retire guard slot (worker_main fills)
     "register_retire_guard",
     # the template webhook consumer (worker_main registers)

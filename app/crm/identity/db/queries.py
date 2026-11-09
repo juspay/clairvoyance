@@ -132,6 +132,22 @@ def live_row_handles_query(merchant_id: str, customer_id: str) -> Tuple[str, Lis
     return query, [merchant_id, customer_id]
 
 
+def live_handle_query(
+    merchant_id: str, customer_id: str, kind: str, scope: str
+) -> Tuple[str, List[Any]]:
+    """The one live id this customer holds for (kind, scope) — what a send
+    on that kind's channel is addressed to. The slot index admits at most
+    one; LIMIT 1 says so to the reader."""
+    query = f"""
+        SELECT value
+        FROM {CRM_CUSTOMER_HANDLE_TABLE}
+        WHERE merchant_id = $1 AND customer_id = $2 AND kind = $3
+          AND scope = $4 AND released_at IS NULL
+        LIMIT 1
+    """
+    return query, [merchant_id, customer_id, kind, scope]
+
+
 def insert_row_handle_query(
     merchant_id: str, customer_id: str, kind: str, scope: str, value: str
 ) -> Tuple[str, List[Any]]:

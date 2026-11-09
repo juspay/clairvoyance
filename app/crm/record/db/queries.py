@@ -190,6 +190,19 @@ def latest_customer_event_query(
     return query, [merchant_id, customer_id, topics, since, where[0], where[1]]
 
 
+def get_event_query(merchant_id: str, event_id: str) -> Tuple[str, List[Any]]:
+    """One letter, as stored — what a run's pointer (source_event_id) names
+    when a send needs the part of it a run never copies (a list). Tenant
+    first; another merchant's id reads nothing."""
+    query = f"""
+        SELECT id, merchant_id, source, topic, schema_version, external_id,
+               payload, received_at, occurred_at, customer_id, attempts
+        FROM {EVENT_RAW_TABLE}
+        WHERE merchant_id = $1 AND id = $2::uuid
+    """
+    return query, [merchant_id, event_id]
+
+
 def event_topics_query(merchant_id: str, event_ids: List[str]) -> Tuple[str, List[Any]]:
     """The topic behind each of a few letter ids — what a run's trail
     names when it says which letter moved a square (T26 keeps the pointer,

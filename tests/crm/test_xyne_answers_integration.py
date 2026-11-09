@@ -128,6 +128,8 @@ async def xyne(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Dict[str, Any]]
             "DELETE FROM crm_customer_handle WHERE merchant_id LIKE $1",
             "UPDATE crm_customer SET merged_into_id = NULL WHERE merchant_id LIKE $1",
             "DELETE FROM crm_customer WHERE merchant_id LIKE $1",
+            # The app is its own send pipe since 4/5: its binding goes first.
+            "DELETE FROM crm_channel_binding WHERE merchant_id LIKE $1",
             "DELETE FROM crm_connector_installation WHERE merchant_id LIKE $1",
         ):
             await conn.execute(statement, scope)

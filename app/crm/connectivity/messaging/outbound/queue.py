@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from app.crm.connectivity.channels.registry import gate_handle_kind_for
 from app.crm.connectivity.db.accessors import message as message_accessor
 from app.crm.connectivity.schemas.message import SendBehind
+from app.crm.shared.handles import ROW_KIND_NAMES, normalize_row_handle
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
 # T16 col 7. What caused the send; every funnel groups on this.
@@ -41,6 +42,11 @@ def normalize_address(channel: str, address: str) -> Optional[str]:
         return normalize_phone(address)
     if kind == "email":
         return normalize_email(address)
+    if kind is not None and kind in ROW_KIND_NAMES:
+        # A channel addressed by a row-kind id (Xyne's user id): the same
+        # normalizer resolve() stored it with, so the gate probes the form
+        # a STOP would have been recorded in.
+        return normalize_row_handle(kind, address)
     return None
 
 

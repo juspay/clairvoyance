@@ -21,6 +21,7 @@ from app.crm.connectivity.db.queries.binding import (
 from app.crm.connectivity.providers import ADAPTERS, adapter_for
 from app.crm.connectivity.providers.base import ChannelAdapter
 from app.crm.connectivity.providers.whatsapp.adapter import MetaWhatsAppAdapter
+from app.crm.connectivity.providers.xyne.adapter import XyneAdapter
 from app.crm.connectivity.schemas.connector import ChannelBinding, ConnectorInstallation
 from app.crm.connectivity.schemas.message import (
     CredentialBundle,
@@ -262,14 +263,15 @@ def test_every_registered_adapter_answers_to_its_own_key() -> None:
         assert isinstance(adapter, ChannelAdapter)
 
 
-def test_whatsapp_is_the_only_shipped_channel() -> None:
-    """Whatsapp is the only shipped channel."""
+def test_the_shipped_channels_are_whatsapp_and_xyne() -> None:
+    """The shipped channels, by name."""
     # Not a tautology: it fails the day someone registers a half-built
     # adapter, which is exactly when a review should notice. It also pins the
     # decision that there is no stand-in adapter — local runs point the Graph
     # base URL at a stub and exercise the real one.
-    assert set(ADAPTERS) == {"whatsapp"}
+    assert set(ADAPTERS) == {"whatsapp", "xyne"}
     assert isinstance(adapter_for("whatsapp"), MetaWhatsAppAdapter)
+    assert isinstance(adapter_for("xyne"), XyneAdapter)
 
 
 def test_an_unknown_channel_returns_none_rather_than_raising() -> None:
