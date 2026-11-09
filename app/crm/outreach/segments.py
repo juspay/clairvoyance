@@ -3,9 +3,10 @@
 
 A segment is a stored question; membership is computed at read time and
 never stored. A static list is the one exception — an imported set IS its
-members, stored as narrow rows (crm_segment_member). Dynamic definitions are
-compiled in phase 4; until then every segment this file creates is a static
-list, and the member reads refuse a dynamic one rather than guess.
+members, stored as narrow rows (crm_segment_member). A dynamic segment's
+rule is checked and saved here (phase 3, segment_rules.py); it is compiled
+and counted in phase 4 — until then the member reads refuse a dynamic
+segment rather than guess.
 
 What this file keeps:
 - **A segment is never a permission list** (modules/05-outreach.md:233).
@@ -22,7 +23,7 @@ What this file keeps:
 """
 
 from datetime import datetime
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from app.crm.identity.contracts import resolve
 from app.crm.outreach.db import DbTxn, UniqueViolation, atomically
@@ -36,6 +37,11 @@ from app.crm.outreach.schemas import (
     SegmentMembersPage,
     SegmentPage,
     SkippedMember,
+)
+from app.crm.outreach.segment_rules import (
+    SegmentRuleInvalid,
+    gather_rule_catalogs,
+    validate_rule,
 )
 
 #: One add takes at most this many people. Each person is one resolve() —
@@ -110,6 +116,30 @@ async def create_static_list(
     try:
         return await segment_accessor.insert_static_list(
             merchant_id, stored, created_by
+        )
+    except UniqueViolation as e:
+        raise SegmentNameTaken(stored) from e
+
+
+async def create_dynamic_segment(
+    merchant_id: str,
+    name: str,
+    definition: Dict[str, Any],
+    created_by: Optional[str],
+) -> Segment:
+    """A new dynamic segment: the rule is checked against the merchant's own
+    event catalog BEFORE it is stored — every event one they send, every
+    field declared for it, every op fit for the field (segment_rules.py).
+    Raises SegmentRuleInvalid (with every problem), SegmentNameTaken, or
+    ValueError on a blank name."""
+    stored = segment_name(name)
+    catalogs = await gather_rule_catalogs(merchant_id, definition)
+    problems = validate_rule(definition, catalogs)
+    if problems:
+        raise SegmentRuleInvalid(problems)
+    try:
+        return await segment_accessor.insert_dynamic_segment(
+            merchant_id, stored, definition, created_by
         )
     except UniqueViolation as e:
         raise SegmentNameTaken(stored) from e
