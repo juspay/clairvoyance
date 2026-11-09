@@ -20,6 +20,7 @@ from app.crm.identity.db.queries import (
     apply_handles_query,
     find_customer_by_attribute_query,
     get_customer_query,
+    get_customers_query,
     insert_customer_query,
     list_customers_query,
     merge_customer_query,
@@ -92,6 +93,17 @@ async def merge_customer(
 ) -> None:
     query, values = merge_customer_query(loser_id, survivor_id)
     await conn.execute(query, *values)
+
+
+async def get_customers(
+    merchant_id: str, customer_ids: List[str]
+) -> Dict[str, CrmCustomerSummary]:
+    """id -> the customer, for the ids this merchant has; unknown ids are
+    simply absent."""
+    query, values = get_customers_query(merchant_id, customer_ids)
+    async with crm_connection() as conn:
+        rows = await conn.fetch(query, *values)
+    return {str(row["id"]): decode_crm_customer_summary(row) for row in rows}
 
 
 async def person_records(merchant_id: str, customer_id: str) -> List[str]:

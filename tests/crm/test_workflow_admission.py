@@ -210,6 +210,7 @@ class _History:
         wake_at: datetime,
         context: Dict[str, Any],
         enrollment_key: str,
+        source_broadcast_id: Optional[str] = None,
     ) -> EnrollmentRun:
         self.inserted.append(enrollment_key)
         self.order.append("insert")

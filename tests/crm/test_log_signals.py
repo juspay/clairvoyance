@@ -417,6 +417,7 @@ class _Admits:
         wake_at: datetime,
         context: Dict[str, Any],
         enrollment_key: str,
+        source_broadcast_id: Optional[str] = None,
     ) -> Any:
         return SimpleNamespace(id=uuid4(), current_node=current_node)
 

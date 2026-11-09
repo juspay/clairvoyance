@@ -1,5 +1,6 @@
-"""enrol() (W2) — the ONLY creator of workflow runs, both doors (reactive
-entry rules now, broadcasts in phase 2). Admission guards are the plan's
+"""enrol() (W2) — the ONLY creator of workflow runs, both doors: the
+reactive entry rules call enrol(); a broadcast's admission (broadcasts.py,
+phase 3) calls enrol_step inside its own per-person atom. Admission guards are the plan's
 own words (canon: entry carries reenter + cooldown, enforced for BOTH
 doors); the open-run partial unique absorbs every race.
 
@@ -72,8 +73,8 @@ def _admission(
     now: datetime,
 ) -> Tuple[bool, str]:
     """PURE decide: may this customer start a run through this door?
-    Returns (admit, reason) — the reason is logged, never stored
-    (skips-with-rows are the broadcast door's T18 concern, phase 2)."""
+    Returns (admit, reason) — the event door logs the reason; the broadcast
+    door writes it on the recipient row (canon T18 skip_reason)."""
     if runs and not door.reenter:
         return False, "reenter_disabled"
     if latest_entered_at is not None and door.cooldown_hours > 0:
@@ -180,6 +181,47 @@ async def _enrol_in_txn(
     source-event idempotency read must not race a sibling tick — and the
     templates this document sends are held SHARED (shared/locks.py) so a
     retirement cannot commit between its count and this insert."""
+    run, reason = await enrol_step(
+        txn,
+        merchant_id=merchant_id,
+        workflow=workflow,
+        definition=definition,
+        door=door,
+        customer_id=customer_id,
+        context=context,
+        enrollment_key=enrollment_key,
+        records=records,
+    )
+    if run is None:
+        _log_skipped(merchant_id, str(workflow.id), reason, customer_id=customer_id)
+    # No "enrolled" log here: enrol() emits it AFTER the atom commits, or a
+    # failed commit would count a run that never existed.
+    return run
+
+
+async def enrol_step(
+    txn: DbTxn,
+    *,
+    merchant_id: str,
+    workflow: Workflow,
+    definition: WorkflowDefinition,
+    door: WorkflowEntryAt,
+    customer_id: str,
+    context: Dict[str, Any],
+    enrollment_key: str,
+    records: List[str],
+    source_broadcast_id: Optional[str] = None,
+    wake_jitter: timedelta = timedelta(0),
+) -> Tuple[Optional[EnrollmentRun], str]:
+    """A sub-step of the CALLER'S atom (the txn is theirs): the guards, then
+    the insert. Returns (run, "admitted") or (None, the refusal's word) and
+    logs nothing — the event door logs a refusal (_enrol_in_txn above), a
+    broadcast writes it on the recipient row (canon T18 skip_reason).
+
+    ``records`` is every record of the person (identity's person_records).
+    ``source_broadcast_id`` stamps the run a broadcast admitted (canon T20
+    col 18); ``wake_jitter`` spreads a broadcast's first wakes, because
+    mass writes must never come due the same second (canon T20 col 8)."""
     source_event_id = context.get("source_event_id")
     if source_event_id and await enrollment_accessor.source_event_used(
         txn, merchant_id, str(workflow.id), records, str(source_event_id)
@@ -187,13 +229,7 @@ async def _enrol_in_txn(
         # This event already made its run (at-least-once scan). Named like
         # every other refusal: unlogged, it is the one way "events arriving,
         # no runs starting" can be normal and invisible at once.
-        _log_skipped(
-            merchant_id,
-            str(workflow.id),
-            "source_event_replayed",
-            customer_id=customer_id,
-        )
-        return None
+        return None, "source_event_replayed"
 
     # Keyed plan: the guards judge THIS key's history (B2 — "one run per
     # <field>" means reenter/cooldown are about the order, not the
@@ -209,8 +245,7 @@ async def _enrol_in_txn(
     now = datetime.now(timezone.utc)
     admit, reason = _admission(door, facts["runs"], facts["latest_entered_at"], now)
     if not admit:
-        _log_skipped(merchant_id, str(workflow.id), reason, customer_id=customer_id)
-        return None
+        return None, reason
     if facts["open_runs"]:
         # Re-entry allowed, but a run of hers is still open — started on
         # another of her records, which the open-run unique (per key, and
@@ -218,10 +253,7 @@ async def _enrol_in_txn(
         # never merged this is the same refusal the unique gives below.
         # ponytail: two records enrolled in the SAME instant both pass this
         # read; the unique cannot span ids. Only a merge racing an enrol.
-        _log_skipped(
-            merchant_id, str(workflow.id), "open_run_exists", customer_id=customer_id
-        )
-        return None
+        return None, "open_run_exists"
 
     start = next((node for node in definition.nodes if node.id == door.start), None)
     if start is None:  # the validator forbids this; drift is an error, not a run
@@ -236,10 +268,9 @@ async def _enrol_in_txn(
         workflow.version,
         customer_id,
         door.start,
-        _first_wake(start, now, definition.exits.max_age_days),
+        _first_wake(start, now, definition.exits.max_age_days) + wake_jitter,
         context,
         enrollment_key,
+        source_broadcast_id,
     )
-    # No log here: "enrolled" is emitted by enrol() AFTER the atom commits,
-    # or a failed commit would count a run that never existed.
-    return run
+    return run, "admitted"

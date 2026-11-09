@@ -98,8 +98,60 @@ is sent, closed, cancelled or failed.
 | `draft` | → `scheduled` | — | → `cancelled` |
 | `scheduled` | re-aimed | at its moment → `resolving` | → `cancelled` |
 | `resolving` | 409 | → `dispatching` (or `failed`) | → `cancelled`, queue cancelled |
-| `dispatching` | 409 | — | → `cancelled`, queue cancelled |
+| `dispatching` | 409 | admission → `sent` | → `cancelled`, queue cancelled |
 | `sent` · `closed` · `cancelled` · `failed` | 409 | — | 409 |
+
+## Admission (phase 3)
+
+The same broadcaster loop admits what the freeze queued
+(`outreach/admission.py`; canon/06-outreach.md: "apply the target workflow's
+guards → enrol everyone else into `workflow_id`, stamping
+`source_broadcast_id` on each run"). Every recipient ends one of two ways:
+
+- **`enrolled`** — a run of the workflow started through its first door,
+  stamped `source_broadcast_id` (canon T20 col 18), its context her current
+  phone and her name (a broadcast has no founding event);
+- **`skipped`** with its reason (canon T18 col 9):
+
+| Reason | When |
+|---|---|
+| `already_in_flow` | re-entry is off and she ran this plan before, or a run of hers is still open (on any of her records) |
+| `cooldown_active` | her last run began inside the plan's cooldown |
+| `no_phone` | the plan calls or messages, and she has no phone |
+| `customer_gone` | erased, or not this merchant's |
+| `key_required` | the plan was republished "one run per <field>" after it was scheduled |
+| `workflow_not_live` | the plan was archived |
+| `admission_failed` | an unexpected error on her row — logged, skipped once, never retried forever |
+
+How a page goes, at the broadcaster's own pace (no throttle — the walker
+and the dialler own their limits):
+- **Claim** up to 1,000 queued rows → `claimed` (who, since when), `FOR
+  UPDATE SKIP LOCKED`: two pods never take one person.
+- **Gather once**: the workflow, the page's customers in one identity read
+  (`get_customers`), the merchant's merges (`merged_pairs`).
+- **One transaction per person**: the guards, her run and her row's end share
+  one fate — never a run without `enrolled`, never `enrolled` without a run.
+  A customer merged after the freeze is admitted as her surviving record.
+- **Spread**: each run's first wake is spread over 60 seconds — mass writes
+  must never come due the same second (canon T20 col 8).
+- The first page stamps `dispatched_at` ("fired"); when nothing waits, the
+  broadcast is **`sent`**.
+
+What stops it:
+- **cancel** — the person being admitted finishes, everyone after is
+  `cancelled` (the broadcast row is held `FOR SHARE` by each admission,
+  `FOR UPDATE` by the cancel);
+- **a paused workflow holds the queue** (rows go back to `queued`, nothing is
+  skipped), the walker's own rule for a paused plan; it resumes when the plan
+  is live again;
+- **a dead pod** — its claimed rows go back to the queue after 10 minutes
+  (the reaper, canon T18 col 11).
+
+**Refused at schedule** (422, with every reason): a workflow whose first door
+is keyed "one run per <field>" (a broadcast has no <field> to give), and a
+workflow whose sends, action args or playbook lines ask for a fact a
+broadcast run never carries (it carries `phone` and `customer_name`) — those
+would skip or park everyone.
 
 ## Example
 

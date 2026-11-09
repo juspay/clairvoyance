@@ -9,7 +9,7 @@ from app.crm.identity.attributes import (
     mutate_customer_attribute,
     read_customer_attribute,
 )
-from app.crm.identity.db.accessor import get_customer
+from app.crm.identity.db.accessor import get_customer, get_customers
 from app.crm.identity.facts import assert_facts, customer_facts
 from app.crm.identity.person import merged_pairs, person_records
 from app.crm.identity.resolve import resolve
@@ -26,6 +26,8 @@ __all__ = [
     "customer_facts",
     "CustomerFacts",
     "get_customer",
+    # A broadcast's admission page reads its customers in ONE query.
+    "get_customers",
     "read_customer_attribute",
     "find_customer_by_attribute",
     "mutate_customer_attribute",

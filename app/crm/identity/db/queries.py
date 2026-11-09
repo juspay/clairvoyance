@@ -122,6 +122,19 @@ def person_records_query(merchant_id: str, customer_id: str) -> Tuple[str, List[
     return query, [merchant_id, customer_id]
 
 
+def get_customers_query(
+    merchant_id: str, customer_ids: List[str]
+) -> Tuple[str, List[Any]]:
+    """Many customers in one read (a broadcast's admission page): the list
+    shape, no attributes. Merchant first; the PK carries it."""
+    query = f"""
+        SELECT {_SUMMARY_COLUMNS}
+        FROM {CRM_CUSTOMER_TABLE}
+        WHERE merchant_id = $1 AND id = ANY($2::uuid[])
+    """
+    return query, [merchant_id, customer_ids]
+
+
 def merged_pairs_query(merchant_id: str) -> Tuple[str, List[Any]]:
     """Every stapled row of the merchant and the survivor it points at —
     one hop. Only merged rows are read (the partial merged_into_id index):
