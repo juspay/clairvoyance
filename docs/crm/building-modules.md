@@ -124,7 +124,10 @@ no explicit transaction; Postgres runs one statement atomically;
 `crm_replica_read(query, values)` is the one door to the read replica, for
 the console's reports only — the replica lags, so no worker, claim or write
 reads there, and a replica failure raises rather than retrying on the
-primary); a logic
+primary. One stated exception: a broadcast's freeze reads a dynamic
+segment's pages there — ids only, inserted ON CONFLICT DO NOTHING, and an
+audience seconds behind is the design; named where it lives,
+`outreach/broadcasts.py`); a logic
 file touches a handle in exactly ONE place: the `txn` param of an
 `_in_txn` body (threading through the atom's private sub-steps is part
 of the body; it never escapes the atom). Multi-

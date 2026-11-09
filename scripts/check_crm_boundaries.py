@@ -73,6 +73,7 @@ TABLE_OWNERS = {
     "crm_segment_member": "outreach",
     "crm_campaign": "outreach",
     "crm_broadcast": "outreach",
+    "crm_broadcast_recipient": "outreach",
     "crm_connector_installation": "connectivity",
     "crm_channel_binding": "connectivity",
     "crm_channel_template": "connectivity",

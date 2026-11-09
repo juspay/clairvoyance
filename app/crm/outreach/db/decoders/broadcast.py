@@ -22,4 +22,6 @@ def decode_broadcast(row: Mapping[str, Any]) -> Broadcast:
         closed_at=row["closed_at"],
         created_by=row["created_by"],
         created_at=row["created_at"],
+        attempts=row["attempts"],
+        last_error=row["last_error"],
     )
