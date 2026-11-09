@@ -91,3 +91,18 @@ class DeleteUserResponse(BaseModel):
     success: bool
     message: str
     deleted_id: str
+
+
+class UserTokenState(BaseModel):
+    """What a token verifier needs to know about a token's user: whether the
+    account is active, and the login-token cut-off (migration 089)."""
+
+    is_active: bool
+    tokens_valid_after: Optional[datetime] = None
+
+
+class RevokeSessionsResponse(BaseModel):
+    """Body of ``POST /user/{user_id}/revoke-sessions``."""
+
+    user_id: str
+    tokens_valid_after: datetime

@@ -59,6 +59,23 @@ def get_user_by_id_query(user_id: str) -> Tuple[str, List[Any]]:
     return query, [user_id]
 
 
+def get_user_token_state_query(user_id: str) -> Tuple[str, List[Any]]:
+    """Generate query for what a token verifier checks about a user."""
+    query = "SELECT is_active, tokens_valid_after FROM users WHERE id = $1"
+    return query, [user_id]
+
+
+def revoke_user_sessions_query(user_id: str) -> Tuple[str, List[Any]]:
+    """Generate query to cut off every login token a user holds now."""
+    query = """
+        UPDATE users
+        SET tokens_valid_after = now(), updated_at = now()
+        WHERE id = $1
+        RETURNING tokens_valid_after
+    """
+    return query, [user_id]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Existence check query builders
 # ─────────────────────────────────────────────────────────────────────────────
@@ -290,6 +307,10 @@ def update_user_query(
         set_clauses.append(f"is_active = ${param_idx}")
         params.append(is_active)
         param_idx += 1
+        if is_active is False:
+            # Deactivation cuts off the user's login tokens too, so
+            # re-activating them later doesn't bring old logins back.
+            set_clauses.append("tokens_valid_after = now()")
 
     if not set_clauses:
         return "", []

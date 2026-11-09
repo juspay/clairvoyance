@@ -14,6 +14,7 @@ from app.schemas import UserInfo
 from app.schemas.breeze_buddy.resellers import UmbrellaGrantUpdate, UserAccessResponse
 from app.schemas.breeze_buddy.users import (
     DeleteUserResponse,
+    RevokeSessionsResponse,
     UserCreate,
     UserListResponse,
     UserResponse,
@@ -28,6 +29,7 @@ from .handlers import (
     get_user_access_handler,
     get_user_by_id_handler,
     remove_user_workspace_handler,
+    revoke_user_sessions_handler,
     revoke_user_umbrella_handler,
     set_user_umbrella_handler,
     update_user_handler,
@@ -283,6 +285,25 @@ async def update_user_account(
         500: If there's an error updating the user
     """
     return await update_user_handler(user_id, user_data, current_user)
+
+
+@router.post("/user/{user_id}/revoke-sessions", response_model=RevokeSessionsResponse)
+async def revoke_user_sessions(
+    user_id: str,
+    current_user: UserInfo = Depends(get_current_user_with_rbac),
+):
+    """
+    Sign a user out everywhere: every login token they hold now is refused.
+
+    Admin only. Stamps ``users.tokens_valid_after``; short-lived tokens
+    (login, launch, signup) issued before it are refused within 30 s on every
+    pod. Long-lived admin tokens are NOT affected — revoke or rotate those via
+    ``/auth/tokens``. Deactivating a user (``is_active: false``) stamps the
+    same cut-off and also refuses all of the user's tokens while inactive.
+
+    404 if no such user.
+    """
+    return await revoke_user_sessions_handler(user_id, current_user)
 
 
 @router.delete("/user/{user_id}", response_model=DeleteUserResponse)

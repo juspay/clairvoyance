@@ -1,4 +1,4 @@
-"""SQL builders for token_registry (migrations 086, 087).
+"""SQL builders for token_registry (migrations 086–088).
 
 Pure functions; no DB I/O. Returns ``Tuple[str, List[Any]]`` for
 ``run_parameterized_query``.
@@ -14,7 +14,8 @@ TOKEN_REGISTRY_TABLE = "token_registry"
 _COLUMNS = (
     "id, token_hash, kind, source, subject, username, role, reseller_ids, "
     "merchant_ids, created_by, issued_at, expires_at, created_at, revoked_at, "
-    "revoked_by, revoke_reason, last_seen_at, last_seen_from, last_route"
+    "revoked_by, revoke_reason, last_seen_at, last_seen_from, last_route, "
+    "replaced_by"
 )
 
 
@@ -151,3 +152,75 @@ def revoke_token_query(
         FROM revoked
     """
     return query, [token_id, revoked_by, reason]
+
+
+def rotate_token_query(
+    *,
+    old_id: str,
+    new_id: str,
+    new_token_hash: str,
+    new_token: str,
+    rotated_by: str,
+    grace_hours: int,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> Tuple[str, List[Any]]:
+    """Rotate one live token in one statement:
+
+    - the old row: ``replaced_by`` = the new id, revoked at
+      ``now() + grace_hours`` by ``rotated_by``, reason ``rotated``;
+    - the new row: the old row's kind, subject and scopes, ``source =
+      minted``, ``created_by = rotated_by``;
+    - any ``merchants.s2s_token`` holding the old token (matched by hash,
+      among its own merchants) now holds the new one.
+
+    Returns two rows (``side`` = ``old`` / ``new``), or none when the old id
+    is unknown or already revoked/rotating — then nothing was written.
+    """
+    query = f"""
+        WITH old AS (
+            UPDATE {TOKEN_REGISTRY_TABLE}
+            SET revoked_at = now() + make_interval(hours => $6::int),
+                revoked_by = $5,
+                revoke_reason = 'rotated',
+                replaced_by = $2::uuid
+            WHERE id = $1::uuid AND revoked_at IS NULL
+            RETURNING {_COLUMNS}
+        ),
+        new AS (
+            INSERT INTO {TOKEN_REGISTRY_TABLE} (
+                id, token_hash, kind, source, subject, username, role,
+                reseller_ids, merchant_ids, created_by, issued_at, expires_at
+            )
+            SELECT $2::uuid, $3, kind, 'minted', subject, username, role,
+                   reseller_ids, merchant_ids, $5, $7, $8
+            FROM old
+            RETURNING {_COLUMNS}
+        ),
+        swapped AS (
+            UPDATE {MERCHANTS_TABLE} m
+            SET s2s_token = $4, updated_at = now()
+            FROM old o
+            WHERE m.merchant_id = ANY(o.merchant_ids)
+              AND m.s2s_token IS NOT NULL
+              AND encode(sha256(convert_to(m.s2s_token, 'UTF8')), 'hex') = o.token_hash
+            RETURNING m.merchant_id
+        )
+        SELECT 'old' AS side, old.*,
+               (SELECT count(*) FROM swapped) AS merchant_tokens_swapped
+        FROM old
+        UNION ALL
+        SELECT 'new' AS side, new.*,
+               (SELECT count(*) FROM swapped) AS merchant_tokens_swapped
+        FROM new
+    """
+    return query, [
+        old_id,
+        new_id,
+        new_token_hash,
+        new_token,
+        rotated_by,
+        grace_hours,
+        issued_at,
+        expires_at,
+    ]
