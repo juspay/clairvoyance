@@ -16,6 +16,7 @@ from app.crm.outreach.db.queries.segment import (
     insert_static_list_query,
     list_segments_query,
     lock_segment_query,
+    stamp_dynamic_count_query,
     stamp_member_count_query,
 )
 from app.crm.outreach.schemas import Segment
@@ -91,3 +92,14 @@ async def stamp_member_count(
     row = await conn.fetchrow(query, *values)
     assert row is not None  # locked earlier in this same transaction
     return int(row["member_count"]), row["computed_at"]
+
+
+async def stamp_dynamic_count(
+    merchant_id: str, segment_id: str, member_count: int, computed_at: datetime
+) -> Optional[Segment]:
+    query, values = stamp_dynamic_count_query(
+        merchant_id, segment_id, member_count, computed_at
+    )
+    async with crm_connection() as conn:
+        row = await conn.fetchrow(query, *values)
+    return decode_segment(row) if row else None

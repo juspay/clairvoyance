@@ -14,13 +14,18 @@ The laws, on top of the shape:
 - a derived field (computed in code at read time: Shopify ``items_count``,
   WhatsApp ``reply``) is refused: a segment is answered by ONE SQL query over
   stored events (canon/05-audiences.md:24), and a value only Python can
-  compute has no stored form to query.
+  compute has no stored form to query;
+- a date-time field is not compared (>, <) yet: Postgres 14 has no safe
+  cast, and one malformed date in one payload would fail the merchant's
+  whole query (record/segments.py refuses it too). Whether the field exists
+  still works, and recency is the event's own ``within_days``.
 """
 
 from typing import Any, Dict, List, Optional
 
 from app.crm.outreach.catalog_laws import condition_against_catalog
 from app.crm.record.contracts import AmbiguousTopic, CatalogField, catalog_fields
+from app.crm.shared.predicate import ORDER_OPS
 from app.crm.shared.segment_format import (
     MAX_RULE_EVENTS,
     EventCondition,
@@ -98,6 +103,13 @@ def _catalog_problems(
             problems.append(
                 f"{at}: {condition.field!r} is computed in code, not stored on "
                 "the event — a segment can only read stored fields"
+            )
+            continue
+        if field is not None and field.type == "datetime" and condition.op in ORDER_OPS:
+            problems.append(
+                f"{at}: a segment does not compare date-times yet — ask whether "
+                f"{condition.field!r} exists, or how recent the event is "
+                "(within_days)"
             )
             continue
         problems.extend(

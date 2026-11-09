@@ -605,8 +605,11 @@ async def segment_members_route(
         merchant_scope("read a segment's members", "crm.segments.members.list")
     ),
 ) -> SegmentMembersPage:
-    """One page of a static list's members, in customer_id order. 404
-    unknown or another merchant's segment · 409 a dynamic segment."""
+    """One page of a segment's members, in customer_id order: a static
+    list's rows, or whoever a dynamic segment's rule holds for right now.
+    404 unknown or another merchant's segment · 422 a stored rule that can
+    no longer be answered, with every reason · 503 the answer could not be
+    read in time (try again; the detail carries the last stamped count)."""
     try:
         return await segments.segment_members(
             merchant_id, str(segment_id), str(after) if after else None, limit
@@ -615,8 +618,51 @@ async def segment_members_route(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found"
         )
-    except segments.SegmentIsDynamic:
+    except segments.SegmentRuleInvalid as e:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="a dynamic segment computes its members; only a static list has member rows",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        )
+    except segments.SegmentNotAnswered as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_not_answered(e.standing),
+        )
+
+
+def _not_answered(standing: Segment) -> Dict[str, Any]:
+    """A 503's detail: what failed, and the count that still stands."""
+    return {
+        "message": "The segment could not be answered in time; try again shortly",
+        "member_count": standing.member_count,
+        "computed_at": (
+            standing.computed_at.isoformat() if standing.computed_at else None
+        ),
+    }
+
+
+@segment_router.post("/{segment_id}/count", response_model=Segment)
+async def count_segment_route(
+    segment_id: UUID,
+    merchant_id: str = Depends(merchant_scope("count a segment", "crm.segments.count")),
+) -> Segment:
+    """Count a dynamic segment now and stamp the cache (member_count +
+    computed_at); a static list's exact count comes back as it stands. 404
+    unknown or another merchant's segment · 422 a stored rule that can no
+    longer be answered, with every reason · 503 the count could not be read
+    in time — the detail carries the count that still stands, so the console
+    keeps showing it."""
+    try:
+        return await segments.count_segment(merchant_id, str(segment_id))
+    except segments.SegmentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Segment not found"
+        )
+    except segments.SegmentRuleInvalid as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.problems
+        )
+    except segments.SegmentNotAnswered as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_not_answered(e.standing),
         )
