@@ -26,6 +26,7 @@ from app.api.security.breeze_buddy.rbac_token import get_current_user_with_rbac
 from app.crm.auth import merchant_scope
 from app.crm.outreach import (
     analytics,
+    broadcast_report,
     broadcasts,
     campaigns,
     plans,
@@ -35,6 +36,7 @@ from app.crm.outreach import (
 )
 from app.crm.outreach.schemas import (
     Broadcast,
+    BroadcastFunnel,
     BroadcastPage,
     Campaign,
     CustomerRun,
@@ -865,4 +867,67 @@ async def cancel_broadcast_route(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"the broadcast is already {e.status}",
+        )
+
+
+@broadcast_router.post("/{broadcast_id}/pause", response_model=Broadcast)
+async def pause_broadcast_route(
+    broadcast_id: UUID,
+    merchant_id: str = Depends(
+        merchant_scope("pause a broadcast", "crm.broadcasts.pause")
+    ),
+) -> Broadcast:
+    """Stop admitting: the person in flight finishes, everyone after stays
+    queued until resume. Runs already started carry on. 404 · 409 not
+    dispatching (a scheduled broadcast is re-aimed or cancelled instead)."""
+    try:
+        return await broadcasts.pause_broadcast(merchant_id, str(broadcast_id))
+    except broadcasts.BroadcastNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found"
+        )
+    except broadcasts.BroadcastStateConflict as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"the broadcast is {e.status} — only a dispatching one can be paused",
+        )
+
+
+@broadcast_router.post("/{broadcast_id}/resume", response_model=Broadcast)
+async def resume_broadcast_route(
+    broadcast_id: UUID,
+    merchant_id: str = Depends(
+        merchant_scope("resume a broadcast", "crm.broadcasts.resume")
+    ),
+) -> Broadcast:
+    """Admit the rest of a paused broadcast's queue. 404 · 409 not paused."""
+    try:
+        return await broadcasts.resume_broadcast(merchant_id, str(broadcast_id))
+    except broadcasts.BroadcastNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found"
+        )
+    except broadcasts.BroadcastStateConflict as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"the broadcast is {e.status} — only a paused one can be resumed",
+        )
+
+
+@broadcast_router.get("/{broadcast_id}/funnel", response_model=BroadcastFunnel)
+async def broadcast_funnel_route(
+    broadcast_id: UUID,
+    merchant_id: str = Depends(
+        merchant_scope("read a broadcast's funnel", "crm.broadcasts.funnel")
+    ),
+) -> BroadcastFunnel:
+    """The broadcast's report: the frozen list and its skips by reason, the
+    runs it started and how they stand, and the calls they placed. Final
+    once the broadcast is closed (closes_at says when). 404 unknown or
+    another merchant's."""
+    try:
+        return await broadcast_report.broadcast_funnel(merchant_id, str(broadcast_id))
+    except broadcasts.BroadcastNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Broadcast not found"
         )

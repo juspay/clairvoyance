@@ -36,6 +36,18 @@ queued recipient becomes a run stamped source_broadcast_id, or a skipped row
 with its reason; then dispatching -> sent. The schedule refuses what
 admission could only skip or park: a keyed first door, a fact a broadcast
 run never carries (catalog_laws.broadcast_problems).
+
+Phase 4 — pause, resume, close (and the report, broadcast_report.py):
+- pause holds a dispatching broadcast's queue: admission stops after the
+  person in flight, the rest stay queued; resume picks up where it stopped.
+  Runs already started are not touched — the broadcast never owns them.
+- close: once the reporting window ends the funnel is final (canon T17 col
+  11). The window is the last run's whole life (the workflow's
+  max_age_days) after it entered, plus CLOSE_GRACE for the last call
+  reports — the corpus's "fired Friday 10:00, final Sunday" (T17 col 18) is
+  a time after the fire, never "when every run has ended": a one-call plan's
+  runs end when the call is QUEUED, and one parked run would hold it open
+  forever. The broadcaster's loop runs the close job beside its reaper.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -54,6 +66,7 @@ from app.crm.outreach.db.accessors import (
     broadcast as broadcast_accessor,
     broadcast_recipient as recipient_accessor,
     campaign as campaign_accessor,
+    enrollment as enrollment_accessor,
     segment as segment_accessor,
     workflow as workflow_accessor,
 )
@@ -63,6 +76,7 @@ from app.crm.outreach.schemas import (
     Campaign,
     Segment,
     WorkflowDefinition,
+    WorkflowExits,
 )
 from app.crm.outreach.segments import (
     SegmentNotFound,
@@ -93,6 +107,15 @@ LAST_ERROR_CHARS = 500
 
 #: The statuses a broadcast never leaves.
 FINISHED = ("sent", "closed", "cancelled", "failed")
+
+#: After the last run's whole life, how long the report stays open for the
+#: last call reports before it goes final (phase 4, the D2 ruling).
+CLOSE_GRACE = timedelta(days=1)
+
+#: How many sent broadcasts one close pass looks at. Sent broadcasts are a
+#: merchant's deliberate launches, closed within days, so this is far above
+#: what is ever waiting.
+CLOSE_BATCH = 500
 
 
 class BroadcastNotFound(Exception):
@@ -409,3 +432,100 @@ async def _fail_freeze_in_txn(
         return None
     await recipient_accessor.cancel_queued_recipients(txn, broadcast_id)
     return await broadcast_accessor.fail_freeze(txn, merchant_id, broadcast_id, reason)
+
+
+async def pause_broadcast(merchant_id: str, broadcast_id: str) -> Broadcast:
+    """Hold a dispatching broadcast's queue: the person being admitted
+    finishes, everyone after waits, queued. Runs it already started carry on
+    by their own rules. Raises BroadcastNotFound or BroadcastStateConflict
+    (not dispatching — a scheduled one is re-aimed or cancelled instead)."""
+    return await _move(merchant_id, broadcast_id, "dispatching", "paused")
+
+
+async def resume_broadcast(merchant_id: str, broadcast_id: str) -> Broadcast:
+    """Admit the rest of a paused broadcast's queue, from where it stopped.
+    Raises BroadcastNotFound or BroadcastStateConflict (not paused)."""
+    return await _move(merchant_id, broadcast_id, "paused", "dispatching")
+
+
+async def _move(
+    merchant_id: str, broadcast_id: str, from_status: str, to_status: str
+) -> Broadcast:
+    moved = await broadcast_accessor.move_broadcast(
+        merchant_id, broadcast_id, from_status, to_status
+    )
+    if moved is not None:
+        logger.bind(
+            component=LOG_COMPONENT, merchant_id=merchant_id, broadcast_id=broadcast_id
+        ).info(f"broadcast {from_status} -> {to_status}")
+        return moved
+    # Not in from_status (or not this merchant's): say where it is.
+    current = await broadcast_accessor.get_broadcast(merchant_id, broadcast_id)
+    if current is None:
+        raise BroadcastNotFound(broadcast_id)
+    raise BroadcastStateConflict(current.status)
+
+
+def report_window_end(
+    last_entered_at: Optional[datetime], max_age_days: float
+) -> Optional[datetime]:
+    """PURE: when the broadcast's numbers go final — its last run's whole
+    life after that run entered, plus CLOSE_GRACE. None when it started no
+    run: there is nothing to wait for."""
+    if last_entered_at is None:
+        return None
+    return last_entered_at + timedelta(days=max_age_days) + CLOSE_GRACE
+
+
+async def max_age_days(broadcast: Broadcast) -> float:
+    """The run life of the broadcast's workflow, as published now — the
+    model's default when it is gone or has no document.
+    ponytail: the latest version's, not each run's pinned one; a republish
+    that shortens max_age_days can close a report a little early."""
+    workflow = await workflow_accessor.get_workflow(
+        broadcast.merchant_id, str(broadcast.workflow_id)
+    )
+    if workflow is None or not workflow.definition:
+        return WorkflowExits().max_age_days
+    return WorkflowDefinition.model_validate(workflow.definition).exits.max_age_days
+
+
+async def close_due_broadcasts() -> int:
+    """The close job (the broadcaster's loop, beside the reaper): every sent
+    broadcast whose reporting window has ended -> closed. A cheap check on
+    the first fire before the exact one on the last run's entry: the last
+    entry is never before the first fire, so a window not over from the fire
+    is not over at all. One that admitted nobody closes at once. A broadcast
+    the job cannot judge is logged and left sent: housekeeping must never
+    stop the loop's freezes and admissions."""
+    now = datetime.now(timezone.utc)
+    closed = 0
+    for broadcast in await broadcast_accessor.close_candidates(CLOSE_BATCH):
+        try:
+            closed += await _close_if_due(broadcast, now)
+        except Exception as e:
+            logger.bind(
+                component=LOG_COMPONENT,
+                merchant_id=broadcast.merchant_id,
+                broadcast_id=str(broadcast.id),
+            ).error(f"close check failed: {type(e).__name__}: {e}")
+    return closed
+
+
+async def _close_if_due(broadcast: Broadcast, now: datetime) -> int:
+    """1 when this broadcast's window has ended and it is now closed."""
+    merchant_id, broadcast_id = broadcast.merchant_id, str(broadcast.id)
+    if broadcast.dispatched_at is not None:
+        age = await max_age_days(broadcast)
+        soonest = broadcast.dispatched_at + timedelta(days=age) + CLOSE_GRACE
+        if soonest > now:
+            return 0
+        last = await enrollment_accessor.last_broadcast_entry(merchant_id, broadcast_id)
+        if (report_window_end(last, age) or soonest) > now:
+            return 0
+    if await broadcast_accessor.close_broadcast(merchant_id, broadcast_id) is None:
+        return 0  # no longer sent: another pod closed it first
+    logger.bind(
+        component=LOG_COMPONENT, merchant_id=merchant_id, broadcast_id=broadcast_id
+    ).info("broadcast closed: the reporting window ended")
+    return 1

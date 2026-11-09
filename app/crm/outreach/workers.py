@@ -6,7 +6,8 @@ supplies each claim and handler.
 The broadcaster runs ONE loop with two jobs (design/worker-runtime.md: no
 pod runs two loops): a due freeze first — an audience must be frozen before
 it can be admitted — else one admission page. Its reaper (canon T18 col 11)
-is housekeeping on the same claim, the retention sweep's pattern below.
+and its close job (phase 4: sent -> closed once the reporting window ends)
+are housekeeping on the same claim, the retention sweep's pattern below.
 
 The retention sweep (canon T20 exited_at: "exited rows age out") is
 housekeeping on the same loop, not a second one: the claim callable runs
@@ -27,7 +28,11 @@ from app.crm.outreach.admission import (
     admit_page,
     release_stale_claims,
 )
-from app.crm.outreach.broadcasts import claim_due_freezes, freeze_broadcast
+from app.crm.outreach.broadcasts import (
+    claim_due_freezes,
+    close_due_broadcasts,
+    freeze_broadcast,
+)
 from app.crm.outreach.runs import run_retention_sweep_tick
 from app.crm.outreach.schemas import Broadcast, EnrollmentRun
 from app.crm.outreach.walker import walk_run
@@ -35,7 +40,8 @@ from app.crm.outreach.walker import walk_run
 _last_sweep_at = float("-inf")
 _last_reap_at = float("-inf")
 
-#: How often the broadcaster's reaper looks for claims a dead pod left.
+#: How often the broadcaster's housekeeping runs: the reaper looks for
+#: claims a dead pod left, and the close job for reports gone final.
 REAP_INTERVAL_SECONDS = 60.0
 
 
@@ -63,6 +69,7 @@ async def claim_broadcaster_work(batch: int) -> List[BroadcasterJob]:
     if now - _last_reap_at >= REAP_INTERVAL_SECONDS:
         _last_reap_at = now
         await release_stale_claims()
+        await close_due_broadcasts()
     frozen = await claim_due_freezes(batch)
     if frozen:
         return [BroadcasterJob("freeze", broadcast) for broadcast in frozen]

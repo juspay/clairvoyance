@@ -928,6 +928,37 @@ def runs_by_version_query(
     return query, [merchant_id, workflow_id, since, until]
 
 
+def broadcast_run_endings_query(
+    merchant_id: str, broadcast_id: str
+) -> Tuple[str, List[Any]]:
+    """Every run one broadcast started (canon/06-outreach.md: "runs WHERE
+    source_broadcast_id = B"), with how it stands and its lifetime — the
+    funnel's raw material, the same columns the Performance tab reads per
+    window. 058's partial (merchant_id, source_broadcast_id) index."""
+    query = f"""
+        SELECT id, enrollment_key, status, exit_reason, exited_at,
+               entered_at, current_node
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND source_broadcast_id = $2
+    """
+    return query, [merchant_id, broadcast_id]
+
+
+def last_broadcast_entry_query(
+    merchant_id: str, broadcast_id: str
+) -> Tuple[str, List[Any]]:
+    """When the broadcast's LAST run entered — the close job's anchor: the
+    reporting window is that run's whole life after it (a paused broadcast
+    admits its rest days later). 058's partial (merchant_id,
+    source_broadcast_id) index."""
+    query = f"""
+        SELECT max(entered_at) AS last_entered_at
+        FROM {ENROLLMENT_TABLE}
+        WHERE merchant_id = $1 AND source_broadcast_id = $2
+    """
+    return query, [merchant_id, broadcast_id]
+
+
 def run_endings_in_window_query(
     merchant_id: str,
     workflow_id: str,
