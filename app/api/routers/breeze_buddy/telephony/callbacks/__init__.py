@@ -18,6 +18,10 @@ Endpoints:
 
 from fastapi import APIRouter, BackgroundTasks, Request
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.signature_observe import (
+    observe_webhook_signature,
+)
+
 from .handlers import (
     handle_call_transfer,
     handle_callback_details_get,
@@ -55,6 +59,7 @@ async def callback_details(
     Example:
         GET /exotel/callback/details?CallSid=abc123&Stream[RecordingUrl]=https://...
     """
+    await observe_webhook_signature(request, provider.lower(), "details")
     return await handle_callback_details_get(request, provider, background_tasks)
 
 
@@ -89,6 +94,7 @@ async def callback_details_post(
         POST /twilio/callback/details
         Form data: CallSid=abc123&RecordingUrl=https://...
     """
+    await observe_webhook_signature(request, provider.lower(), "details")
     return await handle_callback_details_post(request, provider, background_tasks)
 
 
@@ -143,6 +149,7 @@ async def callback_status(request: Request, provider: str):
         POST /twilio/callback/status
         Form data: CallSid=abc123&CallStatus=completed&RecordingUrl=https://...
     """
+    await observe_webhook_signature(request, provider.lower(), "status")
     return await handle_callback_status(request, provider)
 
 
@@ -166,6 +173,7 @@ async def transfer_callback(request: Request, provider: str, action: str):
         - (exotel, dial-up)           — Fetch agent phone number to dial (GET)
         - (plivo, dial-up)            — Dial-back XML: agent → customer bridge (POST)
     """
+    await observe_webhook_signature(request, provider.lower(), f"transfer/{action}")
     return await handle_call_transfer(request, provider, action)
 
 

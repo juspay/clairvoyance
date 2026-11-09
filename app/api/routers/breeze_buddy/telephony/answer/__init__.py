@@ -16,6 +16,9 @@ Authentication:
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.ai.voice.agents.breeze_buddy.services.telephony.signature_observe import (
+    observe_webhook_signature,
+)
 from app.core.config.static import EXOTEL_WEBHOOK_AUTH_TOKEN
 
 from .handlers import handle_provider_answer
@@ -67,5 +70,7 @@ async def provider_answer(request: Request, provider: str):
             )
         if auth_token != EXOTEL_WEBHOOK_AUTH_TOKEN:
             raise HTTPException(status_code=401, detail="Invalid auth token")
+
+    await observe_webhook_signature(request, provider_lower, "answer")
 
     return await handle_provider_answer(request, provider_lower)
