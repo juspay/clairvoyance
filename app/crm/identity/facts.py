@@ -21,6 +21,7 @@ from app.core.logger import logger
 from app.core.logger.context import update_log_context
 from app.crm.identity.db import DbTxn, accessor, atomically
 from app.crm.identity.schemas import CustomerFacts
+from app.crm.shared.handles import ROW_KIND_NAMES
 
 EVIDENCE_RANK = {"declared": 3, "observed": 2, "imported": 1, "inferred": 0}
 
@@ -42,17 +43,20 @@ MATERIALIZED_COLUMNS = {
 }
 
 # Attribute names a reader outside identity may never see the value of:
-# the handle columns' names (a producer could assert them as facts) and
-# the handle-history bucket ADR 0021's trigger fills.
-HANDLE_LIKE_ATTRIBUTES = frozenset(
-    {
-        "phone",
-        "email",
-        "igsid",
-        "shopify_customer_id",
-        "external_ref",
-        "_handle_history",
-    }
+# the handle columns' names (a producer could assert them as facts), every
+# row kind's name, and the handle-history bucket ADR 0021's trigger fills.
+HANDLE_LIKE_ATTRIBUTES = (
+    frozenset(
+        {
+            "phone",
+            "email",
+            "igsid",
+            "shopify_customer_id",
+            "external_ref",
+            "_handle_history",
+        }
+    )
+    | ROW_KIND_NAMES
 )
 
 
