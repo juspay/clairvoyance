@@ -14,7 +14,14 @@ condition —
     HAVING (count(*) FILTER (WHERE topic = $3 AND <window> AND <where>) >= $4)
        AND NOT (count(*) FILTER (WHERE topic = $5) >= $6)
 
-`all` / `any` / `not` become AND / OR / NOT over those counts. Narrowing the
+`all` / `any` / `not` become AND / OR / NOT over those counts.
+
+A customer is a PERSON (canon/01-identity.md: reads across a pair). When the
+merchant has merged records, identity hands them in (`merged`: record ->
+survivor) and the events group under the survivor, so a letter stamped on
+the record she was merged out of still counts for her, and the record that
+is no more never comes back as a member. With no merges the SQL is exactly
+what it was. Narrowing the
 rows is the caller's decision (record/segments.py): it is safe only when the
 rule cannot hold for a customer none of whose rows an event condition
 counts. Narrowed, the query reads each condition's topic, and only inside
@@ -89,12 +96,12 @@ def segment_members_query(
     narrow: bool,
     after: Optional[str],
     limit: int,
+    merged: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, List[Any]]:
     """One page of the customers a rule holds for, keyset-paged on
     customer_id (the group key): `after` is the last id of the page before."""
     params = _Params([merchant_id])
-    paged = f"AND customer_id > {params.add(after)}::uuid" if after else ""
-    grouped = _grouped(rule, narrow, paged, params)
+    grouped = _grouped(rule, narrow, after, params, merged)
     query = f"""
         {grouped}
         ORDER BY customer_id
@@ -104,12 +111,15 @@ def segment_members_query(
 
 
 def segment_count_query(
-    merchant_id: str, rule: Any, narrow: bool
+    merchant_id: str,
+    rule: Any,
+    narrow: bool,
+    merged: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, List[Any]]:
     """How many customers the rule holds for — the same grouped query,
     counted."""
     params = _Params([merchant_id])
-    grouped = _grouped(rule, narrow, "", params)
+    grouped = _grouped(rule, narrow, None, params, merged)
     query = f"""
         SELECT count(*) AS n FROM (
             {grouped}
@@ -118,17 +128,37 @@ def segment_count_query(
     return query, params.values
 
 
-def _grouped(rule: Any, narrow: bool, paged: str, params: _Params) -> str:
+def _grouped(
+    rule: Any,
+    narrow: bool,
+    after: Optional[str],
+    params: _Params,
+    merged: Optional[Dict[str, str]],
+) -> str:
+    person, named, joined = "customer_id", "", ""
+    if merged:
+        # The person a row belongs to: the survivor of a merged-away record,
+        # else the record itself. Both arrays are parameters, in step.
+        losers = params.add(list(merged))
+        survivors = params.add(list(merged.values()))
+        joined = (
+            f"LEFT JOIN unnest({losers}::uuid[], {survivors}::uuid[]) "
+            "AS merged(loser, survivor) ON merged.loser = customer_id"
+        )
+        person = "COALESCE(merged.survivor, customer_id)"
+        named = " AS customer_id"
+    paged = f"AND {person} > {params.add(after)}::uuid" if after else ""
     narrowed = f"AND ({_counted_rows(rule, params)})" if narrow else ""
     holds = _holds(rule, params)
     return f"""
-        SELECT customer_id
+        SELECT {person}{named}
         FROM {EVENT_RAW_TABLE}
+        {joined}
         WHERE merchant_id = $1
           AND customer_id IS NOT NULL
           {narrowed}
           {paged}
-        GROUP BY customer_id
+        GROUP BY {person}
         HAVING {holds}
     """
 

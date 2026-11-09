@@ -81,13 +81,57 @@ def apply_handles_query(
 def merge_customer_query(loser_id: str, survivor_id: str) -> Tuple[str, List[Any]]:
     """The staple (never melt): one UPDATE on the younger row. The WHERE
     status='active' makes racing staplers converge — the second is a
-    no-op. Freed partial uniques let the survivor attach the handles."""
+    no-op. Freed partial uniques let the survivor attach the handles.
+
+    Path-compressed to one hop (canon/01-identity.md T05 col 20): rows
+    the loser had already absorbed are re-pointed at the survivor in the
+    same statement, so L -> A -> B never exists — L points at B. Every
+    "who is this person" read relies on that one hop. Only when the staple
+    really happened: a racing no-op re-points nothing."""
     query = f"""
-        UPDATE {CRM_CUSTOMER_TABLE}
-        SET status = 'merged_away', merged_into_id = $2, merged_at = now()
-        WHERE id = $1 AND status = 'active'
+        WITH stapled AS (
+            UPDATE {CRM_CUSTOMER_TABLE}
+            SET status = 'merged_away', merged_into_id = $2, merged_at = now()
+            WHERE id = $1 AND status = 'active'
+            RETURNING id
+        )
+        UPDATE {CRM_CUSTOMER_TABLE} c
+        SET merged_into_id = $2
+        FROM stapled
+        WHERE c.merged_into_id = stapled.id
     """
     return query, [loser_id, survivor_id]
+
+
+def person_records_query(merchant_id: str, customer_id: str) -> Tuple[str, List[Any]]:
+    """Every record of the person this customer is: the survivor, then the
+    rows stapled into it (canon/01-identity.md: reads across a pair,
+    `id = $2 OR merged_into_id = $2`). Merges are one hop, so the survivor
+    is the row's own merged_into_id, or the row itself. The PK and the
+    partial merged_into_id index (049) carry it. No row: nothing back."""
+    query = f"""
+        SELECT c.id
+        FROM {CRM_CUSTOMER_TABLE} me
+        JOIN {CRM_CUSTOMER_TABLE} c
+          ON c.merchant_id = me.merchant_id
+         AND (c.id = COALESCE(me.merged_into_id, me.id)
+              OR c.merged_into_id = COALESCE(me.merged_into_id, me.id))
+        WHERE me.merchant_id = $1 AND me.id = $2
+        ORDER BY c.merged_into_id IS NOT NULL, c.id
+    """
+    return query, [merchant_id, customer_id]
+
+
+def merged_pairs_query(merchant_id: str) -> Tuple[str, List[Any]]:
+    """Every stapled row of the merchant and the survivor it points at —
+    one hop. Only merged rows are read (the partial merged_into_id index):
+    none at all for a merchant nobody was ever merged in."""
+    query = f"""
+        SELECT id, merged_into_id
+        FROM {CRM_CUSTOMER_TABLE}
+        WHERE merchant_id = $1 AND merged_into_id IS NOT NULL
+    """
+    return query, [merchant_id]
 
 
 def get_customer_query(merchant_id: str, customer_id: str) -> Tuple[str, List[Any]]:

@@ -92,7 +92,7 @@ CONSOLE_READS = [
     ("one run", lambda: enrollment.get_run("m1", "wf", "r1"), 1),
     ("run steps", lambda: step.run_steps("m1", "r1", 200), 1),
     ("run calls", lambda: get_leads_by_enrollment_id("m1", "r1", T0, None), 1),
-    ("journey", lambda: enrollment.customer_runs("m1", "c1", 100), 1),
+    ("journey", lambda: enrollment.customer_runs("m1", ["c1"], 100), 1),
 ]
 
 

@@ -11,8 +11,10 @@ from app.crm.record.db.queries import get_customer_journey_query
 
 
 def test_first_page_has_no_cursor_predicate() -> None:
-    sql, params = get_customer_journey_query("merchant-1", "cust-777", 50)
-    assert params == ["merchant-1", "cust-777", 50]
+    sql, params = get_customer_journey_query("merchant-1", ["cust-777"], 50)
+    assert params == ["merchant-1", ["cust-777"], 50]
+    # every record of the person (identity's person_records)
+    assert "customer_id = ANY($2::uuid[])" in sql
     assert "crm_journey_event" in sql
     assert "$1" in sql and "$2" in sql and "$3" in sql
     assert "(started_at, id) <" not in sql
@@ -22,9 +24,9 @@ def test_first_page_has_no_cursor_predicate() -> None:
 def test_cursor_page_binds_keyset_positionally() -> None:
     before = datetime(2026, 8, 24, tzinfo=timezone.utc)
     sql, params = get_customer_journey_query(
-        "merchant-1", "cust-777", 50, before_started_at=before, before_id="evt-9"
+        "merchant-1", ["cust-777"], 50, before_started_at=before, before_id="evt-9"
     )
-    assert params == ["merchant-1", "cust-777", before, "evt-9", 50]
+    assert params == ["merchant-1", ["cust-777"], before, "evt-9", 50]
     assert "(started_at, id) < ($3, $4)" in sql
     assert "LIMIT $5" in sql
     assert "OFFSET" not in sql
@@ -32,9 +34,9 @@ def test_cursor_page_binds_keyset_positionally() -> None:
 
 def test_cursor_ignored_without_both_halves() -> None:
     sql, params = get_customer_journey_query(
-        "merchant-1", "cust-777", 50, before_started_at=datetime.now(timezone.utc)
+        "merchant-1", ["cust-777"], 50, before_started_at=datetime.now(timezone.utc)
     )
-    assert params == ["merchant-1", "cust-777", 50]
+    assert params == ["merchant-1", ["cust-777"], 50]
     assert "(started_at, id) <" not in sql
 
 

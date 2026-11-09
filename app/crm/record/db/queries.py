@@ -104,15 +104,17 @@ def quarantine_event_query(event_id: str, reason: str) -> Tuple[str, List[Any]]:
 
 def get_customer_journey_query(
     merchant_id: str,
-    customer_id: str,
+    customer_ids: List[str],
     limit: int,
     before_started_at: Optional[datetime] = None,
     before_id: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Keyset cursor (started_at, id) — canon's prescribed pagination for
     V01 (crm.journey_event). An OFFSET page shifts under an append-heavy
-    timeline; a row-value comparison on the cursor doesn't."""
-    values: List[Any] = [merchant_id, customer_id]
+    timeline; a row-value comparison on the cursor doesn't. Every record of
+    the person (identity's person_records): her timeline does not stop at
+    a merge."""
+    values: List[Any] = [merchant_id, customer_ids]
     cursor = ""
     if before_started_at is not None and before_id:
         values.extend([before_started_at, before_id])
@@ -123,7 +125,7 @@ def get_customer_journey_query(
                started_at, ended_at, outcome, recording_ref, transcript_ref,
                source_kind
         FROM {JOURNEY_EVENT_VIEW}
-        WHERE merchant_id = $1 AND customer_id = $2
+        WHERE merchant_id = $1 AND customer_id = ANY($2::uuid[])
         {cursor}
         ORDER BY started_at DESC, id DESC
         LIMIT ${len(values)}
@@ -133,13 +135,15 @@ def get_customer_journey_query(
 
 def customer_has_event_query(
     merchant_id: str,
-    customer_id: str,
+    customer_ids: List[str],
     topics: List[str],
     since: datetime,
     where: Optional[Tuple[str, str]] = None,
 ) -> Tuple[str, List[Any]]:
     """The walker's goal re-check at fire time: did she do the thing after
-    the run began? One EXISTS on the stamped customer index. A producer
+    the run began? One EXISTS on the stamped customer index, over every
+    record of the person (identity's person_records: a letter stamped on
+    the record she was merged into still answers her run). A producer
     that omits occurred_at must not defeat the check (NULL > x is NULL,
     never true) — the envelope's received_at stands in.
 
@@ -151,13 +155,13 @@ def customer_has_event_query(
         SELECT EXISTS (
             SELECT 1 FROM {EVENT_RAW_TABLE}
             WHERE merchant_id = $1
-              AND customer_id = $2
+              AND customer_id = ANY($2::uuid[])
               AND topic = ANY($3)
               AND COALESCE(occurred_at, received_at) > $4
               {keyed}
         ) AS found
     """
-    params: List[Any] = [merchant_id, customer_id, topics, since]
+    params: List[Any] = [merchant_id, customer_ids, topics, since]
     if where:
         params.extend([where[0], where[1]])
     return query, params

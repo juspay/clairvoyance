@@ -156,11 +156,14 @@ def insert_enrollment_query(
 def admission_facts_query(
     merchant_id: str,
     workflow_id: str,
-    customer_id: str,
+    customer_ids: List[str],
     enrollment_key: Optional[str] = None,
 ) -> Tuple[str, List[Any]]:
     """Everything the admission guards need in one read: has she EVER run
-    this flow (reenter), when did her latest run begin (cooldown).
+    this flow (reenter), when did her latest run begin (cooldown), is one
+    still open. "She" is the person — every record she has (identity's
+    person_records): a run started on the record she was merged out of is
+    still hers, so a merge never opens a second run or skips a cooldown.
 
     On a keyed plan (entry.key, canon T20 col 13: "one run per <field>")
     the history judged is that KEY's, not the customer's — "has this
@@ -170,34 +173,43 @@ def admission_facts_query(
     keep the customer-wide read."""
     if enrollment_key is not None:
         query = f"""
-            SELECT count(*) AS runs, max(entered_at) AS latest_entered_at
+            SELECT count(*) AS runs, max(entered_at) AS latest_entered_at,
+                   count(*) FILTER (WHERE status <> 'exited') AS open_runs
             FROM {ENROLLMENT_TABLE}
             WHERE merchant_id = $1 AND workflow_id = $2
-              AND enrollment_key = $3 AND customer_id = $4
+              AND enrollment_key = $3 AND customer_id = ANY($4::uuid[])
         """
-        return query, [merchant_id, workflow_id, enrollment_key, customer_id]
+        return query, [merchant_id, workflow_id, enrollment_key, customer_ids]
     query = f"""
-        SELECT count(*) AS runs, max(entered_at) AS latest_entered_at
+        SELECT count(*) AS runs, max(entered_at) AS latest_entered_at,
+               count(*) FILTER (WHERE status <> 'exited') AS open_runs
         FROM {ENROLLMENT_TABLE}
-        WHERE merchant_id = $1 AND workflow_id = $2 AND customer_id = $3
+        WHERE merchant_id = $1 AND workflow_id = $2
+          AND customer_id = ANY($3::uuid[])
     """
-    return query, [merchant_id, workflow_id, customer_id]
+    return query, [merchant_id, workflow_id, customer_ids]
 
 
 def source_event_used_query(
-    merchant_id: str, workflow_id: str, customer_id: str, source_event_id: str
+    merchant_id: str,
+    workflow_id: str,
+    customer_ids: List[str],
+    source_event_id: str,
 ) -> Tuple[str, List[Any]]:
     """Per-event idempotency for the entry processor: the window scan may
     hand us the same event twice (at-least-once, by design); a run born
-    from it already existing — open OR exited — means skip."""
+    from it already existing — open OR exited — means skip. Across every
+    record of the person: a replay after a merge resolves to the survivor,
+    while the run it made carries the record she had then."""
     query = f"""
         SELECT EXISTS (
             SELECT 1 FROM {ENROLLMENT_TABLE}
-            WHERE merchant_id = $1 AND workflow_id = $2 AND customer_id = $3
+            WHERE merchant_id = $1 AND workflow_id = $2
+              AND customer_id = ANY($3::uuid[])
               AND context->>'source_event_id' = $4
         ) AS used
     """
-    return query, [merchant_id, workflow_id, customer_id, source_event_id]
+    return query, [merchant_id, workflow_id, customer_ids, source_event_id]
 
 
 def claim_due_runs_query(limit: int, lease_seconds: int) -> Tuple[str, List[Any]]:
@@ -354,19 +366,23 @@ def record_run_error_query(
 
 
 def open_runs_for_customer_query(
-    merchant_id: str, customer_id: str
+    merchant_id: str, customer_ids: List[str]
 ) -> Tuple[str, List[Any]]:
     """The consumer's per-run read (rollout phase 13): this customer's
     open runs across every plan, so goals and listening are judged
-    against each run's PINNED version. The customer index carries it; a
-    customer with nothing open costs one empty indexed read."""
+    against each run's PINNED version. Every record of the person: her
+    order, stamped on the record she was merged into, still ends the run
+    started on the old one, and her reply still reaches it. The customer
+    index carries it; a customer with nothing open costs one empty
+    indexed read."""
     query = f"""
         SELECT {_RUN_COLUMNS}
         FROM {ENROLLMENT_TABLE}
-        WHERE merchant_id = $1 AND customer_id = $2 AND status <> 'exited'
+        WHERE merchant_id = $1 AND customer_id = ANY($2::uuid[])
+          AND status <> 'exited'
         ORDER BY entered_at, id
     """
-    return query, [merchant_id, customer_id]
+    return query, [merchant_id, customer_ids]
 
 
 def resume_run_by_id_query(
@@ -1039,22 +1055,23 @@ _RUN_COLUMNS_OF_E = ", ".join(f"e.{c.strip()}" for c in _RUN_COLUMNS.split(","))
 
 
 def customer_runs_query(
-    merchant_id: str, customer_id: str, limit: int
+    merchant_id: str, customer_ids: List[str], limit: int
 ) -> Tuple[str, List[Any]]:
     """The customer's journey (rollout phase 09): her runs across EVERY
     plan in the order they began, each naming its plan — the loan funnel's
-    journey view while it runs as clocks. Both tables are outreach's; the
-    customer index carries the read."""
+    journey view while it runs as clocks. Every record of the person, so a
+    merge does not hide the runs of the record she had before. Both tables
+    are outreach's; the customer index carries the read."""
     query = f"""
         SELECT {_RUN_COLUMNS_OF_E}, w.name AS workflow_name
         FROM {ENROLLMENT_TABLE} e
         JOIN {WORKFLOW_TABLE} w
           ON w.merchant_id = e.merchant_id AND w.id = e.workflow_id
-        WHERE e.merchant_id = $1 AND e.customer_id = $2
+        WHERE e.merchant_id = $1 AND e.customer_id = ANY($2::uuid[])
         ORDER BY e.entered_at, e.id
         LIMIT $3
     """
-    return query, [merchant_id, customer_id, limit]
+    return query, [merchant_id, customer_ids, limit]
 
 
 def sweep_exited_runs_query(cutoff: datetime, batch: int) -> Tuple[str, List[Any]]:

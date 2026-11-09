@@ -18,6 +18,7 @@ from app.core.config.static import (
     CRM_RUN_SWEEP_BATCH_SIZE,
 )
 from app.core.logger import logger
+from app.crm.identity.contracts import person_records
 from app.crm.outreach import steps as steps_log
 from app.crm.outreach.db.accessors import (
     enrollment as enrollment_accessor,
@@ -197,8 +198,11 @@ async def customer_runs(
     merchant_id: str, customer_id: str, limit: int
 ) -> List[CustomerRun]:
     """The customer's journey: her runs across every plan, in the order
-    they began (rollout phase 09)."""
-    return await enrollment_accessor.customer_runs(merchant_id, customer_id, limit)
+    they began (rollout phase 09) — on every record she has (identity's
+    person_records), so a merge does not hide the runs from before it."""
+    return await enrollment_accessor.customer_runs(
+        merchant_id, await person_records(merchant_id, customer_id), limit
+    )
 
 
 async def run_retention_sweep_tick() -> None:
