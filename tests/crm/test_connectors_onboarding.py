@@ -257,6 +257,13 @@ class _FakeBindingAccessor:
         self.upserts.append(args)
         return _binding()
 
+    async def retire_others_paused_bindings(self, txn, merchant_id, channel, address):
+        """Test double: record whose leftover pipes would be retired."""
+        self.retired_for = getattr(self, "retired_for", []) + [
+            (merchant_id, channel, address)
+        ]
+        return []
+
 
 def _installation_read(**overrides) -> InstallationRead:
     fields = dict(
@@ -506,6 +513,39 @@ async def test_a_retired_endpoint_is_refused(monkeypatch) -> None:
     )
     with pytest.raises(OnboardingError, match="retired"):
         await onboard("shop", "whatsapp", _request().model_dump())
+
+
+async def test_an_exclusive_account_comes_back_to_its_own_retired_pipe(
+    monkeypatch,
+) -> None:
+    """Xyne 4/5: a Xyne app is its own pipe, so it changes hands — A
+    disconnects, B connects (A's paused pipe is retired), B disconnects, A
+    connects again. The provider just vouched for the token and the account
+    lock proved nobody else holds it, so A's retired pipe is revived, not
+    refused: the T12 recycled-number rule is about numbers, not accounts."""
+    bindings = _FakeBindingAccessor(existing=_binding(status="retired"))
+    _patch_onboarding(monkeypatch, bindings=bindings, exclusive_account=True)
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert len(bindings.upserts) == 1
+
+
+async def test_an_exclusive_account_retires_another_merchants_leftover_pipe(
+    monkeypatch,
+) -> None:
+    """Inside the atom, after the account lock: the leftover is retired so
+    the address is free for the new holder (crm_channel_binding_address_uq)
+    — and only for an exclusive account."""
+    bindings = _FakeBindingAccessor()
+    _patch_onboarding(monkeypatch, bindings=bindings, exclusive_account=True)
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert getattr(bindings, "retired_for", None) == [
+        ("shop", "whatsapp", _result().address)
+    ]
+
+    plain = _FakeBindingAccessor()
+    _patch_onboarding(monkeypatch, bindings=plain)
+    await onboard("shop", "whatsapp", _request().model_dump())
+    assert getattr(plain, "retired_for", None) is None
 
 
 async def test_a_second_number_does_not_steal_the_default_route(monkeypatch) -> None:

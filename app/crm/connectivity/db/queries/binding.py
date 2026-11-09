@@ -165,6 +165,31 @@ def pause_bindings_for_installation_query(
     return query, [merchant_id, installation_id, BINDING_PAUSED, BINDING_ACTIVE]
 
 
+def retire_others_paused_bindings_query(
+    merchant_id: str, channel: str, address: str
+) -> Tuple[str, List[Any]]:
+    """Part of onboarding's atom, for an EXCLUSIVE account only: another
+    merchant's paused pipe on this address is the leftover of a door they
+    disconnected — they surrendered the account, so the pipe is retired
+    (kept as the tombstone their manifest rows point at) and the address is
+    free for the new holder under crm_channel_binding_address_uq.
+
+    Paused only: an ACTIVE pipe of another merchant is never touched here —
+    if one existed the account check above was wrong, and the unique index
+    refusing the new pipe is the right answer."""
+    query = f"""
+        UPDATE {BINDING_TABLE}
+           SET status = $4,
+               is_primary = false
+         WHERE channel = $2
+           AND address = $3
+           AND merchant_id <> $1
+           AND status = $5
+        RETURNING {BINDING_COLUMNS}
+    """
+    return query, [merchant_id, channel, address, BINDING_RETIRED, BINDING_PAUSED]
+
+
 def inbound_binding_query(channel: str, address: str) -> Tuple[str, List[Any]]:
     """The pipe an inbound fact ARRIVED on — the one lookup with no merchant.
 

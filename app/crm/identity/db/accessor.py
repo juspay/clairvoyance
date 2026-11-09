@@ -23,6 +23,7 @@ from app.crm.identity.db.queries import (
     insert_customer_query,
     insert_row_handle_query,
     list_customers_query,
+    live_handle_query,
     live_row_handles_query,
     lock_live_customer_query,
     merge_customer_query,
@@ -37,6 +38,7 @@ from app.crm.identity.db.queries import (
 )
 from app.crm.identity.schemas import CrmCustomer, CrmCustomerSummary
 from app.crm.shared.db import crm_connection
+from app.crm.shared.handles import UNSCOPED
 from app.crm.shared.normalize import normalize_email, normalize_phone
 
 
@@ -65,6 +67,17 @@ async def get_customer(merchant_id: str, customer_id: str) -> Optional[CrmCustom
     async with crm_connection() as conn:
         row = await conn.fetchrow(query, *values)
     return decode_crm_customer(row) if row is not None else None
+
+
+async def get_live_handle(
+    merchant_id: str, customer_id: str, kind: str, scope: str = UNSCOPED
+) -> Optional[str]:
+    """This customer's live id of one row kind, or None. Self-scoped: a
+    send reads it once, outside any atom."""
+    query, values = live_handle_query(merchant_id, customer_id, kind, scope)
+    async with crm_connection() as conn:
+        value = await conn.fetchval(query, *values)
+    return str(value) if value is not None else None
 
 
 async def probe_customer(

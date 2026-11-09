@@ -14,7 +14,7 @@ B5; the call sites never change.
 """
 
 import asyncio
-from typing import Optional
+from typing import Dict, Optional
 
 from app.core.config.static import CRM_MESSAGE_SEND_TIMEOUT_SECONDS
 from app.core.logger import logger
@@ -24,7 +24,10 @@ from app.crm.connectivity.vocabulary.reasons import (
     REASON_GATE_UNAVAILABLE,
     REASON_SUPPRESSED,
 )
+from app.crm.identity.contracts import get_customer
 from app.crm.platform.contracts import is_suppressed
+from app.crm.shared.handles import ROW_KIND_NAMES
+from app.crm.shared.normalize import normalize_email, normalize_phone
 
 
 async def gate(message: QueuedMessage) -> Optional[str]:
@@ -51,7 +54,7 @@ async def gate(message: QueuedMessage) -> Optional[str]:
         # lease-pin test bounds BATCH × timeout × 2, which covers this
         # deadline plus send()'s.
         if await asyncio.wait_for(
-            is_suppressed({kind: message.sent_to_address}),
+            _is_suppressed(message, kind),
             timeout=CRM_MESSAGE_SEND_TIMEOUT_SECONDS,
         ):
             return REASON_SUPPRESSED
@@ -69,6 +72,36 @@ async def gate(message: QueuedMessage) -> Optional[str]:
         logger.opt(exception=e).error(f"gate probe raised for {message.id}")
         return REASON_GATE_UNAVAILABLE
     return None
+
+
+async def _is_suppressed(message: QueuedMessage, kind: str) -> bool:
+    """The address — and, on a channel addressed by a row-kind id (Xyne's
+    user id), the person's own phone and email too.
+
+    The book is probed by the customer's own handle values
+    (design/gate-mechanics.md §3.2), and a "*" STOP on a phone means every
+    channel. A phone channel's address IS the phone, so the address alone
+    was always enough; a Xyne send's address is not, and a person who said
+    STOP by phone must not get a Xyne form. A stored value that will not
+    normalize is left out: the book only holds normalized values, so no STOP
+    could be filed under it."""
+    handles: Dict[str, str] = {kind: message.sent_to_address}
+    if kind in ROW_KIND_NAMES:
+        customer = await get_customer(message.merchant_id, message.customer_id)
+        if customer is None:
+            # Missing is NO (ADR 0018): without the person, a STOP filed
+            # under their phone or email cannot be checked. gate() turns
+            # this into gate_unavailable.
+            raise LookupError(
+                f"customer {message.customer_id} not found for a {kind} send"
+            )
+        phone = normalize_phone(customer.phone) if customer.phone else None
+        email = normalize_email(customer.email) if customer.email else None
+        if phone:
+            handles["phone"] = phone
+        if email:
+            handles["email"] = email
+    return await is_suppressed(handles)
 
 
 def mint_send_token(message: QueuedMessage) -> SendToken:

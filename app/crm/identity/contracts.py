@@ -9,7 +9,7 @@ from app.crm.identity.attributes import (
     mutate_customer_attribute,
     read_customer_attribute,
 )
-from app.crm.identity.db.accessor import get_customer
+from app.crm.identity.db.accessor import get_customer, get_live_handle
 from app.crm.identity.facts import assert_facts, customer_facts
 from app.crm.identity.resolve import resolve
 from app.crm.identity.schemas import CustomerFacts
@@ -25,6 +25,7 @@ __all__ = [
     "customer_facts",
     "CustomerFacts",
     "get_customer",
+    "get_live_handle",
     "read_customer_attribute",
     "find_customer_by_attribute",
     "mutate_customer_attribute",

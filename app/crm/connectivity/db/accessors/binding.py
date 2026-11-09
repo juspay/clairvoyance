@@ -18,6 +18,7 @@ from app.crm.connectivity.db.queries.binding import (
     merchant_bindings_query,
     pause_bindings_for_installation_query,
     primary_binding_query,
+    retire_others_paused_bindings_query,
     update_conversation_channel_query,
     update_template_message_channel_query,
     upsert_binding_query,
@@ -111,6 +112,16 @@ async def pause_bindings_for_installation(
 ) -> List[ChannelBinding]:
     """Every pipe under a door being revoked, paused and un-defaulted."""
     query, values = pause_bindings_for_installation_query(merchant_id, installation_id)
+    rows = await conn.fetch(query, *values)
+    return [decode_binding(row) for row in rows]
+
+
+async def retire_others_paused_bindings(
+    conn: DbTxn, merchant_id: str, channel: str, address: str
+) -> List[ChannelBinding]:
+    """Another merchant's paused pipe on this address, retired — an
+    exclusive account changing hands (see the query)."""
+    query, values = retire_others_paused_bindings_query(merchant_id, channel, address)
     rows = await conn.fetch(query, *values)
     return [decode_binding(row) for row in rows]
 

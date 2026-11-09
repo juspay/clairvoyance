@@ -22,6 +22,7 @@ from app.crm.connectivity.providers.xyne.onboard import (
     XyneOnboarder,
     token_app_id,
 )
+from app.crm.connectivity.providers.xyne.templates import XyneTemplates
 from tests.crm.doubles import stub_http
 
 
@@ -63,11 +64,13 @@ def _accepts(monkeypatch):
 # --- the registry ------------------------------------------------------------
 
 
-def test_xyne_is_a_registered_door_with_no_pipe() -> None:
+def test_xyne_is_a_registered_door_and_its_own_pipe() -> None:
+    """Xyne 4/5: the app sends as well as receives — its channel is "xyne"
+    and its forms register with us (Xyne keeps none)."""
     spec = CONNECTORS["xyne"]
     assert spec.source == "xyne"
-    assert spec.channel is None
-    assert spec.templates is None
+    assert spec.channel == "xyne"
+    assert isinstance(spec.templates, XyneTemplates)
     assert spec.request_model is OnboardXyneRequest
     assert spec.actions == {}
 
@@ -127,7 +130,7 @@ def test_the_app_id_is_not_a_field_the_caller_can_type() -> None:
     a typed one is not even read."""
     assert "app_id" not in OnboardXyneRequest.model_fields
     typed = OnboardXyneRequest(**{**_request().model_dump(), "app_id": "other"})
-    assert XyneOnboarder().identify(typed) == (APP_ID, None)
+    assert XyneOnboarder().identify(typed) == (APP_ID, APP_ID)
 
 
 def test_a_pasted_token_and_secret_are_trimmed_before_they_are_checked() -> None:
@@ -178,7 +181,9 @@ def test_a_token_naming_no_usable_app_reads_none(token) -> None:
 
 
 def test_identify_knows_the_app_before_the_handshake() -> None:
-    assert XyneOnboarder().identify(_request()) == (APP_ID, None)
+    """The app id is both the account and its pipe's address (4/5): the
+    binding a form leaves on is the app itself."""
+    assert XyneOnboarder().identify(_request()) == (APP_ID, APP_ID)
 
 
 # --- the handshake -----------------------------------------------------------
@@ -195,7 +200,7 @@ async def test_a_good_token_becomes_a_healthy_door_with_its_bundle(
     assert str(call.url) == CHECK_URL
     assert call.headers["authorization"] == f"Bearer {TOKEN}"
     assert result.external_account_id == APP_ID
-    assert result.address is None
+    assert result.address == APP_ID
     assert result.health_level == "healthy"
     assert result.display_label == f"Xyne app {APP_ID}"
     # Everything onboarding.py vaults, encrypted: secrets AND the base URL.
@@ -204,6 +209,20 @@ async def test_a_good_token_becomes_a_healthy_door_with_its_bundle(
         onboard.WEBHOOK_SECRET: WEBHOOK_SECRET,
         onboard.BASE_URL: BASE,
     }
+
+
+async def test_a_preview_user_is_vaulted_with_the_app(monkeypatch) -> None:
+    """The person a form's preview goes to on submit (4/5) is kept with the
+    app's connection, normalized like every Xyne user id."""
+    _accepts(monkeypatch)
+    result = await XyneOnboarder().gather(_request(preview_user_id="  cm8xpreview01 "))
+    assert result.bundle[onboard.PREVIEW_USER_ID] == "cm8xpreview01"
+
+
+@pytest.mark.parametrize("bad", ["", "null", "env-api-user", "a b", "x" * 65])
+def test_a_preview_user_that_is_no_xyne_id_is_refused(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        _request(preview_user_id=bad)
 
 
 async def test_the_merchants_label_is_kept(monkeypatch) -> None:

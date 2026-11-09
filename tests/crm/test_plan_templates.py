@@ -101,7 +101,41 @@ def _catalogs() -> Catalogs:
         catalogs[topic] = {p: with_ops(f) for p, f in _loan_registration().items()}
     for topic in [*LINE_OPEN, *LINE_DONE]:
         catalogs[topic] = {p: with_ops(f) for p, f in _line_registration().items()}
+    catalogs["interview.requested"] = {
+        p: with_ops(f) for p, f in _interview_registration().items()
+    }
     return catalogs
+
+
+def _interview_registration() -> Dict[str, CatalogField]:
+    """What Pragathi registers for interview.requested (Xyne 4/5): the person
+    by phone, their name, and the free slots as a list — whole on a Xyne
+    send ("$slots"), one line of labels anywhere else. Their Xyne user id is
+    not a registered field: a vendor may declare only phone and name as
+    identity, and the flat reader takes ``xyne_user_id`` from the top level
+    of every letter (Xyne 2/5)."""
+    fields = [
+        CatalogField(
+            path="payload.customer_mobile_number",
+            type="phone",
+            label="Phone",
+            identity="phone",
+        ),
+        CatalogField(
+            path="payload.candidate_name",
+            type="text",
+            label="Candidate",
+            variable=True,
+        ),
+        CatalogField(
+            path="payload.slots",
+            type="list",
+            label="Free slots",
+            variable=True,
+            item_format="{label}",
+        ),
+    ]
+    return {f.path: f for f in fields}
 
 
 def _line_registration() -> Dict[str, CatalogField]:

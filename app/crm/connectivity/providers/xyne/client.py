@@ -1,7 +1,8 @@
 """The HTTP transport every Xyne face shares — base URL, auth, verdicts.
 
 Never leaves providers/xyne (like meta/graph.py): onboard.py checks a token
-through it, and no face builds a header itself.
+through it, templates.py posts a form's preview through it, adapter.py takes
+its URL and headers from it, and no face builds a header itself.
 
 **Where a request may go.** The base URL is merchant-supplied at onboarding,
 so it is checked every time a token is about to ride on it: https only, and a
@@ -13,7 +14,7 @@ default, pinned here), so a 30x cannot carry the bearer token somewhere else.
 and raises anything else. Each face turns XyneRefused into its own error type.
 """
 
-from typing import Dict
+from typing import Any, Dict, List
 from urllib.parse import urlsplit
 
 import httpx
@@ -35,9 +36,18 @@ ALLOWED_HOST_SUFFIXES = ["xyne.juspay.net"]
 #: at /api/apps itself.
 TOKEN_CHECK_PATH = "/api/apps/channel/list?limit=1&joined=true"
 
+#: Where an app posts a message (xyne-spaces apps/backend/src/apps/routes/
+#: chat.ts, mounted under /api/apps/chat). Needs chat:write. A ``channelId``
+#: that names a USER posts into the bot's DM with them — only a user of the
+#: app's own workspace (middelware/channelValidation.ts,
+#: resolveBotDmChannelId); anyone else is a 404. Answers 201
+#: ``{conversationId, messageId, …}``; the messageId is the Message row's
+#: primary key, the same id a form answer's ``context.messageId`` carries.
+POST_MESSAGE_PATH = "/api/apps/chat/postMessage"
+
 #: The error code Xyne's requirePermission middleware answers 403 with — only
 #: reachable AFTER the authenticator accepted the token.
-_MISSING_PERMISSION = "missing_permission"
+MISSING_PERMISSION = "missing_permission"
 
 
 class XyneRefused(Exception):
@@ -73,8 +83,14 @@ def normalize_base_url(raw: str) -> str:
     return value
 
 
-def _headers(api_token: str) -> Dict[str, str]:
+def auth_headers(api_token: str) -> Dict[str, str]:
     return {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
+
+
+def post_message_url(base_url: str) -> str:
+    """PURE: the postMessage URL under this base — checked like every URL a
+    token rides on (ValueError when the base is not a Xyne host)."""
+    return normalize_base_url(base_url) + POST_MESSAGE_PATH
 
 
 async def check_token(base_url: str, api_token: str) -> None:
@@ -88,7 +104,7 @@ async def check_token(base_url: str, api_token: str) -> None:
     url = normalize_base_url(base_url) + TOKEN_CHECK_PATH
     async with create_http_client(timeout=CRM_ACTION_TIMEOUT_SECONDS) as client:
         response = await client.get(
-            url, headers=_headers(api_token), follow_redirects=False
+            url, headers=auth_headers(api_token), follow_redirects=False
         )
     if response.status_code == 403 and _is_missing_permission(response):
         return
@@ -97,14 +113,82 @@ async def check_token(base_url: str, api_token: str) -> None:
     _raise_for_status(response, "token check", api_token)
 
 
-def _is_missing_permission(response: httpx.Response) -> bool:
-    """PURE: whether a 403 is Xyne's permission refusal (token accepted)
-    rather than anything else. An unreadable body is not."""
+async def post_message(
+    base_url: str, api_token: str, body: Dict[str, Any]
+) -> Dict[str, Any]:
+    """POST one message and return Xyne's answer, or raise.
+
+    For the template face's preview, where Xyne's verdict on the form IS
+    the answer: XyneRefused carries Xyne's own reasons (its validator's
+    ``path: message`` lines) for the merchant to fix; anything else is a
+    moment Xyne could not answer. The send path does not come through
+    here — it pins its own timeout to the claim lease and classifies
+    every status itself (adapter.py).
+    """
+    url = post_message_url(base_url)
+    async with create_http_client(timeout=CRM_ACTION_TIMEOUT_SECONDS) as client:
+        response = await client.post(
+            url, json=body, headers=auth_headers(api_token), follow_redirects=False
+        )
+    code = response.status_code
+    if 400 <= code < 500 and code != 429:
+        raise XyneRefused(
+            f"Xyne refused it ({code}): {refusal_text(response, api_token)}"
+        )
+    _raise_for_status(response, "message", api_token)
+    return _json_object(response)
+
+
+def refusal_text(response: httpx.Response, api_token: str, limit: int = 500) -> str:
+    """Xyne's reasons for a 4xx in its own words: the ``error`` sentence and
+    each validator line it lists (``components.0.props.label: Required``),
+    truncated and digit-masked like every excerpt. An unreadable body falls
+    back to the raw excerpt."""
+    body = _json_object(response)
+    parts: List[str] = []
+    for key in ("error", "message"):
+        if isinstance(body.get(key), str) and body[key].strip():
+            parts.append(body[key].strip())
+    details = body.get("details")
+    if isinstance(details, list):
+        for item in details:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("message"), str):
+                path = item.get("path")
+                where = ".".join(str(p) for p in path) if isinstance(path, list) else ""
+                parts.append(
+                    f"{where}: {item['message']}" if where else item["message"]
+                )
+    if not parts:
+        return _excerpt(response, api_token, limit)
+    text = "; ".join(parts)
+    if api_token:
+        text = text.replace(api_token, "[token]")
+    return mask_digit_runs(text[:limit])
+
+
+def error_word(response: httpx.Response) -> str:
+    """PURE: the ``error`` word of a Xyne refusal body, or "" — how a 403 says
+    whether the token was accepted (``missing_permission``) or not."""
+    error = _json_object(response).get("error")
+    return error if isinstance(error, str) else ""
+
+
+def _json_object(response: httpx.Response) -> Dict[str, Any]:
+    """The body as an object, or an empty one — a load balancer's HTML page
+    is not a reason to raise past the status code that carries the verdict."""
     try:
         body = response.json()
     except ValueError:
-        return False
-    return isinstance(body, dict) and body.get("error") == _MISSING_PERMISSION
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _is_missing_permission(response: httpx.Response) -> bool:
+    """PURE: whether a 403 is Xyne's permission refusal (token accepted)
+    rather than anything else. An unreadable body is not."""
+    return error_word(response) == MISSING_PERMISSION
 
 
 def _raise_for_status(response: httpx.Response, what: str, api_token: str) -> None:
@@ -134,7 +218,14 @@ def _excerpt(response: httpx.Response, api_token: str, limit: int = 200) -> str:
 
 __all__ = [
     "ALLOWED_HOST_SUFFIXES",
+    "MISSING_PERMISSION",
+    "POST_MESSAGE_PATH",
     "XyneRefused",
+    "auth_headers",
     "check_token",
+    "error_word",
     "normalize_base_url",
+    "post_message",
+    "post_message_url",
+    "refusal_text",
 ]

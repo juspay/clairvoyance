@@ -42,10 +42,24 @@ class Channel:
     # channel that does not, the send door skips the registry and the route
     # carries no template row.
     registers_templates: bool
+    # Whether a send may carry a LIST as a variable, not only one line of
+    # text. A WhatsApp blank is one line, so a declared list reaches it
+    # joined; a Xyne form's options are the elements themselves ("$slots"
+    # fills from data.slots), read off the run's letter at send time.
+    structured_variables: bool = False
 
 
 CHANNELS: Dict[str, Channel] = {
     "whatsapp": Channel(gate_handle_kind="phone", registers_templates=True),
+    # A Xyne form goes to a person's Xyne user id (a crm_customer_handle
+    # row, Xyne 2/5). Its layout is registered with US, not with Xyne —
+    # Xyne keeps no templates; every message carries its whole form — and
+    # Xyne's own validator checks it once, on submit (xyne/templates.py).
+    "xyne": Channel(
+        gate_handle_kind="xyne_user_id",
+        registers_templates=True,
+        structured_variables=True,
+    ),
 }
 
 
@@ -58,6 +72,14 @@ def gate_handle_kind_for(channel: str) -> Optional[str]:
     """
     entry = CHANNELS.get(channel)
     return entry.gate_handle_kind if entry else None
+
+
+def takes_structured_variables(channel: str) -> bool:
+    """Whether a send on ``channel`` may carry a list as a variable. An
+    unregistered channel answers False — the text-only posture every
+    channel had before this flag."""
+    entry = CHANNELS.get(channel)
+    return entry.structured_variables if entry else False
 
 
 def registers_templates_for(channel: str) -> bool:
