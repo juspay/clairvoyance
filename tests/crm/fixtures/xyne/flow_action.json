@@ -1,0 +1,86 @@
+{
+  "actionId": "submit-interview-availability",
+  "type": "submit",
+  "values": {
+    "slots_2026-10-29": [
+      "10:00",
+      "11:00"
+    ],
+    "slots_2026-10-30": [
+      "15:00"
+    ]
+  },
+  "context": {
+    "flowJSON": {
+      "version": "2.0",
+      "screenId": "interview-availability",
+      "title": "Your PM has requested you to take an Elimination interview (frontend) between 29 and 31 October 2026. Pick the dates that work for you, and for each date select one or more time slots (9 AM – 7 PM).",
+      "components": [
+        {
+          "id": "time-2026-10-29",
+          "type": "dropdown",
+          "props": {
+            "name": "slots_2026-10-29",
+            "label": "29 October 2026 — time slots",
+            "options": "$timeSlots",
+            "multiple": true
+          }
+        },
+        {
+          "id": "time-2026-10-30",
+          "type": "dropdown",
+          "props": {
+            "name": "slots_2026-10-30",
+            "label": "30 October 2026 — time slots",
+            "options": "$timeSlots",
+            "multiple": true
+          }
+        },
+        {
+          "id": "submit-btn",
+          "type": "button",
+          "props": {
+            "label": "Submit Availability",
+            "variant": "primary",
+            "action": {
+              "type": "submit",
+              "actionId": "submit-interview-availability"
+            }
+          }
+        }
+      ],
+      "data": {
+        "kind": "interview_availability",
+        "timeSlots": [
+          {
+            "label": "10:00 AM",
+            "value": "10:00"
+          },
+          {
+            "label": "11:00 AM",
+            "value": "11:00"
+          },
+          {
+            "label": "03:00 PM",
+            "value": "15:00"
+          }
+        ]
+      },
+      "state": {
+        "values": {
+          "slots_2026-10-29": [],
+          "slots_2026-10-30": []
+        },
+        "touched": {},
+        "errors": {},
+        "submitting": false,
+        "submitted": false,
+        "history": [],
+        "loadingComponentIds": []
+      }
+    },
+    "messageId": "cmh3b7r2t000aqz8m4n1x8k5p",
+    "conversationId": "cmh3b7r0q0009qz8a7c2v6w1d",
+    "userId": "cmh2x9k1p0003qz8w5f4r7t2e"
+  }
+}
