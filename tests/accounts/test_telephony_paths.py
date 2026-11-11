@@ -1,6 +1,6 @@
 """The Plivo REST paths outside the live call: they run on the account the
 lead's template names, the MPC callback always answers the waiting bot, and
-a recording's keys go only to Plivo."""
+a recording is fetched only from Plivo (with its keys) or our own copy."""
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -97,11 +97,13 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
     """
     seen: List[Tuple[str, Any]] = []
 
+    class Body:
+        async def iter_chunked(self, _n: int) -> Any:
+            yield b"mp3"
+
     class Response:
         status = 200
-
-        async def read(self) -> bytes:
-            return b"mp3"
+        content = Body()
 
     class Session:
         def __init__(self, *_a: Any, **_k: Any) -> None:
@@ -126,25 +128,26 @@ def gets(monkeypatch: pytest.MonkeyPatch) -> List[Tuple[str, Any]]:
 
 
 @pytest.mark.parametrize(
-    "url, keys_sent",
+    "url, expected",
     [
-        ("https://media.plivo.com/v1/Account/x/Recording/y.mp3", True),
+        ("https://media.plivo.com/v1/Account/x/Recording/y.mp3", "keys"),
         # a regional recording host (India's is aps1)
-        ("https://aps1.media.plivo.com/v1/Account/x/Recording/y.mp3", True),
-        # Plivo's API is not a recording: never signed
-        ("https://api.plivo.com/v1/Account/x/Call/", False),
+        ("https://aps1.media.plivo.com/v1/Account/x/Recording/y.mp3", "keys"),
         # our uploaded copy on the storage CDN: fetched, but without keys
-        ("https://sdk.beta.breezesdk.store/breeze-buddy/recordings/r.mp3", False),
-        ("https://attacker.example/rec.mp3", False),
-        ("http://media.plivo.com/v1/Account/x/Recording/y.mp3", False),
-        ("https://plivo.com.attacker.example/rec.mp3", False),
+        ("https://sdk.beta.breezesdk.store/breeze-buddy/recordings/r.mp3", "no keys"),
+        # a Plivo recording host in cleartext: fetched, but without keys
+        ("http://media.plivo.com/v1/Account/x/Recording/y.mp3", "no keys"),
+        # Plivo's API is not a recording host
+        ("https://api.plivo.com/v1/Account/x/Call/", "refused"),
+        ("https://attacker.example/rec.mp3", "refused"),
+        ("https://plivo.com.attacker.example/rec.mp3", "refused"),
     ],
 )
 def test_a_recordings_keys_go_only_to_plivo_over_https(
     gets: List[Tuple[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
     url: str,
-    keys_sent: bool,
+    expected: str,
 ) -> None:
     looked_up: List[Any] = []
 
@@ -161,14 +164,17 @@ def test_a_recordings_keys_go_only_to_plivo_over_https(
     monkeypatch.setattr(recording, "get_lead_by_call_id", get_lead_by_call_id)
     monkeypatch.setattr(recording, "lead_plivo_account", account)
     audio = asyncio.run(recording.download_call_recording(url, "CA-1"))
+    if expected == "refused":
+        # another host's file is never fetched, so never stored as ours
+        assert audio is None and gets == [] and looked_up == []
+        return
     assert audio is not None and audio.read() == b"mp3"
     [(fetched, auth)] = gets
     assert fetched == url
-    if keys_sent:
+    if expected == "keys":
         assert auth is not None and auth.login == US_ID
     else:
-        # any other URL is fetched without keys, and without reading the
-        # lead's account at all
+        # fetched without keys, and without reading the lead's account at all
         assert auth is None and looked_up == []
 
 
