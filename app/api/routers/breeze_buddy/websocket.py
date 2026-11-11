@@ -2,6 +2,9 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from app.ai.voice.agents.breeze_buddy.managers.calls import handle_call_completion
+from app.ai.voice.agents.breeze_buddy.services.telephony.signature_observe import (
+    observe_websocket_signature,
+)
 from app.ai.voice.agents.breeze_buddy.services.telephony.utils import get_voice_provider
 from app.ai.voice.agents.breeze_buddy.utils.transport.websockets import (
     is_caller_disconnected_error,
@@ -38,6 +41,8 @@ async def telephony_websocket_handler_v2(
     completion handlers (both call Smart Router's release endpoint).
     """
     logger.info(f"Handling v2 websocket for {template}")
+
+    await observe_websocket_signature(websocket, service_provider)
 
     async with create_aiohttp_session() as session:
         try:
