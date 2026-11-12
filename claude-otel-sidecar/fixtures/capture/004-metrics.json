@@ -1,0 +1,498 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "os.type",
+            "value": {
+              "stringValue": "darwin"
+            }
+          },
+          {
+            "key": "os.version",
+            "value": {
+              "stringValue": "25.0.0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "2.1.280"
+            }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeMetrics": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code",
+            "version": "2.1.280"
+          },
+          "metrics": [
+            {
+              "name": "claude_code.cost.usage",
+              "description": "Cost of the Claude Code session",
+              "unit": "USD",
+              "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": true,
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {
+                        "key": "user.id",
+                        "value": {
+                          "stringValue": "3822d219f13f3b17d3039c6d2aa59a92d32c30434136c48cc12b2ec8b52f1867"
+                        }
+                      },
+                      {
+                        "key": "session.id",
+                        "value": {
+                          "stringValue": "c7a9d906-46f6-4570-b4ad-811b6d2971c1"
+                        }
+                      },
+                      {
+                        "key": "organization.id",
+                        "value": {
+                          "stringValue": "99ce97bc-d6f5-42a4-b47a-c238cc27c306"
+                        }
+                      },
+                      {
+                        "key": "user.email",
+                        "value": {
+                          "stringValue": "narsimha.reddy@juspay.in"
+                        }
+                      },
+                      {
+                        "key": "user.account_uuid",
+                        "value": {
+                          "stringValue": "ec5e5d57-3340-4e6f-acb4-3c86f305f729"
+                        }
+                      },
+                      {
+                        "key": "user.account_id",
+                        "value": {
+                          "stringValue": "user_01WBtmnnu63LHSZCQwQvqtkG"
+                        }
+                      },
+                      {
+                        "key": "terminal.type",
+                        "value": {
+                          "stringValue": "dumb"
+                        }
+                      },
+                      {
+                        "key": "model",
+                        "value": {
+                          "stringValue": "claude-sonnet-5"
+                        }
+                      },
+                      {
+                        "key": "query_source",
+                        "value": {
+                          "stringValue": "main"
+                        }
+                      },
+                      {
+                        "key": "effort",
+                        "value": {
+                          "stringValue": "high"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1791836583600000000",
+                    "timeUnixNano": "1791836583864000000",
+                    "asDouble": 0.0506748
+                  }
+                ]
+              }
+            },
+            {
+              "name": "claude_code.token.usage",
+              "description": "Number of tokens used",
+              "unit": "tokens",
+              "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": true,
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {
+                        "key": "user.id",
+                        "value": {
+                          "stringValue": "3822d219f13f3b17d3039c6d2aa59a92d32c30434136c48cc12b2ec8b52f1867"
+                        }
+                      },
+                      {
+                        "key": "session.id",
+                        "value": {
+                          "stringValue": "c7a9d906-46f6-4570-b4ad-811b6d2971c1"
+                        }
+                      },
+                      {
+                        "key": "organization.id",
+                        "value": {
+                          "stringValue": "99ce97bc-d6f5-42a4-b47a-c238cc27c306"
+                        }
+                      },
+                      {
+                        "key": "user.email",
+                        "value": {
+                          "stringValue": "narsimha.reddy@juspay.in"
+                        }
+                      },
+                      {
+                        "key": "user.account_uuid",
+                        "value": {
+                          "stringValue": "ec5e5d57-3340-4e6f-acb4-3c86f305f729"
+                        }
+                      },
+                      {
+                        "key": "user.account_id",
+                        "value": {
+                          "stringValue": "user_01WBtmnnu63LHSZCQwQvqtkG"
+                        }
+                      },
+                      {
+                        "key": "terminal.type",
+                        "value": {
+                          "stringValue": "dumb"
+                        }
+                      },
+                      {
+                        "key": "model",
+                        "value": {
+                          "stringValue": "claude-sonnet-5"
+                        }
+                      },
+                      {
+                        "key": "query_source",
+                        "value": {
+                          "stringValue": "main"
+                        }
+                      },
+                      {
+                        "key": "effort",
+                        "value": {
+                          "stringValue": "high"
+                        }
+                      },
+                      {
+                        "key": "type",
+                        "value": {
+                          "stringValue": "input"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1791836583600000000",
+                    "timeUnixNano": "1791836583864000000",
+                    "asDouble": 2
+                  },
+                  {
+                    "attributes": [
+                      {
+                        "key": "user.id",
+                        "value": {
+                          "stringValue": "3822d219f13f3b17d3039c6d2aa59a92d32c30434136c48cc12b2ec8b52f1867"
+                        }
+                      },
+                      {
+                        "key": "session.id",
+                        "value": {
+                          "stringValue": "c7a9d906-46f6-4570-b4ad-811b6d2971c1"
+                        }
+                      },
+                      {
+                        "key": "organization.id",
+                        "value": {
+                          "stringValue": "99ce97bc-d6f5-42a4-b47a-c238cc27c306"
+                        }
+                      },
+                      {
+                        "key": "user.email",
+                        "value": {
+                          "stringValue": "narsimha.reddy@juspay.in"
+                        }
+                      },
+                      {
+                        "key": "user.account_uuid",
+                        "value": {
+                          "stringValue": "ec5e5d57-3340-4e6f-acb4-3c86f305f729"
+                        }
+                      },
+                      {
+                        "key": "user.account_id",
+                        "value": {
+                          "stringValue": "user_01WBtmnnu63LHSZCQwQvqtkG"
+                        }
+                      },
+                      {
+                        "key": "terminal.type",
+                        "value": {
+                          "stringValue": "dumb"
+                        }
+                      },
+                      {
+                        "key": "model",
+                        "value": {
+                          "stringValue": "claude-sonnet-5"
+                        }
+                      },
+                      {
+                        "key": "query_source",
+                        "value": {
+                          "stringValue": "main"
+                        }
+                      },
+                      {
+                        "key": "effort",
+                        "value": {
+                          "stringValue": "high"
+                        }
+                      },
+                      {
+                        "key": "type",
+                        "value": {
+                          "stringValue": "output"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1791836583600000000",
+                    "timeUnixNano": "1791836583864000000",
+                    "asDouble": 4
+                  },
+                  {
+                    "attributes": [
+                      {
+                        "key": "user.id",
+                        "value": {
+                          "stringValue": "3822d219f13f3b17d3039c6d2aa59a92d32c30434136c48cc12b2ec8b52f1867"
+                        }
+                      },
+                      {
+                        "key": "session.id",
+                        "value": {
+                          "stringValue": "c7a9d906-46f6-4570-b4ad-811b6d2971c1"
+                        }
+                      },
+                      {
+                        "key": "organization.id",
+                        "value": {
+                          "stringValue": "99ce97bc-d6f5-42a4-b47a-c238cc27c306"
+                        }
+                      },
+                      {
+                        "key": "user.email",
+                        "value": {
+                          "stringValue": "narsimha.reddy@juspay.in"
+                        }
+                      },
+                      {
+                        "key": "user.account_uuid",
+                        "value": {
+                          "stringValue": "ec5e5d57-3340-4e6f-acb4-3c86f305f729"
+                        }
+                      },
+                      {
+                        "key": "user.account_id",
+                        "value": {
+                          "stringValue": "user_01WBtmnnu63LHSZCQwQvqtkG"
+                        }
+                      },
+                      {
+                        "key": "terminal.type",
+                        "value": {
+                          "stringValue": "dumb"
+                        }
+                      },
+                      {
+                        "key": "model",
+                        "value": {
+                          "stringValue": "claude-sonnet-5"
+                        }
+                      },
+                      {
+                        "key": "query_source",
+                        "value": {
+                          "stringValue": "main"
+                        }
+                      },
+                      {
+                        "key": "effort",
+                        "value": {
+                          "stringValue": "high"
+                        }
+                      },
+                      {
+                        "key": "type",
+                        "value": {
+                          "stringValue": "cacheRead"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1791836583600000000",
+                    "timeUnixNano": "1791836583864000000",
+                    "asDouble": 23994
+                  },
+                  {
+                    "attributes": [
+                      {
+                        "key": "user.id",
+                        "value": {
+                          "stringValue": "3822d219f13f3b17d3039c6d2aa59a92d32c30434136c48cc12b2ec8b52f1867"
+                        }
+                      },
+                      {
+                        "key": "session.id",
+                        "value": {
+                          "stringValue": "c7a9d906-46f6-4570-b4ad-811b6d2971c1"
+                        }
+                      },
+                      {
+                        "key": "organization.id",
+                        "value": {
+                          "stringValue": "99ce97bc-d6f5-42a4-b47a-c238cc27c306"
+                        }
+                      },
+                      {
+                        "key": "user.email",
+                        "value": {
+                          "stringValue": "narsimha.reddy@juspay.in"
+                        }
+                      },
+                      {
+                        "key": "user.account_uuid",
+                        "value": {
+                          "stringValue": "ec5e5d57-3340-4e6f-acb4-3c86f305f729"
+                        }
+                      },
+                      {
+                        "key": "user.account_id",
+                        "value": {
+                          "stringValue": "user_01WBtmnnu63LHSZCQwQvqtkG"
+                        }
+                      },
+                      {
+                        "key": "terminal.type",
+                        "value": {
+                          "stringValue": "dumb"
+                        }
+                      },
+                      {
+                        "key": "model",
+                        "value": {
+                          "stringValue": "claude-sonnet-5"
+                        }
+                      },
+                      {
+                        "key": "query_source",
+                        "value": {
+                          "stringValue": "main"
+                        }
+                      },
+                      {
+                        "key": "effort",
+                        "value": {
+                          "stringValue": "high"
+                        }
+                      },
+                      {
+                        "key": "type",
+                        "value": {
+                          "stringValue": "cacheCreation"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1791836583600000000",
+                    "timeUnixNano": "1791836583864000000",
+                    "asDouble": 11458
+                  }
+                ]
+              }
+            },
+            {
+              "name": "claude_code.active_time.total",
+              "description": "Total active time in seconds",
+              "unit": "s",
+              "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": true,
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {
+                        "key": "user.id",
+                        "value": {
+                          "stringValue": "3822d219f13f3b17d3039c6d2aa59a92d32c30434136c48cc12b2ec8b52f1867"
+                        }
+                      },
+                      {
+                        "key": "session.id",
+                        "value": {
+                          "stringValue": "c7a9d906-46f6-4570-b4ad-811b6d2971c1"
+                        }
+                      },
+                      {
+                        "key": "organization.id",
+                        "value": {
+                          "stringValue": "99ce97bc-d6f5-42a4-b47a-c238cc27c306"
+                        }
+                      },
+                      {
+                        "key": "user.email",
+                        "value": {
+                          "stringValue": "narsimha.reddy@juspay.in"
+                        }
+                      },
+                      {
+                        "key": "user.account_uuid",
+                        "value": {
+                          "stringValue": "ec5e5d57-3340-4e6f-acb4-3c86f305f729"
+                        }
+                      },
+                      {
+                        "key": "user.account_id",
+                        "value": {
+                          "stringValue": "user_01WBtmnnu63LHSZCQwQvqtkG"
+                        }
+                      },
+                      {
+                        "key": "terminal.type",
+                        "value": {
+                          "stringValue": "dumb"
+                        }
+                      },
+                      {
+                        "key": "type",
+                        "value": {
+                          "stringValue": "cli"
+                        }
+                      }
+                    ],
+                    "startTimeUnixNano": "1791836583607000000",
+                    "timeUnixNano": "1791836583864000000",
+                    "asDouble": 2.273
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

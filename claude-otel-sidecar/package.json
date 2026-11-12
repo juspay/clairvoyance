@@ -1,0 +1,14 @@
+{
+  "name": "claude-code-metrics-sidecar",
+  "version": "1.2.0",
+  "description": "Receives Claude Code's native OTLP telemetry and re-emits it in NeuroLink proxy format (proxy_* metrics, proxy.request spans, neurolink_proxy request_final logs) so existing OpenObserve dashboards keep working.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/classify.test.mjs test/transform.test.mjs test/protobuf.test.mjs test/protobuf-encode.test.mjs test/usage.test.mjs test/e2e.test.mjs"
+  }
+}
